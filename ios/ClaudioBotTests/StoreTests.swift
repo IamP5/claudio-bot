@@ -504,3 +504,40 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(SkillsSection.content(store, bot: b1) == .skills([notes]))
     }
 }
+
+@MainActor
+@Suite struct ConnectorsSectionTests {
+    private let b1 = BotID("b1")
+    private let gmail = Connector(name: "claude.ai Gmail", status: .needsAuth, enabled: true)
+
+    private func store(_ features: [Feature]) -> AppStore {
+        let store = AppStore()
+        store.apply(.hello(Hello(features: features, machine: "Mac", userName: "Alex", bots: [bot("b1")])))
+        return store
+    }
+
+    @Test func theSectionHidesWithoutTheConnectorsFeature() {
+        let store = store([.memory])
+        store.apply(.connectors(botId: b1, connectors: [gmail]))
+        #expect(ConnectorsSection.rows(store, b1) == .hidden)
+    }
+
+    @Test func theSectionLoadsUntilTheBridgeListsThenShowsTheList() {
+        let store = store([.connectors])
+        #expect(ConnectorsSection.rows(store, b1) == .loading)
+        store.apply(.connectors(botId: b1, connectors: [gmail]))
+        #expect(ConnectorsSection.rows(store, b1) == .shown([gmail]))
+        #expect(ConnectorsSection.detail(gmail) == "Needs sign-in on your Mac")
+        #expect(ConnectorsSection.detail(Connector(name: "x", status: .connected, enabled: false)) == "Off for this Bot and its agents")
+    }
+
+    @Test func theSwitchSendsSetConnector() throws {
+        let message = ConnectorsSection.toggle(b1, gmail, enabled: false)
+        #expect(message == .setConnector(botId: b1, name: "claude.ai Gmail", enabled: false))
+        let json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(message)) as? [String: Any])
+        #expect(json["type"] as? String == "set_connector")
+        #expect(json["botId"] as? String == "b1")
+        #expect(json["name"] as? String == "claude.ai Gmail")
+        #expect(json["enabled"] as? Bool == false)
+    }
+}

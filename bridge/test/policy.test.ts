@@ -925,4 +925,20 @@ describe("pass 3 rows: memory, skills, the claudio registry and connector toggle
     expect(verdict(call("mcp__github__list_issues", {}), off)).toBe("pass");
     expect(verdict(claudio("list_routines"), { connectorsOff: ["claudio"] })).toBe("pass");
   });
+
+  test("an off connector is denied by its tool prefix as Claude Code normalizes it, whatever name the hook reports", () => {
+    const gmail = call("mcp__claude_ai_Gmail__search_threads", {}, { mcpServer: { name: "Gmail", source: "claudeai" } });
+    expect(verdict(gmail, { connectorsOff: ["claude.ai Gmail"] })).toBe("deny:connector.off");
+    const vercel = call("mcp__plugin_vercel_vercel__list_projects", {}, { mcpServer: { name: "vercel", source: "plugin" } });
+    expect(verdict(vercel, { connectorsOff: ["plugin:vercel:vercel"] })).toBe("deny:connector.off");
+    expect(verdict(call("mcp__claude-in-chrome__navigate", {}, { mcpServer: null }), { connectorsOff: ["claude-in-chrome"] })).toBe("deny:connector.off");
+    expect(verdict(vercel, { connectorsOff: ["claude.ai Gmail"] })).toBe("pass");
+  });
+
+  test("a connector call whose server the hook does not name is denied while the bot has any connector off", () => {
+    const unnamed = call("mcp__github__list_issues", {}, { mcpServer: null });
+    expect(verdict(unnamed, { connectorsOff: ["slack"] })).toBe("deny:connector.off");
+    expect(verdict(unnamed)).toBe("pass");
+    expect(verdict(call("mcp__claudio__list_routines", {}, { mcpServer: null }), { connectorsOff: ["slack"] })).toBe("pass");
+  });
 });

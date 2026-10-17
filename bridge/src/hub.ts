@@ -342,6 +342,7 @@ export function createHub(deps: HubDeps): Hub {
   const memory = createMemory({
     homes,
     botName: (id) => world.bots.get(id)?.name ?? "a bot",
+    turnOf: (id) => brains.get(id)?.current?.initiator ?? system,
     changed: () => deps.broadcast({ type: "memory", facts: memory.facts() }),
     reopen: (id) => {
       for (const botId of id === null ? world.bots.keys() : [id]) brains.get(botId)?.reopen();

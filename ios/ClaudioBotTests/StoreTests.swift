@@ -59,6 +59,22 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(store.activity.isEmpty)
     }
 
+    @Test func theActivityLineShowsTheStoresTextForItsKeyOnlyWhenTheBridgeBacksActivity() {
+        let store = store()
+        let b1 = BotID("b1")
+        store.apply(.activity(botId: b1, agentId: nil, text: "Reading hub.ts", at: at))
+        #expect(ActivityLine.text(in: store, botId: b1) == nil)
+
+        store.apply(.hello(Hello(features: [.activity], machine: "Mac", userName: "Alex", bots: [bot("b1")])))
+        store.apply(.activity(botId: b1, agentId: nil, text: "Reading hub.ts", at: at))
+        store.apply(.activity(botId: b1, agentId: AgentID("a1"), text: "Running the tests", at: at))
+        #expect(ActivityLine.text(in: store, botId: b1) == "Reading hub.ts")
+        #expect(ActivityLine.text(in: store, botId: b1, agentId: AgentID("a1")) == "Running the tests")
+        #expect(ActivityLine.text(in: store, botId: b1, agentId: AgentID("a2")) == nil)
+        store.apply(.activity(botId: b1, agentId: nil, text: nil, at: at))
+        #expect(ActivityLine.text(in: store, botId: b1) == nil)
+    }
+
     @Test func memoryConnectorsSkillsAndWebhookTokensLandInTheStoreAndGoWithTheirBot() {
         let store = store()
         let b1 = BotID("b1")

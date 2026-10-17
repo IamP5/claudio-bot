@@ -164,8 +164,11 @@ struct HomeView: View {
 struct BotRow: View {
     let bot: Bot
 
+    @Environment(AppStore.self) private var store
+
     var body: some View {
         let display = RowDisplay(bot)
+        let activity = bot.status == .working ? ActivityLine.text(in: store, botId: bot.id) : nil
         HStack(spacing: 14) {
             AvatarView(avatar: bot.avatar, size: 46, needsAttention: display.needsAttention)
             VStack(alignment: .leading, spacing: 3) {
@@ -185,7 +188,9 @@ struct BotRow: View {
                 }
                 HStack(spacing: 6) {
                     Group {
-                        if display.previewIsQuestion {
+                        if let activity {
+                            Text(activity).italic()
+                        } else if display.previewIsQuestion {
                             Text(Image(systemName: "list.bullet.rectangle")) + Text(" ") + Text(display.preview)
                         } else {
                             Text(display.preview)

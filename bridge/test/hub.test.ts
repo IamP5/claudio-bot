@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,8 +12,10 @@ import { emptySession, emptyWorld, newBot, type BotRecord, type EnvelopeId, type
 
 const roots: string[] = [];
 afterEach(() => {
+  setSystemTime();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+const later = (ms: number) => setSystemTime(new Date(Date.now() + ms));
 
 const at = "2026-10-17T12:00:00.000Z";
 const inAnHour = () => new Date(Date.now() + 3_600_000).toISOString();
@@ -309,6 +311,84 @@ test("a card held back while the phone was live is pushed by the hub's clock onc
   await flush();
 
   expect(sent).toEqual(["eng needs you"]);
+});
+
+test("a turn still running 20 s after its push pushes its last bubble when it ends", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  await h.hub.handle({ type: "send", botId: b.id, text: "fix the build", uploads: [] });
+  await flush();
+  h.q().emit(assistant(text("On it.")));
+  await flush();
+
+  later(25_000);
+  h.q().emit(assistant(text("Fixed.")));
+  await flush();
+  expect(h.pushes.map((p) => p.reason)).toEqual(["message"]);
+  h.q().emit(result());
+  await flush();
+
+  const [onIt, fixed] = b.messages.filter((m) => m.kind === "bot").map((m) => m.id);
+  expect(h.pushes).toEqual([
+    { botId: b.id, reason: "message", messageId: onIt! },
+    { botId: b.id, reason: "result", messageId: fixed! },
+  ]);
+});
+
+test("a turn ending within 20 s of its push, or on the bubble it pushed, pushes nothing more", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  await h.hub.handle({ type: "send", botId: b.id, text: "status?", uploads: [] });
+  await flush();
+  h.q().emit(assistant(text("Looking.")));
+  await flush();
+  later(15_000);
+  h.q().emit(assistant(text("All green.")), result());
+  await flush();
+
+  await h.hub.handle({ type: "send", botId: b.id, text: "and the deploy?", uploads: [] });
+  await flush();
+  later(11 * 60_000);
+  h.q().emit(assistant(text("Deployed.")));
+  await flush();
+  later(60_000);
+  h.q().emit(result());
+  await flush();
+
+  expect(h.pushes.map((p) => p.reason)).toEqual(["message", "message"]);
+});
+
+test("a turn whose bubbles were all held back by a live phone pushes its last bubble at the end", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world, { sends: (_, n) => n > 2 });
+  await h.hub.handle({ type: "send", botId: b.id, text: "status?", uploads: [] });
+  await flush();
+  h.q().emit(assistant(text("Looking.")), assistant(text("All green.")));
+  await flush();
+  expect(h.pushes).toEqual([]);
+
+  h.q().emit(result());
+  await flush();
+
+  const green = b.messages.findLast((m) => m.kind === "bot")!;
+  expect(h.pushes).toEqual([{ botId: b.id, reason: "message", messageId: green.id }]);
+});
+
+test("a long routine run posts its held bubbles at the end with a single push", async () => {
+  const h = await fired();
+  h.q().emit(assistant(text("Two PRs merged.")));
+  await flush();
+  later(60_000);
+  h.q().emit(assistant(text("Both are green.")), result());
+  await flush();
+
+  expect(h.pushes.map((p) => p.reason)).toEqual(["message"]);
 });
 
 test("output that arrives between turns still reaches the chat", async () => {

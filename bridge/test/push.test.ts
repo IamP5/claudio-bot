@@ -153,9 +153,10 @@ test.each([
   ["card", "Claudio Bot needs you"],
   ["reminder", "Claudio Bot is still waiting for you"],
   ["message", "Claudio Bot has an update for you"],
+  ["result", "Claudio Bot has an update for you"],
 ] as [PushReason, string][])("reason %s reads %p", async (reason, text) => {
   const h = harness();
-  const id = reason === "message" ? h.bubble("m_bubble") : CARD;
+  const id = reason === "message" || reason === "result" ? h.bubble("m_bubble") : CARD;
   h.push.notify(BOT, reason, id);
   await settle();
   expect(h.calls.map((c) => c.init.body)).toEqual([text]);
@@ -188,7 +189,7 @@ test("a card and its reminder each push once, across a restart", async () => {
   expect(restarted.calls.map((c) => c.init.body)).toEqual(["Claudio Bot is still waiting for you"]);
 });
 
-test("messages push at most once per bot per throttle window; cards and reminders are never throttled", async () => {
+test("only message pushes throttle message pushes; cards and reminders are never throttled and throttle nothing", async () => {
   const h = harness();
   const pushedAt = (minutes: number, reason: PushReason, id: MessageId) => {
     h.clock.t = T0 + minutes * 60_000;
@@ -200,9 +201,24 @@ test("messages push at most once per bot per throttle window; cards and reminder
   expect(await pushedAt(5, "message", h.bubble("m_b2"))).toBe(false);
   expect(await pushedAt(6, "card", CARD)).toBe(true);
   expect(await pushedAt(7, "reminder", CARD)).toBe(true);
-  expect(await pushedAt(12, "message", h.bubble("m_b3"))).toBe(false);
-  expect(await pushedAt(7 + MESSAGE_THROTTLE_MS / 60_000, "message", h.bubble("m_b4"))).toBe(true);
-  expect(keys(h.world)).toEqual(["m_b1|message", "m_card|card", "m_card|reminder", "m_b4|message"]);
+  expect(await pushedAt(12, "message", h.bubble("m_b3"))).toBe(true);
+  expect(await pushedAt(12 + MESSAGE_THROTTLE_MS / 60_000 - 1, "message", h.bubble("m_b4"))).toBe(false);
+  expect(keys(h.world)).toEqual(["m_b1|message", "m_card|card", "m_card|reminder", "m_b3|message"]);
+});
+
+test("a turn's result push is never throttled and throttles no message push", async () => {
+  const h = harness();
+  const pushedAt = (minutes: number, reason: PushReason, id: MessageId) => {
+    h.clock.t = T0 + minutes * 60_000;
+    const before = h.calls.length;
+    h.push.notify(BOT, reason, id);
+    return settle().then(() => h.calls.length > before);
+  };
+  expect(await pushedAt(0, "message", h.bubble("m_b1"))).toBe(true);
+  expect(await pushedAt(1, "result", h.bubble("m_b2"))).toBe(true);
+  expect(await pushedAt(2, "result", h.bubble("m_b3"))).toBe(true);
+  expect(await pushedAt(10, "message", h.bubble("m_b4"))).toBe(true);
+  expect(h.calls.map((c) => c.init.body)).toEqual(Array(4).fill("Claudio Bot has an update for you"));
 });
 
 test("the throttle survives a restart", async () => {

@@ -4,7 +4,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import type { Scope } from "./policy";
 import type { Actor } from "./world";
 
-export type SandboxEnv = Readonly<Record<string, string | undefined>>;
+type SandboxEnv = Readonly<Record<string, string | undefined>>;
 
 /** Under the user's home: what no sandboxed command reads. Mirrors the gate's floor roots in policy.ts. */
 const PRIVATE: readonly string[] = [
@@ -75,7 +75,7 @@ const GIT_RUNS: readonly string[] = ["hooks", "config", "config.worktree"];
  * hook allow approves the command, not the hosts). CLAUDIOBOT_ALLOWED_DOMAINS (comma-separated) adds hosts, and
  * CLAUDIOBOT_SANDBOX_STRICT_NETWORK=1 makes this list the whole allowlist.
  */
-export const DEFAULT_DOMAINS: readonly string[] = [
+const DEFAULT_DOMAINS: readonly string[] = [
   "github.com",
   "*.github.com",
   "*.githubusercontent.com",

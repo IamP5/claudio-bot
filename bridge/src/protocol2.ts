@@ -1,11 +1,11 @@
 import type { CardReply } from "./gate";
 import type { Message, PermissionChoice, ServerMessage } from "./protocol";
 
-// Today's app speaks protocol 2. It connects without ?protocol=3 and decodes a permission card as nothing, so the
+// An app that speaks protocol 2 connects without ?protocol=3 and decodes a permission card as nothing, so the
 // transport shows it each permission card as a question with these options, and the hub reads an answer to that
 // question as a decision. It has no Always or Never, and dismissing the card denies the call.
 
-export const PROTOCOL_2_OPTIONS = [
+const PROTOCOL_2_OPTIONS = [
   { label: "Allow once", choice: "once" },
   { label: "Deny", choice: "deny" },
 ] as const satisfies readonly { label: string; choice: PermissionChoice }[];

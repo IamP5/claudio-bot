@@ -27,7 +27,7 @@ import {
 
 /** Who runs a turn. An agent belongs to a bot: its cards show in the bot's chat and the bot's standing rules apply. */
 export type Actor = { kind: "bot"; botId: BotId } | { kind: "agent"; botId: BotId; agentId: AgentId };
-export type BotActor = Extract<Actor, { kind: "bot" }>;
+type BotActor = Extract<Actor, { kind: "bot" }>;
 export type ActorKey = `bot:${string}` | `agent:${string}`;
 export const actorKey = (a: Actor): ActorKey => (a.kind === "bot" ? `bot:${a.botId}` : `agent:${a.agentId}`);
 export const botActor = (botId: BotId): BotActor => ({ kind: "bot", botId });
@@ -67,14 +67,16 @@ export const hopsAfter = (by: Initiator | null): number => (by === null ? 0 : ho
 
 /**
  * A slice another module owns: a readonly field holding deeply readonly data, so `bot.routines.push(…)` or
- * `bot.routines = …` outside the scheduler fails to compile. The owner keeps a module-private `own()` cast and
- * mutates in place; nothing else may make a slice writable.
+ * `bot.routines = …` outside the scheduler fails to compile. The owner calls `own()` and mutates in place.
  */
 export type Owned<T> = T extends string | number | boolean | null | undefined
   ? T
   : T extends readonly (infer U)[]
     ? readonly Owned<U>[]
     : { readonly [K in keyof T]: Owned<T[K]> };
+
+/** The writable view of a slice. Only the slice's writer, named on its type, calls this. */
+export const own = <T>(slice: Owned<T>): T => slice as unknown as T;
 
 
 export type EnvelopeId = string & { readonly __brand: "EnvelopeId" };
@@ -194,7 +196,7 @@ export type StandingRule =
 export type Grant = { actor: ActorKey; fingerprint: Fingerprint; cardId: MessageId; appliesTo: "attended" | "unattended"; expiresAt: string };
 
 /** What a permission decision applies to. The card message is what the user sees; this is the match key behind it. */
-export type HeldCall = {
+type HeldCall = {
   initiator: Initiator;
   tool: string;
   signature: Signature;
@@ -316,7 +318,7 @@ export const agentPeer = (agent: Agent): AgentPeer => ({ kind: "agent", id: agen
 export const routinePeer = (routine: { id: RoutineId; name: string }): Peer => ({ kind: "routine", id: routine.id, name: routine.name });
 
 
-export function unreadDelta(previous: Message | undefined, next: Message): number {
+function unreadDelta(previous: Message | undefined, next: Message): number {
   switch (next.kind) {
     case "bot":
     case "question":
@@ -340,7 +342,7 @@ export function post(bot: BotRecord, message: Message): Message {
 }
 
 // Messages between a bot and one peer group into one exchange while nothing else is said.
-export function exchangeFor(
+function exchangeFor(
   last: Message | undefined,
   peer: Peer,
   direction: "sent" | "received",
@@ -459,7 +461,7 @@ export function findBot(world: World, ref: string): BotRecord | undefined {
 
 const URL_PATTERN = /https?:\/\/[^\s<>()[\]"'`]+/g;
 
-export function extractUrls(text: string): string[] {
+function extractUrls(text: string): string[] {
   return (text.match(URL_PATTERN) ?? []).map((u) => u.replace(/[.,;:!?*_]+$/, ""));
 }
 

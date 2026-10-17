@@ -1,7 +1,6 @@
 // A small shell tokenizer, pure. policy.ts turns the words into path touches and command rows; this file only knows
 // how a line splits into simple commands and words, which words are redirect targets, and where a word stops being a
 // literal path (its first unquoted $ ` * ? [ { ). It is best effort: the auto classifier still screens whatever passes.
-// Owner: U1.
 //
 // Heredocs are stripped before the main scan (stripHeredocs): a `<<[-]WORD` body is skipped so its text cannot desync
 // the quote/paren scanners (the classic `git commit -m "$(cat <<'EOF' … EOF)"` that used to hide every later command).
@@ -25,7 +24,7 @@ export type Word = {
 };
 
 /** One simple command: its words in order and the raw source slice it came from (for the raw-text scan). */
-export type Command = {
+type Command = {
   words: Word[];
   raw: string;
   /** Paren/substitution nesting. 0 is the top level; anything deeper is a subshell whose `cd` cannot leak outward. */

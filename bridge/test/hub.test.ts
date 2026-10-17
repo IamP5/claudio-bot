@@ -545,7 +545,7 @@ test("a hold whose time has passed does not skip a fire in the tick that clears 
   expect(h.routine.runs.map((r) => r.status)).toEqual(["running"]);
 });
 
-test("today's app answering Allow once on a held call grants it once for the turn's attendance and tells the bot", async () => {
+test("a protocol 2 app answering Allow once on a held call grants it once for the turn's attendance and tells the bot", async () => {
   const world = emptyWorld();
   const b = bot("eng");
   world.bots.set(b.id, b);
@@ -592,7 +592,7 @@ test("delete_bot saves the world without the bot before its home is moved to the
   expect(frames.at(-1)).toEqual({ type: "bot_removed", botId: doomed.id });
 });
 
-test("an answer to a permission card from today's app is a decision; an option it never showed is refused", async () => {
+test("an answer to a permission card from a protocol 2 app is a decision; an option it never showed is refused", async () => {
   const world = emptyWorld();
   const b = bot("eng");
   const card: Message = { kind: "permission", id: "m_card" as MessageId, at, from: null, tool: "Bash", label: "Push to the default branch", detail: "git push origin main", always: "git push to main", answer: null, expiresAt: inAnHour() };

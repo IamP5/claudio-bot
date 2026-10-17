@@ -13,7 +13,7 @@ import {
   type Upload,
 } from "./protocol";
 
-export type Parsed = { ok: true; message: ClientMessage } | { ok: false; error: string };
+type Parsed = { ok: true; message: ClientMessage } | { ok: false; error: string };
 
 class ParseError extends Error {}
 

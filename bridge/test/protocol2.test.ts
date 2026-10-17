@@ -27,7 +27,7 @@ test.each([
   ["deny", 1],
   ["never", 1],
   ["expired", "expired"],
-] as const)("today's app sees a permission card answered %p as a question answered %p", (answer, shown) => {
+] as const)("a protocol 2 app sees a permission card answered %p as a question answered %p", (answer, shown) => {
   expect(forProtocol2({ type: "message", botId, message: permission(answer) })).toEqual({
     type: "message",
     botId,
@@ -59,7 +59,7 @@ test.each([
   ["Allow once on a permission card", permission(null), { type: "answer", option: 0 }, { kind: "permission", choice: "once" }],
   ["Deny on a permission card", permission(null), { type: "answer", option: 1 }, { kind: "permission", choice: "deny" }],
   ["dismissing a permission card", permission(null), { type: "dismiss" }, { kind: "permission", choice: "deny" }],
-  ["an option today's app never showed", permission(null), { type: "answer", option: 2 }, null],
+  ["an option a protocol 2 app never showed", permission(null), { type: "answer", option: 2 }, null],
   ["an answer to a question", undefined, { type: "answer", option: 2 }, { kind: "option", index: 2 }],
   ["a dismissed question", undefined, { type: "dismiss" }, { kind: "dismiss" }],
 ] as const)("card reply: %s", (_, card, tap, reply) => {

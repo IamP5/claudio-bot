@@ -1,5 +1,5 @@
 // Usage. The truth is <bridge home>/usage/YYYY-MM.jsonl (mode 0600, append-only). An in-memory index (spend per local
-// day per bot, lifetime spend per agent, last cumulative per session) is rebuilt from those files at start. Owner: U3.
+// day per bot, lifetime spend per agent, last cumulative per session) is rebuilt from those files at start.
 //
 // Boot folds every month file, not only the last two. An agent's budget is lifetime, and a session idle for months
 // still has a true baseline in an old file; a window would undercount the first and re-adopt the second. Rows are small

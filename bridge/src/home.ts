@@ -14,7 +14,7 @@ function utf8Text(bytes: Uint8Array): string | null {
   }
 }
 
-export type FileView = { mime: string; content: string | null; data: string | null };
+type FileView = { mime: string; content: string | null; data: string | null };
 
 export function createHomes(root: string) {
   const homeOf = (id: BotId) => join(root, "bots", id);

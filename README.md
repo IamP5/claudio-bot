@@ -213,7 +213,7 @@ xcodebuild -scheme ClaudioBot -destination 'platform=iOS Simulator,name=iPhone 1
 ./scripts/screenshots.sh # demo-mode screenshots (launch args: -demo -demoScreen <screen>)
 ```
 
-The bridge and the app share one contract. If you change `bridge/src/protocol.ts`, update `bridge/src/fixtures.ts`, regenerate `fixtures/protocol.json` with `bun src/fixtures.ts`, and mirror the change in `ios/ClaudioBot/Model/Protocol.swift`. Both test suites decode the same fixtures.
+The bridge and the app share one contract. If you change `bridge/src/protocol.ts`, update `bridge/scripts/fixtures.ts`, regenerate `fixtures/protocol.json` with `bun scripts/fixtures.ts`, and mirror the change in `ios/ClaudioBot/Model/Protocol.swift`. Both test suites decode the same fixtures.
 
 ## Limitations and roadmap
 

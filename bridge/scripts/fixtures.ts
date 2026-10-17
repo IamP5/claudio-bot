@@ -1,4 +1,4 @@
-import type { Agent, Bot, Broadcast, ClientMessage, Message, Peer, Routine, ServerMessage } from "./protocol";
+import type { Agent, Bot, Broadcast, ClientMessage, Message, Peer, Routine, ServerMessage } from "../src/protocol";
 
 // The wire form of T: branded ids are plain strings, so fixtures type-check without casts.
 type Wire<T> = T extends string & { readonly __brand: string } ? string : T extends (infer U)[] ? Wire<U>[] : T extends object ? { [K in keyof T]: Wire<T[K]> } : T;

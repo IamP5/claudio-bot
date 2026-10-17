@@ -15,6 +15,7 @@ import type { Persist } from "./store";
 import {
   actorKey,
   attended,
+  own,
   type AccountState,
   type ActiveTurn,
   type Actor,
@@ -28,7 +29,7 @@ import {
   type SessionState,
 } from "./world";
 
-// The turn runner for one actor, and the only writer of its SessionState and of AccountState. Owner: U2.
+// The turn runner for one actor, and the only writer of its SessionState and of AccountState.
 // step() is the whole lifecycle as a pure function; createSession() is the shell that feeds it SDK and caller events
 // and carries out its effects.
 
@@ -38,7 +39,7 @@ export function claudeExecutable(): string | null {
 }
 
 export const STOP_DEADLINE_MS = 15_000;
-export const RETRY_BACKOFF_MS = [1_000, 3_000, 8_000] as const;
+const RETRY_BACKOFF_MS = [1_000, 3_000, 8_000] as const;
 /** The first start plus one retry per backoff step. A replay after a restart is a start too. */
 export const MAX_STARTS = RETRY_BACKOFF_MS.length + 1;
 /**
@@ -46,15 +47,15 @@ export const MAX_STARTS = RETRY_BACKOFF_MS.length + 1;
  * reached Claude, so no attempt is used and nothing else queued is touched. The last wait repeats until a query opens.
  */
 export const START_RETRY_MS = [30_000, 60_000, 120_000, 300_000] as const;
-export const DENIALS_PER_TURN = 3;
+const DENIALS_PER_TURN = 3;
 /** A turn with no SDK message for this long is noted in the owning bot's chat, once per turn. It keeps running. */
-export const STALL_MS = 30 * 60_000;
+const STALL_MS = 30 * 60_000;
 /**
  * A query with no turn in flight and no message for this long is closed, so its claude process exits; the next turn
  * resumes the session on a new one. It counts from the last message, so output after a turn keeps the process. It is
  * well inside the prompt cache's hour, so a resume reads the cache like the closed query would have.
  */
-export const IDLE_MS = 15 * 60_000;
+const IDLE_MS = 15 * 60_000;
 /** When the ledger cannot answer, an unattended start waits this long; an attended one runs. */
 export const HEADROOM_RETRY_MS = 60_000;
 export const USAGE_PARK_SLACK_MS = 30_000;
@@ -75,7 +76,7 @@ export const CAP_NOTE = "Daily cap reached. Your messages still run; routines an
 export const BREAKER_NOTE = `Stopped this turn after ${DENIALS_PER_TURN} held or denied tool calls.`;
 export const RESTARTED_ERROR = "The bridge restarted during this turn.";
 const stallNote = (name: string) => `${name} has been silent for 30 minutes; you can press Stop.`;
-export const startFailedNote = (error: string) =>
+const startFailedNote = (error: string) =>
   `Claude Code could not start: ${error.replace(/\.?\s*$/, ".")} Queued messages are kept, and it keeps trying.`;
 const restartedNotice = (envelopeText: string) =>
   `[The bridge restarted during your turn on: ${envelopeText.split("\n")[0]} It may be partly done; check before redoing it.]`;
@@ -175,7 +176,7 @@ export type Effect =
   | { kind: "note"; text: string };
 
 /** Lives in memory only; a restart starts from freshMemo(). */
-export type Memo = {
+type Memo = {
   /**
    * How many notices at the front of session.notices the turn in flight carried. They are dropped once the model has
    * seen them (the turn had output or reached a result) and kept when it ends before that, so the next start carries
@@ -193,7 +194,7 @@ export type Memo = {
 export const freshMemo = (): Memo => ({ carried: 0, capNoted: false, told: {}, startFailures: 0 });
 
 export type Core = { session: SessionState; parkedUntil: string | null; memo: Memo };
-export type StepContext = { now: Date; headroom: (initiator: Initiator) => Headroom; userName: string };
+type StepContext = { now: Date; headroom: (initiator: Initiator) => Headroom; userName: string };
 
 const turnOf = (life: Lifecycle): ActiveTurn | null => (life.kind === "working" || life.kind === "stopping" ? life.turn : null);
 
@@ -455,7 +456,7 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
 }
 
 /** What the SDK said during the turn, before its result. */
-export type Signals = {
+type Signals = {
   /** A rate_limit_event rejected a request that extra usage did not cover. */
   rejected: boolean;
   /** That event's resetsAt as sent; classify() decides whether it is usable. */
@@ -567,8 +568,6 @@ type Live = {
 };
 
 const SYSTEM: Initiator = { kind: "system" };
-const own = (state: Owned<SessionState>) => state as unknown as SessionState;
-const ownAccount = (account: Owned<AccountState>) => account as unknown as AccountState;
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function createSession(spec: SessionSpec): Session {
@@ -630,13 +629,13 @@ export function createSession(spec: SessionSpec): Session {
   function transition(ev: Event, now: Date): Effect[] {
     const before = { session: structuredClone(spec.state) as SessionState, parkedUntil: spec.account.parkedUntil, memo };
     const t = step(before, ev, { now, headroom: (i) => headroom(i, now), userName });
-    const state = own(spec.state);
+    const state = own<SessionState>(spec.state);
     const changed =
       JSON.stringify([before.session, before.parkedUntil]) !== JSON.stringify([t.core.session, t.core.parkedUntil]);
     state.pending = t.core.session.pending;
     state.lifecycle = t.core.session.lifecycle;
     state.notices = t.core.session.notices;
-    ownAccount(spec.account).parkedUntil = t.core.parkedUntil;
+    own<AccountState>(spec.account).parkedUntil = t.core.parkedUntil;
     memo = t.core.memo;
     if (changed) guard("persist", () => spec.persist("now"));
     return t.effects;
@@ -781,7 +780,7 @@ export function createSession(spec: SessionSpec): Session {
   function receive(m: SDKMessage, l: Live) {
     heardAt = clock().getTime();
     if (m.session_id && m.session_id !== spec.state.id) {
-      own(spec.state).id = m.session_id;
+      own<SessionState>(spec.state).id = m.session_id;
       guard("persist", () => spec.persist());
     }
     if (m.type === "assistant" && m.error) signals.apiError = m.error;

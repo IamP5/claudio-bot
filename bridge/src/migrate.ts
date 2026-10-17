@@ -1,5 +1,5 @@
-// The rename from ~/.claudebot to ~/.claudiobot. Runs first, before anything opens a file in the home. Owner: U7.
-// Resume finds transcripts by session id, so a symlink in either direction keeps every bot's session (probe Q8).
+// The rename from ~/.claudebot to ~/.claudiobot. Runs first, before anything opens a file in the home.
+// Resume finds transcripts by session id, so a symlink in either direction keeps every bot's session.
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { botMemory, DEFAULT_BOT, defaultBotJob } from "./prompts";

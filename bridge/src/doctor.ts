@@ -26,12 +26,12 @@ export type Finding = { level: Level; check: string; detail: string };
 
 type Entry = { kind: "absent" } | { kind: "dir" } | { kind: "link"; target: string; resolves: boolean } | { kind: "other" };
 
-export type StateFacts =
+type StateFacts =
   | { kind: "absent" }
   | { kind: "unreadable"; why: string }
   | { kind: "parsed"; version: unknown; bots: number | null; devices: number | null };
 
-export type LockFacts = { path: string } & ({ kind: "free" } | { kind: "pid"; pid: number; alive: boolean } | { kind: "garbled" });
+type LockFacts = { path: string } & ({ kind: "free" } | { kind: "pid"; pid: number; alive: boolean } | { kind: "garbled" });
 
 export type Facts = {
   platform: string;
@@ -90,7 +90,7 @@ export function lockPathOf(fs: DoctorFs, home: string): string {
   }
 }
 
-export function readLock(fs: DoctorFs, alive: (pid: number) => boolean, home: string): LockFacts {
+function readLock(fs: DoctorFs, alive: (pid: number) => boolean, home: string): LockFacts {
   const path = lockPathOf(fs, home);
   let body: string;
   try {
@@ -126,7 +126,7 @@ async function version(exec: Exec, argv: string[], env?: Record<string, string |
   return ran && ran.code === 0 ? firstLine(ran.stdout) : null;
 }
 
-export type ServiceView = { installed: InstalledPlist | null; env: Record<string, string | undefined>; envFrom: "plist" | "shell"; home: string; port: number };
+type ServiceView = { installed: InstalledPlist | null; env: Record<string, string | undefined>; envFrom: "plist" | "shell"; home: string; port: number };
 
 /** What the service sees: launchd hands it the plist's variables and no others from the shell. */
 export async function serviceView(deps: Pick<DoctorDeps, "exec" | "env" | "homeDir">, target: ServiceTarget): Promise<ServiceView> {
@@ -323,7 +323,7 @@ const CHECKS: Check[] = [
 
 export const check = (facts: Facts): Finding[] => CHECKS.flatMap((c) => c(facts));
 
-export const formatFinding = (f: Finding) => `${f.level}  ${f.check.padEnd(10)} ${f.detail}`;
+const formatFinding = (f: Finding) => `${f.level}  ${f.check.padEnd(10)} ${f.detail}`;
 
 export async function doctor(deps: DoctorDeps, target: ServiceTarget, out: (text: string) => void): Promise<number> {
   const findings = check(await gather(deps, target));

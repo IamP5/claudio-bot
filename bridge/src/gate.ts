@@ -12,7 +12,9 @@ import {
   agentPeer,
   attended,
   botActor,
+  isOpenCard,
   newMessageId,
+  own,
   settleCard,
   type Actor,
   type ActorKey,
@@ -29,7 +31,7 @@ import {
 
 // Everything that waits on the human: the PreToolUse gate, both card kinds (TTL, reminder, dedupe, settle),
 // standing rules, one-shot grants, and the audit log at <bridge home>/audit/YYYY-MM.jsonl (0600, append-only).
-// The only writer of World.gate and BotRecord.rules. Owner: U1.
+// The only writer of World.gate and BotRecord.rules.
 //
 // Mechanism: deny-and-regrant. An "ask" decision posts a permission card and denies the call with a "held for
 // approval" reason. Allow once installs an exact-input grant for 10 minutes and delivers a decision envelope that runs
@@ -41,8 +43,8 @@ import {
 // A card's Message.answer is the truth about whether it is open; GateState.open only carries its deadlines and the held
 // call, and is reconciled against the messages at boot and on every tick.
 
-/** A hook that times out fails closed (probe Q6). The gate never awaits I/O, so this is only a backstop. */
-export const HOOK_TIMEOUT_S = 30;
+/** A hook that times out fails closed. The gate never awaits I/O, so this is only a backstop. */
+const HOOK_TIMEOUT_S = 30;
 
 /**
  * Cards remind once at half their life, then expire. A grant lets the exact call run once within grantMs of the
@@ -52,7 +54,7 @@ const TTL = { permissionMs: 2 * 3600_000, questionMs: 24 * 3600_000, grantMs: 10
 
 const VERDICTS_KEPT = 1000;
 
-/** Per bot, how many permission cards may be open at once before new ones are refused (a runaway turn, probe G1 C). */
+/** Per bot, how many permission cards may be open at once before new ones are refused, so a runaway turn cannot flood the phone. */
 const MAX_OPEN_CARDS = 10;
 
 export type CardReply = { kind: "option"; index: number } | { kind: "dismiss" } | { kind: "permission"; choice: PermissionChoice };
@@ -119,7 +121,7 @@ export type GateDeps = {
 
 const COULD_NOT_CHECK = "The bridge could not check this call, so it was blocked and did not run. Do not retry it this turn.";
 
-export const denyOutput = (reason: string): SyncHookJSONOutput => ({
+const denyOutput = (reason: string): SyncHookJSONOutput => ({
   hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
 });
 const allowOutput = (reason: string): SyncHookJSONOutput => ({
@@ -144,7 +146,7 @@ function checked(out: SyncHookJSONOutput): SyncHookJSONOutput {
 }
 
 /**
- * A PreToolUse callback that throws fails OPEN and the tool runs (probe Q6), so every exception, including one from
+ * A PreToolUse callback that throws fails OPEN and the tool runs, so every exception, including one from
  * reading the input or from the error report itself, becomes an explicit deny. The body is synchronous.
  */
 export function failClosed(body: (input: PreToolUseHookInput) => SyncHookJSONOutput, onError: (input: unknown, error: string) => void): HookCallback {
@@ -235,19 +237,17 @@ function resolveReal(path: string): string {
   }
 }
 
-const own = <T>(slice: Owned<T>): T => slice as unknown as T;
 const pad = (n: number) => String(n).padStart(2, "0");
 const localDay = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const localMonth = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
 const SYSTEM: Initiator = { kind: "system" };
-const isOpenCard = (m: Message): m is Card => (m.kind === "question" || m.kind === "permission") && m.answer === null;
 
 export function createGate(deps: GateDeps): Gate {
   const { world, userName } = deps;
   const state = own<GateState>(world.gate);
   const rulesOf = (bot: BotRecord) => own<StandingRule[]>(bot.rules);
   // A recorded verdict is keyed by tool_use_id but only replayed for the same call fingerprint, so a reused id with a
-  // different input is decided afresh (probe G1). fp null marks a verdict that does not depend on the input (stopping).
+  // different input is decided afresh. fp null marks a verdict that does not depend on the input (stopping).
   const verdicts = new Map<string, { fp: string | null; out: SyncHookJSONOutput }>();
   const at = (date: Date, plusMs = 0) => new Date(date.getTime() + plusMs).toISOString();
 
@@ -530,7 +530,7 @@ export function createGate(deps: GateDeps): Gate {
     answer(botId, messageId, reply) {
       const bot = world.bots.get(botId);
       if (!bot) return { ok: false, error: "Unknown bot" };
-      // A card past its deadline is expired, never granted, even before the tick that would have retired it (probe G1).
+      // A card past its deadline is expired, never granted, even before the tick that would have retired it.
       const held = state.open.find((c) => c.cardId === messageId);
       if (held && held.expiresAt <= deps.now().toISOString()) {
         expire(held);

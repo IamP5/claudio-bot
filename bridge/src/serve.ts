@@ -7,10 +7,10 @@ import type { ClientMessage, DeviceId, ServerMessage, TransportMessage } from ".
 import { forProtocol2 } from "./protocol2";
 import type { Stream } from "./stream";
 
-// HTTP and the socket: /health, POST /pair, /ws with resume, and the transport messages. Owner: U5.
+// HTTP and the socket: /health, POST /pair, /ws with resume, and the transport messages.
 
 // Broadcasts go out twice: as is to apps that connected with ?protocol=3, and with permission cards shown as questions
-// to today's app, which sends no protocol and has no permission card.
+// to a protocol 2 app, which sends no protocol and has no permission card.
 const TOPIC = { 2: "protocol2", 3: "protocol3" } as const;
 // Uploads ride inline in `send` as base64, up to 10 MB a file. The app's socket takes frames this large too.
 export const MAX_FRAME_BYTES = 32 << 20;
@@ -21,7 +21,7 @@ export const PAIR_FAILURE_WINDOW_MS = 10 * 60_000;
  * A socket is live while it was heard from this recently. The app pings every 20 s while it runs; a suspended iPhone
  * stops pinging but keeps the socket open, and push must not mistake it for someone watching.
  */
-export const LIVE_WINDOW_MS = 45_000;
+const LIVE_WINDOW_MS = 45_000;
 // Bun pings a socket silent for 44 s and closes it at 60 s, so a dead one goes away instead of lingering for two minutes.
 const IDLE_TIMEOUT_S = 60;
 
@@ -167,7 +167,7 @@ export function serve(deps: ServeDeps): Transport {
         if (deviceId === null) return new Response("Unauthorized", { status: 401 });
         const protocol = Number(url.searchParams.get("protocol")) >= 3 ? 3 : 2;
         const epoch = url.searchParams.get("epoch");
-        // The ring holds protocol 3 frames, and today's app never asks to resume.
+        // The ring holds protocol 3 frames, and a protocol 2 app never asks to resume.
         const resume = epoch && protocol === 3 ? { epoch, after: Number(url.searchParams.get("after") ?? NaN) } : null;
         const limited = protocol === 2 || devices.list(null).some((d) => d.id === deviceId && d.legacy);
         if (server.upgrade(req, { data: { deviceId, protocol, resume, heardAt: deps.now().getTime(), limited } })) return;

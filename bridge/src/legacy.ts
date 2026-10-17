@@ -2,7 +2,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Devices } from "./devices";
 
-// Protocol 2's shared token keeps today's phone connected for one release, as the legacy device. Owner: U5.
+// Protocol 2's shared token keeps a phone paired before protocol 3 connected for one release, as the legacy device.
 // Revoking that phone leaves a marker next to state.json, because the token file alone can come back (an old bridge
 // run writes a new one, a backup restores it). Once the marker exists, no token is ever imported again.
 

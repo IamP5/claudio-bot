@@ -18,7 +18,7 @@ import {
 
 export const bridgeHome = () => process.env.CLAUDIOBOT_HOME ?? join(homedir(), ".claudiobot");
 
-export const STATE_VERSION = 3;
+const STATE_VERSION = 3;
 
 /**
  * Debounced save. "now" writes synchronously before returning: the path for state that must precede an effect. It
@@ -26,7 +26,7 @@ export const STATE_VERSION = 3;
  */
 export type Persist = (urgency?: "now") => void;
 
-export type StateFileV3 = {
+type StateFileV3 = {
   version: 3;
   bots: BotRecord[];
   agents: AgentRecord[];

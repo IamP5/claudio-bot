@@ -40,7 +40,7 @@ export function initiatorOf(e: Envelope): Initiator {
 export const runsAhead = (e: Envelope): boolean => e.from === "decision";
 
 /** Only a routine's own fire settles its run. A continuation keeps the routine's initiator but settles nothing. */
-export const settlesOf = (e: Envelope): RunRef | null => (e.from === "routine" ? e.run : null);
+const settlesOf = (e: Envelope): RunRef | null => (e.from === "routine" ? e.run : null);
 
 /** What a session queues for one envelope. Session.push takes this, and Pending keeps all of it but `ahead`. */
 export type SessionInput = { text: string; initiator: Initiator; settles: RunRef | null; ahead: boolean };

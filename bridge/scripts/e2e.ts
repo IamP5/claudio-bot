@@ -94,7 +94,7 @@ async function pair(code: string): Promise<string> {
   return body.token;
 }
 
-/** protocol3 false is today's app: no ?protocol=3, so permission cards arrive as questions. */
+/** protocol3 false is a protocol 2 app: no ?protocol=3, so permission cards arrive as questions. */
 function connect(token: string, protocol3 = true) {
   const bots = new Map<BotId, Bot>();
   const conversations = new Map<BotId, Message[]>();
@@ -272,8 +272,8 @@ try {
     await c.waitFor(() => c.resting(claudio), "the held turn to end");
     check(c.status(claudio) === "awaiting_approval", "the bot rests as awaiting approval");
     check((await head(origin)) === remoteBefore, "origin's main did not move before approval");
-    const shown = await old.waitFor(() => old.messages(claudio).find((m) => m.id === card.id), "today's app to see the card", 10_000);
-    check(shown.kind === "question" && JSON.stringify(shown.options) === JSON.stringify(["Allow once", "Deny"]), "today's app sees it as an Allow once / Deny question");
+    const shown = await old.waitFor(() => old.messages(claudio).find((m) => m.id === card.id), "a protocol 2 app to see the card", 10_000);
+    check(shown.kind === "question" && JSON.stringify(shown.options) === JSON.stringify(["Allow once", "Deny"]), "a protocol 2 app sees it as an Allow once / Deny question");
     if (viaLegacy) old.send({ type: "answer", botId: claudio, messageId: card.id, option: 0 });
     else c.send({ type: "decide", botId: claudio, messageId: card.id, choice: "once" });
     await c.waitFor(() => c.messages(claudio).find((m) => m.id === card.id && m.kind === "permission" && m.answer === "once"), "the card to close as once", 10_000);
@@ -290,7 +290,7 @@ try {
     return heldPush(false);
   });
 
-  await scenario("today's app approves a held push through its question card", async () => {
+  await scenario("a protocol 2 app approves a held push through its question card", async () => {
     await git(pushme, "commit", "-q", "--allow-empty", "-m", "second change");
     return heldPush(true);
   });

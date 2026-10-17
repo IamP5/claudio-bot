@@ -1,10 +1,10 @@
 import type { Tickable } from "./clock";
 import type { BotId, MessageId } from "./protocol";
 import type { Persist } from "./store";
-import type { Owned, PushState, World } from "./world";
+import { own, type PushState, type World } from "./world";
 
 // "<bot> needs you" when no socket is live: an ntfy-style POST to CLAUDIOBOT_PUSH_URL now, APNs later behind the
-// same Sender. The only writer of World.push. Owner: U6.
+// same Sender. The only writer of World.push.
 // No message content ever leaves the Mac: the text is the bot's name (cleaned, at most 40 characters) and a fixed
 // phrase per reason, the click link
 // claudiobot://bot/<id>?message=<id>.
@@ -26,7 +26,7 @@ export type Push = Tickable & {
 };
 
 /** What a transport receives. `text` and `link` are the whole user-visible payload. */
-export type Notification = { botId: BotId; messageId: MessageId; text: string; link: string };
+type Notification = { botId: BotId; messageId: MessageId; text: string; link: string };
 
 /** One delivery attempt. Rejects on failure; the caller never retries. ntfy now, APNs later. */
 export type Sender = (n: Notification) => Promise<void>;
@@ -44,7 +44,7 @@ const PHRASE: Record<PushReason, string> = {
   result: "has an update for you",
 };
 
-export const linkTo = (botId: BotId, messageId: MessageId) =>
+const linkTo = (botId: BotId, messageId: MessageId) =>
   `claudiobot://bot/${encodeURIComponent(botId)}?message=${encodeURIComponent(messageId)}`;
 
 export function ntfySender(url: string, fetchFn: typeof fetch = fetch): Sender {
@@ -72,7 +72,6 @@ export function senderFromEnv(value: string | undefined, log: (line: string) => 
   return ntfySender(url.href, fetchFn);
 }
 
-const own = (slice: Owned<PushState>) => slice as PushState;
 const idOf = (key: string) => key.slice(0, key.lastIndexOf("|"));
 
 // The name is the one bot-controlled free text that leaves the Mac, so a renamed bot cannot smuggle content out.
@@ -114,7 +113,7 @@ export function createPush(deps: {
     if (pushed(key)) return false;
     if (reason === "message" && throttled(bot.id, now)) return false;
 
-    const state = own(world.push);
+    const state = own<PushState>(world.push);
     state.sent = state.sent.filter((s) => now - Date.parse(s.at) < RETAIN_MS);
     state.sent.push({ key, at: new Date(now).toISOString() });
     try {

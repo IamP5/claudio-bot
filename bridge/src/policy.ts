@@ -1,6 +1,5 @@
 // The whole tool policy, pure: no SDK types, no IO, no clock. gate.ts parses the hook input into a ToolCall at the
 // boundary, gathers the context (including the filesystem's realpath and the known user homes), and calls decide().
-// Owner: U1.
 //
 // Accepted limits (documented so the README can quote them, and so a reviewer knows what is out of scope):
 //   - Interpreters. A protected path reached only through code an interpreter runs (python -c, node -e, ruby -e, a
@@ -72,7 +71,7 @@ export type Decision =
   | { kind: "deny"; via: DenyVia; rule: string; reason: string; handOff: boolean }
   | { kind: "ask"; rule: string; label: string; signature: Signature; always: string; offerAlways: boolean };
 
-export type DenyVia = "floor" | "initiator" | "limit" | "never" | "rule" | "malformed";
+type DenyVia = "floor" | "initiator" | "limit" | "never" | "rule" | "malformed";
 
 /** Allowed calls per bot per local day. Past these, a runaway chain stops making bots and agents. */
 export const DAILY_CAPS: Readonly<Record<string, number>> = { mcp__claudio__create_bot: 5, mcp__claudio__start_agent: 20 };
@@ -147,7 +146,7 @@ const absRaw = (p: string, dir: string) => (isAbsolute(p) ? p : `${dir}${sep}${p
 /** Keys whose string values are paths, in any tool's input (built-in file tools and MCP filesystem servers alike). */
 const PATH_KEY = /path|file|dir|folder|uri|url|location|^(cwd|src|source|dest|destination|target)$/i;
 const looksPath = (v: string) => /^[~/]/.test(v) || v.startsWith("file://") || /\$\{?HOME\b/.test(v) || v.includes("/");
-/** A file's new contents, never a path; scanning it as paths is slow and pointless (perf, SHOULD 10). */
+/** A file's new contents, never a path; scanning it as paths is slow and pointless. */
 const BODY_KEYS = new Set(["content", "old_string", "new_string", "new_source"]);
 
 /** Every string in a tool's input that could name a path: keyed as a path, or shaped like one anywhere it appears. */
@@ -205,7 +204,7 @@ const WRAPPERS: Record<string, readonly string[]> = {
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish"]);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
-/** The executable's name for matching rows: a leading zsh `=` stripped, the basename taken, lower-cased (MUST 3). */
+/** The executable's name for matching rows: a leading zsh `=` stripped, the basename taken, lower-cased. */
 const verbOf = (word: string) => basename(word.startsWith("=") ? word.slice(1) : word).toLowerCase();
 
 /** What a wrapped segment really runs: a command, or a script handed to a shell. `chdir` is set by env -C/--chdir. */
@@ -237,7 +236,7 @@ function unwrap(raw: string[]): Unwrapped {
         if (head === "env" && c) chdir = c[1];
       }
       if (head === "timeout" && i < words.length) i++;
-      // A bare `env` / `env -i` / `env A=1` with no command is an environment dump, not a wrapper; surface it (SHOULD 14).
+      // A bare `env` / `env -i` / `env A=1` with no command is an environment dump, not a wrapper; surface it.
       if (head === "env" && i >= words.length) return { words: ["env"], chdir };
       words = words.slice(i);
       continue;
@@ -282,12 +281,12 @@ const WRITING = (verb: string, words: string[]) =>
 /** A command word is a $PATH lookup, not a cwd-relative file, unless it is spelled as a path. */
 const commandIsPath = (text: string) => text.startsWith("/") || text.startsWith("~") || text.startsWith("./") || text.startsWith("../");
 const META = /[$`*?[{]/;
-/** A path longer than any real filesystem path is a file body or a huge literal, not a path to resolve (perf, SHOULD 10). */
+/** A path longer than any real filesystem path is a file body or a huge literal, not a path to resolve. */
 const MAX_PATH_LEN = 4096;
-/** A Bash command past this is held rather than parsed, so the synchronous hook cannot freeze the bridge (perf, SHOULD 10). */
+/** A Bash command past this is held rather than parsed, so the synchronous hook cannot freeze the bridge. */
 const MAX_BASH_LEN = 256 * 1024;
 
-/** Replace $name / ${name} with a tracked literal assignment's value (SHOULD 8), so `d=.ssh; cat ~/$d/id_rsa` resolves. */
+/** Replace $name / ${name} with a tracked literal assignment's value, so `d=.ssh; cat ~/$d/id_rsa` resolves. */
 function substVars(text: string, vars: Record<string, string>): string {
   if (Object.keys(vars).length === 0 || !text.includes("$")) return text;
   return text.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (m, a: string, b: string) => vars[a ?? b] ?? m);
@@ -296,7 +295,7 @@ function substVars(text: string, vars: Record<string, string>): string {
 /**
  * One path a word names: tracked vars and `~`, `~name`, `~+`, `$HOME` are expanded first, then the path is cut at the
  * first metacharacter still unresolved ($VAR, a backtick, a glob). A word with a leftover metachar only knows the
- * directory above the metachar (cut back to the last `/`, MUST 4), which matches a protected root as an ancestor: the
+ * directory above the metachar (cut back to the last `/`), which matches a protected root as an ancestor: the
  * glob could expand into the root. Empty prefixes resolve to nothing.
  */
 function candidateTouch(raw: string, dir: string, ctx: PolicyContext, vars: Record<string, string>, ancestorAnyway: boolean, write: boolean): Touch | null {
@@ -305,7 +304,7 @@ function candidateTouch(raw: string, dir: string, ctx: PolicyContext, vars: Reco
   const m = expanded.search(META);
   let cut = m === -1 ? expanded : expanded.slice(0, m);
   if (m !== -1) {
-    // The metachar is unresolved, so only the directory above it is a known path; back up to the last `/` (MUST 4).
+    // The metachar is unresolved, so only the directory above it is a known path; back up to the last `/`.
     const slash = cut.lastIndexOf("/");
     if (slash >= 0) cut = cut.slice(0, slash + 1);
   }
@@ -366,7 +365,7 @@ function bashParts(command: string, cwd: string, ctx: PolicyContext): Part[] {
   const start = ctx.realpath(cwd);
   const commands = shellCommands(command);
   const vars = collectVars(commands, ctx, start);
-  if (!("TMPDIR" in vars)) vars.TMPDIR = process.env.TMPDIR ?? "/tmp"; // a known scratch root, so $TMPDIR/x resolves (FP trim)
+  if (!("TMPDIR" in vars)) vars.TMPDIR = process.env.TMPDIR ?? "/tmp"; // a known scratch root, so $TMPDIR/x resolves
   const addedRemotes = new Set<string>();
 
   // A set of possible cwds, over-approximated: `cd` keeps the old dirs as well as the new, so a conditional or failed cd
@@ -397,7 +396,7 @@ function bashParts(command: string, cwd: string, ctx: PolicyContext): Part[] {
     // env -C/--chdir runs just this command elsewhere; otherwise it runs in one of the possible cwds (plus HOME if uncertain).
     const here = u.chdir !== undefined ? dirs.map((d) => resolveDir(u.chdir!, d)) : uncertain ? union(dirs, [home]) : dirs;
     const nWords: string[] = [verb, ...u.words.slice(1).map((w) => substVars(w, vars))];
-    // A push to a remote that is a URL, or one added or re-pointed on this same line, can exfiltrate the repo (SHOULD 12).
+    // A push to a remote that is a URL, or one added or re-pointed on this same line, can exfiltrate the repo.
     let pushUntrusted = false;
     if (verb === "git") {
       const g = gitArgs(nWords);
@@ -457,7 +456,7 @@ function bashParts(command: string, cwd: string, ctx: PolicyContext): Part[] {
     } else if (operand.text === "-") {
       dirs = union(dirs, prev); // `cd -` returns to OLDPWD
     } else if (emptyDynamic(operand, vars)) {
-      dirs = union(dirs, [home]); // a dynamic target could be anywhere; HOME is the common landing (SHOULD "ask on such cd")
+      dirs = union(dirs, [home]); // a dynamic target could be anywhere; HOME is the common landing
       uncertain = true;
     } else {
       dirs = union(dirs, dirs.map((d) => resolveDir(operand.text, d)));
@@ -469,7 +468,7 @@ function bashParts(command: string, cwd: string, ctx: PolicyContext): Part[] {
   return parts;
 }
 
-/** Literal same-line assignments (`d=.ssh`, `h=$HOME`), expanded to an absolute value where one is known (SHOULD 8). */
+/** Literal same-line assignments (`d=.ssh`, `h=$HOME`), expanded to an absolute value where one is known. */
 function collectVars(commands: { words: Word[] }[], ctx: PolicyContext, dir: string): Record<string, string> {
   const vars: Record<string, string> = {};
   for (const c of commands)
@@ -528,7 +527,7 @@ const inHome = (...rels: string[]) => (ctx: PolicyContext) => rels.map((r) => re
 
 /** Entering any of these is the user's job (handed off), read or write, by the tool name or an input field. */
 const CREDENTIAL_WORDS = new Set(["password", "passwords", "passcode", "otp", "totp", "2fa", "mfa", "cvv", "cvc", "cardnumber"]);
-/** A payment action is handed off only when it is a write (checkout, pay), never a read (get_purchase_quote, SHOULD 14). */
+/** A payment action is handed off only when it is a write (checkout, pay), never a read (get_purchase_quote). */
 const PAYMENT_WORDS = new Set(["pay", "payment", "payments", "purchase", "checkout"]);
 
 function keyWords(value: unknown, out: Set<string>) {
@@ -568,7 +567,7 @@ const ESCALATE = {
     if (/(^|\/)\.(zshrc|zprofile|bashrc|bash_profile|profile)$/.test(path)) return true;
     if (under(path, resolve(ctx.scope.homedir, "Library/LaunchAgents"))) return true;
     for (const d of ["hooks", "commands", "agents", "skills", "plugins"]) if (under(path, resolve(ctx.scope.homedir, ".claude", d))) return true;
-    // Persistence vectors a committed repo or the home dir can carry (SHOULD 13): agent instructions and hook scripts.
+    // Persistence vectors a committed repo or the home dir can carry: agent instructions and hook scripts.
     if (/(^|\/)(\.claude\/)?CLAUDE\.md$/.test(path)) return true;
     if (/(^|\/)\.claude\/(commands|agents|skills|hooks)\//.test(path)) return true;
     if (/(^|\/)\.(githooks|husky)(\/|$)/.test(path)) return true;
@@ -700,7 +699,7 @@ const COMMIT_MSG_FLAGS = new Set(["-m", "--message", "-F", "--file"]);
 const GH_BODY_FLAGS = new Set(["-b", "--body", "-F", "--body-file", "-t", "--title"]);
 
 /** The text a floor's raw scan should see: data arguments (an echo string, a commit message, a PR body, a grep pattern)
- *  are dropped, because a protected path named only there is not read (FP trim); a path a command actually reads stays. */
+ *  are dropped, because a protected path named only there is not read; a path a command actually reads stays. */
 function scanTextOf(verb: string, words: string[]): string {
   if (verb === "echo" || verb === "printf") return "";
   if (verb === "git") {
@@ -879,7 +878,7 @@ const SCRATCH_ROOTS = (ctx: PolicyContext) => [
 const inScratch = (real: string, ctx: PolicyContext) => SCRATCH_ROOTS(ctx).some((r) => under(real, ctx.realpath(r)) || under(real, r));
 /** A recursive-delete operand that is outside the bot's own scope and not a throwaway cache/temp dir. */
 const deletesOutside = (path: string, cwd: string, ctx: PolicyContext) => {
-  const p = path.replace(/\$\{?TMPDIR\}?/g, process.env.TMPDIR ?? "/tmp"); // $TMPDIR is a scratch root (FP trim)
+  const p = path.replace(/\$\{?TMPDIR\}?/g, process.env.TMPDIR ?? "/tmp"); // $TMPDIR is a scratch root
   const real = ctx.realpath(absRaw(expandHome(p, ctx, cwd), cwd));
   return !inScope(real, ctx) && !inScratch(real, ctx);
 };
@@ -998,7 +997,7 @@ const TABLE: readonly Row[] = [
     id: "publish",
     label: "Publish a package or a release",
     match: bash((words) => {
-      if (words.includes("--dry-run")) return false; // a dry run uploads nothing (FP trim)
+      if (words.includes("--dry-run")) return false; // a dry run uploads nothing
       const d = deploySub(words);
       if (d && (d.tool === "npm" || d.tool === "pnpm" || d.tool === "yarn" || d.tool === "bun") && ["publish", "unpublish", "dist-tag", "deprecate"].includes(d.sub)) return true;
       const g = ghArgs(words);
@@ -1012,7 +1011,7 @@ const TABLE: readonly Row[] = [
     id: "deploy",
     label: "Deploy or change infrastructure",
     match: bash((words, text) => {
-      if (words.includes("--dry-run")) return false; // a dry run changes nothing (FP trim)
+      if (words.includes("--dry-run")) return false; // a dry run changes nothing
       const v = basename(words[0] ?? "");
       // vercel/netlify take the prod flag with or without a `deploy` subcommand, and promote/rollback also change prod.
       if (v === "vercel" || v === "netlify") return words.some((a) => a.startsWith("--prod") || a === "--target=production") || ["promote", "rollback"].includes(words[1] ?? "");
@@ -1071,7 +1070,7 @@ const TABLE: readonly Row[] = [
     label: "Send data to a web service",
     match: bash((words, _, part) => {
       if (part.verb !== "curl" && part.verb !== "wget") return false;
-      // Posting to the loopback host is a local dev server, not exfiltration (FP trim).
+      // Posting to the loopback host is a local dev server, not exfiltration.
       if (words.some((a) => /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(a) || /\.localhost(:|\/|$)/.test(a))) return false;
       return part.verb === "curl" ? curlSends(words.slice(1)) : wgetSends(words.slice(1));
     }),
@@ -1147,7 +1146,7 @@ const deny = (via: DenyVia, rule: string, reason: string, handOff = false): Deci
  */
 export function decide(call: ToolCall, ctx: PolicyContext): Decision {
   if (SDK_INTERNAL.has(call.tool)) return PASS;
-  // A command too long to scan in bounded time is held rather than parsed, so the hook never freezes the bridge (SHOULD 10).
+  // A command too long to scan in bounded time is held rather than parsed, so the hook never freezes the bridge.
   if (call.tool === "Bash" && typeof call.input.command === "string" && call.input.command.length > MAX_BASH_LEN)
     return { kind: "ask", rule: "bash.toolong", label: "Run a very long shell command", signature: "Bash:bash.toolong" as Signature, always: "", offerAlways: false };
   const at: { via: DenyVia; rule: string } = { via: "floor", rule: "floor.paths" };

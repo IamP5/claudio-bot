@@ -33,7 +33,7 @@ export function serviceTarget(opts: { label: string; uid: number; logDir: string
 export const defaultLogDir = (home = homedir()) => join(home, "Library", "Logs", "ClaudioBot");
 
 /** Names that steer this CLI, not the bridge, so they stay out of the service's environment. */
-export const CONTROL_VARS = ["CLAUDIOBOT_SERVICE_LABEL", "CLAUDIOBOT_LOG_DIR"] as const;
+const CONTROL_VARS = ["CLAUDIOBOT_SERVICE_LABEL", "CLAUDIOBOT_LOG_DIR"] as const;
 
 /** launchd starts agents with a bare PATH and none of the shell's variables, so the install-time ones are pinned. */
 export function capturedEnv(env: Record<string, string | undefined>): Record<string, string> {
@@ -49,7 +49,7 @@ export type ServiceSpec = { target: ServiceTarget; bun: string; env: Record<stri
 
 type PlistValue = string | number | boolean | PlistValue[] | { [key: string]: PlistValue };
 
-export function plistDict(spec: ServiceSpec): { [key: string]: PlistValue } {
+function plistDict(spec: ServiceSpec): { [key: string]: PlistValue } {
   const { target } = spec;
   return {
     Label: target.label,

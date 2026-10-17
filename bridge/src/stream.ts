@@ -2,7 +2,6 @@ import type { Broadcast, ServerMessage, StreamPosition } from "./protocol";
 
 // The resumable broadcast: a seq on every published frame, an epoch per bridge start, and a bounded replay ring.
 // Memory only, so a restart means a fresh hello. Every frame is a full upsert, so replaying one twice is harmless.
-// Owner: U5.
 
 export type Stream = {
   /** Random per start; never "" (that means "no ring" on the wire). */

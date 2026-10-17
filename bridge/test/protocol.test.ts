@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import fixtures from "../../fixtures/protocol.json";
-import { fixturesJson, fixturesPath } from "../src/fixtures";
+import { fixturesJson, fixturesPath } from "../scripts/fixtures";
 import { parseClientMessage } from "../src/parse";
 
-test("fixtures/protocol.json is what src/fixtures.ts generates, so tsc has checked every server fixture", async () => {
+test("fixtures/protocol.json is what scripts/fixtures.ts generates, so tsc has checked every server fixture", async () => {
   expect(await Bun.file(fixturesPath).text()).toBe(fixturesJson());
 });
 

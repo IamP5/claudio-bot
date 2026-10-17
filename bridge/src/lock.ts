@@ -1,7 +1,7 @@
 import { linkSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-// One bridge per home. Owner: U5.
+// One bridge per home.
 
 export type HomeLock =
   | { kind: "held"; path: string; release(): void }

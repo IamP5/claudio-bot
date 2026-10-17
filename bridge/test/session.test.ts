@@ -609,6 +609,7 @@ function harness(
     defaultExecutable?: boolean;
     clock?: { t: number };
     dailyLeft?: () => number;
+    context?: () => string;
   } = {},
 ) {
   const clock = opts.clock ?? { t: NOW.getTime() };
@@ -627,6 +628,7 @@ function harness(
     state,
     account,
     options: opts.options ?? (() => ({ cwd: "/bots/b_1", resume: state.id ?? undefined })),
+    context: opts.context,
     ledger: {
       add: opts.add ?? ((row) => void usage.push(row as Record<string, unknown>)),
       headroom: (_, i) => (opts.headroom ?? roomy)(i),
@@ -694,6 +696,34 @@ async function started(text: string, initiator: Initiator = user): Promise<{ h: 
 }
 
 describe("session", () => {
+  test("the context rides on a turn's message when it changed since this session last sent it, even on an open query", async () => {
+    let context = "";
+    const h = harness({ context: () => context });
+    h.push("[Alex]\none");
+    await flush();
+    h.q().emit(resultMsg(0.1));
+    await flush();
+    context = "Facts: likes tea";
+    h.push("[Alex]\ntwo");
+    await flush();
+    h.q().emit(resultMsg(0.2));
+    await flush();
+    h.push("[Alex]\nthree");
+    await flush();
+    h.q().emit(resultMsg(0.3));
+    await flush();
+    context = "";
+    h.push("[Alex]\nfour");
+    await flush();
+    expect(h.queries).toHaveLength(1);
+    expect(h.sent()).toEqual([
+      "[Alex]\none",
+      "Facts: likes tea\n\n[Alex]\ntwo",
+      "[Alex]\nthree",
+      "[No facts about the user are on file now. The list sent earlier no longer applies.]\n\n[Alex]\nfour",
+    ]);
+  });
+
   test("an envelope is on disk, counted as started, before the SDK sees it", async () => {
     const { h, id } = await started("[Alex]\nhello");
     expect(h.q().received).toHaveLength(1);

@@ -371,12 +371,13 @@ export function createHub(deps: HubDeps): Hub {
       log: deps.log,
       name: () => bot.name,
       continuing: () => gate.beginTurn(actor),
+      context: () => memory.context(bot.id),
       ...deps.claude,
       options: () => ({
         cwd: homes.homeOf(bot.id),
         resume: bot.session.id ?? undefined,
         settingSources: ["user", "project"],
-        systemPrompt: { type: "preset", preset: "claude_code", append: [persona({ name: bot.name, userName }), memory.context(bot.id)].filter(Boolean).join("\n\n") },
+        systemPrompt: { type: "preset", preset: "claude_code", append: persona({ name: bot.name, userName }) },
         permissionMode: "auto",
         mcpServers: { claudio: botToolServer(bot.id, actions) },
         // A bot asks with its own ask tool, which posts a card instead of blocking the turn.

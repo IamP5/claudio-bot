@@ -113,6 +113,7 @@ export const notices = {
     `[Your request to run ${call(tool, detail)} expired unanswered. It did not run. ${userName} did not say no; ask again later if it still matters.]`,
   expiredQuestion: (userName: string, question: string) =>
     `[Your question "${question}" expired unanswered. ${userName} did not say no; do not act on it.]`,
+  contextCleared: "[No facts about the user are on file now. The list sent earlier no longer applies.]",
   droppedByStop: (userName: string, envelopeText: string) =>
     `[${userName} pressed Stop, so this never ran: ${envelopeText.split("\n")[0]}]`,
 };

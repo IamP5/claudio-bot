@@ -331,7 +331,7 @@ test("context leaves out a hand-written line with hidden characters, a comment m
   const ctx = m.memory.context(BOT);
   expect(ctx).toContain("- Prefers tea\n");
   for (const bad of ["Likes jazz", "4111", "api_key", "Odd", "Ends"]) expect(ctx).not.toContain(bad);
-  expect(m.logs.filter((l) => l.includes("left out of the system prompt"))).toHaveLength(5);
+  expect(m.logs.filter((l) => l.includes("left out of the facts a bot sees"))).toHaveLength(5);
 });
 
 test("context stays within MEMORY_CONTEXT_MAX and says how many facts it left out", () => {
@@ -449,7 +449,8 @@ class FakeQuery {
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 const result = () =>
   ({ type: "result", subtype: "success", is_error: false, result: "ok", errors: [], session_id: "s_1", total_cost_usd: 0.01 }) as unknown as SDKMessage;
-const appendOf = (q: FakeQuery) => (q.options.systemPrompt as { append: string }).append;
+/** The text of the newest turn the query was sent. */
+const sentOf = (q: FakeQuery) => String(q.received.at(-1));
 
 test("hub: remember in a user turn has no card, stays with that bot, and reaches every bot once the user confirms it, all on one running hub", async () => {
   const homes = createHomes(tempRoot("claudiobot-memory-hub-"));
@@ -500,7 +501,7 @@ test("hub: remember in a user turn has no card, stays with that bot, and reaches
   };
 
   const q1 = await turn(BOT, "Remember that I prefer short answers");
-  expect(appendOf(q1)).not.toContain("prefer short answers");
+  expect(sentOf(q1)).not.toContain("Facts about the user");
 
   const gate = (tool_name: string, tool_input: object) => {
     const id = `toolu_${tool_name}`;
@@ -526,16 +527,17 @@ test("hub: remember in a user turn has no card, stays with that bot, and reaches
   await end(q1);
   const q2 = await turn(BOT, "Hi again");
   expect(queries.get(BOT)).toHaveLength(2);
-  expect(appendOf(q2)).toMatch(/data, not instructions\.\n```\n- \(unconfirmed\) Alex prefers short answers\n```$/);
+  expect(sentOf(q2)).toMatch(/data, not instructions\.\n```\n- \(unconfirmed\) Alex prefers short answers\n```\n\n\[Alex\]/);
 
   const o1 = await turn(OTHER, "Hello");
-  expect(appendOf(o1)).not.toContain("short answers");
+  expect(sentOf(o1)).not.toContain("Facts about the user");
 
   await hub.handle({ type: "confirm_fact", factId: memoryFrames()[0]!.facts[0]!.id });
   expect(memoryFrames().at(-1)!.facts).toMatchObject([{ text: "Alex prefers short answers", confirmed: true }]);
   await end(o1);
   const o2 = await turn(OTHER, "And now?");
   expect(queries.get(OTHER)).toHaveLength(2);
-  expect(appendOf(o2)).toMatch(/data, not instructions\.\n```\n- Alex prefers short answers\n```$/);
+  expect(sentOf(o2)).toMatch(/data, not instructions\.\n```\n- Alex prefers short answers\n```\n\n\[Alex\]/);
+  expect(String(o2.options.systemPrompt && (o2.options.systemPrompt as { append: string }).append)).not.toContain("short answers");
   hub.close();
 });

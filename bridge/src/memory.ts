@@ -64,9 +64,8 @@ const hasCardNumber = (text: string) => [...text.matchAll(CARD_DIGITS)].some((m)
 
 export type Memory = {
   /**
-   * Appended to a bot's system prompt as its query opens: USER.md's confirmed facts and this bot's own proposals, fenced
-   * and labelled as data, at most MEMORY_CONTEXT_MAX bytes. "" when there are none. Called from the hub's options(); it
-   * must not throw.
+   * Put on top of a bot's turn when it changed since its session last sent it: USER.md's confirmed facts and this bot's
+   * own proposals, fenced and labelled as data, at most MEMORY_CONTEXT_MAX bytes. "" when there are none. Must not throw.
    */
   context(botId: BotId): string;
   /** The remember tool. Returns the tool's reply; throws (the tool reports an error) when it refuses the text. */
@@ -285,7 +284,7 @@ export function createMemory(deps: MemoryDeps): Memory {
           if (f.proposer !== null && f.proposer !== botId) return [];
           const why = unsafe(f.fact.text);
           if (why !== null) {
-            deps.log(`memory: fact ${f.fact.id} left out of the system prompt: ${why}`);
+            deps.log(`memory: fact ${f.fact.id} left out of the facts a bot sees: ${why}`);
             return [];
           }
           return [f.proposer === null ? f.fact.text : `(unconfirmed) ${f.fact.text}`];

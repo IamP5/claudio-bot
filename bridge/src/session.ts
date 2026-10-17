@@ -517,6 +517,12 @@ export type SessionSpec = {
   account: Owned<AccountState>;
   /** Read at every query start: resume from state.id, and hooks: gate.hooks(actor). */
   options: () => Options;
+  /**
+   * Read before each turn is sent: context that changes between turns (the facts about the user). A resumed Claude Code
+   * session keeps the system prompt it started with, so this rides on the turn's message, and only when it differs
+   * from what this session last sent.
+   */
+  context?: () => string;
   /** headroom() before each start, dailyLeft() as a query opens for an unattended turn, add() at each result. */
   ledger: Ledger;
   /** Every SDK message of the live query, with the turn in flight; late output between turns comes with null. */
@@ -589,6 +595,17 @@ export function createSession(spec: SessionSpec): Session {
   // When the live query last said anything or was sent a turn, and whether the turn in flight was told it is silent.
   let heardAt = 0;
   let stallNoted = false;
+
+  /** The context this session last put on a turn; null before the first. */
+  let contextSent: string | null = null;
+  function withContext(text: string): string {
+    let now = contextSent ?? "";
+    guard("context", () => void (now = spec.context?.() ?? ""));
+    if (now === (contextSent ?? "")) return text;
+    const shown = now === "" ? noticeText.contextCleared : now;
+    contextSent = now;
+    return `${shown}\n\n${text}`;
+  }
 
   const guard = (what: string, f: () => void) => {
     try {
@@ -685,7 +702,7 @@ export function createSession(spec: SessionSpec): Session {
     heardAt = clock().getTime();
     stallNoted = false;
     if (p.kind === "continuation") guard("continuing", () => spec.continuing?.());
-    l.send({ type: "user", message: { role: "user", content: text }, parent_tool_use_id: null });
+    l.send({ type: "user", message: { role: "user", content: withContext(text) }, parent_tool_use_id: null });
   }
 
   /** The stall note while a turn runs; closing the query while none does. */

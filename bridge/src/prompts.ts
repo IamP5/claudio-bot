@@ -39,7 +39,7 @@ export function initiatorOf(e: Envelope): Initiator {
 }
 
 /** An approval continuation runs before anything else queued, so the grant it relies on is still fresh. */
-export const kindOf = (e: Envelope): Pending["kind"] => (e.from === "decision" ? "continuation" : "envelope");
+const kindOf = (e: Envelope): Pending["kind"] => (e.from === "decision" ? "continuation" : "envelope");
 
 /** Only a routine's own fire settles its run. A continuation keeps the routine's initiator but settles nothing. */
 const settlesOf = (e: Envelope): RunRef | null => (e.from === "routine" ? e.run : null);

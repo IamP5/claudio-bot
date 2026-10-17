@@ -403,19 +403,22 @@ function bashParts(command: string, cwd: string, ctx: PolicyContext): Part[] {
     // env -C/--chdir runs just this command elsewhere; otherwise it runs in one of the possible cwds (plus HOME if uncertain).
     const here = u.chdir !== undefined ? dirs.map((d) => resolveDir(u.chdir!, d)) : uncertain ? union(dirs, [home]) : dirs;
     const nWords: string[] = [verb, ...u.words.slice(1).map((w) => substVars(w, vars))];
-    // A push to a remote that is a URL, or one added or re-pointed on this same line, can exfiltrate the repo.
+    // A push to a remote that is a URL or a path, or one added or re-pointed on this same line, can exfiltrate the
+    // repo; so can re-pointing a remote for a later call, which is held the same way.
     let pushUntrusted = false;
     if (verb === "git") {
       const g = gitArgs(nWords);
       if (g?.sub === "remote" && (g.args[0] === "add" || g.args[0] === "set-url")) {
         const name = g.args.slice(1).find((a) => !a.startsWith("-"));
         if (name !== undefined) addedRemotes.add(name);
+        pushUntrusted = true;
       }
       if (g?.sub === "config") {
-        const key = g.args.find((a) => !a.startsWith("-")) ?? "";
+        const [key = "", value] = g.args.filter((a) => !a.startsWith("-"));
         const remote = key.match(REMOTE_URL_KEY);
         if (remote) addedRemotes.add(remote[1]!);
-        if (INSTEAD_OF_KEY.test(key)) repointed = true;
+        if (INSTEAD_OF_KEY.test(key) || INCLUDE_KEY.test(key)) repointed = true;
+        pushUntrusted = value !== undefined && (remote !== null || INSTEAD_OF_KEY.test(key) || INCLUDE_KEY.test(key));
       }
       if (g?.sub === "push") {
         const remote = g.args.find((a) => !a.startsWith("-") && !a.startsWith("+"));
@@ -460,7 +463,6 @@ function bashParts(command: string, cwd: string, ctx: PolicyContext): Part[] {
   }
 
   function updateCwd(c: { words: Word[]; cond: boolean }, verb: string) {
-    const from = dirs[0] ?? home;
     const operand = c.words.find((w, i) => i > 0 && !w.text.startsWith("-"));
     const before = dirs;
     if (verb === "popd") {
@@ -640,10 +642,10 @@ const ESCALATE = {
   config(path: string, ctx: PolicyContext): boolean {
     if (/(^|\/)\.claude\/settings[^/]*$/.test(path) || /(^|\/)\.mcp\.json$/.test(path)) return true;
     if (/(^|\/)\.git\/hooks\//.test(path) || /(^|\/)\.git\/config$/.test(path)) return true;
-    if (/(^|\/)\.(zshrc|zprofile|zshenv|zlogin|zlogout|bashrc|bash_profile|bash_login|bash_logout|profile|gitconfig|npmrc|envrc)$/.test(path)) return true;
+    if (/(^|\/)\.(zshrc|zprofile|zshenv|zlogin|zlogout|bashrc|bash_profile|bash_login|bash_logout|bash_aliases|profile|gitconfig|npmrc|envrc|vimrc|exrc|tmux\.conf|inputrc)$/.test(path)) return true;
     if (/(^|\/)\.cursor\/mcp\.json$/.test(path)) return true;
     // Folders a login shell, git or launchd reads from, or that sit early on PATH.
-    for (const d of ["Library/LaunchAgents", "Library/Preferences", ".config/git", ".config/fish", "bin", ".local/bin"]) if (under(path, resolve(ctx.scope.homedir, d))) return true;
+    for (const d of ["Library/LaunchAgents", "Library/Preferences", ".config/git", ".config/fish", ".config/nvim", ".vim", "bin", ".local/bin"]) if (under(path, resolve(ctx.scope.homedir, d))) return true;
     for (const d of ["hooks", "commands", "agents", "skills", "plugins"]) if (under(path, resolve(ctx.scope.homedir, ".claude", d))) return true;
     // Persistence vectors a committed repo or the home dir can carry: agent instructions and hook scripts.
     if (/(^|\/)(\.claude\/)?CLAUDE\.md$/.test(path)) return true;
@@ -716,28 +718,44 @@ const FLOORS: readonly Floor[] = [
   { id: "floor.localnet", label: "a loopback or private network address", roots: () => [], call: (c) => c.tool === "WebFetch" && isPrivateHost(fetchHost(c)) },
 ];
 
-/** The lower-case host a WebFetch call names, IPv6 without brackets; null when its url does not parse. */
+/** The lower-case host a WebFetch call names, IPv6 without brackets and a name without its trailing dot; null when its
+ *  url does not parse. */
 function fetchHost(call: ToolCall): string | null {
   try {
-    return new URL(String(call.input.url)).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    return new URL(String(call.input.url)).hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
   } catch {
     return null;
   }
 }
 
-/** Loopback, private, link-local, CGNAT (Tailscale) and unspecified addresses, and names that only resolve locally.
- *  URL parsing has already turned decimal and hex IPv4 spellings into dotted quads. A public name that resolves to a
+const privateV4 = (a: number, b: number) =>
+  a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+
+/** The IPv4 address an IPv6 one carries: v4-mapped ::ffff:a.b.c.d, NAT64 64:ff9b::/96, and 6to4 2002:AABB:CCDD::/48. */
+function embeddedV4(host: string): [number, number] | null {
+  const dotted = host.match(/^::ffff:(\d+)\.(\d+)\.\d+\.\d+$/);
+  if (dotted) return [Number(dotted[1]), Number(dotted[2])];
+  const hex = host.match(/^(?:::ffff:|64:ff9b::)([0-9a-f]{1,4}):[0-9a-f]{1,4}$/) ?? host.match(/^2002:([0-9a-f]{1,4}):/);
+  if (!hex) return null;
+  const high = parseInt(hex[1]!, 16);
+  return [high >> 8, high & 0xff];
+}
+
+/** Loopback, private, link-local, CGNAT (Tailscale) and unspecified addresses, IPv6 ones that carry such an IPv4, and
+ *  names that only resolve locally: a dotless name, .local/.lan/.internal/.home.arpa and the tailnet's *.ts.net. URL
+ *  parsing has already turned decimal and hex IPv4 spellings into dotted quads. A public name that resolves to a
  *  private address (DNS rebinding) is not caught here. */
 function isPrivateHost(host: string | null): boolean {
   if (host === null) return false;
-  if (host === "localhost" || /\.(localhost|local|internal|home\.arpa)$/.test(host)) return true;
+  if (host === "localhost" || /\.(localhost|local|lan|internal|home\.arpa|ts\.net)$/.test(host)) return true;
   const v4 = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-  if (v4) {
-    const [a, b] = [Number(v4[1]), Number(v4[2])];
-    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+  if (v4) return privateV4(Number(v4[1]), Number(v4[2]));
+  if (host.includes(":")) {
+    if (host === "::1" || host === "::" || /^(fc|fd|fe[89ab])/.test(host)) return true;
+    const inner = embeddedV4(host);
+    return inner !== null && privateV4(...inner);
   }
-  if (host.includes(":")) return host === "::1" || host === "::" || /^(fc|fd|fe[89ab])/.test(host) || host.startsWith("::ffff:");
-  return false;
+  return !host.includes(".");
 }
 
 /** A command that prints the whole environment (`env`, `printenv`) or one variable (`printenv VAR`), leaking the bridge's secrets. */
@@ -921,6 +939,8 @@ function ghArgs(words: string[]): { sub: string; args: string[] } | null {
 /** `git config` keys that point a remote somewhere else: remote.<name>.url / pushurl, and url.<base>.insteadOf. */
 const REMOTE_URL_KEY = /^remote\.(.+)\.(url|pushurl)(=|$)/i;
 const INSTEAD_OF_KEY = /^url\..+\.(push)?insteadof(=|$)/i;
+/** A config file pulled in by include.path or includeIf.<cond>.path can set any of the keys above. */
+const INCLUDE_KEY = /^include(if\..+)?\.path(=|$)/i;
 /** push options that name the destination or the program run on it, so the configured remote no longer decides. */
 const PUSH_TARGET_FLAG = /^--(repo|receive-pack|exec)(=|$)/;
 
@@ -928,15 +948,20 @@ const PUSH_TARGET_FLAG = /^--(repo|receive-pack|exec)(=|$)/;
 function gitConfigRepoints(words: string[]): boolean {
   for (let i = 1; i < words.length && words[i]!.startsWith("-"); i++) {
     const w = words[i]!;
-    const key = w === "-c" || w === "--config-env" ? words[++i] ?? "" : w.startsWith("--config-env=") ? w.slice("--config-env=".length) : null;
-    if (key !== null && (REMOTE_URL_KEY.test(key) || INSTEAD_OF_KEY.test(key))) return true;
+    const key =
+      w === "-c" || w === "--config-env" ? words[++i] ?? "" : w.startsWith("--config-env=") ? w.slice("--config-env=".length) : /^-c./.test(w) ? w.slice(2) : null;
+    if (key !== null && (REMOTE_URL_KEY.test(key) || INSTEAD_OF_KEY.test(key) || INCLUDE_KEY.test(key))) return true;
     if (["-C", "--git-dir", "--work-tree", "--namespace"].includes(w)) i++;
   }
   return false;
 }
 
-/** A git remote that is a URL (`https://…`, `git@host:…`, `ssh://…`), not a named remote configured in the repo. */
-const isGitUrl = (remote: string) => /:\/\//.test(remote) || /^[^/\s]+@[^/\s]+:/.test(remote) || remote.startsWith("file://");
+/**
+ * A git remote that is a URL or a path, not a named remote configured in the repo: `https://…`, `ssh://…`, `ext::…`,
+ * scp-style `[user@]host:path`, or a local path git pushes to directly.
+ */
+const isGitUrl = (remote: string) =>
+  /:\/\//.test(remote) || remote.includes("::") || /^[^/\s:]+:/.test(remote) || /^(\/|\.\.?(\/|$)|~)/.test(remote);
 
 /** A push forces history over the remote: -f, a short cluster that contains f (-fu, -uf, -vf), a --force* abbreviation, or a + refspec. */
 const pushForce = (args: string[]) =>
@@ -1115,7 +1140,7 @@ const TABLE: readonly Row[] = [
   },
   {
     id: "git.push.remote",
-    label: "Push to a URL or a just-added remote",
+    label: "Push to a URL, a path or a re-pointed remote, or re-point one",
     match: (p) => p.kind === "bash" && p.pushUntrusted,
     attended: "ask",
     unattended: "ask",
@@ -1449,9 +1474,10 @@ export function fingerprint(call: ToolCall): Fingerprint {
 const lines = (s: string) => (s === "" ? 0 : s.split("\n").length - (s.endsWith("\n") ? 1 : 0));
 const CLIP = 4096;
 
-/** Control and format characters (bidi overrides, isolates, zero-width ones) as <U+XXXX>; newline, tab and the emoji joiner stay. */
+/** Control and format characters (bidi overrides, isolates, zero-width ones), line and paragraph separators, and spaces
+ *  that look like nothing or like a plain space (no-break, Hangul fillers) as <U+XXXX>; newline, tab and the emoji joiner stay. */
 const visible = (s: string) =>
-  s.replace(/(?![\n\t\u200D])[\p{Cc}\p{Cf}]/gu, (ch) => `<U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}>`);
+  s.replace(/(?![\n\t\u200D])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00A0\u3164\u115F\u1160\uFFA0]/gu, (ch) => `<U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}>`);
 
 /** Cut at n characters, then the full length and a hash, so two long payloads that share a prefix never look alike. */
 const clipExact = (s: string, n: number) => (s.length <= n ? visible(s) : `${visible(s.slice(0, n))}… (${s.length} chars, sha256 ${sha256(s).slice(0, 12)})`);

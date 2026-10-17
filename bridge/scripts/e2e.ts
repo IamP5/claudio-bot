@@ -616,6 +616,7 @@ try {
     check(there.includes("wt.txt") && (await git(wt.path, "symbolic-ref", "--short", "HEAD")).text().trim() === wt.branch, `the commit landed on ${wt.branch} in the worktree: ${JSON.stringify(there.trim())}`);
     check((await head(demo, "HEAD")) === demoHead && (await git(demo, "symbolic-ref", "--short", "HEAD")).text().trim() === demoBranch && !existsSync(join(demo, "wt.txt")), "the main checkout is untouched");
     check((rec.agent.evidence?.ahead ?? 0) >= 1, `evidence counts the commit from where the worktree started: ${JSON.stringify(rec.agent.evidence)}`);
+    check(cardsSince(before).length === 0, `the agent ran with no card: ${JSON.stringify(cardsSince(before).map((m) => m.kind === "permission" && m.label))}`);
 
     writeFileSync(join(wt.path, ".env"), "TOKEN=e2e\n");
     let at = c.received.length;

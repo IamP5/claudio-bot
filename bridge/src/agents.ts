@@ -55,12 +55,17 @@ const queued = (text: string, initiator: Initiator): SessionInput => ({ kind: "e
 
 /**
  * What a repo carries that Claude Code would load and run from it: project settings and their hooks, .mcp.json
- * servers, commands, agents and skills. Relative paths, sorted.
+ * servers, commands, agents and skills. Relative paths, sorted. An empty folder loads nothing, so it does not count:
+ * Claude Code itself leaves an empty .claude/.cc-writes in a folder an agent wrote to.
  */
 export function projectConfigOf(root: string): string[] {
   const found = existsSync(join(root, ".mcp.json")) ? [".mcp.json"] : [];
+  const dir = join(root, ".claude");
   try {
-    found.push(...readdirSync(join(root, ".claude")).map((name) => `.claude/${name}`));
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory() && readdirSync(join(dir, entry.name)).length === 0) continue;
+      found.push(`.claude/${entry.name}`);
+    }
   } catch {}
   return found.sort();
 }

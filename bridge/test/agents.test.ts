@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Options, query, SandboxSettings, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { createAgents } from "../src/agents";
+import { createAgents, projectConfigOf } from "../src/agents";
 import type { Headroom, Ledger } from "../src/ledger";
 import type { AgentEvidence, AgentId, AgentStatus, BotId, RoutineId, RunId } from "../src/protocol";
 import type { Project } from "../src/projects";
@@ -743,4 +743,15 @@ test("an agent the daily cap stopped mid-turn is capped, not failed, and says ho
   h.agents.session(rec.agent.id)?.recheck();
   await flush();
   expect(rec.agent.status).toBe("capped");
+});
+
+test("a repo's empty .claude folders, like the .cc-writes Claude Code leaves, are not config to trust", () => {
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-config-")));
+  roots.push(repo);
+  mkdirSync(join(repo, ".claude", ".cc-writes"), { recursive: true });
+  mkdirSync(join(repo, ".claude", "skills"));
+  expect(projectConfigOf(repo)).toEqual([]);
+  writeFileSync(join(repo, ".claude", "settings.json"), "{}");
+  mkdirSync(join(repo, ".claude", "skills", "greet"));
+  expect(projectConfigOf(repo)).toEqual([".claude/settings.json", ".claude/skills"]);
 });

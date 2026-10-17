@@ -934,3 +934,54 @@ test("the client requests of the pass 3 units answer through their modules", asy
   expect(await h.hub.handle({ type: "skills", botId: b.id })).toEqual([{ type: "skills", botId: b.id, skills: [] }]);
   expect(await h.hub.handle({ type: "remove_worktree", agentId: "a_none" as AgentId })).toEqual([{ type: "error", message: "Unknown agent" }]);
 });
+
+test("a send repeated with the same clientId posts one user message and delivers one envelope", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  const send = { type: "send", botId: b.id, text: "status?", uploads: [], clientId: "c-1" } as const;
+  expect(await h.hub.handle(send)).toEqual([]);
+  expect(await h.hub.handle(send)).toEqual([]);
+  await flush();
+  h.q().emit(assistant(text("All green.")), result());
+  await flush();
+  await flush();
+
+  expect(b.messages.filter((m) => m.kind === "user").map((m) => m.kind === "user" && m.clientId)).toEqual(["c-1"]);
+  expect(h.queries).toHaveLength(1);
+  expect(h.q().received).toHaveLength(1);
+
+  await h.hub.handle({ ...send, clientId: "c-2" });
+  expect(b.messages.filter((m) => m.kind === "user")).toHaveLength(2);
+});
+
+test("delete_bot removes the config folders of the bot's agents and keeps other bots'", async () => {
+  const world = emptyWorld();
+  const doomed = bot("doomed");
+  const kept = bot("kept");
+  world.bots.set(doomed.id, doomed);
+  world.bots.set(kept.id, kept);
+  const agentOf = (id: string, botId: BotId): AgentRecord => ({
+    agent: { id: id as AgentId, botId, title: "Fix", where: "mac", projectName: "app", status: "waiting", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null },
+    cwd: "/code/app",
+    messages: [],
+    session: emptySession(),
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: { kind: "user" },
+  });
+  world.agents.set("a_doomed" as AgentId, agentOf("a_doomed", doomed.id));
+  world.agents.set("a_kept" as AgentId, agentOf("a_kept", kept.id));
+  const h = hubOver(world);
+  h.homes.create(doomed.id, "# doomed\n");
+  const gone = h.homes.agentConfig("a_doomed" as AgentId);
+  const stays = h.homes.agentConfig("a_kept" as AgentId);
+
+  expect(await h.hub.handle({ type: "delete_bot", botId: doomed.id })).toEqual([]);
+
+  expect(existsSync(gone)).toBe(false);
+  expect(existsSync(stays)).toBe(true);
+  expect([...world.agents.keys()]).toEqual(["a_kept"]);
+});

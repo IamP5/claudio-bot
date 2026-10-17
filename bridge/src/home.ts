@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { basename, extname, join, relative, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import type { AgentId, Attachment, BotId, LibraryFile, Upload } from "./protocol";
 
 const TEXT_LIMIT = 1024 * 1024;
@@ -47,6 +47,13 @@ export function createHomes(root: string) {
       const dir = join(root, "agent-config", id);
       mkdirSync(dir, { recursive: true, mode: 0o700 });
       return dir;
+    },
+
+    removeAgentConfig(id: AgentId) {
+      const parent = join(root, "agent-config");
+      const dir = join(parent, id);
+      if (dirname(dir) !== parent) throw new Error(`${id} is not an agent id`);
+      rmSync(dir, { recursive: true, force: true });
     },
 
     ensureUserMd(userName: string) {

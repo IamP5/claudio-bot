@@ -83,8 +83,9 @@ test("library stops at its depth and entry caps", () => {
     writeFileSync(join(dir, "f.md"), String(d));
   }
   const paths = homes.library(id).map((f) => f.path);
-  expect(paths.length).toBe(LIBRARY_DEPTH_MAX - 1);
-  expect(paths.some((p) => p.includes(`d${LIBRARY_DEPTH_MAX}/`))).toBe(false);
+  expect(paths.length).toBe(LIBRARY_DEPTH_MAX);
+  expect(paths.some((p) => p.includes(`d${LIBRARY_DEPTH_MAX}/f.md`))).toBe(true);
+  expect(paths.some((p) => p.includes(`d${LIBRARY_DEPTH_MAX + 1}/`))).toBe(false);
 
   const wide = fresh();
   for (let i = 0; i < LIBRARY_ENTRIES_MAX + 5; i++) writeFileSync(join(wide.home, "library", `${i}.md`), "");

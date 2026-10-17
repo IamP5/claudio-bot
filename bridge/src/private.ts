@@ -23,6 +23,7 @@ export const PRIVATE = {
     "Library/Cookies",
   ],
   creds: [
+    // .netrc also holds the Heroku CLI's token.
     ".netrc",
     ".config/gh",
     ".config/op",
@@ -42,9 +43,9 @@ export const PRIVATE = {
     ".cargo/credentials",
     ".cargo/credentials.toml",
     ".terraform.d/credentials.tfrc.json",
-    ".terraformrc",
     ".gem/credentials",
-    ".m2/settings.xml",
+    // Not .terraformrc or .m2/settings.xml: builds read them for mirrors and proxies, and a token in either should move
+    // to credentials.tfrc.json or settings-security.xml, which stay private.
     ".m2/settings-security.xml",
     ".config/stripe",
     ".config/doctl",
@@ -53,7 +54,6 @@ export const PRIVATE = {
     "Library/Preferences/netlify",
     ".config/configstore/firebase-tools.json",
     ".oci",
-    // Heroku keeps its token in .netrc.
     // Shell and REPL histories hold whatever was typed inline: tokens, passwords, connection strings.
     ".zsh_history",
     ".zsh_sessions",

@@ -49,7 +49,7 @@ export function createHomes(root: string) {
       const path = join(dir, name);
       const stat = lstatSync(path, { throwIfNoEntry: false });
       if (stat?.isDirectory()) {
-        if (depth + 1 < LIBRARY_DEPTH_MAX) walk(path, depth + 1, base, out, seen);
+        if (depth < LIBRARY_DEPTH_MAX) walk(path, depth + 1, base, out, seen);
       } else if (stat?.isFile()) out.push({ path: relative(base, path), size: stat.size, modifiedAt: stat.mtime.toISOString() });
     }
   }

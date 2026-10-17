@@ -424,9 +424,7 @@ test("shell histories, CLI tokens and the Claude desktop and Cursor logins are p
     ".cargo/credentials.toml",
     ".cargo/credentials",
     ".terraform.d/credentials.tfrc.json",
-    ".terraformrc",
     ".gem/credentials",
-    ".m2/settings.xml",
     ".m2/settings-security.xml",
     ".config/stripe/config.toml",
     ".config/doctl/config.yaml",
@@ -447,7 +445,7 @@ test("shell histories, CLI tokens and the Claude desktop and Cursor logins are p
     ".cursor/projects/p/t.jsonl",
   ].map((rel) => `${HOME}/${rel}`);
   expect(secret.filter(reachable)).toEqual([]);
-  const work = [".cargo/registry/index/x", ".m2/repository/x.jar", "Library/Application Support/Claude/scratch-workspaces/w/a.ts", ".cursor/plugins/p/SKILL.md"].map(
+  const work = [".cargo/registry/index/x", ".m2/repository/x.jar", ".m2/settings.xml", ".terraformrc", "Library/Application Support/Claude/scratch-workspaces/w/a.ts", ".cursor/plugins/p/SKILL.md"].map(
     (rel) => `${HOME}/${rel}`,
   );
   expect(work.filter((p) => !canRead(boxes[1]!, p))).toEqual([]);

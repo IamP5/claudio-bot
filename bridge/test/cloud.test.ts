@@ -46,7 +46,7 @@ const previous = process.env.CLAUDIOBOT_CLAUDE;
 process.env.CLAUDIOBOT_CLAUDE = fake;
 afterAll(() => (previous === undefined ? delete process.env.CLAUDIOBOT_CLAUDE : (process.env.CLAUDIOBOT_CLAUDE = previous)));
 
-test("creates a cloud session through a terminal, then follows up on it", async () => {
+test("creates a cloud session through a terminal, then follows up on it, never loading the repo's own settings or MCP servers", async () => {
   expect(await createCloudSession(dir, "Summarize the README")).toEqual({
     title: "README summary",
     url: "https://claude.ai/code/session_FAKE",
@@ -54,7 +54,7 @@ test("creates a cloud session through a terminal, then follows up on it", async 
   });
   await followUpCloudSession(dir, "session_FAKE", "Also list the TODOs");
   expect((await Bun.file(log).text()).trim().split("\n")).toEqual([
-    "--cloud Summarize the README",
-    "-p Also list the TODOs --cloud session_FAKE --output-format json",
+    "--cloud Summarize the README --setting-sources user --strict-mcp-config",
+    "-p Also list the TODOs --cloud session_FAKE --output-format json --setting-sources user --strict-mcp-config",
   ]);
 });

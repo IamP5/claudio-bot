@@ -8,7 +8,6 @@ struct TaskView: View {
     @Environment(AppModel.self) private var app
     @State private var draft = ""
     @State private var pinnedToBottom = true
-    @FocusState private var composerFocused: Bool
 
     private var task: TaskSummary? { store.tasks[taskId] }
     private var items: [Item] { store.transcripts[taskId]?.items ?? [] }
@@ -82,9 +81,7 @@ struct TaskView: View {
                 .background(.bar)
         } else {
             HStack(alignment: .bottom, spacing: 8) {
-                TextField(task.status.isActive ? "Queue a follow-up" : "Reply to Claude", text: $draft, axis: .vertical)
-                    .lineLimit(1...6)
-                    .focused($composerFocused)
+                PromptTextView(text: $draft, placeholder: task.status.isActive ? "Queue a follow-up" : "Reply to Claude", maxLines: 6)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
                     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))

@@ -18,7 +18,6 @@ struct NewTaskView: View {
     @AppStorage("new.permission") private var permission = PermissionMode.default
 
     @State private var prompt = ""
-    @FocusState private var promptFocused: Bool
 
     private var eligibleProjects: [Project] {
         place == .cloud ? store.projects.filter { $0.githubRepo != nil } : store.projects
@@ -37,18 +36,8 @@ struct NewTaskView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextEditor(text: $prompt)
-                        .focused($promptFocused)
-                        .frame(minHeight: 150)
-                        .overlay(alignment: .topLeading) {
-                            if prompt.isEmpty {
-                                Text("What should Claude do?")
-                                    .foregroundStyle(.tertiary)
-                                    .padding(.top, 8)
-                                    .padding(.leading, 5)
-                                    .allowsHitTesting(false)
-                            }
-                        }
+                    PromptTextView(text: $prompt, placeholder: "What should Claude do?", minLines: 7, autofocus: true)
+                        .padding(.vertical, 4)
                 }
 
                 Section {
@@ -92,7 +81,6 @@ struct NewTaskView: View {
                         .disabled(!canSend)
                 }
             }
-            .task { promptFocused = true }
         }
     }
 

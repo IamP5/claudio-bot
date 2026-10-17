@@ -11,6 +11,7 @@
 		0278ED1613B9C039A186ED95 /* Demo.swift in Sources */ = {isa = PBXBuildFile; fileRef = E524248A187288BA8553C5F4 /* Demo.swift */; };
 		03593801E08C909651B637A6 /* ClaudeBotApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3396227092798BDCE4DACA0 /* ClaudeBotApp.swift */; };
 		039B3049399D795BECF9DC3B /* TaskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32109B9F3E50CA264F631E13 /* TaskView.swift */; };
+		0D593467DC37B29F55EF161D /* PromptTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23875891BEFA3DD1F7738F76 /* PromptTextView.swift */; };
 		17DC4C3174F3DFCCACB741FA /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7881D184F2B357109BDAA2D9 /* PairingView.swift */; };
 		46406A845EB22EECB0E99E77 /* protocol.json in Resources */ = {isa = PBXBuildFile; fileRef = 3BAD3DF825B7E8E1E6DDAFDA /* protocol.json */; };
 		814081B0EBA9A260DFA28EFD /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84B65753919FE246569C02B2 /* HomeView.swift */; };
@@ -43,6 +44,7 @@
 		145E02FB7285087168F615BF /* BridgeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeClient.swift; sourceTree = "<group>"; };
 		1482AD7C82100AEDF05A7AB3 /* ClaudeBotTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ClaudeBotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		155C40D6A2DF00BEC7E8FE22 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
+		23875891BEFA3DD1F7738F76 /* PromptTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptTextView.swift; sourceTree = "<group>"; };
 		32109B9F3E50CA264F631E13 /* TaskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskView.swift; sourceTree = "<group>"; };
 		38D36EBF4A3403BF024E3228 /* Pairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pairing.swift; sourceTree = "<group>"; };
 		3BAD3DF825B7E8E1E6DDAFDA /* protocol.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = protocol.json; path = ../../fixtures/protocol.json; sourceTree = "<group>"; };
@@ -123,6 +125,7 @@
 				43319B4E17617801239B6C05 /* MarkdownText.swift */,
 				83AFB16FF4F2E2188CD4C9CA /* NewTaskView.swift */,
 				7881D184F2B357109BDAA2D9 /* PairingView.swift */,
+				23875891BEFA3DD1F7738F76 /* PromptTextView.swift */,
 				F0774A096D32B5FEFDBFC035 /* SettingsView.swift */,
 				32109B9F3E50CA264F631E13 /* TaskView.swift */,
 				427B70D72AEA34E5A73A0A44 /* TranscriptItems.swift */,
@@ -265,6 +268,7 @@
 				DB5C2CA205DBB7756FAE14EC /* Notifier.swift in Sources */,
 				A2A75B83D859112E2068544D /* Pairing.swift in Sources */,
 				17DC4C3174F3DFCCACB741FA /* PairingView.swift in Sources */,
+				0D593467DC37B29F55EF161D /* PromptTextView.swift in Sources */,
 				AFD88820A77F7FA8FEE36304 /* Protocol.swift in Sources */,
 				01513787F306926FC91EB369 /* SettingsView.swift in Sources */,
 				84B5C477040812DFDDDB435C /* Store.swift in Sources */,

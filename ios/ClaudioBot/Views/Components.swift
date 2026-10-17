@@ -44,6 +44,9 @@ struct ConnectionBadge: View {
             case .unpaired:
                 StatusDot(color: .gray)
                 Text("Not paired")
+            case .unrecognized:
+                StatusDot(color: .red)
+                Text("Not recognized")
             }
         }
         .font(.footnote.weight(.medium))
@@ -59,6 +62,32 @@ extension ConnectionState {
         case .connecting: "Connecting"
         case .connected: "Connected"
         case .disconnected: "Reconnecting"
+        case .unrecognized: "Not recognized"
+        }
+    }
+}
+
+/// The latest error, shown over whatever is on screen until it times out or is tapped away.
+struct ErrorToast: View {
+    @Environment(AppStore.self) private var store
+
+    var body: some View {
+        if let notice = store.lastError {
+            Label(notice.message, systemImage: "exclamationmark.triangle.fill")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Theme.raised, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .onTapGesture { store.dismissError(notice) }
+                .task(id: notice.id) {
+                    try? await Task.sleep(for: .seconds(5))
+                    store.dismissError(notice)
+                }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Dismisses the error")
         }
     }
 }
@@ -99,16 +128,40 @@ struct AgentStatusPill: View {
         case .waiting: AvatarColor.amber.color
         case .failed: AvatarColor.red.color
         case .inCloud: AvatarColor.blue.color
-        case .unknown: Theme.secondary
+        case .awaitingApproval: Theme.attention
+        case .unavailable: AvatarColor.red.color
+        case .parked, .capped, .unknown: Theme.secondary
         }
     }
 
     var body: some View {
+        StatusPill(text: status.title, color: color, pulsing: status == .working)
+    }
+}
+
+/// "Awaiting approval", "Parked" or "Unavailable" beside a bot's name.
+struct BotStatusChip: View {
+    let status: BotStatus
+
+    var body: some View {
+        if let text = status.chip {
+            StatusPill(text: text, color: status == .awaitingApproval ? Theme.attention : status == .unavailable ? AvatarColor.red.color : Theme.secondary)
+        }
+    }
+}
+
+struct StatusPill: View {
+    let text: String
+    let color: Color
+    var pulsing = false
+
+    var body: some View {
         HStack(spacing: 5) {
-            StatusDot(color: color, pulsing: status == .working)
-            Text(status.title)
+            StatusDot(color: color, pulsing: pulsing)
+            Text(text)
         }
         .font(.caption.weight(.semibold))
+        .lineLimit(1)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .foregroundStyle(color)

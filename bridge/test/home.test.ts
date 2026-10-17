@@ -1,8 +1,8 @@
 import { afterAll, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHomes } from "../src/home";
+import { createHomes, LIBRARY_DEPTH_MAX, LIBRARY_ENTRIES_MAX } from "../src/home";
 import type { BotId } from "../src/protocol";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-homes-")));
@@ -35,6 +35,61 @@ test("library lists files recursively, newest first, skipping dotfiles, with hom
     ["library/notes/new.md", 4],
     ["library/old.md", 3],
   ]);
+});
+
+test("library skips symlinks, so a link loop or a link out of the home neither hangs, throws nor lists what it points at", () => {
+  const { id, home } = fresh();
+  const lib = join(home, "library");
+  const outside = mkdtempSync(join(tmpdir(), "claudiobot-outside-"));
+  writeFileSync(join(outside, "secret.txt"), "s");
+  writeFileSync(join(lib, "mine.md"), "m");
+  symlinkSync(lib, join(lib, "loop"));
+  symlinkSync(outside, join(lib, "out"));
+  symlinkSync(join(outside, "secret.txt"), join(lib, "secret.txt"));
+  symlinkSync(join(lib, "gone"), join(lib, "dangling"));
+  expect(homes.library(id).map((f) => f.path)).toEqual(["library/mine.md"]);
+  rmSync(outside, { recursive: true });
+});
+
+test("a library folder that is itself a symlink lists nothing", () => {
+  const { id, home } = fresh();
+  const outside = mkdtempSync(join(tmpdir(), "claudiobot-outside-"));
+  writeFileSync(join(outside, "secret.txt"), "s");
+  rmSync(join(home, "library"), { recursive: true });
+  symlinkSync(outside, join(home, "library"));
+  expect(homes.library(id)).toEqual([]);
+  rmSync(outside, { recursive: true });
+});
+
+test("an unreadable folder in the library leaves out only that folder", () => {
+  const { id, home } = fresh();
+  mkdirSync(join(home, "library", "locked"));
+  writeFileSync(join(home, "library", "locked", "x.md"), "x");
+  writeFileSync(join(home, "library", "open.md"), "o");
+  chmodSync(join(home, "library", "locked"), 0o000);
+  try {
+    expect(homes.library(id).map((f) => f.path)).toEqual(["library/open.md"]);
+  } finally {
+    chmodSync(join(home, "library", "locked"), 0o700);
+  }
+});
+
+test("library stops at its depth and entry caps", () => {
+  const { id, home } = fresh();
+  let dir = join(home, "library");
+  for (let d = 1; d <= LIBRARY_DEPTH_MAX + 1; d++) {
+    dir = join(dir, `d${d}`);
+    mkdirSync(dir);
+    writeFileSync(join(dir, "f.md"), String(d));
+  }
+  const paths = homes.library(id).map((f) => f.path);
+  expect(paths.length).toBe(LIBRARY_DEPTH_MAX);
+  expect(paths.some((p) => p.includes(`d${LIBRARY_DEPTH_MAX}/f.md`))).toBe(true);
+  expect(paths.some((p) => p.includes(`d${LIBRARY_DEPTH_MAX + 1}/`))).toBe(false);
+
+  const wide = fresh();
+  for (let i = 0; i < LIBRARY_ENTRIES_MAX + 5; i++) writeFileSync(join(wide.home, "library", `${i}.md`), "");
+  expect(homes.library(wide.id).length).toBe(LIBRARY_ENTRIES_MAX);
 });
 
 test("reads text and images inside the home", async () => {

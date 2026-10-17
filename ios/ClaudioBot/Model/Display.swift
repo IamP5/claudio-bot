@@ -141,8 +141,67 @@ extension AgentStatus {
         case .waiting: "Waiting"
         case .failed: "Failed"
         case .inCloud: "In cloud"
+        case .awaitingApproval: "Awaiting approval"
+        case .parked: "Parked"
+        case .unavailable: "Unavailable"
+        case .capped: "Paused at cap"
         case .unknown(let raw): raw.replacingOccurrences(of: "_", with: " ").capitalized
         }
+    }
+}
+
+extension BotStatus {
+    /// The chip a bot wears in the list and the chat. Working already shows as "Typing…".
+    var chip: String? {
+        switch self {
+        case .awaitingApproval: "Awaiting approval"
+        case .parked: "Parked"
+        case .unavailable: "Unavailable"
+        case .idle, .working, .unknown: nil
+        }
+    }
+}
+
+extension PermissionChoice {
+    var button: String {
+        switch self {
+        case .once: "Allow once"
+        case .always: "Always allow"
+        case .deny: "Deny"
+        case .never: "Never"
+        }
+    }
+
+    var outcome: String {
+        switch self {
+        case .once: "Allowed once"
+        case .always: "Always allowed"
+        case .deny: "Denied"
+        case .never: "Never allowed"
+        }
+    }
+
+    /// Allow once and Always run the call; Deny and Never do not.
+    var allows: Bool { self == .once || self == .always }
+}
+
+extension RunStatus {
+    var title: String {
+        switch self {
+        case .running: "Running"
+        case .ok: "Done"
+        case .quiet: "Nothing to report"
+        case .failed: "Failed"
+        case .skipped: "Skipped"
+        case .unknown(let raw): raw.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+}
+
+extension RoutineRun {
+    /// "Late" and "Run now" tags, in that order.
+    var tags: [String] {
+        (late ? ["Late"] : []) + (manual ? ["Run now"] : [])
     }
 }
 

@@ -141,7 +141,7 @@ struct ProfileView: View {
     }
 }
 
-private struct CardSection<Content: View>: View {
+struct CardSection<Content: View>: View {
     let title: String
     var footer: String?
     @ViewBuilder let content: Content
@@ -164,7 +164,7 @@ private struct CardSection<Content: View>: View {
     }
 }
 
-private struct Placeholder: View {
+struct Placeholder: View {
     let text: String
 
     var body: some View {
@@ -187,6 +187,7 @@ private struct Loading: View {
 private struct InfoTab: View {
     let bot: Bot
     @Environment(BridgeClient.self) private var client
+    @Environment(Router.self) private var router
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -198,6 +199,10 @@ private struct InfoTab: View {
                 routines
                 character
             }
+            SpendingSection(bot: bot)
+            MuteSection(bot: bot)
+            ConnectorsSection(bot: bot)
+            SkillsSection(bot: bot)
         }
     }
 
@@ -208,18 +213,28 @@ private struct InfoTab: View {
             } else {
                 ForEach(Array(bot.routines.enumerated()), id: \.element.id) { index, routine in
                     if index > 0 { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16) }
-                    Toggle(isOn: Binding(
-                        get: { routine.enabled },
-                        set: { client.send(.setRoutine(botId: bot.id, routineId: routine.id, enabled: $0)) }
-                    )) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(routine.name).font(.system(size: 16)).foregroundStyle(.white)
-                            Text(routine.enabled ? routine.describe : "Paused")
-                                .font(.system(size: 13))
-                                .foregroundStyle(Theme.secondary)
+                    HStack(spacing: 12) {
+                        Button { router.path.append(.routine(bot.id, routine.id)) } label: {
+                            HStack(spacing: 8) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(routine.name).font(.system(size: 16)).foregroundStyle(.white)
+                                    Text(routine.enabled ? routine.describe : "Paused")
+                                        .font(.system(size: 13))
+                                        .foregroundStyle(Theme.secondary)
+                                }
+                                Spacer(minLength: 0)
+                                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.tertiary)
+                            }
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
+                        Toggle(routine.name, isOn: Binding(
+                            get: { routine.enabled },
+                            set: { client.send(.setRoutine(botId: bot.id, routineId: routine.id, enabled: $0)) }
+                        ))
+                        .labelsHidden()
+                        .tint(AvatarColor.teal.color)
                     }
-                    .tint(AvatarColor.teal.color)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                 }

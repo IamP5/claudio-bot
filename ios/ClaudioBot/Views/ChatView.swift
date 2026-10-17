@@ -20,9 +20,37 @@ struct ChatView: View {
                         ChatRowView(row: row, bot: bot, onPeer: open)
                             .padding(.top, index == 0 ? 8 : Self.gap(between: rows[index - 1], and: row))
                     }
-                    if bot.status == .working {
-                        TypingRow(avatar: bot.avatar)
+                    ForEach(store.proposedFacts(by: bot)) { fact in
+                        ProposedFactCard(bot: bot, fact: fact)
+                            .padding(.top, 14)
+                    }
+                    if let spend = bot.spend, spend.nearLimit {
+                        SpendWarning(bot: bot, spend: spend, onChangeCap: openProfile)
+                            .padding(.top, 14)
+                    }
+                    switch bot.status {
+                    case .working:
+                        TypingRow(avatar: bot.avatar) { client.send(.stop(botId: botId)) }
                             .padding(.top, 12)
+                        ActivityLine(botId: botId)
+                    case .unavailable:
+                        Text("Claude Code could not start on your Mac. Your messages wait, and the bridge keeps trying.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.tertiary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 24)
+                            .padding(.top, 14)
+                    case .parked:
+                        Text("Parked. It waits for the usage limit or today's spending cap to reset.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.tertiary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 24)
+                            .padding(.top, 14)
+                    default:
+                        EmptyView()
                     }
                 }
                 .padding(.horizontal, 16)
@@ -44,6 +72,12 @@ struct ChatView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .background(Theme.background)
+            .safeAreaInset(edge: .top) {
+                if OfflineBar.shows(store.connection) {
+                    OfflineBar(state: store.connection)
+                        .frame(maxWidth: 760)
+                }
+            }
             .safeAreaInset(edge: .bottom) {
                 Composer(bot: bot, openQuestion: store.openQuestion(in: botId) != nil) {
                     followsBottom = true
@@ -96,7 +130,12 @@ struct ChatView: View {
         switch peer {
         case .agent(let id, _): router.path.append(.exchange(id))
         case .bot(let id, _, _): if store.bots[id] != nil { router.open(id) }
-        case .routine: openProfile()
+        case .routine(let id, _):
+            if store.bots[botId]?.routines.contains(where: { $0.id == id }) == true {
+                router.path.append(.routine(botId, id))
+            } else {
+                openProfile()
+            }
         case .unknown: break
         }
     }
@@ -112,6 +151,7 @@ struct HeaderPill: View {
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.white)
                 .lineLimit(1)
+            BotStatusChip(status: bot.status)
         }
         .padding(.leading, 6)
         .padding(.trailing, 14)
@@ -122,14 +162,36 @@ struct HeaderPill: View {
 
 struct TypingRow: View {
     let avatar: Avatar
+    let onStop: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            AvatarView(avatar: avatar, size: 28, animated: true)
-            Text("Typing…")
-                .font(.subheadline)
-                .foregroundStyle(Theme.secondary)
+            HStack(spacing: 10) {
+                AvatarView(avatar: avatar, size: 28, animated: true)
+                Text("Typing…")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: 8)
+            StopButton(action: onStop)
         }
-        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Stops the turn in flight. Queued work the user typed still runs.
+struct StopButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label("Stop", systemImage: "stop.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(Theme.raised, in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }

@@ -24,6 +24,7 @@ enum Route: Hashable {
     case profile(BotID, tab: ProfileView.Tab = .info)
     case exchange(AgentID)
     case file(BotID, path: String)
+    case routine(BotID, RoutineID)
 }
 
 @Observable
@@ -39,8 +40,6 @@ final class Router {
     var showingInspector = false
     /// The ref of a create_bot in flight; the bot it becomes is opened.
     var pendingCreate: String?
-    /// A pairing that arrived through a claudiobot://pair link, waiting to be confirmed.
-    var pairingLink: Pairing?
 
     func open(_ bot: BotID) {
         showingNewChat = false
@@ -56,15 +55,18 @@ final class AppModel {
     let store = AppStore()
     let client: BridgeClient
     let router = Router()
+    /// The pairing in progress. While paired, a flow shows the pairing sheet; while unpaired the pairing screen is always up.
+    private(set) var pairingFlow: PairingFlow?
     @ObservationIgnored let notifier = Notifier()
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     init() {
-        let client = BridgeClient(store: store)
+        let client = BridgeClient(store: store, deviceName: UIDevice.current.name)
         self.client = client
         let notifier = notifier
         let router = router
         client.onAlerts = { notifier.post($0, viewing: client.openBot) }
+        client.onForget = { notifier.clearAll() }
         notifier.onOpenBot = { router.open($0) }
         notifier.onAnswer = { bot, message, option in
             client.send(.answer(botId: bot, messageId: message, option: option))
@@ -72,27 +74,64 @@ final class AppModel {
         }
         #if DEBUG
         if Demo.isEnabled {
-            Demo.load(into: store, router: router)
+            Demo.load(into: self)
             return
         }
         #endif
-        if let pairing = PairingVault.load() {
+        if let pairing = PairingVault.app.load() {
             client.start(pairing)
         }
     }
 
-    /// Validates by connecting first, so only a pairing that reached the bridge is saved.
-    func pair(_ pairing: Pairing) async throws {
-        _ = try await BridgeClient.probe(pairing)
-        PairingVault.save(pairing)
-        client.start(pairing)
-        router.pairingLink = nil
-        await notifier.requestAuthorization()
+    /// Opens the pairing form, for a Mac that no longer recognizes this iPhone.
+    func beginPairing() {
+        if pairingFlow == nil { pairingFlow = PairingFlow() }
+    }
+
+    /// Asks the user to confirm the bridge's address. Nothing is sent until they do.
+    func propose(_ invite: PairInvite) {
+        var flow = pairingFlow ?? PairingFlow()
+        flow.propose(invite)
+        pairingFlow = flow
+    }
+
+    func cancelConfirmation() {
+        pairingFlow?.cancelConfirmation()
+    }
+
+    /// Closes the pairing sheet, except while a code is being redeemed.
+    func cancelPairing() {
+        if pairingFlow?.isPairing != true { pairingFlow = nil }
+    }
+
+    func showPairingFailure(_ message: String) {
+        var flow = pairingFlow ?? PairingFlow()
+        flow.fail(message)
+        pairingFlow = flow
+    }
+
+    /// Redeems the confirmed code. The current pairing stays until the new bridge says hello.
+    func confirmPairing() {
+        guard let invite = pairingFlow?.confirm() else { return }
+        let current = client.pairing
+        Task {
+            do {
+                try await client.pair(invite)
+                pairingFlow = nil
+                await notifier.requestAuthorization()
+            } catch {
+                let unchanged = current.map { " You are still paired with \($0.url.bridgeAddress)." } ?? ""
+                showPairingFailure(error.localizedDescription + unchanged)
+            }
+        }
     }
 
     func open(_ url: URL) {
-        if let pairing = Pairing(link: url) {
-            router.pairingLink = pairing
+        switch DeepLink(url: url) {
+        case .pair(let invite): propose(invite)
+        case .outdatedBridge: showPairingFailure(DeepLink.outdatedBridgeMessage)
+        case .bot(let bot, _): router.open(bot)
+        case nil: break
         }
     }
 
@@ -128,22 +167,24 @@ final class AppModel {
 }
 
 struct RootView: View {
+    @Environment(AppModel.self) private var app
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
     @Environment(Router.self) private var router
 
     var body: some View {
-        @Bindable var router = router
         Group {
             if store.connection == .unpaired {
                 PairingView()
             } else {
                 MainView()
-                    .sheet(item: $router.pairingLink) { link in
-                        NavigationStack { PairingView(link: link) }
+                    .sheet(isPresented: Binding(get: { app.pairingFlow != nil }, set: { if !$0 { app.cancelPairing() } })) {
+                        NavigationStack { PairingView() }
+                            .interactiveDismissDisabled(app.pairingFlow?.isPairing == true)
                     }
             }
         }
+        .overlay(alignment: .top) { ErrorToast() }
         .tint(.white)
         .onChange(of: router.selection, initial: true) { _, bot in client.openBot = bot }
         .onChange(of: store.created) { _, created in
@@ -153,8 +194,4 @@ struct RootView: View {
             }
         }
     }
-}
-
-extension Pairing: Identifiable {
-    var id: String { url.absoluteString + token }
 }

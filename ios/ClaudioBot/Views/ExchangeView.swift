@@ -21,6 +21,8 @@ struct ExchangeView: View {
                         }
                         status(thread.agent)
                             .padding(.top, 10)
+                        ActivityLine(botId: thread.agent.botId, agentId: thread.agent.id)
+                        AgentEvidenceSection(agent: thread.agent)
                     }
                     .padding(16)
                     .frame(maxWidth: 760)
@@ -70,17 +72,45 @@ struct ExchangeView: View {
     }
 
     private func status(_ agent: Agent) -> some View {
-        HStack(spacing: 8) {
-            AgentStatusPill(status: agent.status)
-            Text("\(agent.projectName) on \(agent.where == .cloud ? "the cloud" : "your Mac")")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.tertiary)
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                AgentStatusPill(status: agent.status)
+                Text("\(agent.projectName) on \(agent.where == .cloud ? "the cloud" : "your Mac")")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.tertiary)
+            }
+            if let line = Self.spendLine(agent) {
+                Text(line)
+                    .font(.system(size: 13).monospacedDigit())
+                    .foregroundStyle(agent.spend?.nearLimit == true ? Theme.attention : Theme.tertiary)
+            }
+            if agent.where == .mac, store.lacks(.worktrees) {
+                Text("Update the bridge on your Mac to see what this agent changed in git.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.tertiary)
+                    .multilineTextAlignment(.center)
+            }
         }
         .frame(maxWidth: .infinity)
     }
 
+    /// Cloud agents run on claude.ai, which the bridge does not meter, so they have no line.
+    static func spendLine(_ agent: Agent) -> String? {
+        guard let spend = agent.spend else { return nil }
+        return spend.reached ? "Used its \(Money.text(spend.limitUsd)) budget" : "Spent \(spend.text) budget"
+    }
+
     private func actions(_ agent: Agent) -> some View {
         HStack(spacing: 12) {
+            if agent.status == .working {
+                Button { client.send(.stopAgent(agentId: agent.id)) } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .glass(in: Capsule())
+                        .foregroundStyle(Theme.danger)
+                }
+            }
             if let url = agent.url {
                 Button { openURL(url) } label: {
                     Label("Open in Claude", systemImage: "arrow.up.right.square")

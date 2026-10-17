@@ -1,9 +1,13 @@
-import { existsSync, mkdirSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { basename, extname, join, relative, resolve, sep } from "node:path";
-import type { Attachment, BotId, LibraryFile, Upload } from "./protocol";
+import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import type { AgentId, Attachment, BotId, LibraryFile, Upload } from "./protocol";
+import { BOT_WRITABLE } from "./sandbox";
 
 const TEXT_LIMIT = 1024 * 1024;
 const BINARY_LIMIT = 10 * 1024 * 1024;
+/** How many folders deep under library/ the listing goes, and how many entries it looks at in all. */
+export const LIBRARY_DEPTH_MAX = 8;
+export const LIBRARY_ENTRIES_MAX = 1000;
 
 function utf8Text(bytes: Uint8Array): string | null {
   if (bytes.includes(0)) return null;
@@ -14,7 +18,7 @@ function utf8Text(bytes: Uint8Array): string | null {
   }
 }
 
-export type FileView = { mime: string; content: string | null; data: string | null };
+type FileView = { mime: string; content: string | null; data: string | null };
 
 export function createHomes(root: string) {
   const homeOf = (id: BotId) => join(root, "bots", id);
@@ -28,13 +32,25 @@ export function createHomes(root: string) {
     return real === home || real.startsWith(home + sep) ? real : null;
   }
 
-  function walk(dir: string, base: string, out: LibraryFile[]) {
-    for (const name of readdirSync(dir)) {
+  /**
+   * The bot writes its library, so the walk never follows a symlink (a loop, or a link to / or out of the home), and an
+   * entry it cannot read is left out rather than failing the whole listing.
+   */
+  function walk(dir: string, depth: number, base: string, out: LibraryFile[], seen: { entries: number }) {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
       if (name.startsWith(".")) continue;
+      if (++seen.entries > LIBRARY_ENTRIES_MAX) return;
       const path = join(dir, name);
-      const stat = statSync(path);
-      if (stat.isDirectory()) walk(path, base, out);
-      else if (stat.isFile()) out.push({ path: relative(base, path), size: stat.size, modifiedAt: stat.mtime.toISOString() });
+      const stat = lstatSync(path, { throwIfNoEntry: false });
+      if (stat?.isDirectory()) {
+        if (depth < LIBRARY_DEPTH_MAX) walk(path, depth + 1, base, out, seen);
+      } else if (stat?.isFile()) out.push({ path: relative(base, path), size: stat.size, modifiedAt: stat.mtime.toISOString() });
     }
   }
 
@@ -42,14 +58,33 @@ export function createHomes(root: string) {
     userMd,
     homeOf,
 
+    /** An empty folder, in the bridge home where no bot or agent reaches, that stands in for an untrusted repo's config. */
+    agentConfig(id: AgentId): string {
+      const dir = join(root, "agent-config", id);
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      return dir;
+    },
+
+    removeAgentConfig(id: AgentId) {
+      const parent = join(root, "agent-config");
+      const dir = join(parent, id);
+      if (dirname(dir) !== parent) throw new Error(`${id} is not an agent id`);
+      rmSync(dir, { recursive: true, force: true });
+    },
+
     ensureUserMd(userName: string) {
       mkdirSync(root, { recursive: true });
-      if (!existsSync(userMd)) writeFileSync(userMd, `# About ${userName}\n\n`);
+      if (!existsSync(userMd)) writeFileSync(userMd, `# About ${userName}\n\n`, { mode: 0o600 });
+    },
+
+    /** The folders the bot's sandbox lets it write, made for a bot created before work/ existed. */
+    ensureFolders(id: BotId) {
+      for (const dir of BOT_WRITABLE) mkdirSync(join(homeOf(id), dir), { recursive: true });
     },
 
     create(id: BotId, memory: string) {
       const home = homeOf(id);
-      for (const dir of ["library", "inbox"]) mkdirSync(join(home, dir), { recursive: true });
+      for (const dir of BOT_WRITABLE) mkdirSync(join(home, dir), { recursive: true });
       if (!existsSync(join(home, "CLAUDE.md"))) writeFileSync(join(home, "CLAUDE.md"), memory);
     },
 
@@ -57,7 +92,7 @@ export function createHomes(root: string) {
     library(id: BotId): LibraryFile[] {
       const home = homeOf(id);
       const out: LibraryFile[] = [];
-      if (existsSync(join(home, "library"))) walk(join(home, "library"), home, out);
+      if (lstatSync(join(home, "library"), { throwIfNoEntry: false })?.isDirectory()) walk(join(home, "library"), 0, home, out, { entries: 0 });
       return out.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
     },
 

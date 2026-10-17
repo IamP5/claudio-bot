@@ -1,18 +1,32 @@
-import { timingSafeEqual } from "node:crypto";
-import { hostname, networkInterfaces } from "node:os";
+import { mkdirSync } from "node:fs";
+import { homedir, hostname } from "node:os";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import qrcode from "qrcode-terminal";
+import { bridgeUrls, lanAddresses, pairLink, readNames } from "./address";
+import { createDevices, type PairCode } from "./devices";
 import { createHomes } from "./home";
 import { createHub } from "./hub";
-import { parseClientMessage } from "./parse";
+import { legacyToken } from "./legacy";
+import { lockHome } from "./lock";
+import { migrateHome } from "./migrate";
 import { scanProjects } from "./projects";
-import type { ServerMessage } from "./protocol";
-import { bridgeHome, createSaver, loadOrCreateToken, loadWorld } from "./store";
+import { createPush, senderFromEnv } from "./push";
+import { serve } from "./serve";
+import { bridgeHome, createSaver, loadWorld } from "./store";
+import { createStream } from "./stream";
+import { errorText } from "./text";
 
-const TOPIC = "all";
-
+/** A helper command's output, or "" when it is missing, fails or takes over 2 s (it is killed then). */
 async function run(argv: string[]): Promise<string> {
-  const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+  let proc: Bun.Subprocess<"ignore", "pipe", "ignore">;
+  try {
+    proc = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+  } catch {
+    return "";
+  }
+  const timer = setTimeout(() => proc.kill(), 2000);
   const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]).catch(() => ["", 1] as const);
+  clearTimeout(timer);
   return code === 0 ? out.trim() : "";
 }
 
@@ -21,87 +35,117 @@ const machineName = async () => (await run(["scutil", "--get", "ComputerName"]))
 const firstName = async () =>
   process.env.CLAUDIOBOT_USER_NAME || (await run(["id", "-F"])).split(/\s+/)[0] || process.env.USER || "there";
 
-function lanAddresses(): string[] {
-  return Object.values(networkInterfaces())
-    .flat()
-    .filter((a) => a && a.family === "IPv4" && !a.internal)
-    .map((a) => a!.address);
+function holdLock(home: string) {
+  const lock = lockHome(home);
+  if (lock.kind === "held") {
+    process.on("exit", lock.release);
+    return;
+  }
+  console.error(
+    lock.kind === "busy"
+      ? `Another ClaudioBot bridge (pid ${lock.pid}) is using ${home}. Stop it first; if none is running, delete ${lock.path}.`
+      : `Could not take the lock ${lock.path}. If no ClaudioBot bridge is running, delete it and start again.`,
+  );
+  process.exit(1);
 }
 
-const port = Number(process.env.CLAUDIOBOT_PORT ?? 7878);
-const token = await loadOrCreateToken();
-const tokenBytes = Buffer.from(token);
-const tokenMatches = (candidate: string | null) => {
-  const bytes = Buffer.from(candidate ?? "");
-  return bytes.length === tokenBytes.length && timingSafeEqual(bytes, tokenBytes);
-};
+const now = () => new Date();
+const log = (line: string) => console.log(line);
 
+const home = bridgeHome();
+holdLock(home);
+
+const migration = migrateHome({ env: process.env, home: homedir(), now });
+if (migration.legacyEnv !== null && !process.env.CLAUDIOBOT_HOME) {
+  console.warn(`WARNING: CLAUDEBOT_HOME is set but this bridge reads CLAUDIOBOT_HOME. Rename the variable; until then it is ignored.`);
+}
+if (migration.kind === "conflict") {
+  console.error(migration.message);
+} else if (migration.kind === "linked") {
+  log(`linked ${migration.to} to ${migration.from}`);
+} else if (migration.kind === "moved_aside") {
+  console.error(
+    `NOTE: ${migration.to} held no bots of yours, so it was moved to ${migration.aside} and ${migration.to} now links to ${migration.from}.\n` +
+      `  ${migration.aside} is only a backup of that near-empty home. Check it, then delete it when you like.`,
+  );
+}
+// The home now resolves to ~/.claudebot, a different lock name. Hold that one too, or a bridge started with
+// CLAUDIOBOT_HOME=~/.claudebot could share the home.
+if (migration.kind === "linked" || migration.kind === "moved_aside") holdLock(home);
+// Only after the migration, which links the home into place when it is absent. Other users may not list it.
+mkdirSync(home, { recursive: true, mode: 0o700 });
+
+const port = Number(process.env.CLAUDIOBOT_PORT ?? 7878);
 const machine = await machineName();
-const { world, firstRun } = loadWorld();
-const saver = createSaver(world);
+const { world, firstRun } = loadWorld(home);
+const saver = createSaver(world, home, 250, log);
+const devices = createDevices({ world, persist: saver.schedule, now, announce });
+const legacy = legacyToken(home);
+legacy.reconcile(devices);
+
+const push = createPush({
+  world,
+  persist: saver.schedule,
+  sender: senderFromEnv(process.env.CLAUDIOBOT_PUSH_URL, log),
+  liveUntil: () => transport.liveUntil(),
+  now,
+  log,
+});
+
 const hub = createHub({
   machine,
   userName: await firstName(),
   world,
-  homes: createHomes(bridgeHome()),
+  homes: createHomes(home),
   model: process.env.CLAUDIOBOT_MODEL || undefined,
   scan: () => scanProjects(),
-  broadcast: (message) => server.publish(TOPIC, JSON.stringify(message)),
+  claude: { query },
+  broadcast: (message) => transport.publish(message),
+  signal: (message) => transport.signal(message),
   persist: saver.schedule,
-  log: (line) => console.log(line),
+  log,
+  push,
+  webhookPort: Number(process.env.CLAUDIOBOT_WEBHOOK_PORT ?? 7879),
 });
 
-const send = (ws: { send(data: string): unknown }, message: ServerMessage) => {
-  ws.send(JSON.stringify(message));
-};
+const transport = serve({ devices, stream: createStream(), hub, legacy, log, now, port });
 
-const server = Bun.serve({
-  hostname: "0.0.0.0",
-  port,
-  fetch(req, server) {
-    const url = new URL(req.url);
-    if (url.pathname === "/health") return Response.json({ ok: true, machine });
-    if (url.pathname === "/ws") {
-      if (!tokenMatches(url.searchParams.get("token"))) return new Response("Unauthorized", { status: 401 });
-      if (server.upgrade(req, { data: undefined })) return;
-      return new Response("Expected a WebSocket upgrade", { status: 426 });
-    }
-    return new Response("Not found", { status: 404 });
-  },
-  websocket: {
-    async open(ws) {
-      // Subscribe in the same tick as the snapshot so no broadcast falls between them.
-      send(ws, hub.hello());
-      ws.subscribe(TOPIC);
-    },
-    async message(ws, raw) {
-      const parsed = parseClientMessage(String(raw));
-      if (!parsed.ok) return send(ws, { type: "error", message: parsed.error });
-      try {
-        for (const reply of await hub.handle(parsed.message)) send(ws, reply);
-      } catch (e) {
-        send(ws, { type: "error", message: (e as Error).message });
-      }
-    },
-  },
-});
-
-for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, () => {
+function shutdown() {
+  let saved = true;
+  try {
     hub.close();
+  } catch (e) {
+    log(`shutdown: closing the bots failed: ${errorText(e)}`);
+  }
+  try {
     saver.flush();
-    process.exit(0);
-  });
+  } catch (e) {
+    saved = false;
+    log(`shutdown: state.json was not saved: ${errorText(e)}`);
+  }
+  process.exit(saved ? 0 : 1);
 }
+for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, shutdown);
 
-const urls = (lanAddresses().length > 0 ? lanAddresses() : ["127.0.0.1"]).map((ip) => `ws://${ip}:${server.port}/ws`);
-const pairLink = `claudiobot://pair?url=${encodeURIComponent(urls[0]!)}&token=${token}`;
+const urls = bridgeUrls(await readNames(run), lanAddresses(), transport.port);
 
 console.log(`claudiobot bridge on ${machine}`);
 for (const url of urls) console.log(`  ${url}`);
-console.log(`token: ${token}`);
-console.log(`pair: ${pairLink}`);
-qrcode.generate(pairLink, { small: true }, (qr) => console.log(qr));
+
+function announce({ code, expiresAt }: PairCode) {
+  const link = pairLink(urls, code);
+  console.log(`pair code: ${code} (single use, until ${new Date(expiresAt).toLocaleTimeString()})`);
+  console.log(`pair: ${link}`);
+  qrcode.generate(link, { small: true }, (qr) => console.log(qr));
+}
+
+// The legacy phone alone still gets a code: it should re-pair with its own token before the legacy path goes away.
+const paired = devices.list(null).filter((d) => !d.legacy).length;
+if (paired === 0 || process.argv.includes("--pair")) {
+  announce(devices.newCode());
+} else {
+  console.log(`${paired} paired device${paired === 1 ? "" : "s"}. To pair another, use Settings on a paired phone or restart with --pair.`);
+}
 
 hub.boot(firstRun);
 hub.startTicker();

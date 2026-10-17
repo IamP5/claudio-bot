@@ -2,6 +2,9 @@
   "name": "bridge",
   "type": "module",
   "private": true,
+  "engines": {
+    "bun": ">=1.3.0"
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/qrcode-terminal": "^0.12.2"
@@ -14,8 +17,12 @@
     "qrcode-terminal": "0.12.0",
     "zod": "4.6.7"
   },
+  "bin": {
+    "claudiobot": "src/cli.ts"
+  },
   "scripts": {
     "start": "bun run src/main.ts",
+    "claudiobot": "bun run src/cli.ts",
     "test": "bun test",
     "e2e": "bun run scripts/e2e.ts"
   }

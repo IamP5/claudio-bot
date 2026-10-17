@@ -2,8 +2,9 @@
 import Foundation
 
 /// `-demo` fills the store with sample bots through the reducer, without a bridge.
-/// `-demoScreen home|newchat|chat|profile|links|library|file|agent|digest|engineer|factory|pair|settings`
-/// opens a screen directly for screenshots.
+/// `-demoScreen home|newchat|chat|profile|links|library|file|agent|digest|engineer|factory|pair|settings|routine|approval`
+/// opens a screen directly for screenshots. The pairing and connection states have their own:
+/// `pairconfirm|outdated` (unpaired), `confirm|unrecognized|error|oldbridge` (paired).
 @MainActor
 enum Demo {
     private static let arguments = ProcessInfo.processInfo.arguments
@@ -12,14 +13,24 @@ enum Demo {
         arguments.indices.contains(at + 1) ? arguments[at + 1] : nil
     }
 
-    static func load(into store: AppStore, router: Router) {
-        if screen == "pair" { return }
-        store.apply(.hello(machine: "MacBook Pro", userName: "Alex", bots: bots))
+    static func load(into app: AppModel) {
+        let store = app.store
+        let router = app.router
+        let invite = PairInvite(url: URL(string: "ws://10.0.0.20:7878/ws")!, code: "K7QD-M2XP")
+        switch screen {
+        case "pair": return
+        case "pairconfirm": return app.propose(invite)
+        case "outdated": return app.showPairingFailure(DeepLink.outdatedBridgeMessage)
+        default: break
+        }
+        let oldBridge = screen == "oldbridge"
+        store.apply(.hello(Hello(protocol: oldBridge ? 2 : Wire.protocolVersion, machine: "MacBook Pro", userName: "Alex", bots: bots)))
+        if !oldBridge { store.apply(.devices(devices)) }
         for (bot, messages) in conversations {
             store.apply(.conversation(botId: BotID(bot), messages: messages))
         }
-        store.apply(.details(botId: BotID("claude"), library: library, links: links, agents: []))
-        store.apply(.details(botId: BotID("engineer"), library: [], links: [], agents: agents))
+        store.apply(.details(botId: BotID("claude"), library: library, links: links, agents: [], routines: []))
+        store.apply(.details(botId: BotID("engineer"), library: [], links: [], agents: agents, routines: []))
         store.apply(.agent(agents[0], messages: agentMessages))
         store.apply(.file(botId: BotID("claude"), path: "library/merge-plan.md", file: BotFile(mime: "text/markdown", content: plan, data: nil)))
 
@@ -44,13 +55,38 @@ enum Demo {
         case "agent":
             router.selection = BotID("engineer")
             router.path = [.exchange(AgentID("a1"))]
+        case "routine":
+            router.selection = BotID("news")
+            router.path = [.routine(BotID("news"), RoutineID("r1"))]
+        case "approval": router.selection = BotID("release")
+        case "confirm": app.propose(invite)
+        case "unrecognized": store.setConnection(.unrecognized)
+        case "error":
+            router.selection = BotID("release")
+            store.apply(.error(message: "That card already closed."))
+        case "oldbridge": router.showingSettings = true
         default: break
         }
     }
 
-    /// Stands in for the bridge after a send: echoes the message, types for a few seconds, then replies.
+    /// Stands in for the bridge: answers devices and pair_code, settles a permission card, and replies to a send.
     static func respond(to msg: ClientMessage, store: AppStore) {
-        guard case let .send(botId, text, _) = msg, var bot = store.bots[botId] else { return }
+        switch msg {
+        case .devices:
+            store.apply(.devices(devices))
+            return
+        case .pairCode:
+            store.apply(.pairCode(PairCode(code: "K7QD-M2XP", expiresAt: .now + 600)))
+            return
+        case let .decide(botId, messageId, choice):
+            guard case let .permission(id, at, card)? = store.conversations[botId]?[messageId] else { return }
+            var decided = card
+            decided.answer = .chose(choice)
+            store.apply(.message(botId: botId, message: .permission(id: id, at: at, card: decided)))
+            return
+        default: break
+        }
+        guard case let .send(botId, text, _, _) = msg, var bot = store.bots[botId] else { return }
         store.apply(.message(botId: botId, message: me(UUID().uuidString, .now, text)))
         bot.status = .working
         store.apply(.bot(bot))
@@ -83,24 +119,42 @@ enum Demo {
         )
     }
 
-    private static func routine(_ id: String, _ name: String, _ schedule: String, _ describe: String, enabled: Bool = true) -> Routine {
-        Routine(id: RoutineID(id), name: name, schedule: schedule, describe: describe, prompt: "Run \(name).", enabled: enabled, lastRunAt: nil)
+    private static func routine(
+        _ id: String, _ name: String, _ schedule: String, _ describe: String, enabled: Bool = true, runs: [RoutineRun] = []
+    ) -> Routine {
+        Routine(
+            id: RoutineID(id), name: name, schedule: schedule, describe: describe, prompt: "Run \(name).", enabled: enabled,
+            lastRunAt: runs.first?.at, nextRunAt: enabled ? at(-1, 7, 30) : nil, runs: runs
+        )
     }
+
+    private static let digestRuns: [RoutineRun] = [
+        RoutineRun(id: RunID("run4"), at: at(1, 7, 30), status: .ok, late: false, manual: false, note: nil),
+        RoutineRun(id: RunID("run3"), at: at(2, 9, 12), status: .quiet, late: true, manual: false, note: nil),
+        RoutineRun(id: RunID("run2"), at: at(3, 14, 2), status: .ok, late: false, manual: true, note: nil),
+        RoutineRun(id: RunID("run1"), at: at(4, 7, 30), status: .failed, late: false, manual: false, note: "The forum timed out twice."),
+    ]
+
+    static let devices: [Device] = [
+        Device(id: DeviceID("d1"), name: "Alex's iPhone", createdAt: at(30, 9, 0), lastSeenAt: .now, legacy: false, current: true),
+        Device(id: DeviceID("d2"), name: "Alex's iPad", createdAt: at(12, 9, 0), lastSeenAt: at(1, 21, 4), legacy: false, current: false),
+    ]
 
     static let bots: [Bot] = [
         bot("news", "news digest", .pentagon, .teal, last: at(1, 7, 31),
             preview: "Morning, Alex. Here's what changed overnight.", unread: 1,
-            routines: [routine("r1", "morning-digest", "30 7 * * 1-5", "Weekdays at 7:30 AM")]),
+            routines: [routine("r1", "morning-digest", "30 7 * * 1-5", "Weekdays at 7:30 AM", runs: digestRuns)]),
         bot("claude", "Claudio Bot", .circle, .white, last: at(2, 15, 9),
             preview: "Want me to merge any of these now?", question: "Want me to merge any of these now?"),
         bot("release", "release captain", .drop, .purple, last: at(3, 16, 4),
             preview: "v2.4.0 is tagged and the changelog is up.",
+            question: "Push to the default branch: git push origin main", status: .awaitingApproval,
             routines: [routine("r2", "release-train", "0 16 * * 5", "Fridays at 4:00 PM")]),
         bot("engineer", "engineer", .hexagon, .orange, last: ago(minutes: 2),
             preview: "The checkout smoke tests are in PR #148.", status: .working,
             routines: [routine("r3", "ci-upkeep", "30 8 * * 1-5", "Weekdays at 8:30 AM")]),
         bot("standup", "standup notes", .star4, .blue, last: at(8, 9, 2),
-            preview: "Yesterday: 3 PRs merged, 1 bug filed, release on track."),
+            preview: "Yesterday: 3 PRs merged, 1 bug filed, release on track.", status: .parked),
         bot("maker", "bot maker", .flower, .pink, last: at(9, 18, 40),
             preview: "I made standup notes. Its one job is your daily summary.",
             routines: [
@@ -178,6 +232,11 @@ enum Demo {
         ("release", [
             me("l1", at(3, 15, 50), "cut the release when CI is green"),
             say("l2", at(3, 16, 4), "v2.4.0 is tagged and the changelog is up. CI was green on all 412 tests, and I checked the deploy preview before tagging."),
+            me("l3", ago(minutes: 6), "Push the changelog fix straight to main."),
+            .permission(id: MessageID("l4"), at: ago(minutes: 5), card: PermissionCard(
+                from: nil, tool: "Bash", label: "Push to the default branch", detail: "git push origin main",
+                always: "git push to main or master from release captain", answer: nil, expiresAt: .now + 100 * 60
+            )),
         ]),
         ("standup", [
             say("k1", at(8, 9, 2), "Yesterday: 3 PRs merged, 1 bug filed, release on track. Today: review the checkout tests and pair on the login fix."),

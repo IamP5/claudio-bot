@@ -1,17 +1,20 @@
 import {
   COLORS,
+  PERMISSION_CHOICES,
   SHAPES,
   type AgentId,
   type Avatar,
   type BotId,
   type BotPatch,
   type ClientMessage,
+  type DeviceId,
+  type FactId,
   type MessageId,
   type RoutineId,
   type Upload,
 } from "./protocol";
 
-export type Parsed = { ok: true; message: ClientMessage } | { ok: false; error: string };
+type Parsed = { ok: true; message: ClientMessage } | { ok: false; error: string };
 
 class ParseError extends Error {}
 
@@ -45,6 +48,13 @@ function oneOf<T extends string>(o: Obj, key: string, values: readonly T[]): T {
   return v as T;
 }
 
+function usd(o: Obj, key: string): number | null {
+  const v = o[key];
+  if (v === null) return null;
+  if (typeof v !== "number" || !Number.isFinite(v) || v < 0) throw new ParseError(`${key} must be null or a non-negative number`);
+  return v;
+}
+
 function avatar(v: unknown): Avatar {
   const o = obj(v, "avatar");
   return { shape: oneOf(o, "shape", SHAPES), color: oneOf(o, "color", COLORS) };
@@ -58,6 +68,8 @@ function patch(v: unknown): BotPatch {
   if (o.avatar !== undefined) p.avatar = avatar(o.avatar);
   if (o.pinned !== undefined) p.pinned = bool(o, "pinned");
   if (o.hidden !== undefined) p.hidden = bool(o, "hidden");
+  if (o.dailyCapUsd !== undefined) p.dailyCapUsd = usd(o, "dailyCapUsd");
+  if (o.muted !== undefined) p.muted = bool(o, "muted");
   return p;
 }
 
@@ -71,6 +83,10 @@ function uploads(v: unknown): Upload[] {
 }
 
 const botId = (o: Obj) => str(o, "botId") as BotId;
+const messageId = (o: Obj) => str(o, "messageId") as MessageId;
+const agentId = (o: Obj) => str(o, "agentId") as AgentId;
+const routineId = (o: Obj) => str(o, "routineId") as RoutineId;
+const factId = (o: Obj) => str(o, "factId") as FactId;
 
 const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
   create_bot: (o) => ({ type: "create_bot", ref: str(o, "ref") }),
@@ -78,17 +94,34 @@ const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
   send: (o) => {
     const message = { type: "send", botId: botId(o), text: str(o, "text", { empty: true }), uploads: uploads(o.uploads) } as const;
     if (message.text.trim() === "" && message.uploads.length === 0) throw new ParseError("send needs text or uploads");
-    return message;
+    return o.clientId === undefined ? message : { ...message, clientId: str(o, "clientId") };
   },
-  answer: (o) => ({ type: "answer", botId: botId(o), messageId: str(o, "messageId") as MessageId, option: index(o, "option") }),
-  dismiss: (o) => ({ type: "dismiss", botId: botId(o), messageId: str(o, "messageId") as MessageId }),
+  answer: (o) => ({ type: "answer", botId: botId(o), messageId: messageId(o), option: index(o, "option") }),
+  dismiss: (o) => ({ type: "dismiss", botId: botId(o), messageId: messageId(o) }),
+  decide: (o) => ({ type: "decide", botId: botId(o), messageId: messageId(o), choice: oneOf(o, "choice", PERMISSION_CHOICES) }),
+  stop: (o) => ({ type: "stop", botId: botId(o) }),
+  stop_agent: (o) => ({ type: "stop_agent", agentId: agentId(o) }),
   update_bot: (o) => ({ type: "update_bot", botId: botId(o), patch: patch(o.patch) }),
   mark_unread: (o) => ({ type: "mark_unread", botId: botId(o) }),
-  delete_bot: (o) => ({ type: "delete_bot", botId: botId(o) }),
-  set_routine: (o) => ({ type: "set_routine", botId: botId(o), routineId: str(o, "routineId") as RoutineId, enabled: bool(o, "enabled") }),
+  delete_bot: (o) => (o.force === undefined ? { type: "delete_bot", botId: botId(o) } : { type: "delete_bot", botId: botId(o), force: bool(o, "force") }),
+  set_routine: (o) => ({ type: "set_routine", botId: botId(o), routineId: routineId(o), enabled: bool(o, "enabled") }),
+  run_routine: (o) => ({ type: "run_routine", botId: botId(o), routineId: routineId(o) }),
   details: (o) => ({ type: "details", botId: botId(o) }),
-  agent: (o) => ({ type: "agent", agentId: str(o, "agentId") as AgentId }),
+  agent: (o) => ({ type: "agent", agentId: agentId(o) }),
   file: (o) => ({ type: "file", botId: botId(o), path: str(o, "path") }),
+  memory: () => ({ type: "memory" }),
+  set_fact: (o) => ({ type: "set_fact", factId: o.factId === null ? null : factId(o), text: str(o, "text") }),
+  forget_fact: (o) => ({ type: "forget_fact", factId: factId(o) }),
+  confirm_fact: (o) => ({ type: "confirm_fact", factId: factId(o) }),
+  connectors: (o) => ({ type: "connectors", botId: botId(o) }),
+  set_connector: (o) => ({ type: "set_connector", botId: botId(o), name: str(o, "name"), enabled: bool(o, "enabled") }),
+  skills: (o) => ({ type: "skills", botId: botId(o) }),
+  delete_skill: (o) => ({ type: "delete_skill", botId: botId(o), name: str(o, "name") }),
+  webhook_token: (o) => ({ type: "webhook_token", botId: botId(o), routineId: routineId(o) }),
+  remove_worktree: (o) => ({ type: "remove_worktree", agentId: agentId(o) }),
+  devices: () => ({ type: "devices" }),
+  revoke_device: (o) => ({ type: "revoke_device", deviceId: str(o, "deviceId") as DeviceId }),
+  pair_code: () => ({ type: "pair_code" }),
 };
 
 export function parseClientMessage(raw: string): Parsed {

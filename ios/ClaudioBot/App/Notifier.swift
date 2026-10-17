@@ -34,14 +34,30 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// Removes the bot's message notification and its card notifications, which share its thread.
     func clear(bot: BotID) {
-        let id = Self.identifier(bot)
-        center.removeDeliveredNotifications(withIdentifiers: [id])
-        center.removePendingNotificationRequests(withIdentifiers: [id])
+        Task {
+            let ids = await center.deliveredNotifications()
+                .filter { $0.request.content.threadIdentifier == bot.rawValue }
+                .map(\.request.identifier)
+            center.removeDeliveredNotifications(withIdentifiers: ids)
+        }
     }
 
-    // One notification per bot: a newer message replaces the older one instead of stacking.
-    private static func identifier(_ bot: BotID) -> String { "bot-\(bot.rawValue)" }
+    /// After unpairing, nothing on the lock screen should point at the old Mac.
+    func clearAll() {
+        center.removeAllDeliveredNotifications()
+        center.removeAllPendingNotificationRequests()
+    }
+
+    /// Messages share one notification per bot, so a newer one replaces the older instead of stacking.
+    /// Each card gets its own, so a later message cannot replace a question or approval still waiting on the user.
+    static func identifier(for alert: Alert) -> String {
+        switch alert.reason {
+        case .message: "bot-\(alert.bot.id.rawValue)"
+        case .question(let id, _, _), .permission(let id, _): "card-\(id.rawValue)"
+        }
+    }
 
     private func post(_ alert: Alert) async {
         let content = UNMutableNotificationContent()
@@ -56,8 +72,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             content.body = question
             content.userInfo["messageId"] = id.rawValue
             content.categoryIdentifier = await registerCategory(for: id, options: options)
+        case .permission(_, let label):
+            // No approve action here: the user decides with the exact command in front of them.
+            content.body = "Needs your approval: \(label)"
         }
-        try? await center.add(UNNotificationRequest(identifier: Self.identifier(alert.bot.id), content: content, trigger: nil))
+        try? await center.add(UNNotificationRequest(identifier: Self.identifier(for: alert), content: content, trigger: nil))
     }
 
     /// Action titles are fixed per category, so each question gets its own category with its first two options.

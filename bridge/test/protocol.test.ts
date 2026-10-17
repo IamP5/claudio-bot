@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import fixtures from "../../fixtures/protocol.json";
-import { fixturesJson, fixturesPath } from "../src/fixtures";
+import { fixturesJson, fixturesPath } from "../scripts/fixtures";
 import { parseClientMessage } from "../src/parse";
 
-test("fixtures/protocol.json is what src/fixtures.ts generates, so tsc has checked every server fixture", async () => {
+test("fixtures/protocol.json is what scripts/fixtures.ts generates, so tsc has checked every server fixture", async () => {
   expect(await Bun.file(fixturesPath).text()).toBe(fixturesJson());
 });
 
@@ -25,6 +25,24 @@ test.each([
   ["a non-boolean pin", { type: "update_bot", botId: "b1", patch: { pinned: "yes" } }],
   ["a malformed upload", { type: "send", botId: "b1", text: "hi", uploads: [{ name: "a.png" }] }],
   ["a non-boolean routine toggle", { type: "set_routine", botId: "b1", routineId: "r1", enabled: 1 }],
+  ["a permission choice the bridge does not know", { type: "decide", botId: "b1", messageId: "m8", choice: "maybe" }],
+  ["a decide without a card", { type: "decide", botId: "b1", choice: "once" }],
+  ["a stop without a bot", { type: "stop" }],
+  ["a stop_agent without an agent", { type: "stop_agent", botId: "b1" }],
+  ["a run_routine without a routine", { type: "run_routine", botId: "b1" }],
+  ["a revoke_device without a device", { type: "revoke_device", deviceId: "" }],
+  ["a negative daily cap", { type: "update_bot", botId: "b1", patch: { dailyCapUsd: -1 } }],
+  ["a daily cap that is not a number", { type: "update_bot", botId: "b1", patch: { dailyCapUsd: "10" } }],
+  ["an empty clientId", { type: "send", botId: "b1", text: "hi", uploads: [], clientId: "" }],
+  ["a mute that is not a boolean", { type: "update_bot", botId: "b1", patch: { muted: 1 } }],
+  ["a set_fact with a numeric fact id", { type: "set_fact", factId: 3, text: "x" }],
+  ["a set_fact with no text", { type: "set_fact", factId: null, text: "" }],
+  ["a forget_fact with a null fact id", { type: "forget_fact", factId: null }],
+  ["a confirm_fact with no fact id", { type: "confirm_fact" }],
+  ["a set_connector without enabled", { type: "set_connector", botId: "b1", name: "slack" }],
+  ["a delete_skill without a name", { type: "delete_skill", botId: "b1" }],
+  ["a webhook_token without a routine", { type: "webhook_token", botId: "b1" }],
+  ["a remove_worktree without an agent", { type: "remove_worktree" }],
 ])("rejects %s", (_, raw) => {
   expect(parseClientMessage(typeof raw === "string" ? raw : JSON.stringify(raw)).ok).toBe(false);
 });
@@ -32,4 +50,9 @@ test.each([
 test("a send with only an upload is accepted", () => {
   const parsed = parseClientMessage(JSON.stringify({ type: "send", botId: "b1", text: "", uploads: [{ name: "a.png", mime: "image/png", data: "AA==" }] }));
   expect(parsed.ok).toBe(true);
+});
+
+test("a daily cap of null goes back to the bridge default", () => {
+  const parsed = parseClientMessage(JSON.stringify({ type: "update_bot", botId: "b1", patch: { dailyCapUsd: null } }));
+  expect(parsed).toEqual({ ok: true, message: { type: "update_bot", botId: "b1", patch: { dailyCapUsd: null } } } as never);
 });

@@ -1,5 +1,5 @@
 // End to end against the real bridge and real Claude Code, through the WebSocket like the app, in a temp home.
-// Run: bun run e2e. It spends real usage (about a dollar or two), never starts a cloud agent, and never touches
+// Run: bun run e2e. It spends real usage (two runs charged $0.42 and $0.62), never starts a cloud agent, and never touches
 // ~/.claudebot or ~/.claudiobot: CLAUDIOBOT_HOME points into a temp folder, which skips migration.
 // E2E_MODEL overrides the model; E2E_BRIDGE_LOG names a file for the bridge's own log.
 import type { Subprocess } from "bun";

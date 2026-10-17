@@ -804,6 +804,7 @@ test("a bot's commands run sandboxed to its home, never writing USER.md or its C
   });
   const h = hubOver(world);
   h.homes.create(b.id, "# eng\n");
+  rmSync(join(h.root, "bots", b.id, "work"), { recursive: true }); // a bot made before work/ existed
   h.hub.boot(false);
   await flush();
   const agentOptions = h.q().options;
@@ -815,9 +816,10 @@ test("a bot's commands run sandboxed to its home, never writing USER.md or its C
   expect([botOptions.sandbox?.enabled, botOptions.sandbox?.allowUnsandboxedCommands, botOptions.sandbox?.filesystem?.allowWrite]).toEqual([
     true,
     false,
-    [join(home, "bots", b.id)],
+    ["library", "inbox", "work"].map((d) => join(home, "bots", b.id, d)),
   ]);
-  expect(botOptions.sandbox?.filesystem?.denyWrite).toEqual(expect.arrayContaining([join(home, "bots", b.id, "CLAUDE.md"), join(home, "USER.md")]));
+  expect(["library", "inbox", "work"].map((d) => existsSync(join(home, "bots", b.id, d)))).toEqual([true, true, true]);
+  expect(botOptions.sandbox?.filesystem?.denyWrite).toEqual(expect.arrayContaining([join(home, "bots", b.id, "**/CLAUDE.md"), join(home, "USER.md")]));
   expect(botOptions.sandbox?.filesystem?.denyRead?.[0]).toBe(home);
   expect([botOptions.settings, agentOptions.settings]).toEqual([{ autoMemoryEnabled: false, cleanupPeriodDays: 3650 }, { autoMemoryEnabled: false, cleanupPeriodDays: 3650 }]);
   expect([agentOptions.sandbox?.filesystem?.allowWrite?.[0], agentOptions.env?.GIT_CONFIG_VALUE_1, botOptions.env]).toEqual([cwd, "ssh://git@github.com/", undefined]);

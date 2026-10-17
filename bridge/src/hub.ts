@@ -432,20 +432,23 @@ export function createHub(deps: HubDeps): Hub {
       context: () => memory.context(bot.id),
       brief: () => standingBrief(bot),
       ...deps.claude,
-      options: () => ({
-        cwd: homes.homeOf(bot.id),
-        resume: bot.session.id ?? undefined,
-        settingSources: ["user", "project"],
-        systemPrompt: { type: "preset", preset: "claude_code", append: persona({ name: bot.name, userName }) },
-        permissionMode: "auto",
-        mcpServers: { claudio: botToolServer(bot.id, actions) },
-        // A bot asks with its own ask tool, which posts a card instead of blocking the turn.
-        disallowedTools: ["AskUserQuestion"],
-        model: deps.model,
-        hooks: gate.hooks(actor),
-        sandbox: sandboxFor(actor, scopeOf(actor), process.env),
-        settings: settingsFor(bot.id),
-      }),
+      options: () => {
+        homes.ensureFolders(bot.id);
+        return {
+          cwd: homes.homeOf(bot.id),
+          resume: bot.session.id ?? undefined,
+          settingSources: ["user", "project"],
+          systemPrompt: { type: "preset", preset: "claude_code", append: persona({ name: bot.name, userName }) },
+          permissionMode: "auto",
+          mcpServers: { claudio: botToolServer(bot.id, actions) },
+          // A bot asks with its own ask tool, which posts a card instead of blocking the turn.
+          disallowedTools: ["AskUserQuestion"],
+          model: deps.model,
+          hooks: gate.hooks(actor),
+          sandbox: sandboxFor(actor, scopeOf(actor), process.env),
+          settings: settingsFor(bot.id),
+        };
+      },
       onMessage(m, pending) {
         if (!world.bots.has(bot.id)) return;
         // Output between turns, such as a background task finishing, has no turn to wait for, and no turn end would

@@ -22,11 +22,25 @@ const PUSH_READABLE: readonly string[] = [".ssh/config", ".ssh/known_hosts", ".s
 const CACHES: readonly string[] = [".npm", ".bun/install/cache", ".cache", "Library/Caches", "Library/Developer/Xcode/DerivedData"];
 
 /**
- * Under a bot's home: what Claude Code loads as that bot's instructions, skills, settings and MCP servers. Only the
- * bridge writes them (the remember and save_skill tools, update_self), from its own unsandboxed process, so no Bash
- * command of the bot can rewrite what its later turns obey.
+ * Under a bot's home: the only folders its Bash commands write. library/ holds what it makes for the user, inbox/ the
+ * user's uploads, work/ scratch such as clones and scripts. The home's root, where CLAUDE.md and .claude/ live, and
+ * .history/ are the bridge's.
  */
-const BOT_LOADED: readonly string[] = ["CLAUDE.md", "CLAUDE.local.md", ".claude", ".mcp.json"];
+export const BOT_WRITABLE: readonly string[] = ["library", "inbox", "work"];
+
+/**
+ * What Claude Code loads as instructions, skills, settings and MCP servers, at any depth: it reads a nested CLAUDE.md
+ * or .claude/rules when the bot opens a file below it. Only the bridge writes the home's own (remember, save_skill,
+ * update_self), from its unsandboxed process, so no Bash command of the bot can rewrite what its later turns obey.
+ */
+const BOT_LOADED: readonly string[] = ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude", "**/.mcp.json"];
+
+/**
+ * Under a mac agent's cwd: what Claude Code loads as the project's settings, skills, MCP servers and local
+ * instructions, which a later session of any agent there obeys. CLAUDE.md stays writable, since keeping it current is
+ * ordinary repo work, and a Write or Edit of it still opens a card.
+ */
+const AGENT_LOADED: readonly string[] = [".claude", ".mcp.json", "CLAUDE.local.md"];
 
 /**
  * Under a git dir outside the agent's cwd: what git loads and runs later, outside the sandbox. The sandbox already
@@ -67,7 +81,7 @@ export const AGENT_GIT_ENV: Readonly<Record<string, string>> = {
 /**
  * The OS-enforced floor (Seatbelt on macOS) for every Bash call of a bot or a mac agent, and every process it starts.
  * It does not cover Read/Write/Edit/Grep/Glob or WebFetch: the gate's floors cover those tool paths.
- * A bot writes its home but not the files in BOT_LOADED, and the sandbox's own TMPDIR; it reads its home and USER.md and
+ * A bot writes the folders in BOT_WRITABLE but not the files in BOT_LOADED, and the sandbox's own TMPDIR; it reads its home and USER.md and
  * nothing else of the bridge home. USER.md changes only through the bridge (remember, the phone's Memory). A mac agent
  * writes its cwd (project or worktree), the git dirs a commit there needs, the per-user temp and cache dirs and build
  * caches, and reads nothing of the bridge home. `gitDirs` comes from `gitDirsOf(cwd)` and is ignored for a bot.
@@ -94,8 +108,8 @@ export function sandboxFor(actor: Actor, scope: Scope, env: SandboxEnv, gitDirs:
     return {
       ...common,
       filesystem: {
-        allowWrite: [scope.own],
-        denyWrite: [...BOT_LOADED.map((f) => join(scope.own, f)), ...userMd],
+        allowWrite: BOT_WRITABLE.map((d) => join(scope.own, d)),
+        denyWrite: [...BOT_LOADED.map((f) => `${scope.own}/${f}`), ...userMd],
         denyRead,
         allowRead: [scope.own, ...userMd],
       },
@@ -108,7 +122,7 @@ export function sandboxFor(actor: Actor, scope: Scope, env: SandboxEnv, gitDirs:
     ...(gh ? { enableWeakerNetworkIsolation: true } : {}),
     filesystem: {
       allowWrite: [scope.own, ...gitDirs, ...userTempDirs(env), ...CACHES.map(home)],
-      denyWrite: gitDirs.flatMap((d) => GIT_RUNS.map((f) => join(d, f))),
+      denyWrite: [...AGENT_LOADED.map((f) => join(scope.own, f)), ...gitDirs.flatMap((d) => GIT_RUNS.map((f) => join(d, f)))],
       denyRead,
       allowRead: [...PUSH_READABLE, ...(gh ? [".config/gh"] : [])].map(home),
     },

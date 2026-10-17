@@ -1,6 +1,7 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import type { AgentId, Attachment, BotId, LibraryFile, Upload } from "./protocol";
+import { BOT_WRITABLE } from "./sandbox";
 
 const TEXT_LIMIT = 1024 * 1024;
 const BINARY_LIMIT = 10 * 1024 * 1024;
@@ -76,9 +77,14 @@ export function createHomes(root: string) {
       if (!existsSync(userMd)) writeFileSync(userMd, `# About ${userName}\n\n`, { mode: 0o600 });
     },
 
+    /** The folders the bot's sandbox lets it write, made for a bot created before work/ existed. */
+    ensureFolders(id: BotId) {
+      for (const dir of BOT_WRITABLE) mkdirSync(join(homeOf(id), dir), { recursive: true });
+    },
+
     create(id: BotId, memory: string) {
       const home = homeOf(id);
-      for (const dir of ["library", "inbox"]) mkdirSync(join(home, dir), { recursive: true });
+      for (const dir of BOT_WRITABLE) mkdirSync(join(home, dir), { recursive: true });
       if (!existsSync(join(home, "CLAUDE.md"))) writeFileSync(join(home, "CLAUDE.md"), memory);
     },
 

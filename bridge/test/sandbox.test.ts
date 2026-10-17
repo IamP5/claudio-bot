@@ -16,11 +16,21 @@ const botScope: Scope = { bridgeHome: BRIDGE, own: `${BRIDGE}/bots/b_alpha`, use
 const agentScope = (own = "/Users/u/Dev/app"): Scope => ({ bridgeHome: BRIDGE, own, userMd: null, homedir: HOME });
 const ENV = { TMPDIR: "/var/folders/ab/cdef/T/", SSH_AUTH_SOCK: "/var/run/com.apple.launchd.X/Listeners", HOME };
 
-// Seatbelt's rules as the sandbox applies them: allowRead wins over denyRead, denyWrite wins over allowWrite.
-const under = (p: string, root: string) => {
-  if (root.includes("*")) return new RegExp(`^${root.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*")}(/|$)`).test(p);
-  return p === root || p.startsWith(root + "/");
-};
+// Seatbelt's rules as the sandbox applies them: allowRead wins over denyRead, denyWrite wins over allowWrite. A glob
+// becomes a regex the way Claude Code 2.1 builds it: `**/` is any run of folders, `*` stays inside one, and the match
+// covers everything under what it names.
+const globRegex = (g: string) =>
+  new RegExp(
+    "^" +
+      g
+        .replace(/[.^$+{}()|\\]/g, "\\$&")
+        .replace(/\*\*\//g, "\u0000")
+        .replace(/\*/g, "[^/]*")
+        .replace(/\?/g, "[^/]")
+        .replace(/\u0000/g, "(.*/)?") +
+      "(/.*)?$",
+  );
+const under = (p: string, root: string) => (/[*?[]/.test(root) ? globRegex(root).test(p) : p === root || p.startsWith(root + "/"));
 const canRead = (s: SandboxSettings, p: string) =>
   !(s.filesystem?.denyRead ?? []).some((r) => under(p, r)) || (s.filesystem?.allowRead ?? []).some((r) => under(p, r));
 const canWrite = (s: SandboxSettings, p: string) =>
@@ -105,6 +115,37 @@ describe("a bot", () => {
     });
   });
 
+  test("writes only its library, inbox and work folders, and no instruction file Claude Code would load from inside them", () => {
+    const own = "/Users/u/.claudiobot/bots/b_alpha";
+    expect(
+      writesOf(s, [
+        `${own}/library/report.md`,
+        `${own}/inbox/upload.pdf`,
+        `${own}/work/clone/src/main.py`,
+        `${own}/notes.txt`,
+        `${own}/.history/main.jsonl`,
+        `${own}/library/x/CLAUDE.md`,
+        `${own}/library/CLAUDE.local.md`,
+        `${own}/work/repo/.claude/settings.json`,
+        `${own}/work/repo/.claude/rules/r.md`,
+        `${own}/inbox/a/b/.mcp.json`,
+        `${own}/work/CLAUDE.md`,
+      ]),
+    ).toEqual({
+      [`${own}/library/report.md`]: true,
+      [`${own}/inbox/upload.pdf`]: true,
+      [`${own}/work/clone/src/main.py`]: true,
+      [`${own}/notes.txt`]: false,
+      [`${own}/.history/main.jsonl`]: false,
+      [`${own}/library/x/CLAUDE.md`]: false,
+      [`${own}/library/CLAUDE.local.md`]: false,
+      [`${own}/work/repo/.claude/settings.json`]: false,
+      [`${own}/work/repo/.claude/rules/r.md`]: false,
+      [`${own}/inbox/a/b/.mcp.json`]: false,
+      [`${own}/work/CLAUDE.md`]: false,
+    });
+  });
+
   test("gets no ssh-agent socket and no gh, even when the env offers them", () => {
     const g = sandboxFor(bot, botScope, { ...ENV, CLAUDIOBOT_SANDBOX_GH: "1" });
     expect([g.network?.allowUnixSockets, g.enableWeakerNetworkIsolation, canRead(g, "/Users/u/.config/gh/hosts.yml")]).toEqual([undefined, undefined, false]);
@@ -177,6 +218,17 @@ describe("a mac agent", () => {
       "/Users/u/Documents/x": false,
       "/Users/u/.claudiobot/state.json": false,
       "/private/tmp/x": false,
+    });
+  });
+
+  test("does not write the project's Claude settings, skills, MCP servers or local instructions, but may edit CLAUDE.md", () => {
+    expect(writesOf(s, ["/Users/u/Dev/app/.claude/settings.json", "/Users/u/Dev/app/.claude/skills/x/SKILL.md", "/Users/u/Dev/app/.mcp.json", "/Users/u/Dev/app/CLAUDE.local.md", "/Users/u/Dev/app/CLAUDE.md", "/Users/u/Dev/app/src/a.ts"])).toEqual({
+      "/Users/u/Dev/app/.claude/settings.json": false,
+      "/Users/u/Dev/app/.claude/skills/x/SKILL.md": false,
+      "/Users/u/Dev/app/.mcp.json": false,
+      "/Users/u/Dev/app/CLAUDE.local.md": false,
+      "/Users/u/Dev/app/CLAUDE.md": true,
+      "/Users/u/Dev/app/src/a.ts": true,
     });
   });
 

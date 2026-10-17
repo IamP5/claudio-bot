@@ -136,6 +136,8 @@ final class AppStore {
     private(set) var skills: [BotID: [Skill]] = [:]
     /// The newest webhook token, shown once and then dismissed.
     private(set) var webhookToken: WebhookToken?
+    /// Sends the bridge has not echoed back yet, oldest first, each with the hellos it was resent after.
+    private(set) var unechoedSends: [(message: ClientMessage, resends: Int)] = []
 
     func has(_ feature: Feature) -> Bool {
         features.contains(feature)
@@ -176,7 +178,33 @@ final class AppStore {
             connectors = [:]
             skills = [:]
             webhookToken = nil
+            unechoedSends = []
         }
+    }
+
+    /// A frame sent on a socket that dropped may never have arrived, so a send stays here until its echo.
+    func sendStarted(_ msg: ClientMessage) {
+        guard has(.mute), Self.clientId(of: msg) != nil, !unechoedSends.contains(where: { $0.message == msg }) else { return }
+        unechoedSends.append((msg, 0))
+    }
+
+    /// What to send again on the socket that just said hello, with the same clientIds. A send still unechoed after
+    /// three resends is given up, so one the bridge refuses is not repeated forever.
+    func resendsAfterHello() -> [ClientMessage] {
+        // The bridge drops a repeated clientId from the same release that added mute; an older one would post it twice.
+        guard has(.mute) else {
+            unechoedSends = []
+            return []
+        }
+        unechoedSends = unechoedSends.compactMap { pending in
+            guard case .send(let botId, _, _, _) = pending.message, bots[botId] != nil, pending.resends < 3 else { return nil }
+            return (pending.message, pending.resends + 1)
+        }
+        return unechoedSends.map(\.message)
+    }
+
+    private static func clientId(of msg: ClientMessage) -> String? {
+        if case .send(_, _, _, let clientId) = msg { clientId } else { nil }
     }
 
     func decisionSent(_ choice: PermissionChoice, for card: MessageID) {
@@ -317,6 +345,7 @@ final class AppStore {
 
     private func settlePending(_ message: Message) {
         if case .permission(let id, _, let card) = message, card.answer != nil { pendingDecisions[id] = nil }
+        if case .user(_, _, _, _, let clientId?) = message { unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId } }
     }
 
     /// The home list: visible bots, pinned first, then newest activity.

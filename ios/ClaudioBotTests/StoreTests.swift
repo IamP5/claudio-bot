@@ -452,3 +452,63 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(MarkdownBlock.parse("## Plan\nstep one") == [.heading("Plan"), .prose("step one")])
     }
 }
+
+@MainActor
+@Suite struct SendBookkeepingTests {
+    private func store(features: [Feature] = [.mute], bots: [String] = ["b1"]) -> AppStore {
+        let store = AppStore()
+        store.apply(.hello(Hello(features: features, machine: "Mac", userName: "Alex", bots: bots.map { bot($0) })))
+        return store
+    }
+
+    private func send(_ text: String, to botId: String = "b1", id: String) -> ClientMessage {
+        .send(botId: BotID(botId), text: text, uploads: [], clientId: id)
+    }
+
+    private func echo(_ id: String) -> ServerMessage {
+        .message(botId: BotID("b1"), message: .user(id: MessageID("m-\(id)"), at: at, text: "hi", attachments: [], clientId: id))
+    }
+
+    @Test func aSendUnechoedWhenTheSocketDroppedIsResentAfterTheNextHelloWithItsClientId() {
+        let store = store()
+        store.sendStarted(send("first", id: "c1"))
+        store.sendStarted(send("second", id: "c2"))
+        store.apply(echo("c1"))
+
+        store.apply(.hello(Hello(features: [.mute], machine: "Mac", userName: "Alex", bots: [bot("b1")])))
+        #expect(store.resendsAfterHello() == [send("second", id: "c2")])
+
+        store.apply(echo("c2"))
+        #expect(store.resendsAfterHello().isEmpty)
+    }
+
+    @Test func aConversationThatHoldsTheEchoSettlesTheSend() {
+        let store = store()
+        store.sendStarted(send("first", id: "c1"))
+        store.apply(.conversation(botId: BotID("b1"), messages: [.user(id: MessageID("m1"), at: at, text: "first", attachments: [], clientId: "c1")]))
+        #expect(store.resendsAfterHello().isEmpty)
+    }
+
+    @Test func aSendIsGivenUpAfterThreeResendsOrWhenItsBotIsGone() {
+        let store = store(bots: ["b1", "b2"])
+        store.sendStarted(send("stuck", id: "c1"))
+        store.sendStarted(send("orphan", to: "b2", id: "c2"))
+        store.apply(.botRemoved(BotID("b2")))
+        for _ in 0..<3 { #expect(store.resendsAfterHello() == [send("stuck", id: "c1")]) }
+        #expect(store.resendsAfterHello().isEmpty)
+    }
+
+    @Test func aBridgeThatCannotDropRepeatsGetsNoResend() {
+        let store = store(features: [])
+        store.sendStarted(send("first", id: "c1"))
+        #expect(store.resendsAfterHello().isEmpty)
+        #expect(store.unechoedSends.isEmpty)
+    }
+
+    @Test func unpairingForgetsUnechoedSends() {
+        let store = store()
+        store.sendStarted(send("first", id: "c1"))
+        store.setConnection(.unpaired)
+        #expect(store.unechoedSends.isEmpty)
+    }
+}

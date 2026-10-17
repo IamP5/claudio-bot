@@ -6,7 +6,6 @@ import type { Project } from "./projects";
 import { createSession, type Session } from "./session";
 import { newMessageId, type AgentRecord, type World } from "./world";
 
-// Runs the Claude Code sessions bots start. The hub hears about every change and every report.
 export function createAgents(deps: {
   world: World;
   userName: string;

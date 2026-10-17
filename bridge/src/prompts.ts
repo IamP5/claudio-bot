@@ -1,6 +1,5 @@
 import type { AgentId, Attachment } from "./protocol";
 
-// Everything that reaches a bot. The first line says where it came from.
 export type Envelope =
   | { from: "user"; text: string; attachments: Attachment[] }
   | { from: "answer"; question: string; option: string }

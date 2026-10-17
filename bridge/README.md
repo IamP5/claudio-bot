@@ -1,6 +1,6 @@
 # claudebot bridge
 
-A small daemon for your Mac. The ClaudeBot iOS app connects to it over one WebSocket and uses it to run coding tasks with Claude Code. A task runs either on the Mac itself or as a Claude Code cloud session. Every task runs on your own Claude Code login. The wire format is defined in `src/protocol.ts`.
+A small daemon for your Mac. It runs your bots. A bot is a persistent assistant with one long conversation, its own home folder, routines and agents. The ClaudeBot iOS app is a view onto the bridge over one WebSocket. Bots keep working, and routines keep firing, while the phone is closed. Every bot runs on your own Claude Code login. The wire format is in `src/protocol.ts`, and `docs/design.md` at the repo root explains the design.
 
 ## Run it
 
@@ -9,36 +9,66 @@ bun install
 bun run start
 ```
 
-On startup the bridge prints its LAN WebSocket URL, its token, a `claudebot://pair?...` link, and a QR code of that link. To pair, scan the QR code from the iOS app. The token is created on the first run and kept in `~/.claudebot/token`. Delete that file to revoke every paired phone.
+On startup the bridge prints its LAN WebSocket URL, its token, a `claudebot://pair?...` link and a QR code of that link. To pair, scan the QR code from the iOS app. The token is created on the first run and kept in `~/.claudebot/token`. To revoke every paired phone, delete that file.
 
-`claude` must be on `PATH` and logged in. You can check with `claude -p hi`.
+`claude` must be on `PATH` and logged in. To check, run `claude -p hi`.
+
+The first run creates **Claude Bot**, a general assistant, and it greets you.
 
 ## Environment
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CLAUDEBOT_PORT` | `7878` | Port to listen on, on all interfaces. |
-| `CLAUDEBOT_ROOTS` | `~/Dev/projects:~/code:~/Developer:~/Projects` | Colon-separated folders. Each git repo directly inside one is offered as a project. |
-| `CLAUDEBOT_HOME` | `~/.claudebot` | Holds `token` and `state.json`, which stores tasks and transcripts. |
+| `CLAUDEBOT_ROOTS` | `~/Dev/projects:~/code:~/Developer:~/Projects` | Colon-separated folders. Each git repo directly inside one is a project that agents can work in. |
+| `CLAUDEBOT_HOME` | `~/.claudebot` | Holds the token, `state.json`, `USER.md`, the bot homes and the trash. |
 | `CLAUDEBOT_CLAUDE` | `claude` on `PATH` | Path to the Claude Code executable. Useful when the bridge runs under launchd. |
+| `CLAUDEBOT_MODEL` | your Claude Code default | Pins the model for bots and agents. The e2e script sets `haiku`. |
+| `CLAUDEBOT_USER_NAME` | first word of `id -F`, else `$USER` | Your first name, as bots use it. |
 
-## How tasks run
+## What is on disk
 
-A local task runs through the Claude Agent SDK in the project folder. Each tool permission prompt and each `AskUserQuestion` call is shown on the phone, and the task waits for your answer. A follow-up goes into the same live conversation. If the bridge restarts, a task that was running or waiting comes back as stopped. A task that had finished its turn (idle) still takes follow-ups, and the bridge resumes its session.
+```
+~/.claudebot/
+  token
+  state.json          bots, conversations, routines and agents
+  USER.md             facts about you that every bot may read and add to
+  bots/<botId>/       a bot's home and the working folder of its session
+    CLAUDE.md         the bot's job and its own notes
+    library/          files the bot makes, listed in the app's Library
+    inbox/            files you send from the phone
+  trash/<botId>-<ms>/ the home of a deleted bot
+```
 
-A cloud task runs `claude --cloud` in the project folder, so the project needs a GitHub remote.
+Deleting a bot moves its home to `trash/`. Nothing is deleted.
 
-## Cloud limitations
+## How a bot runs
 
-- The phone gets no live stream from a cloud session. It sees "Cloud session created" with a claude.ai link, and "Follow-up sent" for each follow-up. To watch the work, open the link.
-- Approvals and questions in a cloud session are answered on claude.ai, not through the bridge.
-- The model and permission mode chosen on the phone are recorded but not passed to `claude --cloud`.
+Each bot has one Claude Code session through the Agent SDK. It starts the first time something reaches the bot, and after a restart it resumes from the stored session id, so the bot remembers the conversation. The session uses the `claude_code` system prompt with the bot's persona appended, loads your user settings and the bot's `CLAUDE.md`, and runs with `permissionMode: "auto"`.
+
+Everything that reaches a bot is one message whose first line says where it came from, such as `[Bruno]`, `[Routine digest fired]` or `[Agent "Fix login" (a_...) reports]`. Messages queue, and the bot takes them one turn at a time. While a turn runs, the bot's status is `working`. Each text block the bot writes becomes one chat bubble. Tool calls do not show.
+
+A bot acts through the `claudebot` MCP tools: `ask` posts a question card, `start_agent` and `message_agent` run coding agents, `list_projects` lists the repos, `message_bot` and `create_bot` reach other bots, `update_self` renames the bot, and `set_routine` and `delete_routine` manage its schedule.
+
+## Agents
+
+A bot starts an agent for coding work in a project.
+
+- A **mac** agent is a Claude Code session in the project folder. When its turn ends, its final message goes back to the bot, which decides what to tell you.
+- A **cloud** agent runs `claude --cloud` in the project folder, so the project needs a GitHub remote. It does not report back. The bot gives you the claude.ai link instead. Follow-ups go through `claude -p ... --cloud <session>`.
+
+If the bridge restarts while a mac agent is working, the agent is marked failed and its bot is told. A message to the agent resumes it.
+
+## Routines
+
+A routine is a prompt a bot receives on a schedule, written as five-field cron in the Mac's local time. The bridge checks at the start of each minute and fires a routine at most once per minute. Runs missed while the Mac slept are skipped.
 
 ## Tests
 
 ```sh
-bun test       # unit tests, no network
-bun run e2e    # real Claude Code with haiku, in a throwaway repo; costs a few cents
+bun test         # unit tests, no network
+bunx tsc --noEmit
+bun run e2e      # real Claude Code with haiku in a temp home; costs about 3 cents
 ```
 
-`scripts/record.ts` re-records the SDK event streams in `test/recordings/` that the reducer tests replay.
+The e2e script never starts a cloud agent, because that creates a real session in your account. It prints the cost of each session it ran.

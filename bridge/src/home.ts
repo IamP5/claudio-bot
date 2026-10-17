@@ -16,7 +16,6 @@ function utf8Text(bytes: Uint8Array): string | null {
 
 export type FileView = { mime: string; content: string | null; data: string | null };
 
-// The bridge's folder on disk: USER.md, each bot's home, and the trash.
 export function createHomes(root: string) {
   const homeOf = (id: BotId) => join(root, "bots", id);
   const userMd = join(root, "USER.md");

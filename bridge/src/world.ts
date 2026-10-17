@@ -67,7 +67,6 @@ export const botPeer = (bot: BotRecord): Peer => ({ kind: "bot", id: bot.id, nam
 export const agentPeer = (agent: Agent): Peer => ({ kind: "agent", id: agent.id, title: agent.title });
 export const routinePeer = (routine: Routine): Peer => ({ kind: "routine", id: routine.id, name: routine.name });
 
-// How many unread messages a change adds: a new bot bubble or card, or a message received in an exchange.
 export function unreadDelta(previous: Message | undefined, next: Message): number {
   switch (next.kind) {
     case "bot":
@@ -80,7 +79,7 @@ export function unreadDelta(previous: Message | undefined, next: Message): numbe
   }
 }
 
-// Inserts or replaces by id, keeping unread in step. Replaying the same message changes nothing.
+// Replaying the same message changes nothing, so a retried broadcast never double-counts unread.
 export function post(bot: BotRecord, message: Message): Message {
   const i = bot.messages.findIndex((m) => m.id === message.id);
   const previous = i === -1 ? undefined : bot.messages[i];

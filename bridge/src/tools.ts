@@ -2,7 +2,6 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { COLORS, SHAPES, type BotId, type Color, type Shape } from "./protocol";
 
-// What a bot can do to the world. Each returns the short text the bot reads back.
 export type BotActions = {
   ask(botId: BotId, a: { question: string; options: string[] }): string;
   startAgent(botId: BotId, a: { title: string; prompt: string; project: string; where: "mac" | "cloud" }): Promise<string>;

@@ -115,7 +115,6 @@ function connect(token: string) {
     send: (m: ClientMessage) => ws.send(JSON.stringify(m)),
     opened: new Promise<void>((resolve) => (ws.onopen = () => resolve())),
     close: () => ws.close(),
-    // Sends text and waits for the bot to finish a turn that said something.
     async ask(botId: BotId, text: string, what: string) {
       const before = messages(botId).length;
       this.send({ type: "send", botId, text, uploads: [] });

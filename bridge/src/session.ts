@@ -6,8 +6,7 @@ export function claudeExecutable(): string | null {
 
 export type Session = { push(text: string): void; close(): void; readonly working: boolean };
 
-// One long-lived Claude Code session fed one message per turn. It starts on the first push, and after a crash the
-// next push starts it again, so options() should resume the stored session id.
+// After a crash the next push starts a new query, so options() must read the latest session id to resume it.
 export function createSession(spec: {
   options: () => Options;
   onMessage: (message: SDKMessage) => void;

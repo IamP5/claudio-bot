@@ -715,10 +715,10 @@ const FLOORS: readonly Floor[] = [
   },
   { id: "floor.payment", label: "a password, a payment or a 2FA code", roots: () => [], connector: handsOff, handOff: true },
   // The bridge itself listens on loopback, and the LAN, the tailnet and cloud metadata sit on private addresses.
-  { id: "floor.localnet", label: "a loopback or private network address", roots: () => [], call: (c) => c.tool === "WebFetch" && isPrivateHost(fetchHost(c)) },
+  { id: "floor.localnet", label: "a loopback or private network address", roots: () => [], call: (c) => (c.tool === "WebFetch" || (isConnector(c) && typeof c.input.url === "string")) && isPrivateHost(fetchHost(c)) },
 ];
 
-/** The lower-case host a WebFetch call names, IPv6 without brackets and a name without its trailing dot; null when its
+/** The lower-case host a WebFetch or connector call's url names, IPv6 without brackets and a name without its trailing dot; null when its
  *  url does not parse. */
 function fetchHost(call: ToolCall): string | null {
   try {
@@ -1050,7 +1050,8 @@ const WRITE_VERBS = new Set([
   // A query can be SQL that writes; evaluate runs script in a page; click, fill, type and press act in a browser.
   "query", "evaluate", "eval", "click", "fill", "type", "press", "drag", "replace", "save",
 ]);
-const READ_VERBS = new Set(["get", "list", "read", "search", "find", "fetch", "describe", "view", "count"]);
+// No "fetch": a connector that fetches a URL can carry data out in it, as WebFetch can.
+const READ_VERBS = new Set(["get", "list", "read", "search", "find", "describe", "view", "count"]);
 const verbsOf = (call: ToolCall) => wordsOf(call.tool.split("__").slice(2).join("_"));
 const SHELL_DEPLOY = { npm: ["-w", "--workspace", "--otp", "--prefix", "--registry"], pnpm: ["--filter", "-C", "--dir"], yarn: [], bun: [], kubectl: ["--context", "-n", "--namespace"], terraform: [], aws: [], gcloud: [], az: [], wrangler: [], docker: [], helm: [], sam: [], cdk: [], eas: [] } as const;
 const DEPLOY_VERBS = new Set(["deploy", "publish", "push", "apply", "destroy", "delete", "create", "update", "sync", "promote", "rollback", "install", "upgrade", "uninstall", "submit", "up", "scale", "rollout", "unpublish"]);

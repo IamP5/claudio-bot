@@ -161,7 +161,7 @@ private struct Face {
         case .pill: Face(left: CGPoint(x: 0.55, y: 0.44), right: CGPoint(x: 0.73, y: 0.41))
         case .triangle: Face(left: CGPoint(x: 0.42, y: 0.42), right: CGPoint(x: 0.6, y: 0.42), tilt: -10)
         case .star4, .star6: Face(left: CGPoint(x: 0.45, y: 0.43), right: CGPoint(x: 0.61, y: 0.41))
-        default: Face(left: CGPoint(x: 0.48, y: 0.43), right: CGPoint(x: 0.67, y: 0.4))
+        default: Face(left: CGPoint(x: 0.47, y: 0.43), right: CGPoint(x: 0.69, y: 0.39))
         }
     }
 }
@@ -181,7 +181,7 @@ struct AvatarView: View {
         }
         .frame(width: size, height: size)
         .overlay(alignment: .bottomTrailing) {
-            if needsAttention { AttentionBadge(size: max(12, size * 0.34)).offset(x: size * 0.06, y: size * 0.04) }
+            if needsAttention { AttentionBadge(size: max(12, size * 0.28)).offset(x: size * 0.06, y: size * 0.04) }
         }
         .accessibilityHidden(true)
     }
@@ -208,7 +208,7 @@ struct AvatarView: View {
     private func eye(at point: CGPoint, tilt: Double, blink: Bool) -> some View {
         Capsule()
             .fill(Color(hex: 0x161616))
-            .frame(width: size * 0.085, height: size * (blink ? 0.03 : 0.19))
+            .frame(width: size * 0.095, height: size * (blink ? 0.03 : 0.21))
             .rotationEffect(.degrees(tilt))
             .position(x: point.x * size, y: point.y * size)
     }

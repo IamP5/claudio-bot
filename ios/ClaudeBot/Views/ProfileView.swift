@@ -186,32 +186,46 @@ private struct InfoTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
-            CardSection(title: "Routines") {
-                if bot.routines.isEmpty {
-                    Placeholder(text: "Routines are recurring tasks this Bot runs on a schedule. Ask it in chat to set one up.")
-                } else {
-                    ForEach(Array(bot.routines.enumerated()), id: \.element.id) { index, routine in
-                        if index > 0 { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16) }
-                        Toggle(isOn: Binding(
-                            get: { routine.enabled },
-                            set: { client.send(.setRoutine(botId: bot.id, routineId: routine.id, enabled: $0)) }
-                        )) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(routine.name).font(.system(size: 16)).foregroundStyle(.white)
-                                Text(routine.enabled ? routine.describe : "Paused")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(Theme.secondary)
-                            }
+            // A bot without routines leads with its look, the way the reference does.
+            if bot.routines.isEmpty {
+                character
+                routines
+            } else {
+                routines
+                character
+            }
+        }
+    }
+
+    private var routines: some View {
+        CardSection(title: "Routines") {
+            if bot.routines.isEmpty {
+                Placeholder(text: "Routines are recurring tasks this Bot runs on a schedule. Ask it in chat to set one up.")
+            } else {
+                ForEach(Array(bot.routines.enumerated()), id: \.element.id) { index, routine in
+                    if index > 0 { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16) }
+                    Toggle(isOn: Binding(
+                        get: { routine.enabled },
+                        set: { client.send(.setRoutine(botId: bot.id, routineId: routine.id, enabled: $0)) }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(routine.name).font(.system(size: 16)).foregroundStyle(.white)
+                            Text(routine.enabled ? routine.describe : "Paused")
+                                .font(.system(size: 13))
+                                .foregroundStyle(Theme.secondary)
                         }
-                        .tint(AvatarColor.teal.color)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
                     }
+                    .tint(AvatarColor.teal.color)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
                 }
             }
-            CardSection(title: "Character", footer: "How this Bot looks everywhere: the list, the chat, and the color of your messages.") {
-                AvatarPicker(bot: bot)
-            }
+        }
+    }
+
+    private var character: some View {
+        CardSection(title: "Character", footer: "How this Bot looks everywhere: the list, the chat, and the color of your messages.") {
+            AvatarPicker(bot: bot)
         }
     }
 }
@@ -226,8 +240,7 @@ struct AvatarPicker: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 5), spacing: 14) {
-                ForEach(AvatarShape.allCases, id: \.self) { shape in
+            CenteredRows(AvatarShape.allCases, perRow: 5, cell: 64, spacing: 8) { shape in
                     Button { set(Avatar(shape: shape, color: bot.avatar.color)) } label: {
                         AvatarBody(shape: shape)
                             .fill(bot.avatar.color.color)
@@ -238,13 +251,11 @@ struct AvatarPicker: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel(shape.rawValue)
                     .accessibilityAddTraits(bot.avatar.shape == shape ? .isSelected : [])
-                }
             }
             .padding(.top, 18)
             .padding(.horizontal, 12)
 
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 6), spacing: 14) {
-                ForEach(AvatarColor.allCases, id: \.self) { color in
+            CenteredRows(AvatarColor.allCases, perRow: 6, cell: 54, spacing: 8) { color in
                     Button { set(Avatar(shape: bot.avatar.shape, color: color)) } label: {
                         Circle()
                             .fill(color.color)
@@ -255,7 +266,6 @@ struct AvatarPicker: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel(color.rawValue)
                     .accessibilityAddTraits(bot.avatar.color == color ? .isSelected : [])
-                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 22)
@@ -268,6 +278,34 @@ struct AvatarPicker: View {
                 .padding(16)
                 .disabled(bot.avatar == .standard)
         }
+    }
+}
+
+/// A grid whose short last row is centered, like the reference picker.
+private struct CenteredRows<Item: Hashable, Cell: View>: View {
+    let rows: [[Item]]
+    let cell: CGFloat
+    let spacing: CGFloat
+    let content: (Item) -> Cell
+
+    init(_ items: [Item], perRow: Int, cell: CGFloat, spacing: CGFloat, @ViewBuilder content: @escaping (Item) -> Cell) {
+        rows = stride(from: 0, to: items.count, by: perRow).map { Array(items[$0..<min($0 + perRow, items.count)]) }
+        self.cell = cell
+        self.spacing = spacing
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(spacing: spacing) {
+            ForEach(rows, id: \.self) { row in
+                HStack(spacing: 0) {
+                    ForEach(row, id: \.self) { item in
+                        content(item).frame(width: cell, height: cell)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 

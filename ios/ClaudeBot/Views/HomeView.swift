@@ -158,7 +158,7 @@ struct BotRow: View {
     var body: some View {
         let display = RowDisplay(bot)
         HStack(spacing: 14) {
-            AvatarView(avatar: bot.avatar, size: 42, needsAttention: display.needsAttention)
+            AvatarView(avatar: bot.avatar, size: 46, needsAttention: display.needsAttention)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(bot.name)
@@ -191,7 +191,7 @@ struct BotRow: View {
                 }
             }
         }
-        .padding(.vertical, 11)
+        .padding(.vertical, 14)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityValue(display.unreadDot ? "Unread" : "")

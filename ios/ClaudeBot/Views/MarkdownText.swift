@@ -3,6 +3,8 @@ import SwiftUI
 enum MarkdownBlock: Equatable {
     case prose(String)
     case heading(String)
+    /// A numbered or bulleted line, drawn with a hanging indent.
+    case item(marker: String, String)
     case code(language: String?, String)
 
     /// Splits assistant text into prose, headings, and fenced code. An unclosed fence runs to the end,
@@ -33,6 +35,9 @@ enum MarkdownBlock: Equatable {
                 }
             } else if code != nil {
                 code?.append(line)
+            } else if let item = Self.listItem(trimmed) {
+                flushProse()
+                blocks.append(.item(marker: item.marker, item.text))
             } else if let hashes = trimmed.firstIndex(where: { $0 != "#" }), trimmed.hasPrefix("#"),
                       trimmed[hashes] == " " {
                 flushProse()
@@ -44,6 +49,15 @@ enum MarkdownBlock: Equatable {
         if let open = code { blocks.append(.code(language: language, open.joined(separator: "\n"))) }
         flushProse()
         return blocks
+    }
+
+    private static func listItem(_ line: String) -> (marker: String, text: String)? {
+        if line.hasPrefix("- ") || line.hasPrefix("* ") {
+            return ("•", String(line.dropFirst(2)))
+        }
+        let digits = line.prefix { $0.isNumber }
+        guard !digits.isEmpty, digits.count <= 3, line.dropFirst(digits.count).hasPrefix(". ") else { return nil }
+        return ("\(digits).", String(line.dropFirst(digits.count + 2)))
     }
 }
 
@@ -57,6 +71,11 @@ struct MarkdownText: View {
                 case .prose(let s):
                     Text(Self.inline(s))
                         .textSelection(.enabled)
+                case let .item(marker, s):
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(marker).monospacedDigit().frame(minWidth: 16, alignment: .trailing)
+                        Text(Self.inline(s)).textSelection(.enabled)
+                    }
                 case .heading(let s):
                     Text(Self.inline(s))
                         .font(.headline)
@@ -70,8 +89,12 @@ struct MarkdownText: View {
 
     // Inline-only keeps line breaks and list markers as written; full block parsing would merge them.
     static func inline(_ s: String) -> AttributedString {
-        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+        var text = (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(s)
+        for run in text.runs where run.link != nil {
+            text[run.range].underlineStyle = .single
+        }
+        return text
     }
 }
 

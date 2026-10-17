@@ -213,6 +213,13 @@ private func question(_ id: String, answer: Answer? = nil) -> Message {
         #expect(MarkdownBlock.parse("```\nstreaming") == [.code(language: nil, "streaming")])
     }
 
+    @Test func listLinesBecomeItemsWithTheirMarkers() {
+        #expect(MarkdownBlock.parse("Today:\n1. **One** thing\n12. Twelve\n- dash") == [
+            .prose("Today:"), .item(marker: "1.", "**One** thing"), .item(marker: "12.", "Twelve"), .item(marker: "•", "dash"),
+        ])
+        #expect(MarkdownBlock.parse("2026 was a year.") == [.prose("2026 was a year.")])
+    }
+
     @Test func headingsAreTheirOwnBlock() {
         #expect(MarkdownBlock.parse("## Plan\nstep one") == [.heading("Plan"), .prose("step one")])
     }

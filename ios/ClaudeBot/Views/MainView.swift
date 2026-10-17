@@ -4,7 +4,16 @@ import SwiftUI
 struct MainView: View {
     @Environment(AppStore.self) private var store
     @Environment(Router.self) private var router
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var visibility: NavigationSplitViewVisibility = .all
+
+    /// iPad only. On iPhone the profile is pushed instead, and an inspector would turn into a sheet.
+    private var inspectorShown: Binding<Bool> {
+        Binding(
+            get: { sizeClass == .regular && router.showingInspector && router.selection != nil },
+            set: { router.showingInspector = $0 }
+        )
+    }
 
     var body: some View {
         @Bindable var router = router
@@ -30,6 +39,13 @@ struct MainView: View {
                     case .exchange(let agent): ExchangeView(agentId: agent)
                     case let .file(bot, path): FileView(botId: bot, path: path)
                     }
+                }
+            }
+            .inspector(isPresented: inspectorShown) {
+                // Only built while shown, so its toolbar items never leak into the chat's toolbar.
+                if inspectorShown.wrappedValue, let id = router.selection {
+                    ProfileView(botId: id)
+                        .inspectorColumnWidth(min: 320, ideal: 380, max: 460)
                 }
             }
         }

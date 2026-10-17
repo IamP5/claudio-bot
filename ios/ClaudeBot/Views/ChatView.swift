@@ -9,7 +9,6 @@ struct ChatView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
-        @Bindable var router = router
         if let bot = store.bots[botId] {
             let rows = Timeline.rows(store.conversations[botId]?.messages ?? [])
             ScrollView {
@@ -50,10 +49,6 @@ struct ChatView: View {
                     }
                     .accessibilityLabel("More")
                 }
-            }
-            .inspector(isPresented: $router.showingInspector) {
-                ProfileView(botId: botId)
-                    .inspectorColumnWidth(min: 320, ideal: 380, max: 460)
             }
         }
     }
@@ -100,6 +95,7 @@ struct HeaderPill: View {
         .padding(.leading, 6)
         .padding(.trailing, 14)
         .padding(.vertical, 6)
+        .glass(in: Capsule())
     }
 }
 

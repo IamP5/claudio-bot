@@ -804,6 +804,7 @@ test("a bot's commands run sandboxed to its home and USER.md, and a mac agent's 
     [join(home, "bots", b.id), join(home, "USER.md")],
   ]);
   expect(botOptions.sandbox?.filesystem?.denyRead?.[0]).toBe(home);
+  expect([botOptions.settings, agentOptions.settings]).toEqual([{ autoMemoryEnabled: false }, { autoMemoryEnabled: false }]);
   expect([agentOptions.sandbox?.filesystem?.allowWrite?.[0], agentOptions.env?.GIT_CONFIG_VALUE_1, botOptions.env]).toEqual([cwd, "ssh://git@github.com/", undefined]);
 });
 

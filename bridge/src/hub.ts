@@ -21,7 +21,7 @@ import {
   type ServerMessage,
   type StreamPosition,
 } from "./protocol";
-import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, onboarding, persona, type Envelope } from "./prompts";
+import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, NO_AUTO_MEMORY, onboarding, persona, type Envelope } from "./prompts";
 import { cardReply } from "./protocol2";
 import type { Push } from "./push";
 import { gitDirsOf, sandboxFor } from "./sandbox";
@@ -340,6 +340,7 @@ export function createHub(deps: HubDeps): Hub {
         model: deps.model,
         hooks: gate.hooks(actor),
         sandbox: sandboxFor(actor, scopeOf(actor), process.env),
+        settings: NO_AUTO_MEMORY,
       }),
       onMessage(m, pending) {
         if (!world.bots.has(bot.id)) return;

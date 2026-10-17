@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createCloudSession, followUpCloudSession } from "./cloud";
 import type { Ledger } from "./ledger";
 import type { AgentId, AgentStatus, BotId } from "./protocol";
-import { agentPrompt, type SessionInput } from "./prompts";
+import { agentPrompt, NO_AUTO_MEMORY, type SessionInput } from "./prompts";
 import type { Project } from "./projects";
 import { createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { AGENT_GIT_ENV } from "./sandbox";
@@ -169,6 +169,7 @@ export function createAgents(deps: {
           model: deps.model,
           hooks: deps.hooks(actor),
           sandbox: deps.sandbox(actor),
+          settings: NO_AUTO_MEMORY,
           // The SDK replaces the environment rather than adding to it.
           env: { ...process.env, ...AGENT_GIT_ENV },
           maxBudgetUsd,

@@ -135,6 +135,13 @@ export const agentPrompt = ({ botName, userName, prompt }: { botName: string; us
   `You were started by the bot ${botName} for ${userName}. Work on a new branch, verify your change, and open a PR when done. ` +
   `Your final message each turn is reported to the bot.\n\n${prompt}`;
 
+/**
+ * Claude Code's own memory lives in ~/.claude/projects, which the gate's floors and the sandbox keep from every bot and
+ * agent, so each attempt to save one would be refused and count toward the turn's denial breaker. A bot keeps its
+ * memory in CLAUDE.md and USER.md instead.
+ */
+export const NO_AUTO_MEMORY = { autoMemoryEnabled: false } as const;
+
 export const botMemory = ({ name, job }: { name: string; job: string }) => `# ${name}\n\n## Job\n\n${job}\n\n## Notes\n`;
 
 /** The bot a first run creates. migrate.ts recognizes an untouched one by these and the job. */

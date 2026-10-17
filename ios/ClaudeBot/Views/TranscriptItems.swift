@@ -99,6 +99,7 @@ struct ToolRow: View {
 
 struct DiffView: View {
     let text: String
+    @State private var viewportWidth: CGFloat = 0
 
     var body: some View {
         ScrollView([.horizontal, .vertical], showsIndicators: false) {
@@ -107,6 +108,8 @@ struct DiffView: View {
                     Text(line.isEmpty ? " " : String(line))
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(Self.color(line))
+                        .lineLimit(1)
+                        .fixedSize()
                         .padding(.horizontal, 10)
                         .padding(.vertical, 1)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -114,8 +117,10 @@ struct DiffView: View {
                 }
             }
             .padding(.vertical, 8)
+            .frame(minWidth: viewportWidth, alignment: .leading)
         }
-        .frame(maxHeight: 260)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { viewportWidth = $0 }
+        .frame(maxWidth: .infinity, maxHeight: 260, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
         .background(Color(.systemBackground).opacity(0.6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }

@@ -529,7 +529,7 @@ export type SessionSpec = {
   account: Owned<AccountState>;
   /** Read at every query start: resume from state.id, and hooks: gate.hooks(actor). */
   options: () => Options;
-  /** headroom() before each start; add() at each result. */
+  /** headroom() before each start, dailyLeft() as a query opens for an unattended turn, add() at each result. */
   ledger: Ledger;
   /** Every SDK message of the live query, with the turn in flight; late output between turns comes with null. */
   onMessage: (m: SDKMessage, turn: Pending | null) => void;
@@ -559,6 +559,8 @@ type Live = {
   q: Query;
   /** The query started without a resume id, so its first result is the session's whole cost. */
   fresh: boolean;
+  /** Opened for an unattended turn, with maxBudgetUsd at most what was left of the daily cap. */
+  capped: boolean;
   send(m: SDKUserMessage): void;
   release(): void;
   stderr(): string;
@@ -650,7 +652,7 @@ export function createSession(spec: SessionSpec): Session {
   function perform(e: Effect) {
     switch (e.kind) {
       case "send":
-        return send(e.text);
+        return send(e.pending, e.text);
       case "end":
         return guard("onTurnEnd", () => spec.onTurnEnd(e.pending, e.end));
       case "interrupt":
@@ -662,10 +664,17 @@ export function createSession(spec: SessionSpec): Session {
     }
   }
 
-  function send(text: string) {
+  /**
+   * maxBudgetUsd is fixed when a query opens and counts the spend since then, and the SDK stops a turn at it. So an
+   * unattended turn gets a query of its own, capped at what is left of the daily cap as it starts, and an attended turn
+   * never runs on such a query: the cap does not hold it. A runaway unattended turn stops at the cap, not at its end.
+   */
+  function send(p: Pending, text: string) {
+    const unattended = !attended(p.initiator);
+    if (live && (unattended || live.capped)) closeLive();
     let l: Live;
     try {
-      l = live ?? open();
+      l = live ?? open(unattended);
     } catch (e) {
       return dispatch({ kind: "unstarted", error: redactSecrets(errorText(e)) });
     }
@@ -696,10 +705,12 @@ export function createSession(spec: SessionSpec): Session {
     if (!live && spec.state.lifecycle.kind === "idle" && spec.state.pending.length === 0) guard("onDormant", () => spec.onDormant?.());
   }
 
-  function open(): Live {
+  function open(unattended: boolean): Live {
     const path = executable();
     if (!path) throw new Error("claude was not found on PATH, or CLAUDIOBOT_CLAUDE does not name an executable");
     const options = spec.options();
+    // Above 0: the headroom check let this turn start, and it sees the same spend.
+    const cap = unattended ? spec.ledger.dailyLeft(spec.actor.botId) : null;
     const gen = ++generation;
     const inbox: SDKUserMessage[] = [];
     let wake: (() => void) | null = null;
@@ -716,11 +727,20 @@ export function createSession(spec: SessionSpec): Session {
         wake = null;
       }
     }
-    const q = run({ prompt: input(), options: { ...options, pathToClaudeCodeExecutable: path, stderr: (d) => (stderr = (stderr + d).slice(-2000)) } });
+    const q = run({
+      prompt: input(),
+      options: {
+        ...options,
+        ...(cap !== null && { maxBudgetUsd: Math.min(cap, options.maxBudgetUsd ?? cap) }),
+        pathToClaudeCodeExecutable: path,
+        stderr: (d) => (stderr = (stderr + d).slice(-2000)),
+      },
+    });
     const l: Live = {
       gen,
       q,
       fresh: !options.resume,
+      capped: cap !== null,
       send(m) {
         inbox.push(m);
         wake?.();

@@ -100,8 +100,7 @@ export function createAgents(deps: {
       ...deps.claude,
       // Called as a query opens, after the headroom check let the queue head start, so it is above 0. The SDK counts
       // spend from the query's start, across every turn the live query serves, which matches a lifetime budget. The
-      // daily cap is left to the headroom check before each turn: frozen into a query that outlives the day, or serves
-      // an attended turn, it would stop work the cap never holds.
+      // session lowers it to what is left of the daily cap for a query it opens for an unattended turn.
       options: (): Options => {
         const maxBudgetUsd = deps.ledger.budgetLeft(id);
         return {

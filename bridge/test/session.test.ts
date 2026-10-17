@@ -604,6 +604,7 @@ function harness(
     executable?: string | null;
     defaultExecutable?: boolean;
     clock?: { t: number };
+    dailyLeft?: () => number;
   } = {},
 ) {
   const clock = opts.clock ?? { t: NOW.getTime() };
@@ -626,7 +627,7 @@ function harness(
       add: opts.add ?? ((row) => void usage.push(row as Record<string, unknown>)),
       headroom: (_, i) => (opts.headroom ?? roomy)(i),
       budgetLeft: () => 5,
-      dailyLeft: () => 10,
+      dailyLeft: opts.dailyLeft ?? (() => 10),
     },
     onMessage: (m, t) => messages.push({ m, turn: t }),
     onTurnEnd: (p, end) => ends.push({ id: p.id, text: p.text, pending: p, end }),
@@ -992,6 +993,40 @@ describe("session", () => {
       [undefined, ["[a]"]],
       ["s_1", ["[r]"]],
     ]);
+  });
+
+  test("an unattended turn runs on a query opened for it and capped at what is left of the daily cap; an attended one never does", async () => {
+    const left = [3.25, 2.5];
+    const h = harness({ dailyLeft: () => left.shift()! });
+    const turn = async (text: string, initiator: Initiator = user, settles: RunRef | null = null) => {
+      h.push(text, initiator, false, settles);
+      await flush();
+      h.q().emit(resultMsg(1));
+      await flush();
+    };
+    await turn("[a]");
+    await turn("[r]", routine, fired);
+    await turn("[b]", botMail);
+    await turn("[u1]");
+    await turn("[u2]");
+    expect(h.queries.map((q) => [q.options.resume, q.options.maxBudgetUsd, q.closed, q.received.map((r) => r.text)])).toEqual([
+      [undefined, undefined, true, ["[a]"]],
+      ["s_1", 3.25, true, ["[r]"]],
+      ["s_1", 2.5, true, ["[b]"]],
+      ["s_1", undefined, false, ["[u1]", "[u2]"]],
+    ]);
+  });
+
+  test("an unattended agent turn is capped by the smaller of the agent's budget and the daily cap", async () => {
+    const left = [3, 9];
+    const h = harness({ dailyLeft: () => left.shift()!, options: () => ({ cwd: "/code/shop", maxBudgetUsd: 4.5 }) });
+    for (const [text, initiator] of [["[r1]", routine], ["[r2]", routine], ["[u]", user]] as const) {
+      h.push(text, initiator);
+      await flush();
+      h.q().emit(resultMsg(1));
+      await flush();
+    }
+    expect(h.queries.map((q) => q.options.maxBudgetUsd)).toEqual([3, 4.5, 4.5]);
   });
 
   test("a turn silent for 30 minutes leaves one note naming the bot, and keeps running", async () => {

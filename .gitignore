@@ -2,3 +2,4 @@ node_modules/
 build/
 DerivedData/
 *.xcodeproj/xcuserdata/
+reference/

@@ -1,113 +1,131 @@
 // Wire protocol between the iOS app and the Mac bridge. JSON over one WebSocket.
 // ios/ClaudeBot/Model/Protocol.swift mirrors this file; fixtures/protocol.json pins both.
+// docs/grok-bot-reference.md describes the product these types model.
 
-export type TaskId = string & { readonly __brand: "TaskId" };
-export type ProjectId = string & { readonly __brand: "ProjectId" };
-export type ItemId = string & { readonly __brand: "ItemId" };
+export type BotId = string & { readonly __brand: "BotId" };
+export type MessageId = string & { readonly __brand: "MessageId" };
+export type AgentId = string & { readonly __brand: "AgentId" };
+export type RoutineId = string & { readonly __brand: "RoutineId" };
 
-export type Project = {
-  id: ProjectId;
+export const SHAPES = [
+  "circle", "cloud", "diamond", "star4", "flower", "blob", "scallop",
+  "drop", "pill", "triangle", "pentagon", "star6", "hexagon",
+] as const;
+export const COLORS = [
+  "white", "brown", "red", "orange", "amber", "green",
+  "teal", "blue", "purple", "pink", "gray",
+] as const;
+export type Shape = (typeof SHAPES)[number];
+export type Color = (typeof COLORS)[number];
+export type Avatar = { shape: Shape; color: Color };
+
+export type Routine = {
+  id: RoutineId;
   name: string;
-  path: string;
-  branch: string | null;
-  // owner/name on GitHub. Null means the project can only run locally.
-  githubRepo: string | null;
+  // Five-field cron in the Mac's local time zone.
+  schedule: string;
+  // "Weekdays at 7:57 AM", computed by the bridge.
+  describe: string;
+  prompt: string;
+  enabled: boolean;
+  lastRunAt: string | null;
 };
 
-export type Target =
-  | { kind: "local"; projectId: ProjectId }
-  | { kind: "cloud"; projectId: ProjectId };
-
-export type PermissionMode = "default" | "acceptEdits" | "plan" | "auto" | "bypassPermissions";
-
-// running: Claude is working. needs_input: an approval or question is pending.
-// idle: the turn ended and the task accepts a follow-up. failed / stopped are terminal.
-export type TaskStatus = "running" | "needs_input" | "idle" | "failed" | "stopped";
-
-export type TaskSummary = {
-  id: TaskId;
-  title: string;
-  target: Target;
-  projectName: string;
-  model: string;
-  permissionMode: PermissionMode;
-  status: TaskStatus;
-  createdAt: string;
-  updatedAt: string;
-  // Last line of assistant text, for the home list.
+export type Bot = {
+  id: BotId;
+  name: string;
+  // The optional label under the name.
+  title: string | null;
+  avatar: Avatar;
+  pinned: boolean;
+  hidden: boolean;
+  // working: a turn is in progress, so the app shows "Typing…".
+  status: "idle" | "working";
+  unread: number;
+  // Text of the newest unanswered question card. Drives the attention badge and the list preview.
+  question: string | null;
   preview: string;
-  costUsd: number;
-  // claude.ai/code URL for cloud tasks.
-  cloudUrl: string | null;
+  lastAt: string;
+  createdAt: string;
+  routines: Routine[];
 };
 
-export type Question = {
-  question: string;
-  header: string;
-  multiSelect: boolean;
-  options: { label: string; description: string }[];
-};
+export type Peer =
+  | { kind: "bot"; id: BotId; name: string; avatar: Avatar }
+  | { kind: "agent"; id: AgentId; title: string }
+  | { kind: "routine"; id: RoutineId; name: string };
 
-export type Item =
-  | { kind: "user"; id: ItemId; text: string; at: string }
-  | { kind: "assistant"; id: ItemId; text: string; at: string }
-  | {
-      kind: "tool";
-      id: ItemId;
-      name: string;
-      summary: string;
-      state: "running" | "ok" | "error";
-      output: string | null;
-      at: string;
-    }
-  | {
-      kind: "approval";
-      id: ItemId;
-      tool: string;
-      summary: string;
-      detail: string;
-      state: "pending" | "allowed" | "denied";
-      at: string;
-    }
+export type Attachment = { name: string; mime: string; path: string };
+
+export type Message =
+  | { kind: "user"; id: MessageId; at: string; text: string; attachments: Attachment[] }
+  | { kind: "bot"; id: MessageId; at: string; text: string }
   | {
       kind: "question";
-      id: ItemId;
-      questions: Question[];
-      answers: Record<string, string> | null;
+      id: MessageId;
       at: string;
+      question: string;
+      options: string[];
+      // Index into options, "dismissed", or null while open.
+      answer: number | "dismissed" | null;
     }
-  | {
-      kind: "result";
-      id: ItemId;
-      ok: boolean;
-      text: string;
-      costUsd: number;
-      durationMs: number;
-      at: string;
-    }
-  | { kind: "notice"; id: ItemId; text: string; url: string | null; at: string };
+  // A run of messages between this bot and one peer, grouped while nothing else is said.
+  // The app labels it: sent 1 → "Messaged X", received 1 → "Message from X", else "N messages with X".
+  | { kind: "exchange"; id: MessageId; at: string; peer: Peer; sent: number; received: number }
+  // A system line such as "Created routines {0} and {1}". Each {n} is replaced by a tappable chip for refs[n].
+  | { kind: "note"; id: MessageId; at: string; text: string; refs: Peer[] };
+
+export type AgentStatus = "working" | "waiting" | "failed" | "in_cloud";
+
+export type Agent = {
+  id: AgentId;
+  botId: BotId;
+  title: string;
+  where: "mac" | "cloud";
+  projectName: string;
+  status: AgentStatus;
+  // claude.ai/code URL for cloud agents.
+  url: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AgentMessage = { id: MessageId; at: string; from: "bot" | "agent"; text: string };
+
+export type LibraryFile = { path: string; size: number; modifiedAt: string };
+export type Link = { url: string; host: string; at: string };
 
 export type ServerMessage =
-  | { type: "hello"; machine: string; projects: Project[]; tasks: TaskSummary[] }
-  | { type: "task"; task: TaskSummary }
-  // Full transcript, sent on subscribe.
-  | { type: "transcript"; taskId: TaskId; items: Item[] }
-  // Insert or replace by item.id. Replaying the same message is a no-op.
-  | { type: "item"; taskId: TaskId; item: Item }
+  | { type: "hello"; machine: string; userName: string; bots: Bot[] }
+  | { type: "bot"; bot: Bot }
+  | { type: "bot_removed"; botId: BotId }
+  // Answers create_bot with the ref the client sent, so the app can open the new bot.
+  | { type: "created"; ref: string; botId: BotId }
+  // Full history, sent in answer to open.
+  | { type: "conversation"; botId: BotId; messages: Message[] }
+  // Insert or replace by message.id. Replaying the same message is a no-op.
+  | { type: "message"; botId: BotId; message: Message }
+  | { type: "details"; botId: BotId; library: LibraryFile[]; links: Link[]; agents: Agent[] }
+  | { type: "agent"; agent: Agent; messages: AgentMessage[] }
+  // content is null when the file is not text or is over 1 MB. data is base64 for images up to 10 MB.
+  | { type: "file"; botId: BotId; path: string; mime: string; content: string | null; data: string | null }
   | { type: "error"; message: string };
 
-export type Decision = "allow" | "allow_always" | "deny";
+export type Upload = { name: string; mime: string; data: string };
+
+export type BotPatch = Partial<Pick<Bot, "name" | "title" | "avatar" | "pinned" | "hidden">>;
 
 export type ClientMessage =
-  | {
-      type: "create";
-      prompt: string;
-      target: Target;
-      model: string;
-      permissionMode: PermissionMode;
-    }
-  | { type: "subscribe"; taskId: TaskId }
-  | { type: "send"; taskId: TaskId; text: string }
-  | { type: "decide"; taskId: TaskId; itemId: ItemId; decision: Decision }
-  | { type: "answer"; taskId: TaskId; itemId: ItemId; answers: Record<string, string> }
-  | { type: "stop"; taskId: TaskId };
+  | { type: "create_bot"; ref: string }
+  // Sends the conversation and marks the bot read.
+  | { type: "open"; botId: BotId }
+  | { type: "send"; botId: BotId; text: string; uploads: Upload[] }
+  | { type: "answer"; botId: BotId; messageId: MessageId; option: number }
+  | { type: "dismiss"; botId: BotId; messageId: MessageId }
+  | { type: "update_bot"; botId: BotId; patch: BotPatch }
+  | { type: "mark_unread"; botId: BotId }
+  | { type: "delete_bot"; botId: BotId }
+  | { type: "set_routine"; botId: BotId; routineId: RoutineId; enabled: boolean }
+  | { type: "details"; botId: BotId }
+  | { type: "agent"; agentId: AgentId }
+  | { type: "file"; botId: BotId; path: string };

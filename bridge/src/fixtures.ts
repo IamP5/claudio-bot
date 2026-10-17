@@ -1,42 +1,69 @@
 import type { ClientMessage, ServerMessage } from "./protocol";
 
 const at = "2026-10-16T12:00:00.000Z";
-const projects = [
-  { id: "p1", name: "drawdown", path: "/Users/me/drawdown", branch: "main", githubRepo: "me/drawdown" },
-  { id: "p2", name: "scratch", path: "/Users/me/scratch", branch: null, githubRepo: null },
-];
-const task = {
-  id: "t1", title: "Fix the login bug", target: { kind: "local", projectId: "p1" }, projectName: "drawdown",
-  model: "opus", permissionMode: "default", status: "needs_input", createdAt: at, updatedAt: at,
-  preview: "Looking at auth.ts", costUsd: 0.0123, cloudUrl: null,
+const routine = {
+  id: "r1", name: "tech-news-digest", schedule: "57 7 * * 1-5", describe: "Weekdays at 7:57 AM",
+  prompt: "Post today's tech digest.", enabled: true, lastRunAt: at,
+};
+const bot = {
+  id: "b1", name: "engineer", title: null, avatar: { shape: "hexagon", color: "orange" },
+  pinned: false, hidden: false, status: "idle", unread: 2,
+  question: "Want me to merge any of these now?", preview: "Want me to merge any of these now?",
+  lastAt: at, createdAt: at, routines: [routine],
+};
+const agentPeer = { kind: "agent", id: "a1", title: "Set up verification skill" };
+const agent = {
+  id: "a1", botId: "b1", title: "Set up verification skill", where: "mac", projectName: "solta-o-som",
+  status: "waiting", url: null, createdAt: at, updatedAt: at,
 };
 
 export const server = [
-  { type: "hello", machine: "MacBook", projects, tasks: [task] },
-  { type: "task", task: { ...task, id: "t2", target: { kind: "cloud", projectId: "p1" }, status: "idle", cloudUrl: "https://claude.ai/code/session_01" } },
+  { type: "hello", machine: "MacBook", userName: "Bruno", bots: [bot] },
+  { type: "bot", bot: { ...bot, id: "b2", name: "tech news", title: "Morning digest", avatar: { shape: "pentagon", color: "teal" }, status: "working", unread: 0, question: null, pinned: true } },
+  { type: "bot_removed", botId: "b2" },
+  { type: "created", ref: "c1", botId: "b3" },
   {
-    type: "transcript", taskId: "t1", items: [
-      { kind: "user", id: "i1", text: "Fix the login bug", at },
-      { kind: "assistant", id: "i2", text: "Looking at auth.ts", at },
-      { kind: "tool", id: "i3", name: "Read", summary: "src/auth.ts", state: "ok", output: "export function login() {}", at },
-      { kind: "tool", id: "i4", name: "Bash", summary: "bun test", state: "running", output: null, at },
-      { kind: "approval", id: "i5", tool: "Edit", summary: "src/auth.ts", detail: "- old\n+ new", state: "pending", at },
-      { kind: "question", id: "i6", questions: [{ question: "Which DB?", header: "DB", multiSelect: false, options: [{ label: "Postgres", description: "SQL" }, { label: "Redis", description: "KV" }] }], answers: null, at },
-      { kind: "result", id: "i7", ok: true, text: "Fixed.", costUsd: 0.0123, durationMs: 4200, at },
-      { kind: "notice", id: "i8", text: "Cloud session created", url: "https://claude.ai/code/session_01", at },
+    type: "conversation", botId: "b1", messages: [
+      { kind: "user", id: "m1", at, text: "Merge the stack when green", attachments: [{ name: "plan.png", mime: "image/png", path: "inbox/plan.png" }] },
+      { kind: "bot", id: "m2", at, text: "On it. **#19** can merge on its own." },
+      { kind: "exchange", id: "m3", at, peer: agentPeer, sent: 1, received: 3 },
+      { kind: "note", id: "m4", at, text: "Created routines {0} and {1}", refs: [{ kind: "routine", id: "r1", name: "tech-news-digest" }, { kind: "routine", id: "r2", name: "healthcheck" }] },
+      { kind: "exchange", id: "m5", at, peer: { kind: "bot", id: "b2", name: "tech news", avatar: { shape: "pentagon", color: "teal" } }, sent: 1, received: 0 },
+      { kind: "question", id: "m6", at, question: "Want me to merge any of these now?", options: ["Merge only #19", "Merge #18 and #19", "Keep holding everything"], answer: null },
     ],
   },
-  { type: "item", taskId: "t1", item: { kind: "question", id: "i6", questions: [], answers: { "Which DB?": "Postgres" }, at } },
-  { type: "error", message: "Unknown task" },
+  { type: "message", botId: "b1", message: { kind: "question", id: "m6", at, question: "Want me to merge any of these now?", options: ["Merge only #19", "Merge #18 and #19", "Keep holding everything"], answer: 1 } },
+  { type: "message", botId: "b1", message: { kind: "question", id: "m7", at, question: "Add the secret?", options: ["Yes", "Not yet"], answer: "dismissed" } },
+  {
+    type: "details", botId: "b1",
+    library: [{ path: "comment-prune-plan.md", size: 2048, modifiedAt: at }],
+    links: [{ url: "https://github.com/me/app/pull/19", host: "github.com", at }],
+    agents: [agent, { ...agent, id: "a2", where: "cloud", status: "in_cloud", url: "https://claude.ai/code/session_01" }],
+  },
+  {
+    type: "agent", agent, messages: [
+      { id: "am1", at, from: "bot", text: "Create the verification skill and open a PR." },
+      { id: "am2", at, from: "agent", text: "PR #19 is open. 27 tests pass." },
+    ],
+  },
+  { type: "file", botId: "b1", path: "comment-prune-plan.md", mime: "text/markdown", content: "# Plan\n", data: null },
+  { type: "file", botId: "b1", path: "chart.png", mime: "image/png", data: "iVBORw0KGgo=", content: null },
+  { type: "error", message: "Unknown bot" },
 ] as unknown as ServerMessage[];
 
 export const client = [
-  { type: "create", prompt: "Add dark mode", target: { kind: "cloud", projectId: "p1" }, model: "sonnet", permissionMode: "acceptEdits" },
-  { type: "subscribe", taskId: "t1" },
-  { type: "send", taskId: "t1", text: "Also add tests" },
-  { type: "decide", taskId: "t1", itemId: "i5", decision: "allow_always" },
-  { type: "answer", taskId: "t1", itemId: "i6", answers: { "Which DB?": "Postgres" } },
-  { type: "stop", taskId: "t1" },
+  { type: "create_bot", ref: "c1" },
+  { type: "open", botId: "b1" },
+  { type: "send", botId: "b1", text: "Also add tests", uploads: [{ name: "shot.png", mime: "image/png", data: "iVBORw0KGgo=" }] },
+  { type: "answer", botId: "b1", messageId: "m6", option: 1 },
+  { type: "dismiss", botId: "b1", messageId: "m7" },
+  { type: "update_bot", botId: "b1", patch: { name: "eng", title: "Ships PRs", avatar: { shape: "star6", color: "blue" }, pinned: true, hidden: false } },
+  { type: "mark_unread", botId: "b1" },
+  { type: "delete_bot", botId: "b1" },
+  { type: "set_routine", botId: "b1", routineId: "r1", enabled: false },
+  { type: "details", botId: "b1" },
+  { type: "agent", agentId: "a1" },
+  { type: "file", botId: "b1", path: "comment-prune-plan.md" },
 ] as unknown as ClientMessage[];
 
 if (import.meta.main) {

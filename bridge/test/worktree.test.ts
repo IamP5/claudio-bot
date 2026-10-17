@@ -1,8 +1,8 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { branchOf, prepareWorkspace, removeWorktree } from "../src/worktree";
+import { branchOf, prepareWorkspace, removeWorktree, worktreesRoot } from "../src/worktree";
 
 const AGENT = "a_ab12cd34-0000-4000-8000-000000000000";
 // Each case spawns real git several times; a loaded machine can take seconds.
@@ -211,4 +211,9 @@ test("removing is refused while the worktree holds ignored files, except build f
   rmSync(join(ws.cwd, ".env"));
   expect(await removeWorktree(project.path, ws.worktree!)).toEqual({ ok: true });
   expect(existsSync(ws.cwd)).toBe(false);
+});
+
+test("worktrees go under ~/.claudiobot-worktrees unless CLAUDIOBOT_WORKTREES names another folder", () => {
+  expect(worktreesRoot({})).toBe(join(homedir(), ".claudiobot-worktrees"));
+  expect(worktreesRoot({ CLAUDIOBOT_WORKTREES: "/tmp/wt" })).toBe("/tmp/wt");
 });

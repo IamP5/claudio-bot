@@ -10,7 +10,8 @@ import type { Isolate } from "./tools";
 // bridge home and every bot home (the floors and the sandbox keep those private). Made with hardened git calls;
 // removed only when the user asks (remove_worktree), never with --force and never while it holds uncommitted work.
 
-export const worktreesRoot = () => join(homedir(), ".claudiobot-worktrees");
+/** CLAUDIOBOT_WORKTREES moves it, like CLAUDIOBOT_HOME moves the bridge home. */
+export const worktreesRoot = (env: Record<string, string | undefined> = process.env) => env.CLAUDIOBOT_WORKTREES || join(homedir(), ".claudiobot-worktrees");
 
 /** base: the commit a worktree started from. note: a line for the bot's chat about where the agent ended up. */
 export type Workspace = { cwd: string; worktree: Worktree | null; base: string | null; note: string | null };

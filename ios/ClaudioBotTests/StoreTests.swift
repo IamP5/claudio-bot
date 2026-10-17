@@ -494,11 +494,12 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
 @Suite struct SkillsSectionTests {
     @Test func skillsShowOnlyWithTheFeatureAndFollowTheBridgesList() {
         let b1 = BotID("b1")
-        let store = AppStore()
-        store.apply(hello([bot("b1")]))
-        store.apply(.skills(botId: b1, skills: [Skill(name: "greet", description: "d", updatedAt: at)]))
-        #expect(SkillsSection.content(store, bot: b1) == .hidden)
+        let older = AppStore()
+        older.apply(hello([bot("b1")]))
+        older.apply(.skills(botId: b1, skills: [Skill(name: "greet", description: "d", updatedAt: at)]))
+        #expect(SkillsSection.content(older, bot: b1) == .hidden)
 
+        let store = AppStore()
         store.apply(.hello(Hello(features: [.skills], machine: "Mac", userName: "Alex", bots: [bot("b1")])))
         #expect(SkillsSection.content(store, bot: b1) == .loading)
         let greet = Skill(name: "greet", description: "Greet the user", updatedAt: at)

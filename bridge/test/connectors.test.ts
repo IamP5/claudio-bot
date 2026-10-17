@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { connectorSettings, createConnectors, type McpControl } from "../src/connectors";
 import type { BotId } from "../src/protocol";
 import { flushNow, loadWorld } from "../src/store";
-import { emptyWorld, newBot } from "../src/world";
+import { emptyWorld, newBot, own } from "../src/world";
 
 const B = "b_1" as BotId;
 
@@ -74,7 +74,7 @@ test("an off server shows off, including one the SDK did not load because it was
 
 test("with no live query, list shows the last list seen this run, else the off names unchecked", async () => {
   const fresh = setup({ live: false });
-  await fresh.connectors.set(B, "linear", false);
+  own<string[]>(fresh.bot.connectorsOff).push("linear");
   expect(await fresh.connectors.list(B)).toEqual([{ name: "linear", status: "unchecked", enabled: false }]);
 
   const seen = setup();
@@ -105,10 +105,33 @@ test("turning a server off twice keeps one entry", async () => {
 });
 
 test("set without a live query still persists and reopens", async () => {
-  const { connectors, events, bot } = setup({ live: false });
+  const { connectors, events, bot, close } = setup();
+  await connectors.list(B);
+  close();
   expect(await connectors.set(B, "linear", false)).toEqual({ ok: true });
   expect(bot.connectorsOff).toEqual(["linear"]);
   expect(events).toEqual(["persist now", `reopen ${B}`]);
+});
+
+test("only a server the bot has listed can be turned off, while any name can be turned back on", async () => {
+  const { connectors, events, bot } = setup();
+  expect((await connectors.set(B, "made-up", false)).ok).toBe(false);
+  expect((await setup({ live: false }).connectors.set(B, "linear", false)).ok).toBe(false);
+  expect(bot.connectorsOff).toEqual([]);
+  expect(events).toEqual([]);
+
+  own<string[]>(bot.connectorsOff).push("gone-server");
+  expect(await connectors.set(B, "gone-server", true)).toEqual({ ok: true });
+  expect(bot.connectorsOff).toEqual([]);
+});
+
+test("at most 64 servers can be off for one bot", async () => {
+  const many = Array.from({ length: 64 }, (_, i) => `server-${i}`);
+  const { connectors, bot } = setup({ statuses: [...many, "one-more"].map((name) => ({ name, status: "connected", source: "user" })) });
+  for (const name of many) expect(await connectors.set(B, name, false)).toEqual({ ok: true });
+  expect((await connectors.set(B, "one-more", false)).ok).toBe(false);
+  expect(bot.connectorsOff).toHaveLength(64);
+  expect(await connectors.set(B, "server-0", false)).toEqual({ ok: true });
 });
 
 test("set refuses an unknown bot, the claudio server and a malformed name, changing nothing", async () => {
@@ -132,7 +155,8 @@ test("a failing live query does not fail list or set", async () => {
     persist: () => {},
     log: (line) => void logs.push(line),
   });
-  expect(await connectors.set(B, "linear", false)).toEqual({ ok: true });
+  own<string[]>(world.bots.get(B)!.connectorsOff).push("linear");
+  expect(await connectors.set(B, "other", true)).toEqual({ ok: true });
   expect(await connectors.list(B)).toEqual([{ name: "linear", status: "unchecked", enabled: false }]);
   expect(logs).toHaveLength(2);
 });

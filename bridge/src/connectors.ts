@@ -15,6 +15,7 @@ export type McpControl = Pick<Query, "mcpServerStatus" | "toggleMcpServer">;
 
 const CLAUDIO = "claudio";
 const NAME_MAX = 200;
+const OFF_MAX = 64;
 
 /**
  * Flag settings merged into every query of the bot and its agents so the off servers do not load. Pure.
@@ -91,6 +92,10 @@ export function createConnectors(deps: ConnectorsDeps): Connectors {
       if (!bot) return refused("That bot no longer exists.");
       if (name === CLAUDIO) return refused("The claudio connector is the bridge's own and cannot be turned off.");
       if (name.length === 0 || name.length > NAME_MAX || hasHiddenCharacters(name)) return refused("That is not a connector name.");
+      if (!enabled && !bot.connectorsOff.includes(name)) {
+        if (bot.connectorsOff.length >= OFF_MAX) return refused(`At most ${OFF_MAX} connectors can be off for one bot.`);
+        if (!(await current(botId)).some((s) => s.name === name)) return refused("That bot has no connector by that name.");
+      }
       const off = own<string[]>(bot.connectorsOff);
       const at = off.indexOf(name);
       if (enabled && at >= 0) off.splice(at, 1);

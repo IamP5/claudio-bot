@@ -6,7 +6,7 @@ import { agentPrompt, type SessionInput } from "./prompts";
 import type { Project } from "./projects";
 import { createSession, type Session, type SessionSpec, type TurnEnd } from "./session";
 import type { Persist } from "./store";
-import { attended, emptySession, newMessageId, type Actor, type AgentRecord, type Initiator, type World } from "./world";
+import { emptySession, newMessageId, type Actor, type AgentRecord, type Initiator, type World } from "./world";
 
 // Agents are actors like bots: mac agents run on the same session module behind the same gate, metered by the same
 // ledger. Cloud agents run on claude.ai: the bridge neither gates nor meters them.
@@ -96,13 +96,12 @@ export function createAgents(deps: {
       userName: deps.userName,
       log: deps.log,
       ...deps.claude,
-      // Called as a query opens, after the session's headroom check let the queue head start, so neither amount is 0.
-      // The SDK counts spend from the query's start and a live query serves later turns too, so this is only ever
-      // stricter than the ledger. Attended turns are not held by the daily cap, so they get the agent's budget alone.
+      // Called as a query opens, after the headroom check let the queue head start, so it is above 0. The SDK counts
+      // spend from the query's start, across every turn the live query serves, which matches a lifetime budget. The
+      // daily cap is left to the headroom check before each turn: frozen into a query that outlives the day, or serves
+      // an attended turn, it would stop work the cap never holds.
       options: (): Options => {
-        const head = rec.session.pending[0];
-        const budget = deps.ledger.budgetLeft(id);
-        const maxBudgetUsd = head && !attended(head.initiator) ? Math.min(budget, deps.ledger.dailyLeft(rec.agent.botId)) : budget;
+        const maxBudgetUsd = deps.ledger.budgetLeft(id);
         return {
           cwd: rec.cwd,
           resume: rec.session.id ?? undefined,

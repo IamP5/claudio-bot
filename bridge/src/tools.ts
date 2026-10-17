@@ -25,7 +25,7 @@ async function reply(run: () => string | Promise<string>) {
 const always = { alwaysLoad: true };
 /** Push titles and every phone's bot list show the name, so a long one or one with control or bidi characters is refused. */
 export const BOT_NAME_MAX = 40;
-const UNSAFE_NAME = /[\p{Cc}\u202A-\u202E\u2066-\u2069]/u;
+const UNSAFE_NAME = /[\p{Cc}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
 export const botName = z
   .string()
   .refine(

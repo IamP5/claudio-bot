@@ -1,9 +1,9 @@
 import { realpathSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { createAgents } from "./agents";
 import { createClock, type Tickable } from "./clock";
-import { createGate, type Gate } from "./gate";
+import { createGate } from "./gate";
 import type { Homes } from "./home";
 import { createLedger } from "./ledger";
 import type { Scope } from "./policy";
@@ -89,8 +89,11 @@ export type HubDeps = {
 /** The routine's own scheduled fire. Its bubbles wait for the result, so a run with nothing to say posts nothing. */
 const holdsBubbles = (p: Pending) => p.settles !== null && p.initiator.kind === "routine" && !p.initiator.manual;
 
-/** What the hub has read of one turn's output. held is null once its bubbles go out as they arrive. */
-type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; pushed: boolean };
+/**
+ * What the hub has read of one turn's output. held is null once its bubbles go out as they arrive. carded: the turn
+ * opened a permission card of its own, so the run has something to tell even if it then calls routine_no_update.
+ */
+type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; pushed: boolean; carded: boolean };
 
 const earliest = (deadlines: (string | null)[]): string | null =>
   deadlines.reduce<string | null>((min, d) => (d !== null && (min === null || d < min) ? d : min), null);
@@ -113,6 +116,8 @@ export function createHub(deps: HubDeps): Hub {
   const clockNow = () => new Date();
   const now = () => clockNow().toISOString();
   const brains = new Map<BotId, Session>();
+  // Each bot's turn in flight, as read so far. Stop can end queued envelopes while it runs, and those must not reset it.
+  const readings = new Map<BotId, Reading>();
   const system: Initiator = { kind: "system" };
   // The clock is created last, once every ticker exists; a module may report a change while the hub is being built.
   let poke = () => {};
@@ -131,9 +136,11 @@ export function createHub(deps: HubDeps): Hub {
    * that parked this bot's session alone. The daily cap, reached or parking the session, holds only unattended ones.
    */
   function parked(bot: BotRecord, attended: boolean): boolean {
+    // The scheduler ticks before the sessions, so it can see a hold whose time has passed but is not yet cleared.
     const hold = holdOf(bot.session);
-    if (accountParked() || hold?.reason === "usage_limit") return true;
-    return !attended && (hold !== null || !ledger.headroom(botActor(bot.id), system).ok);
+    const held = hold !== null && hold.until > now() ? hold : null;
+    if (accountParked() || held?.reason === "usage_limit") return true;
+    return !attended && (held !== null || !ledger.headroom(botActor(bot.id), system).ok);
   }
 
   function view(bot: BotRecord): Bot {
@@ -160,8 +167,32 @@ export function createHub(deps: HubDeps): Hub {
   }
 
   function say(bot: BotRecord, message: Message) {
+    // A card the bot's own turn opens shows after what that turn wrote before it.
+    if (message.kind === "permission" && message.from === null && message.answer === null) {
+      const r = readings.get(bot.id);
+      if (r) r.carded = true;
+      release(bot);
+    }
     deps.broadcast({ type: "message", botId: bot.id, message: post(bot, message) });
     changed(bot);
+  }
+
+  // The message is in bot.messages before the push, because the push's throttle reads it.
+  function postBubbles(bot: BotRecord, r: { pushed: boolean }, bubbles: readonly Bubble[]) {
+    for (const { id, text } of bubbles) {
+      say(bot, { kind: "bot", id, at: now(), text });
+      if (!r.pushed) deps.push.notify(bot, "message", id);
+      r.pushed = true;
+    }
+  }
+
+  /** The turn's held bubbles go out now, ahead of a card or note it caused; the rest of the turn posts as it arrives. */
+  function release(bot: BotRecord) {
+    const r = readings.get(bot.id);
+    if (!r || r.held === null) return;
+    const held = r.held;
+    r.held = null;
+    postBubbles(bot, r, held);
   }
 
   const note = (bot: BotRecord, text: string, refs: Peer[] = []) => say(bot, { kind: "note", id: newMessageId(), at: now(), text, refs });
@@ -178,10 +209,13 @@ export function createHub(deps: HubDeps): Hub {
 
   function scopeOf(actor: Actor): Scope {
     const bridgeHome = realpathSync(root);
-    if (actor.kind === "bot") return { bridgeHome, own: realpathSync(homes.homeOf(actor.botId)), userMd: join(bridgeHome, "USER.md"), homedir: realpathSync(homedir()) };
+    const home = realpathSync(homedir());
+    // So ~name in a command resolves for the user and for root.
+    const users = { [userInfo().username]: home, root: process.platform === "darwin" ? "/var/root" : "/root" };
+    if (actor.kind === "bot") return { bridgeHome, own: realpathSync(homes.homeOf(actor.botId)), userMd: join(bridgeHome, "USER.md"), homedir: home, users };
     const rec = world.agents.get(actor.agentId);
     if (!rec) throw new Error(`Unknown agent ${actor.agentId}`);
-    return { bridgeHome, own: realpathSync(rec.cwd), userMd: null, homedir: realpathSync(homedir()) };
+    return { bridgeHome, own: realpathSync(rec.cwd), userMd: null, homedir: home, users };
   }
 
   function deliver(actor: Actor, e: Envelope) {
@@ -242,18 +276,6 @@ export function createHub(deps: HubDeps): Hub {
     const existing = brains.get(bot.id);
     if (existing) return existing;
     const actor = botActor(bot.id);
-    // Only the turn in flight is read. Stop can end queued envelopes while it runs, and those must not reset it.
-    let reading: Reading | null = null;
-
-    // The message is in bot.messages before the push, because the push's throttle reads it.
-    function post(r: { pushed: boolean }, bubbles: readonly Bubble[]) {
-      for (const { id, text } of bubbles) {
-        say(bot, { kind: "bot", id, at: now(), text });
-        if (!r.pushed) deps.push.notify(bot, "message", id);
-        r.pushed = true;
-      }
-    }
-
     const session = createSession({
       actor,
       state: bot.session,
@@ -278,28 +300,27 @@ export function createHub(deps: HubDeps): Hub {
       onMessage(m, pending) {
         if (!world.bots.has(bot.id)) return;
         // Output between turns, such as a background task finishing, has no turn to wait for.
-        if (pending === null) return post({ pushed: false }, readTurn(freshTurn, m).bubbles);
-        if (reading?.id !== pending.id) reading = { id: pending.id, turn: freshTurn, held: holdsBubbles(pending) ? [] : null, pushed: false };
-        const r = reading;
+        if (pending === null) return postBubbles(bot, { pushed: false }, readTurn(freshTurn, m).bubbles);
+        let r = readings.get(bot.id);
+        if (r?.id !== pending.id) {
+          r = { id: pending.id, turn: freshTurn, held: holdsBubbles(pending) ? [] : null, pushed: false, carded: false };
+          readings.set(bot.id, r);
+        }
         const read = readTurn(r.turn, m);
         r.turn = read.turn;
-        if (r.held === null) return post(r, read.bubbles);
+        if (r.held === null) return postBubbles(bot, r, read.bubbles);
         r.held.push(...read.bubbles);
-        // A card is the last thing a turn shows, so what led up to it goes out before the card does.
-        if (r.turn.asked) {
-          const held = r.held;
-          r.held = null;
-          post(r, held);
-        }
+        // A question card is the last thing a turn shows, so what led up to it goes out before the card does.
+        if (r.turn.asked) release(bot);
       },
       onTurnEnd(pending, end) {
         if (!world.bots.has(bot.id)) return;
+        const r = readings.get(bot.id);
         let quiet = false;
-        if (end.kind !== "deferred" && reading?.id === pending.id) {
-          const r = reading;
-          reading = null;
-          quiet = r.turn.quiet && !r.turn.asked;
-          if (r.held !== null && !quiet) post(r, r.held);
+        if (end.kind !== "deferred" && r?.id === pending.id) {
+          readings.delete(bot.id);
+          quiet = r.turn.quiet && !r.turn.asked && !r.carded;
+          if (r.held !== null && !quiet) postBubbles(bot, r, r.held);
         }
         endTurn(bot, pending, end, quiet);
       },
@@ -307,7 +328,10 @@ export function createHub(deps: HubDeps): Hub {
         if (world.bots.has(bot.id)) changed(bot);
       },
       note(text) {
-        if (world.bots.has(bot.id)) note(bot, text);
+        if (!world.bots.has(bot.id)) return;
+        // The breaker's note comes mid-turn; what the turn wrote before it goes first.
+        release(bot);
+        note(bot, text);
       },
     });
     brains.set(bot.id, session);
@@ -541,9 +565,10 @@ export function createHub(deps: HubDeps): Hub {
       case "delete_bot":
         brains.get(bot.id)?.close();
         brains.delete(bot.id);
+        readings.delete(bot.id);
         agents.stopFor(bot.id);
-        // Before the agents go: the gate finds the agents' grants through them. The cast goes when U1's Gate lands.
-        (gate as Gate & { forgetBot?(botId: BotId): void }).forgetBot?.(bot.id);
+        // Before the agents go: the gate finds the agents' grants through them.
+        gate.forgetBot(bot.id);
         for (const [id, rec] of world.agents) if (rec.agent.botId === bot.id) world.agents.delete(id);
         world.bots.delete(bot.id);
         // A crash between these two leaves an orphan home rather than a bot whose home is gone.

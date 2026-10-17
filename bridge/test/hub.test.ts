@@ -27,7 +27,10 @@ class FakeQuery {
   private done = false;
   private wake: (() => void) | null = null;
 
-  constructor(prompt: AsyncIterable<SDKUserMessage>) {
+  constructor(
+    prompt: AsyncIterable<SDKUserMessage>,
+    readonly options: Options,
+  ) {
     void (async () => {
       for await (const m of prompt) this.received.push(m.message.content as string);
     })();
@@ -94,8 +97,8 @@ function hubOver(world: World, opts: { persist?: (urgency?: "now") => void } = {
     log: () => {},
     push: { notify: (bot, reason, messageId) => pushes.push({ botId: bot.id, reason, messageId }) },
     claude: {
-      query: (({ prompt }: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => {
-        const q = new FakeQuery(prompt);
+      query: (({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => {
+        const q = new FakeQuery(prompt, options);
         queries.push(q);
         return q;
       }) as unknown as typeof query,
@@ -103,6 +106,13 @@ function hubOver(world: World, opts: { persist?: (urgency?: "now") => void } = {
     },
   });
   return { hub, homes, root, events, frames, pushes, queries, q: () => queries.at(-1)! };
+}
+
+/** The bridge's real gate, called the way Claude Code calls the PreToolUse hook the session was given. */
+function runBash(q: FakeQuery, command: string) {
+  const id = `toolu_${++uuid}`;
+  const input = { hook_event_name: "PreToolUse", session_id: "s_1", transcript_path: "/tmp/t.jsonl", cwd: q.options.cwd!, tool_name: "Bash", tool_input: { command, description: "run" }, tool_use_id: id };
+  return q.options.hooks!.PreToolUse![0]!.hooks[0]!(input as never, id, { signal: new AbortController().signal });
 }
 
 const bot = (name: string, patch: Partial<BotRecord> = {}): BotRecord => ({ ...newBot({ id: `b_${name}` as BotId, name, avatar: { shape: "circle", color: "white" }, at }), ...patch });
@@ -125,12 +135,15 @@ function dueRoutine(b: BotRecord): RoutineRecord {
 
 const bubbles = (b: BotRecord) => b.messages.filter((m): m is Extract<Message, { kind: "bot" }> => m.kind === "bot").map((m) => m.text);
 
-async function fired(over: Partial<BotRecord> = {}) {
+async function fired(over: Partial<BotRecord> = {}, routines = 1) {
   const world = emptyWorld();
   const b = bot("eng", over);
   world.bots.set(b.id, b);
   const routine = dueRoutine(b);
+  for (let i = 1; i < routines; i++) (b.routines as RoutineRecord[]).push({ ...dueRoutine(b), id: `r_more${i}` as RoutineId, name: `more${i}` });
+  if (routines > 1) (b.routines as RoutineRecord[]).splice(1, 1);
   const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
   h.hub.tick(new Date());
   await flush();
   return { ...h, bot: b, routine };
@@ -313,6 +326,81 @@ test("raising a bot's daily cap starts its held routine at once instead of at th
   expect(status()).toBe("working");
 });
 
+test("a routine run's held bubbles go out before a permission card its turn opens, and the run is not quiet", async () => {
+  const h = await fired();
+
+  h.q().emit(assistant(text("The release branch is ready.")));
+  await flush();
+  expect(bubbles(h.bot)).toEqual([]);
+  const verdict = await runBash(h.q(), "git push origin main");
+  h.q().emit(assistant(toolUse("mcp__claudio__routine_no_update")), result());
+  await flush();
+
+  expect(JSON.stringify(verdict)).toContain('"deny"');
+  expect(h.bot.messages.filter((m) => m.kind === "bot" || m.kind === "permission").map((m) => m.kind)).toEqual(["bot", "permission"]);
+  expect(h.routine.runs.map((r) => r.status)).toEqual(["ok"]);
+});
+
+test("Stop during a held routine run drops the queued one and still posts what the running one wrote", async () => {
+  const h = await fired({}, 2);
+  const [running, queued] = h.bot.routines as RoutineRecord[];
+  h.q().emit(assistant(text("Halfway through the digest.")));
+  await flush();
+
+  expect(await h.hub.handle({ type: "stop", botId: h.bot.id })).toEqual([]);
+  h.q().emit(result(0.1, { subtype: "error_during_execution", is_error: true, errors: ["interrupted"] }));
+  await flush();
+
+  expect(bubbles(h.bot)).toEqual(["Halfway through the digest."]);
+  expect([running!.runs[0]?.status, queued!.runs[0]?.status]).toEqual(["skipped", "skipped"]);
+  expect(h.q().received).toHaveLength(1);
+});
+
+test("a held routine run that still finishes quiet after Stop dropped the queued one posts nothing", async () => {
+  const h = await fired({}, 2);
+  const [running, queued] = h.bot.routines as RoutineRecord[];
+  h.q().emit(assistant(text("Nothing changed since the last digest.")));
+  await flush();
+
+  await h.hub.handle({ type: "stop", botId: h.bot.id });
+  h.q().emit(assistant(toolUse("mcp__claudio__routine_no_update")), result());
+  await flush();
+
+  expect(bubbles(h.bot)).toEqual([]);
+  expect([running!.runs[0]?.status, queued!.runs[0]?.status]).toEqual(["quiet", "skipped"]);
+});
+
+test("a hold whose time has passed does not skip a fire in the tick that clears it", async () => {
+  const run = { routineId: "r_old" as RoutineId, runId: "run_old" as RunId };
+  const lapsed = new Date(Date.now() - 60_000).toISOString();
+  const h = await fired({
+    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, at, text: "[Routine old fired]", initiator: { kind: "routine", run, manual: false }, settles: run, attempts: 0 }], lifecycle: { kind: "parked", reason: "daily_cap", until: lapsed }, notices: [] },
+  });
+
+  expect(h.routine.runs.map((r) => r.status)).toEqual(["running"]);
+});
+
+test("today's app answering Allow once on a held call grants it once for the turn's attendance and tells the bot", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "push it", uploads: [] });
+  await flush();
+  await runBash(h.q(), "git push origin main");
+  h.q().emit(result());
+  await flush();
+  const card = b.messages.find((m) => m.kind === "permission")!;
+
+  expect(await h.hub.handle({ type: "answer", botId: b.id, messageId: card.id, option: 0 })).toEqual([]);
+  await flush();
+
+  expect(b.messages.find((m) => m.id === card.id)).toMatchObject({ answer: "once" });
+  expect(world.gate.grants.map((g) => g.appliesTo)).toEqual(["attended"]);
+  expect(h.q().received.at(-1)).toStartWith("[Alex allowed once: Bash `git push origin main`.");
+});
+
 test("at the daily cap a scheduled fire is skipped, and Run now from the phone still runs", async () => {
   const h = await fired({ dailyCapUsd: 0 });
   expect(h.routine.runs.map((r) => [r.status, r.note])).toEqual([["skipped", "Paused by a limit"]]);
@@ -334,7 +422,7 @@ test("delete_bot saves the world without the bot before its home is moved to the
 
   expect(await hub.handle({ type: "delete_bot", botId: doomed.id })).toEqual([]);
 
-  expect(events.slice(-2)).toEqual(["persist now with no bots", "trash b_doomed"]);
+  expect(events).toEqual(["persist now with no bots", "trash b_doomed"]);
   expect(existsSync(homes.homeOf(doomed.id))).toBe(false);
   expect(frames.at(-1)).toEqual({ type: "bot_removed", botId: doomed.id });
 });

@@ -10,6 +10,8 @@ struct ChatView: View {
     @State private var position = ScrollPosition(edge: .bottom)
     /// Whether the list follows new content down. Dragging lets go; settling near the bottom or sending takes hold again.
     @State private var followsBottom = true
+    /// Whether the newest message is far enough below the screen to offer a way back down.
+    @State private var showsJump = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -75,6 +77,17 @@ struct ChatView: View {
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height + $0.contentInsets.bottom } action: { _, _ in
                 if followsBottom { position.scrollTo(edge: .bottom) }
             }
+            .onScrollGeometryChange(for: Bool.self) { Self.bottomGap($0) > 200 } action: { _, far in
+                withAnimation(.easeOut(duration: 0.2)) { showsJump = far }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if showsJump {
+                    JumpToLatestButton(action: jumpToLatest)
+                        .padding(.trailing, 16)
+                        .padding(.bottom, 12)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.8)))
+                }
+            }
             .scrollDismissesKeyboard(.interactively)
             .background(Theme.background)
             .safeAreaInset(edge: .top) {
@@ -112,6 +125,15 @@ struct ChatView: View {
     /// New rows fade up a few points; under Reduce Motion they only fade.
     private var arrival: AnyTransition {
         reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 8))
+    }
+
+    private func jumpToLatest() {
+        followsBottom = true
+        if reduceMotion {
+            position.scrollTo(edge: .bottom)
+        } else {
+            withAnimation(.snappy(duration: 0.35)) { position.scrollTo(edge: .bottom) }
+        }
     }
 
     private static func bottomGap(_ geometry: ScrollGeometry) -> CGFloat {
@@ -186,6 +208,26 @@ struct TypingRow: View {
             Spacer(minLength: 8)
             StopButton(action: onStop)
         }
+    }
+}
+
+/// Takes the list back down to the newest message after the user scrolled up.
+struct JumpToLatestButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .glass(in: Circle())
+                // The glass isn't hit-testable on its own, so without this a tap falls through to the list.
+                .contentShape(Circle())
+        }
+        .buttonStyle(.pressable)
+        .accessibilityLabel("Jump to latest message")
+        .accessibilityIdentifier("jumpToLatest")
     }
 }
 

@@ -131,10 +131,11 @@ test("a permission card settles first-wins, and an expired one refuses every ans
 });
 
 test("status: a running turn shows working, then a held queue head shows parked, then awaiting approval", () => {
-  expect(botStatus({ working: true, held: true, awaitingApproval: true })).toBe("working");
-  expect(botStatus({ working: false, held: true, awaitingApproval: true })).toBe("parked");
-  expect(botStatus({ working: false, held: false, awaitingApproval: true })).toBe("awaiting_approval");
-  expect(botStatus({ working: false, held: false, awaitingApproval: false })).toBe("idle");
+  expect(botStatus({ unavailable: true, working: true, held: true, awaitingApproval: true })).toBe("unavailable");
+  expect(botStatus({ unavailable: false, working: true, held: true, awaitingApproval: true })).toBe("working");
+  expect(botStatus({ unavailable: false, working: false, held: true, awaitingApproval: true })).toBe("parked");
+  expect(botStatus({ unavailable: false, working: false, held: false, awaitingApproval: true })).toBe("awaiting_approval");
+  expect(botStatus({ unavailable: false, working: false, held: false, awaitingApproval: false })).toBe("idle");
 });
 
 const pending = (n: number): Pending => ({ id: `e${n}` as EnvelopeId, kind: "envelope", at: at(n), text: "[Alex]\nhi", initiator: { kind: "routine", run: { routineId: "r1" as RoutineId, runId: "run1" as RunId }, manual: false }, settles: null, attempts: 0 });

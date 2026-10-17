@@ -159,6 +159,7 @@ export function createHub(deps: HubDeps): Hub {
     return toBot(
       bot,
       botStatus({
+        unavailable: session?.unavailable ?? false,
         working: session?.working ?? false,
         held: session ? session.parkedFor !== null : holdOf(bot.session) !== null,
         awaitingApproval: world.gate.open.some((c) => c.kind !== "question" && c.actor.botId === bot.id),

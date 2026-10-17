@@ -24,6 +24,14 @@ struct ChatView: View {
                     case .working:
                         TypingRow(avatar: bot.avatar) { client.send(.stop(botId: botId)) }
                             .padding(.top, 12)
+                    case .unavailable:
+                        Text("Claude Code could not start on your Mac. Your messages wait, and the bridge keeps trying.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.tertiary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 24)
+                            .padding(.top, 14)
                     case .parked:
                         Text("Parked. It waits for the usage limit or today's spending cap to reset.")
                             .font(.system(size: 13))

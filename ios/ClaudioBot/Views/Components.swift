@@ -129,6 +129,7 @@ struct AgentStatusPill: View {
         case .failed: AvatarColor.red.color
         case .inCloud: AvatarColor.blue.color
         case .awaitingApproval: Theme.attention
+        case .unavailable: AvatarColor.red.color
         case .parked, .unknown: Theme.secondary
         }
     }
@@ -138,13 +139,13 @@ struct AgentStatusPill: View {
     }
 }
 
-/// "Awaiting approval" or "Parked" beside a bot's name.
+/// "Awaiting approval", "Parked" or "Unavailable" beside a bot's name.
 struct BotStatusChip: View {
     let status: BotStatus
 
     var body: some View {
         if let text = status.chip {
-            StatusPill(text: text, color: status == .awaitingApproval ? Theme.attention : Theme.secondary)
+            StatusPill(text: text, color: status == .awaitingApproval ? Theme.attention : status == .unavailable ? AvatarColor.red.color : Theme.secondary)
         }
     }
 }

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Options, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, query, SandboxSettings, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createAgents } from "../src/agents";
 import type { Headroom, Ledger } from "../src/ledger";
 import type { AgentId, AgentStatus, BotId, RoutineId, RunId } from "../src/protocol";
@@ -77,7 +77,7 @@ afterEach(() => {
   else process.env.CLAUDIOBOT_CLAUDE = configuredClaude;
 });
 
-function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; project?: Project } = {}) {
+function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; project?: Project; sandbox?: () => SandboxSettings } = {}) {
   const world = opts.world ?? emptyWorld();
   const queries: FakeQuery[] = [];
   const reports: { agentId: AgentId; text: string; by: Initiator }[] = [];
@@ -107,7 +107,7 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; p
     },
     hooks: (actor) => ({ PreToolUse: [{ matcher: actor.kind === "agent" ? actor.agentId : "bot", hooks: [] }] }),
     beginTurn: (actor) => begun.push(actor.kind === "agent" ? actor.agentId : actor.botId),
-    sandbox: (actor) => ({ enabled: true, filesystem: { allowWrite: [actor.kind === "agent" ? actor.agentId : actor.botId] } }),
+    sandbox: opts.sandbox ?? ((actor) => ({ enabled: true, filesystem: { allowWrite: [actor.kind === "agent" ? actor.agentId : actor.botId] } })),
     configRoot: (id) => `/bridge/agent-config/${id}`,
     trustCard: (actor, repo) => trustCards.push({ agentId: actor.agentId, ...repo }),
     persist: () => {},
@@ -488,4 +488,13 @@ test("a repo with no config of its own asks nothing and still runs on the empty 
   await flush();
 
   expect([h.trustCards, h.q().options.projectConfigRoot]).toEqual([[], `/bridge/agent-config/${rec.agent.id}`]);
+});
+
+test("an agent whose Claude Code cannot start shows unavailable, and its bot hears why", async () => {
+  const h = harness({ sandbox: () => { throw new Error("no sandbox for you"); } });
+  const rec = await h.start();
+  await flush();
+
+  expect([rec.agent.status, h.statuses.at(-1), h.queries.length]).toEqual(["unavailable", "unavailable", 0]);
+  expect(h.notes.map((n) => n.text)).toEqual(["Claude Code could not start: no sandbox for you. Queued messages are kept, and it keeps trying."]);
 });

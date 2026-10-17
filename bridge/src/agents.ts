@@ -51,7 +51,7 @@ export function projectConfigOf(root: string): string[] {
 }
 
 /** Statuses that hold only while the session or an open card says so. */
-const LIVE: ReadonlySet<AgentStatus> = new Set(["working", "parked", "awaiting_approval"]);
+const LIVE: ReadonlySet<AgentStatus> = new Set(["working", "parked", "awaiting_approval", "unavailable"]);
 
 export function createAgents(deps: {
   world: World;
@@ -87,6 +87,7 @@ export function createAgents(deps: {
     if (rec.agent.where === "cloud") return reported;
     const id = rec.agent.id;
     const session = sessions.get(id);
+    if (session?.unavailable) return "unavailable";
     if (session?.working) return "working";
     if (session?.parkedFor) return "parked";
     if (deps.world.gate.open.some((c) => c.kind === "permission" && c.actor.kind === "agent" && c.actor.agentId === id)) return "awaiting_approval";

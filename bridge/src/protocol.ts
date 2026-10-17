@@ -62,7 +62,9 @@ export type Routine = {
 
 // working: a turn is in progress, so the app shows "Typing…".
 // awaiting_approval: resting with a permission card open. parked: paused by the usage limit or the daily cap.
-export type BotStatus = "idle" | "working" | "awaiting_approval" | "parked";
+// unavailable: Claude Code could not start (it is missing, or its sandbox could not start); queued work waits and the
+// bridge keeps trying.
+export type BotStatus = "idle" | "working" | "awaiting_approval" | "parked" | "unavailable";
 
 export type Bot = {
   id: BotId;
@@ -136,7 +138,7 @@ export type Message =
   // A system line such as "Created routines {0} and {1}". Each {n} is replaced by a tappable chip for refs[n].
   | { kind: "note"; id: MessageId; at: string; text: string; refs: Peer[] };
 
-export type AgentStatus = "working" | "waiting" | "failed" | "in_cloud" | "awaiting_approval" | "parked";
+export type AgentStatus = "working" | "waiting" | "failed" | "in_cloud" | "awaiting_approval" | "parked" | "unavailable";
 
 export type Agent = {
   id: AgentId;

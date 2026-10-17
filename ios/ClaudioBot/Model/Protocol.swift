@@ -117,11 +117,12 @@ struct Avatar: Codable, Hashable, Sendable {
 }
 
 /// awaitingApproval: resting with a permission card open. parked: paused by the usage limit or the daily cap.
+/// unavailable: Claude Code could not start on the Mac; queued work waits and the bridge keeps trying.
 enum BotStatus: OpenEnum {
-    case idle, working, awaitingApproval, parked
+    case idle, working, awaitingApproval, parked, unavailable
     case unknown(String)
 
-    static let allCases: [BotStatus] = [.idle, .working, .awaitingApproval, .parked]
+    static let allCases: [BotStatus] = [.idle, .working, .awaitingApproval, .parked, .unavailable]
     init?(rawValue: String) { self.init(wire: rawValue) }
 
     var rawValue: String {
@@ -130,6 +131,7 @@ enum BotStatus: OpenEnum {
         case .working: "working"
         case .awaitingApproval: "awaiting_approval"
         case .parked: "parked"
+        case .unavailable: "unavailable"
         case .unknown(let raw): raw
         }
     }
@@ -599,10 +601,10 @@ enum Message: Codable, Hashable, Sendable, Identifiable {
 }
 
 enum AgentStatus: OpenEnum {
-    case working, waiting, failed, inCloud, awaitingApproval, parked
+    case working, waiting, failed, inCloud, awaitingApproval, parked, unavailable
     case unknown(String)
 
-    static let allCases: [AgentStatus] = [.working, .waiting, .failed, .inCloud, .awaitingApproval, .parked]
+    static let allCases: [AgentStatus] = [.working, .waiting, .failed, .inCloud, .awaitingApproval, .parked, .unavailable]
     init?(rawValue: String) { self.init(wire: rawValue) }
 
     var rawValue: String {
@@ -613,6 +615,7 @@ enum AgentStatus: OpenEnum {
         case .inCloud: "in_cloud"
         case .awaitingApproval: "awaiting_approval"
         case .parked: "parked"
+        case .unavailable: "unavailable"
         case .unknown(let raw): raw
         }
     }

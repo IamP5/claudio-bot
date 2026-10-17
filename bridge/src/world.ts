@@ -426,8 +426,12 @@ export function settleCard<A extends CardAnswer>(
   return { ok: true, card: { ...message, answer: a.answer } as Extract<Card, { kind: A["kind"] }> };
 }
 
-/** working wins (a turn runs), then parked (nothing runs and the queue head is held), then awaiting_approval. */
-export function botStatus(s: { working: boolean; held: boolean; awaitingApproval: boolean }): BotStatus {
+/**
+ * unavailable wins (Claude Code could not start, so the retry is no turn), then working (a turn runs), then parked
+ * (nothing runs and the queue head is held), then awaiting_approval.
+ */
+export function botStatus(s: { unavailable: boolean; working: boolean; held: boolean; awaitingApproval: boolean }): BotStatus {
+  if (s.unavailable) return "unavailable";
   if (s.working) return "working";
   if (s.held) return "parked";
   return s.awaitingApproval ? "awaiting_approval" : "idle";

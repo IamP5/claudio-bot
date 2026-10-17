@@ -79,7 +79,7 @@ type PushCall = { botId: BotId; reason: PushReason; messageId: MessageId };
 /** sends: whether the fake push goes out (default: always). push: a real push instead of the fake. */
 function hubOver(
   world: World,
-  opts: { persist?: (urgency?: "now") => void; sends?: (call: PushCall, n: number) => boolean; push?: Push; scan?: () => Promise<Project[]> } = {},
+  opts: { persist?: (urgency?: "now") => void; sends?: (call: PushCall, n: number) => boolean; push?: Push; scan?: () => Promise<Project[]>; executable?: string | null } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "claudiobot-hub-"));
   roots.push(root);
@@ -125,7 +125,7 @@ function hubOver(
         queries.push(q);
         return q;
       }) as unknown as typeof query,
-      executable: () => "/fake/claude",
+      executable: () => (opts.executable === undefined ? "/fake/claude" : opts.executable),
     },
   });
   return { hub, homes, root, events, frames, pushes, attempts, queries, q: () => queries.at(-1)! };
@@ -843,6 +843,20 @@ test("an agent in a repo with committed Claude settings runs on an empty config 
   await flush();
 
   expect([h.q() === agentQuery, h.q().options.cwd, h.q().options.projectConfigRoot, status()]).toEqual([false, repo, undefined, "idle"]);
+});
+
+test("a bot whose Claude Code cannot start shows unavailable, not typing, and says why once", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world, { executable: null });
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "hi", uploads: [] });
+  await flush();
+  const frame = h.frames.findLast((f) => f.type === "bot" && f.bot.id === b.id);
+
+  expect([frame?.type === "bot" && frame.bot.status, h.queries.length]).toEqual(["unavailable", 0]);
+  expect(b.messages.filter((m) => m.kind === "note").map((m) => m.kind === "note" && m.text.split(":")[0])).toEqual(["Claude Code could not start"]);
 });
 
 test("one ticker throwing is logged, and the tickers after it still run", () => {

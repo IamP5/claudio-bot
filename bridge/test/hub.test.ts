@@ -139,7 +139,7 @@ function runBash(q: FakeQuery, command: string) {
 }
 
 /** One of the bot's own tools, called the way Claude Code calls it: over MCP. */
-async function callTool(q: FakeQuery, name: string, args: object) {
+async function callTool(q: FakeQuery, name: string, args: Record<string, unknown>) {
   const [server, client] = InMemoryTransport.createLinkedPair();
   await (q.options.mcpServers!.claudio as McpSdkServerConfigWithInstance).instance.connect(server);
   const mcp = new Client({ name: "test", version: "1" });

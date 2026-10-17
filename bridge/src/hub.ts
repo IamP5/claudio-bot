@@ -359,6 +359,9 @@ export function createHub(deps: HubDeps): Hub {
           if (!quiet) pushEnd(bot, r);
         }
         endTurn(bot, pending, end, quiet);
+        // The session saved the turn's end before calling here, so a held run's report and its settled run would
+        // otherwise wait for the debounced save.
+        if (end.kind !== "deferred" && holdsBubbles(pending)) deps.persist("now");
       },
       onChange() {
         if (world.bots.has(bot.id)) changed(bot);
@@ -404,7 +407,11 @@ export function createHub(deps: HubDeps): Hub {
       if (rec) agents.notice(rec, text);
     },
     denied: (actor) => sessionOf(actor)?.denied(),
-    notify: (bot, reason, id) => deps.push.notify(bot, reason, id),
+    notify(bot, reason, id) {
+      deps.push.notify(bot, reason, id);
+      // The gate posts a card before it records it as open, so the bot frame say() sent did not count it yet.
+      if (reason === "card") changed(bot);
+    },
     persist: deps.persist,
     auditDir: join(root, "audit"),
     userName,
@@ -474,8 +481,9 @@ export function createHub(deps: HubDeps): Hub {
     ask: (botId, a) => gate.ask(botId, a),
 
     async startAgent(botId, a) {
+      const scanned = await deps.scan();
       const bot = owned(botId);
-      const project = findProject(await deps.scan(), a.project);
+      const project = findProject(scanned, a.project);
       if (!project) return `No project "${a.project}". Call list_projects for the names.`;
       if (a.where === "cloud" && !project.githubRepo) return `${project.name} has no GitHub remote, so start it with where "mac".`;
       const rec = await agents.start(botId, { ...a, project, botName: bot.name, initiator: initiatorNow(bot), budgetUsd: null });

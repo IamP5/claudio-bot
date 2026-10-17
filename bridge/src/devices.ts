@@ -9,6 +9,8 @@ import type { DeviceRecord, World } from "./world";
 
 export const PAIR_CODE_TTL_MS = 10 * 60_000;
 export const PAIR_CODE_ATTEMPTS = 5;
+/** The phone reconnects often; the device list shows when it was last seen to the minute, so one save a minute is enough. */
+const SEEN_EVERY_MS = 60_000;
 
 export type PairCode = { code: string; expiresAt: string };
 
@@ -182,7 +184,10 @@ export function createDevices(deps: {
     seen(id) {
       const record = records.find((d) => d.id === id);
       if (!record) return;
-      record.lastSeenAt = deps.now().toISOString();
+      const now = deps.now();
+      const since = record.lastSeenAt === null ? Infinity : now.getTime() - Date.parse(record.lastSeenAt);
+      if (since >= 0 && since < SEEN_EVERY_MS) return;
+      record.lastSeenAt = now.toISOString();
       deps.persist();
     },
 

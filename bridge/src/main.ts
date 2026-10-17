@@ -100,13 +100,22 @@ const hub = createHub({
 
 const transport = serve({ devices, stream: createStream(), hub, legacy, log, now, port });
 
-for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, () => {
+function shutdown() {
+  let saved = true;
+  try {
     hub.close();
+  } catch (e) {
+    log(`shutdown: closing the bots failed: ${(e as Error).message}`);
+  }
+  try {
     saver.flush();
-    process.exit(0);
-  });
+  } catch (e) {
+    saved = false;
+    log(`shutdown: state.json was not saved at shutdown: ${(e as Error).message}`);
+  }
+  process.exit(saved ? 0 : 1);
 }
+for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, shutdown);
 
 const urls = (lanAddresses().length > 0 ? lanAddresses() : ["127.0.0.1"]).map((ip) => `ws://${ip}:${transport.port}/ws`);
 

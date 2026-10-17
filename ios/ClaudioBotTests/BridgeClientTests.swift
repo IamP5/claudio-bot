@@ -282,4 +282,49 @@ private func scratchVault() -> PairingVault {
         #expect(vault.load() == nil)
         try await eventually("the revoke frame") { bridge.texts.contains(#"{"deviceId":"d1","type":"revoke_device"}"#) }
     }
+
+    @Test func aBridgeWithMemoryIsAskedForItsFactsOnEveryHello() async throws {
+        let memoryHello = #"{"type":"hello","protocol":3,"features":["memory"],"machine":"Mac","userName":"Alex","epoch":"","seq":0,"resumed":false,"bots":[]}"#
+        let bridge = try FakeBridge(onOpen: { $0.send(memoryHello) })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        client.start(pairing)
+        try await eventually("the memory request") { bridge.texts.contains(#"{"type":"memory"}"#) }
+        client.stop()
+    }
+
+    @Test func aStopTappedOfflineLongAgoIsNotSentWhileAMessageStillIs() async throws {
+        let bridge = try FakeBridge(onOpen: { $0.send(hello()) })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        var timing = quick
+        timing.staleStop = 0
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: timing)
+        client.send(.stop(botId: BotID("b1")))
+        client.send(.markUnread(botId: BotID("b1")))
+        try await Task.sleep(for: .milliseconds(50))
+        client.start(pairing)
+        try await eventually("the queued message") { bridge.texts.contains { $0.contains("mark_unread") } }
+        #expect(!bridge.texts.contains { $0.contains(#""type":"stop""#) })
+        client.stop()
+    }
+
+    @Test func failedConnectsCountUpAndAnotherAddressOfTheSameMacReplacesThePairingOnHello() async throws {
+        let bridge = try FakeBridge(onOpen: { $0.send(hello()) })
+        let vault = scratchVault()
+        defer { vault.clear() }
+        let good = try await bridge.start()
+        let dead = Pairing(url: URL(string: "ws://127.0.0.1:9/ws")!, credential: .device(DeviceID("d1"), token: "t1"))
+        try vault.save(dead)
+        let client = BridgeClient(store: AppStore(), vault: vault, timing: quick)
+        client.start(dead)
+        try await eventually("a failed connect") { client.failures >= 1 }
+
+        try await client.changeAddress(to: good)
+
+        #expect(vault.load() == Pairing(url: good, credential: dead.credential))
+        try await eventually("the hello at the new address") { client.store.machine == "Mac" }
+        #expect(client.failures == 0)
+        #expect(bridge.upgrades.allSatisfy { $0.authorization == "Bearer t1" })
+        client.stop()
+    }
 }

@@ -61,7 +61,12 @@ final class BridgeClient {
         var greeting: Duration = .seconds(10)
         var reply: Duration = .seconds(10)
         var legacyRetry: Duration = .seconds(600)
+        /// A Stop queued offline for longer than this is dropped: by the time it arrives it would stop a later turn.
+        var staleStop: TimeInterval = 60
     }
+
+    /// Failed connects in a row after which the app offers to edit the address or pair again.
+    static let failuresBeforeHelp = 3
 
     enum Ending: Equatable, Sendable { case greeted, failed, revoked, unrecognized }
 
@@ -73,6 +78,8 @@ final class BridgeClient {
     private(set) var pairing: Pairing?
     /// Why this phone was unpaired without the user asking, for the pairing screen.
     private(set) var unpairedReason: String?
+    /// Connects in a row that ended without a hello. A hello resets it.
+    private(set) var failures = 0
 
     /// The bot on screen. It is opened now and again after every reconnect, which also marks it read.
     var openBot: BotID? {
@@ -90,7 +97,8 @@ final class BridgeClient {
     @ObservationIgnored private var nap: Task<Void, Never>?
     @ObservationIgnored private var upgrade: Task<Void, Never>?
     @ObservationIgnored private var pairCodeReply: (@Sendable (PairCode?) -> Void)?
-    @ObservationIgnored private var outbox: [ClientMessage] = []
+    /// What the user did offline, with when, sent after the next hello.
+    @ObservationIgnored private var outbox: [(message: ClientMessage, at: Date)] = []
     /// Kept across reconnects to one bridge, because the store still holds what came before.
     @ObservationIgnored private var cursor = StreamCursor()
     @ObservationIgnored private let log = Logger(subsystem: "dev.claudiobot.app", category: "bridge")
@@ -145,6 +153,18 @@ final class BridgeClient {
         start(candidate)
     }
 
+    /// Points this pairing at another address of the same Mac, such as its Tailscale name. The token decides: only the
+    /// bridge that issued it says hello, so the new address is saved only once that hello arrives.
+    func changeAddress(to url: URL) async throws {
+        guard let current = pairing, url != current.url else { return }
+        let moved = Pairing(url: url, credential: current.credential)
+        try await moved.greet(within: timing.greeting)
+        try vault.save(moved)
+        // Set first, so start() sees the same bridge and keeps what the store holds.
+        pairing = moved
+        start(moved)
+    }
+
     /// Revokes this iPhone on the bridge first when it can, so the token is dead even if the phone is lost later.
     func unpair() async {
         if case .device(let id, _)? = pairing?.credential, let socket, store.machine != nil {
@@ -176,7 +196,16 @@ final class BridgeClient {
         if let socket, store.machine != nil {
             transmitCounted(msg, on: socket)
         } else {
-            outbox.append(msg)
+            outbox.append((msg, .now))
+        }
+    }
+
+    /// Whether a message queued offline still means what the user meant. A Stop is for the turn on screen when it was
+    /// tapped; a minute later it would stop whatever turn runs by then.
+    nonisolated static func stillWanted(_ msg: ClientMessage, queuedAt: Date, now: Date, staleStop: TimeInterval) -> Bool {
+        switch msg {
+        case .stop, .stopAgent: now.timeIntervalSince(queuedAt) <= staleStop
+        default: true
         }
     }
 
@@ -218,7 +247,7 @@ final class BridgeClient {
     }
 
     private func run() async {
-        var failures = 0
+        failures = 0
         while !Task.isCancelled, let pairing {
             store.setConnection(.connecting)
             let ending = await session(pairing)
@@ -234,7 +263,7 @@ final class BridgeClient {
                 break
             }
             let delay = Backoff.delay(afterFailures: failures)
-            failures += 1
+            if ending == .failed { failures += 1 }
             store.setConnection(.disconnected(retryAt: .now + delay))
             let nap = Task { _ = try? await Task.sleep(for: .seconds(delay)) }
             self.nap = nap
@@ -310,11 +339,16 @@ final class BridgeClient {
             case .hello:
                 greeted = true
                 if let openBot { transmit(.open(botId: openBot), on: ws) }
+                // Facts bots propose show as a badge and in their chats, so the app keeps them live from the start.
+                if store.has(.memory) { transmit(.memory, on: ws) }
                 let resent = store.resendsAfterHello()
                 resent.forEach { transmitCounted($0, on: ws) }
                 let pending = outbox
                 outbox.removeAll()
-                pending.filter { !resent.contains($0) }.forEach { send($0) }
+                let now = Date.now
+                pending
+                    .filter { !resent.contains($0.message) && Self.stillWanted($0.message, queuedAt: $0.at, now: now, staleStop: timing.staleStop) }
+                    .forEach { send($0.message) }
                 upgradeLegacyPairing()
             case .bot(let bot) where bot.id == openBot && bot.unread > 0:
                 // The bridge counts a message as unread until the next open, so re-open the bot on screen.

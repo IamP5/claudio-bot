@@ -34,26 +34,19 @@ extension PermissionMode {
     }
 }
 
-extension TaskStatus {
-    var title: String {
-        switch self {
-        case .running: "Running"
-        case .needsInput: "Needs you"
-        case .idle: "Done"
-        case .failed: "Failed"
-        case .stopped: "Stopped"
-        }
-    }
-
+extension StatusDisplay.Tone {
     var color: Color {
         switch self {
         case .running: .claude
-        case .needsInput: .yellow
-        case .idle: .green
+        case .attention: .yellow
+        case .done: .green
+        case .cloud: .cyan
         case .failed: .red
         case .stopped: .gray
         }
     }
+
+    var textColor: Color { self == .attention ? .primary : color }
 }
 
 enum ToolSymbol {
@@ -96,18 +89,18 @@ struct TargetBadge: View {
 }
 
 struct StatusPill: View {
-    let status: TaskStatus
+    let display: StatusDisplay
 
     var body: some View {
         HStack(spacing: 5) {
-            StatusDot(color: status.color, pulsing: status == .running)
-            Text(status.title)
+            StatusDot(color: display.tone.color, pulsing: display.pulsing)
+            Text(display.title)
         }
         .font(.caption2.weight(.semibold))
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
-        .foregroundStyle(status == .needsInput ? Color.primary : status.color)
-        .background(status.color.opacity(0.16), in: Capsule())
+        .foregroundStyle(display.tone.textColor)
+        .background(display.tone.color.opacity(0.16), in: Capsule())
     }
 }
 

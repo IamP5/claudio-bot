@@ -67,7 +67,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         case .needsInput:
             content.body = "Claude is waiting for you."
         case .finished:
-            content.body = task.preview.isEmpty ? "Done." : "Done: \(task.preview)"
+            let label = task.statusDisplay.title
+            content.body = task.preview.isEmpty ? "\(label)." : "\(label): \(task.preview)"
         case .failed:
             content.body = task.preview.isEmpty ? "The task failed." : "Failed: \(task.preview)"
         }

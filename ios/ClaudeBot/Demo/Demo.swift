@@ -37,7 +37,7 @@ enum Demo {
     static let tasks: [TaskSummary] = [
         task("t1", "Fix the login redirect loop", .local(ProjectID("p1")), "drawdown", .needsInput, 2,
              "I need to edit src/auth.ts to clear the stale session cookie."),
-        task("t2", "Add dark mode to settings", .cloud(ProjectID("p1")), "drawdown", .running, 6,
+        task("t2", "Add dark mode to settings", .cloud(ProjectID("p1")), "drawdown", .idle, 6,
              "Cloud session started. Follow along in the Claude app.",
              cloudUrl: URL(string: "https://claude.ai/code/session_01")),
         task("t3", "Bump Bun and fix type errors", .local(ProjectID("p2")), "api-server", .running, 1,

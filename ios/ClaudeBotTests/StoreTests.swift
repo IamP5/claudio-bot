@@ -4,9 +4,12 @@ import Testing
 
 private let at = Date(timeIntervalSince1970: 1_792_152_000)
 
-private func summary(_ id: String, _ status: TaskStatus, updated: TimeInterval = 0, title: String = "Task") -> TaskSummary {
+private func summary(
+    _ id: String, _ status: TaskStatus, updated: TimeInterval = 0, title: String = "Task",
+    target: Target = .local(ProjectID("p1"))
+) -> TaskSummary {
     TaskSummary(
-        id: TaskID(id), title: title, target: .local(ProjectID("p1")), projectName: "drawdown", model: "opus",
+        id: TaskID(id), title: title, target: target, projectName: "drawdown", model: "opus",
         permissionMode: .default, status: status, createdAt: at, updatedAt: at + updated,
         preview: "", costUsd: 0, cloudUrl: nil
     )
@@ -101,6 +104,13 @@ private func assistant(_ id: String, _ text: String) -> Item {
         let sections = HomeSection.make(from: tasks, matching: "")
         #expect(sections.map(\.kind) == [.needsYou, .running, .recent])
         #expect(sections.map { $0.tasks.map(\.id.rawValue) } == [["ask"], ["run-new", "run-old"], ["fail", "done"]])
+    }
+
+    @Test func idleCloudTasksStayInRecent() {
+        let tasks = [summary("c", .idle, target: .cloud(ProjectID("p1"))), summary("r", .running)]
+        let sections = HomeSection.make(from: tasks, matching: "")
+        #expect(sections.map(\.kind) == [.running, .recent])
+        #expect(sections.last?.tasks.map(\.id.rawValue) == ["c"])
     }
 
     @Test func searchFiltersAndDropsEmptySections() {

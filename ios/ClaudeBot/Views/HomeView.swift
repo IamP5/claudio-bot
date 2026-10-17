@@ -95,7 +95,7 @@ struct TaskRow: View {
                     .lineLimit(2)
             }
             HStack(spacing: 6) {
-                StatusPill(status: task.status)
+                StatusPill(display: task.statusDisplay)
                 TargetBadge(target: task.target)
                 Text(task.projectName)
                     .font(.caption)

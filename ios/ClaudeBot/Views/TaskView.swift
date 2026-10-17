@@ -134,8 +134,9 @@ private struct TaskHeader: View {
             HStack(spacing: 4) {
                 Image(systemName: task.target.isCloud ? "cloud" : "laptopcomputer")
                 Text("\(task.projectName) · \(task.target.isCloud ? "Cloud" : "Mac") ·")
-                StatusDot(color: task.status.color, pulsing: task.status == .running)
-                Text(task.status.title)
+                let display = task.statusDisplay
+                StatusDot(color: display.tone.color, pulsing: display.pulsing)
+                Text(display.title)
             }
             .font(.caption)
             .foregroundStyle(.secondary)

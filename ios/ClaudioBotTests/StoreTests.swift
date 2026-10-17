@@ -27,14 +27,14 @@ private func question(_ id: String, answer: Answer? = nil) -> Message {
 @Suite struct StoreTests {
     private func store(with bots: [Bot] = [bot("b1")]) -> AppStore {
         let store = AppStore()
-        store.apply(.hello(machine: "Mac", userName: "Bruno", bots: bots))
+        store.apply(.hello(machine: "Mac", userName: "Alex", bots: bots))
         return store
     }
 
     @Test func helloMeansConnected() {
         let store = store()
         #expect(store.connection == .connected(machine: "Mac"))
-        #expect(store.userName == "Bruno")
+        #expect(store.userName == "Alex")
     }
 
     @Test func homeListsPinnedFirstThenNewestActivity() {
@@ -202,8 +202,8 @@ private func question(_ id: String, answer: Answer? = nil) -> Message {
     }
 
     @Test func initials() {
-        #expect(Initials.of("Bruno Gabriel") == "BG")
-        #expect(Initials.of("bruno") == "B")
+        #expect(Initials.of("Alex Rivera") == "AR")
+        #expect(Initials.of("alex") == "A")
         #expect(Initials.of("Ana Maria Souza") == "AM")
     }
 

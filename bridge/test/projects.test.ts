@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { parseGithubRepo, scanProjects } from "../src/projects";
 
 test.each([
-  ["git@github.com:me/drawdown.git", "me/drawdown"],
-  ["https://github.com/me/drawdown.git", "me/drawdown"],
-  ["https://github.com/me/drawdown", "me/drawdown"],
-  ["https://gitlab.com/me/drawdown.git", null],
+  ["git@github.com:acme/web.git", "acme/web"],
+  ["https://github.com/acme/web.git", "acme/web"],
+  ["https://github.com/acme/web", "acme/web"],
+  ["https://gitlab.com/acme/web.git", null],
 ])("github repo from %s", (url, expected) => {
   expect(parseGithubRepo(url)).toBe(expected);
 });

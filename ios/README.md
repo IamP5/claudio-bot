@@ -1,6 +1,6 @@
 # ClaudioBot for iPhone and iPad
 
-ClaudioBot is a phone for your bots. A bot is a persistent assistant with one long conversation and one job, such as "tech news" or "engineer". Your bots live on your Mac, in the bridge. They keep working, run their routines and start coding agents while the phone is closed. The app shows them, lets you chat with them, and tells you when one needs you.
+ClaudioBot is a phone for your bots. A bot is a persistent assistant with one long conversation and one job, such as "news digest" or "engineer". Your bots live on your Mac, in the bridge. They keep working, run their routines and start coding agents while the phone is closed. The app shows them, lets you chat with them, and tells you when one needs you.
 
 The app talks to one thing only: the bridge in `../bridge`, over a single WebSocket. The wire contract is `../bridge/src/protocol.ts`, and `../fixtures/protocol.json` holds a sample of every message. `ClaudioBot/Model/Protocol.swift` mirrors that file. The tests decode every server message and encode every client message in the fixture, and each must round-trip to equal JSON.
 
@@ -44,7 +44,7 @@ swift ios/scripts/make-icon.swift ios/ClaudioBot/Assets.xcassets/AppIcon.appicon
 ## Pairing
 
 1. On your Mac, run `bun run start` in the `bridge` folder. It prints a QR code, the bridge address and a token.
-2. In ClaudioBot, tap Scan QR code, or type the address (for example `ws://192.168.1.20:7878/ws`) and the token.
+2. In ClaudioBot, tap Scan QR code, or type the address (for example `ws://10.0.0.20:7878/ws`) and the token.
 3. The app connects once to check the pair before it saves anything. The address and token live in the Keychain on this device.
 
 The QR code encodes `claudiobot://pair?url=<urlencoded ws url>&token=<hex>`. Opening that link on the phone pairs it the same way.
@@ -57,7 +57,7 @@ The phone and the Mac need to reach each other. The same Wi-Fi network works, an
 
 **New chat.** Create new Bot comes first. The bridge makes the bot, and the app opens it as soon as it exists. Every bot follows, hidden ones included.
 
-**Chat.** Bot messages are gray bubbles with markdown. Your messages use the bot's color. A centered time appears before the first message and after every gap of more than an hour. A question card lists lettered options. Tap one to answer, or tap X to dismiss it. You can also type a free answer while it is open. Centered gray lines show what the bot did on its own, such as "Messaged linkedin coach" or "4 messages with Set up verification skill". Tap one to open that agent, bot or routine. While the bot works, its avatar bobs beside "Typing…".
+**Chat.** Bot messages are gray bubbles with markdown. Your messages use the bot's color. A centered time appears before the first message and after every gap of more than an hour. A question card lists lettered options. Tap one to answer, or tap X to dismiss it. You can also type a free answer while it is open. Centered gray lines show what the bot did on its own, such as "Messaged standup notes" or "4 messages with Set up verification skill". Tap one to open that agent, bot or routine. While the bot works, its avatar bobs beside "Typing…".
 
 The composer's + menu attaches a photo from the library, a new photo or a file. Each upload can be up to 10 MB. The mic dictates into the field with the Speech framework.
 

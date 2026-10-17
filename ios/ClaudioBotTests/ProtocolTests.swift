@@ -45,7 +45,7 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         let msg = try Wire.decoder().decode(ServerMessage.self, from: Fixture.entries("server")[0])
         guard case let .hello(machine, userName, bots) = msg else { Issue.record("not hello"); return }
         #expect(machine == "MacBook")
-        #expect(userName == "Bruno")
+        #expect(userName == "Alex")
         let bot = try #require(bots.first)
         #expect(bot.avatar == Avatar(shape: .hexagon, color: .orange))
         #expect(bot.title == nil)
@@ -122,10 +122,10 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
 
 @Suite struct PairingTests {
     @Test func deepLinkParsesUrlAndToken() {
-        let link = URL(string: "claudiobot://pair?url=ws%3A%2F%2F192.168.1.20%3A7878%2Fws&token=abc123")!
+        let link = URL(string: "claudiobot://pair?url=ws%3A%2F%2F10.0.0.20%3A7878%2Fws&token=abc123")!
         let pairing = Pairing(link: link)
-        #expect(pairing == Pairing(url: URL(string: "ws://192.168.1.20:7878/ws")!, token: "abc123"))
-        #expect(pairing?.socketURL.absoluteString == "ws://192.168.1.20:7878/ws?token=abc123")
+        #expect(pairing == Pairing(url: URL(string: "ws://10.0.0.20:7878/ws")!, token: "abc123"))
+        #expect(pairing?.socketURL.absoluteString == "ws://10.0.0.20:7878/ws?token=abc123")
     }
 
     @Test func linksThatAreNotWebSocketPairingsAreRejected() {

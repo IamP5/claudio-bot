@@ -34,7 +34,7 @@ async function startServer(): Promise<string> {
       CLAUDIOBOT_ROOTS: roots,
       CLAUDIOBOT_HOME: home,
       CLAUDIOBOT_MODEL: "haiku",
-      CLAUDIOBOT_USER_NAME: "Bruno",
+      CLAUDIOBOT_USER_NAME: "Alex",
     },
     stdout: "pipe",
     stderr: "inherit",
@@ -131,7 +131,7 @@ try {
   let client = connect(await startServer());
   await client.opened;
   const hello = await client.waitFor(() => client.received.find((m) => m.type === "hello"), "hello");
-  check(hello.type === "hello" && hello.userName === "Bruno", "hello names the user from CLAUDIOBOT_USER_NAME");
+  check(hello.type === "hello" && hello.userName === "Alex", "hello names the user from CLAUDIOBOT_USER_NAME");
   const claudioBot = [...client.bots.values()].find((b) => b.name === "Claudio Bot");
   check(claudioBot?.avatar.shape === "circle" && claudioBot.avatar.color === "white", "first start creates Claudio Bot, a white circle");
   client.send({ type: "open", botId: claudioBot.id });
@@ -160,7 +160,7 @@ try {
   check(client.botSays(newBotId, cardAt + 1).length === 0, "(b) the onboarding card is the last thing in its turn");
   client.send({ type: "answer", botId: newBotId, messageId: card.id, option: 0 });
   await client.waitFor(() => client.messages(newBotId).find((m) => m.id === card.id && m.kind === "question" && m.answer === 0), "the answered card");
-  await client.waitFor(() => log.includes(`[Bruno answered "${card.question}": ${card.options[0]}]`), "the answer envelope", 10_000);
+  await client.waitFor(() => log.includes(`[Alex answered "${card.question}": ${card.options[0]}]`), "the answer envelope", 10_000);
   check(true, "(b) answering the card delivers the answer envelope");
   await client.waitFor(() => client.botSays(newBotId, beforeAnswer).length > 0 && client.idle(newBotId), "the reply to the answer");
   check(true, `(b) the bot replies to the answer, and is now named ${client.bots.get(newBotId)?.name}`);

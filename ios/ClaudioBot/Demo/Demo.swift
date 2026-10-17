@@ -14,14 +14,14 @@ enum Demo {
 
     static func load(into store: AppStore, router: Router) {
         if screen == "pair" { return }
-        store.apply(.hello(machine: "MacBook Pro", userName: "Bruno Gabriel", bots: bots))
+        store.apply(.hello(machine: "MacBook Pro", userName: "Alex", bots: bots))
         for (bot, messages) in conversations {
             store.apply(.conversation(botId: BotID(bot), messages: messages))
         }
         store.apply(.details(botId: BotID("claude"), library: library, links: links, agents: []))
         store.apply(.details(botId: BotID("engineer"), library: [], links: [], agents: agents))
         store.apply(.agent(agents[0], messages: agentMessages))
-        store.apply(.file(botId: BotID("claude"), path: "library/comment-prune-plan.md", file: BotFile(mime: "text/markdown", content: plan, data: nil)))
+        store.apply(.file(botId: BotID("claude"), path: "library/merge-plan.md", file: BotFile(mime: "text/markdown", content: plan, data: nil)))
 
         switch screen {
         case "newchat": router.showingNewChat = true
@@ -31,7 +31,7 @@ enum Demo {
             router.showingInspector = true
         case "digest": router.selection = BotID("news")
         case "engineer": router.selection = BotID("engineer")
-        case "factory": router.selection = BotID("eggbot")
+        case "factory": router.selection = BotID("maker")
         case "profile":
             router.selection = BotID("claude")
             router.path = [.profile(BotID("claude"))]
@@ -40,7 +40,7 @@ enum Demo {
             router.path = [.profile(BotID("claude"), tab: screen == "links" ? .links : .library)]
         case "file":
             router.selection = BotID("claude")
-            router.path = [.profile(BotID("claude"), tab: .library), .file(BotID("claude"), path: "library/comment-prune-plan.md")]
+            router.path = [.profile(BotID("claude"), tab: .library), .file(BotID("claude"), path: "library/merge-plan.md")]
         case "agent":
             router.selection = BotID("engineer")
             router.path = [.exchange(AgentID("a1"))]
@@ -56,7 +56,7 @@ enum Demo {
         store.apply(.bot(bot))
         Task {
             try? await Task.sleep(for: .seconds(4))
-            store.apply(.message(botId: botId, message: say(UUID().uuidString, .now, "On it. I'll check the PRs against main and report back with anything that blocks a merge.")))
+            store.apply(.message(botId: botId, message: say(UUID().uuidString, .now, "On it. I'll check it against main and report back with anything that blocks a merge.")))
             bot.status = .idle
             store.apply(.bot(bot))
         }
@@ -88,24 +88,24 @@ enum Demo {
     }
 
     static let bots: [Bot] = [
-        bot("news", "tech news", .pentagon, .teal, last: at(1, 7, 58),
-            preview: "Morning, Bruno. Here's what's new since yesterday.", unread: 1,
-            routines: [routine("r1", "tech-news-digest", "57 7 * * 1-5", "Weekdays at 7:57 AM")]),
+        bot("news", "news digest", .pentagon, .teal, last: at(1, 7, 31),
+            preview: "Morning, Alex. Here's what changed overnight.", unread: 1,
+            routines: [routine("r1", "morning-digest", "30 7 * * 1-5", "Weekdays at 7:30 AM")]),
         bot("claude", "Claudio Bot", .circle, .white, last: at(2, 15, 9),
             preview: "Want me to merge any of these now?", question: "Want me to merge any of these now?"),
-        bot("lead", "Engineering Lead", .drop, .red, last: at(3, 18, 2),
-            preview: "Done. Zocão now has premium in Solta o Som until March.",
-            routines: [routine("r2", "Engineering chase", "19,49 * * * *", "Every hour at :19 and :49")]),
+        bot("release", "release captain", .drop, .purple, last: at(3, 16, 4),
+            preview: "v2.4.0 is tagged and the changelog is up.",
+            routines: [routine("r2", "release-train", "0 16 * * 5", "Fridays at 4:00 PM")]),
         bot("engineer", "engineer", .hexagon, .orange, last: ago(minutes: 2),
-            preview: "The solta-o-som verification skill is in PR #19.", status: .working,
-            routines: [routine("r3", "maintain-verification-skill", "30 8 * * 1-5", "Weekdays at 8:30 AM")]),
-        bot("coach", "linkedin coach", .hexagon, .red, last: at(8, 20, 14),
-            preview: "A few things to watch for while you write the launch post."),
-        bot("eggbot", "dr eggbot", .drop, .red, last: at(9, 23, 40),
-            preview: "I made linkedin coach. Its one job is to get your posts ready.",
+            preview: "The checkout smoke tests are in PR #148.", status: .working,
+            routines: [routine("r3", "ci-upkeep", "30 8 * * 1-5", "Weekdays at 8:30 AM")]),
+        bot("standup", "standup notes", .star4, .blue, last: at(8, 9, 2),
+            preview: "Yesterday: 3 PRs merged, 1 bug filed, release on track."),
+        bot("maker", "bot maker", .flower, .pink, last: at(9, 18, 40),
+            preview: "I made standup notes. Its one job is your daily summary.",
             routines: [
-                routine("r4", "transcript-healthcheck", "44 8 * * *", "Every day at 8:44 AM", enabled: false),
-                routine("r5", "routine-healthcheck", "49 8 * * 1", "Mondays at 8:49 AM", enabled: false),
+                routine("r4", "bot-checkup", "0 9 * * 1", "Mondays at 9:00 AM", enabled: false),
+                routine("r5", "weekly-review", "0 17 * * 5", "Fridays at 5:00 PM", enabled: false),
             ]),
     ]
 
@@ -117,103 +117,106 @@ enum Demo {
         .user(id: MessageID(id), at: date, text: text, attachments: [])
     }
 
-    private static let pr = "https://github.com/lamP5/solta-o-som/pull/"
+    private static let pr = "https://github.com/acme/web/pull/"
+    private static let cloudURL = "https://claude.ai/code/session_7fK2pQx9LmV4"
 
     static let conversations: [(String, [Message])] = [
         ("claude", [
-            me("c1", at(3, 21, 2), "Merge the curation stack when it's green, but ask me before anything touches production."),
-            say("c2", at(2, 7, 40), "The Solta o som curation PRs (#18 through #27) all finished overnight and are clean. Two things have to be in production before that phase can ship: a `CRON_SECRET` value and the database migration from #20."),
-            say("c3", at(2, 7, 40), "Should I add the CRON_SECRET in production and start merging from #18?"),
+            me("c1", at(3, 21, 2), "Merge the payments stack when it's green, but ask me before anything touches production."),
+            say("c2", at(2, 7, 40), "The payments PRs on acme/web (#139 through #143) all finished overnight and are green. One thing has to happen in production before that stack can ship: the database migration from #141."),
+            say("c3", at(2, 7, 40), "Should I run the migration in production and start merging from #139?"),
             .question(id: MessageID("c4"), at: at(2, 7, 41), card: QuestionCard(
-                question: "Should I add the CRON_SECRET in production and start merging from #18?",
-                options: ["Yes, add it and merge", "Not yet"], answer: .option(1)
+                question: "Should I run the migration in production and start merging from #139?",
+                options: ["Yes, run it and merge", "Not yet"], answer: .option(1)
             )),
-            say("c5", at(2, 8, 50), "Got it. I won't add the secret or merge anything. PRs #18 through #27 stay open until you tell me to go ahead."),
-            say("c6", at(2, 15, 8), "The Solta o som PRs are still open, as you asked. The top of the curation stack, [#27](\(pr)27), is in, and [#18](\(pr)18) is clean against main. The verify skill PR, [#19](\(pr)19), can be merged on its own. [#20](\(pr)20) still needs the production migration and `CRON_SECRET` before it lands."),
+            say("c5", at(2, 8, 50), "Got it. I won't touch production or merge anything. #139 through #143 stay open until you say go."),
+            say("c6", at(2, 15, 8), "Quick update on the stack. [#139](\(pr)139) is clean against main, and the retry fix in [#142](\(pr)142) can merge on its own. [#141](\(pr)141) still waits on the production migration, and [#143](\(pr)143) stacks on top of it."),
             say("c7", at(2, 15, 8), "Want me to merge any of these now?"),
             .question(id: MessageID("c8"), at: at(2, 15, 9), card: QuestionCard(
                 question: "Want me to merge any of these now?",
-                options: ["Merge only #19", "Merge #18 and #19", "Keep holding everything"], answer: nil
+                options: ["Merge only #142", "Merge #139 and #142", "Keep holding everything"], answer: nil
             )),
         ]),
         ("news", [
-            .note(id: MessageID("n0"), at: at(12, 9, 3), text: "Created routine {0}", refs: [.routine(id: RoutineID("r1"), name: "tech-news-digest")]),
-            say("n1", at(1, 7, 58), """
-            Morning, Bruno. Here's what's new since yesterday.
+            .note(id: MessageID("n0"), at: at(12, 9, 3), text: "Created routine {0}", refs: [.routine(id: RoutineID("r1"), name: "morning-digest")]),
+            say("n1", at(1, 7, 31), """
+            Morning, Alex. Here's what changed overnight.
 
-            1. **Anthropic shipped Claude Code Review to Team and Enterprise plans.** Admins pick Quick, Standard or Deep review per repo, and eligible orgs get up to $10k in credits by Jan 15. [ClaudeDevs post](https://x.com/ClaudeDevs)
-            2. **Meta's new business terms let it scrape sites linked to business accounts.** Starting Oct 30, businesses that keep using Facebook, Instagram or WhatsApp agree to the crawl. [Nieman Lab](https://www.niemanlab.org)
-            3. **Goodfire published "Neural Networks Are Already Clean", the top story on Hacker News.** Neurons that seem to do several jobs come from fixable problems, not a basic feature of networks. [The essay](https://goodfire.ai)
-            4. **OpenAI and Anthropic are each giving $5M to a new Simons Foundation program for AI in math.** It funds tools that check and build on proofs that AI produces. [OpenAI's post](https://openai.com)
+            1. **acme/web merged 3 PRs.** The new checkout page is behind a flag, and the retry fix closed two open bugs. [Pull requests](https://github.com/acme/web/pulls)
+            2. **A security advisory landed for an image library you depend on.** The fix is a patch release, and nothing in your code calls the affected API. [Advisory](https://github.com/advisories)
+            3. **Your CI runner image updates on Monday.** The new image drops an old Node version that two of your workflows still pin. [Changelog](https://github.blog/changelog)
+            4. **The design team shared the new onboarding flow.** It touches three screens you own. [Design review](https://example.com/design/onboarding)
             """),
-            say("n2", at(1, 7, 58), "Theo's new video covers version control for agents. Matt Pocock only posted short clips. I couldn't reach Reddit today because it blocked the requests, so this pulls from X, Hacker News and YouTube."),
+            say("n2", at(1, 7, 31), "I skipped the forum roundup today because the site timed out twice. Everything else came from GitHub and your team's feeds."),
         ]),
         ("engineer", [
-            say("e1", at(5, 22, 10), "I started a cloud agent for the skill. It's running on your default model. Once the skill is merged, I can add a daily upkeep routine."),
-            .exchange(id: MessageID("e2"), at: at(5, 22, 26), peer: .agent(id: AgentID("a1"), title: "Set up pstack verification skill for solta-o-som"), sent: 2, received: 2),
-            say("e3", at(5, 23, 10), "The solta-o-som verification skill isn't done yet. The agent got its tests passing, but it crashed twice while capturing proof screenshots. I told it to commit, push and open the PR first, and only then retry the screenshots."),
-            .exchange(id: MessageID("e4"), at: at(5, 23, 49), peer: .agent(id: AgentID("a1"), title: "Set up pstack verification skill for solta-o-som"), sent: 0, received: 1),
-            say("e5", at(5, 23, 49), "The solta-o-som verification skill is in [PR #19](\(pr)19). It's open, I haven't merged it, and the app code is unchanged. It adds the skill, 17 feature recipes, and a control CLI that passes all 27 of its tests."),
-            me("e6", ago(minutes: 3), "Nice. Also fix the flaky checkout test, in the cloud this time."),
-            .exchange(id: MessageID("e7"), at: ago(minutes: 2), peer: .agent(id: AgentID("a2"), title: "Fix flaky checkout e2e test"), sent: 1, received: 0),
+            me("e0", at(5, 21, 58), "Checkout keeps breaking without anyone noticing. Can you get smoke tests on it?"),
+            say("e1", at(5, 22, 10), "Yes. I started an agent on acme/web for it, on your default model. Once the tests are merged, I can add a daily run to my upkeep routine."),
+            .exchange(id: MessageID("e2"), at: at(5, 22, 26), peer: .agent(id: AgentID("a1"), title: "Add checkout smoke tests"), sent: 2, received: 2),
+            say("e3", at(5, 23, 10), "Not done yet. The agent got the tests passing, but the payment step timed out twice in the headless browser. I told it to open the PR first, then look at the timeout."),
+            .exchange(id: MessageID("e4"), at: at(5, 23, 49), peer: .agent(id: AgentID("a1"), title: "Add checkout smoke tests"), sent: 0, received: 1),
+            say("e5", at(5, 23, 49), "The checkout smoke tests are in [PR #148](\(pr)148). It's open and I haven't merged it. It adds 6 tests that cover cart, address, payment and the receipt, and all of them pass."),
+            me("e6", ago(minutes: 3), "Nice. Also fix the flaky login test, in the cloud this time."),
+            .exchange(id: MessageID("e7"), at: ago(minutes: 2), peer: .agent(id: AgentID("a2"), title: "Fix flaky login e2e test"), sent: 1, received: 0),
         ]),
-        ("eggbot", [
-            say("g1", at(13, 23, 33), "Setting things up, then I'll ask what bot you want."),
-            .note(id: MessageID("g2"), at: at(13, 23, 33), text: "Created routines {0} and {1}", refs: [
-                .routine(id: RoutineID("r4"), name: "transcript-healthcheck"),
-                .routine(id: RoutineID("r5"), name: "routine-healthcheck"),
+        ("maker", [
+            say("g1", at(13, 10, 33), "Setting things up, then I'll ask what bot you want."),
+            .note(id: MessageID("g2"), at: at(13, 10, 33), text: "Created routines {0} and {1}", refs: [
+                .routine(id: RoutineID("r4"), name: "bot-checkup"),
+                .routine(id: RoutineID("r5"), name: "weekly-review"),
             ]),
-            say("g3", at(13, 23, 34), "I design Claudio Bots. What's the one job this one should do every time it wakes?"),
-            me("g4", at(9, 23, 30), "make a linkedin coach that gets my posts ready"),
-            say("g5", at(9, 23, 31), "Reading your last posts now, then I'll build it."),
-            .note(id: MessageID("g6"), at: at(9, 23, 38), text: "Created {0}", refs: [
-                .bot(id: BotID("coach"), name: "linkedin coach", avatar: Avatar(shape: .hexagon, color: .red)),
+            say("g3", at(13, 10, 34), "I design Claudio Bots. What's the one job this one should do every time it wakes?"),
+            me("g4", at(9, 18, 30), "make a bot that writes my standup notes every morning"),
+            say("g5", at(9, 18, 31), "Looking at what you worked on this week, then I'll build it."),
+            .note(id: MessageID("g6"), at: at(9, 18, 38), text: "Created {0}", refs: [
+                .bot(id: BotID("standup"), name: "standup notes", avatar: Avatar(shape: .star4, color: .blue)),
             ]),
-            .exchange(id: MessageID("g7"), at: at(9, 23, 39), peer: .bot(id: BotID("coach"), name: "linkedin coach", avatar: Avatar(shape: .hexagon, color: .red)), sent: 1, received: 0),
-            say("g8", at(9, 23, 40), "I made linkedin coach. Its one job is to get your posts ready: it drafts, trims, and checks each one against what worked before."),
-            say("g9", at(9, 23, 40), "If you hate it, long-press it in the list and choose Delete."),
+            .exchange(id: MessageID("g7"), at: at(9, 18, 39), peer: .bot(id: BotID("standup"), name: "standup notes", avatar: Avatar(shape: .star4, color: .blue)), sent: 1, received: 0),
+            say("g8", at(9, 18, 40), "I made standup notes. Its one job is your daily summary: what you shipped yesterday, what's next, and what's blocking you."),
+            say("g9", at(9, 18, 40), "If you hate it, long-press it in the list and choose Delete."),
         ]),
-        ("lead", [
-            me("l1", at(3, 17, 50), "give Zocão premium in Solta o Som"),
-            say("l2", at(3, 18, 2), "Done. Zocão now has premium in Solta o Som until March. I set it in the production admin and checked his account page."),
+        ("release", [
+            me("l1", at(3, 15, 50), "cut the release when CI is green"),
+            say("l2", at(3, 16, 4), "v2.4.0 is tagged and the changelog is up. CI was green on all 412 tests, and I checked the deploy preview before tagging."),
         ]),
-        ("coach", [
-            say("k1", at(8, 20, 14), "A few things to watch for while you write the launch post: lead with the result, cut the first paragraph, and keep it under 200 words."),
+        ("standup", [
+            say("k1", at(8, 9, 2), "Yesterday: 3 PRs merged, 1 bug filed, release on track. Today: review the checkout tests and pair on the login fix."),
         ]),
     ]
 
     static let agents: [Agent] = [
-        Agent(id: AgentID("a1"), botId: BotID("engineer"), title: "Set up pstack verification skill for solta-o-som", where: .mac,
-              projectName: "solta-o-som", status: .waiting, url: nil, createdAt: at(5, 22, 26), updatedAt: at(5, 23, 49)),
-        Agent(id: AgentID("a2"), botId: BotID("engineer"), title: "Fix flaky checkout e2e test", where: .cloud,
-              projectName: "solta-o-som", status: .inCloud, url: URL(string: "https://claude.ai/code/session_01"),
+        Agent(id: AgentID("a1"), botId: BotID("engineer"), title: "Add checkout smoke tests", where: .mac,
+              projectName: "web", status: .waiting, url: nil, createdAt: at(5, 22, 26), updatedAt: at(5, 23, 49)),
+        Agent(id: AgentID("a2"), botId: BotID("engineer"), title: "Fix flaky login e2e test", where: .cloud,
+              projectName: "web", status: .inCloud, url: URL(string: cloudURL),
               createdAt: ago(minutes: 2), updatedAt: ago(minutes: 2)),
     ]
 
     static let agentMessages: [AgentMessage] = [
-        AgentMessage(id: MessageID("am1"), at: at(5, 22, 26), from: .bot, text: "Create a verification skill for solta-o-som with pstack. Work on a branch, verify it against the real app, and open a PR."),
-        AgentMessage(id: MessageID("am2"), at: at(5, 23, 0), from: .agent, text: "Tests pass, but the screenshot capture crashed twice at the same step."),
-        AgentMessage(id: MessageID("am3"), at: at(5, 23, 2), from: .bot, text: "Commit, push and open the PR first. Then retry the screenshots. If they fail a third time, skip them and list what's missing in the PR."),
-        AgentMessage(id: MessageID("am4"), at: at(5, 23, 49), from: .agent, text: "PR #19 is open. The skill, 17 feature recipes and a control CLI. All 27 tests pass. Sign-in and premium flows were not driven because they need a Clerk key."),
+        AgentMessage(id: MessageID("am1"), at: at(5, 22, 26), from: .bot, text: "Add smoke tests for the checkout flow in acme/web. Work on a branch, run them against the dev server, and open a PR."),
+        AgentMessage(id: MessageID("am2"), at: at(5, 23, 0), from: .agent, text: "The tests pass locally, but the payment step timed out twice in the headless browser."),
+        AgentMessage(id: MessageID("am3"), at: at(5, 23, 2), from: .bot, text: "Commit, push and open the PR first. Then look at the timeout. If it fails a third time, mark that test as skipped and say why in the PR."),
+        AgentMessage(id: MessageID("am4"), at: at(5, 23, 49), from: .agent, text: "PR #148 is open with 6 tests for cart, address, payment and the receipt. All pass. The payment timeout was a missing wait on the card form."),
     ]
 
     static let library: [LibraryFile] = [
-        LibraryFile(path: "library/comment-prune-plan.md", size: 2048, modifiedAt: at(2, 9, 0)),
+        LibraryFile(path: "library/merge-plan.md", size: 2048, modifiedAt: at(2, 9, 0)),
         LibraryFile(path: "library/release-checklist.md", size: 1200, modifiedAt: at(20, 9, 0)),
     ]
 
-    static let links: [BotLink] = [20, 19, 18, 27].map { number in
+    static let links: [BotLink] = [143, 142, 141, 139].map { number in
         BotLink(url: URL(string: "\(pr)\(number)")!, host: "github.com", at: at(2, 15, 8))
-    } + [BotLink(url: URL(string: "https://claude.ai/code/session_01")!, host: "claude.ai", at: at(4, 10, 0))]
+    } + [BotLink(url: URL(string: cloudURL)!, host: "claude.ai", at: at(4, 10, 0))]
 
     static let plan = """
-    # Comment prune plan
+    # Payments stack merge plan
 
-    Remove comments that narrate the code. Keep the ones that explain a decision.
+    Land the payments PRs on acme/web in order, and stop before production changes.
 
-    1. Run the comment audit on `src/`.
-    2. Delete every comment that restates the line below it.
-    3. Open one PR per package.
+    1. Merge #139 once CI is green.
+    2. Merge #142 on its own. It only touches the retry logic.
+    3. Run the #141 migration in production, after Alex says yes.
+    4. Merge #141, then #143.
     """
 }
 #endif

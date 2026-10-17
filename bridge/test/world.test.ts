@@ -69,10 +69,10 @@ test("replaying the same message changes nothing", () => {
 test("question and preview come from the newest open card and the last bot message", () => {
   const b = bot();
   post(b, said("**Done.** Two PRs\nare open.", 1));
-  post(b, { kind: "question", id: id("q1"), at: at(2), question: "Merge #18?", options: ["Yes", "No"], answer: null });
+  post(b, { kind: "question", id: id("q1"), at: at(2), question: "Merge #139?", options: ["Yes", "No"], answer: null });
   post(b, { kind: "user", id: id("u"), at: at(3), text: "wait", attachments: [] });
   const view = toBot(b, "working");
-  expect(view).toMatchObject({ question: "Merge #18?", preview: "**Done.** Two PRs", lastAt: at(3), status: "working" });
+  expect(view).toMatchObject({ question: "Merge #139?", preview: "**Done.** Two PRs", lastAt: at(3), status: "working" });
 
   const settled = settleQuestion(b.messages[1], 0);
   if (!settled.ok) throw new Error(settled.error);
@@ -98,13 +98,13 @@ test("home order is pinned first, then newest activity", () => {
 
 test("links come from bot messages and agent urls, deduped, newest first", () => {
   const b = bot();
-  post(b, said("Opened [#19](https://github.com/me/app/pull/19). See https://example.com/a.", 1));
-  post(b, said("Still https://github.com/me/app/pull/19, and **https://news.ycombinator.com/item?id=1**", 3));
-  const cloud = { url: "https://claude.ai/code/session_01", createdAt: at(2) } as Agent;
+  post(b, said("Opened [#142](https://github.com/acme/web/pull/142). See https://example.com/a.", 1));
+  post(b, said("Still https://github.com/acme/web/pull/142, and **https://news.ycombinator.com/item?id=1**", 3));
+  const cloud = { url: "https://claude.ai/code/session_abc", createdAt: at(2) } as Agent;
   expect(linksOf(b, [cloud])).toEqual([
-    { url: "https://github.com/me/app/pull/19", host: "github.com", at: at(3) },
+    { url: "https://github.com/acme/web/pull/142", host: "github.com", at: at(3) },
     { url: "https://news.ycombinator.com/item?id=1", host: "news.ycombinator.com", at: at(3) },
-    { url: "https://claude.ai/code/session_01", host: "claude.ai", at: at(2) },
+    { url: "https://claude.ai/code/session_abc", host: "claude.ai", at: at(2) },
     { url: "https://example.com/a", host: "example.com", at: at(1) },
   ]);
 });
@@ -128,14 +128,14 @@ test("bots are found by id or by name, ignoring case", () => {
 });
 
 test.each([
-  [{ from: "user", text: "Fix it", attachments: [{ name: "a.png", mime: "image/png", path: "inbox/a.png" }] }, "[Bruno]\nFix it\nAttached: inbox/a.png"],
-  [{ from: "answer", question: "Which?", option: "B" }, '[Bruno answered "Which?": B]'],
-  [{ from: "dismiss", question: "Which?" }, '[Bruno dismissed "Which?" without answering]'],
+  [{ from: "user", text: "Fix it", attachments: [{ name: "a.png", mime: "image/png", path: "inbox/a.png" }] }, "[Alex]\nFix it\nAttached: inbox/a.png"],
+  [{ from: "answer", question: "Which?", option: "B" }, '[Alex answered "Which?": B]'],
+  [{ from: "dismiss", question: "Which?" }, '[Alex dismissed "Which?" without answering]'],
   [{ from: "routine", name: "digest", prompt: "Post it." }, "[Routine digest fired]\nPost it."],
   [{ from: "agent", title: "Fix login", agentId: "a1", text: "PR #3 is open." }, '[Agent "Fix login" (a1) reports]\nPR #3 is open.'],
-  [{ from: "bot", name: "dr eggbot", text: "Hi" }, "[Message from bot dr eggbot]\nHi"],
-  [{ from: "created", by: "user", brief: null }, "[You were just created by Bruno]"],
-  [{ from: "created", by: { bot: "dr eggbot" }, brief: "Coach LinkedIn posts." }, "[You were just created by bot dr eggbot. Brief:]\nCoach LinkedIn posts."],
+  [{ from: "bot", name: "bot maker", text: "Hi" }, "[Message from bot bot maker]\nHi"],
+  [{ from: "created", by: "user", brief: null }, "[You were just created by Alex]"],
+  [{ from: "created", by: { bot: "bot maker" }, brief: "Write my standup notes." }, "[You were just created by bot bot maker. Brief:]\nWrite my standup notes."],
 ] as const)("envelope %#", (e, expected) => {
-  expect(envelope(e as never, "Bruno")).toBe(expected);
+  expect(envelope(e as never, "Alex")).toBe(expected);
 });

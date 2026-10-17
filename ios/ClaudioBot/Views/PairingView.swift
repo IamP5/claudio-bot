@@ -75,7 +75,7 @@ struct PairingView: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Bridge address").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                TextField("ws://192.168.1.20:7878/ws", text: $urlText)
+                TextField("ws://10.0.0.20:7878/ws", text: $urlText)
                     .keyboardType(.URL)
                     .textContentType(.URL)
                     .textInputAutocapitalization(.never)

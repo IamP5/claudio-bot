@@ -46,7 +46,7 @@ Deleting a bot moves its home to `trash/`. Nothing is deleted.
 
 Each bot has one Claude Code session through the Agent SDK. It starts the first time something reaches the bot, and after a restart it resumes from the stored session id, so the bot remembers the conversation. The session uses the `claude_code` system prompt with the bot's persona appended, loads your user settings and the bot's `CLAUDE.md`, and runs with `permissionMode: "auto"`.
 
-Everything that reaches a bot is one message whose first line says where it came from, such as `[Bruno]`, `[Routine digest fired]` or `[Agent "Fix login" (a_...) reports]`. Messages queue, and the bot takes them one turn at a time. While a turn runs, the bot's status is `working`. Each text block the bot writes becomes one chat bubble. Tool calls do not show.
+Everything that reaches a bot is one message whose first line says where it came from, such as `[Alex]`, `[Routine digest fired]` or `[Agent "Fix login" (a_...) reports]`. Messages queue, and the bot takes them one turn at a time. While a turn runs, the bot's status is `working`. Each text block the bot writes becomes one chat bubble. Tool calls do not show.
 
 A bot acts through the `claudio` MCP tools: `ask` posts a question card, `start_agent` and `message_agent` run coding agents, `list_projects` lists the repos, `message_bot` and `create_bot` reach other bots, `update_self` renames the bot, and `set_routine` and `delete_routine` manage its schedule.
 

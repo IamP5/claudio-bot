@@ -3,7 +3,7 @@
     {
       "type": "hello",
       "machine": "MacBook",
-      "userName": "Bruno",
+      "userName": "Alex",
       "bots": [
         {
           "id": "b1",
@@ -24,7 +24,7 @@
           "routines": [
             {
               "id": "r1",
-              "name": "tech-news-digest",
+              "name": "morning-digest",
               "schedule": "57 7 * * 1-5",
               "describe": "Weekdays at 7:57 AM",
               "prompt": "Post today's tech digest.",
@@ -39,7 +39,7 @@
       "type": "bot",
       "bot": {
         "id": "b2",
-        "name": "tech news",
+        "name": "news digest",
         "title": "Morning digest",
         "avatar": {
           "shape": "pentagon",
@@ -56,7 +56,7 @@
         "routines": [
           {
             "id": "r1",
-            "name": "tech-news-digest",
+            "name": "morning-digest",
             "schedule": "57 7 * * 1-5",
             "describe": "Weekdays at 7:57 AM",
             "prompt": "Post today's tech digest.",
@@ -96,7 +96,7 @@
           "kind": "bot",
           "id": "m2",
           "at": "2026-10-16T12:00:00.000Z",
-          "text": "On it. **#19** can merge on its own."
+          "text": "On it. **#142** can merge on its own."
         },
         {
           "kind": "exchange",
@@ -119,7 +119,7 @@
             {
               "kind": "routine",
               "id": "r1",
-              "name": "tech-news-digest"
+              "name": "morning-digest"
             },
             {
               "kind": "routine",
@@ -135,7 +135,7 @@
           "peer": {
             "kind": "bot",
             "id": "b2",
-            "name": "tech news",
+            "name": "news digest",
             "avatar": {
               "shape": "pentagon",
               "color": "teal"
@@ -150,8 +150,8 @@
           "at": "2026-10-16T12:00:00.000Z",
           "question": "Want me to merge any of these now?",
           "options": [
-            "Merge only #19",
-            "Merge #18 and #19",
+            "Merge only #142",
+            "Merge #139 and #142",
             "Keep holding everything"
           ],
           "answer": null
@@ -167,8 +167,8 @@
         "at": "2026-10-16T12:00:00.000Z",
         "question": "Want me to merge any of these now?",
         "options": [
-          "Merge only #19",
-          "Merge #18 and #19",
+          "Merge only #142",
+          "Merge #139 and #142",
           "Keep holding everything"
         ],
         "answer": 1
@@ -194,14 +194,14 @@
       "botId": "b1",
       "library": [
         {
-          "path": "comment-prune-plan.md",
+          "path": "merge-plan.md",
           "size": 2048,
           "modifiedAt": "2026-10-16T12:00:00.000Z"
         }
       ],
       "links": [
         {
-          "url": "https://github.com/me/app/pull/19",
+          "url": "https://github.com/acme/web/pull/142",
           "host": "github.com",
           "at": "2026-10-16T12:00:00.000Z"
         }
@@ -212,7 +212,7 @@
           "botId": "b1",
           "title": "Set up verification skill",
           "where": "mac",
-          "projectName": "solta-o-som",
+          "projectName": "web",
           "status": "waiting",
           "url": null,
           "createdAt": "2026-10-16T12:00:00.000Z",
@@ -223,9 +223,9 @@
           "botId": "b1",
           "title": "Set up verification skill",
           "where": "cloud",
-          "projectName": "solta-o-som",
+          "projectName": "web",
           "status": "in_cloud",
-          "url": "https://claude.ai/code/session_01",
+          "url": "https://claude.ai/code/session_abc",
           "createdAt": "2026-10-16T12:00:00.000Z",
           "updatedAt": "2026-10-16T12:00:00.000Z"
         }
@@ -238,7 +238,7 @@
         "botId": "b1",
         "title": "Set up verification skill",
         "where": "mac",
-        "projectName": "solta-o-som",
+        "projectName": "web",
         "status": "waiting",
         "url": null,
         "createdAt": "2026-10-16T12:00:00.000Z",
@@ -255,14 +255,14 @@
           "id": "am2",
           "at": "2026-10-16T12:00:00.000Z",
           "from": "agent",
-          "text": "PR #19 is open. 27 tests pass."
+          "text": "PR #142 is open. 27 tests pass."
         }
       ]
     },
     {
       "type": "file",
       "botId": "b1",
-      "path": "comment-prune-plan.md",
+      "path": "merge-plan.md",
       "mime": "text/markdown",
       "content": "# Plan\n",
       "data": null
@@ -351,7 +351,7 @@
     {
       "type": "file",
       "botId": "b1",
-      "path": "comment-prune-plan.md"
+      "path": "merge-plan.md"
     }
   ]
 }

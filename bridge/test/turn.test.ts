@@ -5,8 +5,8 @@ import { ASK_TOOL, freshTurn, readTurn, splitBubbles, type Turn } from "../src/t
 import { newBot, post } from "../src/world";
 
 test("paragraphs become separate bubbles", () => {
-  expect(splitBubbles("Hey Bruno.\n\nI looked at the PR.\n\n\nIt is ready to merge.")).toEqual([
-    "Hey Bruno.",
+  expect(splitBubbles("Hey Alex.\n\nI looked at the PR.\n\n\nIt is ready to merge.")).toEqual([
+    "Hey Alex.",
     "I looked at the PR.",
     "It is ready to merge.",
   ]);
@@ -58,14 +58,14 @@ function chat(messages: SDKMessage[]): string[] {
 test("text after ask in the same turn never reaches the chat, and the next turn speaks again", () => {
   expect(
     chat([
-      assistant(text("Hey Bruno.\n\nI can help with code or research.")),
+      assistant(text("Hey Alex.\n\nI can help with code or research.")),
       assistant(otherTool),
       assistant(text("One more thing."), askCall, text("I've posted the question card.")),
       assistant(text("Let me know what you pick.")),
       result,
       assistant(text("Great, coding it is.")),
     ]),
-  ).toEqual(["Hey Bruno.", "I can help with code or research.", "One more thing.", "Great, coding it is."]);
+  ).toEqual(["Hey Alex.", "I can help with code or research.", "One more thing.", "Great, coding it is."]);
 });
 
 test("replaying an assistant message rewrites the same bubbles", () => {

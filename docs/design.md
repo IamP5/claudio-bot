@@ -34,13 +34,13 @@ Everything that reaches a bot is an **envelope**, pushed as one user message who
 
 | Source | First line |
 | --- | --- |
-| the user typed | `[Bruno]` then the text, plus `Attached: inbox/<file>` lines |
-| the user answered a card | `[Bruno answered "<question>": <option>]` |
-| the user dismissed a card | `[Bruno dismissed "<question>" without answering]` |
+| the user typed | `[Alex]` then the text, plus `Attached: inbox/<file>` lines |
+| the user answered a card | `[Alex answered "<question>": <option>]` |
+| the user dismissed a card | `[Alex dismissed "<question>" without answering]` |
 | a routine fired | `[Routine <name> fired]` then its prompt |
 | an agent reported | `[Agent "<title>" (<agentId>) reports]` then its final text |
 | another bot | `[Message from bot <name>]` then the text |
-| bot just created | `[You were just created by Bruno]` or `[You were just created by bot <name>. Brief:]` then the brief |
+| bot just created | `[You were just created by Alex]` or `[You were just created by bot <name>. Brief:]` then the brief |
 
 Envelopes queue per bot. The input stream already serializes them.
 
@@ -106,7 +106,7 @@ A tiny 5-field cron (`*`, lists, ranges, `*/n` steps; dow 0-6 with Sunday 0) in 
 
 ## Default bot
 
-On first run, create **Claudio Bot** (circle, white), the general assistant, the way Grok ships "Grok Bot". It starts with the `[You were just created by Bruno]` envelope, so it greets the user. `create_bot` from the app makes "New Bot" with a random shape and color and the same envelope plus "Introduce yourself in one short message, then use ask to learn what Bruno wants help with first. Base the options on what USER.md says about them, plus Coding / building an app and Research and staying informed. After they answer, name yourself with update_self."
+On first run, create **Claudio Bot** (circle, white), the general assistant, the way Grok ships "Grok Bot". It starts with the `[You were just created by Alex]` envelope, so it greets the user. `create_bot` from the app makes "New Bot" with a random shape and color and the same envelope plus "Introduce yourself in one short message, then use ask to learn what Alex wants help with first. Base the options on what USER.md says about them, plus Coding / building an app and Research and staying informed. After they answer, name yourself with update_self."
 
 ## Library, links, files
 

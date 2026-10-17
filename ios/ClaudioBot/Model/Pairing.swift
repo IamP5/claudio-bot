@@ -10,7 +10,7 @@ struct Pairing: Codable, Equatable, Sendable {
 
         var errorDescription: String? {
             switch self {
-            case .url: "Enter the bridge address, like ws://192.168.1.20:7878/ws."
+            case .url: "Enter the bridge address, like ws://10.0.0.20:7878/ws."
             case .token: "Enter the token the bridge printed."
             }
         }

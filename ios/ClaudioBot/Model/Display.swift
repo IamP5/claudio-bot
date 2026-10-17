@@ -128,7 +128,7 @@ enum TimeLabel {
 }
 
 enum Initials {
-    /// "Bruno Gabriel" is "BG", "Bruno" is "B".
+    /// "Alex Rivera" is "AR", "Alex" is "A".
     static func of(_ name: String) -> String {
         String(name.split(separator: " ").prefix(2).compactMap(\.first)).uppercased()
     }

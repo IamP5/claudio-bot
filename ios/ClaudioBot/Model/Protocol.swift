@@ -24,10 +24,14 @@ enum BotTag {}
 enum MessageTag {}
 enum AgentTag {}
 enum RoutineTag {}
+enum RunTag {}
+enum DeviceTag {}
 typealias BotID = Identifier<BotTag>
 typealias MessageID = Identifier<MessageTag>
 typealias AgentID = Identifier<AgentTag>
 typealias RoutineID = Identifier<RoutineTag>
+typealias RunID = Identifier<RunTag>
+typealias DeviceID = Identifier<DeviceTag>
 
 /// A string enum whose unknown values survive a decode and encode back unchanged.
 protocol OpenEnum: RawRepresentable<String>, Codable, Hashable, Sendable, CaseIterable {
@@ -112,19 +116,80 @@ struct Avatar: Codable, Hashable, Sendable {
     static let standard = Avatar(shape: .circle, color: .white)
 }
 
+/// awaitingApproval: resting with a permission card open. parked: paused by the usage limit or the daily cap.
 enum BotStatus: OpenEnum {
-    case idle, working
+    case idle, working, awaitingApproval, parked
     case unknown(String)
 
-    static let allCases: [BotStatus] = [.idle, .working]
+    static let allCases: [BotStatus] = [.idle, .working, .awaitingApproval, .parked]
     init?(rawValue: String) { self.init(wire: rawValue) }
 
     var rawValue: String {
         switch self {
         case .idle: "idle"
         case .working: "working"
+        case .awaitingApproval: "awaiting_approval"
+        case .parked: "parked"
         case .unknown(let raw): raw
         }
+    }
+}
+
+enum TriggerKind: OpenEnum {
+    case cron
+    case unknown(String)
+
+    static let allCases: [TriggerKind] = [.cron]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .cron: "cron"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// running: fired, turn not finished. quiet: ran with nothing to say. skipped: did not run.
+enum RunStatus: OpenEnum {
+    case running, ok, quiet, failed, skipped
+    case unknown(String)
+
+    static let allCases: [RunStatus] = [.running, .ok, .quiet, .failed, .skipped]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .running: "running"
+        case .ok: "ok"
+        case .quiet: "quiet"
+        case .failed: "failed"
+        case .skipped: "skipped"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+struct RoutineRun: Codable, Hashable, Sendable, Identifiable {
+    let id: RunID
+    let at: Date
+    let status: RunStatus
+    /// Fired after its time because the Mac was asleep.
+    let late: Bool
+    /// Run now from the phone.
+    let manual: Bool
+    let note: String?
+
+    private enum CodingKeys: String, CodingKey { case id, at, status, late, manual, note }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(at, forKey: .at)
+        try c.encode(status, forKey: .status)
+        try c.encode(late, forKey: .late)
+        try c.encode(manual, forKey: .manual)
+        try c.encode(note, forKey: .note)
     }
 }
 
@@ -136,8 +201,43 @@ struct Routine: Codable, Hashable, Sendable, Identifiable {
     var prompt: String
     var enabled: Bool
     var lastRunAt: Date?
+    var trigger: TriggerKind = .cron
+    var nextRunAt: Date?
+    /// Newest first.
+    var runs: [RoutineRun] = []
 
-    private enum CodingKeys: String, CodingKey { case id, name, schedule, describe, prompt, enabled, lastRunAt }
+    private enum CodingKeys: String, CodingKey { case id, name, schedule, describe, prompt, enabled, lastRunAt, trigger, nextRunAt, runs }
+
+    init(
+        id: RoutineID, name: String, schedule: String, describe: String, prompt: String, enabled: Bool,
+        lastRunAt: Date?, trigger: TriggerKind = .cron, nextRunAt: Date? = nil, runs: [RoutineRun] = []
+    ) {
+        self.id = id
+        self.name = name
+        self.schedule = schedule
+        self.describe = describe
+        self.prompt = prompt
+        self.enabled = enabled
+        self.lastRunAt = lastRunAt
+        self.trigger = trigger
+        self.nextRunAt = nextRunAt
+        self.runs = runs
+    }
+
+    // The protocol 3 fields are optional on decode so a protocol 2 bridge still loads.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(RoutineID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        schedule = try c.decode(String.self, forKey: .schedule)
+        describe = try c.decode(String.self, forKey: .describe)
+        prompt = try c.decode(String.self, forKey: .prompt)
+        enabled = try c.decode(Bool.self, forKey: .enabled)
+        lastRunAt = try c.decodeIfPresent(Date.self, forKey: .lastRunAt)
+        trigger = try c.decodeIfPresent(TriggerKind.self, forKey: .trigger) ?? .cron
+        nextRunAt = try c.decodeIfPresent(Date.self, forKey: .nextRunAt)
+        runs = try c.decodeIfPresent([RoutineRun].self, forKey: .runs) ?? []
+    }
 
     // Written out so nil goes on the wire as null, the way the bridge sends it.
     func encode(to encoder: Encoder) throws {
@@ -149,6 +249,9 @@ struct Routine: Codable, Hashable, Sendable, Identifiable {
         try c.encode(prompt, forKey: .prompt)
         try c.encode(enabled, forKey: .enabled)
         try c.encode(lastRunAt, forKey: .lastRunAt)
+        try c.encode(trigger, forKey: .trigger)
+        try c.encode(nextRunAt, forKey: .nextRunAt)
+        try c.encode(runs, forKey: .runs)
     }
 }
 
@@ -166,9 +269,50 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
     var lastAt: Date
     var createdAt: Date
     var routines: [Routine]
+    /// Spend cap per local day. nil: the bridge default.
+    var dailyCapUsd: Double?
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, title, avatar, pinned, hidden, status, unread, question, preview, lastAt, createdAt, routines
+        case id, name, title, avatar, pinned, hidden, status, unread, question, preview, lastAt, createdAt, routines, dailyCapUsd
+    }
+
+    init(
+        id: BotID, name: String, title: String?, avatar: Avatar, pinned: Bool, hidden: Bool, status: BotStatus,
+        unread: Int, question: String?, preview: String, lastAt: Date, createdAt: Date, routines: [Routine],
+        dailyCapUsd: Double? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.title = title
+        self.avatar = avatar
+        self.pinned = pinned
+        self.hidden = hidden
+        self.status = status
+        self.unread = unread
+        self.question = question
+        self.preview = preview
+        self.lastAt = lastAt
+        self.createdAt = createdAt
+        self.routines = routines
+        self.dailyCapUsd = dailyCapUsd
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(BotID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        avatar = try c.decode(Avatar.self, forKey: .avatar)
+        pinned = try c.decode(Bool.self, forKey: .pinned)
+        hidden = try c.decode(Bool.self, forKey: .hidden)
+        status = try c.decode(BotStatus.self, forKey: .status)
+        unread = try c.decode(Int.self, forKey: .unread)
+        question = try c.decodeIfPresent(String.self, forKey: .question)
+        preview = try c.decode(String.self, forKey: .preview)
+        lastAt = try c.decode(Date.self, forKey: .lastAt)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        routines = try c.decode([Routine].self, forKey: .routines)
+        dailyCapUsd = try c.decodeIfPresent(Double.self, forKey: .dailyCapUsd)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -186,6 +330,7 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
         try c.encode(lastAt, forKey: .lastAt)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(routines, forKey: .routines)
+        try c.encode(dailyCapUsd, forKey: .dailyCapUsd)
     }
 }
 
@@ -255,15 +400,16 @@ struct Attachment: Codable, Hashable, Sendable {
 enum Answer: Codable, Hashable, Sendable {
     case option(Int)
     case dismissed
+    /// Nobody answered before `expiresAt`.
+    case expired
 
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if let index = try? c.decode(Int.self) {
             self = .option(index)
         } else {
-            // "dismissed", or a closing state a newer bridge invented: either way the card is closed with no choice.
-            _ = try c.decode(String.self)
-            self = .dismissed
+            // A closing state a newer bridge invented still closes the card, with no choice.
+            self = try c.decode(String.self) == "expired" ? .expired : .dismissed
         }
     }
 
@@ -272,6 +418,7 @@ enum Answer: Codable, Hashable, Sendable {
         switch self {
         case .option(let index): try c.encode(index)
         case .dismissed: try c.encode("dismissed")
+        case .expired: try c.encode("expired")
         }
     }
 }
@@ -280,12 +427,69 @@ struct QuestionCard: Hashable, Sendable {
     let question: String
     let options: [String]
     var answer: Answer?
+    /// nil for cards from before protocol 3, which never expire.
+    var expiresAt: Date?
+
+    init(question: String, options: [String], answer: Answer?, expiresAt: Date? = nil) {
+        self.question = question
+        self.options = options
+        self.answer = answer
+        self.expiresAt = expiresAt
+    }
+}
+
+/// The four buttons on a permission card. The app sends only these strings.
+enum PermissionChoice: String, Codable, Hashable, Sendable, CaseIterable {
+    case once, always, deny, never
+}
+
+/// How a permission card was closed. `nil` on the card means it is still open.
+enum PermissionAnswer: Codable, Hashable, Sendable {
+    case chose(PermissionChoice)
+    case expired
+    /// A closing state a newer bridge invented.
+    case closed(String)
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        if let choice = PermissionChoice(rawValue: raw) {
+            self = .chose(choice)
+        } else {
+            self = raw == "expired" ? .expired : .closed(raw)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .chose(let choice): try c.encode(choice.rawValue)
+        case .expired: try c.encode("expired")
+        case .closed(let raw): try c.encode(raw)
+        }
+    }
+}
+
+/// A tool call held for approval. It has not run, and runs only if the user allows it.
+struct PermissionCard: Hashable, Sendable {
+    /// nil when the bot itself asked; the agent when one of the bot's agents did.
+    let from: Peer?
+    /// "Bash", "Write", "mcp__github__merge_pull_request".
+    let tool: String
+    /// The rule that asked, in words.
+    let label: String
+    /// The exact call the user approves, secrets masked.
+    let detail: String
+    /// What "Always" would allow from now on, in words.
+    let always: String
+    var answer: PermissionAnswer?
+    let expiresAt: Date
 }
 
 enum Message: Codable, Hashable, Sendable, Identifiable {
     case user(id: MessageID, at: Date, text: String, attachments: [Attachment])
     case bot(id: MessageID, at: Date, text: String)
     case question(id: MessageID, at: Date, card: QuestionCard)
+    case permission(id: MessageID, at: Date, card: PermissionCard)
     /// A run of messages between this bot and one peer.
     case exchange(id: MessageID, at: Date, peer: Peer, sent: Int, received: Int)
     /// A system line whose `{n}` placeholders become chips for `refs[n]`.
@@ -294,20 +498,21 @@ enum Message: Codable, Hashable, Sendable, Identifiable {
 
     var id: MessageID {
         switch self {
-        case .user(let id, _, _, _), .bot(let id, _, _), .question(let id, _, _),
+        case .user(let id, _, _, _), .bot(let id, _, _), .question(let id, _, _), .permission(let id, _, _),
              .exchange(let id, _, _, _, _), .note(let id, _, _, _), .unknown(let id, _, _): id
         }
     }
 
     var at: Date {
         switch self {
-        case .user(_, let at, _, _), .bot(_, let at, _), .question(_, let at, _),
+        case .user(_, let at, _, _), .bot(_, let at, _), .question(_, let at, _), .permission(_, let at, _),
              .exchange(_, let at, _, _, _), .note(_, let at, _, _), .unknown(_, let at, _): at
         }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case kind, id, at, text, attachments, question, options, answer, peer, sent, received, refs
+        case kind, id, at, text, attachments, question, options, answer, expiresAt, peer, sent, received, refs
+        case from, tool, label, detail, always
     }
 
     init(from decoder: Decoder) throws {
@@ -326,7 +531,18 @@ enum Message: Codable, Hashable, Sendable, Identifiable {
             self = .question(id: id, at: at, card: QuestionCard(
                 question: try c.decode(String.self, forKey: .question),
                 options: try c.decode([String].self, forKey: .options),
-                answer: try c.decodeIfPresent(Answer.self, forKey: .answer)
+                answer: try c.decodeIfPresent(Answer.self, forKey: .answer),
+                expiresAt: try c.decodeIfPresent(Date.self, forKey: .expiresAt)
+            ))
+        case "permission":
+            self = .permission(id: id, at: at, card: PermissionCard(
+                from: try c.decodeIfPresent(Peer.self, forKey: .from),
+                tool: try c.decode(String.self, forKey: .tool),
+                label: try c.decode(String.self, forKey: .label),
+                detail: try c.decode(String.self, forKey: .detail),
+                always: try c.decode(String.self, forKey: .always),
+                answer: try c.decodeIfPresent(PermissionAnswer.self, forKey: .answer),
+                expiresAt: try c.decode(Date.self, forKey: .expiresAt)
             ))
         case "exchange":
             self = .exchange(
@@ -357,6 +573,16 @@ enum Message: Codable, Hashable, Sendable, Identifiable {
             try c.encode(card.question, forKey: .question)
             try c.encode(card.options, forKey: .options)
             try c.encode(card.answer, forKey: .answer)
+            try c.encode(card.expiresAt, forKey: .expiresAt)
+        case let .permission(_, _, card):
+            try c.encode("permission", forKey: .kind)
+            try c.encode(card.from, forKey: .from)
+            try c.encode(card.tool, forKey: .tool)
+            try c.encode(card.label, forKey: .label)
+            try c.encode(card.detail, forKey: .detail)
+            try c.encode(card.always, forKey: .always)
+            try c.encode(card.answer, forKey: .answer)
+            try c.encode(card.expiresAt, forKey: .expiresAt)
         case let .exchange(_, _, peer, sent, received):
             try c.encode("exchange", forKey: .kind)
             try c.encode(peer, forKey: .peer)
@@ -373,10 +599,10 @@ enum Message: Codable, Hashable, Sendable, Identifiable {
 }
 
 enum AgentStatus: OpenEnum {
-    case working, waiting, failed, inCloud
+    case working, waiting, failed, inCloud, awaitingApproval, parked
     case unknown(String)
 
-    static let allCases: [AgentStatus] = [.working, .waiting, .failed, .inCloud]
+    static let allCases: [AgentStatus] = [.working, .waiting, .failed, .inCloud, .awaitingApproval, .parked]
     init?(rawValue: String) { self.init(wire: rawValue) }
 
     var rawValue: String {
@@ -385,6 +611,8 @@ enum AgentStatus: OpenEnum {
         case .waiting: "waiting"
         case .failed: "failed"
         case .inCloud: "in_cloud"
+        case .awaitingApproval: "awaiting_approval"
+        case .parked: "parked"
         case .unknown(let raw): raw
         }
     }
@@ -476,8 +704,62 @@ struct BotFile: Hashable, Sendable {
     let data: String?
 }
 
+struct Device: Codable, Hashable, Sendable, Identifiable {
+    let id: DeviceID
+    let name: String
+    let createdAt: Date
+    let lastSeenAt: Date?
+    /// Paired with the shared token from before protocol 3.
+    let legacy: Bool
+    /// The device that asked for this list.
+    let current: Bool
+
+    private enum CodingKeys: String, CodingKey { case id, name, createdAt, lastSeenAt, legacy, current }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(lastSeenAt, forKey: .lastSeenAt)
+        try c.encode(legacy, forKey: .legacy)
+        try c.encode(current, forKey: .current)
+    }
+}
+
+/// A one-time code another phone can pair with.
+struct PairCode: Codable, Hashable, Sendable {
+    let code: String
+    let expiresAt: Date
+}
+
+/// Where the broadcast stream stands. An empty epoch means the bridge keeps no replay ring.
+struct StreamPosition: Hashable, Sendable {
+    var epoch: String
+    var seq: Int
+    var resumed: Bool
+}
+
+struct Hello: Hashable, Sendable {
+    /// Absent before protocol 3, which reads as 2.
+    var `protocol`: Int
+    var machine: String
+    var userName: String
+    var bots: [Bot]
+    var position: StreamPosition
+
+    init(protocol: Int = Wire.protocolVersion, machine: String, userName: String, bots: [Bot],
+         position: StreamPosition = StreamPosition(epoch: "", seq: 0, resumed: false)) {
+        self.protocol = `protocol`
+        self.machine = machine
+        self.userName = userName
+        self.bots = bots
+        self.position = position
+    }
+}
+
 enum ServerMessage: Codable, Sendable {
-    case hello(machine: String, userName: String, bots: [Bot])
+    case hello(Hello)
     case bot(Bot)
     case botRemoved(BotID)
     case created(ref: String, botId: BotID)
@@ -486,23 +768,32 @@ enum ServerMessage: Codable, Sendable {
     case details(botId: BotID, library: [LibraryFile], links: [BotLink], agents: [Agent])
     case agent(Agent, messages: [AgentMessage])
     case file(botId: BotID, path: String, file: BotFile)
+    case devices([Device])
+    case pairCode(PairCode)
     case error(message: String)
     case unknown(type: String)
 
     private enum CodingKeys: String, CodingKey {
         case type, machine, userName, bots, bot, botId, ref, messages, message, library, links, agents, agent
-        case path, mime, content, data
+        case path, mime, content, data, devices, code, expiresAt
+        case `protocol`, epoch, seq, resumed
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .type) {
         case "hello":
-            self = .hello(
+            self = .hello(Hello(
+                protocol: try c.decodeIfPresent(Int.self, forKey: .protocol) ?? 2,
                 machine: try c.decode(String.self, forKey: .machine),
                 userName: try c.decode(String.self, forKey: .userName),
-                bots: try c.decode([Bot].self, forKey: .bots)
-            )
+                bots: try c.decode([Bot].self, forKey: .bots),
+                position: StreamPosition(
+                    epoch: try c.decodeIfPresent(String.self, forKey: .epoch) ?? "",
+                    seq: try c.decodeIfPresent(Int.self, forKey: .seq) ?? 0,
+                    resumed: try c.decodeIfPresent(Bool.self, forKey: .resumed) ?? false
+                )
+            ))
         case "bot":
             self = .bot(try c.decode(Bot.self, forKey: .bot))
         case "bot_removed":
@@ -532,6 +823,10 @@ enum ServerMessage: Codable, Sendable {
                     data: try c.decodeIfPresent(String.self, forKey: .data)
                 )
             )
+        case "devices":
+            self = .devices(try c.decode([Device].self, forKey: .devices))
+        case "pair_code":
+            self = .pairCode(PairCode(code: try c.decode(String.self, forKey: .code), expiresAt: try c.decode(Date.self, forKey: .expiresAt)))
         case "error":
             self = .error(message: try c.decode(String.self, forKey: .message))
         case let other:
@@ -542,11 +837,15 @@ enum ServerMessage: Codable, Sendable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .hello(machine, userName, bots):
+        case let .hello(hello):
             try c.encode("hello", forKey: .type)
-            try c.encode(machine, forKey: .machine)
-            try c.encode(userName, forKey: .userName)
-            try c.encode(bots, forKey: .bots)
+            try c.encode(hello.protocol, forKey: .protocol)
+            try c.encode(hello.machine, forKey: .machine)
+            try c.encode(hello.userName, forKey: .userName)
+            try c.encode(hello.bots, forKey: .bots)
+            try c.encode(hello.position.epoch, forKey: .epoch)
+            try c.encode(hello.position.seq, forKey: .seq)
+            try c.encode(hello.position.resumed, forKey: .resumed)
         case let .bot(bot):
             try c.encode("bot", forKey: .type)
             try c.encode(bot, forKey: .bot)
@@ -582,12 +881,45 @@ enum ServerMessage: Codable, Sendable {
             try c.encode(file.mime, forKey: .mime)
             try c.encode(file.content, forKey: .content)
             try c.encode(file.data, forKey: .data)
+        case let .devices(devices):
+            try c.encode("devices", forKey: .type)
+            try c.encode(devices, forKey: .devices)
+        case let .pairCode(code):
+            try c.encode("pair_code", forKey: .type)
+            try c.encode(code.code, forKey: .code)
+            try c.encode(code.expiresAt, forKey: .expiresAt)
         case let .error(message):
             try c.encode("error", forKey: .type)
             try c.encode(message, forKey: .message)
         case let .unknown(type):
             try c.encode(type, forKey: .type)
         }
+    }
+}
+
+/// One frame off the socket. A broadcast carries the stream seq; a reply to one client does not.
+/// A hello carries its seq inside its stream position, so `seq` mirrors it there.
+struct ServerFrame: Codable, Sendable {
+    let seq: Int?
+    let message: ServerMessage
+
+    private enum CodingKeys: String, CodingKey { case seq }
+
+    init(seq: Int? = nil, message: ServerMessage) {
+        self.seq = seq
+        self.message = message
+    }
+
+    init(from decoder: Decoder) throws {
+        message = try ServerMessage(from: decoder)
+        seq = try decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(Int.self, forKey: .seq)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try message.encode(to: encoder)
+        if case .hello = message { return }
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(seq, forKey: .seq)
     }
 }
 
@@ -605,15 +937,21 @@ struct BotPatch: Codable, Hashable, Sendable {
     var avatar: Avatar?
     var pinned: Bool?
     var hidden: Bool?
+    /// `.some(nil)` goes back to the bridge default.
+    var dailyCapUsd: Double??
 
-    private enum CodingKeys: String, CodingKey { case name, title, avatar, pinned, hidden }
+    private enum CodingKeys: String, CodingKey { case name, title, avatar, pinned, hidden, dailyCapUsd }
 
-    init(name: String? = nil, title: String?? = nil, avatar: Avatar? = nil, pinned: Bool? = nil, hidden: Bool? = nil) {
+    init(
+        name: String? = nil, title: String?? = nil, avatar: Avatar? = nil, pinned: Bool? = nil, hidden: Bool? = nil,
+        dailyCapUsd: Double?? = nil
+    ) {
         self.name = name
         self.title = title
         self.avatar = avatar
         self.pinned = pinned
         self.hidden = hidden
+        self.dailyCapUsd = dailyCapUsd
     }
 
     init(from decoder: Decoder) throws {
@@ -625,6 +963,9 @@ struct BotPatch: Codable, Hashable, Sendable {
         avatar = try c.decodeIfPresent(Avatar.self, forKey: .avatar)
         pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned)
         hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden)
+        if c.contains(.dailyCapUsd) {
+            dailyCapUsd = .some(try c.decodeNil(forKey: .dailyCapUsd) ? nil : try c.decode(Double.self, forKey: .dailyCapUsd))
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -634,6 +975,7 @@ struct BotPatch: Codable, Hashable, Sendable {
         try c.encodeIfPresent(avatar, forKey: .avatar)
         try c.encodeIfPresent(pinned, forKey: .pinned)
         try c.encodeIfPresent(hidden, forKey: .hidden)
+        if let dailyCapUsd { try c.encode(dailyCapUsd, forKey: .dailyCapUsd) }
     }
 }
 
@@ -644,16 +986,25 @@ enum ClientMessage: Codable, Hashable, Sendable {
     case send(botId: BotID, text: String, uploads: [Upload])
     case answer(botId: BotID, messageId: MessageID, option: Int)
     case dismiss(botId: BotID, messageId: MessageID)
+    /// Answers a permission card. Chat text never approves.
+    case decide(botId: BotID, messageId: MessageID, choice: PermissionChoice)
+    /// Stops the bot's turn in flight and drops its queued unattended work.
+    case stop(botId: BotID)
+    case stopAgent(agentId: AgentID)
     case updateBot(botId: BotID, patch: BotPatch)
     case markUnread(botId: BotID)
     case deleteBot(botId: BotID)
     case setRoutine(botId: BotID, routineId: RoutineID, enabled: Bool)
+    case runRoutine(botId: BotID, routineId: RoutineID)
     case details(botId: BotID)
     case agent(agentId: AgentID)
     case file(botId: BotID, path: String)
+    case devices
+    case revokeDevice(deviceId: DeviceID)
+    case pairCode
 
     private enum CodingKeys: String, CodingKey {
-        case type, ref, botId, text, uploads, messageId, option, patch, routineId, enabled, agentId, path
+        case type, ref, botId, text, uploads, messageId, option, choice, patch, routineId, enabled, agentId, path, deviceId
     }
 
     init(from decoder: Decoder) throws {
@@ -667,14 +1018,22 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case "answer":
             self = .answer(botId: try bot(), messageId: try c.decode(MessageID.self, forKey: .messageId), option: try c.decode(Int.self, forKey: .option))
         case "dismiss": self = .dismiss(botId: try bot(), messageId: try c.decode(MessageID.self, forKey: .messageId))
+        case "decide":
+            self = .decide(botId: try bot(), messageId: try c.decode(MessageID.self, forKey: .messageId), choice: try c.decode(PermissionChoice.self, forKey: .choice))
+        case "stop": self = .stop(botId: try bot())
+        case "stop_agent": self = .stopAgent(agentId: try c.decode(AgentID.self, forKey: .agentId))
         case "update_bot": self = .updateBot(botId: try bot(), patch: try c.decode(BotPatch.self, forKey: .patch))
         case "mark_unread": self = .markUnread(botId: try bot())
         case "delete_bot": self = .deleteBot(botId: try bot())
         case "set_routine":
             self = .setRoutine(botId: try bot(), routineId: try c.decode(RoutineID.self, forKey: .routineId), enabled: try c.decode(Bool.self, forKey: .enabled))
+        case "run_routine": self = .runRoutine(botId: try bot(), routineId: try c.decode(RoutineID.self, forKey: .routineId))
         case "details": self = .details(botId: try bot())
         case "agent": self = .agent(agentId: try c.decode(AgentID.self, forKey: .agentId))
         case "file": self = .file(botId: try bot(), path: try c.decode(String.self, forKey: .path))
+        case "devices": self = .devices
+        case "revoke_device": self = .revokeDevice(deviceId: try c.decode(DeviceID.self, forKey: .deviceId))
+        case "pair_code": self = .pairCode
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown client message \(other)")
         }
@@ -703,6 +1062,17 @@ enum ClientMessage: Codable, Hashable, Sendable {
             try c.encode("dismiss", forKey: .type)
             try c.encode(botId, forKey: .botId)
             try c.encode(messageId, forKey: .messageId)
+        case let .decide(botId, messageId, choice):
+            try c.encode("decide", forKey: .type)
+            try c.encode(botId, forKey: .botId)
+            try c.encode(messageId, forKey: .messageId)
+            try c.encode(choice, forKey: .choice)
+        case let .stop(botId):
+            try c.encode("stop", forKey: .type)
+            try c.encode(botId, forKey: .botId)
+        case let .stopAgent(agentId):
+            try c.encode("stop_agent", forKey: .type)
+            try c.encode(agentId, forKey: .agentId)
         case let .updateBot(botId, patch):
             try c.encode("update_bot", forKey: .type)
             try c.encode(botId, forKey: .botId)
@@ -718,6 +1088,10 @@ enum ClientMessage: Codable, Hashable, Sendable {
             try c.encode(botId, forKey: .botId)
             try c.encode(routineId, forKey: .routineId)
             try c.encode(enabled, forKey: .enabled)
+        case let .runRoutine(botId, routineId):
+            try c.encode("run_routine", forKey: .type)
+            try c.encode(botId, forKey: .botId)
+            try c.encode(routineId, forKey: .routineId)
         case let .details(botId):
             try c.encode("details", forKey: .type)
             try c.encode(botId, forKey: .botId)
@@ -728,11 +1102,34 @@ enum ClientMessage: Codable, Hashable, Sendable {
             try c.encode("file", forKey: .type)
             try c.encode(botId, forKey: .botId)
             try c.encode(path, forKey: .path)
+        case .devices:
+            try c.encode("devices", forKey: .type)
+        case let .revokeDevice(deviceId):
+            try c.encode("revoke_device", forKey: .type)
+            try c.encode(deviceId, forKey: .deviceId)
+        case .pairCode:
+            try c.encode("pair_code", forKey: .type)
         }
     }
 }
 
+/// HTTP, outside the socket: POST /pair with a one-time code returns this device's own token.
+struct PairRequest: Codable, Hashable, Sendable {
+    let code: String
+    let name: String
+}
+
+struct PairResponse: Codable, Hashable, Sendable {
+    let deviceId: DeviceID
+    let token: String
+}
+
 enum Wire {
+    /// The protocol this app speaks, sent on every connect.
+    static let protocolVersion = 3
+    /// The bridge protocols this app works with. Outside it the app asks to update one side.
+    static let protocols = 3...3
+
     static func decoder() -> JSONDecoder {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .custom { decoder in

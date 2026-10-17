@@ -24,6 +24,7 @@ enum Route: Hashable {
     case profile(BotID, tab: ProfileView.Tab = .info)
     case exchange(AgentID)
     case file(BotID, path: String)
+    case routine(BotID, RoutineID)
 }
 
 @Observable
@@ -39,8 +40,8 @@ final class Router {
     var showingInspector = false
     /// The ref of a create_bot in flight; the bot it becomes is opened.
     var pendingCreate: String?
-    /// A pairing that arrived through a claudiobot://pair link, waiting to be confirmed.
-    var pairingLink: Pairing?
+    /// A pairing code that arrived through a claudiobot://pair link, waiting to be redeemed.
+    var pairingLink: PairInvite?
 
     func open(_ bot: BotID) {
         showingNewChat = false
@@ -81,9 +82,9 @@ final class AppModel {
         }
     }
 
-    /// Validates by connecting first, so only a pairing that reached the bridge is saved.
-    func pair(_ pairing: Pairing) async throws {
-        _ = try await BridgeClient.probe(pairing)
+    /// Redeems the one-time code for this phone's own token. Nothing is saved unless the bridge accepts the code.
+    func pair(_ invite: PairInvite) async throws {
+        let pairing = try await Pairing.redeem(invite, deviceName: UIDevice.current.name)
         PairingVault.save(pairing)
         client.start(pairing)
         router.pairingLink = nil
@@ -91,8 +92,10 @@ final class AppModel {
     }
 
     func open(_ url: URL) {
-        if let pairing = Pairing(link: url) {
-            router.pairingLink = pairing
+        switch DeepLink(url: url) {
+        case .pair(let invite): router.pairingLink = invite
+        case .bot(let bot, _): router.open(bot)
+        case nil: break
         }
     }
 
@@ -155,6 +158,6 @@ struct RootView: View {
     }
 }
 
-extension Pairing: Identifiable {
-    var id: String { url.absoluteString + token }
+extension PairInvite: Identifiable {
+    var id: String { link.absoluteString }
 }

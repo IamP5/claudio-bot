@@ -41,6 +41,7 @@ struct Alert: Equatable, Sendable {
     enum Reason: Equatable, Sendable {
         case message(String)
         case question(id: MessageID, question: String, options: [String])
+        case permission(id: MessageID, label: String)
     }
 
     let bot: Bot
@@ -68,6 +69,32 @@ struct ErrorNotice: Equatable, Sendable {
     let message: String
 }
 
+/// The bridge speaks a protocol outside `Wire.protocols`, so one side needs an update.
+enum ProtocolMismatch: Equatable, Sendable {
+    case updateBridge, updateApp
+
+    init?(bridge: Int) {
+        guard !Wire.protocols.contains(bridge) else { return nil }
+        self = bridge < Wire.protocols.lowerBound ? .updateBridge : .updateApp
+    }
+}
+
+// The bridge closes a card when its deadline passes. Until that frame arrives, a deadline already
+// past reads as expired, so nobody taps a button the bridge will refuse.
+extension QuestionCard {
+    func answer(at now: Date) -> Answer? {
+        if answer == nil, let expiresAt, now >= expiresAt { return .expired }
+        return answer
+    }
+}
+
+extension PermissionCard {
+    func answer(at now: Date) -> PermissionAnswer? {
+        if answer == nil, now >= expiresAt { return .expired }
+        return answer
+    }
+}
+
 @Observable
 @MainActor
 final class AppStore {
@@ -81,6 +108,11 @@ final class AppStore {
     /// The bot each `create_bot` ref became, so the screen that asked can open it.
     private(set) var created: [String: BotID] = [:]
     private(set) var lastError: ErrorNotice?
+    private(set) var protocolMismatch: ProtocolMismatch?
+    /// The phones paired with this Mac, once Settings asked for them.
+    private(set) var devices: [Device]?
+    /// The newest code for pairing another phone.
+    private(set) var pairCode: PairCode?
 
     var machine: String? {
         if case .connected(let machine) = connection { machine } else { nil }
@@ -97,17 +129,26 @@ final class AppStore {
             agents = [:]
             files = [:]
             created = [:]
+            protocolMismatch = nil
+            devices = nil
+            pairCode = nil
         }
+    }
+
+    /// The bridge keeps one live code, so a new request makes the shown one stale until the reply lands.
+    func discardPairCode() {
+        pairCode = nil
     }
 
     /// The reducer. Returns what the user should be notified about.
     @discardableResult
     func apply(_ msg: ServerMessage) -> [Alert] {
         switch msg {
-        case let .hello(machine, userName, bots):
-            connection = .connected(machine: machine)
-            self.userName = userName
-            self.bots = Dictionary(bots.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+        case let .hello(hello):
+            connection = .connected(machine: hello.machine)
+            userName = hello.userName
+            protocolMismatch = ProtocolMismatch(bridge: hello.protocol)
+            bots = Dictionary(hello.bots.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             conversations = conversations.filter { self.bots[$0.key] != nil }
             details = details.filter { self.bots[$0.key] != nil }
             return []
@@ -140,6 +181,8 @@ final class AppStore {
                 return [Alert(bot: bot, reason: .message(text))]
             case .question(let id, _, let card) where previous == nil && card.answer == nil:
                 return [Alert(bot: bot, reason: .question(id: id, question: card.question, options: card.options))]
+            case .permission(let id, _, let card) where previous == nil && card.answer == nil:
+                return [Alert(bot: bot, reason: .permission(id: id, label: card.label))]
             default:
                 return []
             }
@@ -165,6 +208,14 @@ final class AppStore {
             files[FileKey(botId: botId, path: path)] = file
             return []
 
+        case let .devices(devices):
+            self.devices = devices
+            return []
+
+        case let .pairCode(code):
+            pairCode = code
+            return []
+
         case let .error(message):
             lastError = ErrorNotice(message: message)
             return []
@@ -188,9 +239,9 @@ final class AppStore {
     }
 
     /// The open question card, newest first, if any.
-    func openQuestion(in botId: BotID) -> (id: MessageID, card: QuestionCard)? {
+    func openQuestion(in botId: BotID, now: Date = .now) -> (id: MessageID, card: QuestionCard)? {
         for message in conversations[botId]?.messages.reversed() ?? [] {
-            if case let .question(id, _, card) = message, card.answer == nil { return (id, card) }
+            if case let .question(id, _, card) = message, card.answer(at: now) == nil { return (id, card) }
         }
         return nil
     }

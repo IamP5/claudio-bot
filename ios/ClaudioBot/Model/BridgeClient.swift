@@ -9,6 +9,28 @@ enum Backoff {
     }
 }
 
+/// The last broadcast this app applied, so a reconnect asks the bridge to replay only what it missed.
+struct StreamCursor: Equatable, Sendable {
+    private(set) var epoch = ""
+    private(set) var seq = 0
+
+    mutating func observe(_ frame: ServerFrame) {
+        if case .hello(let hello) = frame.message {
+            // A resumed hello is followed by the frames after our seq, which advance it themselves.
+            guard !(hello.position.resumed && hello.position.epoch == epoch) else { return }
+            epoch = hello.position.epoch
+            seq = hello.position.seq
+        } else if let frameSeq = frame.seq {
+            seq = frameSeq
+        }
+    }
+
+    /// Empty when the bridge keeps no replay ring.
+    var resumeQuery: [URLQueryItem] {
+        epoch.isEmpty ? [] : [URLQueryItem(name: "epoch", value: epoch), URLQueryItem(name: "after", value: String(seq))]
+    }
+}
+
 /// Owns the one WebSocket to the Mac bridge and feeds every frame into the store's reducer.
 @Observable
 @MainActor
@@ -17,6 +39,8 @@ final class BridgeClient {
     @ObservationIgnored var onAlerts: ([Alert]) -> Void = { _ in }
 
     private(set) var pairing: Pairing?
+    /// Why this phone was unpaired without the user asking, for the pairing screen.
+    private(set) var unpairedReason: String?
 
     /// The bot on screen. It is opened now and again after every reconnect, which also marks it read.
     var openBot: BotID? {
@@ -30,6 +54,8 @@ final class BridgeClient {
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private var nap: Task<Void, Never>?
     @ObservationIgnored private var outbox: [ClientMessage] = []
+    /// Kept across reconnects within one launch, because the store still holds what came before.
+    @ObservationIgnored private var cursor: StreamCursor?
     @ObservationIgnored private let log = Logger(subsystem: "dev.claudiobot.app", category: "bridge")
 
     init(store: AppStore) {
@@ -47,6 +73,8 @@ final class BridgeClient {
     func start(_ pairing: Pairing) {
         stop()
         self.pairing = pairing
+        unpairedReason = nil
+        cursor = nil
         loop = Task { [weak self] in await self?.run(pairing) }
     }
 
@@ -58,10 +86,12 @@ final class BridgeClient {
         socket = nil
     }
 
-    func unpair() {
+    func unpair(reason: String? = nil) {
         stop()
         PairingVault.clear()
         pairing = nil
+        cursor = nil
+        unpairedReason = reason
         outbox.removeAll()
         store.setConnection(.unpaired)
     }
@@ -99,8 +129,12 @@ final class BridgeClient {
         var failures = 0
         while !Task.isCancelled {
             store.setConnection(.connecting)
-            let greeted = await session(pairing)
+            let outcome = await session(pairing)
             if Task.isCancelled { return }
+            if outcome == .revoked {
+                return unpair(reason: "This iPhone was removed from your Mac. Pair it again to reconnect.")
+            }
+            let greeted = outcome == .greeted
             if greeted { failures = 0 }
             let delay = Backoff.delay(afterFailures: failures)
             failures += 1
@@ -111,9 +145,16 @@ final class BridgeClient {
         }
     }
 
-    /// Runs one socket until it closes. Returns whether the bridge said hello.
-    private func session(_ pairing: Pairing) async -> Bool {
-        let ws = URLSession.shared.webSocketTask(with: pairing.socketURL)
+    private enum Outcome { case greeted, failed, revoked }
+
+    /// The bridge closes a revoked device's live socket with 4001, and answers its next upgrade with 401.
+    nonisolated static func wasRevoked(closeCode: Int, upgradeStatus: Int?) -> Bool {
+        closeCode == 4001 || upgradeStatus == 401
+    }
+
+    /// Runs one socket until it closes.
+    private func session(_ pairing: Pairing) async -> Outcome {
+        let ws = URLSession.shared.webSocketTask(with: pairing.socketRequest(resumingFrom: cursor))
         ws.maximumMessageSize = 32 << 20
         socket = ws
         ws.resume()
@@ -134,26 +175,32 @@ final class BridgeClient {
         let decoder = Wire.decoder()
         var greeted = false
         while !Task.isCancelled {
-            let frame: URLSessionWebSocketTask.Message
+            let received: URLSessionWebSocketTask.Message
             do {
-                frame = try await ws.receive()
+                received = try await ws.receive()
             } catch {
                 log.info("socket closed: \(error.localizedDescription)")
+                if Self.wasRevoked(closeCode: ws.closeCode.rawValue, upgradeStatus: greeted ? nil : (ws.response as? HTTPURLResponse)?.statusCode) {
+                    return .revoked
+                }
                 break
             }
             let data: Data
-            switch frame {
+            switch received {
             case .string(let text): data = Data(text.utf8)
             case .data(let bytes): data = bytes
             @unknown default: continue
             }
-            let msg: ServerMessage
+            let frame: ServerFrame
             do {
-                msg = try decoder.decode(ServerMessage.self, from: data)
+                frame = try decoder.decode(ServerFrame.self, from: data)
             } catch {
                 log.error("undecodable frame: \(error)")
                 continue
             }
+            let msg = frame.message
+            cursor = cursor ?? StreamCursor()
+            cursor?.observe(frame)
             let alerts = store.apply(msg)
             if case .hello = msg {
                 greeted = true
@@ -168,54 +215,6 @@ final class BridgeClient {
             }
             onAlerts(alerts)
         }
-        return greeted
-    }
-
-    enum ProbeError: LocalizedError {
-        case timeout, notABridge, refused(String)
-
-        var errorDescription: String? {
-            switch self {
-            case .timeout: "The bridge did not answer. Check the address and that your phone is on the same network or tailnet."
-            case .notABridge: "Something answered, but it is not a ClaudioBot bridge."
-            case .refused(let reason): "Could not connect: \(reason)"
-            }
-        }
-    }
-
-    /// Opens a throwaway socket and waits for hello, so a bad address or token fails before it is saved.
-    static func probe(_ pairing: Pairing) async throws -> String {
-        let ws = URLSession.shared.webSocketTask(with: pairing.socketURL)
-        ws.resume()
-        defer { ws.cancel(with: .normalClosure, reason: nil) }
-        return try await withThrowingTaskGroup(of: String.self) { group in
-            group.addTask {
-                let frame: URLSessionWebSocketTask.Message
-                do {
-                    frame = try await ws.receive()
-                } catch let error as URLError where error.code == .badServerResponse {
-                    throw ProbeError.refused("the bridge rejected the token.")
-                } catch {
-                    throw ProbeError.refused(error.localizedDescription)
-                }
-                let data: Data = switch frame {
-                case .string(let text): Data(text.utf8)
-                case .data(let bytes): bytes
-                @unknown default: Data()
-                }
-                guard case .hello(let machine, _, _) = try? Wire.decoder().decode(ServerMessage.self, from: data) else {
-                    throw ProbeError.notABridge
-                }
-                return machine
-            }
-            group.addTask {
-                try await Task.sleep(for: .seconds(8))
-                ws.cancel(with: .goingAway, reason: nil)
-                throw ProbeError.timeout
-            }
-            defer { group.cancelAll() }
-            guard let machine = try await group.next() else { throw ProbeError.timeout }
-            return machine
-        }
+        return greeted ? .greeted : .failed
     }
 }

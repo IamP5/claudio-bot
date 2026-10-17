@@ -23,6 +23,11 @@ struct HomeView: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
+            if let mismatch = store.protocolMismatch {
+                UpdateBanner(mismatch: mismatch)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
             if searching {
                 searchField
                     .listRowBackground(Color.clear)
@@ -165,6 +170,7 @@ struct BotRow: View {
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
                         .lineLimit(1)
+                    BotStatusChip(status: bot.status)
                     Spacer(minLength: 8)
                     if bot.pinned {
                         Image(systemName: "pin.fill").font(.system(size: 10)).foregroundStyle(Theme.tertiary)
@@ -205,6 +211,27 @@ struct ConnectionBanner: View {
         VStack(alignment: .leading, spacing: 4) {
             ConnectionBadge(state: state)
             Text("ClaudioBot needs the bridge running on your Mac. Your bots keep working there while this phone is away.")
+                .font(.footnote)
+                .foregroundStyle(Theme.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+/// The bridge and the app speak protocols too far apart for everything to work.
+struct UpdateBanner: View {
+    let mismatch: ProtocolMismatch
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(mismatch == .updateBridge ? "Update the bridge" : "Update the app", systemImage: "arrow.triangle.2.circlepath")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Theme.attention)
+            Text(mismatch == .updateBridge
+                 ? "The bridge on your Mac is older than this app. Approvals, Stop and paired devices need the new bridge."
+                 : "The bridge on your Mac is newer than this app. Update ClaudioBot so nothing is missing.")
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)
         }

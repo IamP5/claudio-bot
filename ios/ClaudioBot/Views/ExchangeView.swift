@@ -81,6 +81,15 @@ struct ExchangeView: View {
 
     private func actions(_ agent: Agent) -> some View {
         HStack(spacing: 12) {
+            if agent.status == .working {
+                Button { client.send(.stopAgent(agentId: agent.id)) } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .glass(in: Capsule())
+                        .foregroundStyle(Theme.danger)
+                }
+            }
             if let url = agent.url {
                 Button { openURL(url) } label: {
                     Label("Open in Claude", systemImage: "arrow.up.right.square")

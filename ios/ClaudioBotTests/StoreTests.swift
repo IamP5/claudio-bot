@@ -19,15 +19,28 @@ private func botMessage(_ id: String, _ text: String) -> Message {
     .bot(id: MessageID(id), at: at, text: text)
 }
 
-private func question(_ id: String, answer: Answer? = nil) -> Message {
-    .question(id: MessageID(id), at: at, card: QuestionCard(question: "Merge?", options: ["Yes", "Not yet"], answer: answer))
+private func question(_ id: String, answer: Answer? = nil, expiresAt: Date? = nil) -> Message {
+    .question(id: MessageID(id), at: at, card: QuestionCard(question: "Merge?", options: ["Yes", "Not yet"], answer: answer, expiresAt: expiresAt))
+}
+
+private let deadline = at + 2 * 3600
+
+private func permission(_ id: String, answer: PermissionAnswer? = nil) -> Message {
+    .permission(id: MessageID(id), at: at, card: PermissionCard(
+        from: nil, tool: "Bash", label: "Push to the default branch", detail: "git push origin main",
+        always: "git push to main from engineer", answer: answer, expiresAt: deadline
+    ))
+}
+
+private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
+    .hello(Hello(protocol: version, machine: "Mac", userName: "Alex", bots: bots))
 }
 
 @MainActor
 @Suite struct StoreTests {
     private func store(with bots: [Bot] = [bot("b1")]) -> AppStore {
         let store = AppStore()
-        store.apply(.hello(machine: "Mac", userName: "Alex", bots: bots))
+        store.apply(hello(bots))
         return store
     }
 
@@ -140,9 +153,90 @@ private func question(_ id: String, answer: Answer? = nil) -> Message {
 
     @Test func unpairingForgetsTheMac() {
         let store = store()
+        store.apply(.devices([Device(id: DeviceID("d1"), name: "iPhone", createdAt: at, lastSeenAt: nil, legacy: false, current: true)]))
+        store.apply(.pairCode(PairCode(code: "K7QD-M2XP", expiresAt: deadline)))
         store.setConnection(.unpaired)
         #expect(store.bots.isEmpty)
         #expect(store.userName.isEmpty)
+        #expect(store.devices == nil)
+        #expect(store.pairCode == nil)
+    }
+
+    @Test func aNewPermissionCardAlertsOnceWithItsLabel() {
+        let store = store()
+        let alerts = store.apply(.message(botId: BotID("b1"), message: permission("p1")))
+        #expect(alerts.map(\.reason) == [.permission(id: MessageID("p1"), label: "Push to the default branch")])
+        #expect(store.apply(.message(botId: BotID("b1"), message: permission("p1"))).isEmpty)
+        guard case .permission(_, _, let card)? = store.conversations[BotID("b1")]?[MessageID("p1")] else {
+            Issue.record("card missing"); return
+        }
+        #expect(card.answer(at: at) == nil)
+    }
+
+    @Test func aDecidedCardReplacesTheOpenOneInPlaceWithoutAlerting() {
+        let store = store()
+        store.apply(.conversation(botId: BotID("b1"), messages: [permission("p1"), botMessage("m2", "Waiting on you")]))
+        let alerts = store.apply(.message(botId: BotID("b1"), message: permission("p1", answer: .chose(.once))))
+        #expect(alerts.isEmpty)
+        let messages = store.conversations[BotID("b1")]?.messages
+        #expect(messages?.map(\.id.rawValue) == ["p1", "m2"])
+        #expect(messages?.first == permission("p1", answer: .chose(.once)))
+    }
+
+    @Test func aCardDecidedBeforeTheAppSawItDoesNotAlert() {
+        let store = store()
+        #expect(store.apply(.message(botId: BotID("b1"), message: permission("p1", answer: .chose(.deny)))).isEmpty)
+        #expect(store.apply(.message(botId: BotID("b1"), message: permission("p2", answer: .expired))).isEmpty)
+    }
+
+    @Test func aPermissionCardReadsExpiredOnceItsDeadlinePasses() {
+        let store = store()
+        store.apply(.message(botId: BotID("b1"), message: permission("p1")))
+        guard case .permission(_, _, let card)? = store.conversations[BotID("b1")]?[MessageID("p1")] else {
+            Issue.record("card missing"); return
+        }
+        #expect(card.answer(at: deadline - 1) == nil)
+        #expect(card.answer(at: deadline) == .expired)
+        store.apply(.message(botId: BotID("b1"), message: permission("p1", answer: .expired)))
+        guard case .permission(_, _, let closed)? = store.conversations[BotID("b1")]?[MessageID("p1")] else {
+            Issue.record("card missing"); return
+        }
+        #expect(closed.answer(at: at) == .expired)
+    }
+
+    @Test func aDecisionStandsAfterTheDeadline() {
+        guard case .permission(_, _, let card) = permission("p1", answer: .chose(.always)) else { return }
+        #expect(card.answer(at: deadline + 3600) == .chose(.always))
+    }
+
+    @Test func anExpiredQuestionIsNoLongerTheOpenOne() {
+        let store = store()
+        store.apply(.conversation(botId: BotID("b1"), messages: [question("q1", expiresAt: deadline)]))
+        #expect(store.openQuestion(in: BotID("b1"), now: deadline - 1)?.id == MessageID("q1"))
+        #expect(store.openQuestion(in: BotID("b1"), now: deadline) == nil)
+        store.apply(.conversation(botId: BotID("b1"), messages: [question("q2")]))
+        #expect(store.openQuestion(in: BotID("b1"), now: .distantFuture)?.id == MessageID("q2"))
+    }
+
+    @Test func helloOutsideTheSupportedProtocolsAsksForAnUpdate() {
+        let store = AppStore()
+        store.apply(hello([], protocol: 2))
+        #expect(store.protocolMismatch == .updateBridge)
+        store.apply(hello([], protocol: 4))
+        #expect(store.protocolMismatch == .updateApp)
+        store.apply(hello([], protocol: 3))
+        #expect(store.protocolMismatch == nil)
+    }
+
+    @Test func devicesAndPairCodesAreKeptForSettings() {
+        let store = store()
+        let device = Device(id: DeviceID("d1"), name: "iPhone", createdAt: at, lastSeenAt: nil, legacy: false, current: true)
+        store.apply(.devices([device]))
+        store.apply(.pairCode(PairCode(code: "K7QD-M2XP", expiresAt: deadline)))
+        #expect(store.devices == [device])
+        #expect(store.pairCode == PairCode(code: "K7QD-M2XP", expiresAt: deadline))
+        store.discardPairCode()
+        #expect(store.pairCode == nil)
     }
 }
 
@@ -199,6 +293,24 @@ private func question(_ id: String, answer: Answer? = nil) -> Message {
         #expect(TimeLabel.home(now - 86_400, now: now, calendar: calendar) == "Yesterday")
         #expect(TimeLabel.home(now - 2 * 86_400, now: now, calendar: calendar) == "Wednesday")
         #expect(TimeLabel.home(now - 7 * 86_400, now: now, calendar: calendar) == "Oct 9")
+    }
+
+    @Test func onlyApprovalAndParkedWearAChip() {
+        #expect(BotStatus.allCases.map(\.chip) == [nil, nil, "Awaiting approval", "Parked"])
+        #expect(BotStatus.unknown("sleeping").chip == nil)
+    }
+
+    @Test func onlyOnceAndAlwaysLetTheCallRun() {
+        #expect(PermissionChoice.allCases.filter(\.allows) == [.once, .always])
+    }
+
+    @Test func runTagsSayLateAndRunNow() {
+        let run = { (late: Bool, manual: Bool) in
+            RoutineRun(id: RunID("r"), at: at, status: .ok, late: late, manual: manual, note: nil).tags
+        }
+        #expect(run(false, false) == [])
+        #expect(run(true, false) == ["Late"])
+        #expect(run(true, true) == ["Late", "Run now"])
     }
 
     @Test func initials() {

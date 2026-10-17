@@ -56,6 +56,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             content.body = question
             content.userInfo["messageId"] = id.rawValue
             content.categoryIdentifier = await registerCategory(for: id, options: options)
+        case .permission(_, let label):
+            // No approve action here: the user decides with the exact command in front of them.
+            content.body = "Needs your approval: \(label)"
         }
         try? await center.add(UNNotificationRequest(identifier: Self.identifier(alert.bot.id), content: content, trigger: nil))
     }

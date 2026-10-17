@@ -99,16 +99,39 @@ struct AgentStatusPill: View {
         case .waiting: AvatarColor.amber.color
         case .failed: AvatarColor.red.color
         case .inCloud: AvatarColor.blue.color
-        case .unknown: Theme.secondary
+        case .awaitingApproval: Theme.attention
+        case .parked, .unknown: Theme.secondary
         }
     }
 
     var body: some View {
+        StatusPill(text: status.title, color: color, pulsing: status == .working)
+    }
+}
+
+/// "Awaiting approval" or "Parked" beside a bot's name.
+struct BotStatusChip: View {
+    let status: BotStatus
+
+    var body: some View {
+        if let text = status.chip {
+            StatusPill(text: text, color: status == .awaitingApproval ? Theme.attention : Theme.secondary)
+        }
+    }
+}
+
+struct StatusPill: View {
+    let text: String
+    let color: Color
+    var pulsing = false
+
+    var body: some View {
         HStack(spacing: 5) {
-            StatusDot(color: color, pulsing: status == .working)
-            Text(status.title)
+            StatusDot(color: color, pulsing: pulsing)
+            Text(text)
         }
         .font(.caption.weight(.semibold))
+        .lineLimit(1)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .foregroundStyle(color)

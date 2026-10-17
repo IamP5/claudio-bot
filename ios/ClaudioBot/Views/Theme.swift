@@ -13,4 +13,7 @@ enum Theme {
     static let hairline = Color.white.opacity(0.08)
     static let unread = Color(hex: 0x3B7BF0)
     static let link = Color(hex: 0x4C8DF6)
+    /// The color of "needs you": the attention badge, approvals.
+    static let attention = AvatarColor.amber.color
+    static let danger = AvatarColor.red.color
 }

@@ -25,7 +25,8 @@ export const LIVE_WINDOW_MS = 45_000;
 // Bun pings a socket silent for 44 s and closes it at 60 s, so a dead one goes away instead of lingering for two minutes.
 const IDLE_TIMEOUT_S = 60;
 
-type SocketData = { deviceId: DeviceId; protocol: 2 | 3; resume: { epoch: string; after: number } | null; heardAt: number };
+/** limited: the protocol 2 shared token, or an app that did not announce protocol 3 (see `refusal`). */
+type SocketData = { deviceId: DeviceId; protocol: 2 | 3; resume: { epoch: string; after: number } | null; heardAt: number; limited: boolean };
 type Socket = ServerWebSocket<SocketData>;
 
 export type ServeDeps = {
@@ -51,6 +52,19 @@ export type Transport = {
 };
 
 const isTransport = (m: ClientMessage): m is TransportMessage => m.type === "devices" || m.type === "revoke_device" || m.type === "pair_code";
+
+/**
+ * What a limited socket may not send. The shared token may sit on more than one old phone, and an app from before
+ * protocol 3 offers neither of these, so a frame asking for one is not the user at that app.
+ */
+function refusal(data: SocketData, m: ClientMessage): string | null {
+  if (!data.limited) return null;
+  if (m.type === "revoke_device" && m.deviceId !== data.deviceId) {
+    return "A phone paired before protocol 3 can only revoke itself. Revoke other phones from a phone paired with a code.";
+  }
+  if (m.type === "decide" && m.choice !== "once" && m.choice !== "deny") return "This app can only answer Allow once or Deny. Update the app for Always and Never.";
+  return null;
+}
 
 export function serve(deps: ServeDeps): Transport {
   const { devices, stream, hub, legacy, log } = deps;
@@ -155,7 +169,8 @@ export function serve(deps: ServeDeps): Transport {
         const epoch = url.searchParams.get("epoch");
         // The ring holds protocol 3 frames, and today's app never asks to resume.
         const resume = epoch && protocol === 3 ? { epoch, after: Number(url.searchParams.get("after") ?? NaN) } : null;
-        if (server.upgrade(req, { data: { deviceId, protocol, resume, heardAt: deps.now().getTime() } })) return;
+        const limited = protocol === 2 || devices.list(null).some((d) => d.id === deviceId && d.legacy);
+        if (server.upgrade(req, { data: { deviceId, protocol, resume, heardAt: deps.now().getTime(), limited } })) return;
         return new Response("Expected a WebSocket upgrade", { status: 426 });
       }
       return new Response("Not found", { status: 404 });
@@ -185,6 +200,8 @@ export function serve(deps: ServeDeps): Transport {
         if (!isPaired(ws.data.deviceId)) return ws.close(4001, "revoked");
         const parsed = parseClientMessage(String(raw));
         if (!parsed.ok) return send(ws, { type: "error", message: parsed.error });
+        const refused = refusal(ws.data, parsed.message);
+        if (refused !== null) return send(ws, { type: "error", message: refused });
         try {
           const replies = isTransport(parsed.message) ? transport(ws, parsed.message) : await hub.handle(parsed.message);
           for (const reply of replies) send(ws, reply);

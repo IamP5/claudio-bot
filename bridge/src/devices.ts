@@ -9,6 +9,11 @@ import type { DeviceRecord, World } from "./world";
 
 export const PAIR_CODE_TTL_MS = 10 * 60_000;
 export const PAIR_CODE_ATTEMPTS = 5;
+/**
+ * The protocol 2 shared token authenticates until this moment, one release after protocol 3, and never after it. The
+ * README's upgrade notes name the same date; a phone still on the shared token then pairs again with a code.
+ */
+export const LEGACY_SUNSET = "2027-01-01T00:00:00.000Z";
 /** The phone reconnects often; the device list shows when it was last seen to the minute, so one save a minute is enough. */
 const SEEN_EVERY_MS = 60_000;
 
@@ -24,8 +29,9 @@ export type Devices = {
    */
   pair(code: string, name: string): PairResponse | { error: string };
   /**
-   * The socket upgrade. Authorization: Bearer <token> for every device. For one release the legacy device may still
-   * present ?token=<shared token>; no other device is ever read from the query string.
+   * The socket upgrade. Authorization: Bearer <token> for every device. Until LEGACY_SUNSET the legacy device may still
+   * present ?token=<shared token>; no other device is ever read from the query string. After it, the legacy device
+   * does not authenticate at all.
    */
   authenticate(req: Request): DeviceId | null;
   /** current marks the device asking. */
@@ -149,13 +155,14 @@ export function createDevices(deps: {
     },
 
     authenticate(req) {
+      const legacyLive = deps.now().getTime() < Date.parse(LEGACY_SUNSET);
       const header = req.headers.get("authorization");
       if (header !== null) {
         const bearer = /^Bearer\s+(\S+)\s*$/i.exec(header)?.[1];
-        return bearer ? match(bearer, () => true) : null;
+        return bearer ? match(bearer, (d) => !d.legacy || legacyLive) : null;
       }
       const query = new URL(req.url).searchParams.get("token");
-      return query ? match(query, (d) => d.legacy) : null;
+      return query ? match(query, (d) => d.legacy && legacyLive) : null;
     },
 
     list: (current) =>

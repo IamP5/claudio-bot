@@ -122,7 +122,7 @@ test("a revoked legacy phone stays revoked after a restart, even when its token 
   let b = boot(home);
   expect((await fetch(`${b.http}/ws?token=shared`)).status).toBe(426);
   const phone = await pairPhone(b);
-  const owner = connect(b, { bearer: phone.token });
+  const owner = connect(b, { bearer: phone.token, query: "?protocol=3" });
   const old = connect(b, { query: "?token=shared" });
   await owner.next("hello");
   await old.next("hello");
@@ -143,7 +143,7 @@ test("a legacy revoke that cannot be saved still closes the phone, and a restart
   const home = tempHome("shared");
   let b = boot(home);
   const phone = await pairPhone(b);
-  const owner = connect(b, { bearer: phone.token });
+  const owner = connect(b, { bearer: phone.token, query: "?protocol=3" });
   const old = connect(b, { query: "?token=shared" });
   await owner.next("hello");
   await old.next("hello");
@@ -163,7 +163,7 @@ test("revoking a phone closes its sockets and its token opens no new one", async
   const b = boot(tempHome());
   const keep = await pairPhone(b, "keep");
   const drop = await pairPhone(b, "drop");
-  const owner = connect(b, { bearer: keep.token });
+  const owner = connect(b, { bearer: keep.token, query: "?protocol=3" });
   const doomed = connect(b, { bearer: drop.token });
   await owner.next("hello");
   await doomed.next("hello");

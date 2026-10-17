@@ -114,7 +114,7 @@ The project used to be called claudebot, with its home in `~/.claudebot`. On its
 
 - **Do not run the old bridge after upgrading.** The new bridge rewrites `state.json` as version 3, which an old bridge does not understand. An old bridge treats it as a first run and overwrites it. To go back, stop the new bridge and copy `state.v2.json.bak` over `state.json` first. Anything changed since the upgrade is lost.
 - **`CLAUDEBOT_HOME` is ignored.** If you set it, rename it to `CLAUDIOBOT_HOME`. Until then the bridge warns at every start.
-- **Your phone keeps working for one release.** A phone paired with the old shared token connects as the "legacy" device. The new app trades that token for its own on its first connection. An app build from before this release still connects, and it sees each permission card as a question with **Allow once** and **Deny**.
+- **Your phone keeps working until 1 January 2027.** A phone paired with the old shared token connects as the "legacy" device. The new app trades that token for its own on its first connection. An app build from before this release still connects, and it sees each permission card as a question with **Allow once** and **Deny**. From 1 January 2027 the bridge refuses the shared token, and a phone still on it pairs again with a code.
 - **Fast routines are paused.** Routines may now run at most every 15 minutes. A routine that ran more often is turned off with a note in its chat. Edit its schedule to turn it back on.
 
 ## Configuration

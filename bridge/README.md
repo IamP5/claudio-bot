@@ -25,7 +25,7 @@ At its first start the bridge links `~/.claudiobot` to an existing `~/.claudebot
 
 The bridge upgrades `state.json` from version 2 to 3 and keeps the exact old file as `state.v2.json.bak`. **Do not run an older bridge against the same home afterwards.** It does not know version 3, treats the file as a first run and overwrites it. To go back, stop the new bridge and copy `state.v2.json.bak` over `state.json` first. Anything changed since the upgrade is lost.
 
-The phone paired with the old shared token keeps working for one release as the "legacy" device. Revoking it writes `token.revoked`, and that token is never accepted again. An app build that does not announce `?protocol=3` sees each permission card as a question card with **Allow once** and **Deny**, and its answer decides the card.
+The phone paired with the old shared token keeps working until 1 January 2027 (`LEGACY_SUNSET` in `src/devices.ts`) as the "legacy" device. From then on the shared token is refused, and that phone pairs again with a code. Revoking it writes `token.revoked`, and that token is never accepted again. An app build that does not announce `?protocol=3` sees each permission card as a question card with **Allow once** and **Deny**, and its answer decides the card. The legacy phone and any app build that does not announce `?protocol=3` can revoke only themselves and can decide a card only with Allow once or Deny.
 
 ## Environment
 
@@ -48,7 +48,7 @@ The phone paired with the old shared token keeps working for one release as the 
 ~/.claudiobot/          (a link to ~/.claudebot after migration)
   state.json            version 3: bots, conversations, sessions, routines, cards, devices, pushes
   state.v2.json.bak     the v2 file as it was before the upgrade
-  token                 the protocol 2 shared token, accepted for one release
+  token                 the protocol 2 shared token, accepted until 1 January 2027
   token.revoked         present once the legacy phone was revoked
   USER.md               facts about you that every bot may read and add to
   usage/YYYY-MM.jsonl   one row per turn: cost, delta, who started it (0600)

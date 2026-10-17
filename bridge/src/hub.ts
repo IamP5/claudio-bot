@@ -16,6 +16,7 @@ import {
   type BotId,
   type ClientMessage,
   type Message,
+  type MessageId,
   type Peer,
   type ServerMessage,
   type StreamPosition,
@@ -90,11 +91,16 @@ export type HubDeps = {
 const holdsBubbles = (p: Pending) => p.settles !== null && p.initiator.kind === "routine" && !p.initiator.manual;
 
 /**
- * What the hub has read of one turn's output. held is null once its bubbles go out as they arrive. pushed: a push for
- * one of its bubbles went out; until one does, each new bubble tries again. carded: the turn opened a permission card
- * of its own, so the run has something to tell even if it then calls routine_no_update.
+ * What the hub has read of one turn's output. held is null once its bubbles go out as they arrive. pushed: the bubble
+ * whose push went out, and when; until one does, each new bubble tries again. last: the newest bubble posted. carded:
+ * the turn opened a permission card of its own, so the run has something to tell even if it then calls
+ * routine_no_update.
  */
-type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; pushed: boolean; carded: boolean };
+type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; carded: boolean } & Pushes;
+type Pushes = { pushed: { id: MessageId; at: number } | null; last: MessageId | null };
+
+/** A turn still running this long after its push pushes its last bubble again when it ends. */
+const LONG_TURN_MS = 20_000;
 
 const earliest = (deadlines: (string | null)[]): string | null =>
   deadlines.reduce<string | null>((min, d) => (d !== null && (min === null || d < min) ? d : min), null);
@@ -179,11 +185,22 @@ export function createHub(deps: HubDeps): Hub {
   }
 
   // The message is in bot.messages before the push, because the push's throttle reads it.
-  function postBubbles(bot: BotRecord, r: { pushed: boolean }, bubbles: readonly Bubble[]) {
+  function postBubbles(bot: BotRecord, r: Pushes, bubbles: readonly Bubble[]) {
     for (const { id, text } of bubbles) {
       say(bot, { kind: "bot", id, at: now(), text });
-      if (!r.pushed) r.pushed = deps.push.notify(bot, "message", id);
+      r.last = id;
+      if (r.pushed === null && deps.push.notify(bot, "message", id)) r.pushed = { id, at: clockNow().getTime() };
     }
+  }
+
+  /**
+   * The end of a turn with something to tell. Its last bubble pushes when no push for the turn went out yet (a live
+   * phone held them back, and may since have gone), or when the push that did went out 20 s or more ago.
+   */
+  function pushEnd(bot: BotRecord, r: Pushes) {
+    if (r.last === null || r.last === r.pushed?.id) return;
+    if (r.pushed === null) deps.push.notify(bot, "message", r.last);
+    else if (clockNow().getTime() - r.pushed.at >= LONG_TURN_MS) deps.push.notify(bot, "result", r.last);
   }
 
   /** The turn's held bubbles go out now, ahead of a card or note it caused; the rest of the turn posts as it arrives. */
@@ -300,10 +317,10 @@ export function createHub(deps: HubDeps): Hub {
       onMessage(m, pending) {
         if (!world.bots.has(bot.id)) return;
         // Output between turns, such as a background task finishing, has no turn to wait for.
-        if (pending === null) return postBubbles(bot, { pushed: false }, readTurn(freshTurn, m).bubbles);
+        if (pending === null) return postBubbles(bot, { pushed: null, last: null }, readTurn(freshTurn, m).bubbles);
         let r = readings.get(bot.id);
         if (r?.id !== pending.id) {
-          r = { id: pending.id, turn: freshTurn, held: holdsBubbles(pending) ? [] : null, pushed: false, carded: false };
+          r = { id: pending.id, turn: freshTurn, held: holdsBubbles(pending) ? [] : null, pushed: null, last: null, carded: false };
           readings.set(bot.id, r);
         }
         const read = readTurn(r.turn, m);
@@ -321,6 +338,7 @@ export function createHub(deps: HubDeps): Hub {
           readings.delete(bot.id);
           quiet = r.turn.quiet && !r.turn.asked && !r.carded;
           if (r.held !== null && !quiet) postBubbles(bot, r, r.held);
+          if (!quiet) pushEnd(bot, r);
         }
         endTurn(bot, pending, end, quiet);
       },

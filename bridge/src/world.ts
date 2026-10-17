@@ -230,7 +230,7 @@ export type DeviceRecord = {
 
 /**
  * Pushes already sent, recorded before sending so a crash never double-pushes. key: `${messageId}|${reason}`, reason
- * card, reminder or message (a turn's first bubble). Writer: push.ts.
+ * card, reminder, message (a turn's first bubble) or result (a long turn's last bubble). Writer: push.ts.
  */
 export type PushState = { sent: { key: string; at: string }[] };
 

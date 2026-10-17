@@ -8,14 +8,16 @@ import type { Owned, PushState, World } from "./world";
 // No message content ever leaves the Mac: the text is the bot's name (cleaned, at most 40 characters) and a fixed
 // phrase per reason, the click link
 // claudiobot://bot/<id>?message=<id>.
-// Every push has one key, `${messageId}|${reason}`: a card, its reminder, and a turn's first bubble each push at most
-// once. The key is recorded and flushed before the send, so a crash never double-pushes and a failed send is not
-// retried. Messages push at most once per bot per 10 minutes, counting every push the bot made. Failures only log.
+// Every push has one key, `${messageId}|${reason}`: a card, its reminder, a turn's first bubble and a long turn's last
+// bubble each push at most once. The key is recorded and flushed before the send, so a crash never double-pushes and a
+// failed send is not retried. A turn's first bubble pushes at most once per bot per 10 minutes; nothing else counts
+// toward that or is held by it. Failures only log.
 // A card push a live socket held back is not lost: an open card with no recorded card push goes out at the first
 // tick after every socket has gone quiet. A suspended iPhone keeps its socket open for a while, so "live" means heard
 // from recently, which the transport decides.
 
-export type PushReason = "card" | "reminder" | "message";
+/** message: a turn's first pushed bubble. result: the last bubble of a turn still running 20 s after that push. */
+export type PushReason = "card" | "reminder" | "message" | "result";
 
 /** tick retries card pushes a live socket held back; nextDeadline is when the live sockets go quiet. */
 export type Push = Tickable & {
@@ -39,6 +41,7 @@ const PHRASE: Record<PushReason, string> = {
   card: "needs you",
   reminder: "is still waiting for you",
   message: "has an update for you",
+  result: "has an update for you",
 };
 
 export const linkTo = (botId: BotId, messageId: MessageId) =>
@@ -96,7 +99,7 @@ export function createPush(deps: {
     const ids = new Set(world.bots.get(botId)?.messages.map((m) => m.id));
     return world.push.sent.some((s) => {
       const at = Date.parse(s.at);
-      return ids.has(idOf(s.key) as MessageId) && !Number.isNaN(at) && now - at >= 0 && now - at < MESSAGE_THROTTLE_MS;
+      return s.key.endsWith("|message") && ids.has(idOf(s.key) as MessageId) && !Number.isNaN(at) && now - at >= 0 && now - at < MESSAGE_THROTTLE_MS;
     });
   }
 

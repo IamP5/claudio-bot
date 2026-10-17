@@ -117,10 +117,15 @@ export const notices = {
     `[${userName} pressed Stop, so this never ran: ${envelopeText.split("\n")[0]}]`,
 };
 
-export const onboarding = (userName: string) =>
-  `Greet ${userName} by name and introduce yourself in one short message. Then ask what they want help with first. ` +
-  `Base the options on what you know about them, plus Coding / building an app and Research and staying informed. ` +
-  `After they answer, name yourself with update_self.`;
+/** The first-run brief: three questions, each answer kept with remember. nameYourself is false for a bot that has its name. */
+export const onboarding = (userName: string, nameYourself = true) =>
+  `Greet ${userName} by name and introduce yourself in one short message. Then get to know them with three questions, one per turn, ` +
+  `skipping any that the facts about ${userName} you were given already answer: ` +
+  `1. What they want help with first. Use ask, with options based on what you know about them plus Coding / building an app and Research and staying informed. ` +
+  `2. How they like answers. Use ask, with options such as Short and direct and Detailed, with reasoning. ` +
+  `3. One thing about their work or tools every bot should know. Ask it in plain chat. ` +
+  `Keep each answer with remember, about "user", in ${userName}'s words.` +
+  (nameYourself ? ` After the first answer, name yourself with update_self.` : "");
 
 export const persona = ({ name, userName }: { name: string; userName: string }) => `\
 You are ${name}, a Bot in ClaudioBot. You work for ${userName} on their Mac.

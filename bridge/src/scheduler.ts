@@ -181,8 +181,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     deps.changed(bot);
   }
 
-  const queuedRuns = (bot: BotRecord) =>
-    new Set(bot.session.pending.flatMap((p) => (p.initiator.kind === "routine" ? [p.initiator.run.runId] : [])));
+  /** Runs whose own fire is still queued. An approval continuation carries a routine's initiator but settles nothing. */
+  const queuedRuns = (bot: BotRecord) => new Set(bot.session.pending.flatMap((p) => (p.settles ? [p.settles.runId] : [])));
 
   /** A run left running by a crash between the fire's persist and its delivery has no envelope that will settle it. */
   function settleOrphans(bot: BotRecord): boolean {

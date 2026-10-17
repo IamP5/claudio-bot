@@ -480,10 +480,21 @@ function collectVars(commands: { words: Word[] }[], ctx: PolicyContext, dir: str
   return vars;
 }
 
+/**
+ * Hosts a Bash call asks the sandbox to let through beyond its allowlist (the tool's allowed_domains). The sandbox lets
+ * them through once the call is allowed, so they are part of what the call does.
+ */
+function hostsOf(call: ToolCall): string[] {
+  const hosts = call.tool === "Bash" ? call.input.allowed_domains : undefined;
+  return Array.isArray(hosts) ? hosts.filter((h): h is string => typeof h === "string" && h.trim() !== "").map((h) => h.trim()).sort() : [];
+}
+
 function viewOf(call: ToolCall, ctx: PolicyContext): View {
   if (call.tool === "Bash") {
     const raw = String(call.input.command);
-    return { parts: bashParts(raw, call.cwd, ctx), raw };
+    // The hosts are a part of their own, so the table can hold them however harmless the command is.
+    const hosts: Part[] = hostsOf(call).length > 0 ? [{ kind: "call", call, touches: [] }] : [];
+    return { parts: [...bashParts(raw, call.cwd, ctx), ...hosts], raw };
   }
   const found: string[] = [];
   inputPaths(call.input, null, found);
@@ -1059,6 +1070,14 @@ const TABLE: readonly Row[] = [
     unattended: "ask",
   },
   {
+    id: "net.hosts",
+    label: "Reach a host outside the network allowlist",
+    match: tool((call) => hostsOf(call).length > 0),
+    attended: "pass",
+    unattended: "ask",
+    offerAlways: false,
+  },
+  {
     id: "rm.outside",
     label: "Delete files outside its folder",
     match: bash((words, _, part, ctx) => {
@@ -1196,9 +1215,11 @@ function sorted(value: unknown): unknown {
   return value;
 }
 
-/** Tool plus a hash of the meaningful input. Bash: the command only. Write: path and content. MCP: the whole input. */
+/** Tool plus a hash of the meaningful input. Bash: the command and any hosts. Write: path and content. MCP: the whole input. */
 export function fingerprint(call: ToolCall): Fingerprint {
-  const meaningful = call.tool === "Bash" ? String(call.input.command).trim() : JSON.stringify(sorted(call.input));
+  const hosts = hostsOf(call);
+  const command = String(call.input.command).trim();
+  const meaningful = call.tool === "Bash" ? (hosts.length > 0 ? `${command}\nallowed_domains=${hosts.join(",")}` : command) : JSON.stringify(sorted(call.input));
   return `${call.tool}:${sha256(meaningful).slice(0, 32)}` as Fingerprint;
 }
 
@@ -1209,8 +1230,10 @@ const CLIP = 4096;
 export function detailOf(call: ToolCall): string {
   const i = call.input;
   switch (call.tool) {
-    case "Bash":
-      return clip(maskSecrets(String(i.command).trim()), CLIP);
+    case "Bash": {
+      const hosts = hostsOf(call);
+      return clip(maskSecrets(String(i.command).trim() + (hosts.length > 0 ? ` (network: ${hosts.join(", ")})` : "")), CLIP);
+    }
     case "Write":
       return maskSecrets(`Write ${String(i.file_path)} (${lines(String(i.content))} lines)`);
     case "Edit":

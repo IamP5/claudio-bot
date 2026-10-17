@@ -844,3 +844,28 @@ describe("the hook cannot be frozen by a huge input", () => {
     expect(performance.now() - start).toBeLessThan(500);
   });
 });
+
+describe("hosts a Bash call adds to the sandbox's network allowlist", () => {
+  const curl = (hosts?: unknown) => sh("curl -s https://example.com/data.json", hosts === undefined ? {} : { input: { command: "curl -s https://example.com/data.json", allowed_domains: hosts } });
+
+  test.each([
+    ["a user's turn", user, ["example.com"], "pass"],
+    ["Run now", runNow, ["example.com"], "pass"],
+    ["a routine's turn", routine, ["example.com"], "ask:net.hosts"],
+    ["a bot's message", viaBot(1), ["example.com"], "ask:net.hosts"],
+    ["a routine's turn with no extra hosts", routine, undefined, "pass"],
+    ["a routine's turn with an empty list", routine, [], "pass"],
+  ] as const)("%s: %s", (_, initiator, hosts, expected) => {
+    expect(outcome(decide(curl(hosts), ctx({ initiator })))).toBe(expected);
+  });
+
+  test("the card shows the hosts, offers no Always, and a grant for one set of hosts does not cover another", () => {
+    const d = decide(curl(["example.com"]), ctx({ initiator: routine }));
+    expect([d.kind === "ask" && d.offerAlways, detailOf(curl(["example.com", "api.example.com"]))]).toEqual([
+      false,
+      "curl -s https://example.com/data.json (network: api.example.com, example.com)",
+    ]);
+    expect(new Set([fingerprint(curl()), fingerprint(curl(["example.com"])), fingerprint(curl(["evil.test"]))]).size).toBe(3);
+    expect(fingerprint(curl([]))).toBe(fingerprint(curl()));
+  });
+});

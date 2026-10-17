@@ -44,8 +44,11 @@ import {
 /** A hook that times out fails closed (probe Q6). The gate never awaits I/O, so this is only a backstop. */
 export const HOOK_TIMEOUT_S = 30;
 
-/** Cards remind once at half their life, then expire. A grant lets the exact call run once within grantMs. */
-const TTL = { permissionMs: 2 * 3600_000, questionMs: 24 * 3600_000, grantMs: 10 * 60_000 } as const;
+/**
+ * Cards remind once at half their life, then expire. A grant lets the exact call run once within grantMs of the
+ * continuation turn starting, but never later than grantCeilingMs after the tap (the device may sleep between the two).
+ */
+const TTL = { permissionMs: 2 * 3600_000, questionMs: 24 * 3600_000, grantMs: 10 * 60_000, grantCeilingMs: 24 * 3600_000 } as const;
 
 const VERDICTS_KEPT = 1000;
 
@@ -84,6 +87,11 @@ export type Gate = Tickable & {
   answer(botId: BotId, messageId: MessageId, reply: CardReply): { ok: true } | { ok: false; error: string };
   /** delete_bot: drops the bot's open cards, its and its agents' grants, its rules and its daily counts. */
   forgetBot(botId: BotId): void;
+  /**
+   * The session/hub calls this at the start of a turn that carries a decision envelope (a continuation), so a grant's
+   * 10-minute TTL counts from now rather than from the tap, capped at the 24 h ceiling set when the card was answered.
+   */
+  beginTurn(actor: Actor): void;
   // tick(now): expire overdue cards (level-triggered) with a notice to the asker, never a turn and never a "no";
   //   remind once at remindAt; drop expired grants and cards whose actor or message is gone. nextDeadline(): the
   //   earliest of those.
@@ -478,12 +486,14 @@ export function createGate(deps: GateDeps): Gate {
     dropCard(card.cardId);
     if (choice === "once" || choice === "always") {
       const key = actorKey(card.actor);
+      // The grant's short TTL does not start at the tap: park or backoff may delay the continuation turn, and the device
+      // may sleep. It is created at the hard ceiling and armed to grantMs when the continuation turn begins (beginTurn).
       state.grants.splice(0, state.grants.length, ...state.grants.filter((g) => !(g.actor === key && g.fingerprint === held.fingerprint)), {
         actor: key,
         fingerprint: held.fingerprint,
         cardId: card.cardId,
         appliesTo: attended(held.initiator) ? "attended" : "unattended",
-        expiresAt: at(now, TTL.grantMs),
+        expiresAt: at(now, TTL.grantCeilingMs),
       });
     }
     const ruleBase = { signature: held.signature, label: held.label, cardId: card.cardId, at: now.toISOString() };
@@ -549,6 +559,35 @@ export function createGate(deps: GateDeps): Gate {
       state.daily.splice(0, state.daily.length, ...state.daily.filter((c) => c.botId !== botId));
       const bot = world.bots.get(botId);
       if (bot) rulesOf(bot).splice(0);
+    },
+
+    beginTurn(actor) {
+      const key = actorKey(actor);
+      const armed = at(deps.now(), TTL.grantMs);
+      let changed = false;
+      for (const g of state.grants)
+        if (g.actor === key && armed < g.expiresAt) {
+          g.expiresAt = armed; // only ever shortens: the first continuation sets the window, later turns leave it
+          changed = true;
+        }
+      if (changed) deps.persist("now");
+    },
+
+    wake(gapMs) {
+      // The machine slept for gapMs; an open card was never seen, so push its deadlines forward to give back that time.
+      if (gapMs <= 0) return;
+      const shift = (iso: string) => new Date(Date.parse(iso) + gapMs).toISOString();
+      let changed = false;
+      for (const card of state.open) {
+        const message = messageOf(card);
+        if (!message || message.answer !== null) continue;
+        card.expiresAt = shift(card.expiresAt);
+        if (card.remindAt !== null) card.remindAt = shift(card.remindAt);
+        const bot = world.bots.get(card.actor.botId);
+        if (bot && message.expiresAt !== null) deps.say(bot, { ...message, expiresAt: shift(message.expiresAt) });
+        changed = true;
+      }
+      if (changed) deps.persist("now");
     },
 
     tick(now) {

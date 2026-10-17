@@ -159,7 +159,8 @@ describe("the permission flow", () => {
     expect(t.gate.answer(B1, card!.id, { kind: "permission", choice: "once" })).toEqual({ ok: true });
     expect(t.cards()[0]!.answer).toBe("once");
     expect(gateState(t.world).grants).toHaveLength(1);
-    expect(gateState(t.world).grants[0]!.expiresAt).toBe(new Date(START.getTime() + 10 * 60_000).toISOString());
+    // The grant sits at the 24 h ceiling until a continuation turn arms its 10-minute window (beginTurn).
+    expect(gateState(t.world).grants[0]!.expiresAt).toBe(new Date(START.getTime() + 24 * 3600_000).toISOString());
     expect(t.delivered).toEqual([
       { actor: botActor(B1), e: { from: "decision", choice: "once", tool: "Bash", detail: "git push origin feature", initiator: routine } },
     ]);
@@ -361,15 +362,44 @@ describe("deadlines", () => {
     expect(t.cards()[0]!.answer).toBe("expired");
   });
 
-  test("an unused grant lapses after ten minutes", async () => {
+  test("a grant's ten-minute window starts at the continuation turn, not the tap, and is capped at a 24 h ceiling", async () => {
     const t = setup();
     t.turn.initiator = routine;
     await t.bash("git push origin feature");
     t.gate.answer(B1, t.cards()[0]!.id, { kind: "permission", choice: "once" });
+    // Park or backoff can delay the continuation; until it begins the grant sits at the ceiling, not a 10-minute clock from the tap.
+    expect(t.gate.nextDeadline()).toBe(new Date(START.getTime() + 24 * 3600_000).toISOString());
+    const resume = t.advance(3 * 3600_000); // three hours of park later, the continuation turn finally runs
+    t.gate.beginTurn(botActor(B1));
+    expect(gateState(t.world).grants[0]!.expiresAt).toBe(new Date(resume.getTime() + 10 * 60_000).toISOString());
+    expect(decisionOf(await t.bash("git push origin feature"))).toBe("allow");
+  });
+
+  test("a grant armed at the continuation turn lapses ten minutes later if unused", async () => {
+    const t = setup();
+    t.turn.initiator = routine;
+    await t.bash("git push origin feature");
+    t.gate.answer(B1, t.cards()[0]!.id, { kind: "permission", choice: "once" });
+    t.gate.beginTurn(botActor(B1));
     expect(t.gate.nextDeadline()).toBe(new Date(START.getTime() + 10 * 60_000).toISOString());
     t.gate.tick(t.advance(10 * 60_000));
     expect(gateState(t.world).grants).toHaveLength(0);
     expect(decisionOf(await t.bash("git push origin feature"))).toBe("deny");
+  });
+
+  test("a sleep gap pushes an open card's deadlines forward so it is not expired unseen", async () => {
+    const t = setup();
+    t.turn.initiator = routine;
+    await t.bash("git push origin feature");
+    const card = t.cards()[0]!;
+    const sleep = 8 * 3600_000; // the Mac slept eight hours, past the card's two-hour life
+    t.gate.wake!(sleep);
+    t.advance(sleep);
+    t.gate.tick(t.now());
+    // The card is still open: its expiry moved forward by the gap instead of lapsing during sleep.
+    expect(t.cards()[0]!.answer).toBeNull();
+    expect(t.cards()[0]!.expiresAt).toBe(new Date(START.getTime() + 2 * 3600_000 + sleep).toISOString());
+    expect(t.gate.answer(B1, card.id, { kind: "permission", choice: "once" })).toEqual({ ok: true });
   });
 });
 

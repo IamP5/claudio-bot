@@ -156,6 +156,8 @@ try {
   check(card.options.length >= 2, `(b) the new bot asks an onboarding card: "${card.question}"`);
   await client.waitFor(() => client.idle(newBotId), "the onboarding turn to end");
   const beforeAnswer = client.messages(newBotId).length;
+  const cardAt = client.messages(newBotId).findIndex((m) => m.id === card.id);
+  check(client.botSays(newBotId, cardAt + 1).length === 0, "(b) the onboarding card is the last thing in its turn");
   client.send({ type: "answer", botId: newBotId, messageId: card.id, option: 0 });
   await client.waitFor(() => client.messages(newBotId).find((m) => m.id === card.id && m.kind === "question" && m.answer === 0), "the answered card");
   await client.waitFor(() => log.includes(`[Bruno answered "${card.question}": ${card.options[0]}]`), "the answer envelope", 10_000);
@@ -224,6 +226,11 @@ try {
   await client.waitFor(() => client.botSays(newBotId, firedAt).length > 0 && client.idle(newBotId), "the routine's bot message");
   check(true, `(d) the routine run produced a bot message: "${client.botSays(newBotId, firedAt).map((m) => (m.kind === "bot" ? m.text : "")).join(" ").slice(0, 80)}"`);
 
+  const leaks = [...client.bots.keys()]
+    .flatMap((id) => client.messages(id))
+    .map((m) => (m.kind === "bot" ? m.text : m.kind === "question" ? [m.question, ...m.options].join(" ") : ""))
+    .filter((t) => /USER\.md|CLAUDE\.md/.test(t));
+  check(leaks.length === 0, `no bot message or card mentions USER.md or CLAUDE.md${leaks.length ? `: ${leaks.join(" | ")}` : ""}`);
   const countBefore = client.messages(claudeBot.id).length;
   const botsBefore = [...client.bots.keys()].sort();
   client.close();

@@ -75,6 +75,7 @@ const grantFor = (c: ToolCall, over: Partial<Grant> = {}): Grant => ({
   actor: "bot:b_1",
   fingerprint: fingerprint(c),
   cardId: "m_grant" as MessageId,
+  appliesTo: "attended",
   expiresAt: "2026-10-17T12:10:00.000Z",
   ...over,
 });

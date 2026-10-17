@@ -186,8 +186,12 @@ export type StandingRule =
   | { decision: "allow"; appliesTo: "attended" | "all"; signature: Signature; label: string; cardId: MessageId; at: string }
   | { decision: "deny"; signature: Signature; label: string; cardId: MessageId; at: string };
 
-/** "Allow once": this exact call may run one time before expiresAt (10 minutes). Consumed on use. */
-export type Grant = { actor: ActorKey; fingerprint: Fingerprint; cardId: MessageId; expiresAt: string };
+/**
+ * "Allow once": this exact call may run one time before expiresAt (10 minutes). Consumed on use, and only by a turn of
+ * the attendance of the card that made it, so an unattended turn cannot ride an approval the user gave in their own
+ * turn, and the continuation the grant was made for still finds it. Persisted, so a restart keeps that binding.
+ */
+export type Grant = { actor: ActorKey; fingerprint: Fingerprint; cardId: MessageId; appliesTo: "attended" | "unattended"; expiresAt: string };
 
 /** What a permission decision applies to. The card message is what the user sees; this is the match key behind it. */
 export type HeldCall = {

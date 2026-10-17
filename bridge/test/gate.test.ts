@@ -613,6 +613,23 @@ describe("gate-level hardening (U1 fix round)", () => {
     expect(decisionOf(await t.bash("git push origin main"))).toBe("allow");
   });
 
+  test("a grant keeps the attendance of its card across a restart", async () => {
+    const t = setup();
+    t.turn.initiator = routine;
+    await t.bash("git push origin main");
+    t.gate.answer(B1, t.cards()[0]!.id, { kind: "permission", choice: "once" });
+    const restarted = createGate(t.deps);
+    const push = () => {
+      const i = t.input("Bash", { command: "git push origin main", description: "run" });
+      return restarted.hooks(botActor(B1)).PreToolUse![0]!.hooks[0]!(i, i.tool_use_id, { signal: new AbortController().signal });
+    };
+
+    t.turn.initiator = user;
+    expect(decisionOf(await push())).toBe("deny");
+    t.turn.initiator = routine;
+    expect(decisionOf(await push())).toBe("allow");
+  });
+
   test("a no-Always row posts a card without an Always option and never writes an allow rule", async () => {
     const t = setup();
     await t.call("Write", { file_path: `${t.root}/other/.claude/settings.json`, content: "{}" }, { cwd: t.own });

@@ -241,9 +241,6 @@ export function createGate(deps: GateDeps): Gate {
   // A recorded verdict is keyed by tool_use_id but only replayed for the same call fingerprint, so a reused id with a
   // different input is decided afresh (probe G1). fp null marks a verdict that does not depend on the input (stopping).
   const verdicts = new Map<string, { fp: string | null; out: SyncHookJSONOutput }>();
-  // Which cards were opened from an attended turn. A grant is consumed only by a turn of the same attendance, so an
-  // unattended turn cannot ride a one-time approval the user gave in their own turn. In memory, rebuilt as cards open.
-  const grantKind = new Map<MessageId, boolean>();
   const at = (date: Date, plusMs = 0) => new Date(date.getTime() + plusMs).toISOString();
 
   const botOf = (actor: Actor): BotRecord => {
@@ -364,7 +361,7 @@ export function createGate(deps: GateDeps): Gate {
       initiator,
       scope: deps.scopeOf(actor),
       rules: botOf(actor).rules,
-      grants: state.grants.filter((g) => (grantKind.has(g.cardId) ? grantKind.get(g.cardId) === isAttended : isAttended)),
+      grants: state.grants.filter((g) => g.appliesTo === (isAttended ? "attended" : "unattended")),
       headroom: deps.headroom(actor, initiator),
       callsToday: todayCounts(actor.botId, now),
       now: now.toISOString(),
@@ -481,11 +478,11 @@ export function createGate(deps: GateDeps): Gate {
     dropCard(card.cardId);
     if (choice === "once" || choice === "always") {
       const key = actorKey(card.actor);
-      grantKind.set(card.cardId, attended(held.initiator));
       state.grants.splice(0, state.grants.length, ...state.grants.filter((g) => !(g.actor === key && g.fingerprint === held.fingerprint)), {
         actor: key,
         fingerprint: held.fingerprint,
         cardId: card.cardId,
+        appliesTo: attended(held.initiator) ? "attended" : "unattended",
         expiresAt: at(now, TTL.grantMs),
       });
     }
@@ -547,7 +544,6 @@ export function createGate(deps: GateDeps): Gate {
     forgetBot(botId) {
       // The only caller, hub.delete_bot, persists right after; it owns the durability of the whole deletion.
       const keys = new Set<string>([`bot:${botId}`, ...[...world.agents.values()].filter((r) => r.agent.botId === botId).map((r) => `agent:${r.agent.id}`)]);
-      for (const c of state.open) if (c.actor.botId === botId) grantKind.delete(c.cardId);
       state.open.splice(0, state.open.length, ...state.open.filter((c) => c.actor.botId !== botId));
       state.grants.splice(0, state.grants.length, ...state.grants.filter((g) => !keys.has(g.actor)));
       state.daily.splice(0, state.daily.length, ...state.daily.filter((c) => c.botId !== botId));

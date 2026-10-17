@@ -93,7 +93,7 @@ A routine is a prompt a bot receives on a schedule, written as five-field cron i
 
 The bridge stores each routine's next run time and saves it before it fires, so a crash can lose a fire but never repeat one. Times missed while the Mac slept collapse into one decision. The newest one fires, marked late, if it is within half the routine's period (between 2 minutes and 2 hours). Otherwise one skipped run is recorded. A fire is skipped while the bot is at its daily cap or paused by a limit, or while its previous run is still queued.
 
-A scheduled run's messages wait until the run ends. If the bot called `routine_no_update` and asked nothing, they are dropped and the run is recorded **quiet**. Otherwise they post together, with one push. Run now from the phone always replies, runs even at the daily cap, and never counts toward the 10 failures in a row that turn a routine off. Each routine keeps its newest 20 runs.
+A scheduled run's messages wait until the run ends. If the bot called `routine_no_update` and asked nothing, they are dropped and the run is recorded **quiet**. Otherwise they post together, with one push. Messages written before a card the run opens go out first, and a run that asked for approval is never quiet. Run now from the phone always replies, runs even at the daily cap, and never counts toward the 10 failures in a row that turn a routine off. Each routine keeps its newest 20 runs.
 
 ## Push
 

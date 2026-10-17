@@ -73,14 +73,14 @@ A turn with output is never replayed after a crash, because it may have had effe
 
 Every bot and mac agent query has one `PreToolUse` hook on every tool. Its body is synchronous and wrapped so that any exception becomes a deny, because a hook that throws lets the call run. The policy checks, in order:
 
-1. **Floors**, always denied: the bridge home except the bot's own folder and `USER.md`, SSH, GPG and cloud keys, the Keychain, browser profiles and cookies, the Claude login, and password, payment or 2FA entry (handed back to you).
+1. **Floors**, always denied: the bridge home except the bot's own folder and `USER.md`, writes to config files the bridge itself loads, SSH, GPG and cloud keys, the Keychain, browser profiles and cookies, stored credentials and tokens (the Claude login among them), and password, payment or 2FA entry (handed back to you). Bash is parsed by a real shell tokenizer, and paths are resolved through symlinks and their ancestors before they are matched.
 2. **Initiator bans**: no routine changes in a routine-started chain, and no `message_bot` or `create_bot` at 2 or more bot hops.
 3. **Limits**: budget or daily cap, and per-bot daily caps on `create_bot` (5) and `start_agent` (20).
 4. **Never** rules, then a one-shot **grant** for this exact call, then **Always** rules (an Always given in an attended turn covers attended turns only).
-5. **The table** of risky commands by attended or unattended: pushing to the default branch, force-pushing, merging a PR, publishing, deploying, posting to GitHub, and others.
+5. **The table** of risky commands by attended or unattended: pushing to the default branch, force-pushing, merging a PR, publishing, deploying, setting secrets, sending data to a web service, deleting outside the bot's folder, changing a config file that controls how it runs, running a command built at runtime, and others. Unattended turns also hold pushes to any branch, writes outside the bot's folder, connector writes, `create_bot`, `start_agent` and routine changes.
 6. **Pass**: no opinion, so Claude Code's auto classifier decides as it would without the bridge.
 
-An "ask" opens a **permission card** and denies the call with a "held for approval" reason. That is the deny-and-regrant mechanism. Allow once installs a grant for that exact input for 10 minutes and delivers a decision envelope that runs ahead of other queued work, so the model re-issues the call and the grant lets it through. The card shows the rule in words, the exact call with secrets masked, and what Always would cover. Only a card tap from a paired device approves. Chat text never does. A permission card expires after 2 hours and a question card after 24, each with one reminder at half its life. An expired card leaves a notice that says the call did not run and that the user did not say no.
+An "ask" opens a **permission card** and denies the call with a "held for approval" reason. That is the deny-and-regrant mechanism. Allow once installs a grant for that exact input for 10 minutes and delivers a decision envelope that runs ahead of other queued work, so the model re-issues the call and the grant lets it through. Only a turn of the card's attendance can use the grant, and that binding is saved with it. The card shows the rule in words, the exact call with secrets masked, and what Always would cover. Only a card tap from a paired device approves. Chat text never does. A permission card expires after 2 hours and a question card after 24, each with one reminder at half its life. An expired card leaves a notice that says the call did not run and that the user did not say no.
 
 A transition that opens a card, consumes a grant or adds a rule saves synchronously before the audit row is written and before the hook returns. A repeated hook call for the same `tool_use_id` gets the recorded verdict and opens no second card.
 
@@ -91,13 +91,13 @@ A routine is a prompt on a five-field cron in the Mac's local time. A routine ma
 - `nextRunAt` is stored. It advances, and the running run is recorded, in one synchronous save before the fire is delivered. A crash can lose a fire but never repeat one.
 - Missed times collapse into one decision. The newest missed time fires once, marked late, if it is inside the grace window (half the period, between 2 minutes and 2 hours). Otherwise one skipped run is recorded.
 - A fire is recorded skipped while the bot is held by a limit, or while its previous run is still queued.
-- A scheduled run holds its bubbles until the turn ends. If the bot called `routine_no_update` and asked nothing, the bubbles are dropped, nothing is pushed, and the run settles **quiet**. Otherwise the bubbles post together with one push. Bubbles written before an `ask` card go out at once, ahead of the card.
+- A scheduled run holds its bubbles until the turn ends. If the bot called `routine_no_update` and asked nothing, the bubbles are dropped, nothing is pushed, and the run settles **quiet**. Otherwise the bubbles post together with one push. Bubbles written before a card the turn opens, or before the breaker's note, go out at once, ahead of it, and a run that opened a permission card is never quiet.
 - Run now is attended, never quiet, runs at the daily cap, and its failures never count toward fatigue. Ten failed runs in a row turn a routine off with a note.
 - A v2 routine that runs more often than every 15 minutes is turned off with a note at the first tick after the upgrade. Editing its schedule turns it back on.
 
 ## Usage
 
-The ledger appends one row per turn result to `usage/YYYY-MM.jsonl`. A row holds the SDK's cumulative cost, the delta charged against that session's previous row, the initiator and the local day. Each bot has a daily cap (`CLAUDIOBOT_DAILY_USD`, default $10, or the bot's own `dailyCapUsd` from the phone) that counts its agents too. Each mac agent has a lifetime budget (`CLAUDIOBOT_AGENT_USD`, default $5). A mac agent's query also gets `maxBudgetUsd`, so the SDK stops it mid-turn. Raising a bot's cap from the phone lifts a cap park at once.
+The ledger appends one row per turn result to `usage/YYYY-MM.jsonl`. A row holds the SDK's cumulative cost, the delta charged against that session's previous row, the initiator and the local day. Each bot has a daily cap (`CLAUDIOBOT_DAILY_USD`, default $10, or the bot's own `dailyCapUsd` from the phone) that counts its agents too. Each mac agent has a lifetime budget (`CLAUDIOBOT_AGENT_USD`, default $5). A mac agent's query also gets what is left of it as `maxBudgetUsd`, so the SDK stops it mid-turn. The daily cap is checked before each turn, so one turn can go past it. Raising a bot's cap from the phone lifts a cap park at once.
 
 ## Transport
 

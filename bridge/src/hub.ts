@@ -376,6 +376,20 @@ export function createHub(deps: HubDeps): Hub {
     }
   }
 
+  /** update_self's job replaces CLAUDE.md's ## Job section, which the standing brief and a new session read. */
+  function rejob(botId: BotId, job: string) {
+    const path = claudeMdOf(botId);
+    const doc = readOwn(path);
+    if (doc === null) return;
+    const body = `## Job\n\n${job}\n\n`;
+    const next = /^## Job\s*$/m.test(doc) ? doc.replace(/^## Job\s*\n[\s\S]*?(?=^## |(?![\s\S]))/m, () => body) : `${doc.trimEnd()}\n\n${body}`;
+    try {
+      writeAtomic(path, next);
+    } catch (e) {
+      deps.log(`rejob ${botId}: ${errorText(e)}`);
+    }
+  }
+
   /**
    * Who the bot is now. A resumed session keeps the system prompt it started with, so a rename, a new userName or a
    * newer persona reaches it as this, on the first turn after it changes.
@@ -679,6 +693,10 @@ export function createHub(deps: HubDeps): Hub {
 
     updateSelf(botId, a) {
       const bot = owned(botId);
+      // The job is the bot's standing instructions: a routine's or another bot's turn could be talking it into new ones.
+      if (a.job !== undefined && (brains.get(botId)?.current?.initiator ?? system).kind !== "user")
+        return `Only ${userName} can change your job, in a turn they start. Nothing was changed; ask them.`;
+      if (a.job !== undefined) rejob(bot.id, a.job.replace(/\s+/g, " ").trim());
       if (a.name !== undefined) {
         bot.name = a.name.trim();
         retitle(bot.id, bot.name);

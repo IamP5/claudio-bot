@@ -34,7 +34,7 @@ export type BotActions = {
   listProjects(): Promise<string>;
   messageBot(botId: BotId, a: { bot: string; text: string }): string;
   createBot(botId: BotId, a: { name: string; job: string; shape?: Shape; color?: Color }): string;
-  updateSelf(botId: BotId, a: { name?: string; title?: string; shape?: Shape; color?: Color }): string;
+  updateSelf(botId: BotId, a: { name?: string; title?: string; shape?: Shape; color?: Color; job?: string }): string;
   setRoutine(botId: BotId, a: { name: string; trigger: "cron" | "webhook"; schedule?: string; prompt: string; enabled?: boolean }): string;
   deleteRoutine(botId: BotId, a: { name: string }): string;
   listRoutines(botId: BotId): string;
@@ -107,8 +107,8 @@ export function botToolServer(botId: BotId, act: BotActions) {
     ),
     update_self: tool(
       "update_self",
-      `Change your own name, label (title), shape or color. Shapes: ${SHAPES.join(", ")}. Colors: ${COLORS.join(", ")}.`,
-      { name: botName.optional(), title: z.string().optional(), shape, color },
+      `Change your own name, label (title), shape or color, or your job once the user tells you what it is (only in a turn the user started). Shapes: ${SHAPES.join(", ")}. Colors: ${COLORS.join(", ")}.`,
+      { name: botName.optional(), title: z.string().optional(), shape, color, job: z.string().min(1).max(1000).optional() },
       (a) => reply(() => act.updateSelf(botId, a)),
       always,
     ),

@@ -1,23 +1,34 @@
 import { expect, test } from "bun:test";
 import type { Agent, AgentId, BotId, Message, MessageId, Peer, RoutineId, RunId } from "../src/protocol";
-import { envelope, initiatorOf, notices, runsAhead, withNotices, type Envelope } from "../src/prompts";
+import { envelope, initiatorOf, inputOf, notices, runsAhead, withNotices, type Envelope } from "../src/prompts";
 import {
   attended,
   botStatus,
+  emptySession,
   emptyWorld,
   findBot,
+  holdOf,
   hopsAfter,
+  hopsOf,
+  isRoutineChain,
   linksOf,
   newBot,
   post,
   recordExchange,
+  rootOf,
   routineView,
+  RUNS_ON_BOT,
   settleCard,
   sortBots,
   toBot,
   upsertRoutine,
+  type CardAnswer,
+  type EnvelopeId,
   type Initiator,
+  type Origin,
+  type Pending,
   type RoutineRecord,
+  type World,
 } from "../src/world";
 
 const at = (minute: number) => `2026-10-17T12:${String(minute).padStart(2, "0")}:00.000Z`;
@@ -119,11 +130,22 @@ test("a permission card settles first-wins, and an expired one refuses every ans
   expect(expired.ok && expired.card.answer).toBe("expired");
 });
 
-test("status: parked wins, then working, then awaiting approval", () => {
-  expect(botStatus({ parked: true, working: true, awaitingApproval: true })).toBe("parked");
-  expect(botStatus({ parked: false, working: true, awaitingApproval: true })).toBe("working");
-  expect(botStatus({ parked: false, working: false, awaitingApproval: true })).toBe("awaiting_approval");
-  expect(botStatus({ parked: false, working: false, awaitingApproval: false })).toBe("idle");
+test("status: a running turn shows working, then a held queue head shows parked, then awaiting approval", () => {
+  expect(botStatus({ working: true, held: true, awaitingApproval: true })).toBe("working");
+  expect(botStatus({ working: false, held: true, awaitingApproval: true })).toBe("parked");
+  expect(botStatus({ working: false, held: false, awaitingApproval: true })).toBe("awaiting_approval");
+  expect(botStatus({ working: false, held: false, awaitingApproval: false })).toBe("idle");
+});
+
+const pending = (n: number): Pending => ({ id: `e${n}` as EnvelopeId, at: at(n), text: "[Alex]\nhi", initiator: { kind: "routine", run: { routineId: "r1" as RoutineId, runId: "run1" as RunId }, manual: false }, settles: null, attempts: 0 });
+
+test.each([
+  ["a park with work queued holds the head", { ...emptySession(), pending: [pending(1)], lifecycle: { kind: "parked", reason: "daily_cap", until: at(59) } }, { reason: "daily_cap", until: at(59) }],
+  ["a park with nothing queued holds nothing", { ...emptySession(), lifecycle: { kind: "parked", reason: "usage_limit", until: at(59) } }, null],
+  ["work queued while idle is not held", { ...emptySession(), pending: [pending(1)] }, null],
+  ["backoff retries the head, it does not park it", { ...emptySession(), pending: [pending(1)], lifecycle: { kind: "backoff", until: at(5), attempt: 1 } }, null],
+] as const)("hold: %s", (_, session, hold) => {
+  expect(holdOf(session)).toEqual(hold);
 });
 
 test("the wire routine derives describe and lastRunAt; a skipped run is not a run", () => {
@@ -136,6 +158,18 @@ test("the wire routine derives describe and lastRunAt; a skipped run is not a ru
     id: r.id, name: "digest", schedule: "57 7 * * 1-5", describe: "Weekdays at 7:57 AM", prompt: "Post it.",
     enabled: true, lastRunAt: at(5), trigger: "cron", nextRunAt: at(30), runs: r.runs,
   });
+});
+
+test("a Bot frame carries each routine's newest runs only, and lastRunAt still sees the whole history", () => {
+  const runs = Array.from({ length: 8 }, (_, i) => ({ id: `run${8 - i}` as RunId, at: at(30 - i), status: i < 6 ? ("skipped" as const) : ("ok" as const), late: false, manual: false, note: null }));
+  const b = { ...bot(), routines: [{ id: "r1" as RoutineId, name: "digest", trigger: { kind: "cron" as const, schedule: "0 9 * * *" }, prompt: "Post it.", enabled: true, nextRunAt: null, runs, failStreak: 0 }] };
+
+  const [routine] = toBot(b, "idle").routines;
+
+  expect(RUNS_ON_BOT).toBe(5);
+  expect(routine!.runs.map((r) => r.id as string)).toEqual(["run8", "run7", "run6", "run5", "run4"]);
+  expect(routine!.lastRunAt).toBe(at(24));
+  expect(routineView(b.routines[0]!).runs).toHaveLength(8);
 });
 
 test("home order is pinned first, then newest activity", () => {
@@ -169,6 +203,28 @@ test("routines upsert by name", () => {
   expect(routines).toEqual([{ ...fields, trigger: { kind: "cron", schedule: "0 8 * * *" }, id: "r1" as never, nextRunAt: null, runs: [], failStreak: 0 }]);
 });
 
+test.each([
+  ["a new schedule", { schedule: "0 8 * * *" }, { nextRunAt: null, failStreak: 4 }],
+  ["pausing", { enabled: false }, { nextRunAt: null, failStreak: 4 }],
+  ["a new prompt only", { prompt: "Post it now." }, { nextRunAt: at(30), failStreak: 4 }],
+  ["the same fields again", {}, { nextRunAt: at(30), failStreak: 4 }],
+] as const)("an update with %s clears nextRunAt only when the timing changed", (_, change, expected) => {
+  const routines: RoutineRecord[] = [{ id: "r1" as RoutineId, name: "digest", trigger: { kind: "cron", schedule: "0 9 * * *" }, prompt: "Post it.", enabled: true, nextRunAt: at(30), runs: [], failStreak: 4 }];
+  const { schedule = "0 9 * * *", ...rest } = change as { schedule?: string; enabled?: boolean; prompt?: string };
+
+  upsertRoutine(routines, { name: "digest", trigger: { kind: "cron", schedule }, prompt: "Post it.", enabled: true, ...rest }, () => "r2" as RoutineId);
+
+  expect(routines[0]).toMatchObject(expected);
+});
+
+test("re-enabling a paused routine clears nextRunAt and its fail streak", () => {
+  const routines: RoutineRecord[] = [{ id: "r1" as RoutineId, name: "digest", trigger: { kind: "cron", schedule: "0 9 * * *" }, prompt: "Post it.", enabled: false, nextRunAt: at(30), runs: [], failStreak: 10 }];
+
+  upsertRoutine(routines, { name: "digest", trigger: { kind: "cron", schedule: "0 9 * * *" }, prompt: "Post it.", enabled: true }, () => "r2" as RoutineId);
+
+  expect(routines[0]).toMatchObject({ enabled: true, nextRunAt: null, failStreak: 0 });
+});
+
 test("bots are found by id or by name, ignoring case", () => {
   const world = emptyWorld();
   world.bots.set(bot().id, bot());
@@ -197,6 +253,9 @@ test.each([
 
 const run = { routineId: "r1" as RoutineId, runId: "run1" as RunId };
 const b2 = "b_2" as BotId;
+const a1 = "a1" as AgentId;
+const routineOrigin: Origin = { kind: "routine", run, manual: false };
+const routine: Initiator = routineOrigin;
 
 test.each<[string, Envelope, Initiator, boolean]>([
   ["user", { from: "user", text: "hi", attachments: [] }, { kind: "user" }, true],
@@ -204,21 +263,56 @@ test.each<[string, Envelope, Initiator, boolean]>([
   ["dismiss", { from: "dismiss", question: "Which?" }, { kind: "user" }, true],
   ["scheduled routine", { from: "routine", name: "d", prompt: "p", run, manual: false, late: false }, { kind: "routine", run, manual: false }, false],
   ["Run now", { from: "routine", name: "d", prompt: "p", run, manual: true, late: false }, { kind: "routine", run, manual: true }, true],
-  ["agent report", { from: "agent", title: "Fix", agentId: "a1" as AgentId, text: "done" }, { kind: "agent", agentId: "a1" as AgentId }, false],
-  ["bot message", { from: "bot", name: "b", botId: b2, hops: 2, text: "hi" }, { kind: "bot", botId: b2, hops: 2 }, false],
+  ["agent report", { from: "agent", title: "Fix", agentId: a1, text: "done", hops: 0, origin: { kind: "user" } }, { kind: "agent", agentId: a1, hops: 0, origin: { kind: "user" } }, false],
+  ["bot message", { from: "bot", name: "b", botId: b2, hops: 2, origin: { kind: "user" }, text: "hi" }, { kind: "bot", botId: b2, hops: 2, origin: { kind: "user" } }, false],
   ["created by the user", { from: "created", by: "user", brief: null }, { kind: "user" }, true],
-  ["created by a bot", { from: "created", by: { bot: "b", botId: b2, hops: 1 }, brief: "job" }, { kind: "bot", botId: b2, hops: 1 }, false],
+  ["created by a bot", { from: "created", by: { bot: "b", botId: b2, hops: 1, origin: routineOrigin }, brief: "job" }, { kind: "bot", botId: b2, hops: 1, origin: routineOrigin }, false],
   ["a decision on a routine's call", { from: "decision", choice: "once", tool: "Bash", detail: "x", initiator: { kind: "routine", run, manual: false } }, { kind: "routine", run, manual: false }, false],
 ])("the initiator of %s is derived from the envelope", (_, e, initiator, isAttended) => {
   expect(initiatorOf(e)).toEqual(initiator);
   expect(attended(initiatorOf(e))).toBe(isAttended);
 });
 
-test("bot hops count up only along bot-to-bot chains", () => {
+test.each<[string, Initiator, Origin, number]>([
+  ["the user", { kind: "user" }, { kind: "user" }, 0],
+  ["a routine", routine, routineOrigin, 0],
+  ["a bot two hops from a routine", { kind: "bot", botId: b2, hops: 2, origin: routineOrigin }, routineOrigin, 2],
+  ["an agent reporting inside a bot chain", { kind: "agent", agentId: a1, hops: 1, origin: { kind: "user" } }, { kind: "user" }, 1],
+  ["no turn in flight", { kind: "system" }, { kind: "system" }, 0],
+])("the lineage of %s reads through every hop", (_, initiator, root, hops) => {
+  expect(rootOf(initiator)).toEqual(root);
+  expect(hopsOf(initiator)).toBe(hops);
+  expect(hopsAfter(initiator)).toBe(hops + 1);
+});
+
+test("a chain that began as a routine stays a routine chain through an agent and a bot hop", () => {
+  // The routine's bot started an agent; the agent's turn ran with the routine's initiator and reported back.
+  const report: Envelope = { from: "agent", title: "Fix", agentId: a1, text: "done", hops: hopsOf(routine), origin: rootOf(routine) };
+  const afterReport = initiatorOf(report);
+  const message: Envelope = { from: "bot", name: "b", botId: b2, hops: hopsAfter(afterReport), origin: rootOf(afterReport), text: "hi" };
+  const afterMessage = initiatorOf(message);
+
+  expect([isRoutineChain(routine), isRoutineChain(afterReport), isRoutineChain(afterMessage)]).toEqual([true, true, true]);
+  expect(isRoutineChain({ kind: "bot", botId: b2, hops: 1, origin: { kind: "user" } })).toBe(false);
+  expect(attended(afterReport)).toBe(false);
+});
+
+test("the hop count carries through an agent hop instead of starting over", () => {
+  const botTurn: Initiator = { kind: "bot", botId: b2, hops: 1, origin: { kind: "user" } };
+  const report = initiatorOf({ from: "agent", title: "Fix", agentId: a1, text: "done", hops: hopsOf(botTurn), origin: rootOf(botTurn) });
+
+  expect(hopsAfter(report)).toBe(2);
   expect(hopsAfter(null)).toBe(1);
-  expect(hopsAfter({ kind: "user" })).toBe(1);
-  expect(hopsAfter({ kind: "agent", agentId: "a1" as AgentId })).toBe(1);
-  expect(hopsAfter({ kind: "bot", botId: b2, hops: 1 })).toBe(2);
+});
+
+test.each<[string, Envelope, Initiator, boolean]>([
+  ["a routine's own fire settles its run", { from: "routine", name: "d", prompt: "p", run, manual: false, late: false }, routine, true],
+  ["Run now settles its run", { from: "routine", name: "d", prompt: "p", run, manual: true, late: false }, { kind: "routine", run, manual: true }, true],
+  ["an approval continuation of a routine's call settles nothing", { from: "decision", choice: "once", tool: "Bash", detail: "x", initiator: routine }, routine, false],
+  ["a user message settles nothing", { from: "user", text: "hi", attachments: [] }, { kind: "user" }, false],
+])("queued input: %s", (_, e, initiator, settles) => {
+  const input = inputOf(e, "Alex");
+  expect(input).toEqual({ text: envelope(e, "Alex"), initiator, settles: settles ? run : null, ahead: runsAhead(e) });
 });
 
 test("only an approval continuation runs ahead of queued work", () => {
@@ -233,3 +327,41 @@ test("notices go on top of the next envelope, and an expiry is never a no", () =
   expect(withNotices("[Alex]\nhi", [{ at: at(1), text: expired }])).toBe(`${expired}\n[Alex]\nhi`);
   expect(withNotices("[Alex]\nhi", [])).toBe("[Alex]\nhi");
 });
+
+// Never called: tsc fails if any of these becomes writable outside the slice's writer, or if a card answer drifts
+// from the message types it settles.
+function ownedSlicesAreReadonly(world: World, rec: ReturnType<typeof bot>) {
+  // @ts-expect-error routines belong to scheduler.ts
+  rec.routines.push(rec.routines[0]!);
+  // @ts-expect-error routines belong to scheduler.ts
+  rec.routines = [];
+  // @ts-expect-error a routine's fields belong to scheduler.ts
+  rec.routines[0]!.nextRunAt = null;
+  // @ts-expect-error the session belongs to session.ts
+  rec.session.pending.push(pending(1));
+  // @ts-expect-error the session belongs to session.ts
+  rec.session.lifecycle = { kind: "idle" };
+  // @ts-expect-error standing rules belong to gate.ts
+  rec.rules.splice(0);
+  // @ts-expect-error the gate state belongs to gate.ts
+  world.gate.open.push(world.gate.open[0]!);
+  // @ts-expect-error the account park belongs to session.ts
+  world.account.parkedUntil = null;
+  // @ts-expect-error devices belong to devices.ts
+  world.devices[0]!.lastSeenAt = null;
+}
+
+function cardAnswersFollowTheMessageTypes() {
+  const answers: CardAnswer[] = [
+    { kind: "question", answer: 1 },
+    { kind: "question", answer: "dismissed" },
+    { kind: "question", answer: "expired" },
+    { kind: "permission", answer: "never" },
+    { kind: "permission", answer: "expired" },
+  ];
+  // @ts-expect-error null is an open card, not an answer
+  const open: CardAnswer = { kind: "question", answer: null };
+  // @ts-expect-error a question is never dismissed by a permission choice
+  const crossed: CardAnswer = { kind: "question", answer: "once" };
+  return [answers, open, crossed];
+}

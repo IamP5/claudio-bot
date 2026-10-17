@@ -1,10 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BotId, MessageId, RoutineId, RunId } from "../src/protocol";
 import { createSaver, flushNow, loadWorld, StateFileError } from "../src/store";
-import { emptySession, newBot, type Signature } from "../src/world";
+import { emptySession, emptyWorld, newBot, type Signature } from "../src/world";
 
 const homes: string[] = [];
 const freshHome = () => {
@@ -122,6 +122,7 @@ test("a v2 state file is backed up byte for byte, then upgraded in place to v3",
   const cloud = world.agents.get("a_cloud" as never)!;
   expect(cloud.cloudSession).toBe("session_abc");
   expect(cloud.session.id).toBeNull();
+  expect([...world.agents.values()].map((a) => a.startedBy)).toEqual([{ kind: "system" }, { kind: "system" }, { kind: "system" }]);
 
   expect(world.gate).toEqual({ open: [], grants: [], daily: [] });
   expect(world.devices).toEqual([]);
@@ -145,17 +146,69 @@ test("loading the upgraded file again changes nothing", () => {
   expect(readFileSync(join(home, "state.v2.json.bak"), "utf8")).toBe(backup);
 });
 
-test("a crash between the backup and the upgrade converges: the backup is rewritten from the v2 file that is there", () => {
+test("an existing v2 backup with other bytes is never overwritten: the current bytes go to the next free suffix", () => {
   const home = freshHome();
   const current = JSON.stringify(V2);
+  const older = '{"version":2,"bots":[],"agents":[]}';
   writeState(home, current);
-  writeFileSync(join(home, "state.v2.json.bak"), "{\"version\":2,\"bots\":[],\"agents\":[]}");
+  writeFileSync(join(home, "state.v2.json.bak"), older);
+  writeFileSync(join(home, "state.v2.json.bak.1"), older + " ");
 
   loadWorld(home);
 
-  expect(readFileSync(join(home, "state.v2.json.bak"), "utf8")).toBe(current);
+  expect(readFileSync(join(home, "state.v2.json.bak"), "utf8")).toBe(older);
+  expect(readFileSync(join(home, "state.v2.json.bak.1"), "utf8")).toBe(older + " ");
+  expect(readFileSync(join(home, "state.v2.json.bak.2"), "utf8")).toBe(current);
   expect(JSON.parse(readState(home)).version).toBe(3);
 });
+
+test("a crash between the backup and the upgrade converges: the same bytes are not backed up twice", () => {
+  const home = freshHome();
+  const current = JSON.stringify(V2);
+  writeState(home, current);
+  writeFileSync(join(home, "state.v2.json.bak"), current);
+
+  loadWorld(home);
+
+  expect(readdirSync(home).sort()).toEqual(["state.json", "state.v2.json.bak"]);
+  expect(JSON.parse(readState(home)).version).toBe(3);
+});
+
+test("backups hold the file's exact bytes, even bytes that are not UTF-8", () => {
+  for (const [version, body] of [
+    [2, JSON.stringify({ ...V2, bots: [{ ...V2.bots[1]!, title: "Xmark" }] })],
+    [1, JSON.stringify({ version: 1, tasks: [{ id: "t1", title: "Xmark" }] })],
+  ] as const) {
+    const home = freshHome();
+    const raw = Buffer.from(body);
+    raw[raw.indexOf("Xmark")] = 0xff;
+    writeFileSync(join(home, "state.json"), raw);
+
+    loadWorld(home);
+
+    expect(readFileSync(join(home, `state.v${version}.json.bak`)).equals(raw)).toBe(true);
+  }
+});
+
+test("an existing v1 backup with other bytes is kept, and the v1 file goes to the next free suffix", () => {
+  const home = freshHome();
+  const v1 = JSON.stringify({ version: 1, tasks: [] });
+  writeState(home, v1);
+  writeFileSync(join(home, "state.v1.json.bak"), "older");
+
+  expect(loadWorld(home).firstRun).toBe(true);
+
+  expect(readFileSync(join(home, "state.v1.json.bak"), "utf8")).toBe("older");
+  expect(readFileSync(join(home, "state.v1.json.bak.1"), "utf8")).toBe(v1);
+});
+
+const v2Bot = V2.bots[1]!;
+const v2Agent = V2.agents[0]!;
+const v3 = (patch: object) => JSON.stringify({ version: 3, bots: [], agents: [], gate: { open: [], grants: [], daily: [] }, devices: [], push: { sent: [] }, account: { parkedUntil: null }, ...patch });
+const v3Bot = { ...newBot({ id: "b_1" as BotId, name: "engineer", avatar: { shape: "hexagon", color: "orange" }, at }) };
+const v3Agent = {
+  agent: { ...v2Agent.agent, status: "waiting" }, cwd: v2Agent.cwd, messages: [], session: emptySession(), cloudSession: null, budgetUsd: null, startedBy: { kind: "user" },
+};
 
 test.each([
   ["unreadable JSON", '{"version": 2, "bots": ['],
@@ -164,6 +217,15 @@ test.each([
   ["a non-object", "[]"],
   ["a v2 file with no bots array", JSON.stringify({ version: 2, agents: [] })],
   ["a v3 file with no gate", JSON.stringify({ version: 3, bots: [], agents: [], devices: [], push: { sent: [] }, account: { parkedUntil: null } })],
+  ["a v2 file with a null bot", JSON.stringify({ ...V2, bots: [null] })],
+  ["a v2 bot whose routines are not a list", JSON.stringify({ ...V2, bots: [{ ...v2Bot, routines: "daily" }] })],
+  ["a v2 routine with no schedule", JSON.stringify({ ...V2, bots: [{ ...v2Bot, routines: [{ id: "r1", name: "x", describe: "", prompt: "p", enabled: true, lastRunAt: null }] }] })],
+  ["a v2 message that is not an object", JSON.stringify({ ...V2, bots: [{ ...v2Bot, messages: ["hi"] }] })],
+  ["a v2 agent with no agent", JSON.stringify({ ...V2, agents: [{ cwd: "/x", messages: [], sessionId: null }] })],
+  ["a v3 bot with no session", v3({ bots: [{ ...v3Bot, session: undefined }] })],
+  ["a v3 bot whose queue is not a list", v3({ bots: [{ ...v3Bot, session: { ...emptySession(), pending: {} } }] })],
+  ["a v3 routine with no trigger", v3({ bots: [{ ...v3Bot, routines: [{ id: "r1", name: "x", prompt: "p", enabled: true, nextRunAt: null, runs: [], failStreak: 0 }] }] })],
+  ["a v3 agent with no startedBy", v3({ agents: [{ ...v3Agent, startedBy: undefined }] })],
 ])("refuses to start on %s and leaves every file as it was", (_, body) => {
   const home = freshHome();
   writeState(home, body);
@@ -189,6 +251,18 @@ test("a v1 task file is kept as a backup and the bridge starts fresh, as before"
   expect(firstRun).toBe(true);
   expect(world.bots.size).toBe(0);
   expect(readFileSync(join(home, "state.v1.json.bak"), "utf8")).toBe(v1);
+});
+
+test("a well-formed v3 file with a bot and an agent loads as written", () => {
+  const home = freshHome();
+  const body = v3({ bots: [v3Bot], agents: [v3Agent] });
+  writeState(home, body);
+
+  const { world } = loadWorld(home);
+
+  expect([...world.bots.values()]).toEqual([v3Bot]);
+  expect([...world.agents.values()]).toEqual([v3Agent as never]);
+  expect(readState(home)).toBe(body);
 });
 
 test("no state file is a first run that writes nothing", () => {
@@ -227,4 +301,50 @@ test("the saver debounces, and \"now\" writes before it returns", async () => {
   world.bots.set(bot.id, bot);
   saver.schedule("now");
   expect(JSON.parse(readState(home)).bots.map((b: { id: string }) => b.id)).toEqual(["b_2"]);
+});
+
+test("a stale temp file from another writer does not block a save", () => {
+  const home = freshHome();
+  mkdirSync(join(home, "state.json.tmp"));
+
+  flushNow(loadWorld(home).world, home);
+
+  expect(JSON.parse(readState(home)).version).toBe(3);
+});
+
+// A regular file where the home directory should be makes every write fail until it is moved away.
+const blockedHome = () => {
+  const home = join(freshHome(), "home");
+  writeFileSync(home, "not a directory");
+  return { home, unblock: () => (rmSync(home), mkdirSync(home)) };
+};
+
+const until = async (done: () => boolean, ms = 2000) => {
+  for (const end = Date.now() + ms; !done() && Date.now() < end; ) await Bun.sleep(5);
+};
+
+test("a failed debounced save is logged, stays pending and lands once the disk recovers", async () => {
+  const { home, unblock } = blockedHome();
+  const logs: string[] = [];
+  const saver = createSaver(emptyWorld(), home, 10, (line) => logs.push(line));
+
+  saver.schedule();
+  await until(() => logs.length >= 2);
+  expect(logs.length).toBeGreaterThanOrEqual(2);
+  expect(logs[0]).toContain("state.json");
+
+  unblock();
+  await until(() => existsSync(join(home, "state.json")));
+  expect(JSON.parse(readState(home)).version).toBe(3);
+});
+
+test("\"now\" throws when the write fails, and the state still lands once the disk recovers", async () => {
+  const { home, unblock } = blockedHome();
+  const saver = createSaver(emptyWorld(), home, 10, () => {});
+
+  expect(() => saver.schedule("now")).toThrow();
+
+  unblock();
+  await until(() => existsSync(join(home, "state.json")));
+  expect(JSON.parse(readState(home)).version).toBe(3);
 });

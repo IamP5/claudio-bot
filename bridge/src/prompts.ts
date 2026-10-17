@@ -1,5 +1,5 @@
 import type { AgentId, Attachment, BotId, PermissionChoice } from "./protocol";
-import type { Initiator, Notice, RunRef } from "./world";
+import type { Initiator, Notice, Origin, RunRef } from "./world";
 
 // Everything that reaches a bot or an agent is one envelope. Its initiator is a pure function of the envelope.
 export type Envelope =
@@ -11,9 +11,11 @@ export type Envelope =
   | { from: "decision"; choice: PermissionChoice; tool: string; detail: string; initiator: Initiator }
   // manual: Run now from the phone. late: fired after its time because the Mac was asleep, inside the grace window.
   | { from: "routine"; name: string; prompt: string; run: RunRef; manual: boolean; late: boolean }
-  | { from: "agent"; title: string; agentId: AgentId; text: string }
-  | { from: "bot"; name: string; botId: BotId; hops: number; text: string }
-  | { from: "created"; by: { bot: string; botId: BotId; hops: number } | "user"; brief: string | null };
+  // hops and origin come from the agent turn that reported (world.hopsOf, world.rootOf), so the lineage carries on.
+  | { from: "agent"; title: string; agentId: AgentId; text: string; hops: number; origin: Origin }
+  // hops is world.hopsAfter of the sending turn; origin is world.rootOf of it.
+  | { from: "bot"; name: string; botId: BotId; hops: number; origin: Origin; text: string }
+  | { from: "created"; by: { bot: string; botId: BotId; hops: number; origin: Origin } | "user"; brief: string | null };
 
 export function initiatorOf(e: Envelope): Initiator {
   switch (e.from) {
@@ -26,16 +28,29 @@ export function initiatorOf(e: Envelope): Initiator {
     case "routine":
       return { kind: "routine", run: e.run, manual: e.manual };
     case "agent":
-      return { kind: "agent", agentId: e.agentId };
+      return { kind: "agent", agentId: e.agentId, hops: e.hops, origin: e.origin };
     case "bot":
-      return { kind: "bot", botId: e.botId, hops: e.hops };
+      return { kind: "bot", botId: e.botId, hops: e.hops, origin: e.origin };
     case "created":
-      return e.by === "user" ? { kind: "user" } : { kind: "bot", botId: e.by.botId, hops: e.by.hops };
+      return e.by === "user" ? { kind: "user" } : { kind: "bot", botId: e.by.botId, hops: e.by.hops, origin: e.by.origin };
   }
 }
 
 /** An approval continuation runs before anything else queued, so the grant it relies on is still fresh. */
 export const runsAhead = (e: Envelope): boolean => e.from === "decision";
+
+/** Only a routine's own fire settles its run. A continuation keeps the routine's initiator but settles nothing. */
+export const settlesOf = (e: Envelope): RunRef | null => (e.from === "routine" ? e.run : null);
+
+/** What a session queues for one envelope. Session.push takes this, and Pending keeps all of it but `ahead`. */
+export type SessionInput = { text: string; initiator: Initiator; settles: RunRef | null; ahead: boolean };
+
+export const inputOf = (e: Envelope, userName: string): SessionInput => ({
+  text: envelope(e, userName),
+  initiator: initiatorOf(e),
+  settles: settlesOf(e),
+  ahead: runsAhead(e),
+});
 
 const lines = (...xs: (string | null)[]) => xs.filter((x) => x !== null && x !== "").join("\n");
 

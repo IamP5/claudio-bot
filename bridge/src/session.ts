@@ -46,9 +46,15 @@ export const MAX_STARTS = RETRY_BACKOFF_MS.length + 1;
  * reached Claude, so no attempt is used and nothing else queued is touched. The last wait repeats until a query opens.
  */
 export const START_RETRY_MS = [30_000, 60_000, 120_000, 300_000] as const;
-/** Start failures in a row before the owning bot's chat is told, once per streak. */
-export const START_FAILURES_BEFORE_NOTE = 3;
 export const DENIALS_PER_TURN = 3;
+/** A turn with no SDK message for this long is noted in the owning bot's chat, once per turn. It keeps running. */
+export const STALL_MS = 30 * 60_000;
+/**
+ * A query with no turn in flight and no message for this long is closed, so its claude process exits; the next turn
+ * resumes the session on a new one. It counts from the last message, so output after a turn keeps the process. It is
+ * well inside the prompt cache's hour, so a resume reads the cache like the closed query would have.
+ */
+export const IDLE_MS = 15 * 60_000;
 /** When the ledger cannot answer, an unattended start waits this long; an attended one runs. */
 export const HEADROOM_RETRY_MS = 60_000;
 export const USAGE_PARK_SLACK_MS = 30_000;
@@ -68,10 +74,21 @@ const MODEL_LIMITS: ReadonlySet<string> = new Set(["seven_day_opus", "seven_day_
 export const CAP_NOTE = "Daily cap reached. Your messages still run; routines and other background work wait until tomorrow.";
 export const BREAKER_NOTE = `Stopped this turn after ${DENIALS_PER_TURN} held or denied tool calls.`;
 export const RESTARTED_ERROR = "The bridge restarted during this turn.";
+const stallNote = (name: string) => `${name} has been silent for 30 minutes; you can press Stop.`;
 export const startFailedNote = (error: string) =>
   `Claude Code could not start: ${error.replace(/\.?\s*$/, ".")} Queued messages are kept, and it keeps trying.`;
 const restartedNotice = (envelopeText: string) =>
   `[The bridge restarted during your turn on: ${envelopeText.split("\n")[0]} It may be partly done; check before redoing it.]`;
+
+/** Pending has no field for an approval continuation, so its id carries it. Only push() mints ids. */
+const CONTINUATION = "c_";
+
+/**
+ * Stop drops a routine's scheduled fire and a message from another bot: nobody waits on either. An agent's report and an
+ * approval continuation stay, whatever their initiator, because the bot needs the report and the user just answered.
+ */
+const droppedByStop = (p: Pending): boolean =>
+  (p.settles !== null && !attended(p.initiator)) || (p.initiator.kind === "bot" && !p.id.startsWith(CONTINUATION));
 
 const DROPS_NAMED = 3;
 /** One notice per Stop, however much it dropped, so the notices on the next envelope stay short. */
@@ -106,7 +123,7 @@ export function redactSecrets(text: string): string {
  *   the turn's final report is kept.
  * - stopped: Stop landed while it ran (by "user"), or the 3-denials breaker did (by "breaker"). The interrupt's
  *   error_during_execution result maps here, never to done/failed, and is never retried.
- * - dropped: Stop removed it from the queue before it started. Only unattended envelopes are dropped.
+ * - dropped: Stop removed it from the queue before it started: a routine's scheduled fire or a message from a bot.
  * - failed: removed without a usable result: a crash after output, a terminal error, the poison limit, no budget.
  * - deferred: still queued and will run later (a retry, a start that could not open, or a park). Not an ending; a
  *   routine run stays running. Told once per park, however often its deadline moves.
@@ -119,6 +136,12 @@ export type TurnEnd =
   | { kind: "deferred"; until: string; why: Deferral };
 
 type Deferral = "retry" | ParkReason;
+
+const BUDGET_USED = "The agent's budget is used up.";
+
+/** The turn ended because a budget ran out: the agent's, before it started, or the query's maxBudgetUsd during it. */
+export const usedBudget = (end: TurnEnd): boolean =>
+  (end.kind === "failed" && end.error === BUDGET_USED) || (end.kind === "done" && end.result.subtype === "error_max_budget_usd");
 
 /** How the turn in flight ended, as the shell read it at the SDK boundary. */
 export type Outcome =
@@ -238,8 +261,8 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
     if (c.parkedUntil === null || due(c.parkedUntil) || until > c.parkedUntil) c.parkedUntil = until;
   }
 
-  function dropUnattended(keep: EnvelopeId | null) {
-    const dropped = s.pending.filter((p) => p.id !== keep && !attended(p.initiator));
+  function dropOnStop(keep: EnvelopeId | null) {
+    const dropped = s.pending.filter((p) => p.id !== keep && droppedByStop(p));
     if (dropped.length === 0) return;
     s.pending = s.pending.filter((p) => !dropped.includes(p));
     s.notices.push({ at: iso(now), text: droppedNotice(ctx.userName, dropped.map((p) => p.text)) });
@@ -283,7 +306,7 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
       if (room.ok) return begin(next, room.capReached);
       if (room.reason === "agent_budget") {
         remove(next.id);
-        end(next, { kind: "failed", error: "The agent's budget is used up." });
+        end(next, { kind: "failed", error: BUDGET_USED });
         continue;
       }
       if (capped) return;
@@ -378,7 +401,8 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
         s.lifecycle = { kind: "backoff", until, attempt: held.attempts };
         end(held, { kind: "deferred", until, why: "retry" });
       }
-      if (failures === START_FAILURES_BEFORE_NOTE) fx.push({ kind: "note", text: startFailedNote(ev.error) });
+      // Told at the first failure of a streak: a missing claude does not fix itself.
+      if (failures === 1) fx.push({ kind: "note", text: startFailedNote(ev.error) });
       pump();
       break;
     }
@@ -387,15 +411,15 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
       if (life.kind === "working") {
         s.lifecycle = { kind: "stopping", turn: life.turn, deadline: iso(now + STOP_DEADLINE_MS) };
         fx.push({ kind: "interrupt" });
-        dropUnattended(life.turn.pending);
+        dropOnStop(life.turn.pending);
       } else if (life.kind === "backoff") {
         const head = s.pending.shift();
         s.lifecycle = { kind: "idle" };
         if (head) end(head, { kind: "stopped", by: "user" });
-        dropUnattended(null);
+        dropOnStop(null);
         pump();
       } else if (life.kind === "parked" || life.kind === "idle") {
-        dropUnattended(null);
+        dropOnStop(null);
         pump();
       }
       break;
@@ -477,9 +501,9 @@ export type Session = Tickable & {
   denied(): void;
   /**
    * Stop: working → stopping, where the gate denies every call; the next result, or the 15 s deadline, ends the turn
-   * as stopped. A head waiting in backoff ends as stopped at once. Queued unattended envelopes are dropped, with one
-   * notice; the user's own envelopes still run after the stopped turn ends, or when the park lifts. Resolves false only
-   * when nothing runs and nothing waits.
+   * as stopped. A head waiting in backoff ends as stopped at once. Queued routine fires and bot messages are dropped,
+   * with one notice; everything else queued still runs after the stopped turn ends, or when the park lifts. Resolves
+   * false only when nothing runs and nothing waits.
    */
   interrupt(): Promise<boolean>;
   /** The ledger's answer may have changed (update_bot set dailyCapUsd): a daily-cap park asks headroom again now. */
@@ -490,6 +514,8 @@ export type Session = Tickable & {
   readonly working: boolean;
   /** Why queued work is held while nothing runs; null when something runs or nothing waits. */
   readonly parkedFor: ParkReason | null;
+  /** Claude Code could not be started on the last try and the session waits to try again. working stays true meanwhile. */
+  readonly unavailable: boolean;
   /** The envelope in flight. The gate reads its initiator. */
   readonly current: Pending | null;
   readonly lifecycle: Owned<Lifecycle>;
@@ -503,18 +529,25 @@ export type SessionSpec = {
   account: Owned<AccountState>;
   /** Read at every query start: resume from state.id, and hooks: gate.hooks(actor). */
   options: () => Options;
-  /** headroom() before each start; add() at each result. */
+  /** headroom() before each start, dailyLeft() as a query opens for an unattended turn, add() at each result. */
   ledger: Ledger;
   /** Every SDK message of the live query, with the turn in flight; late output between turns comes with null. */
   onMessage: (m: SDKMessage, turn: Pending | null) => void;
   onTurnEnd: (turn: Pending, end: TurnEnd) => void;
   /** Something the actor's status derives from changed (working, lifecycle, park). */
   onChange: () => void;
-  /** A line for the owning bot's chat: the daily cap is reached, a turn was stopped after 3 held calls, or Claude Code keeps failing to start. */
+  /** A line for the owning bot's chat: the daily cap is reached, a turn was stopped after 3 held calls, or Claude Code could not start. */
   note: (text: string) => void;
   persist: Persist;
   /** Named in the notice an envelope dropped by Stop leaves. */
   userName?: string;
+  /** Who the stall note names, read when it is left so a rename shows. Default "Claude Code". */
+  name?: () => string;
+  /**
+   * Nothing runs, nothing is queued and no query is open. Asked at every tick while so. An owner of many sessions may
+   * close and forget this one: a new session over the same state resumes it.
+   */
+  onDormant?: () => void;
   log?: (line: string) => void;
   query?: typeof query;
   executable?: () => string | null;
@@ -526,6 +559,8 @@ type Live = {
   q: Query;
   /** The query started without a resume id, so its first result is the session's whole cost. */
   fresh: boolean;
+  /** Opened for an unattended turn, with maxBudgetUsd at most what was left of the daily cap. */
+  capped: boolean;
   send(m: SDKUserMessage): void;
   release(): void;
   stderr(): string;
@@ -548,6 +583,9 @@ export function createSession(spec: SessionSpec): Session {
   let generation = 0;
   let closed = false;
   let signals = noSignals();
+  // When the live query last said anything or was sent a turn, and whether the turn in flight was told it is silent.
+  let heardAt = 0;
+  let stallNoted = false;
 
   const guard = (what: string, f: () => void) => {
     try {
@@ -614,7 +652,7 @@ export function createSession(spec: SessionSpec): Session {
   function perform(e: Effect) {
     switch (e.kind) {
       case "send":
-        return send(e.text);
+        return send(e.pending, e.text);
       case "end":
         return guard("onTurnEnd", () => spec.onTurnEnd(e.pending, e.end));
       case "interrupt":
@@ -626,21 +664,53 @@ export function createSession(spec: SessionSpec): Session {
     }
   }
 
-  function send(text: string) {
+  /**
+   * maxBudgetUsd is fixed when a query opens and counts the spend since then, and the SDK stops a turn at it. So an
+   * unattended turn gets a query of its own, capped at what is left of the daily cap as it starts, and an attended turn
+   * never runs on such a query: the cap does not hold it. A runaway unattended turn stops at the cap, not at its end.
+   */
+  function send(p: Pending, text: string) {
+    const unattended = !attended(p.initiator);
+    if (live && (unattended || live.capped)) closeLive();
     let l: Live;
     try {
-      l = live ?? open();
+      l = live ?? open(unattended);
     } catch (e) {
       return dispatch({ kind: "unstarted", error: redactSecrets(errorText(e)) });
     }
     signals = noSignals();
+    heardAt = clock().getTime();
+    stallNoted = false;
     l.send({ type: "user", message: { role: "user", content: text }, parent_tool_use_id: null });
   }
 
-  function open(): Live {
+  /** The stall note while a turn runs; closing the query while none does. */
+  function watchDeadline(): number | null {
+    const kind = spec.state.lifecycle.kind;
+    if (!live || kind === "stopping") return null;
+    if (kind === "working") return stallNoted ? null : heardAt + STALL_MS;
+    return heardAt + IDLE_MS;
+  }
+
+  function watch(now: Date) {
+    if (closed) return;
+    const due = watchDeadline();
+    if (due !== null && now.getTime() >= due) {
+      if (spec.state.lifecycle.kind !== "working") closeLive();
+      else {
+        stallNoted = true;
+        guard("note", () => spec.note(stallNote(spec.name?.() ?? "Claude Code")));
+      }
+    }
+    if (!live && spec.state.lifecycle.kind === "idle" && spec.state.pending.length === 0) guard("onDormant", () => spec.onDormant?.());
+  }
+
+  function open(unattended: boolean): Live {
     const path = executable();
     if (!path) throw new Error("claude was not found on PATH, or CLAUDIOBOT_CLAUDE does not name an executable");
     const options = spec.options();
+    // Above 0: the headroom check let this turn start, and it sees the same spend.
+    const cap = unattended ? spec.ledger.dailyLeft(spec.actor.botId) : null;
     const gen = ++generation;
     const inbox: SDKUserMessage[] = [];
     let wake: (() => void) | null = null;
@@ -657,11 +727,20 @@ export function createSession(spec: SessionSpec): Session {
         wake = null;
       }
     }
-    const q = run({ prompt: input(), options: { ...options, pathToClaudeCodeExecutable: path, stderr: (d) => (stderr = (stderr + d).slice(-2000)) } });
+    const q = run({
+      prompt: input(),
+      options: {
+        ...options,
+        ...(cap !== null && { maxBudgetUsd: Math.min(cap, options.maxBudgetUsd ?? cap) }),
+        pathToClaudeCodeExecutable: path,
+        stderr: (d) => (stderr = (stderr + d).slice(-2000)),
+      },
+    });
     const l: Live = {
       gen,
       q,
       fresh: !options.resume,
+      capped: cap !== null,
       send(m) {
         inbox.push(m);
         wake?.();
@@ -700,6 +779,7 @@ export function createSession(spec: SessionSpec): Session {
   }
 
   function receive(m: SDKMessage, l: Live) {
+    heardAt = clock().getTime();
     if (m.session_id && m.session_id !== spec.state.id) {
       own(spec.state).id = m.session_id;
       guard("persist", () => spec.persist());
@@ -740,7 +820,7 @@ export function createSession(spec: SessionSpec): Session {
   return {
     push(input) {
       if (closed) return;
-      const id = `e_${crypto.randomUUID()}` as EnvelopeId;
+      const id = `${input.ahead ? CONTINUATION : "e_"}${crypto.randomUUID()}` as EnvelopeId;
       const pending: Pending = { id, at: clock().toISOString(), text: input.text, initiator: input.initiator, settles: input.settles, attempts: 0 };
       dispatch({ kind: "push", pending, ahead: input.ahead });
     },
@@ -762,12 +842,15 @@ export function createSession(spec: SessionSpec): Session {
     },
     tick(now) {
       dispatch({ kind: "tick" }, now);
+      watch(now);
     },
     nextDeadline() {
       const life = spec.state.lifecycle;
-      if (life.kind === "stopping") return life.deadline;
-      if (life.kind === "backoff" || life.kind === "parked") return life.until;
-      return waiting() ? spec.account.parkedUntil : null;
+      const lifecycleAt =
+        life.kind === "stopping" ? life.deadline : life.kind === "backoff" || life.kind === "parked" ? life.until : waiting() ? spec.account.parkedUntil : null;
+      const watched = watchDeadline();
+      const watchAt = watched === null ? null : new Date(watched).toISOString();
+      return lifecycleAt === null || (watchAt !== null && watchAt < lifecycleAt) ? watchAt : lifecycleAt;
     },
     close() {
       if (closed) return;
@@ -780,6 +863,9 @@ export function createSession(spec: SessionSpec): Session {
     },
     get parkedFor() {
       return parkedFor();
+    },
+    get unavailable() {
+      return memo.startFailures > 0 && spec.state.lifecycle.kind === "backoff";
     },
     get current() {
       return current();

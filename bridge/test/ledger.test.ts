@@ -114,6 +114,29 @@ test.each([
   got.forEach((d, i) => expect(d).toBeCloseTo(deltas[i]!, 9));
 });
 
+// total_cost_usd as claude-sonnet-5-5 (Claude Code 2.1.301) reported it for one session: a fresh query of five turns,
+// closed; a resumed one; another resumed after its predecessor was closed mid-turn; and a query whose maxBudgetUsd ran
+// out, which reports the same total for every turn after. A resumed query's first result carries the session's total.
+test("the totals a real session reported across closed and resumed queries charge each turn once", () => {
+  const { dir, logs, ledger } = harness({ caps: { [B1]: 10 } });
+  const results: [number, boolean][] = [
+    [0.004278, true],
+    [0.904344, false],
+    [0.936633, false],
+    [0.959443, false],
+    [0.9822531, false],
+    [0.9974631, false],
+    [1.0637391, false],
+    [1.0637391, false],
+    [1.0653341, false],
+  ];
+  for (const [c, fresh] of results) ledger.add({ actor: bot1, sessionId: "s1", initiator: routine, cumulativeUsd: c, fresh });
+  const got = rowsIn(dir).map((r) => r.deltaUsd);
+  [0.004278, 0.900066, 0.032289, 0.02281, 0.0228101, 0.01521, 0.066276, 0, 0.001595].forEach((d, i) => expect(got[i]).toBeCloseTo(d, 9));
+  expect(ledger.dailyLeft(B1)).toBeCloseTo(10 - 1.0653341, 9);
+  expect(logs.filter((l) => l.startsWith("usage: WARNING"))).toEqual([]);
+});
+
 test("a cumulative below the baseline is logged as an anomaly", () => {
   const { logs, ledger } = harness();
   ledger.add({ actor: bot1, sessionId: "s1", initiator: user, cumulativeUsd: 3 });

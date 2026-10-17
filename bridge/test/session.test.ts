@@ -26,6 +26,7 @@ import {
   type Event,
   type Outcome,
   type TurnEnd,
+  usedBudget,
 } from "../src/session";
 import type { SessionInput } from "../src/prompts";
 import {
@@ -52,6 +53,7 @@ const agentMail: Initiator = { kind: "agent", agentId: "a_1" as AgentId, hops: 0
 const attendedNow = attended;
 
 const roomy = (): Headroom => ({ ok: true, capReached: false });
+const fired: RunRef = { routineId: "r_1" as RoutineId, runId: "run_1" as RunId };
 
 // ─── step(): the lifecycle as a table ───────────────────────────────────────────────────────────────────────────────
 
@@ -63,6 +65,8 @@ const env = (id: string, initiator: Initiator = user, attempts = 0): Pending => 
   settles: null,
   attempts,
 });
+/** A routine's scheduled fire: the only envelope that settles a run. */
+const fire = (id: string): Pending => ({ ...env(id, routine), settles: routine.kind === "routine" ? routine.run : null });
 const turn = (id: string, over: Partial<ActiveTurn> = {}): ActiveTurn => ({ pending: id as EnvelopeId, startedAt: NOW.toISOString(), output: false, denials: 0, ...over });
 const core = (lifecycle: Lifecycle, pending: Pending[], over: Partial<Core> = {}): Core => ({
   session: { id: "s_1", pending, lifecycle, notices: [] },
@@ -191,25 +195,32 @@ describe("step", () => {
     expect(t.core.session).toMatchObject({ pending: [], lifecycle: { kind: "idle" } });
   });
 
-  test("Stop on a working turn interrupts it and drops queued unattended envelopes, each with a notice", () => {
-    const pending = [env("a", routine, 1), env("u1"), env("r", routine), env("b", botMail), env("m", manualRun), env("g", agentMail)];
+  test("Stop on a working turn interrupts it and drops queued routine fires and bot messages, with one notice", () => {
+    const pending = [env("a", routine, 1), env("u1"), fire("r"), env("b", botMail), env("m", manualRun), env("g", agentMail)];
     const t = run(core({ kind: "working", turn: turn("a") }, pending), { kind: "stop" });
     expect(t.core.session.lifecycle).toEqual({ kind: "stopping", turn: turn("a"), deadline: later(STOP_DEADLINE_MS) });
-    expect(t.core.session.pending.map((p) => p.id as string)).toEqual(["a", "u1", "m"]);
-    expect(kinds(t.effects)).toEqual(["interrupt", "end", "end", "end"]);
+    expect(t.core.session.pending.map((p) => p.id as string)).toEqual(["a", "u1", "m", "g"]);
+    expect(kinds(t.effects)).toEqual(["interrupt", "end", "end"]);
     expect(endsOf(t.effects)).toEqual([
       ["r", "dropped"],
       ["b", "dropped"],
-      ["g", "dropped"],
     ]);
-    expect(t.core.session.notices.map((n) => n.text)).toEqual(["[Alex pressed Stop, so 3 queued messages never ran: [r]; [b]; [g]]"]);
+    expect(t.core.session.notices.map((n) => n.text)).toEqual(["[Alex pressed Stop, so 2 queued messages never ran: [r]; [b]]"]);
+  });
+
+  test("Stop keeps agent reports and the continuations of calls a routine or the bridge asked for", () => {
+    const system: Initiator = { kind: "system" };
+    const pending = [env("a", user, 1), env("g", agentMail), env("rc", routine), env("sc", system)];
+    const t = run(core({ kind: "working", turn: turn("a") }, pending), { kind: "stop" });
+    expect(t.core.session.pending.map((p) => p.id as string)).toEqual(["a", "g", "rc", "sc"]);
+    expect([kinds(t.effects), t.core.session.notices]).toEqual([["interrupt"], []]);
   });
 
   test.each([
     [1, ["[Alex pressed Stop, so this never ran: [r1]]"]],
     [5, ["[Alex pressed Stop, so 5 queued messages never ran: [r1]; [r2]; [r3]; and 2 more]"]],
   ] as const)("Stop dropping %i envelopes leaves one notice", (n, notices) => {
-    const queued = Array.from({ length: n }, (_, i) => env(`r${i + 1}`, routine));
+    const queued = Array.from({ length: n }, (_, i) => fire(`r${i + 1}`));
     const t = run(core({ kind: "working", turn: turn("a") }, [env("a", user, 1), ...queued]), { kind: "stop" });
     expect(t.core.session.notices.map((x) => x.text)).toEqual([...notices]);
   });
@@ -232,7 +243,7 @@ describe("step", () => {
   test("Stop while parked for the usage limit drops queued unattended work and keeps the user's message parked", () => {
     const until = later(60_000);
     const parked: Lifecycle = { kind: "parked", reason: "usage_limit", until };
-    const t = run(core(parked, [env("u"), env("r", routine), env("b", botMail)], { parkedUntil: until }), { kind: "stop" });
+    const t = run(core(parked, [env("u"), fire("r"), env("b", botMail)], { parkedUntil: until }), { kind: "stop" });
     expect(t.core.session.pending.map((p) => p.id as string)).toEqual(["u"]);
     expect(t.core.session.lifecycle).toEqual(parked);
     expect(endsOf(t.effects)).toEqual([
@@ -243,7 +254,7 @@ describe("step", () => {
   });
 
   test("Stop while parked at the daily cap with only unattended work empties the queue", () => {
-    const t = run(core({ kind: "parked", reason: "daily_cap", until: later(60_000) }, [env("r1", routine), env("r2", routine)]), { kind: "stop" });
+    const t = run(core({ kind: "parked", reason: "daily_cap", until: later(60_000) }, [fire("r1"), fire("r2")]), { kind: "stop" });
     expect(t.core.session).toMatchObject({ pending: [], lifecycle: { kind: "idle" } });
     expect(endsOf(t.effects)).toEqual([
       ["r1", "dropped"],
@@ -305,12 +316,15 @@ describe("step", () => {
     expect(c.session.lifecycle).toMatchObject({ kind: "parked", reason: "daily_cap" });
   });
 
-  test("a query that could not open gives the attempt back, waits 30 s, and touches nothing else queued", () => {
+  test("a query that could not open gives the attempt back, waits 30 s, touches nothing else queued, and says so at once", () => {
     const t = run(core({ kind: "working", turn: turn("a") }, [env("a", user, 1), env("b", routine)]), { kind: "unstarted", error: "claude was not found" });
     const until = later(START_RETRY_MS[0]);
     expect(t.core.session.pending).toEqual([env("a", user, 0), env("b", routine)]);
     expect(t.core.session.lifecycle).toEqual({ kind: "backoff", until, attempt: 0 });
-    expect(t.effects).toEqual([{ kind: "end", pending: env("a", user, 0), end: { kind: "deferred", until, why: "retry" } }]);
+    expect(t.effects).toEqual([
+      { kind: "end", pending: env("a", user, 0), end: { kind: "deferred", until, why: "retry" } },
+      { kind: "note", text: "Claude Code could not start: claude was not found. Queued messages are kept, and it keeps trying." },
+    ]);
   });
 
   test("repeated start failures wait longer each time up to a cap, never use up the envelope, and leave one note", () => {
@@ -387,6 +401,22 @@ describe("step", () => {
     const t = run(core({ kind: "idle" }, []), { kind: "push", pending: env("a", botMail), ahead: false }, () => ({ ok: false, reason: "agent_budget" }));
     expect(endsOf(t.effects)).toEqual([["a", "failed"]]);
     expect(t.core.session).toMatchObject({ pending: [], lifecycle: { kind: "idle" } });
+  });
+
+  test("a budget that ran out, before the turn or during it, reads as used up; other ends do not", () => {
+    const outOfBudget = run(core({ kind: "idle" }, []), { kind: "push", pending: env("a", botMail), ahead: false }, () => ({ ok: false, reason: "agent_budget" }));
+    const outOfAttempts = run(core({ kind: "idle" }, [env("a", user, 4)]), { kind: "pump" });
+    const endOf = (fx: Effect[]) => fx.flatMap((e) => (e.kind === "end" ? [e.end] : []))[0]!;
+    const result = (subtype: string) => ({ type: "result", subtype, is_error: subtype !== "success", errors: [], total_cost_usd: 1 }) as unknown as SDKResultMessage;
+    const ends: TurnEnd[] = [
+      endOf(outOfBudget.effects),
+      { kind: "done", result: result("error_max_budget_usd") },
+      endOf(outOfAttempts.effects),
+      { kind: "done", result: result("success") },
+      { kind: "done", result: result("error_max_turns") },
+      { kind: "stopped", by: "user" },
+    ];
+    expect(ends.map(usedBudget)).toEqual([true, true, false, false, false, false]);
   });
 
   test("an envelope out of attempts fails instead of starting a fifth time", () => {
@@ -574,6 +604,7 @@ function harness(
     executable?: string | null;
     defaultExecutable?: boolean;
     clock?: { t: number };
+    dailyLeft?: () => number;
   } = {},
 ) {
   const clock = opts.clock ?? { t: NOW.getTime() };
@@ -596,7 +627,7 @@ function harness(
       add: opts.add ?? ((row) => void usage.push(row as Record<string, unknown>)),
       headroom: (_, i) => (opts.headroom ?? roomy)(i),
       budgetLeft: () => 5,
-      dailyLeft: () => 10,
+      dailyLeft: opts.dailyLeft ?? (() => 10),
     },
     onMessage: (m, t) => messages.push({ m, turn: t }),
     onTurnEnd: (p, end) => ends.push({ id: p.id, text: p.text, pending: p, end }),
@@ -608,6 +639,7 @@ function harness(
         if (urgency === "now") disk = structuredClone(state);
       }),
     userName: "Alex",
+    name: () => "Ana",
     log: (line) => logs.push(line),
     query: (({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => {
       const q = new FakeQuery(options, prompt, () => structuredClone(disk));
@@ -869,13 +901,13 @@ describe("session", () => {
     await flush();
     expect(h.ends).toMatchObject([{ id, end: { kind: "stopped", by: "user" } }]);
     expect(h.usage).toMatchObject([{ cumulativeUsd: 0.3 }]);
-    expect([h.session.nextDeadline(), h.session.working, h.sent().length]).toEqual([null, false, 1]);
+    expect([h.session.nextDeadline(), h.session.working, h.sent().length]).toEqual([later(15 * 60_000), false, 1]);
     expect(await h.session.interrupt()).toBe(false);
   });
 
   test("while stopping nothing new is sent; queued unattended mail is dropped and the user's queued message runs after", async () => {
     const { h, id: a } = await started("[a]");
-    const r = h.push("[Routine Digest fired]\nsummarize", routine);
+    const r = h.push("[Routine Digest fired]\nsummarize", routine, false, fired);
     const u = h.push("[Alex]\nactually, wait");
     const b = h.push("[Message from bot Scout]\nping", botMail);
     await h.session.interrupt();
@@ -893,6 +925,137 @@ describe("session", () => {
       "[Alex pressed Stop, so 2 queued messages never ran: [Routine Digest fired]; [Message from bot Scout]]\n[Alex]\nactually, wait",
     ]);
     expect(h.queries).toHaveLength(1);
+  });
+
+  test("Stop keeps the continuation of a call a bot's message asked for, and drops the bot's message itself", async () => {
+    const { h } = await started("[a]");
+    const b = h.push("[Message from bot Scout]\nping", botMail);
+    const c = h.push("[Alex allowed Bash `make` once]", botMail, true);
+    const g = h.push("[Agent Fix tests reports]\ndone", agentMail);
+    await h.session.interrupt();
+    expect(h.finals(b)).toMatchObject([{ end: { kind: "dropped" } }]);
+    expect(h.state.pending.map((p) => p.text)).toEqual(["[a]", "[Alex allowed Bash `make` once]", "[Agent Fix tests reports]\ndone"]);
+    expect([h.finals(c), h.finals(g)]).toEqual([[], []]);
+  });
+
+  test("a query that serves no turn for 15 minutes is closed, and the next push resumes the session on a new one", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(said("hi"), resultMsg(0.5));
+    await flush();
+    expect(h.session.nextDeadline()).toBe(new Date(h.clock.t + 15 * 60_000).toISOString());
+    await h.advance(15 * 60_000 - 1);
+    expect(h.q().closed).toBe(false);
+    await h.advance(1);
+    expect([h.q().closed, h.session.nextDeadline()]).toEqual([true, null]);
+    h.push("[b]");
+    await flush();
+    expect(h.queries.map((q) => [q.options.resume, q.received.map((r) => r.text)])).toEqual([
+      [undefined, ["[a]"]],
+      ["s_1", ["[b]"]],
+    ]);
+    h.q().emit(resultMsg(0.75));
+    await flush();
+    expect(h.usage.map((u) => [u.cumulativeUsd, u.fresh])).toEqual([
+      [0.5, true],
+      [0.75, false],
+    ]);
+  });
+
+  test("output after the turn ended keeps the query open: the 15 minutes count from its last message", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(resultMsg(0.5));
+    await flush();
+    await h.advance(10 * 60_000);
+    h.q().emit(said("The background build finished."));
+    await flush();
+    await h.advance(10 * 60_000);
+    expect(h.q().closed).toBe(false);
+    await h.advance(5 * 60_000);
+    expect(h.q().closed).toBe(true);
+  });
+
+  test("a query whose queue waits on the daily cap is closed after 15 minutes too, and the work runs once the cap lifts", async () => {
+    let capped = true;
+    const h = harness({ headroom: (i) => (!capped || attendedNow(i) ? roomy() : { ok: false, reason: "daily_cap", until: later(12 * 3_600_000) }) });
+    h.push("[a]");
+    await flush();
+    h.q().emit(resultMsg(0.5));
+    await flush();
+    h.push("[r]", routine, false, fired);
+    await flush();
+    expect(h.session.parkedFor).toBe("daily_cap");
+    await h.advance(15 * 60_000);
+    expect(h.q().closed).toBe(true);
+    capped = false;
+    h.session.recheck();
+    await flush();
+    expect(h.queries.map((q) => [q.options.resume, q.received.map((r) => r.text)])).toEqual([
+      [undefined, ["[a]"]],
+      ["s_1", ["[r]"]],
+    ]);
+  });
+
+  test("an unattended turn runs on a query opened for it and capped at what is left of the daily cap; an attended one never does", async () => {
+    const left = [3.25, 2.5];
+    const h = harness({ dailyLeft: () => left.shift()! });
+    const turn = async (text: string, initiator: Initiator = user, settles: RunRef | null = null) => {
+      h.push(text, initiator, false, settles);
+      await flush();
+      h.q().emit(resultMsg(1));
+      await flush();
+    };
+    await turn("[a]");
+    await turn("[r]", routine, fired);
+    await turn("[b]", botMail);
+    await turn("[u1]");
+    await turn("[u2]");
+    expect(h.queries.map((q) => [q.options.resume, q.options.maxBudgetUsd, q.closed, q.received.map((r) => r.text)])).toEqual([
+      [undefined, undefined, true, ["[a]"]],
+      ["s_1", 3.25, true, ["[r]"]],
+      ["s_1", 2.5, true, ["[b]"]],
+      ["s_1", undefined, false, ["[u1]", "[u2]"]],
+    ]);
+  });
+
+  test("an unattended agent turn is capped by the smaller of the agent's budget and the daily cap", async () => {
+    const left = [3, 9];
+    const h = harness({ dailyLeft: () => left.shift()!, options: () => ({ cwd: "/code/shop", maxBudgetUsd: 4.5 }) });
+    for (const [text, initiator] of [["[r1]", routine], ["[r2]", routine], ["[u]", user]] as const) {
+      h.push(text, initiator);
+      await flush();
+      h.q().emit(resultMsg(1));
+      await flush();
+    }
+    expect(h.queries.map((q) => q.options.maxBudgetUsd)).toEqual([3, 4.5, 4.5]);
+  });
+
+  test("a turn silent for 30 minutes leaves one note naming the bot, and keeps running", async () => {
+    const { h } = await started("[a]");
+    await h.advance(30 * 60_000 - 1);
+    expect([h.notes, h.session.nextDeadline()]).toEqual([[], new Date(h.clock.t + 1).toISOString()]);
+    await h.advance(1);
+    expect(h.notes).toEqual(["Ana has been silent for 30 minutes; you can press Stop."]);
+    await h.advance(60 * 60_000);
+    expect([h.notes.length, h.q().interrupts, h.q().closed, h.state.lifecycle.kind]).toEqual([1, 0, false, "working"]);
+    h.q().emit(resultMsg(1));
+    await flush();
+    expect(h.ends.map((e) => e.end.kind)).toEqual(["done"]);
+  });
+
+  test("each SDK message restarts the 30 minutes, and every turn can be told once", async () => {
+    const { h } = await started("[a]");
+    await h.advance(20 * 60_000);
+    h.q().emit(said("Still building."));
+    await flush();
+    await h.advance(20 * 60_000);
+    expect(h.notes).toEqual([]);
+    await h.advance(10 * 60_000);
+    h.q().emit(resultMsg(1));
+    await flush();
+    h.push("[b]");
+    await flush();
+    await h.advance(30 * 60_000);
+    expect(h.notes).toEqual(["Ana has been silent for 30 minutes; you can press Stop.", "Ana has been silent for 30 minutes; you can press Stop."]);
   });
 
   test("Stop with no answer kills the query at 15 s, and the next envelope starts a fresh one", async () => {
@@ -1009,6 +1172,20 @@ describe("session", () => {
     expect([h.finals(a), h.finals(b)]).toMatchObject([[{ end: { kind: "done" }, pending: { attempts: 1 } }], [{ end: { kind: "done" }, pending: { attempts: 1 } }]]);
   });
 
+  test("a session that cannot start Claude Code is unavailable while it waits to retry, and stops being so once a query opens", async () => {
+    const o: { executable: string | null | undefined } = { executable: null };
+    const h = harness(o);
+    h.push("[a]");
+    await flush();
+    expect(h.session.unavailable).toBe(true);
+    expect(h.notes).toEqual([
+      "Claude Code could not start: claude was not found on PATH, or CLAUDIOBOT_CLAUDE does not name an executable. Queued messages are kept, and it keeps trying.",
+    ]);
+    o.executable = undefined;
+    await h.advance(START_RETRY_MS[0]);
+    expect([h.sent(), h.session.unavailable, h.notes.length]).toEqual([["[a]"], false, 1]);
+  });
+
   test("a missing claude executable is a start failure, not a failed turn", async () => {
     const h = harness({ executable: null });
     const a = h.push("[a]");
@@ -1031,7 +1208,7 @@ describe("session", () => {
     const until = later(60_000);
     const h = harness({ account: { parkedUntil: until } });
     const u = h.push("[u]");
-    const r = h.push("[r]", routine);
+    const r = h.push("[r]", routine, false, fired);
     await flush();
     expect(h.session.parkedFor).toBe("usage_limit");
     expect(await h.session.interrupt()).toBe(true);

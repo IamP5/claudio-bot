@@ -294,7 +294,7 @@ describe("update", () => {
     const { target, deps, output } = sandbox();
     const r = repo("c3 Fix the gate\nb2 Add doctor\n");
     const questions: string[] = [];
-    const code = await update({ ...deps, exec: r.exec, ask: async (q) => (questions.push(output()), false) }, target);
+    const code = await update({ ...deps, exec: r.exec, ask: async () => (questions.push(output()), false) }, target);
     expect(code).toBe(0);
     expect(questions[0]).toContain("Incoming from origin/main:\nc3 Fix the gate\nb2 Add doctor\n");
     expect(r.state).toEqual({ head: "a1", installs: 0 });

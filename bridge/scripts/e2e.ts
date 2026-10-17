@@ -12,7 +12,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Bot, BotId, ClientMessage, Message, ServerMessage } from "../src/protocol";
 
-// The probe found that haiku 4.5 and sonnet 4.5 silently run in default mode when auto is asked for.
+// haiku 4.5 and sonnet 4.5 silently run in default mode when auto is asked for.
 const MODEL = process.env.E2E_MODEL ?? "claude-sonnet-5-5";
 const TURN_MS = 240_000;
 const USER = "Alex";

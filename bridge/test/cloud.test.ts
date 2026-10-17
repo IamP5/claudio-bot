@@ -24,7 +24,7 @@ test("follow-up JSON from claude -p --cloud is accepted unless it reports failur
   expect(followUpAccepted("Error: session not found")).toBe(false);
 });
 
-// A stand-in for the claude CLI that prints what the real one printed in a probe, and logs its argv.
+// A stand-in for the claude CLI that prints what the real one prints, and logs its argv.
 const dir = mkdtempSync(join(tmpdir(), "claudiobot-fake-claude-"));
 const log = join(dir, "calls.log");
 const fake = join(dir, "claude");

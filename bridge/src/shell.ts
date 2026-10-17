@@ -3,7 +3,7 @@
 // literal path (its first unquoted $ ` * ? [ { ). It is best effort: the auto classifier still screens whatever passes.
 //
 // Heredocs are stripped before the main scan (stripHeredocs): a `<<[-]WORD` body is skipped so its text cannot desync
-// the quote/paren scanners (the classic `git commit -m "$(cat <<'EOF' … EOF)"` that used to hide every later command).
+// the quote/paren scanners (the classic `git commit -m "$(cat <<'EOF' … EOF)"` would otherwise hide every later command).
 // An unquoted delimiter means the body is expanded, so command substitutions inside it are still parsed; a quoted
 // delimiter (`'EOF'`, `"EOF"`, `\EOF`) means a literal body, which is skipped whole.
 

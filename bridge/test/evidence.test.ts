@@ -1,5 +1,5 @@
-import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
+import { chmodSync, cpSync, existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evidenceLine, prOf, readEvidence } from "../src/evidence";
@@ -31,10 +31,18 @@ function commit(cwd: string, file: string, body: string) {
   git(cwd, "commit", "-q", "-m", `edit ${file}`);
 }
 
+// One committed repo, made once and copied per case: git init and the first commit are the same every time.
+let template = "";
+beforeAll(() => {
+  template = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-evidence-template-")));
+  git(template, "init", "-q", "-b", "main");
+  commit(template, "README.md", "hello\n");
+});
+afterAll(() => rmSync(template, { recursive: true, force: true }));
+
 function repo() {
   const dir = temp();
-  git(dir, "init", "-q", "-b", "main");
-  commit(dir, "README.md", "hello\n");
+  cpSync(template, dir, { recursive: true });
   return dir;
 }
 

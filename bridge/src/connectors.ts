@@ -12,10 +12,10 @@ import { own, type World } from "./world";
 // including from an agent whose turn began before the toggle and keeps its query until that turn ends.
 //
 // Proven by isolated probes:
-//  - research/pass3/probe-c: a resumed query given deniedMcpServers does not list or load the user server chrome-devtools.
-//  - research/pass3/probe-c2: the plugin server plugin:vercel:vercel has that name in mcpServerStatus and in the
-//    PreToolUse hook's mcp_server (source "plugin"), its tools are named mcp__plugin_vercel_vercel__*, and
-//    deniedMcpServers [{ serverName: "plugin:vercel:vercel" }] keeps it out of the status list and the tool list.
+//  - a resumed query given deniedMcpServers does not list or load the user server chrome-devtools.
+//  - the plugin server plugin:vercel:vercel has that name in mcpServerStatus and in the PreToolUse hook's mcp_server
+//    (source "plugin"), its tools are named mcp__plugin_vercel_vercel__*, and deniedMcpServers
+//    [{ serverName: "plugin:vercel:vercel" }] keeps it out of the status list and the tool list.
 // Not proven: claude.ai servers ("claude.ai Gmail"). Their hook name and whether the deny list matches their status name
 // are untested; the gate also matches their tool prefix (mcp__claude_ai_Gmail__) as Claude Code's bundle normalizes it.
 

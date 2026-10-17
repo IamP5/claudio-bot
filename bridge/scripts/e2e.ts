@@ -751,7 +751,7 @@ try {
   await scenario("the phone sees today's spend, and the daily cap holds an unattended run until it is raised", async () => {
     const bot = c.bots.get(claudio)!;
     check(bot.spentTodayUsd > 0 && bot.capUsd !== null && bot.capUsd > 0, `the bot frame carries spend ${bot.spentTodayUsd} of ${bot.capUsd}`);
-    let at = c.received.length;
+    const at = c.received.length;
     c.send({ type: "details", botId: claudio });
     const details = await c.waitFor(() => framesOf(c, "details", at).find((f) => f.botId === claudio), "details", 10_000);
     const metered = details.agents.filter((a) => a.where === "mac");
@@ -759,14 +759,17 @@ try {
     c.send({ type: "update_bot", botId: claudio, patch: { dailyCapUsd: 0.01 } });
     await c.waitFor(() => c.bots.get(claudio)?.capUsd === 0.01, "the cap of $0.01", 10_000);
     const before = c.messages(claudio).length;
-    const capped = routineNamed(c, "capped")!;
-    check((await call(await mint(c, capped.id), "{}")).status === 202, "capped fired");
-    await c.waitFor(() => notesOf(c, claudio, before).some((n) => /daily cap/.test(n)) || c.status(claudio) === "parked", "the daily cap to hold the run", 60_000);
-    check(c.botSays(claudio, before).length === 0, "the held run said nothing");
-    at = c.messages(claudio).length;
+    const token = await mint(c, routineNamed(c, "capped")!.id);
+    const refused = await call(token, "{}");
+    const why = await refused.text();
+    check(refused.status === 409 && /limit/i.test(why), `the webhook is refused at the cap: ${refused.status} ${why}`);
+    check(routineNamed(c, "capped")!.runs.length === 0 && c.botSays(claudio, before).length === 0, "no run started and the bot said nothing");
     c.send({ type: "update_bot", botId: claudio, patch: { dailyCapUsd: null } });
+    await c.waitFor(() => c.bots.get(claudio)?.dailyCapUsd === null, "the cap lifted", 10_000);
+    const fired = await call(token, "{}");
+    check(fired.status === 202, `with the cap lifted it fires (${fired.status})`);
     await c.waitFor(() => routineNamed(c, "capped")?.runs[0]?.status === "ok" && c.resting(claudio), "the run once the cap is lifted");
-    return `spend $${bot.spentTodayUsd.toFixed(3)} of $${bot.capUsd}; held at $0.01 (${notesOf(c, claudio, before).join(" | ").slice(0, 120)}); ran after the cap was lifted`;
+    return `spend $${bot.spentTodayUsd.toFixed(3)} of $${bot.capUsd}; at $0.01 the webhook got ${refused.status} "${why}"; after lifting it ran ok`;
   });
 
   await scenario("a rename reaches the bot's resumed session", async () => {

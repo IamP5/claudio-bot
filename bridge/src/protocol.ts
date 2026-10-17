@@ -99,8 +99,8 @@ export type Bot = {
 } & BotSpend;
 
 /**
- * Spend as the ledger counts it: Claude Code's own cost estimates, summed per turn. Refreshed on every bot frame, so it
- * can lag until the bot's next change (a new local day included).
+ * Spend as the ledger counts it: Claude Code's own cost estimates, summed per turn. Refreshed on every bot frame; the
+ * hub sends every bot again at local midnight, so today's figure starts over then.
  */
 export type BotSpend = {
   // The bot and its agents, on the Mac's current local day.

@@ -68,7 +68,7 @@ struct AgentEvidenceSection: View {
                 .confirmationDialog("Remove this worktree?", isPresented: $confirming, titleVisibility: .visible) {
                     Button("Remove", role: .destructive) { client.send(.removeWorktree(agentId: agent.id)) }
                 } message: {
-                    Text("The folder goes away. The branch \(row.branch) keeps every commit. The agent cannot continue after this.")
+                    Text("The folder goes away. The branch \(row.branch) keeps every commit. The bridge refuses while the folder holds uncommitted work or ignored files such as .env; build folders like node_modules go with it. The agent cannot continue after this.")
                 }
             }
             .font(.system(size: 14))

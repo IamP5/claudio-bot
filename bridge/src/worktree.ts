@@ -60,16 +60,28 @@ export async function prepareWorkspace(
   return { cwd: real, worktree: { path: real, branch }, base, note: null };
 }
 
-/** git worktree remove, run from the project's checkout, without --force: refused while the worktree holds uncommitted or untracked work. Its branch stays. */
+/** Ignored folders a build or package install makes again; git worktree remove deletes ignored files with the folder. */
+export const REGENERABLE = ["node_modules", ".build", "dist", "build", "DerivedData"];
+
+/**
+ * git worktree remove, run from the project's checkout, without --force: refused while the worktree holds uncommitted
+ * or untracked work, or ignored files outside REGENERABLE (an .env would go with it). Its branch stays.
+ */
 export async function removeWorktree(repo: string, worktree: Worktree): Promise<Result> {
   const git = await hardenedGit(repo);
   if (!existsSync(worktree.path)) {
     await git(["worktree", "prune"]);
     return { ok: true };
   }
-  const status = await (await hardenedGit(worktree.path))(["status", "--porcelain", "--ignore-submodules=dirty"]);
+  const status = await (await hardenedGit(worktree.path))(["status", "--porcelain", "-z", "--ignored", "--ignore-submodules=dirty"]);
   if (status === null) return refused("git could not read the worktree, so it was left in place.");
-  if (status !== "") return refused(`The worktree has uncommitted changes. Its branch ${worktree.branch} keeps every commit; commit or discard the rest first.`);
+  const entries = status.split("\0").filter((e) => e !== "");
+  if (entries.some((e) => !e.startsWith("!! "))) return refused(`The worktree has uncommitted changes. Its branch ${worktree.branch} keeps every commit; commit or discard the rest first.`);
+  const kept = entries.map((e) => e.slice(3)).filter((p) => !p.split("/").some((part) => REGENERABLE.includes(part)));
+  if (kept.length > 0) {
+    const named = kept.slice(0, 3).join(", ") + (kept.length > 3 ? ` and ${kept.length - 3} more` : "");
+    return refused(`The worktree holds ignored files that removing it would delete: ${named}. Move or delete them first; only ${REGENERABLE.join(", ")} may go with it.`);
+  }
   if ((await git(["worktree", "remove", "--end-of-options", worktree.path])) === null) return refused("git refused to remove the worktree, so it was left in place.");
   return { ok: true };
 }

@@ -1,5 +1,5 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { branchOf, prepareWorkspace, removeWorktree } from "../src/worktree";
@@ -193,3 +193,22 @@ test("a default branch named like an option never reaches git worktree add as on
   expect(git(project.path, "worktree", "list", "--porcelain")).not.toContain("locked");
 });
 
+test("removing is refused while the worktree holds ignored files, except build folders that come back", async () => {
+  const project = repo();
+  writeFileSync(join(project.path, ".gitignore"), ".env\nnode_modules/\ndist/\n");
+  git(project.path, "add", ".");
+  git(project.path, "commit", "-q", "-m", "ignore");
+  const ws = await prepareWorkspace(project, AGENT, "worktree", { root: temp() });
+  mkdirSync(join(ws.cwd, "node_modules", "left-pad"), { recursive: true });
+  writeFileSync(join(ws.cwd, "node_modules", "left-pad", "index.js"), "x\n");
+  mkdirSync(join(ws.cwd, "dist"));
+  writeFileSync(join(ws.cwd, "dist", "app.js"), "x\n");
+  writeFileSync(join(ws.cwd, ".env"), "TOKEN=1\n");
+
+  expect(await removeWorktree(project.path, ws.worktree!)).toEqual({ ok: false, error: expect.stringContaining("ignored files that removing it would delete: .env.") });
+  expect(existsSync(join(ws.cwd, ".env"))).toBe(true);
+
+  rmSync(join(ws.cwd, ".env"));
+  expect(await removeWorktree(project.path, ws.worktree!)).toEqual({ ok: true });
+  expect(existsSync(ws.cwd)).toBe(false);
+});

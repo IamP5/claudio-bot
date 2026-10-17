@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import type { Project, ProjectId } from "./protocol";
 
 export function projectRoots(env = process.env): string[] {
@@ -22,7 +22,7 @@ async function git(cwd: string, args: string[]): Promise<string | null> {
   return code === 0 ? out.trim() : null;
 }
 
-async function describe(path: string): Promise<Project> {
+async function describe({ path, name }: { path: string; name: string }): Promise<Project> {
   const [branch, origin] = await Promise.all([
     // symbolic-ref names the branch even before the first commit, and fails when HEAD is detached.
     git(path, ["symbolic-ref", "--short", "-q", "HEAD"]),
@@ -30,7 +30,7 @@ async function describe(path: string): Promise<Project> {
   ]);
   return {
     id: projectId(path),
-    name: basename(path),
+    name,
     path,
     branch: branch || null,
     githubRepo: origin ? parseGithubRepo(origin) : null,
@@ -38,13 +38,13 @@ async function describe(path: string): Promise<Project> {
 }
 
 export async function scanProjects(roots = projectRoots()): Promise<Project[]> {
-  const dirs: string[] = [];
+  const dirs: { path: string; name: string }[] = [];
   for (const root of roots) {
     if (!existsSync(root) || !statSync(root).isDirectory()) continue;
-    // existsSync follows symlinks, so a symlinked project folder counts too.
+    // existsSync follows symlinks, so a symlinked project folder counts too. The path is the realpath, the name stays the folder name.
     for (const name of readdirSync(root)) {
       const path = join(root, name);
-      if (existsSync(join(path, ".git"))) dirs.push(path);
+      if (existsSync(join(path, ".git"))) dirs.push({ path: realpathSync(path), name });
     }
   }
   const projects = await Promise.all(dirs.map(describe));

@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { approvalDetail, toolSummary } from "../src/summary";
 
 const cwd = "/Users/me/app";
@@ -31,4 +34,19 @@ test("Write detail shows only the first 40 lines", () => {
 test("Bash detail is the full command", () => {
   const command = "git add -A &&\n  git commit -m 'x'";
   expect(approvalDetail("Bash", { command })).toBe(command);
+});
+
+test("paths under a symlinked cwd are shown relative", () => {
+  const real = mkdtempSync(join(tmpdir(), "summary-real-"));
+  const link = join(tmpdir(), `summary-link-${process.pid}`);
+  symlinkSync(real, link);
+  try {
+    writeFileSync(join(real, "hello.py"), "");
+    expect(toolSummary("Write", { file_path: join(realpathSync(real), "hello.py") }, link)).toBe("hello.py");
+    expect(toolSummary("Read", { file_path: join(link, "hello.py") }, realpathSync(real))).toBe("hello.py");
+    expect(toolSummary("Read", { file_path: join(realpathSync(real), "new", "file.py") }, link)).toBe("new/file.py");
+  } finally {
+    rmSync(link);
+    rmSync(real, { recursive: true });
+  }
 });

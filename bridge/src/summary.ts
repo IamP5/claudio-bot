@@ -1,12 +1,22 @@
+import { realpathSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
 
 type Input = Record<string, unknown>;
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
+// Claude reports realpaths, while a project path may go through a symlink (macOS /var is /private/var).
+function realOrSelf(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
 function displayPath(cwd: string, path: string): string {
   if (!isAbsolute(path)) return path;
-  const rel = relative(cwd, path);
+  const rel = relative(realOrSelf(cwd), realOrSelf(path));
   return rel === "" ? "." : rel.startsWith("..") ? path : rel;
 }
 

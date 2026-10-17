@@ -1469,6 +1469,54 @@ describe("session", () => {
   });
 });
 
+describe("a conversation Claude Code no longer has", () => {
+  // What claude 2.1.301 sends for --resume of a purged transcript (probe, 2026-10-17): this result, then the query throws.
+  const gone = (id: string) => {
+    const text = `No conversation found with session ID: ${id}`;
+    return resultMsg(0, { subtype: "error_during_execution", is_error: true, result: text, errors: [text], session_id: id });
+  };
+
+  test("the session id is cleared, the user is told, and the same envelope runs on a fresh session without spending an attempt", async () => {
+    const h = harness({ state: emptySession("s_old") });
+    const a = h.push("[Alex]\nhello");
+    await flush();
+    expect(h.q().options.resume).toBe("s_old");
+    h.q().emit(gone("s_old"));
+    await flush();
+    expect(h.queries).toHaveLength(2);
+    expect([h.queries[0]!.closed, h.q().options.resume]).toEqual([true, undefined]);
+    expect(h.state.id).toBeNull();
+    expect(h.state.pending).toMatchObject([{ id: a, attempts: 1 }]);
+    expect(h.ends).toEqual([]);
+    expect(h.notes).toEqual(["Ana's earlier conversation was cleared by Claude Code, so it starts a new one. Its notes and memory are kept."]);
+    expect(h.sent()).toEqual([
+      "[Alex]\nhello",
+      "[Your earlier conversation history is gone: Claude Code deleted it. Your notes and the facts about the user are kept; ask if you need something from before.]\n[Alex]\nhello",
+    ]);
+    h.q().emit(said("hi"), resultMsg(0.1, { session_id: "s_new" }));
+    await flush();
+    expect(h.finals(a)).toMatchObject([{ end: { kind: "done" } }]);
+    expect(h.state.id).toBe("s_new");
+  });
+
+  test("a fresh query that fails the same way is not retried as lost: it ends like any error result", async () => {
+    const { h, id } = await started("[a]");
+    h.q().emit(gone("s_1"));
+    await flush();
+    expect(h.queries).toHaveLength(1);
+    expect(h.finals(id)).toMatchObject([{ end: { kind: "done" } }]);
+  });
+
+  test("the context is sent again on the fresh session", async () => {
+    const h = harness({ state: emptySession("s_old"), context: () => "Facts: likes tea" });
+    h.push("[a]");
+    await flush();
+    h.q().emit(gone("s_old"));
+    await flush();
+    expect(h.sent()[1]).toStartWith("Facts: likes tea\n\n");
+  });
+});
+
 describe("claudeExecutable", () => {
   const dir = mkdtempSync(join(tmpdir(), "claudio-exe-"));
   const runnable = join(dir, "claude");
@@ -1540,6 +1588,7 @@ test.each([1, 2, 3, 4, 5, 6, 7, 8])("exactly one TurnEnd per envelope that leave
     () => live()?.emit(toolFailed(SANDBOX_DOWN)),
     () => live()?.emit(resultMsg(random(), { subtype: "error_during_execution", is_error: true, errors: [SANDBOX_DOWN] })),
     () => void (openFails = random() < 0.3),
+    () => live()?.emit(resultMsg(0, { subtype: "error_during_execution", is_error: true, errors: ["No conversation found with session ID: s_1"] })),
     () => live()?.emit(rejected(Math.floor(h.clock.t / 1000) + 600, { rateLimitType: "seven_day_opus" }), apiErrorResult(random())),
     () => h.advance(pick([500, 1_000, 3_000, 8_000, 15_000, 30_000, 120_000, 300_000])),
   ];

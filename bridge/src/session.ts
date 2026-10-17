@@ -80,6 +80,12 @@ export const RESTARTED_ERROR = "The bridge restarted during this turn.";
 const stallNote = (name: string) => `${name} has been silent for 30 minutes; you can press Stop.`;
 const startFailedNote = (error: string) =>
   `Claude Code could not start: ${error.replace(/\.?\s*$/, ".")} Queued messages are kept, and it keeps trying.`;
+const forgottenNote = (name: string) =>
+  `${name}'s earlier conversation was cleared by Claude Code, so it starts a new one. Its notes and memory are kept.`;
+const FORGOTTEN_NOTICE =
+  "[Your earlier conversation history is gone: Claude Code deleted it. Your notes and the facts about the user are kept; ask if you need something from before.]";
+/** What Claude Code says when --resume names a transcript it has deleted (after cleanupPeriodDays, or by hand). */
+const forgotten = (text: string) => /No conversation found with session ID/.test(text);
 const restartedNotice = (envelopeText: string) =>
   `[The bridge restarted during your turn on: ${envelopeText.split("\n")[0]} It may be partly done; check before redoing it.]`;
 
@@ -146,6 +152,8 @@ export type Event =
   | { kind: "end"; outcome: Outcome }
   /** The query for the turn just started could not be opened, so nothing reached Claude. */
   | { kind: "unstarted"; error: string }
+  /** The query resumed a session Claude Code no longer has, before any output: start over on a fresh one. */
+  | { kind: "forgotten" }
   | { kind: "stop" }
   /** Deadlines are due, or a hold may have lifted: a daily-cap park re-checks headroom on every tick. */
   | { kind: "tick" }
@@ -387,6 +395,17 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
       }
       // Told at the first failure of a streak: a missing claude does not fix itself.
       if (failures === 1) fx.push({ kind: "note", text: startFailedNote(ev.error) });
+      pump();
+      break;
+    }
+    case "forgotten": {
+      const t = turnOf(s.lifecycle);
+      if (!t) break;
+      s.id = null;
+      // Nothing reached the model, so the start is given back; the fresh session is told its history is gone.
+      if (s.lifecycle.kind === "stopping") finish(t, { kind: "stopped", by: stoppedBy(t) });
+      else requeue(t);
+      s.notices.unshift({ at: iso(now), text: FORGOTTEN_NOTICE });
       pump();
       break;
     }
@@ -653,6 +672,7 @@ export function createSession(spec: SessionSpec): Session {
     const state = own<SessionState>(spec.state);
     const changed =
       JSON.stringify([before.session, before.parkedUntil]) !== JSON.stringify([t.core.session, t.core.parkedUntil]);
+    state.id = t.core.session.id;
     state.pending = t.core.session.pending;
     state.lifecycle = t.core.session.lifecycle;
     state.notices = t.core.session.notices;
@@ -800,6 +820,7 @@ export function createSession(spec: SessionSpec): Session {
     const tail = l.stderr();
     const text = tail ? `${error}\n${tail}` : error;
     if (!current()) return;
+    if (!l.fresh && forgot(text)) return;
     if (!startedSandbox(text)) dispatch({ kind: "end", outcome: { kind: "transient", error: maskSecrets(text) } });
   }
 
@@ -812,6 +833,16 @@ export function createSession(spec: SessionSpec): Session {
     if (reason === null || turnOf(spec.state.lifecycle as Lifecycle)?.output !== false) return false;
     closeLive();
     dispatch({ kind: "unstarted", error: `the sandbox could not start (${reason})` });
+    return true;
+  }
+
+  /** A resumed query found its session gone before any output: the session id is cleared and the turn starts over. */
+  function forgot(text: string): boolean {
+    if (!forgotten(text) || turnOf(spec.state.lifecycle as Lifecycle)?.output !== false) return false;
+    closeLive();
+    contextSent = null;
+    dispatch({ kind: "forgotten" });
+    guard("note", () => spec.note(forgottenNote(spec.name?.() ?? "Claude Code")));
     return true;
   }
 
@@ -849,7 +880,9 @@ export function createSession(spec: SessionSpec): Session {
     signals = noSignals();
     if (!turn) return;
     const failed = m.subtype !== "success" || m.is_error;
-    if (failed && startedSandbox(m.subtype === "success" ? m.result : m.errors.join("\n"))) return;
+    const said = m.subtype === "success" ? m.result : m.errors.join("\n");
+    if (failed && !fresh && forgot(said)) return;
+    if (failed && startedSandbox(said)) return;
     dispatch({ kind: "end", outcome });
     if (l.stale && live === l && turnOf(spec.state.lifecycle as Lifecycle) === null) closeLive();
   }

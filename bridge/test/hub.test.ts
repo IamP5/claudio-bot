@@ -818,7 +818,7 @@ test("a bot's commands run sandboxed to its home and USER.md, and a mac agent's 
     [join(home, "bots", b.id), join(home, "USER.md")],
   ]);
   expect(botOptions.sandbox?.filesystem?.denyRead?.[0]).toBe(home);
-  expect([botOptions.settings, agentOptions.settings]).toEqual([{ autoMemoryEnabled: false }, { autoMemoryEnabled: false }]);
+  expect([botOptions.settings, agentOptions.settings]).toEqual([{ autoMemoryEnabled: false, cleanupPeriodDays: 3650 }, { autoMemoryEnabled: false, cleanupPeriodDays: 3650 }]);
   expect([agentOptions.sandbox?.filesystem?.allowWrite?.[0], agentOptions.env?.GIT_CONFIG_VALUE_1, botOptions.env]).toEqual([cwd, "ssh://git@github.com/", undefined]);
 });
 
@@ -987,7 +987,7 @@ test("turning a connector off answers with the new list, toggles the live query,
   await flush();
   const agentAfter = h.queries.findLast((q) => q.options.cwd === cwd)!;
 
-  const denied = { autoMemoryEnabled: false, deniedMcpServers: [{ serverName: "chrome-devtools" }] };
+  const denied = { autoMemoryEnabled: false, cleanupPeriodDays: 3650, deniedMcpServers: [{ serverName: "chrome-devtools" }] };
   expect([botAfter === botBefore, agentAfter === agentBefore]).toEqual([false, false]);
   expect([botAfter.received.length, botAfter.received[0], agentAfter.received.length, agentAfter.received[0]]).toEqual([
     1,
@@ -995,7 +995,7 @@ test("turning a connector off answers with the new list, toggles the live query,
     1,
     expect.stringContaining("And the docs."),
   ]);
-  expect([botBefore.options.settings, agentBefore.options.settings]).toEqual([{ autoMemoryEnabled: false }, { autoMemoryEnabled: false }]);
+  expect([botBefore.options.settings, agentBefore.options.settings]).toEqual([{ autoMemoryEnabled: false, cleanupPeriodDays: 3650 }, { autoMemoryEnabled: false, cleanupPeriodDays: 3650 }]);
   expect([botAfter.options.settings, agentAfter.options.settings]).toEqual([denied, denied]);
 });
 

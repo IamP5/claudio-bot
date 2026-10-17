@@ -117,6 +117,8 @@ const holdsBubbles = (p: Pending) => p.settles !== null && p.initiator.kind === 
 type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; carded: boolean } & Pushes;
 type Pushes = { pushed: { id: MessageId; at: number } | null; last: MessageId | null };
 
+/** Ten years: as long as the bot lives, in practice. */
+const KEEP_TRANSCRIPTS = { cleanupPeriodDays: 3650 } as const;
 /** A turn still running this long after its push pushes its last bubble again when it ends. */
 const LONG_TURN_MS = 20_000;
 
@@ -327,9 +329,13 @@ export function createHub(deps: HubDeps): Hub {
     if (turn.settles !== null) scheduler.settle(bot.id, turn.settles, outcomeOf(end, quiet));
   }
 
-  /** The flag settings of every query the bot and its agents open. */
+  /**
+   * The flag settings of every query the bot and its agents open. Claude Code deletes transcripts older than
+   * cleanupPeriodDays (30 by default) at startup, and a bot's session lives far longer. The user's own claude runs still
+   * sweep with their setting, so session.ts also recovers from a transcript that is gone.
+   */
   function settingsFor(botId: BotId): Settings {
-    return { ...NO_AUTO_MEMORY, ...connectorSettings(world.bots.get(botId)?.connectorsOff ?? []) };
+    return { ...NO_AUTO_MEMORY, ...KEEP_TRANSCRIPTS, ...connectorSettings(world.bots.get(botId)?.connectorsOff ?? []) };
   }
 
   /** The bot's and its agents' live queries close at their next chance, so the next ones open with fresh options. */

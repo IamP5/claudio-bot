@@ -1,8 +1,8 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { branchOf, mainCheckoutOf, prepareWorkspace, removeWorktree } from "../src/worktree";
+import { branchOf, prepareWorkspace, removeWorktree } from "../src/worktree";
 
 const AGENT = "a_ab12cd34-0000-4000-8000-000000000000";
 // Each case spawns real git several times; a loaded machine can take seconds.
@@ -38,8 +38,9 @@ function repo() {
 test("none and a clean checkout under auto work in the project folder", async () => {
   const project = repo();
   const root = temp();
-  expect(await prepareWorkspace(project, AGENT, "none", { root })).toEqual({ cwd: project.path, worktree: null });
-  expect(await prepareWorkspace(project, AGENT, "auto", { root })).toEqual({ cwd: project.path, worktree: null });
+  const folder = { cwd: project.path, worktree: null, base: null, note: null };
+  expect(await prepareWorkspace(project, AGENT, "none", { root })).toEqual(folder);
+  expect(await prepareWorkspace(project, AGENT, "auto", { root })).toEqual(folder);
   expect(readdirSync(root)).toEqual([]);
 });
 
@@ -52,7 +53,7 @@ test("worktree makes a new worktree on claudio/<id> from main, and the main chec
   const ws = await prepareWorkspace(project, AGENT, "worktree", { root });
 
   const path = join(root, "shop", AGENT);
-  expect(ws).toEqual({ cwd: path, worktree: { path, branch: "claudio/ab12cd34" } });
+  expect(ws).toEqual({ cwd: path, worktree: { path, branch: "claudio/ab12cd34" }, base: git(project.path, "rev-parse", "main"), note: null });
   expect(branchOf(AGENT)).toBe("claudio/ab12cd34");
   expect([git(path, "symbolic-ref", "--short", "HEAD"), git(path, "rev-parse", "HEAD")]).toEqual(["claudio/ab12cd34", git(project.path, "rev-parse", "main")]);
   expect([git(project.path, "symbolic-ref", "--short", "HEAD"), git(project.path, "status", "--porcelain")]).toEqual(["elsewhere", "?? wip.txt"]);
@@ -82,14 +83,34 @@ test("a worktree made from origin's default branch does not track it", async () 
 
 test("a folder outside git works in place, unless a worktree was asked for", async () => {
   const dir = temp();
-  expect(await prepareWorkspace({ path: dir, name: "notes" }, AGENT, "auto", { root: temp() })).toEqual({ cwd: dir, worktree: null });
+  expect(await prepareWorkspace({ path: dir, name: "notes" }, AGENT, "auto", { root: temp() })).toEqual({ cwd: dir, worktree: null, base: null, note: null });
   expect(prepareWorkspace({ path: dir, name: "notes" }, AGENT, "worktree", { root: temp() })).rejects.toThrow("notes is not a git repository");
 });
 
-test("a repo with no main or master branch cannot have a worktree", async () => {
+test("a repo with no main or master branch cannot have a worktree, and auto works in the folder with a note", async () => {
   const project = repo();
   git(project.path, "branch", "-q", "-m", "main", "trunk");
   expect(prepareWorkspace(project, AGENT, "worktree", { root: temp() })).rejects.toThrow("no main or master branch");
+  expect(await prepareWorkspace(project, AGENT, "auto", { root: temp(), busy: true })).toEqual({
+    cwd: project.path,
+    worktree: null,
+    base: null,
+    note: "shop has no main or master branch to start a worktree from, so the agent works in the project folder.",
+  });
+});
+
+test("a repo whose filter is required (git-lfs) still gets a worktree, with the filter not run", async () => {
+  const project = repo();
+  writeFileSync(join(project.path, ".gitattributes"), "*.bin filter=lfs\n");
+  writeFileSync(join(project.path, "a.bin"), "blob\n");
+  git(project.path, "add", ".");
+  git(project.path, "commit", "-q", "-m", "lfs");
+  git(project.path, "config", "filter.lfs.smudge", "/nonexistent/git-lfs smudge");
+  git(project.path, "config", "filter.lfs.process", "/nonexistent/git-lfs filter-process");
+  git(project.path, "config", "filter.lfs.required", "true");
+
+  const ws = await prepareWorkspace(project, AGENT, "worktree", { root: temp() });
+  expect(readFileSync(join(ws.cwd, "a.bin"), "utf8")).toBe("blob\n");
 });
 
 test("making the worktree runs none of the repo's hooks or filters", async () => {
@@ -115,12 +136,6 @@ test("making the worktree runs none of the repo's hooks or filters", async () =>
 
   git(project.path, "worktree", "add", "-q", "--detach", join(temp(), "plain"), "main");
   expect(ran()).toEqual(["hook", "smudge"]);
-});
-
-test("a worktree's main checkout is read from its .git file", async () => {
-  const project = repo();
-  const ws = await prepareWorkspace(project, AGENT, "worktree", { root: temp() });
-  expect([mainCheckoutOf(ws.cwd), mainCheckoutOf(project.path), mainCheckoutOf(temp())]).toEqual([project.path, null, null]);
 });
 
 test("removing is refused while the worktree holds uncommitted work, and keeps the branch and its commits", async () => {
@@ -177,3 +192,4 @@ test("a default branch named like an option never reaches git worktree add as on
   expect(git(ws.cwd, "rev-parse", "HEAD")).toBe(git(project.path, "rev-parse", "main"));
   expect(git(project.path, "worktree", "list", "--porcelain")).not.toContain("locked");
 });
+

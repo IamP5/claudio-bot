@@ -103,8 +103,11 @@ export function inRepo(cwd: string): boolean {
   }
 }
 
-/** null when the folder is not a git checkout or git fails. Must not throw. */
-export async function readEvidence(cwd: string, finalText: string, now: Date): Promise<AgentEvidence | null> {
+/**
+ * null when the folder is not a git checkout or git fails. Must not throw. base: the commit a worktree started from;
+ * without one, ahead counts against the default branch.
+ */
+export async function readEvidence(cwd: string, finalText: string, now: Date, base: string | null = null): Promise<AgentEvidence | null> {
   try {
     if (!existsSync(cwd) || !inRepo(cwd)) return null;
     const git = await hardenedGit(cwd);
@@ -114,7 +117,7 @@ export async function readEvidence(cwd: string, finalText: string, now: Date): P
       git(["rev-parse", "--short", "-q", "--verify", "HEAD"]),
       git(["status", "--porcelain", "--ignore-submodules=dirty"]),
       // Against what origin has when there is a remote, so commits made straight on the default branch still count.
-      defaultBranch(git).then((b) => b.remote ?? b.local),
+      base ?? defaultBranch(git).then((b) => b.remote ?? b.local),
     ]);
     if (status === null) return null;
     const [ahead, stat] =
@@ -151,3 +154,14 @@ export function evidenceLine(e: AgentEvidence): string {
   return `[Git, read by the bridge after this turn: ${parts.join("; ")}.]`;
 }
 
+/** An agent line that opens like the bridge's own is marked as the agent's, so the bot never mistakes it for git's facts. */
+const SPOOF = /^(\s*)\[Git\b/i;
+
+/** What the bot reads for a turn's report: the bridge's git line, then the agent's words. */
+export function reportText(evidence: AgentEvidence | null, text: string): string {
+  const words = text
+    .split("\n")
+    .map((line) => line.replace(SPOOF, "$1(the agent wrote this, not the bridge) [Git"))
+    .join("\n");
+  return `${evidence ? evidenceLine(evidence) : "[Git: not readable]"}\n${words}`;
+}

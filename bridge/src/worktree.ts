@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import { defaultBranch, hardenedGit, inRepo } from "./evidence";
 import type { Worktree } from "./protocol";
 import { refused, type Result } from "./result";
@@ -12,7 +12,8 @@ import type { Isolate } from "./tools";
 
 export const worktreesRoot = () => join(homedir(), ".claudiobot-worktrees");
 
-export type Workspace = { cwd: string; worktree: Worktree | null };
+/** base: the commit a worktree started from. note: a line for the bot's chat about where the agent ended up. */
+export type Workspace = { cwd: string; worktree: Worktree | null; base: string | null; note: string | null };
 
 /** claudio/<first 8 of the agent's uuid>. */
 export const branchOf = (agentId: string) => `claudio/${agentId.replace(/^a_/, "").slice(0, 8)}`;
@@ -22,7 +23,8 @@ const folderName = (name: string) => name.replace(/[^\w.-]/g, "-").replace(/^\.+
 /**
  * Where the agent works. none: the project folder. worktree: always a new worktree on claudio/<id> from the default
  * branch. auto: a worktree when the checkout has uncommitted work or `busy` (another live mac agent works in the
- * folder), else the folder. Throws when a worktree was called for and git could not make one.
+ * folder), else the folder; the folder too, with a note, when there is no default branch to start one from. Throws
+ * when a worktree was asked for and git could not make one.
  */
 export async function prepareWorkspace(
   project: { path: string; name: string },
@@ -30,7 +32,7 @@ export async function prepareWorkspace(
   isolate: Isolate,
   opts: { busy?: boolean; root?: string } = {},
 ): Promise<Workspace> {
-  const folder: Workspace = { cwd: project.path, worktree: null };
+  const folder: Workspace = { cwd: project.path, worktree: null, base: null, note: null };
   if (isolate === "none") return folder;
   if (!inRepo(project.path)) {
     if (isolate === "worktree") throw new Error(`${project.name} is not a git repository, so it cannot have a worktree.`);
@@ -43,7 +45,10 @@ export async function prepareWorkspace(
   }
   const branches = await defaultBranch(git);
   const base = branches.local ?? branches.remote;
-  if (base === null) throw new Error(`${project.name} has no main or master branch to start a worktree from.`);
+  if (base === null) {
+    if (isolate === "auto") return { ...folder, note: `${project.name} has no main or master branch to start a worktree from, so the agent works in the project folder.` };
+    throw new Error(`${project.name} has no main or master branch to start a worktree from.`);
+  }
   const parent = join(opts.root ?? worktreesRoot(), folderName(project.name));
   mkdirSync(parent, { recursive: true, mode: 0o700 });
   const path = join(parent, agentId);
@@ -52,26 +57,12 @@ export async function prepareWorkspace(
     throw new Error(`git could not make a worktree for ${project.name} on ${branch}.`);
   }
   const real = realpathSync(path);
-  return { cwd: real, worktree: { path: real, branch } };
+  return { cwd: real, worktree: { path: real, branch }, base, note: null };
 }
 
-/** The main checkout a linked worktree belongs to, read from its .git file. null when cwd is not a linked worktree. */
-export function mainCheckoutOf(cwd: string): string | null {
-  try {
-    const dot = join(cwd, ".git");
-    if (statSync(dot).isDirectory()) return null;
-    const gitDir = resolve(cwd, readFileSync(dot, "utf8").match(/^gitdir:\s*(.+?)\s*$/m)?.[1] ?? "");
-    const commonFile = join(gitDir, "commondir");
-    const common = existsSync(commonFile) ? resolve(gitDir, readFileSync(commonFile, "utf8").trim()) : gitDir;
-    return basename(common) === ".git" ? realpathSync(dirname(common)) : null;
-  } catch {
-    return null;
-  }
-}
-
-/** git worktree remove, without --force: refused while the worktree holds uncommitted or untracked work. Its branch stays. */
-export async function removeWorktree(main: string, worktree: Worktree): Promise<Result> {
-  const git = await hardenedGit(main);
+/** git worktree remove, run from the project's checkout, without --force: refused while the worktree holds uncommitted or untracked work. Its branch stays. */
+export async function removeWorktree(repo: string, worktree: Worktree): Promise<Result> {
+  const git = await hardenedGit(repo);
   if (!existsSync(worktree.path)) {
     await git(["worktree", "prune"]);
     return { ok: true };

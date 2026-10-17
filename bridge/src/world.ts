@@ -294,6 +294,13 @@ export type AgentRecord = {
   /** Writer: agents.ts. */
   agent: Agent;
   cwd: string;
+  /**
+   * The project folder's realpath, read when the agent started: repo trust, its config and its worktree's removal go
+   * through it, never through files in the worktree the agent can rewrite. Writer: agents.ts. Absent on older records.
+   */
+  repo?: string;
+  /** The commit a worktree agent's branch started from; its evidence counts ahead against it. Writer: agents.ts. */
+  base?: string | null;
   messages: AgentMessage[];
   /** Mac agents' SDK session. Writer: session.ts. */
   readonly session: Owned<SessionState>;

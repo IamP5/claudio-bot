@@ -2,7 +2,7 @@ import type { HookCallbackMatcher, HookEvent, Options, SandboxSettings, SDKMessa
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 import { createCloudSession, followUpCloudSession } from "./cloud";
-import { evidenceLine, readEvidence } from "./evidence";
+import { readEvidence, reportText } from "./evidence";
 import type { Ledger } from "./ledger";
 import type { AgentId, AgentStatus, BotId } from "./protocol";
 import { agentPrompt, type SessionInput } from "./prompts";
@@ -13,7 +13,7 @@ import { AGENT_GIT_ENV } from "./sandbox";
 import type { Persist } from "./store";
 import { errorText } from "./text";
 import type { Isolate } from "./tools";
-import { mainCheckoutOf, prepareWorkspace, removeWorktree, worktreesRoot } from "./worktree";
+import { prepareWorkspace, removeWorktree, worktreesRoot, type Workspace } from "./worktree";
 import { emptySession, newMessageId, repoTrust, type Actor, type AgentActor, type AgentRecord, type Initiator, type World } from "./world";
 
 // Agents are actors like bots: mac agents run on the same session module behind the same gate, metered by the same
@@ -41,6 +41,15 @@ export type Agents = {
   /** The agents in this repo may now load its own config: each live query is replaced at its next chance. */
   trusted(root: string): void;
 };
+
+/** The folder's realpath, or the path as given when it does not resolve (yet). */
+function realpathOr(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
 
 const queued = (text: string, initiator: Initiator): SessionInput => ({ kind: "envelope", text, initiator, settles: null });
 
@@ -98,9 +107,11 @@ export function createAgents(deps: {
   // A report waits for git, so reports run in turn order per agent.
   const reportQueues = new Map<AgentId, Promise<void>>();
   const removing = new Set<AgentId>();
+  /** Mac agents whose workspace is being prepared, by project realpath: each may yet take the folder. */
+  const preparing = new Map<AgentId, string>();
 
-  /** The checkout repo trust and project config are keyed on: the main checkout, also for an agent in a worktree. */
-  const repoOf = (rec: AgentRecord) => (rec.agent.worktree ? (mainCheckoutOf(rec.cwd) ?? rec.cwd) : rec.cwd);
+  /** The checkout repo trust and project config are keyed on, also for an agent in a worktree. */
+  const repoOf = (rec: AgentRecord) => rec.repo ?? rec.cwd;
 
   const worktrees = deps.worktrees ?? worktreesRoot();
   /** Its worktree is being or was removed: the folder its session resumes in no longer exists. */
@@ -137,21 +148,28 @@ export function createAgents(deps: {
   // The gate closes an agent's card through deliver (a decision) or notice (expiry), so those refresh it too.
   const refresh = (rec: AgentRecord) => update(rec, rec.agent.status);
 
-  function report(rec: AgentRecord, status: AgentStatus, text: string, by: Initiator) {
-    update(rec, status, { from: "agent", text });
-    deps.reported(rec, text, by);
+  /** Every report waits behind the ones before it, so a stop or crash never overtakes a turn's report still reading git. */
+  function queueReport(rec: AgentRecord, op: () => void | Promise<void>) {
+    const id = rec.agent.id;
+    const next = (reportQueues.get(id) ?? Promise.resolve()).then(op);
+    reportQueues.set(id, next.catch((e) => deps.log(`agent ${id} report: ${errorText(e)}`)));
   }
 
-  /** The evidence line goes above the agent's words, so nothing the agent writes can stand in for it. */
+  function report(rec: AgentRecord, status: AgentStatus, text: string, by: Initiator) {
+    queueReport(rec, () => {
+      update(rec, status, { from: "agent", text });
+      deps.reported(rec, text, by);
+    });
+  }
+
+  /** The bridge's git line goes above the agent's words, so nothing the agent writes can stand in for it. */
   function reportWithEvidence(rec: AgentRecord, status: AgentStatus, text: string, by: Initiator) {
-    const id = rec.agent.id;
-    const next = (reportQueues.get(id) ?? Promise.resolve()).then(async () => {
-      const evidence = await readEvidence(rec.cwd, text, new Date(deps.now()));
+    queueReport(rec, async () => {
+      const evidence = await readEvidence(rec.cwd, text, new Date(deps.now()), rec.base ?? null);
       rec.agent = { ...rec.agent, evidence };
       update(rec, status, { from: "agent", text });
-      deps.reported(rec, evidence ? `${evidenceLine(evidence)}\n${text}` : text, by);
+      deps.reported(rec, reportText(evidence, text), by);
     });
-    reportQueues.set(id, next.catch((e) => deps.log(`agent ${id} report: ${errorText(e)}`)));
   }
 
   function turnEnded(rec: AgentRecord, by: Initiator, end: TurnEnd) {
@@ -199,7 +217,7 @@ export function createAgents(deps: {
           cwd: rec.cwd,
           // Project settings, hooks and .mcp.json come from here instead of the checkout, which the agent and every
           // branch it checks out can change. A trusted worktree loads them from its main checkout, the one trusted.
-          ...(!trusted ? { projectConfigRoot: deps.configRoot(id) } : repo !== rec.cwd ? { projectConfigRoot: repo } : {}),
+          ...(!trusted ? { projectConfigRoot: deps.configRoot(id) } : rec.agent.worktree ? { projectConfigRoot: repo } : {}),
           resume: rec.session.id ?? undefined,
           settingSources: ["user", "project"],
           systemPrompt: { type: "preset", preset: "claude_code" },
@@ -242,9 +260,19 @@ export function createAgents(deps: {
   return {
     async start(botId, a) {
       const id = `a_${crypto.randomUUID()}` as AgentId;
-      // Another live agent in the project folder makes auto isolate. Cloud agents ignore isolate.
-      const busy = [...deps.world.agents.values()].some((r) => r.cwd === a.project.path && sessions.has(r.agent.id));
-      const workspace = a.where === "mac" ? await prepareWorkspace(a.project, id, a.isolate, { busy, root: worktrees }) : { cwd: a.project.path, worktree: null };
+      const repo = realpathOr(a.project.path);
+      // Another live agent in the project folder, or one still being placed, makes auto isolate. Cloud agents ignore isolate.
+      const busy =
+        [...preparing.values()].includes(repo) || [...deps.world.agents.values()].some((r) => repoOf(r) === repo && !r.agent.worktree && sessions.has(r.agent.id));
+      let workspace: Workspace = { cwd: a.project.path, worktree: null, base: null, note: null };
+      if (a.where === "mac") {
+        preparing.set(id, repo);
+        try {
+          workspace = await prepareWorkspace(a.project, id, a.isolate, { busy, root: worktrees });
+        } finally {
+          preparing.delete(id);
+        }
+      }
       const at = deps.now();
       const rec: AgentRecord = {
         agent: {
@@ -261,6 +289,8 @@ export function createAgents(deps: {
           worktree: workspace.worktree,
         },
         cwd: workspace.cwd,
+        repo,
+        base: workspace.base,
         messages: [{ id: newMessageId(), at, from: "bot", text: a.prompt }],
         session: emptySession(),
         cloudSession: null,
@@ -271,9 +301,10 @@ export function createAgents(deps: {
       deps.changed(rec);
       const prompt = agentPrompt({ botName: a.botName, userName: deps.userName, prompt: a.prompt });
       if (a.where === "mac") {
+        if (workspace.note) deps.note(rec, workspace.note);
         macSession(rec).push(queued(prompt, a.initiator));
-        const found = projectConfigOf(a.project.path);
-        if (found.length > 0) deps.trustCard({ kind: "agent", botId, agentId: rec.agent.id }, { root: a.project.path, name: a.project.name, found });
+        const found = projectConfigOf(repo);
+        if (found.length > 0) deps.trustCard({ kind: "agent", botId, agentId: rec.agent.id }, { root: repo, name: a.project.name, found });
         return rec;
       }
       await cloud(rec, async () => {
@@ -333,10 +364,9 @@ export function createAgents(deps: {
       const carded = deps.world.gate.open.some((c) => c.actor.kind === "agent" && c.actor.agentId === id);
       if (session?.working || rec.session.pending.length > 0 || carded) return refused("The agent is still working. Stop it or wait for its report first.");
       if (removing.has(id)) return refused("The worktree is already being removed.");
-      const main = mainCheckoutOf(rec.cwd);
       removing.add(id);
       try {
-        const result = main ? await removeWorktree(main, worktree) : existsSync(rec.cwd) ? refused("git could not find the worktree's repository, so it was left in place.") : ({ ok: true } as const);
+        const result = await removeWorktree(repoOf(rec), worktree);
         if (!result.ok) return result;
       } finally {
         removing.delete(id);

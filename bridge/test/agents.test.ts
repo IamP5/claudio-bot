@@ -203,6 +203,18 @@ test("a crash after output reports the crash and marks the agent failed", async 
   expect(rec.agent.status).toBe("failed");
 });
 
+test("an agent silent for 30 minutes is noted in its bot's chat once", async () => {
+  const h = harness();
+  const rec = await h.start();
+  await flush();
+  const tick = (min: number) => h.agents.sessions().forEach((s) => s.tick(new Date(Date.now() + min * 60_000)));
+  tick(29);
+  expect(h.notes).toEqual([]);
+  tick(31);
+  tick(45);
+  expect(h.notes).toEqual([{ agentId: rec.agent.id, text: "The agent has been silent for 30 minutes; you can press Stop." }]);
+});
+
 test("Stop interrupts the agent's turn, and the stopped turn reports who stopped it", async () => {
   const h = harness();
   const rec = await h.start();

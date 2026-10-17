@@ -47,6 +47,8 @@ export const MAX_STARTS = RETRY_BACKOFF_MS.length + 1;
  */
 export const START_RETRY_MS = [30_000, 60_000, 120_000, 300_000] as const;
 export const DENIALS_PER_TURN = 3;
+/** A turn with no SDK message for this long is noted in the owning bot's chat, once per turn. It keeps running. */
+export const STALL_MS = 30 * 60_000;
 /** When the ledger cannot answer, an unattended start waits this long; an attended one runs. */
 export const HEADROOM_RETRY_MS = 60_000;
 export const USAGE_PARK_SLACK_MS = 30_000;
@@ -66,6 +68,7 @@ const MODEL_LIMITS: ReadonlySet<string> = new Set(["seven_day_opus", "seven_day_
 export const CAP_NOTE = "Daily cap reached. Your messages still run; routines and other background work wait until tomorrow.";
 export const BREAKER_NOTE = `Stopped this turn after ${DENIALS_PER_TURN} held or denied tool calls.`;
 export const RESTARTED_ERROR = "The bridge restarted during this turn.";
+const stallNote = (name: string) => `${name} has been silent for 30 minutes; you can press Stop.`;
 export const startFailedNote = (error: string) =>
   `Claude Code could not start: ${error.replace(/\.?\s*$/, ".")} Queued messages are kept, and it keeps trying.`;
 const restartedNotice = (envelopeText: string) =>
@@ -532,6 +535,8 @@ export type SessionSpec = {
   persist: Persist;
   /** Named in the notice an envelope dropped by Stop leaves. */
   userName?: string;
+  /** Who the stall note names, read when it is left so a rename shows. Default "Claude Code". */
+  name?: () => string;
   log?: (line: string) => void;
   query?: typeof query;
   executable?: () => string | null;
@@ -565,6 +570,9 @@ export function createSession(spec: SessionSpec): Session {
   let generation = 0;
   let closed = false;
   let signals = noSignals();
+  // When the live query last said anything or was sent a turn, and whether the turn in flight was told it is silent.
+  let heardAt = 0;
+  let stallNoted = false;
 
   const guard = (what: string, f: () => void) => {
     try {
@@ -651,7 +659,21 @@ export function createSession(spec: SessionSpec): Session {
       return dispatch({ kind: "unstarted", error: redactSecrets(errorText(e)) });
     }
     signals = noSignals();
+    heardAt = clock().getTime();
+    stallNoted = false;
     l.send({ type: "user", message: { role: "user", content: text }, parent_tool_use_id: null });
+  }
+
+  function watchDeadline(): number | null {
+    if (!live) return null;
+    return spec.state.lifecycle.kind === "working" && !stallNoted ? heardAt + STALL_MS : null;
+  }
+
+  function watch(now: Date) {
+    const due = watchDeadline();
+    if (closed || due === null || now.getTime() < due) return;
+    stallNoted = true;
+    guard("note", () => spec.note(stallNote(spec.name?.() ?? "Claude Code")));
   }
 
   function open(): Live {
@@ -717,6 +739,7 @@ export function createSession(spec: SessionSpec): Session {
   }
 
   function receive(m: SDKMessage, l: Live) {
+    heardAt = clock().getTime();
     if (m.session_id && m.session_id !== spec.state.id) {
       own(spec.state).id = m.session_id;
       guard("persist", () => spec.persist());
@@ -779,12 +802,15 @@ export function createSession(spec: SessionSpec): Session {
     },
     tick(now) {
       dispatch({ kind: "tick" }, now);
+      watch(now);
     },
     nextDeadline() {
       const life = spec.state.lifecycle;
-      if (life.kind === "stopping") return life.deadline;
-      if (life.kind === "backoff" || life.kind === "parked") return life.until;
-      return waiting() ? spec.account.parkedUntil : null;
+      const own =
+        life.kind === "stopping" ? life.deadline : life.kind === "backoff" || life.kind === "parked" ? life.until : waiting() ? spec.account.parkedUntil : null;
+      const watched = watchDeadline();
+      const mine = watched === null ? null : new Date(watched).toISOString();
+      return own === null || (mine !== null && mine < own) ? mine : own;
     },
     close() {
       if (closed) return;

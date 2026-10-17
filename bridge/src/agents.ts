@@ -95,6 +95,7 @@ export function createAgents(deps: {
       ledger: deps.ledger,
       persist: deps.persist,
       userName: deps.userName,
+      name: () => "The agent",
       log: deps.log,
       ...deps.claude,
       // Called as a query opens, after the headroom check let the queue head start, so it is above 0. The SDK counts

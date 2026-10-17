@@ -638,6 +638,7 @@ function harness(
         if (urgency === "now") disk = structuredClone(state);
       }),
     userName: "Alex",
+    name: () => "Ana",
     log: (line) => logs.push(line),
     query: (({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => {
       const q = new FakeQuery(options, prompt, () => structuredClone(disk));
@@ -934,6 +935,35 @@ describe("session", () => {
     expect(h.finals(b)).toMatchObject([{ end: { kind: "dropped" } }]);
     expect(h.state.pending.map((p) => p.text)).toEqual(["[a]", "[Alex allowed Bash `make` once]", "[Agent Fix tests reports]\ndone"]);
     expect([h.finals(c), h.finals(g)]).toEqual([[], []]);
+  });
+
+  test("a turn silent for 30 minutes leaves one note naming the bot, and keeps running", async () => {
+    const { h } = await started("[a]");
+    await h.advance(30 * 60_000 - 1);
+    expect([h.notes, h.session.nextDeadline()]).toEqual([[], new Date(h.clock.t + 1).toISOString()]);
+    await h.advance(1);
+    expect(h.notes).toEqual(["Ana has been silent for 30 minutes; you can press Stop."]);
+    await h.advance(60 * 60_000);
+    expect([h.notes.length, h.q().interrupts, h.q().closed, h.state.lifecycle.kind]).toEqual([1, 0, false, "working"]);
+    h.q().emit(resultMsg(1));
+    await flush();
+    expect(h.ends.map((e) => e.end.kind)).toEqual(["done"]);
+  });
+
+  test("each SDK message restarts the 30 minutes, and every turn can be told once", async () => {
+    const { h } = await started("[a]");
+    await h.advance(20 * 60_000);
+    h.q().emit(said("Still building."));
+    await flush();
+    await h.advance(20 * 60_000);
+    expect(h.notes).toEqual([]);
+    await h.advance(10 * 60_000);
+    h.q().emit(resultMsg(1));
+    await flush();
+    h.push("[b]");
+    await flush();
+    await h.advance(30 * 60_000);
+    expect(h.notes).toEqual(["Ana has been silent for 30 minutes; you can press Stop.", "Ana has been silent for 30 minutes; you can press Stop."]);
   });
 
   test("Stop with no answer kills the query at 15 s, and the next envelope starts a fresh one", async () => {

@@ -64,11 +64,11 @@ Everything runs on **your Mac, with your own Claude Code login**. There is no ho
 | **Memory** | A bot keeps what it learns about you as a proposal. You see it in Settings, Memory, and once you confirm it every bot knows it. You can add, edit and forget facts there too. |
 | **Skills and connectors** | A bot can save a skill for a task you repeat. Its profile lists its skills and its MCP connectors, with a switch for each connector. |
 | **Live activity** | While a bot or agent works, the chat shows what it is doing, such as "Reading hub.ts". |
-| **Spend caps** | Each bot has a daily cap that its agents share, and each Mac agent has a budget. At the cap, routines and other background work wait until midnight. Your own messages still run. |
+| **Spend caps** | Each bot has a daily cap that its agents share, set in its profile under **Spending**, and each Mac agent has a budget. The profile shows today's spend against the cap, an agent's thread shows its spend against its budget, and the chat warns at 80%. At the cap, routines and other background work wait until midnight. Your own messages still run. |
 | **Library and links** | Files a bot writes to `library/` show up in its Library tab, with a viewer for markdown, text and images. Every link a bot shares is collected under Links. |
 | **Bots talking to bots** | A bot can message another bot or create a new one with a brief. |
 | **Phone niceties** | Unread dots, an attention badge when a bot is waiting on you, notifications with answer buttons, an optional push through [ntfy](https://ntfy.sh) when the app is closed, mute, dictation, photo and file uploads, and pin, rename, hide and delete. A message sent during a dropped connection is sent again, and never posted twice. |
-| **Your data stays home** | State lives in `~/.claudiobot`. Deleting a bot moves its folder to `trash/`. Only its agents' empty config folders are deleted for real. |
+| **Your data stays home** | State lives in `~/.claudiobot`. Deleting a bot moves its folder (files, memory, older history) to `trash/`, where you can recover it; its chat in `state.json` goes. Only its agents' empty config folders are deleted for real. Its agents' worktrees stay, and the delete dialog names them so you can remove them from each agent first. |
 
 <p align="center">
   <img src="ios/screenshots/profile.png" width="200" alt="Bot profile with routines and avatar picker">
@@ -105,7 +105,11 @@ open ClaudioBot.xcodeproj
 
 Pick your iPhone (or a simulator) and your signing team, then run. A free Apple ID works; the app then expires after 7 days. Tap **Scan QR code** and scan the code from the bridge, or type the address and the code. The app trades the code for a token of its own. The phone and the Mac need to be on the same network, or on the same [Tailscale](https://tailscale.com) tailnet when you're away from home.
 
-To pair another phone, open Settings on a paired phone and tap **Pair another device**, or restart the bridge with `bun run start -- --pair`. To keep the bridge running after you close the terminal, see [Run as a service](#run-as-a-service).
+The bridge prints every address it answers on, best first, and the QR code carries the first: the Mac's Tailscale name (`mac.tailnet-1234.ts.net`) when Tailscale is signed in, then its Bonjour name (`Mac.local`), then each LAN address. A phone without Tailscale that scanned a `*.ts.net` code can switch in **Settings → Change address**. After three failed connects in a row the chat list offers **Edit address** and **Pair again**, so a phone that left home can move to the Tailscale name without a new code.
+
+**Another phone.** On a paired phone, open Settings and tap **Pair another device**. It shows a new one-time code and its QR code, and the bridge keeps running. Without a paired phone at hand, run `bun run claudiobot pair` on the Mac (or `bun run start -- --pair` when it is not a service). It prints a fresh code and QR code until a phone pairs.
+
+**A lost phone.** From any other paired phone, open Settings and tap **Revoke** beside the lost one. Its token stops working at once. With no other phone, run `bun run claudiobot pair` and pair a new phone, then revoke the lost one from it. To keep the bridge running after you close the terminal, see [Run as a service](#run-as-a-service).
 
 **3. Put a bot to work**
 

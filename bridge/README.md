@@ -11,7 +11,7 @@ bun install
 bun run start
 ```
 
-On startup the bridge prints its LAN WebSocket URLs, a one-time pairing code (`pair code: 7KQM-X2PD`, valid for 10 minutes and 5 tries), a `claudiobot://pair?url=…&code=…` link and a QR code of that link. Scan the QR code from the iOS app, or type the address and the code. The app posts the code to `POST /pair` and gets a token for that phone alone. The bridge keeps only its sha256 and never prints it. The socket then authenticates with `Authorization: Bearer <token>`.
+On startup the bridge prints its WebSocket URLs, best first (its Tailscale name from `tailscale status` when the node is online, then `<LocalHostName>.local`, then each LAN IPv4; `src/address.ts`), and the QR link carries the first. It also prints a one-time pairing code (`pair code: 7KQM-X2PD`, valid for 10 minutes and 5 tries), a `claudiobot://pair?url=…&code=…` link and a QR code of that link. Scan the QR code from the iOS app, or type the address and the code. The app posts the code to `POST /pair` and gets a token for that phone alone. The bridge keeps only its sha256 and never prints it. The socket then authenticates with `Authorization: Bearer <token>`.
 
 Once a phone is paired, the bridge prints no code at start. To pair another phone, use Settings, Pair another device on a paired phone, or run `bun run start --pair`. Revoking a phone in Settings closes its socket with code 4001. After 10 failed pairings from one address in 10 minutes, `/pair` answers 429 for that address.
 

@@ -902,13 +902,15 @@
           "id": "f_1",
           "text": "Prefers short answers",
           "at": "2026-10-16T12:00:00.000Z",
-          "by": null
+          "by": null,
+          "confirmed": true
         },
         {
           "id": "f_2",
           "text": "Works on acme/web",
           "at": "2026-10-16T12:00:00.000Z",
-          "by": "engineer"
+          "by": "engineer",
+          "confirmed": false
         }
       ]
     },
@@ -1091,6 +1093,10 @@
     {
       "type": "forget_fact",
       "factId": "f_1"
+    },
+    {
+      "type": "confirm_fact",
+      "factId": "f_2"
     },
     {
       "type": "connectors",

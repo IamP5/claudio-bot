@@ -100,8 +100,8 @@ export const server = [
   { type: "activity", botId: "b1", agentId: null, text: "Reading hub.ts", at },
   { type: "activity", botId: "b1", agentId: "a1", text: null, at },
   { type: "memory", seq: 56, facts: [
-    { id: "f_1", text: "Prefers short answers", at, by: null },
-    { id: "f_2", text: "Works on acme/web", at, by: "engineer" },
+    { id: "f_1", text: "Prefers short answers", at, by: null, confirmed: true },
+    { id: "f_2", text: "Works on acme/web", at, by: "engineer", confirmed: false },
   ] },
   { type: "connectors", botId: "b1", connectors: [
     { name: "github", status: "connected", enabled: true },
@@ -139,6 +139,7 @@ export const client = [
   { type: "set_fact", factId: null, text: "Prefers short answers" },
   { type: "set_fact", factId: "f_2", text: "Works on acme/web and acme/api" },
   { type: "forget_fact", factId: "f_1" },
+  { type: "confirm_fact", factId: "f_2" },
   { type: "connectors", botId: "b1" },
   { type: "set_connector", botId: "b1", name: "slack", enabled: false },
   { type: "skills", botId: "b1" },

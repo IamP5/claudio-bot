@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import ClaudioBot
 
@@ -539,5 +540,37 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(json["botId"] as? String == "b1")
         #expect(json["name"] as? String == "claude.ai Gmail")
         #expect(json["enabled"] as? Bool == false)
+    }
+}
+
+@MainActor
+@Suite struct MemorySectionTests {
+    private func height(_ store: AppStore) -> CGFloat {
+        let client = BridgeClient(store: store, vault: PairingVault(service: "dev.claudiobot.tests.\(UUID().uuidString)"))
+        let host = UIHostingController(rootView: MemorySection().environment(store).environment(client))
+        return host.sizeThatFits(in: CGSize(width: 390, height: 2000)).height
+    }
+
+    @Test func memoryShowsOnlyWhenTheBridgeListsIt() {
+        let facts = [Fact(id: FactID("f_1"), text: "Prefers short answers", at: at, by: "Eng")]
+        let older = AppStore()
+        older.apply(hello([]))
+        older.apply(.memory(facts))
+        #expect(height(older) == 0)
+
+        let current = AppStore()
+        current.apply(.hello(Hello(features: [.memory], machine: "Mac", userName: "Alex", bots: [])))
+        current.apply(.memory(facts))
+        #expect(height(current) > 0)
+    }
+
+    @Test func aProposedFactRowIsTallerThanAConfirmedOneBecauseItCarriesConfirmAndForget() {
+        func rendered(confirmed: Bool) -> AppStore {
+            let store = AppStore()
+            store.apply(.hello(Hello(features: [.memory], machine: "Mac", userName: "Alex", bots: [])))
+            store.apply(.memory([Fact(id: FactID("f_1"), text: "Prefers short answers", at: at, by: "Eng", confirmed: confirmed)]))
+            return store
+        }
+        #expect(height(rendered(confirmed: false)) > height(rendered(confirmed: true)))
     }
 }

@@ -51,7 +51,7 @@ export function createHomes(root: string) {
 
     ensureUserMd(userName: string) {
       mkdirSync(root, { recursive: true });
-      if (!existsSync(userMd)) writeFileSync(userMd, `# About ${userName}\n\n`);
+      if (!existsSync(userMd)) writeFileSync(userMd, `# About ${userName}\n\n`, { mode: 0o600 });
     },
 
     create(id: BotId, memory: string) {

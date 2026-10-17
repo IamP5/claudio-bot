@@ -925,7 +925,7 @@ function deploySub(words: string[]): { tool: string; sub: string; args: string[]
  * every name tools.ts serves, so a new tool cannot ship unclassified; a call naming any other claudio tool is denied.
  * The row ids are the signatures' suffixes, so they never change once an Always rule may name them.
  */
-const CLAUDIO: Readonly<Record<ClaudioTool, { id: string; label: string; attended: Cell; unattended: Cell } | null>> = {
+const CLAUDIO: Readonly<Record<ClaudioTool, { id: string; label: string; attended: Cell; unattended: Cell; offerAlways?: boolean } | null>> = {
   ask: null,
   start_agent: { id: "claudio.start_agent", label: "Start a coding agent", attended: "pass", unattended: "ask" },
   message_agent: null,
@@ -937,7 +937,8 @@ const CLAUDIO: Readonly<Record<ClaudioTool, { id: string; label: string; attende
   delete_routine: { id: "claudio.routines", label: "Change routines", attended: "pass", unattended: "ask" },
   list_routines: null,
   routine_no_update: null,
-  remember: { id: "claudio.remember", label: "Remember something", attended: "pass", unattended: "ask" },
+  // No Always: a standing yes would let every later routine write what the bot believes about the user unseen.
+  remember: { id: "claudio.remember", label: "Remember something", attended: "pass", unattended: "ask", offerAlways: false },
   save_skill: { id: "claudio.save_skill", label: "Save a skill", attended: "pass", unattended: "ask" },
 };
 const claudioName = (call: ToolCall) => call.tool.slice("mcp__claudio__".length);
@@ -948,6 +949,7 @@ const CLAUDIO_ROWS: readonly Row[] = [...new Map(Object.values(CLAUDIO).flatMap(
   match: tool((c) => isClaudio(c) && claudioEntry(c)?.id === e.id),
   attended: e.attended,
   unattended: e.unattended,
+  ...(e.offerAlways === undefined ? {} : { offerAlways: e.offerAlways }),
 }));
 
 /** First matching row wins per part; the strictest part wins per call. The only list of risky commands in the bridge. */
@@ -964,8 +966,10 @@ const TABLE: readonly Row[] = [
     id: "memory.user",
     label: "Edit USER.md, which every bot reads",
     match: (p, ctx) => ctx.scope.userMd !== null && p.touches.some((t) => t.write && (t.real === ctx.scope.userMd || t.lexical === ctx.scope.userMd)),
-    attended: "pass",
+    // A direct write would skip remember's proposal step and reach every bot at once, so the user sees each one.
+    attended: "ask",
     unattended: "ask",
+    offerAlways: false,
   },
   {
     id: "dynamic.command",

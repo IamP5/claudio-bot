@@ -131,7 +131,7 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
             id: AgentID("a1"), botId: BotID("b1"), title: "Fix login", where: .mac, projectName: "app",
             status: .working, url: nil, createdAt: at, updatedAt: at
         )
-        store.apply(.details(botId: BotID("b1"), library: [], links: [], agents: [agent]))
+        store.apply(.details(botId: BotID("b1"), library: [], links: [], agents: [agent], routines: []))
         var waiting = agent
         waiting.status = .waiting
         store.apply(.agent(waiting, messages: []))
@@ -141,7 +141,7 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
 
     @Test func aPushedNewAgentJoinsTheCachedDetails() {
         let store = store()
-        store.apply(.details(botId: BotID("b1"), library: [], links: [], agents: []))
+        store.apply(.details(botId: BotID("b1"), library: [], links: [], agents: [], routines: []))
         let agent = Agent(
             id: AgentID("a2"), botId: BotID("b1"), title: "Fix tests", where: .cloud, projectName: "app",
             status: .inCloud, url: URL(string: "https://claude.ai/code/s"), createdAt: at, updatedAt: at
@@ -149,6 +149,26 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         store.apply(.agent(agent, messages: []))
         store.apply(.agent(agent, messages: []))
         #expect(store.details[BotID("b1")]?.agents.map(\.id) == [AgentID("a2")])
+    }
+
+    @Test func aRoutineShowsLiveRunsFromItsBotAndOlderKeptRunsFromDetails() {
+        func run(_ id: String, daysAgo: Double, _ status: RunStatus) -> RoutineRun {
+            RoutineRun(id: RunID(id), at: at - daysAgo * 86_400, status: status, late: false, manual: false, note: nil)
+        }
+        func routine(_ runs: [RoutineRun]) -> Routine {
+            Routine(id: RoutineID("r1"), name: "digest", schedule: "0 9 * * *", describe: "Daily", prompt: "p", enabled: true, lastRunAt: nil, runs: runs)
+        }
+        var b1 = bot("b1")
+        b1.routines = [routine([run("run7", daysAgo: 0, .running), run("run6", daysAgo: 1, .ok)])]
+        let store = store(with: [b1])
+        #expect(store.runs(of: RoutineID("r1"), in: BotID("b1")).map(\.id) == [RunID("run7"), RunID("run6")])
+
+        store.apply(.details(botId: BotID("b1"), library: [], links: [], agents: [], routines: [
+            routine([run("run6", daysAgo: 1, .running), run("run5", daysAgo: 2, .ok), run("run4", daysAgo: 3, .failed)]),
+        ]))
+        let runs = store.runs(of: RoutineID("r1"), in: BotID("b1"))
+        #expect(runs.map(\.id) == ["run7", "run6", "run5", "run4"].map { RunID($0) })
+        #expect(runs.map(\.status) == [.running, .ok, .ok, .failed])
     }
 
     @Test func unpairingForgetsTheMac() {

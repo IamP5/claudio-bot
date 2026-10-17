@@ -21,7 +21,7 @@ struct RoutineView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(16)
                         }
-                        runs(routine)
+                        runs
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
@@ -37,6 +37,7 @@ struct RoutineView: View {
         .background(Theme.background)
         .navigationTitle(store.bots[botId]?.routines.first(where: { $0.id == routineId })?.name ?? "Routine")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { client.send(.details(botId: botId)) }
     }
 
     private func header(_ routine: Routine) -> some View {
@@ -69,12 +70,13 @@ struct RoutineView: View {
         return TimeLabel.separator(next)
     }
 
-    private func runs(_ routine: Routine) -> some View {
-        CardSection(title: "Last runs") {
-            if routine.runs.isEmpty {
+    private var runs: some View {
+        let history = store.runs(of: routineId, in: botId)
+        return CardSection(title: "Last runs") {
+            if history.isEmpty {
                 Placeholder(text: "No runs yet.")
             } else {
-                ForEach(Array(routine.runs.enumerated()), id: \.element.id) { index, run in
+                ForEach(Array(history.enumerated()), id: \.element.id) { index, run in
                     if index > 0 { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16) }
                     RunRow(run: run)
                 }

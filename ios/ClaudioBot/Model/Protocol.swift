@@ -765,7 +765,8 @@ enum ServerMessage: Codable, Sendable {
     case created(ref: String, botId: BotID)
     case conversation(botId: BotID, messages: [Message])
     case message(botId: BotID, message: Message)
-    case details(botId: BotID, library: [LibraryFile], links: [BotLink], agents: [Agent])
+    /// routines carries every kept run (at most 20), where a bot frame carries only the newest 5.
+    case details(botId: BotID, library: [LibraryFile], links: [BotLink], agents: [Agent], routines: [Routine])
     case agent(Agent, messages: [AgentMessage])
     case file(botId: BotID, path: String, file: BotFile)
     case devices([Device])
@@ -774,7 +775,7 @@ enum ServerMessage: Codable, Sendable {
     case unknown(type: String)
 
     private enum CodingKeys: String, CodingKey {
-        case type, machine, userName, bots, bot, botId, ref, messages, message, library, links, agents, agent
+        case type, machine, userName, bots, bot, botId, ref, messages, message, library, links, agents, routines, agent
         case path, mime, content, data, devices, code, expiresAt
         case `protocol`, epoch, seq, resumed
     }
@@ -809,7 +810,8 @@ enum ServerMessage: Codable, Sendable {
                 botId: try c.decode(BotID.self, forKey: .botId),
                 library: try c.decode([LibraryFile].self, forKey: .library),
                 links: try c.decode([BotLink].self, forKey: .links),
-                agents: try c.decode([Agent].self, forKey: .agents)
+                agents: try c.decode([Agent].self, forKey: .agents),
+                routines: try c.decodeIfPresent([Routine].self, forKey: .routines) ?? []
             )
         case "agent":
             self = .agent(try c.decode(Agent.self, forKey: .agent), messages: try c.decode([AgentMessage].self, forKey: .messages))
@@ -864,12 +866,13 @@ enum ServerMessage: Codable, Sendable {
             try c.encode("message", forKey: .type)
             try c.encode(botId, forKey: .botId)
             try c.encode(message, forKey: .message)
-        case let .details(botId, library, links, agents):
+        case let .details(botId, library, links, agents, routines):
             try c.encode("details", forKey: .type)
             try c.encode(botId, forKey: .botId)
             try c.encode(library, forKey: .library)
             try c.encode(links, forKey: .links)
             try c.encode(agents, forKey: .agents)
+            try c.encode(routines, forKey: .routines)
         case let .agent(agent, messages):
             try c.encode("agent", forKey: .type)
             try c.encode(agent, forKey: .agent)

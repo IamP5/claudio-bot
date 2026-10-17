@@ -8,7 +8,7 @@ import { createClock, type Tickable } from "./clock";
 import { connectorSettings, createConnectors } from "./connectors";
 import { createGate } from "./gate";
 import type { Homes } from "./home";
-import { createLedger } from "./ledger";
+import { createLedger, localDay } from "./ledger";
 import { createMemory, writeAtomic } from "./memory";
 import type { Scope } from "./policy";
 import type { Project } from "./projects";
@@ -597,7 +597,21 @@ export function createHub(deps: HubDeps): Hub {
     tick: (at) => allSessions().forEach((s) => s.tick(at)),
     nextDeadline: () => earliest(allSessions().map((s) => s.nextDeadline())),
   };
-  const tickers = { scheduler, gate, sessions, push: deps.push };
+  // Each bot frame carries today's spend, which resets at local midnight with no event of its own.
+  let today = localDay(clockNow());
+  const midnight: Tickable = {
+    tick(at) {
+      if (localDay(at) === today) return;
+      today = localDay(at);
+      for (const bot of world.bots.values()) deps.broadcast({ type: "bot", bot: view(bot) });
+    },
+    nextDeadline: () => {
+      const next = clockNow();
+      next.setHours(24, 0, 0, 0);
+      return next.toISOString();
+    },
+  };
+  const tickers = { scheduler, gate, sessions, push: deps.push, midnight };
   const clock = createClock({ tickers: Object.values(tickers), now: clockNow, log: deps.log });
   poke = () => clock.poke();
 

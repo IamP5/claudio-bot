@@ -1210,3 +1210,20 @@ test("a name holding $& or $1 reaches CLAUDE.md's heading as written", async () 
   await h.hub.handle({ type: "update_bot", botId: b.id, patch: { name: "Cash $& $1" } });
   expect(readFileSync(join(h.homes.homeOf(b.id), "CLAUDE.md"), "utf8")).toStartWith("# Cash $& $1\n");
 });
+
+test("at local midnight every phone gets each bot again, so today's spend starts over on screen", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  const frames = () => h.frames.filter((f) => f.type === "bot").length;
+  h.hub.tick(new Date());
+  const before = frames();
+  const tomorrow = new Date();
+  tomorrow.setHours(24, 0, 1, 0);
+  h.hub.tick(tomorrow);
+  expect(frames()).toBe(before + 1);
+  h.hub.tick(new Date(tomorrow.getTime() + 60_000));
+  expect(frames()).toBe(before + 1);
+});

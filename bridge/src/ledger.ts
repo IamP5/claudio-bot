@@ -92,7 +92,7 @@ const MONTH_FILE = /^\d{4}-\d{2}\.jsonl$/;
 const AGENT_PREFIX = "agent:";
 
 const pad = (n: number) => String(n).padStart(2, "0");
-const localDay = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+export const localDay = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const nextLocalMidnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
 const monthFile = (day: string) => `${day.slice(0, 7)}.jsonl`;
 

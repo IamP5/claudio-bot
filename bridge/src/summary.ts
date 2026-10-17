@@ -51,9 +51,11 @@ const details: Record<string, (input: Input) => string> = {
   Write: (i) => str(i.content).split("\n").slice(0, 40).join("\n"),
 };
 
-export function approvalDetail(name: string, input: Input): string {
+/** The body shown under the summary. Empty when it would only repeat the summary. */
+export function approvalDetail(name: string, input: Input, cwd: string): string {
   const detail = details[name];
-  return detail ? detail(input) : JSON.stringify(input, null, 2);
+  const text = detail ? detail(input) : JSON.stringify(input, null, 2);
+  return text === toolSummary(name, input, cwd) ? "" : text;
 }
 
 export function truncate(text: string, max: number): string {

@@ -21,19 +21,23 @@ test.each([
 });
 
 test("Edit detail is a -/+ diff of old and new strings", () => {
-  expect(approvalDetail("Edit", { file_path: "a", old_string: "one\ntwo", new_string: "three" })).toBe("- one\n- two\n+ three");
+  expect(approvalDetail("Edit", { file_path: "a", old_string: "one\ntwo", new_string: "three" }, cwd)).toBe("- one\n- two\n+ three");
 });
 
 test("Write detail shows only the first 40 lines", () => {
   const content = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join("\n");
-  const lines = approvalDetail("Write", { file_path: "a", content }).split("\n");
+  const lines = approvalDetail("Write", { file_path: "a", content }, cwd).split("\n");
   expect(lines).toHaveLength(40);
   expect(lines.at(-1)).toBe("line 40");
 });
 
-test("Bash detail is the full command", () => {
+test("Bash detail is the full command when it differs from the one-line summary", () => {
   const command = "git add -A &&\n  git commit -m 'x'";
-  expect(approvalDetail("Bash", { command })).toBe(command);
+  expect(approvalDetail("Bash", { command }, cwd)).toBe(command);
+});
+
+test("Bash detail is empty when it would repeat the summary", () => {
+  expect(approvalDetail("Bash", { command: "ls -la" }, cwd)).toBe("");
 });
 
 test("paths under a symlinked cwd are shown relative", () => {

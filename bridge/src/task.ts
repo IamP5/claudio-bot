@@ -212,7 +212,7 @@ function interpret(state: TaskState, event: TaskEvent): Effect {
             id: event.itemId,
             tool: event.tool,
             summary: toolSummary(event.tool, event.input, state.cwd),
-            detail: approvalDetail(event.tool, event.input),
+            detail: approvalDetail(event.tool, event.input, state.cwd),
             state: "pending",
             at: event.at,
           },

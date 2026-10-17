@@ -49,6 +49,9 @@ const TTL = { permissionMs: 2 * 3600_000, questionMs: 24 * 3600_000, grantMs: 10
 
 const VERDICTS_KEPT = 1000;
 
+/** Per bot, how many permission cards may be open at once before new ones are refused (a runaway turn, probe G1 C). */
+const MAX_OPEN_CARDS = 10;
+
 export type CardReply = { kind: "option"; index: number } | { kind: "dismiss" } | { kind: "permission"; choice: PermissionChoice };
 
 export type AuditRow = {
@@ -235,7 +238,12 @@ export function createGate(deps: GateDeps): Gate {
   const { world, userName } = deps;
   const state = own<GateState>(world.gate);
   const rulesOf = (bot: BotRecord) => own<StandingRule[]>(bot.rules);
-  const verdicts = new Map<string, SyncHookJSONOutput>();
+  // A recorded verdict is keyed by tool_use_id but only replayed for the same call fingerprint, so a reused id with a
+  // different input is decided afresh (probe G1). fp null marks a verdict that does not depend on the input (stopping).
+  const verdicts = new Map<string, { fp: string | null; out: SyncHookJSONOutput }>();
+  // Which cards were opened from an attended turn. A grant is consumed only by a turn of the same attendance, so an
+  // unattended turn cannot ride a one-time approval the user gave in their own turn. In memory, rebuilt as cards open.
+  const grantKind = new Map<MessageId, boolean>();
   const at = (date: Date, plusMs = 0) => new Date(date.getTime() + plusMs).toISOString();
 
   const botOf = (actor: Actor): BotRecord => {
@@ -255,9 +263,8 @@ export function createGate(deps: GateDeps): Gate {
     if (i !== -1) state.open.splice(i, 1);
   };
 
-  function remember(toolUseId: string, out: SyncHookJSONOutput): SyncHookJSONOutput {
-    if (verdicts.has(toolUseId)) return out;
-    verdicts.set(toolUseId, out);
+  function remember(toolUseId: string, fp: string | null, out: SyncHookJSONOutput): SyncHookJSONOutput {
+    verdicts.set(toolUseId, { fp, out });
     if (verdicts.size > VERDICTS_KEPT) verdicts.delete(verdicts.keys().next().value!);
     return out;
   }
@@ -316,14 +323,16 @@ export function createGate(deps: GateDeps): Gate {
     const expiresAt = at(now, TTL.permissionMs);
     const detail = detailOf(call);
     const agent = actor.kind === "agent" ? world.agents.get(actor.agentId)?.agent : undefined;
-    deps.say(bot, { kind: "permission", id, at: now.toISOString(), from: agent ? agentPeer(agent) : null, tool: call.tool, label: d.label, detail, always: d.always, answer: null, expiresAt });
+    // offerAlways is false for rows too broad or too risky to carry an Always button; the card then shows Once/Deny/Never.
+    const always = d.offerAlways ? d.always : "";
+    deps.say(bot, { kind: "permission", id, at: now.toISOString(), from: agent ? agentPeer(agent) : null, tool: call.tool, label: d.label, detail, always, answer: null, expiresAt });
     state.open.push({
       kind: "permission",
       cardId: id,
       actor,
       remindAt: at(now, TTL.permissionMs / 2),
       expiresAt,
-      call: { initiator, tool: call.tool, signature: d.signature, fingerprint: fingerprint(call), label: d.label, detail, always: d.always },
+      call: { initiator, tool: call.tool, signature: d.signature, fingerprint: fingerprint(call), label: d.label, detail, always },
     });
     return id;
   }
@@ -334,32 +343,35 @@ export function createGate(deps: GateDeps): Gate {
     // While stopping the session is already ending the turn, so these denials do not feed its breaker.
     if (turn?.stopping) {
       auditRaw(actor, initiator, input, { decision: "deny", via: "stopping", rule: null, cardId: null });
-      return remember(input.tool_use_id, denyOutput(stoppingReason(userName)));
+      return remember(input.tool_use_id, null, denyOutput(stoppingReason(userName)));
     }
-    const seen = verdicts.get(input.tool_use_id);
-    if (seen) return seen;
 
     const parsed = toCall(input);
     if (!parsed.ok) {
       auditRaw(actor, initiator, input, { decision: "deny", via: "malformed", rule: "input", cardId: null });
       deps.denied(actor);
-      return remember(input.tool_use_id, denyOutput(`This call's input is malformed (${parsed.error}), so it was blocked and did not run.`));
+      return remember(input.tool_use_id, null, denyOutput(`This call's input is malformed (${parsed.error}), so it was blocked and did not run.`));
     }
     const call = parsed.call;
+    const fp = fingerprint(call);
+    const seen = verdicts.get(call.toolUseId);
+    if (seen && (seen.fp === null || seen.fp === fp)) return seen.out;
+
     const now = deps.now();
+    const isAttended = attended(initiator);
     const ctx: PolicyContext = {
       actor,
       initiator,
       scope: deps.scopeOf(actor),
       rules: botOf(actor).rules,
-      grants: state.grants,
+      grants: state.grants.filter((g) => (grantKind.has(g.cardId) ? grantKind.get(g.cardId) === isAttended : isAttended)),
       headroom: deps.headroom(actor, initiator),
       callsToday: todayCounts(actor.botId, now),
       now: now.toISOString(),
       realpath: resolveReal,
     };
     const decision = decide(call, ctx);
-    return remember(call.toolUseId, apply(actor, initiator, call, decision, now));
+    return remember(call.toolUseId, fp, apply(actor, initiator, call, decision, now));
   }
 
   function apply(actor: Actor, initiator: Initiator, call: ToolCall, d: Decision, now: Date): SyncHookJSONOutput {
@@ -392,6 +404,12 @@ export function createGate(deps: GateDeps): Gate {
           auditCall(actor, initiator, call, { decision: "ask", via: "waiting", rule: d.rule, cardId: waiting.cardId });
           deps.denied(actor);
           return denyOutput(waitingReason(userName, waiting.cardId));
+        }
+        const open = state.open.filter((c) => c.kind === "permission" && c.actor.botId === actor.botId && messageOf(c)?.answer === null).length;
+        if (open >= MAX_OPEN_CARDS) {
+          auditCall(actor, initiator, call, { decision: "deny", via: "limit", rule: "limit.open_cards", cardId: null });
+          deps.denied(actor);
+          return denyOutput(`${userName} already has ${MAX_OPEN_CARDS} requests waiting from this bot, so this one was not posted and did not run. End your turn and wait for ${userName}.`);
         }
         const cardId = openPermission(actor, initiator, call, d, now);
         deps.persist("now");
@@ -463,6 +481,7 @@ export function createGate(deps: GateDeps): Gate {
     dropCard(card.cardId);
     if (choice === "once" || choice === "always") {
       const key = actorKey(card.actor);
+      grantKind.set(card.cardId, attended(held.initiator));
       state.grants.splice(0, state.grants.length, ...state.grants.filter((g) => !(g.actor === key && g.fingerprint === held.fingerprint)), {
         actor: key,
         fingerprint: held.fingerprint,
@@ -471,7 +490,8 @@ export function createGate(deps: GateDeps): Gate {
       });
     }
     const ruleBase = { signature: held.signature, label: held.label, cardId: card.cardId, at: now.toISOString() };
-    if (choice === "always") setRule(bot, { decision: "allow", appliesTo: attended(held.initiator) ? "attended" : "all", ...ruleBase });
+    // A row that offered no Always button (held.always === "") grants once but never writes the broad allow rule.
+    if (choice === "always" && held.always !== "") setRule(bot, { decision: "allow", appliesTo: attended(held.initiator) ? "attended" : "all", ...ruleBase });
     if (choice === "never") setRule(bot, { decision: "deny", ...ruleBase });
     deps.say(bot, settled.card);
     deps.persist("now");
@@ -503,6 +523,12 @@ export function createGate(deps: GateDeps): Gate {
     answer(botId, messageId, reply) {
       const bot = world.bots.get(botId);
       if (!bot) return { ok: false, error: "Unknown bot" };
+      // A card past its deadline is expired, never granted, even before the tick that would have retired it (probe G1).
+      const held = state.open.find((c) => c.cardId === messageId);
+      if (held && held.expiresAt <= deps.now().toISOString()) {
+        expire(held);
+        return { ok: false, error: held.kind === "permission" ? "That request expired" : "That question expired" };
+      }
       const message = bot.messages.find((m) => m.id === messageId);
       if (reply.kind === "permission") return decidePermission(bot, message, reply.choice);
       const settled = settleCard(message, { kind: "question", answer: reply.kind === "option" ? reply.index : "dismissed" });
@@ -519,13 +545,14 @@ export function createGate(deps: GateDeps): Gate {
     },
 
     forgetBot(botId) {
+      // The only caller, hub.delete_bot, persists right after; it owns the durability of the whole deletion.
       const keys = new Set<string>([`bot:${botId}`, ...[...world.agents.values()].filter((r) => r.agent.botId === botId).map((r) => `agent:${r.agent.id}`)]);
+      for (const c of state.open) if (c.actor.botId === botId) grantKind.delete(c.cardId);
       state.open.splice(0, state.open.length, ...state.open.filter((c) => c.actor.botId !== botId));
       state.grants.splice(0, state.grants.length, ...state.grants.filter((g) => !keys.has(g.actor)));
       state.daily.splice(0, state.daily.length, ...state.daily.filter((c) => c.botId !== botId));
       const bot = world.bots.get(botId);
       if (bot) rulesOf(bot).splice(0);
-      deps.persist("now");
     },
 
     tick(now) {

@@ -289,7 +289,7 @@ describe("the permission flow", () => {
   test("an agent's card shows in its bot's chat and the decision goes to the agent", async () => {
     const t = setup();
     const agent: Agent = { id: A1, botId: B1, title: "Fix login", where: "mac", projectName: "app", status: "working", url: null, createdAt: START.toISOString(), updatedAt: START.toISOString() };
-    t.world.agents.set(A1, { agent, cwd: t.root, messages: [], session: emptySession(), cloudSession: null, budgetUsd: null });
+    t.world.agents.set(A1, { agent, cwd: t.root, messages: [], session: emptySession(), cloudSession: null, budgetUsd: null, startedBy: user });
     const actor: Actor = { kind: "agent", botId: B1, agentId: A1 };
     await t.call("Bash", { command: "npm publish" }, { cwd: t.root }, actor);
     expect(t.cards()[0]!.from).toEqual({ kind: "agent", id: A1, title: "Fix login" });
@@ -563,7 +563,73 @@ describe("boundary adapters", () => {
   });
   test("toHookOutput never returns ask or defer", () => {
     expect(toHookOutput({ kind: "pass" }, null)).toEqual({});
-    expect(decisionOf(toHookOutput({ kind: "ask", rule: "r", label: "l", signature: "s" as never, always: "a" }, "m_1" as MessageId))).toBe("deny");
-    expect(() => toHookOutput({ kind: "ask", rule: "r", label: "l", signature: "s" as never, always: "a" }, null)).toThrow();
+    expect(decisionOf(toHookOutput({ kind: "ask", rule: "r", label: "l", signature: "s" as never, always: "a", offerAlways: true }, "m_1" as MessageId))).toBe("deny");
+    expect(() => toHookOutput({ kind: "ask", rule: "r", label: "l", signature: "s" as never, always: "a", offerAlways: true }, null)).toThrow();
+  });
+});
+
+describe("gate-level hardening (U1 fix round)", () => {
+  test("a card answered after its deadline is expired, never granted, even before a tick", async () => {
+    const t = setup();
+    t.turn.initiator = routine;
+    await t.bash("git push origin feature");
+    const card = t.cards()[0]!;
+    t.advance(2 * 3600_000 + 1); // past the 2h permission TTL, no tick
+    expect(t.gate.answer(B1, card.id, { kind: "permission", choice: "once" })).toEqual({ ok: false, error: "That request expired" });
+    expect(gateState(t.world).grants).toHaveLength(0);
+    expect(t.cards()[0]!.answer).toBe("expired");
+  });
+
+  test("open permission cards per bot are capped, and the overflow is denied", async () => {
+    const t = setup();
+    t.turn.initiator = routine;
+    for (let i = 0; i < 10; i++) expect(decisionOf(await t.bash(`git push origin f${i}`))).toBe("deny");
+    expect(t.cards()).toHaveLength(10);
+    const overflow = await t.bash("git push origin f10");
+    expect(decisionOf(overflow)).toBe("deny");
+    expect(reasonOf(overflow)).toContain("requests waiting");
+    expect(t.cards()).toHaveLength(10);
+  });
+
+  test("a reused tool_use_id with a different command is decided again, not replayed", async () => {
+    const t = setup();
+    const id = "toolu_fixed";
+    expect(decisionOf(await t.call("Bash", { command: "ls" }, { tool_use_id: id }))).toBe("pass");
+    // Same id, different (risky) command: the recorded pass must not carry over.
+    expect(decisionOf(await t.call("Bash", { command: "git push origin main" }, { tool_use_id: id }))).toBe("deny");
+  });
+
+  test("a grant is bound to the attendance of the card that made it", async () => {
+    const t = setup();
+    t.turn.initiator = routine; // an unattended card for a call that asks in every column
+    await t.bash("git push origin main");
+    t.gate.answer(B1, t.cards()[0]!.id, { kind: "permission", choice: "once" });
+    expect(gateState(t.world).grants).toHaveLength(1);
+    // A user (attended) turn may not consume a grant the routine earned; it asks again.
+    t.turn.initiator = user;
+    expect(decisionOf(await t.bash("git push origin main"))).toBe("deny");
+    // The routine turn that earned it still can.
+    t.turn.initiator = routine;
+    expect(decisionOf(await t.bash("git push origin main"))).toBe("allow");
+  });
+
+  test("a no-Always row posts a card without an Always option and never writes an allow rule", async () => {
+    const t = setup();
+    await t.call("Write", { file_path: `${t.root}/other/.claude/settings.json`, content: "{}" }, { cwd: t.own });
+    const card = t.cards()[0]!;
+    expect(card.always).toBe("");
+    t.gate.answer(B1, card.id, { kind: "permission", choice: "always" });
+    expect(t.bot.rules).toHaveLength(0); // granted once, but no standing allow rule
+    expect(gateState(t.world).grants).toHaveLength(1);
+  });
+
+  test("forgetBot clears state but leaves the persist to delete_bot (no extra flush)", async () => {
+    const t = setup();
+    t.turn.initiator = routine;
+    await t.bash("git push origin feature");
+    t.events.length = 0;
+    t.gate.forgetBot(B1);
+    expect(t.events).toEqual([]); // forgetBot itself does not persist
+    expect(gateState(t.world)).toEqual({ open: [], grants: [], daily: [] });
   });
 });

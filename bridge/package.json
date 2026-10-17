@@ -14,8 +14,12 @@
     "qrcode-terminal": "0.12.0",
     "zod": "4.6.7"
   },
+  "bin": {
+    "claudiobot": "src/cli.ts"
+  },
   "scripts": {
     "start": "bun run src/main.ts",
+    "claudiobot": "bun run src/cli.ts",
     "test": "bun test",
     "e2e": "bun run scripts/e2e.ts"
   }

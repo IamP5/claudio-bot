@@ -54,8 +54,9 @@ export function projectConfigOf(root: string): string[] {
   return found.sort();
 }
 
-/** Statuses that hold only while the session or an open card says so. */
 const CAPPED = "Paused at today's spending cap; it resumes when you message it tomorrow or raise the cap.";
+
+/** Statuses that hold only while the session or an open card says so. */
 const LIVE: ReadonlySet<AgentStatus> = new Set(["working", "parked", "awaiting_approval", "unavailable"]);
 
 export function createAgents(deps: {

@@ -15,7 +15,11 @@ export type PairCode = { code: string; expiresAt: string };
 export type Devices = {
   /** One live code at a time; a new code replaces the old one. Printed at start when no device is paired, and sent to a paired phone on pair_code. */
   newCode(): PairCode;
-  /** POST /pair. Single use; a wrong code counts against the attempt limit and the last attempt burns it. */
+  /**
+   * POST /pair. Single use; a wrong code counts against the attempt limit and the last attempt burns it. While no
+   * device but the legacy one is paired, a burned, expired or missing code is replaced and announced at once, so the
+   * Mac always shows a usable code. Throws, with nothing changed and the code still live, when the pairing cannot be saved.
+   */
   pair(code: string, name: string): PairResponse | { error: string };
   /**
    * The socket upgrade. Authorization: Bearer <token> for every device. For one release the legacy device may still
@@ -24,7 +28,7 @@ export type Devices = {
   authenticate(req: Request): DeviceId | null;
   /** current marks the device asking. */
   list(current: DeviceId | null): Device[];
-  /** Removes the device. The caller closes its live sockets at once. False when it was not paired. */
+  /** Removes the device. The caller closes its live sockets at once. False when it was not paired. Throws, with the device kept, when the removal cannot be saved. */
   revoke(id: DeviceId): boolean;
   seen(id: DeviceId): void;
   /** Registers protocol 2's shared token as the legacy device (hash only), so today's phone keeps working. Idempotent. */
@@ -55,9 +59,45 @@ const normalize = (code: string) => code.toUpperCase().replace(/[^0-9A-Z]/g, "")
 
 const display = (code: string) => `${code.slice(0, 4)}-${code.slice(4)}`;
 
-export function createDevices(deps: { world: World; persist: Persist; now: () => Date }): Devices {
+// The name lands in logs and in every phone's device list. Format characters include bidi overrides.
+const cleanName = (name: string) =>
+  Array.from(name.replace(/\s+/g, " ").replace(/\p{C}/gu, "").replace(/ {2,}/g, " ").trim())
+    .slice(0, NAME_LIMIT)
+    .join("")
+    .trim() || "Phone";
+
+type Spent = "none" | "expired" | "burned";
+
+const SPENT: Record<Spent, string> = {
+  none: "No pairing code is active.",
+  expired: "That pairing code has expired.",
+  burned: "Too many wrong pairing codes.",
+};
+
+export function createDevices(deps: {
+  world: World;
+  persist: Persist;
+  now: () => Date;
+  /** Shows a code the bridge issued on its own on the Mac's terminal. */
+  announce: (code: PairCode) => void;
+}): Devices {
   const records = deps.world.devices as DeviceRecord[];
   let live: { code: string; expiresAt: Date; attemptsLeft: number } | null = null;
+
+  function newCode(): PairCode {
+    const expiresAt = new Date(deps.now().getTime() + PAIR_CODE_TTL_MS);
+    live = { code: randomCode(), expiresAt, attemptsLeft: PAIR_CODE_ATTEMPTS };
+    return { code: display(live.code), expiresAt: expiresAt.toISOString() };
+  }
+
+  function refuse(why: Spent): { error: string } {
+    live = null;
+    if (records.some((d) => !d.legacy)) {
+      return { error: `${SPENT[why]} Get a new code from Settings on a paired phone, or restart the bridge with --pair.` };
+    }
+    deps.announce(newCode());
+    return { error: `${SPENT[why]} A new code is showing on the Mac running the bridge.` };
+  }
 
   function add(tokenHash: string, name: string, legacy: boolean): DeviceRecord {
     const record: DeviceRecord = {
@@ -69,7 +109,12 @@ export function createDevices(deps: { world: World; persist: Persist; now: () =>
       legacy,
     };
     records.push(record);
-    deps.persist("now");
+    try {
+      deps.persist("now");
+    } catch (e) {
+      records.splice(records.indexOf(record), 1);
+      throw e;
+    }
     return record;
   }
 
@@ -81,29 +126,24 @@ export function createDevices(deps: { world: World; persist: Persist; now: () =>
   }
 
   return {
-    newCode() {
-      const expiresAt = new Date(deps.now().getTime() + PAIR_CODE_TTL_MS);
-      live = { code: randomCode(), expiresAt, attemptsLeft: PAIR_CODE_ATTEMPTS };
-      return { code: display(live.code), expiresAt: expiresAt.toISOString() };
-    },
+    newCode,
 
     pair(code, name) {
-      if (live === null) return { error: "No pairing code is active. Ask the bridge for a new one." };
-      if (deps.now() >= live.expiresAt) {
-        live = null;
-        return { error: "That pairing code has expired. Ask the bridge for a new one." };
-      }
+      if (live === null) return refuse("none");
+      if (deps.now() >= live.expiresAt) return refuse("expired");
       if (!sameBytes(Buffer.from(normalize(code)), Buffer.from(live.code))) {
         live.attemptsLeft -= 1;
-        if (live.attemptsLeft > 0) return { error: "That pairing code is wrong." };
-        live = null;
-        return { error: "Too many wrong pairing codes. Ask the bridge for a new one." };
+        return live.attemptsLeft > 0 ? { error: "That pairing code is wrong." } : refuse("burned");
       }
+      const used = live;
       live = null;
       const token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
-      const clean = name.replace(/\s+/g, " ").trim().slice(0, NAME_LIMIT) || "Phone";
-      const record = add(sha256(token).toString("hex"), clean, false);
-      return { deviceId: record.id, token };
+      try {
+        return { deviceId: add(sha256(token).toString("hex"), cleanName(name), false).id, token };
+      } catch (e) {
+        live = used;
+        throw e;
+      }
     },
 
     authenticate(req) {
@@ -129,8 +169,13 @@ export function createDevices(deps: { world: World; persist: Persist; now: () =>
     revoke(id) {
       const index = records.findIndex((d) => d.id === id);
       if (index === -1) return false;
-      records.splice(index, 1);
-      deps.persist("now");
+      const [record] = records.splice(index, 1);
+      try {
+        deps.persist("now");
+      } catch (e) {
+        records.splice(index, 0, record!);
+        throw e;
+      }
       return true;
     },
 

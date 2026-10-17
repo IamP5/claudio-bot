@@ -1,6 +1,6 @@
 import { homedir, hostname, networkInterfaces } from "node:os";
 import qrcode from "qrcode-terminal";
-import { createDevices } from "./devices";
+import { createDevices, type PairCode } from "./devices";
 import { createHomes } from "./home";
 import { createHub } from "./hub";
 import { legacyToken } from "./legacy";
@@ -64,12 +64,15 @@ if (migration.kind === "conflict") {
       `  ${migration.aside} is only a backup of that near-empty home. Check it, then delete it when you like.`,
   );
 }
+// The home now resolves to ~/.claudebot, a different lock name. Hold that one too, or a bridge started with
+// CLAUDIOBOT_HOME=~/.claudebot could share the home.
+if (migration.kind === "linked" || migration.kind === "moved_aside") holdLock(home);
 
 const port = Number(process.env.CLAUDIOBOT_PORT ?? 7878);
 const machine = await machineName();
 const { world, firstRun } = loadWorld(home);
 const saver = createSaver(world, home);
-const devices = createDevices({ world, persist: saver.schedule, now });
+const devices = createDevices({ world, persist: saver.schedule, now, announce });
 const legacy = legacyToken(home);
 legacy.reconcile(devices);
 
@@ -95,7 +98,7 @@ const hub = createHub({
   push,
 });
 
-const transport = serve({ devices, stream: createStream(), hub, legacy, log, port });
+const transport = serve({ devices, stream: createStream(), hub, legacy, log, now, port });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
@@ -110,14 +113,17 @@ const urls = (lanAddresses().length > 0 ? lanAddresses() : ["127.0.0.1"]).map((i
 console.log(`claudiobot bridge on ${machine}`);
 for (const url of urls) console.log(`  ${url}`);
 
-// The legacy phone alone still gets a code: it should re-pair with its own token before the legacy path goes away.
-const paired = devices.list(null).filter((d) => !d.legacy).length;
-if (paired === 0 || process.argv.includes("--pair")) {
-  const { code, expiresAt } = devices.newCode();
+function announce({ code, expiresAt }: PairCode) {
   const link = `claudiobot://pair?url=${encodeURIComponent(urls[0]!)}&code=${code}`;
   console.log(`pair code: ${code} (single use, until ${new Date(expiresAt).toLocaleTimeString()})`);
   console.log(`pair: ${link}`);
   qrcode.generate(link, { small: true }, (qr) => console.log(qr));
+}
+
+// The legacy phone alone still gets a code: it should re-pair with its own token before the legacy path goes away.
+const paired = devices.list(null).filter((d) => !d.legacy).length;
+if (paired === 0 || process.argv.includes("--pair")) {
+  announce(devices.newCode());
 } else {
   console.log(`${paired} paired device${paired === 1 ? "" : "s"}. To pair another, use Settings on a paired phone or restart with --pair.`);
 }

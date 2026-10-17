@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDevices, PAIR_CODE_ATTEMPTS, PAIR_CODE_TTL_MS, rejectsOrigin } from "../src/devices";
+import { createDevices, PAIR_CODE_ATTEMPTS, PAIR_CODE_TTL_MS, rejectsOrigin, type PairCode } from "../src/devices";
 import type { DeviceId, PairResponse } from "../src/protocol";
 import { flushNow, loadWorld } from "../src/store";
 import { emptyWorld, type World } from "../src/world";
@@ -12,9 +12,22 @@ const start = new Date("2026-10-17T09:00:00.000Z");
 
 function setup(world: World = emptyWorld()) {
   let now = start;
+  let saving = true;
   const persists: ("now" | undefined)[] = [];
-  const devices = createDevices({ world, persist: (u) => persists.push(u), now: () => now });
-  return { world, devices, persists, advance: (ms: number) => (now = new Date(now.getTime() + ms)) };
+  const announced: PairCode[] = [];
+  const persist = (u?: "now") => {
+    if (!saving) throw new Error("disk full");
+    persists.push(u);
+  };
+  const devices = createDevices({ world, persist, now: () => now, announce: (code) => announced.push(code) });
+  return {
+    world,
+    devices,
+    persists,
+    announced,
+    advance: (ms: number) => (now = new Date(now.getTime() + ms)),
+    savesFail: (fail = true) => (saving = !fail),
+  };
 }
 
 function paired(result: PairResponse | { error: string }): PairResponse {
@@ -215,4 +228,96 @@ test("any request carrying an Origin header is refused", () => {
   expect(rejectsOrigin(new Request("http://127.0.0.1:7878/ws", { headers: { origin: "https://evil.example" } }))).toBe(true);
   expect(rejectsOrigin(new Request("http://127.0.0.1:7878/ws", { headers: { origin: "null" } }))).toBe(true);
   expect(rejectsOrigin(new Request("http://127.0.0.1:7878/ws"))).toBe(false);
+});
+
+const burn = (devices: ReturnType<typeof setup>["devices"]) => {
+  let last: PairResponse | { error: string } = { error: "" };
+  for (let i = 0; i < PAIR_CODE_ATTEMPTS; i++) last = devices.pair("2222-2222", "attacker");
+  return last;
+};
+
+test("while no phone is paired, a burned code is replaced at once and shown on the Mac", () => {
+  const { devices, announced } = setup();
+  devices.newCode();
+  expect(burn(devices)).toEqual({ error: expect.stringContaining("showing on the Mac") });
+  expect(announced).toHaveLength(1);
+  expect("deviceId" in devices.pair(announced[0]!.code, "phone")).toBe(true);
+});
+
+test("while no phone is paired, an expired code is replaced and shown on the Mac", () => {
+  const { devices, announced, advance } = setup();
+  const old = devices.newCode().code;
+  advance(PAIR_CODE_TTL_MS);
+  expect(devices.pair(old, "phone")).toEqual({ error: expect.stringContaining("showing on the Mac") });
+  expect(announced).toHaveLength(1);
+  expect(announced[0]!.code).not.toBe(old);
+  expect("deviceId" in devices.pair(announced[0]!.code, "phone")).toBe(true);
+});
+
+test("once the last phone is revoked, a pairing attempt brings up a code on the Mac", () => {
+  const { devices, announced } = setup();
+  const { deviceId } = paired(devices.pair(devices.newCode().code, "phone"));
+  devices.revoke(deviceId);
+  expect(devices.pair("2222-2222", "phone")).toEqual({ error: expect.stringContaining("showing on the Mac") });
+  expect(announced).toHaveLength(1);
+});
+
+test("the legacy phone alone still counts as unpaired", () => {
+  const { devices, announced } = setup();
+  devices.importLegacy("shared");
+  devices.newCode();
+  burn(devices);
+  expect(announced).toHaveLength(1);
+});
+
+test("with a phone paired, a spent code is not replaced and the error says how to get one", () => {
+  const { devices, announced, advance } = setup();
+  paired(devices.pair(devices.newCode().code, "phone"));
+  devices.newCode();
+  expect(burn(devices)).toEqual({ error: expect.stringContaining("--pair") });
+  const late = devices.newCode().code;
+  advance(PAIR_CODE_TTL_MS);
+  expect(devices.pair(late, "tablet")).toEqual({ error: expect.stringContaining("--pair") });
+  expect(announced).toEqual([]);
+});
+
+test("a pairing that cannot be saved hands out no token and leaves the code usable", () => {
+  const { devices, savesFail } = setup();
+  const { code } = devices.newCode();
+  savesFail();
+  expect(() => devices.pair(code, "phone")).toThrow("disk full");
+  expect(devices.list(null)).toEqual([]);
+  savesFail(false);
+  expect("deviceId" in devices.pair(code, "phone")).toBe(true);
+});
+
+test("a revoke that cannot be saved leaves the device paired, in its place", () => {
+  const { devices, savesFail } = setup();
+  const first = paired(devices.pair(devices.newCode().code, "first"));
+  paired(devices.pair(devices.newCode().code, "second"));
+  savesFail();
+  expect(() => devices.revoke(first.deviceId)).toThrow("disk full");
+  expect(devices.authenticate(bearer(first.token))).toBe(first.deviceId);
+  expect(devices.list(null).map((d) => d.name)).toEqual(["first", "second"]);
+});
+
+test("control and format characters never reach a stored name", () => {
+  const cases: [sent: string, stored: string][] = [
+    ["Alex\u0000's\u0007 iPhone", "Alex's iPhone"],
+    ["Alex\n\tiPhone", "Alex iPhone"],
+    ["\u202Eenohp\u202C \u200Bx", "enohp x"],
+    ["\u001b[31mred\u001b[0m", "[31mred[0m"],
+    ["\u0000\u200B", "Phone"],
+  ];
+  for (const [sent, stored] of cases) {
+    const { devices } = setup();
+    paired(devices.pair(devices.newCode().code, sent));
+    expect([sent, devices.list(null)[0]!.name]).toEqual([sent, stored]);
+  }
+});
+
+test("a long name is cut between characters, never inside one", () => {
+  const { devices } = setup();
+  paired(devices.pair(devices.newCode().code, "x".repeat(63) + "\u{1F600}\u{1F600}"));
+  expect(devices.list(null)[0]!.name).toBe("x".repeat(63) + "\u{1F600}");
 });

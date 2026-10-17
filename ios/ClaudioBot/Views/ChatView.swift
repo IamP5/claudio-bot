@@ -10,6 +10,7 @@ struct ChatView: View {
     @State private var position = ScrollPosition(edge: .bottom)
     /// Whether the list follows new content down. Dragging lets go; settling near the bottom or sending takes hold again.
     @State private var followsBottom = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if let bot = store.bots[botId] {
@@ -19,6 +20,7 @@ struct ChatView: View {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                         ChatRowView(row: row, bot: bot, onPeer: open)
                             .padding(.top, index == 0 ? 8 : Self.gap(between: rows[index - 1], and: row))
+                            .transition(arrival)
                     }
                     ForEach(store.proposedFacts(by: bot)) { fact in
                         ProposedFactCard(bot: bot, fact: fact)
@@ -32,6 +34,7 @@ struct ChatView: View {
                     case .working:
                         TypingRow(avatar: bot.avatar) { client.send(.stop(botId: botId)) }
                             .padding(.top, 12)
+                            .transition(arrival)
                         ActivityLine(botId: botId)
                     case .unavailable:
                         Text("Claude Code could not start on your Mac. Your messages wait, and the bridge keeps trying.")
@@ -53,6 +56,8 @@ struct ChatView: View {
                         EmptyView()
                     }
                 }
+                .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.25), value: rows.count)
+                .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.25), value: bot.status)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 12)
                 .frame(maxWidth: 760)
@@ -102,6 +107,11 @@ struct ChatView: View {
                 }
             }
         }
+    }
+
+    /// New rows fade up a few points; under Reduce Motion they only fade.
+    private var arrival: AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 8))
     }
 
     private static func bottomGap(_ geometry: ScrollGeometry) -> CGFloat {

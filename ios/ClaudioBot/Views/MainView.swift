@@ -6,6 +6,12 @@ struct MainView: View {
     @Environment(Router.self) private var router
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var visibility: NavigationSplitViewVisibility = .automatic
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Whether each bot has an open question. A bot that gains one buzzes; bots arriving in a snapshot do not.
+    private var asking: [BotID: Bool] {
+        store.bots.mapValues { $0.question != nil }
+    }
 
     /// iPad only. On iPhone the profile is pushed instead.
     private var inspectorShown: Bool {
@@ -48,12 +54,15 @@ struct MainView: View {
                     Rectangle().fill(Theme.hairline).frame(width: 1).ignoresSafeArea()
                     NavigationStack { ProfileView(botId: id) }
                         .frame(width: 380)
-                        .transition(.move(edge: .trailing))
+                        .transition(reduceMotion ? .opacity : .move(edge: .trailing))
                 }
             }
             .animation(.snappy, value: inspectorShown)
         }
         .sheet(isPresented: $router.showingNewChat) { NewChatView() }
         .sheet(isPresented: $router.showingSettings) { SettingsView() }
+        .sensoryFeedback(.warning, trigger: asking) { old, new in
+            new.contains { id, asks in asks && old[id] == false }
+        }
     }
 }

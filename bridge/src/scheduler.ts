@@ -41,9 +41,10 @@ export type Scheduler = Tickable & {
   setHookToken(botId: BotId, routineId: RoutineId, tokenHash: string): string | null;
   /**
    * A webhook call that presented a valid token: one fire, persisted before delivery like a cron fire, with the payload
-   * as data. Null when it fired, else why not (paused, still running, cooling down).
+   * as data. Null when it fired. refused: the routine cannot run now (unknown, paused, still running, parked); failed: the
+   * run was recorded but could not start.
    */
-  hook(botId: BotId, routineId: RoutineId, payload: string): string | null;
+  hook(botId: BotId, routineId: RoutineId, payload: string): HookRefusal | null;
   /** The delete_routine tool. Returns the tool's reply. */
   remove(botId: BotId, name: string): string;
   /** The phone's toggle. Re-enabling resets the fail streak and recomputes nextRunAt. Null on success, else the error. */
@@ -60,6 +61,8 @@ export type Scheduler = Tickable & {
    */
   settle(botId: BotId, run: RunRef, outcome: RunOutcome): void;
 };
+
+export type HookRefusal = { kind: "refused" | "failed"; why: string };
 
 export type SchedulerDeps = {
   world: World;
@@ -272,13 +275,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     hook(botId, routineId, payload) {
       const bot = botOf(botId);
       const r = routinesOf(bot).find((r) => r.id === routineId);
-      if (!r || r.trigger.kind !== "webhook") return "Unknown routine";
-      if (!r.enabled) return "The routine is paused.";
+      const refused = (why: string): HookRefusal => ({ kind: "refused", why });
+      if (!r || r.trigger.kind !== "webhook") return refused("Unknown routine");
+      if (!r.enabled) return refused("The routine is paused.");
       const queued = queuedRuns(bot);
-      if (r.runs.some((run) => run.status === "running" && queued.has(run.id))) return "Its previous run is still going.";
-      if (deps.parked(bot, false)) return "Paused by a limit. Try again later.";
+      if (r.runs.some((run) => run.status === "running" && queued.has(run.id))) return refused("Its previous run is still going.");
+      if (deps.parked(bot, false)) return refused("Paused by a limit. Try again later.");
       const run = addRun(r, { at: deps.now().toISOString(), status: "running", late: false, manual: false, note: null });
-      return fire(bot, r, run, payload) ? null : "Could not start the run. Check the bridge log.";
+      return fire(bot, r, run, payload) ? null : { kind: "failed", why: "Could not start the run. Check the bridge log." };
     },
 
     remove(botId, name) {

@@ -572,7 +572,7 @@ test("a hook fires once with the payload, persisted before delivery, and is refu
   expect(e).toMatchObject({ from: "routine", name: "deploys", prompt: "Summarize it.", manual: false, late: false, payload: '{"sha":"abc123"}' });
   expect(flushedBefore?.find((x) => x.id === r.id)?.runs[0]).toMatchObject({ id: e.run.runId, status: "running", manual: false });
 
-  expect(h.scheduler.hook(BOT, r.id, "again")).toBe("Its previous run is still going.");
+  expect(h.scheduler.hook(BOT, r.id, "again")?.why).toBe("Its previous run is still going.");
   expect(h.delivered).toHaveLength(1);
   settle(h, h.lastRef(), "ok");
   expect(h.scheduler.hook(BOT, r.id, "again")).toBeNull();
@@ -583,15 +583,15 @@ test("a hook is refused for a paused routine, a parked bot, a cron routine, or a
   const h = harness(local(19, 8));
   h.scheduler.upsertHook(BOT, { name: "deploys", prompt: "p", enabled: false });
   const r = h.routine("deploys");
-  expect(h.scheduler.hook(BOT, r.id, "x")).toBe("The routine is paused.");
+  expect(h.scheduler.hook(BOT, r.id, "x")?.why).toBe("The routine is paused.");
   expect(h.scheduler.setEnabled(BOT, r.id, true)).toBeNull();
   expect(r.nextRunAt).toBeNull();
   h.setLimit("daily_cap");
-  expect(h.scheduler.hook(BOT, r.id, "x")).toContain("Paused by a limit");
+  expect(h.scheduler.hook(BOT, r.id, "x")?.why).toContain("Paused by a limit");
   h.setLimit("none");
   const cron = h.add("digest", "0 9 * * *");
-  expect(h.scheduler.hook(BOT, cron.id, "x")).toBe("Unknown routine");
-  expect(h.scheduler.hook(BOT, "r_unknown" as RoutineId, "x")).toBe("Unknown routine");
+  expect(h.scheduler.hook(BOT, cron.id, "x")?.why).toBe("Unknown routine");
+  expect(h.scheduler.hook(BOT, "r_unknown" as RoutineId, "x")?.why).toBe("Unknown routine");
   expect(r.runs).toEqual([]);
   expect(h.delivered).toHaveLength(0);
 });

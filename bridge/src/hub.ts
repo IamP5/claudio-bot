@@ -525,7 +525,7 @@ export function createHub(deps: HubDeps): Hub {
   });
 
   const connectors = createConnectors({ world, live: (id) => brains.get(id)?.mcp() ?? null, reopen: reopenAll, persist: deps.persist, log: deps.log });
-  const webhooks = createWebhooks({ world, scheduler, persist: deps.persist, port: deps.webhookPort, now: clockNow, log: deps.log });
+  const webhooks = createWebhooks({ world, scheduler, port: deps.webhookPort, now: clockNow, log: deps.log });
 
   const allSessions = () => [...brains.values(), ...agents.sessions()];
   const sessions: Tickable = {

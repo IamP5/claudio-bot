@@ -49,7 +49,9 @@ struct RoutineView: View {
             )) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(routine.describe).font(.system(size: 16)).foregroundStyle(.white)
-                    Text(routine.schedule).font(.system(size: 13, design: .monospaced)).foregroundStyle(Theme.tertiary)
+                    if !routine.schedule.isEmpty {
+                        Text(routine.schedule).font(.system(size: 13, design: .monospaced)).foregroundStyle(Theme.tertiary)
+                    }
                 }
             }
             .tint(AvatarColor.teal.color)
@@ -58,15 +60,16 @@ struct RoutineView: View {
             HStack {
                 Text("Next run").font(.system(size: 16)).foregroundStyle(.white)
                 Spacer()
-                Text(nextRun(routine)).font(.system(size: 15)).foregroundStyle(Theme.secondary)
+                Text(Self.nextRun(routine)).font(.system(size: 15)).foregroundStyle(Theme.secondary)
             }
             .padding(16)
         }
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
-    private func nextRun(_ routine: Routine) -> String {
+    static func nextRun(_ routine: Routine) -> String {
         guard routine.enabled else { return "Paused" }
+        if routine.trigger == .webhook { return "When called" }
         guard let next = routine.nextRunAt else { return "Not scheduled" }
         return TimeLabel.separator(next)
     }

@@ -11,6 +11,7 @@ const PORT = 7879;
 type RoutineEnvelope = Extract<Envelope, { from: "routine" }>;
 
 function harness(port: number | null = PORT, opts: { enabled?: boolean } = {}) {
+  let persistFails = false;
   let now = new Date("2026-10-19T08:00:00Z");
   const events: string[] = [];
   const delivered: RoutineEnvelope[] = [];
@@ -27,6 +28,7 @@ function harness(port: number | null = PORT, opts: { enabled?: boolean } = {}) {
     },
     note: () => {},
     changed: (_b, urgency) => {
+      if (persistFails && urgency === "now") throw new Error("disk full");
       events.push(urgency === "now" ? "persist now" : "persist");
     },
     log: () => {},
@@ -35,7 +37,7 @@ function harness(port: number | null = PORT, opts: { enabled?: boolean } = {}) {
   });
   scheduler.upsertHook(BOT, { name: "deploys", prompt: "Summarize the deploy.", enabled: opts.enabled });
   const routine = bot.routines.find((r) => r.name === "deploys") as RoutineRecord;
-  const webhooks = createWebhooks({ world, scheduler, persist: () => {}, port, now: () => now, log: () => {} });
+  const webhooks = createWebhooks({ world, scheduler, port, now: () => now, log: () => {} });
   return {
     webhooks,
     scheduler,
@@ -43,6 +45,9 @@ function harness(port: number | null = PORT, opts: { enabled?: boolean } = {}) {
     routine,
     delivered,
     events,
+    failPersist() {
+      persistFails = true;
+    },
     advance(ms: number) {
       now = new Date(now.getTime() + ms);
     },
@@ -105,6 +110,16 @@ const rows: { name: string; call?: Call; before?: (h: ReturnType<typeof harness>
       expect((await h.webhooks.handle(request(token, h.routine.id))).status).toBe(202);
       h.finish();
       h.advance(HOOK_COOLDOWN_MS);
+    },
+    status: 202,
+    fires: true,
+  },
+  {
+    name: "a call after the clock was set back behind the last fire",
+    before: async (h, token) => {
+      expect((await h.webhooks.handle(request(token, h.routine.id))).status).toBe(202);
+      h.finish();
+      h.advance(-3 * 60 * 60 * 1000);
     },
     status: 202,
     fires: true,
@@ -214,4 +229,47 @@ test("the listener binds 127.0.0.1 only and fires on a real loopback POST", asyn
   const ok = await fetch(url, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: '{"sha":"9f2c1e"}' });
   expect(ok.status).toBe(202);
   expect(h.delivered.map((e) => e.payload)).toEqual(['{"sha":"9f2c1e"}']);
+});
+
+test("a run that could not be recorded answers 500 and fires nothing", async () => {
+  const h = harness();
+  const { token } = mint(h.webhooks, h.routine.id);
+  h.failPersist();
+  const res = await h.webhooks.handle(request(token, h.routine.id));
+  expect([res.status, await res.text()]).toEqual([500, "Not fired: Could not start the run. Check the bridge log.\n"]);
+  expect(h.delivered).toHaveLength(0);
+  expect(h.routine.runs[0]).toMatchObject({ status: "failed" });
+});
+
+test("a token rotated while the body was arriving refuses the call", async () => {
+  const h = harness();
+  const { token } = mint(h.webhooks, h.routine.id);
+  let send!: () => void;
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      send = () => {
+        c.enqueue(new TextEncoder().encode("{}"));
+        c.close();
+      };
+    },
+  });
+  const req = new Request(`http://127.0.0.1:${PORT}/hook/${h.routine.id}`, { method: "POST", headers: { host: `127.0.0.1:${PORT}`, authorization: `Bearer ${token}` }, body });
+  const answer = h.webhooks.handle(req);
+  await Bun.sleep(0);
+  mint(h.webhooks, h.routine.id);
+  send();
+  expect((await answer).status).toBe(401);
+  expect(h.delivered).toHaveLength(0);
+});
+
+test("a token is refused when the listener could not bind its port, instead of handing out a dead URL", () => {
+  const taken = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+  try {
+    const h = harness(taken.port);
+    h.webhooks.start();
+    started = h.webhooks;
+    expect(h.webhooks.token(BOT, h.routine.id)).toEqual({ error: "Webhook listener is not running. Check the bridge log, then restart the bridge." });
+  } finally {
+    taken.stop(true);
+  }
 });

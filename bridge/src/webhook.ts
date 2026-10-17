@@ -1,7 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { BotId, RoutineId } from "./protocol";
-import type { Scheduler } from "./scheduler";
-import type { Persist } from "./store";
+import type { HookRefusal, Scheduler } from "./scheduler";
 import type { BotRecord, RoutineRecord, World } from "./world";
 
 // A webhook routine fires when a program on this Mac POSTs to http://127.0.0.1:<port>/hook/<id>
@@ -27,7 +26,6 @@ export type Webhooks = {
 export type WebhooksDeps = {
   world: World;
   scheduler: Pick<Scheduler, "hook" | "setHookToken">;
-  persist: Persist;
   /** null: no listener (tests, or webhooks turned off). */
   port: number | null;
   now: () => Date;
@@ -47,6 +45,7 @@ const reply = (status: number, text: string) => new Response(`${text}\n`, { stat
 
 export function createWebhooks(deps: WebhooksDeps): Webhooks {
   let server: ReturnType<typeof Bun.serve> | null = null;
+  let bindFailed = false;
   const port = () => server?.port ?? deps.port;
 
   function find(routineId: string): { bot: BotRecord; routine: RoutineRecord } | null {
@@ -57,10 +56,22 @@ export function createWebhooks(deps: WebhooksDeps): Webhooks {
     return null;
   }
 
-  /** The cooldown is a fact of the run history: a call within a minute of the routine's last webhook fire waits. */
+  /**
+   * The cooldown is a fact of the run history: a call within a minute of the routine's last webhook fire waits. A last
+   * fire in the future (the clock was set back) counts as elapsed.
+   */
   function coolingDown(r: RoutineRecord): boolean {
     const last = r.runs.find((run) => !run.manual);
-    return last !== undefined && deps.now().getTime() - Date.parse(last.at) < HOOK_COOLDOWN_MS;
+    if (last === undefined) return false;
+    const elapsed = deps.now().getTime() - Date.parse(last.at);
+    return elapsed >= 0 && elapsed < HOOK_COOLDOWN_MS;
+  }
+
+  /** The routine the call names, when the token it presents is that routine's current one. */
+  function authorized(routineId: string, presented: string): { bot: BotRecord; routine: RoutineRecord } | null {
+    const found = find(routineId);
+    const stored = found?.routine.trigger.kind === "webhook" ? found.routine.trigger.tokenHash : null;
+    return found && tokenMatches(presented, stored) ? found : null;
   }
 
   async function readBody(req: Request): Promise<string | null> {
@@ -83,24 +94,26 @@ export function createWebhooks(deps: WebhooksDeps): Webhooks {
 
     const auth = req.headers.get("authorization") ?? "";
     const presented = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length).trim() : "";
-    const found = find(match[1]!);
-    const stored = found?.routine.trigger.kind === "webhook" ? found.routine.trigger.tokenHash : null;
-    if (!found || !tokenMatches(presented, stored)) return reply(401, "Unauthorized: wrong or missing token.");
+    const unauthorized = () => reply(401, "Unauthorized: wrong or missing token.");
+    if (!authorized(match[1]!, presented)) return unauthorized();
 
     const payload = await readBody(req);
     if (payload === null) return reply(413, `Payload too large: at most ${PAYLOAD_MAX_BYTES} bytes.`);
 
-    // From here to the fire nothing awaits, so of two concurrent calls only the first can pass the cooldown.
+    // The token may have been rotated or the routine deleted while the body arrived. From here to the fire nothing
+    // awaits, so of two concurrent calls only the first can pass the cooldown.
+    const found = authorized(match[1]!, presented);
+    if (!found) return unauthorized();
     const { bot, routine } = found;
     if (coolingDown(routine)) return reply(429, `Too soon: a webhook routine fires at most once a minute.`);
-    let why: string | null;
+    let refusal: HookRefusal | null;
     try {
-      why = deps.scheduler.hook(bot.id, routine.id, payload);
+      refusal = deps.scheduler.hook(bot.id, routine.id, payload);
     } catch (error) {
       deps.log(`webhook: ${routine.name} for ${bot.id} failed: ${error instanceof Error ? error.message : String(error)}`);
       return reply(500, "The bridge could not fire the routine.");
     }
-    if (why !== null) return reply(409, `Not fired: ${why}`);
+    if (refusal !== null) return reply(refusal.kind === "failed" ? 500 : 409, `Not fired: ${refusal.why}`);
     deps.log(`webhook: fired ${routine.name} for ${bot.id}`);
     return reply(202, "Fired.");
   }
@@ -109,6 +122,7 @@ export function createWebhooks(deps: WebhooksDeps): Webhooks {
     token(botId, routineId) {
       const p = port();
       if (p === null) return { error: "Webhooks are off on this bridge." };
+      if (bindFailed) return { error: "Webhook listener is not running. Check the bridge log, then restart the bridge." };
       const token = TOKEN_PREFIX + randomBytes(32).toString("base64url");
       const error = deps.scheduler.setHookToken(botId, routineId, sha256(token).toString("hex"));
       if (error !== null) return { error };
@@ -121,8 +135,10 @@ export function createWebhooks(deps: WebhooksDeps): Webhooks {
       if (deps.port === null || server !== null) return;
       try {
         server = Bun.serve({ hostname: "127.0.0.1", port: deps.port, maxRequestBodySize: PAYLOAD_MAX_BYTES, fetch: handle });
+        bindFailed = false;
         deps.log(`webhook: listening on 127.0.0.1:${server.port}`);
       } catch (error) {
+        bindFailed = true;
         deps.log(`webhook: could not listen on 127.0.0.1:${deps.port}: ${error instanceof Error ? error.message : String(error)}`);
       }
     },

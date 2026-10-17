@@ -106,6 +106,11 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(WebhookTokenSection.shows(hook, features: [.webhooks]))
         #expect(!WebhookTokenSection.shows(hook, features: [.memory, .skills]))
         #expect(!WebhookTokenSection.shows(cron, features: [.webhooks]))
+        #expect(RoutineView.nextRun(hook) == "When called")
+        #expect(RoutineView.nextRun(cron) == "Not scheduled")
+        var paused = hook
+        paused.enabled = false
+        #expect(RoutineView.nextRun(paused) == "Paused")
         #expect(!WebhookTokenSection.shows(Routine(
             id: RoutineID("r3"), name: "x", schedule: "", describe: "", prompt: "", enabled: true, lastRunAt: nil, trigger: .unknown("email")
         ), features: [.webhooks]))

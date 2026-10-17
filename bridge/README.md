@@ -158,7 +158,7 @@ With `CLAUDIOBOT_PUSH_URL` set to an ntfy topic, the bridge posts when no phone 
 ```sh
 bun test         # unit tests, no network, no Claude
 bunx tsc --noEmit
-bun run e2e      # real Claude Code in a temp home, 22 scenarios, about $1.25, stops at $8
+bun run e2e      # real Claude Code in a temp home, 29 scenarios, about $1.60, stops at $8
 ```
 
 The e2e script starts the bridge with `CLAUDIOBOT_HOME` and every project root in a temp folder, so it never touches `~/.claudebot` or `~/.claudiobot`, and points `CLAUDIOBOT_WORKTREES` at a temp folder too. It keeps your `HOME` for the Claude Code login but passes the bridge no `SSH_AUTH_SOCK` or GitHub token, sends pushes to a fake ntfy server of its own, and turns claude.ai connectors off. It pairs over `POST /pair` and drives the bridge through the socket like the app. It covers a user turn; a bot command built at runtime that the gate holds and that, after Allow once (which Claude Code runs without asking its classifier), the sandbox still refuses: a read in the bridge home and a write outside the bot's home; a mac agent's commit and report; Stop on a running command; an agent's `git push origin main` to a local bare remote that waits for Allow once; a bot's held push approved through a protocol 2 socket's answer; a repo whose committed hook must not run until the repo is trusted, and does after; no push while a phone is connected and a push once none is; quiet and non-quiet routine runs after a restart; and session resume. It pins `claude-sonnet-5-5`, because auto mode needs it. `E2E_MODEL` overrides the model, and `E2E_BRIDGE_LOG=<file>` keeps the bridge's log. It never starts a cloud agent, and it prints the total the ledger charged.

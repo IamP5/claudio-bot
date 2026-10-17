@@ -279,7 +279,7 @@ decisions.tsv           the decision log from building it
 cd bridge
 bun test                 # unit tests, no network
 bunx tsc --noEmit
-bun run e2e              # real Claude Code (claude-sonnet-5-5) in a temp home, 22 scenarios, about $1.25
+bun run e2e              # real Claude Code (claude-sonnet-5-5) in a temp home, 29 scenarios, about $1.60
 
 # app
 cd ios

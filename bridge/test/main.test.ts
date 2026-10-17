@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { bridgeReady, collect } from "./output";
 
 const homes: string[] = [];
 afterEach(() => {
@@ -19,11 +20,9 @@ test("SIGTERM still exits when the last save fails, and says the state was not s
     stdout: "pipe",
     stderr: "pipe",
   });
-  const out = new Response(bridge.stdout).text();
+  const out = collect(bridge.stdout);
   const err = new Response(bridge.stderr).text();
-  const started = Date.now();
-  while (!(await Bun.file(join(home, "state.json")).exists()) && Date.now() - started < 10_000) await Bun.sleep(20);
-  await Bun.sleep(300);
+  await bridgeReady(out);
 
   chmodSync(home, 0o500);
   bridge.kill("SIGTERM");
@@ -31,7 +30,7 @@ test("SIGTERM still exits when the last save fails, and says the state was not s
   if (code === "still running") bridge.kill("SIGKILL");
 
   expect(code).toBe(1);
-  expect(await out).toContain("shutdown: state.json was not saved");
+  expect(await out.all()).toContain("shutdown: state.json was not saved");
   expect(await err).not.toContain("error:");
 }, 20_000);
 

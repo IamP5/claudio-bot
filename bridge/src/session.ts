@@ -1,12 +1,12 @@
-import {
+import type {
   query,
-  type Options,
-  type Query,
-  type SDKAssistantMessageError,
-  type SDKMessage,
-  type SDKRateLimitInfo,
-  type SDKResultMessage,
-  type SDKUserMessage,
+  Options,
+  Query,
+  SDKAssistantMessageError,
+  SDKMessage,
+  SDKRateLimitInfo,
+  SDKResultMessage,
+  SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Tickable } from "./clock";
 import type { Headroom, Ledger } from "./ledger";
@@ -570,7 +570,8 @@ export type SessionSpec = {
    */
   onDormant?: () => void;
   log?: (line: string) => void;
-  query?: typeof query;
+  /** The SDK's query in the bridge; a fake in tests. Required, so no test falls back to the real CLI. */
+  query: typeof query;
   executable?: () => string | null;
   now?: () => Date;
 };
@@ -612,7 +613,7 @@ function sandboxDownIn(m: SDKMessage): string | null {
 }
 
 export function createSession(spec: SessionSpec): Session {
-  const run = spec.query ?? query;
+  const run = spec.query;
   const clock = spec.now ?? (() => new Date());
   const log = spec.log ?? ((line: string) => console.error(line));
   const executable = spec.executable ?? claudeExecutable;

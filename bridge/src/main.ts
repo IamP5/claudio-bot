@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { homedir, hostname } from "node:os";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import qrcode from "qrcode-terminal";
 import { bridgeUrls, lanAddresses, pairLink, readNames } from "./address";
 import { createDevices, type PairCode } from "./devices";
@@ -15,9 +16,17 @@ import { bridgeHome, createSaver, loadWorld } from "./store";
 import { createStream } from "./stream";
 import { errorText } from "./text";
 
+/** A helper command's output, or "" when it is missing, fails or takes over 2 s (it is killed then). */
 async function run(argv: string[]): Promise<string> {
-  const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+  let proc: Bun.Subprocess<"ignore", "pipe", "ignore">;
+  try {
+    proc = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+  } catch {
+    return "";
+  }
+  const timer = setTimeout(() => proc.kill(), 2000);
   const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]).catch(() => ["", 1] as const);
+  clearTimeout(timer);
   return code === 0 ? out.trim() : "";
 }
 
@@ -90,6 +99,7 @@ const hub = createHub({
   homes: createHomes(home),
   model: process.env.CLAUDIOBOT_MODEL || undefined,
   scan: () => scanProjects(),
+  claude: { query },
   broadcast: (message) => transport.publish(message),
   signal: (message) => transport.signal(message),
   persist: saver.schedule,

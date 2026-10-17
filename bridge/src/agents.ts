@@ -82,7 +82,7 @@ export function createAgents(deps: {
   ledger: Ledger;
   log: (line: string) => void;
   /** Tests pass a fake SDK. */
-  claude?: Pick<SessionSpec, "query" | "executable">;
+  claude: Pick<SessionSpec, "query" | "executable">;
   hooks: (actor: Actor) => Partial<Record<HookEvent, HookCallbackMatcher[]>>;
   /** An approval continuation's turn starts (gate.beginTurn). */
   beginTurn: (actor: Actor) => void;

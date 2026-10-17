@@ -46,13 +46,12 @@ export function bonjourName(localHostName: string): string | null {
   return /^[A-Za-z0-9-]+$/.test(name) ? `${name}.local` : null;
 }
 
-/** Each lookup gives up after 2 s, so a stuck tailscaled never holds up the bridge's start. */
+/** Where Homebrew and the Tailscale installer put the CLI; launchd's PATH for the service may hold neither. */
+const TAILSCALE_PATH = "/opt/homebrew/bin:/usr/local/bin";
+
+/** `run` gives "" for a command that is missing, fails or hangs, so a stuck tailscaled never holds up the start. */
 export async function readNames(run: (argv: string[]) => Promise<string>): Promise<Names> {
-  const within = (p: Promise<string>) => Promise.race([p, Bun.sleep(2000).then(() => "")]);
-  const tailscale = Bun.which("tailscale") ?? (existsSync(TAILSCALE_APP) ? TAILSCALE_APP : null);
-  const [status, local] = await Promise.all([
-    tailscale ? within(run([tailscale, "status", "--json"])) : "",
-    within(run(["scutil", "--get", "LocalHostName"])),
-  ]);
+  const tailscale = Bun.which("tailscale") ?? Bun.which("tailscale", { PATH: TAILSCALE_PATH }) ?? (existsSync(TAILSCALE_APP) ? TAILSCALE_APP : null);
+  const [status, local] = await Promise.all([tailscale ? run([tailscale, "status", "--json"]) : "", run(["scutil", "--get", "LocalHostName"])]);
   return { tailnet: tailnetName(status), localHost: bonjourName(local) };
 }

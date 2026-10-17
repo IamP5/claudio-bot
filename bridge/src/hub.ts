@@ -104,7 +104,7 @@ export type HubDeps = {
   /** The loopback port webhook routines answer on; null: no listener. */
   webhookPort: number | null;
   /** Tests pass a fake SDK. The bridge uses the real query and the claude on PATH. */
-  claude?: Pick<SessionSpec, "query" | "executable">;
+  claude: Pick<SessionSpec, "query" | "executable">;
 };
 
 /** The routine's own scheduled fire. Its bubbles wait for the result, so a run with nothing to say posts nothing. */

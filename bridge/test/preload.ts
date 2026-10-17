@@ -10,8 +10,8 @@ if (configured !== undefined && configured !== STAND_IN) {
 }
 process.env.CLAUDIOBOT_CLAUDE = STAND_IN;
 
-// A session not handed a query falls back to the SDK's. The session turns that throw into a start-failure note, so the
-// test that did it is failed here rather than left to pass on whatever the note changed.
+// Sessions take their query from their owner, and only main.ts hands them the SDK's. Any test that still reaches it
+// is failed here: the session would turn the throw into a start-failure note the test might pass on.
 const REACHED = "A test reached the Claude Agent SDK's query. Pass the session a fake query.";
 let reached = false;
 mock.module("@anthropic-ai/claude-agent-sdk", () => ({

@@ -62,6 +62,7 @@ function hubWith(rows: UsageRow[]) {
     persist: () => {},
     log: () => {},
     push: { notify: () => true, tick() {}, nextDeadline: () => null },
+    claude: { query: (() => { throw new Error("no queries in spend tests"); }) as never, executable: () => null },
   });
   return { hub, frames };
 }

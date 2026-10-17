@@ -34,7 +34,7 @@ const agent2: Actor = { kind: "agent", botId: B1, agentId: A2 };
 const user: Initiator = { kind: "user" };
 const routine: Initiator = { kind: "routine", run: { routineId: "r1" as RoutineId, runId: "u1" as RunId }, manual: false };
 const manual: Initiator = { ...routine, manual: true };
-const fromBot: Initiator = { kind: "bot", botId: B2, hops: 1 };
+const fromBot: Initiator = { kind: "bot", botId: B2, hops: 1, origin: { kind: "user" } };
 const system: Initiator = { kind: "system" };
 
 // Local wall-clock times, so the day boundaries hold in whatever zone the test runs.

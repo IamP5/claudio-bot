@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -35,12 +35,19 @@ test("SIGTERM still exits when the last save fails, and says the state was not s
   expect(await err).not.toContain("error:");
 }, 20_000);
 
-test("a first start creates the home so that only its owner can list it", async () => {
+// scutil runs right after the home is made and before anything writes into it, so a stand-in records what the home was
+// then. Every later writer that would create the home (the ledger, the audit log) makes it 0700 too, so the end state
+// alone cannot tell whether main.ts made it private before the first write.
+test("a first start makes the home private before anything is written into it", async () => {
   const root = mkdtempSync(join(tmpdir(), "claudiobot-main-"));
   homes.push(root);
   const home = join(root, "fresh");
+  const bin = join(root, "bin");
+  const seen = join(root, "home-mode");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "scutil"), `#!/bin/sh\n/usr/bin/stat -f %Lp "$CLAUDIOBOT_HOME" > "${seen}" 2>/dev/null || echo missing > "${seen}"\necho Mac\n`, { mode: 0o755 });
   const bridge = Bun.spawn(["bun", join(import.meta.dir, "../src/main.ts")], {
-    env: { PATH: process.env.PATH, HOME: root, CLAUDIOBOT_HOME: home, CLAUDIOBOT_PORT: "0", CLAUDIOBOT_WEBHOOK_PORT: "0", CLAUDIOBOT_USER_NAME: "Alex", CLAUDIOBOT_CLAUDE: join(root, "no-claude") },
+    env: { PATH: `${bin}:${process.env.PATH}`, HOME: root, CLAUDIOBOT_HOME: home, CLAUDIOBOT_PORT: "0", CLAUDIOBOT_WEBHOOK_PORT: "0", CLAUDIOBOT_USER_NAME: "Alex", CLAUDIOBOT_CLAUDE: join(root, "no-claude") },
     stdout: "ignore",
     stderr: "ignore",
   });
@@ -48,5 +55,6 @@ test("a first start creates the home so that only its owner can list it", async 
   while (!(await Bun.file(join(home, "state.json")).exists()) && Date.now() - started < 10_000) await Bun.sleep(20);
   bridge.kill("SIGTERM");
   await bridge.exited;
+  expect(readFileSync(seen, "utf8").trim()).toBe("700");
   expect((statSync(home).mode & 0o777).toString(8)).toBe("700");
 }, 20_000);

@@ -301,9 +301,11 @@ final class BridgeClient {
             case .hello:
                 greeted = true
                 if let openBot { transmit(.open(botId: openBot), on: ws) }
+                let resent = store.resendsAfterHello()
+                resent.forEach { transmit($0, on: ws) }
                 let pending = outbox
                 outbox.removeAll()
-                pending.forEach { send($0) }
+                pending.filter { !resent.contains($0) }.forEach { send($0) }
                 upgradeLegacyPairing()
             case .bot(let bot) where bot.id == openBot && bot.unread > 0:
                 // The bridge counts a message as unread until the next open, so re-open the bot on screen.

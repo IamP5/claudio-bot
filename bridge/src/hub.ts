@@ -662,6 +662,8 @@ export function createHub(deps: HubDeps): Hub {
         changed(bot);
         return [{ type: "conversation", botId: bot.id, messages: bot.messages }];
       case "send": {
+        // A phone resends what it never saw echoed after a reconnect; the first copy may have arrived.
+        if (message.clientId !== undefined && bot.messages.some((m) => m.kind === "user" && m.clientId === message.clientId)) return [];
         const attachments = homes.saveUploads(bot.id, message.uploads);
         if ("error" in attachments) return error(attachments.error);
         say(bot, { kind: "user", id: newMessageId(), at: now(), text: message.text, attachments, ...(message.clientId !== undefined && { clientId: message.clientId }) });
@@ -697,11 +699,19 @@ export function createHub(deps: HubDeps): Hub {
         agents.stopFor(bot.id);
         // Before the agents go: the gate finds the agents' grants through them.
         gate.forgetBot(bot.id);
-        for (const [id, rec] of world.agents) if (rec.agent.botId === bot.id) world.agents.delete(id);
+        const doomed = [...world.agents.values()].filter((rec) => rec.agent.botId === bot.id).map((rec) => rec.agent.id);
+        for (const id of doomed) world.agents.delete(id);
         world.bots.delete(bot.id);
         // A crash between these two leaves an orphan home rather than a bot whose home is gone.
         deps.persist("now");
         homes.trash(bot.id, new Date());
+        for (const id of doomed) {
+          try {
+            homes.removeAgentConfig(id);
+          } catch (e) {
+            deps.log(`delete_bot: could not remove the config folder of ${id}: ${errorText(e)}`);
+          }
+        }
         deps.broadcast({ type: "bot_removed", botId: bot.id });
         return [];
       case "set_routine":

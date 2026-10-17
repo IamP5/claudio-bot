@@ -9,6 +9,7 @@ struct Composer: View {
     var onSend: () -> Void = {}
 
     @Environment(BridgeClient.self) private var client
+    @Environment(AppStore.self) private var store
     @State private var text = ""
     @State private var uploads: [Upload] = []
     @State private var problem: String?
@@ -151,7 +152,9 @@ struct Composer: View {
         let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
         dictation.stop()
-        client.send(.send(botId: bot.id, text: message, uploads: uploads))
+        let send = ClientMessage.send(botId: bot.id, text: message, uploads: uploads, clientId: UUID().uuidString)
+        store.sendStarted(send)
+        client.send(send)
         text = ""
         uploads = []
         problem = nil

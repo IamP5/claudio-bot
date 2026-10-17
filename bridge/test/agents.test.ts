@@ -77,7 +77,7 @@ afterEach(() => {
   else process.env.CLAUDIOBOT_CLAUDE = configuredClaude;
 });
 
-function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; project?: Project; sandbox?: () => SandboxSettings; worktrees?: string } = {}) {
+function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; project?: Project; sandbox?: () => SandboxSettings; worktrees?: string; budgetLeft?: number } = {}) {
   const world = opts.world ?? emptyWorld();
   const queries: FakeQuery[] = [];
   const reports: { agentId: AgentId; text: string; by: Initiator }[] = [];
@@ -89,7 +89,7 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; p
   const ledger: Ledger = {
     add: () => {},
     headroom: (_, i) => (opts.headroom ? opts.headroom(i) : { ok: true, capReached: false }),
-    budgetLeft: () => 4.5,
+    budgetLeft: () => opts.budgetLeft ?? 4.5,
     dailyLeft: () => 10,
   };
   const agents = createAgents({
@@ -334,7 +334,7 @@ test("a notice tops the agent's next envelope", async () => {
 });
 
 test("an agent whose budget is used up never starts its turn and reports that it used its budget", async () => {
-  const h = harness({ headroom: () => ({ ok: false, reason: "agent_budget" }) });
+  const h = harness({ headroom: () => ({ ok: false, reason: "agent_budget" }), budgetLeft: 0 });
   const rec = await h.start();
   await flush();
   expect(h.queries).toEqual([]);
@@ -343,7 +343,7 @@ test("an agent whose budget is used up never starts its turn and reports that it
 });
 
 test("an agent whose query ran out of budget mid-turn reports that it used its budget", async () => {
-  const h = harness();
+  const h = harness({ budgetLeft: 0 });
   const rec = await h.start();
   await flush();
   h.q().emit(said("Running the tests."), result("", { subtype: "error_max_budget_usd", is_error: true, errors: ["Reached maximum budget ($4.5)"] }));
@@ -731,3 +731,16 @@ test("two agents started at once under auto in a clean checkout do not share the
   const placed = await Promise.all([h.startIn("auto"), h.startIn("auto")]);
   expect(placed.map((r) => r.agent.worktree === null).sort()).toEqual([false, true]);
 }, 30_000);
+
+test("an agent the daily cap stopped mid-turn is capped, not failed, and says how it resumes", async () => {
+  const h = harness({ budgetLeft: 3 });
+  const rec = await h.start("mac", routine);
+  await flush();
+  h.q().emit(said("Running the tests."), result("", { subtype: "error_max_budget_usd", is_error: true, errors: ["Reached maximum budget ($0.4)"] }));
+  await flush();
+  expect(rec.agent.status).toBe("capped");
+  expect(h.reports.map((r) => r.text)).toEqual(["Paused at today's spending cap; it resumes when you message it tomorrow or raise the cap."]);
+  h.agents.session(rec.agent.id)?.recheck();
+  await flush();
+  expect(rec.agent.status).toBe("capped");
+});

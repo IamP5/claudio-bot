@@ -16,6 +16,9 @@ import { own, type PushState, type World } from "./world";
 // A card push a live socket held back is not lost: an open card with no recorded card push goes out at the first
 // tick after every socket has gone quiet. A suspended iPhone keeps its socket open for a while, so "live" means heard
 // from recently, which the transport decides.
+// At start no socket is live yet, though a phone that was open usually reconnects within seconds. So a card or reminder
+// push for a card already open at start waits START_GRACE_MS and then goes out only if no phone is live.
+// A muted bot sends no message or result push. Cards and reminders still push: a held call waits on the user.
 
 /** message: a turn's first pushed bubble. result: the last bubble of a turn still running 20 s after that push. */
 export type PushReason = "card" | "reminder" | "message" | "result";
@@ -36,6 +39,7 @@ export const MESSAGE_THROTTLE_MS = 10 * 60_000;
 // Far longer than any card stays open, so a key is never forgotten while its card can still remind.
 const RETAIN_MS = 7 * 24 * 60 * 60_000;
 const SEND_TIMEOUT_MS = 10_000;
+export const START_GRACE_MS = 60_000;
 
 const PHRASE: Record<PushReason, string> = {
   card: "needs you",
@@ -86,6 +90,10 @@ export function createPush(deps: {
   log: (line: string) => void;
 }): Push {
   const { world, sender } = deps;
+  const graceEnds = deps.now().getTime() + START_GRACE_MS;
+  const openAtStart = new Set<MessageId>(world.gate.open.map((c) => c.cardId));
+  type Deferred = { bot: { id: BotId; name: string }; reason: PushReason; messageId: MessageId };
+  const deferred = new Map<string, Deferred>();
 
   // Derived from the durable log rather than held in memory, so the throttle survives a restart. A record stamped
   // after now (the clock moved back) does not throttle.
@@ -104,8 +112,13 @@ export function createPush(deps: {
 
   function notify(bot: { id: BotId; name: string }, reason: PushReason, messageId: MessageId, now = deps.now().getTime()): boolean {
     if (sender === null || live(now)) return false;
+    if ((reason === "message" || reason === "result") && world.bots.get(bot.id)?.muted) return false;
     const key = `${messageId}|${reason}`;
     if (pushed(key)) return false;
+    if (now < graceEnds && openAtStart.has(messageId)) {
+      deferred.set(key, { bot, reason, messageId });
+      return false;
+    }
     if (reason === "message" && throttled(bot.id, now)) return false;
 
     const state = own<PushState>(world.push);
@@ -131,6 +144,10 @@ export function createPush(deps: {
   return {
     notify: (bot, reason, messageId) => notify(bot, reason, messageId),
     tick(now) {
+      if (now.getTime() >= graceEnds) {
+        for (const d of deferred.values()) if (world.gate.open.some((c) => c.cardId === d.messageId)) notify(d.bot, d.reason, d.messageId, now.getTime());
+        deferred.clear();
+      }
       for (const card of heldCards()) {
         const bot = world.bots.get(card.actor.botId);
         if (bot) notify(bot, "card", card.cardId, now.getTime());
@@ -138,7 +155,10 @@ export function createPush(deps: {
     },
     nextDeadline() {
       const until = deps.liveUntil();
-      return sender !== null && until !== null && heldCards().length > 0 ? until.toISOString() : null;
+      const held = sender !== null && until !== null && heldCards().length > 0 ? until.getTime() : Infinity;
+      const grace = deferred.size > 0 ? graceEnds : Infinity;
+      const next = Math.min(held, grace);
+      return next === Infinity ? null : new Date(next).toISOString();
     },
   };
 }

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BotId, MessageId } from "../src/protocol";
-import { createPush, MESSAGE_THROTTLE_MS, ntfySender, senderFromEnv, type PushReason, type Sender } from "../src/push";
+import { createPush, MESSAGE_THROTTLE_MS, ntfySender, senderFromEnv, START_GRACE_MS, type PushReason, type Sender } from "../src/push";
 import { createSaver, loadWorld } from "../src/store";
 import { botActor, newBot, post, type GateState, type PushState, type World } from "../src/world";
 
@@ -355,4 +355,80 @@ test("an unparseable record does not hide a recent push from the throttle", asyn
   h.push.notify(BOT, "message", h.bubble("m_b2"));
   await settle();
   expect(h.calls).toEqual([]);
+});
+
+test("a muted bot pushes no message or result, and still pushes its card and reminder", async () => {
+  const h = harness();
+  h.world.bots.get(BOT.id)!.muted = true;
+  expect(h.push.notify(BOT, "message", h.bubble("m_first"))).toBe(false);
+  expect(h.push.notify(BOT, "result", h.bubble("m_last"))).toBe(false);
+  expect(h.push.notify(BOT, "card", CARD)).toBe(true);
+  expect(h.push.notify(BOT, "reminder", CARD)).toBe(true);
+  await settle();
+  expect(h.calls.map((c) => c.init.body)).toEqual(["Claudio Bot needs you", "Claudio Bot is still waiting for you"]);
+  expect(keys(h.world)).toEqual(["m_card|card", "m_card|reminder"]);
+});
+
+test("a muted message records nothing, so the first message after unmuting still pushes", async () => {
+  const h = harness();
+  h.world.bots.get(BOT.id)!.muted = true;
+  h.push.notify(BOT, "message", h.bubble("m_first"));
+  h.world.bots.get(BOT.id)!.muted = false;
+  expect(h.push.notify(BOT, "message", h.bubble("m_second"))).toBe(true);
+});
+
+/** A bridge restarted with CARD open in state.json, its card push never sent: a live phone held it back before. */
+function restartWithOpenCard() {
+  const before = harness();
+  openCard(before.world);
+  createSaver(before.world, before.home).flush();
+  return harness({ home: before.home });
+}
+
+test("a card open at start waits out the grace window, then pushes when no phone came back", async () => {
+  const restarted = restartWithOpenCard();
+  restarted.push.tick(new Date(T0));
+  restarted.push.notify(BOT, "reminder", CARD);
+  await settle();
+  expect(restarted.calls).toEqual([]);
+  expect(restarted.push.nextDeadline()).toBe(new Date(T0 + START_GRACE_MS).toISOString());
+
+  restarted.clock.t = T0 + START_GRACE_MS;
+  restarted.push.tick(new Date(restarted.clock.t));
+  restarted.push.tick(new Date(restarted.clock.t));
+  await settle();
+  expect(restarted.calls.map((c) => c.init.body).sort()).toEqual(["Claudio Bot is still waiting for you", "Claudio Bot needs you"]);
+  expect(restarted.push.nextDeadline()).toBeNull();
+});
+
+test("a phone that reconnects within the grace window gets no push for the cards open at start", async () => {
+  const restarted = restartWithOpenCard();
+  restarted.push.tick(new Date(T0));
+  restarted.push.notify(BOT, "reminder", CARD);
+
+  // Reconnected at 5 s and pinging every 20 s, so last heard from at 45 s.
+  restarted.sockets.until = new Date(T0 + 45_000 + 45_000);
+  restarted.clock.t = T0 + START_GRACE_MS;
+  restarted.push.tick(new Date(restarted.clock.t));
+  await settle();
+  expect(restarted.calls).toEqual([]);
+  expect(keys(restarted.world)).toEqual([]);
+});
+
+test("a reminder deferred at start is dropped when its card closes inside the grace window", async () => {
+  const restarted = restartWithOpenCard();
+  restarted.push.notify(BOT, "reminder", CARD);
+  (restarted.world.gate as GateState).open.splice(0);
+  restarted.clock.t = T0 + START_GRACE_MS;
+  restarted.push.tick(new Date(restarted.clock.t));
+  await settle();
+  expect(restarted.calls).toEqual([]);
+});
+
+test("the grace window never delays a card opened after start", async () => {
+  const h = harness();
+  openCard(h.world, "m_new" as MessageId);
+  expect(h.push.notify(BOT, "card", "m_new" as MessageId)).toBe(true);
+  await settle();
+  expect(h.calls.map((c) => c.init.body)).toEqual(["Claudio Bot needs you"]);
 });

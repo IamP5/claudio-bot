@@ -163,6 +163,25 @@ private func scratchVault() -> PairingVault {
         client.stop()
     }
 
+    @Test func aSendTheSocketDroppedBeforeItsEchoIsResentWithTheSameClientIdAfterReconnecting() async throws {
+        let muteHello = #"{"type":"hello","protocol":3,"features":["mute"],"machine":"Mac","userName":"Alex","epoch":"","seq":0,"resumed":false,"bots":[{"id":"b1","name":"engineer","title":null,"avatar":{"shape":"hexagon","color":"orange"},"pinned":false,"hidden":false,"status":"idle","unread":0,"question":null,"preview":"","lastAt":"2026-10-16T12:00:00.000Z","createdAt":"2026-10-16T12:00:00.000Z","routines":[]}]}"#
+        let bridge = try FakeBridge(onOpen: { $0.send(muteHello) })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        client.start(pairing)
+        try await eventually("the hello") { client.store.machine != nil }
+
+        let send = ClientMessage.send(botId: BotID("b1"), text: "status?", uploads: [], clientId: "c1")
+        client.store.sendStarted(send)
+        client.send(send)
+        try await eventually("the first copy") { bridge.texts.contains { $0.contains(#""clientId":"c1""#) } }
+        bridge.sockets.first?.close(code: 1000)
+
+        try await eventually("the resend", within: .seconds(8)) { bridge.texts.filter { $0.contains(#""clientId":"c1""#) }.count == 2 }
+        #expect(bridge.upgrades.count == 2)
+        client.stop()
+    }
+
     @Test func anUndecodableBroadcastCountsAsAGap() async throws {
         let bridge = try FakeBridge(onOpen: { socket in
             switch socket.index {

@@ -8,7 +8,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHomes } from "../src/home";
 import { createHub, tickEach } from "../src/hub";
 import type { Project } from "../src/projects";
-import type { AgentId, BotId, Message, MessageId, RoutineId, RunId, ServerMessage, StreamPosition } from "../src/protocol";
+import type { AgentId, BotId, ClientMessage, Message, MessageId, RoutineId, RunId, ServerMessage, StreamPosition } from "../src/protocol";
 import { createPush, type Push, type PushReason } from "../src/push";
 import { BREAKER_NOTE } from "../src/session";
 import { CLAUDIO_TOOLS } from "../src/tools";
@@ -996,4 +996,55 @@ test("turning a connector off answers with the new list, toggles the live query,
   ]);
   expect([botBefore.options.settings, agentBefore.options.settings]).toEqual([{ autoMemoryEnabled: false }, { autoMemoryEnabled: false }]);
   expect([botAfter.options.settings, agentAfter.options.settings]).toEqual([denied, denied]);
+});
+
+test("a send repeated with the same clientId posts one user message and delivers one envelope", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  const send: ClientMessage = { type: "send", botId: b.id, text: "status?", uploads: [], clientId: "c-1" };
+  expect(await h.hub.handle(send)).toEqual([]);
+  expect(await h.hub.handle(send)).toEqual([]);
+  await flush();
+  h.q().emit(assistant(text("All green.")), result());
+  await flush();
+  await flush();
+
+  expect(b.messages.filter((m) => m.kind === "user").map((m) => m.kind === "user" && m.clientId)).toEqual(["c-1"]);
+  expect(h.queries).toHaveLength(1);
+  expect(h.q().received).toHaveLength(1);
+
+  await h.hub.handle({ ...send, clientId: "c-2" });
+  expect(b.messages.filter((m) => m.kind === "user")).toHaveLength(2);
+});
+
+test("delete_bot removes the config folders of the bot's agents and keeps other bots'", async () => {
+  const world = emptyWorld();
+  const doomed = bot("doomed");
+  const kept = bot("kept");
+  world.bots.set(doomed.id, doomed);
+  world.bots.set(kept.id, kept);
+  const agentOf = (id: string, botId: BotId): AgentRecord => ({
+    agent: { id: id as AgentId, botId, title: "Fix", where: "mac", projectName: "app", status: "waiting", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null },
+    cwd: "/code/app",
+    messages: [],
+    session: emptySession(),
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: { kind: "user" },
+  });
+  world.agents.set("a_doomed" as AgentId, agentOf("a_doomed", doomed.id));
+  world.agents.set("a_kept" as AgentId, agentOf("a_kept", kept.id));
+  const h = hubOver(world);
+  h.homes.create(doomed.id, "# doomed\n");
+  const gone = h.homes.agentConfig("a_doomed" as AgentId);
+  const stays = h.homes.agentConfig("a_kept" as AgentId);
+
+  expect(await h.hub.handle({ type: "delete_bot", botId: doomed.id })).toEqual([]);
+
+  expect(existsSync(gone)).toBe(false);
+  expect(existsSync(stays)).toBe(true);
+  expect([...world.agents.keys()]).toEqual(["a_kept" as AgentId]);
 });

@@ -20,6 +20,8 @@ struct ChatRowView: View {
                 BotBubble(text: text)
             case let .question(id, _, card):
                 QuestionCardView(botId: bot.id, messageId: id, card: card, color: bot.avatar.color)
+            case let .permission(id, _, card):
+                PermissionCardView(botId: bot.id, messageId: id, card: card)
             case let .exchange(_, _, peer, sent, received):
                 EventLineView(segments: EventLine.exchange(peer: peer, sent: sent, received: received), onPeer: onPeer)
             case let .note(_, _, text, refs):
@@ -83,6 +85,20 @@ struct QuestionCardView: View {
     let card: QuestionCard
     let color: AvatarColor
 
+    var body: some View {
+        TimelineView(.deadline(card.expiresAt)) { _ in
+            QuestionCardBody(botId: botId, messageId: messageId, card: card, answer: card.answer(at: .now), color: color)
+        }
+    }
+}
+
+private struct QuestionCardBody: View {
+    let botId: BotID
+    let messageId: MessageID
+    let card: QuestionCard
+    let answer: Answer?
+    let color: AvatarColor
+
     @Environment(BridgeClient.self) private var client
 
     var body: some View {
@@ -90,10 +106,10 @@ struct QuestionCardView: View {
             HStack(alignment: .top, spacing: 12) {
                 Text(card.question)
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(card.answer == nil ? .white : Theme.secondary)
+                    .foregroundStyle(answer == nil ? .white : Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
-                if card.answer == nil {
+                if answer == nil {
                     Button {
                         client.send(.dismiss(botId: botId, messageId: messageId))
                     } label: {
@@ -106,7 +122,7 @@ struct QuestionCardView: View {
                     .accessibilityLabel("Dismiss question")
                 }
             }
-            switch card.answer {
+            switch answer {
             case nil:
                 VStack(spacing: 0) {
                     ForEach(Array(card.options.enumerated()), id: \.offset) { index, option in
@@ -120,18 +136,180 @@ struct QuestionCardView: View {
                     }
                 }
                 .background(Theme.inset, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                if let expiresAt = card.expiresAt {
+                    ExpiryLine(expiresAt: expiresAt)
+                }
             case .option(let index) where card.options.indices.contains(index):
                 OptionRow(index: index, text: card.options[index], chosen: color)
                     .background(Theme.inset, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            case .expired:
+                ClosedLine(text: "Expired. Nobody answered in time.")
             default:
-                Text("Dismissed")
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.tertiary)
+                ClosedLine(text: "Dismissed")
             }
         }
         .padding(16)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .padding(.trailing, 20)
+    }
+}
+
+/// A tool call held for approval: the exact call, what Always would cover, and the four choices.
+struct PermissionCardView: View {
+    let botId: BotID
+    let messageId: MessageID
+    let card: PermissionCard
+
+    var body: some View {
+        TimelineView(.deadline(card.expiresAt)) { _ in
+            PermissionCardBody(botId: botId, messageId: messageId, card: card, answer: card.answer(at: .now))
+        }
+    }
+}
+
+private struct PermissionCardBody: View {
+    let botId: BotID
+    let messageId: MessageID
+    let card: PermissionCard
+    let answer: PermissionAnswer?
+
+    @Environment(AppStore.self) private var store
+    @Environment(BridgeClient.self) private var client
+
+    private var sent: PermissionChoice? { store.pendingDecisions[messageId] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(answer == nil ? Theme.attention : Theme.tertiary)
+                Text(card.label)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(answer == nil ? .white : Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if case .agent(_, let title) = card.from {
+                Label(title, systemImage: "gearshape.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.secondary)
+                    .lineLimit(1)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(card.tool)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.tertiary)
+                Text(card.detail)
+                    .font(.system(size: 15, design: .monospaced))
+                    .foregroundStyle(answer == nil ? .white : Theme.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(12)
+            .background(Theme.inset, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(card.tool): \(card.detail)")
+
+            switch answer {
+            case nil:
+                buttons
+                Text("Always allows \(card.always).")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ExpiryLine(expiresAt: card.expiresAt)
+            case .chose(let choice):
+                HStack(spacing: 8) {
+                    Image(systemName: choice.allows ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundStyle(choice.allows ? AvatarColor.green.color : Theme.danger)
+                    Text(choice.outcome)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.secondary)
+                }
+                .accessibilityElement(children: .combine)
+            case .expired:
+                ClosedLine(text: "Expired. It did not run.")
+            case .closed:
+                ClosedLine(text: "Closed. It did not run.")
+            }
+        }
+        .padding(16)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .padding(.trailing, 20)
+    }
+
+    private var buttons: some View {
+        Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+            GridRow {
+                choiceButton(.once)
+                choiceButton(.always)
+            }
+            GridRow {
+                choiceButton(.deny)
+                choiceButton(.never)
+            }
+        }
+        .disabled(sent != nil)
+    }
+
+    private func choiceButton(_ choice: PermissionChoice) -> some View {
+        Button {
+            client.send(.decide(botId: botId, messageId: messageId, choice: choice))
+        } label: {
+            HStack(spacing: 6) {
+                if sent == choice { ProgressView().controlSize(.mini) }
+                Text(choice.button)
+            }
+            .font(.system(size: 15, weight: .semibold))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .foregroundStyle(foreground(choice))
+            .background(background(choice), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .opacity(sent == nil || sent == choice ? 1 : 0.5)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func foreground(_ choice: PermissionChoice) -> Color {
+        switch choice {
+        case .once: .black
+        case .always: .white
+        case .deny, .never: Theme.danger
+        }
+    }
+
+    private func background(_ choice: PermissionChoice) -> Color {
+        choice == .once ? .white : Theme.inset
+    }
+}
+
+extension TimelineSchedule where Self == ExplicitTimelineSchedule<[Date]> {
+    /// Redraws now and once more at the deadline, so a card closes on time without a bridge frame.
+    /// The past entry matters: before its first entry a timeline reports that entry's date, not the clock.
+    static func deadline(_ date: Date?) -> Self {
+        .explicit([.distantPast] + (date.map { [$0] } ?? []))
+    }
+}
+
+/// "Expires in 1 hr, 40 min" under an open card.
+private struct ExpiryLine: View {
+    let expiresAt: Date
+
+    var body: some View {
+        Text("Expires in \(Text(expiresAt, style: .relative))")
+            .font(.system(size: 13))
+            .foregroundStyle(Theme.tertiary)
+    }
+}
+
+private struct ClosedLine: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.subheadline)
+            .foregroundStyle(Theme.tertiary)
     }
 }
 

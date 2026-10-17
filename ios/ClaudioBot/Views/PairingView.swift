@@ -2,17 +2,13 @@ import SwiftUI
 import VisionKit
 
 struct PairingView: View {
-    /// A pairing from a claudiobot://pair link; it fills the form and connects right away.
-    var link: Pairing?
-
     @Environment(AppModel.self) private var app
-    @Environment(Router.self) private var router
-    @Environment(\.dismiss) private var dismiss
+    @Environment(BridgeClient.self) private var client
     @State private var urlText = ""
-    @State private var token = ""
-    @State private var connecting = false
-    @State private var failure: String?
+    @State private var code = ""
     @State private var scanning = false
+
+    private var flow: PairingFlow { app.pairingFlow ?? PairingFlow() }
 
     var body: some View {
         ScrollView {
@@ -29,6 +25,7 @@ struct PairingView: View {
                 .tint(.white)
                 .foregroundStyle(.black)
                 .controlSize(.large)
+                .disabled(flow.isPairing)
 
                 HStack {
                     VStack { Divider() }
@@ -44,18 +41,38 @@ struct PairingView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .background(Theme.background)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { app.cancelPairing() }
+                    .disabled(flow.isPairing)
+            }
+        }
         .sheet(isPresented: $scanning) {
             QRScannerSheet { payload in
                 scanning = false
-                guard let url = URL(string: payload), let pairing = Pairing(link: url) else {
-                    failure = "That QR code is not a ClaudioBot pairing code."
-                    return
+                switch URL(string: payload).flatMap(DeepLink.init(url:)) {
+                case .pair(let invite): app.propose(invite)
+                case .outdatedBridge: app.showPairingFailure(DeepLink.outdatedBridgeMessage)
+                default: app.showPairingFailure("That QR code is not a ClaudioBot pairing code.")
                 }
-                connect(pairing)
             }
         }
-        .onAppear { if let pending = link ?? router.pairingLink { connect(pending) } }
-        .onChange(of: router.pairingLink) { _, pending in if let pending { connect(pending) } }
+        // Dismissal goes through the buttons only, so a dismissal can never race the Pair action.
+        .alert(
+            flow.confirming?.confirmation(replacing: client.pairing).title ?? "",
+            isPresented: Binding(get: { flow.confirming != nil }, set: { _ in }),
+            presenting: flow.confirming
+        ) { _ in
+            Button("Pair") { app.confirmPairing() }
+            Button("Cancel", role: .cancel) { app.cancelConfirmation() }
+        } message: { invite in
+            if let detail = invite.confirmation(replacing: client.pairing).detail { Text(detail) }
+        }
+        .onChange(of: flow.confirming, initial: true) { _, invite in
+            guard let invite else { return }
+            urlText = invite.url.absoluteString
+            code = invite.code
+        }
     }
 
     private var header: some View {
@@ -64,10 +81,16 @@ struct PairingView: View {
                 .padding(.top, 24)
             Text("Pair with your Mac")
                 .font(.largeTitle.bold())
-            Text("Your bots live on your Mac. Run `bun run start` in the bridge folder there. It prints a QR code and a pairing token.")
+            Text("Your bots live on your Mac. Run `bun run start` in the bridge folder there. It prints a QR code and a pairing code. A phone that is already paired can show one too, under Settings.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+            if let reason = client.unpairedReason {
+                Label(reason, systemImage: "iphone.slash")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.attention)
+                    .multilineTextAlignment(.center)
+            }
         }
     }
 
@@ -83,52 +106,36 @@ struct PairingView: View {
                     .fieldStyle()
             }
             VStack(alignment: .leading, spacing: 6) {
-                Text("Token").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                TextField("Paste the token", text: $token)
+                Text("Pairing code").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                TextField("XXXX-XXXX", text: $code)
                     .font(.body.monospaced())
-                    .textInputAutocapitalization(.never)
+                    .textInputAutocapitalization(.characters)
                     .autocorrectionDisabled()
                     .fieldStyle()
             }
-            if let failure {
+            if let failure = flow.failure {
                 Label(failure, systemImage: "exclamationmark.triangle.fill")
                     .font(.footnote)
                     .foregroundStyle(.red)
             }
             Button {
                 do {
-                    connect(try Pairing(urlString: urlText, token: token))
+                    app.propose(try PairInvite(urlString: urlText, code: code))
                 } catch {
-                    failure = error.localizedDescription
+                    app.showPairingFailure(error.localizedDescription)
                 }
             } label: {
                 HStack {
-                    if connecting { ProgressView() }
-                    Text(connecting ? "Connecting…" : "Connect")
+                    if flow.isPairing { ProgressView() }
+                    Text(flow.isPairing ? "Pairing…" : "Pair")
                 }
                 .font(.headline)
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
-            .disabled(connecting || urlText.isEmpty || token.isEmpty)
+            .disabled(flow.isPairing || urlText.isEmpty || code.isEmpty)
             .padding(.top, 4)
-        }
-    }
-
-    private func connect(_ pairing: Pairing) {
-        urlText = pairing.url.absoluteString
-        token = pairing.token
-        failure = nil
-        connecting = true
-        Task {
-            do {
-                try await app.pair(pairing)
-                dismiss()
-            } catch {
-                failure = error.localizedDescription
-            }
-            connecting = false
         }
     }
 }
@@ -159,7 +166,7 @@ struct QRScannerSheet: View {
                     ContentUnavailableView(
                         "Scanning unavailable",
                         systemImage: "qrcode.viewfinder",
-                        description: Text("This device cannot scan codes. Open the pairing link from the bridge on this phone, or enter the address and token by hand.")
+                        description: Text("This device cannot scan codes. Open the pairing link from the bridge on this phone, or enter the address and pairing code by hand.")
                     )
                 }
             }

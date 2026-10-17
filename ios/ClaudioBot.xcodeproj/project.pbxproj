@@ -25,12 +25,16 @@
 		8E548A13634137BC72FB9023 /* Pairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115913A479F9E103CD5CFF9 /* Pairing.swift */; };
 		A566840C8264E1DF3E6FEB76 /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64F093F0E46C0BAC5BE987F1 /* MainView.swift */; };
 		A6E86502FC799DB04527A8F4 /* Dictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C44F435CF1C5391694E09FA6 /* Dictation.swift */; };
+		AAA17DF788E524DB9B1223CD /* DeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = D784CF4F0E9AD11C9698E1B8 /* DeepLink.swift */; };
 		B5ABEA77B87DD846521E1C51 /* protocol.json in Resources */ = {isa = PBXBuildFile; fileRef = B39EB6FB6164288CB6A58B65 /* protocol.json */; };
 		BCDA80FCBC7C0C212080FC60 /* ClaudioBotApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C210149B5827EAFB36F61F0 /* ClaudioBotApp.swift */; };
 		BDFDAE2BCE66614D384C68BA /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 982F1219C87F1A4346344127 /* ChatView.swift */; };
+		C4D1C6705A84AF3D5E134452 /* BridgeClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A043FD6FEC842D94A260F35E /* BridgeClientTests.swift */; };
 		C753E8B757FDB0968CFCCA79 /* Notifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5DB853F507FAAC2088B4B45 /* Notifier.swift */; };
 		D63CBBBA113E2E462A8B275A /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AEC678D2C98543C38666D7C /* SettingsView.swift */; };
+		D71C8C4D37722592EF686761 /* FakeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 097EB76BEE0A213D3217C7AC /* FakeBridge.swift */; };
 		DB6AB2521CED8BD33FCE18A8 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA34950BCDD0C39C5EBE5C3D /* Components.swift */; };
+		E1016F750B621F757F13A29D /* RoutineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA9652032D83AB4C07B9A127 /* RoutineView.swift */; };
 		E1E102E248602A4C805116AC /* BridgeClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B26A0A11AE96837D15B18BB5 /* BridgeClient.swift */; };
 		E944A6BDFA56826F902B81ED /* FileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A929F97F49B2C78A33813AAA /* FileView.swift */; };
 		F0D0E583164ECE08FF3AF2A2 /* Display.swift in Sources */ = {isa = PBXBuildFile; fileRef = E41D942EF4BC15933EE5DB0C /* Display.swift */; };
@@ -52,6 +56,7 @@
 		06280DC6DF2D564FD10301E5 /* ChatItems.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatItems.swift; sourceTree = "<group>"; };
 		08EA47CC8EDC9B43CE464D17 /* ClaudioBotTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ClaudioBotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		092A81439AEE386898334298 /* PromptTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptTextView.swift; sourceTree = "<group>"; };
+		097EB76BEE0A213D3217C7AC /* FakeBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeBridge.swift; sourceTree = "<group>"; };
 		0C210149B5827EAFB36F61F0 /* ClaudioBotApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudioBotApp.swift; sourceTree = "<group>"; };
 		0E3BE12B6F1C5728B7BDF60B /* Composer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Composer.swift; sourceTree = "<group>"; };
 		0F1DF58E4527B980D434F6EB /* ExchangeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExchangeView.swift; sourceTree = "<group>"; };
@@ -67,6 +72,7 @@
 		8AEC678D2C98543C38666D7C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		968DA57BA93F923DB93997B3 /* ProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTests.swift; sourceTree = "<group>"; };
 		982F1219C87F1A4346344127 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		A043FD6FEC842D94A260F35E /* BridgeClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeClientTests.swift; sourceTree = "<group>"; };
 		A929F97F49B2C78A33813AAA /* FileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileView.swift; sourceTree = "<group>"; };
 		AA2ACF9F0339737C2D0EFF06 /* Store.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Store.swift; sourceTree = "<group>"; };
 		AE43D18A2BF7FD2272FDAB29 /* ClaudioBot.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ClaudioBot.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -78,8 +84,10 @@
 		C44F435CF1C5391694E09FA6 /* Dictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dictation.swift; sourceTree = "<group>"; };
 		C5B3A683A87EDE6B0692EC79 /* Demo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Demo.swift; sourceTree = "<group>"; };
 		C5DB853F507FAAC2088B4B45 /* Notifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notifier.swift; sourceTree = "<group>"; };
+		D784CF4F0E9AD11C9698E1B8 /* DeepLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLink.swift; sourceTree = "<group>"; };
 		E41D942EF4BC15933EE5DB0C /* Display.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Display.swift; sourceTree = "<group>"; };
 		E90D10FEF3E09FAB71934012 /* Protocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Protocol.swift; sourceTree = "<group>"; };
+		EA9652032D83AB4C07B9A127 /* RoutineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutineView.swift; sourceTree = "<group>"; };
 		FA2DDB4E3C0A0B83541F52CA /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -97,6 +105,7 @@
 			isa = PBXGroup;
 			children = (
 				B26A0A11AE96837D15B18BB5 /* BridgeClient.swift */,
+				D784CF4F0E9AD11C9698E1B8 /* DeepLink.swift */,
 				C44F435CF1C5391694E09FA6 /* Dictation.swift */,
 				E41D942EF4BC15933EE5DB0C /* Display.swift */,
 				B115913A479F9E103CD5CFF9 /* Pairing.swift */,
@@ -109,6 +118,8 @@
 		8F63FA456E3B018B3C798894 /* ClaudioBotTests */ = {
 			isa = PBXGroup;
 			children = (
+				A043FD6FEC842D94A260F35E /* BridgeClientTests.swift */,
+				097EB76BEE0A213D3217C7AC /* FakeBridge.swift */,
 				B39EB6FB6164288CB6A58B65 /* protocol.json */,
 				968DA57BA93F923DB93997B3 /* ProtocolTests.swift */,
 				824EE05FB7E99C7C0330F541 /* StoreTests.swift */,
@@ -164,6 +175,7 @@
 				BBDC9008AF631DCD129CE695 /* PairingView.swift */,
 				FA2DDB4E3C0A0B83541F52CA /* ProfileView.swift */,
 				092A81439AEE386898334298 /* PromptTextView.swift */,
+				EA9652032D83AB4C07B9A127 /* RoutineView.swift */,
 				8AEC678D2C98543C38666D7C /* SettingsView.swift */,
 				6E239D4F0DF5EA2B3D309E36 /* Theme.swift */,
 			);
@@ -283,6 +295,7 @@
 				BCDA80FCBC7C0C212080FC60 /* ClaudioBotApp.swift in Sources */,
 				DB6AB2521CED8BD33FCE18A8 /* Components.swift in Sources */,
 				66815E9680770FB34118E8D1 /* Composer.swift in Sources */,
+				AAA17DF788E524DB9B1223CD /* DeepLink.swift in Sources */,
 				14445448821E12EA0CF98FF0 /* Demo.swift in Sources */,
 				A6E86502FC799DB04527A8F4 /* Dictation.swift in Sources */,
 				F0D0E583164ECE08FF3AF2A2 /* Display.swift in Sources */,
@@ -298,6 +311,7 @@
 				36153193DD22EDA8940B684A /* ProfileView.swift in Sources */,
 				0DA1049B7D59CCCB02C2ED05 /* PromptTextView.swift in Sources */,
 				26A8F24ED9A3BAC4A0434391 /* Protocol.swift in Sources */,
+				E1016F750B621F757F13A29D /* RoutineView.swift in Sources */,
 				D63CBBBA113E2E462A8B275A /* SettingsView.swift in Sources */,
 				37C3CD090EEE0200FA855E69 /* Store.swift in Sources */,
 				761C26D7E7C8287B4B6797BC /* Theme.swift in Sources */,
@@ -308,6 +322,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C4D1C6705A84AF3D5E134452 /* BridgeClientTests.swift in Sources */,
+				D71C8C4D37722592EF686761 /* FakeBridge.swift in Sources */,
 				23288F140278C30D8EA49348 /* ProtocolTests.swift in Sources */,
 				F69061003B284FD9E89A2323 /* StoreTests.swift in Sources */,
 			);

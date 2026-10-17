@@ -29,8 +29,8 @@ enum Demo {
         for (bot, messages) in conversations {
             store.apply(.conversation(botId: BotID(bot), messages: messages))
         }
-        store.apply(.details(botId: BotID("claude"), library: library, links: links, agents: []))
-        store.apply(.details(botId: BotID("engineer"), library: [], links: [], agents: agents))
+        store.apply(.details(botId: BotID("claude"), library: library, links: links, agents: [], routines: []))
+        store.apply(.details(botId: BotID("engineer"), library: [], links: [], agents: agents, routines: []))
         store.apply(.agent(agents[0], messages: agentMessages))
         store.apply(.file(botId: BotID("claude"), path: "library/merge-plan.md", file: BotFile(mime: "text/markdown", content: plan, data: nil)))
 

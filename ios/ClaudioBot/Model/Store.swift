@@ -54,6 +54,7 @@ struct BotDetails: Equatable, Sendable {
     var library: [LibraryFile]
     var links: [BotLink]
     var agents: [Agent]
+    var routines: [Routine]
 }
 
 struct AgentThread: Equatable, Sendable {
@@ -219,8 +220,8 @@ final class AppStore {
                 return []
             }
 
-        case let .details(botId, library, links, agents):
-            details[botId] = BotDetails(library: library, links: links, agents: agents)
+        case let .details(botId, library, links, agents, routines):
+            details[botId] = BotDetails(library: library, links: links, agents: agents, routines: routines)
             return []
 
         case let .agent(agent, messages):
@@ -280,6 +281,15 @@ final class AppStore {
             if case let .question(id, _, card) = message, card.answer(at: now) == nil { return (id, card) }
         }
         return nil
+    }
+
+    /// A routine's runs, newest first. Bot frames stay live but carry only the newest 5;
+    /// details carries every kept run as of the last fetch, so it fills in the older ones.
+    func runs(of routineId: RoutineID, in botId: BotID) -> [RoutineRun] {
+        let live = bots[botId]?.routines.first { $0.id == routineId }?.runs ?? []
+        let kept = details[botId]?.routines.first { $0.id == routineId }?.runs ?? []
+        let liveIds = Set(live.map(\.id))
+        return (live + kept.filter { !liveIds.contains($0.id) }).sorted { $0.at > $1.at }
     }
 }
 

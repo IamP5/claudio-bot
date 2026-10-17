@@ -50,16 +50,18 @@ private let at = Date(timeIntervalSince1970: 1_792_152_000)
 
 /// Every value in a decoded frame that fell back to `.unknown`, so a fixture the app does not model fails loudly.
 private func unknowns(in message: ServerMessage) -> [String] {
+    func inRoutine(_ routine: Routine) -> [String] {
+        var found: [String] = []
+        if case .unknown(let raw) = routine.trigger { found.append("trigger \(raw)") }
+        for run in routine.runs { if case .unknown(let raw) = run.status { found.append("run status \(raw)") } }
+        return found
+    }
     func inBot(_ bot: Bot) -> [String] {
         var found: [String] = []
         if case .unknown(let raw) = bot.status { found.append("bot status \(raw)") }
         if case .unknown(let raw) = bot.avatar.shape { found.append("shape \(raw)") }
         if case .unknown(let raw) = bot.avatar.color { found.append("color \(raw)") }
-        for routine in bot.routines {
-            if case .unknown(let raw) = routine.trigger { found.append("trigger \(raw)") }
-            for run in routine.runs { if case .unknown(let raw) = run.status { found.append("run status \(raw)") } }
-        }
-        return found
+        return found + bot.routines.flatMap(inRoutine)
     }
     func inAgent(_ agent: Agent) -> [String] {
         if case .unknown(let raw) = agent.status { return ["agent status \(raw)"] }
@@ -78,7 +80,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
     case .bot(let b): return inBot(b)
     case .conversation(_, let messages): return messages.flatMap(inMessage)
     case .message(_, let m): return inMessage(m)
-    case .details(_, _, _, let agents): return agents.flatMap(inAgent)
+    case .details(_, _, _, let agents, let routines): return agents.flatMap(inAgent) + routines.flatMap(inRoutine)
     case .agent(let a, _): return inAgent(a)
     default: return []
     }
@@ -150,6 +152,18 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(routine.trigger == .cron)
         #expect(routine.nextRunAt == nil)
         #expect(routine.runs.isEmpty)
+    }
+
+    @Test func detailsCarryEveryKeptRunAndAProtocol2DetailsHasNoRoutines() throws {
+        let routines = try Fixture.server().flatMap { frame -> [Routine] in
+            if case .details(_, _, _, _, let routines) = frame.message { routines } else { [] }
+        }
+        #expect(routines.map(\.id) == [RoutineID("r1")])
+        #expect(routines.first?.runs.map(\.id) == ["run4", "run3", "run2", "run1"].map { RunID($0) })
+
+        let old = try decode(ServerMessage.self, #"{"type":"details","botId":"b1","library":[],"links":[],"agents":[]}"#)
+        guard case .details(_, _, _, _, let none) = old else { Issue.record("not details"); return }
+        #expect(none.isEmpty)
     }
 
     @Test func botsAndAgentsCarryTheNewStatusesAndTheDailyCap() throws {

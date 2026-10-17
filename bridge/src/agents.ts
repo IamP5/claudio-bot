@@ -32,6 +32,9 @@ export type Agents = {
 
 const queued = (text: string, initiator: Initiator): SessionInput => ({ text, initiator, settles: null, ahead: false });
 
+/** Statuses that hold only while the session or an open card says so. */
+const LIVE: ReadonlySet<AgentStatus> = new Set(["working", "parked", "awaiting_approval"]);
+
 export function createAgents(deps: {
   world: World;
   userName: string;
@@ -53,12 +56,32 @@ export function createAgents(deps: {
   const sessions = new Map<AgentId, Session>();
   const cloudQueues = new Map<AgentId, Promise<void>>();
 
-  function update(rec: AgentRecord, status: AgentStatus, said?: { from: "bot" | "agent"; text: string }) {
+  /** A mac agent shows what its session is doing, or an open card; once neither holds, what its last report left. */
+  function statusOf(rec: AgentRecord, reported: AgentStatus): AgentStatus {
+    if (rec.agent.where === "cloud") return reported;
+    const id = rec.agent.id;
+    const session = sessions.get(id);
+    if (session?.working) return "working";
+    if (session?.parkedFor) return "parked";
+    if (deps.world.gate.open.some((c) => c.kind === "permission" && c.actor.kind === "agent" && c.actor.agentId === id)) return "awaiting_approval";
+    return LIVE.has(reported) ? "waiting" : reported;
+  }
+
+  function record(rec: AgentRecord, said: { from: "bot" | "agent"; text: string }) {
     const at = deps.now();
-    rec.agent = { ...rec.agent, status, updatedAt: at };
-    if (said) rec.messages.push({ id: newMessageId(), at, ...said });
+    rec.messages.push({ id: newMessageId(), at, ...said });
+    rec.agent = { ...rec.agent, updatedAt: at };
+  }
+
+  function update(rec: AgentRecord, reported: AgentStatus, said?: { from: "bot" | "agent"; text: string }) {
+    if (said) record(rec, said);
+    const status = statusOf(rec, reported);
+    if (status !== rec.agent.status) rec.agent = { ...rec.agent, status, updatedAt: deps.now() };
     deps.changed(rec);
   }
+
+  // The gate closes an agent's card through deliver (a decision) or notice (expiry), so those refresh it too.
+  const refresh = (rec: AgentRecord) => update(rec, rec.agent.status);
 
   function report(rec: AgentRecord, status: AgentStatus, text: string, by: Initiator) {
     update(rec, status, { from: "agent", text });
@@ -118,7 +141,7 @@ export function createAgents(deps: {
       },
       onMessage() {},
       onTurnEnd: (pending, end) => turnEnded(rec, pending.initiator, end),
-      onChange: () => deps.changed(rec),
+      onChange: () => refresh(rec),
       note: (text) => deps.note(rec, text),
       // Its record keeps everything; a follow-up or decision makes a new session that resumes it.
       onDormant() {
@@ -181,8 +204,10 @@ export function createAgents(deps: {
 
     async message(rec, text, initiator) {
       if (rec.agent.where === "mac") {
-        update(rec, "working", { from: "bot", text });
+        // Recorded before the push, which can end the turn at once (a used-up budget) and report after it.
+        record(rec, { from: "bot", text });
         macSession(rec).push(queued(text, initiator));
+        refresh(rec);
         return `Sent. ${rec.agent.title} will report back.`;
       }
       const cloudSession = rec.cloudSession;
@@ -201,11 +226,15 @@ export function createAgents(deps: {
     },
 
     deliver(rec, input) {
-      if (rec.agent.where === "mac") macSession(rec).push(input);
+      if (rec.agent.where !== "mac") return;
+      macSession(rec).push(input);
+      refresh(rec);
     },
 
     notice(rec, text) {
-      if (rec.agent.where === "mac") macSession(rec).notice(text);
+      if (rec.agent.where !== "mac") return;
+      macSession(rec).notice(text);
+      refresh(rec);
     },
 
     async stop(rec) {

@@ -7,7 +7,7 @@ import { createAgents } from "../src/agents";
 import type { Headroom, Ledger } from "../src/ledger";
 import type { AgentId, AgentStatus, BotId, RoutineId, RunId } from "../src/protocol";
 import type { Project } from "../src/projects";
-import { emptySession, emptyWorld, type AgentRecord, type Initiator, type World } from "../src/world";
+import { emptySession, emptyWorld, type AgentRecord, type Initiator, type OpenCard, type World } from "../src/world";
 
 const AT = "2026-10-17T12:00:00.000Z";
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -262,6 +262,46 @@ test("a decision envelope is queued for the agent and is not recorded in its thr
   await flush();
   expect(h.q().received.at(-1)).toBe("[Alex allowed Bash `bun test` once]");
   expect(rec.messages.map((m) => m.text)).toEqual(["Make the suite green.", "Waiting on approval."]);
+});
+
+test("an agent shows working while the continuation after Allow once runs, and waiting once it reports", async () => {
+  const h = harness();
+  const rec = await h.start();
+  await flush();
+  h.q().emit(result("Waiting on approval."));
+  await flush();
+  expect(rec.agent.status).toBe("waiting");
+  h.agents.deliver(rec, { text: "[Alex allowed Bash `bun test` once]", initiator: user, settles: null, ahead: true });
+  expect([rec.agent.status, h.statuses.at(-1)]).toEqual(["working", "working"]);
+  await flush();
+  h.q().emit(result("Tests pass."));
+  await flush();
+  expect(rec.agent.status).toBe("waiting");
+});
+
+test("an agent whose work waits on the daily cap shows parked, and working once the cap lifts", async () => {
+  let capped = true;
+  const h = harness({ headroom: (i) => (capped && i.kind !== "user" ? { ok: false, reason: "daily_cap", until: "2026-10-18T03:00:00.000Z" } : { ok: true, capReached: false }) });
+  const rec = await h.start("mac", routine);
+  expect([rec.agent.status, h.statuses.at(-1)]).toEqual(["parked", "parked"]);
+  capped = false;
+  h.agents.session(rec.agent.id)!.recheck();
+  expect(rec.agent.status).toBe("working");
+});
+
+test("an agent whose turn ended with a permission card open shows awaiting_approval until the card closes", async () => {
+  const h = harness();
+  const rec = await h.start();
+  await flush();
+  const card = { kind: "permission", cardId: "m_card", actor: { kind: "agent", botId: B1, agentId: rec.agent.id }, remindAt: null, expiresAt: AT, call: {} } as unknown as OpenCard;
+  const open = h.world.gate.open as OpenCard[];
+  open.push(card);
+  h.q().emit(result("I need to run bun test."));
+  await flush();
+  expect([rec.agent.status, h.statuses.at(-1)]).toEqual(["awaiting_approval", "awaiting_approval"]);
+  open.splice(0);
+  h.agents.notice(rec, "[Your request to run Bash `bun test` expired unanswered.]");
+  expect([rec.agent.status, h.statuses.at(-1)]).toEqual(["waiting", "waiting"]);
 });
 
 test("a notice tops the agent's next envelope", async () => {

@@ -972,6 +972,40 @@ describe("gap 3: a connector call passes unattended only when every verb in its 
   });
 });
 
+describe("gap 3: persistence paths a shell, git or direnv loads are self-escalation", () => {
+  const w = (p: string) => call("Write", { file_path: p, content: "x" });
+  test.each([
+    `${HOME}/.zshenv`,
+    `${HOME}/.zlogin`,
+    `${HOME}/.zlogout`,
+    `${HOME}/.bash_login`,
+    `${HOME}/.bash_logout`,
+    `${HOME}/.gitconfig`,
+    `${HOME}/code/other/.npmrc`,
+    `${HOME}/.config/git/config`,
+    `${HOME}/.config/git/hooks/pre-commit`,
+    `${HOME}/.config/fish/config.fish`,
+    `${HOME}/.envrc`,
+    `${HOME}/code/other/.envrc`,
+    `${HOME}/bin/git`,
+    `${HOME}/.local/bin/ls`,
+    `${HOME}/Library/Preferences/com.apple.Terminal.plist`,
+    `${HOME}/code/other/.cursor/mcp.json`,
+    `${HOME}/.cursor/mcp.json`,
+  ])("Write %s asks in a user's turn, with no Always", (path) => {
+    expect(verdict(w(path), { initiator: user })).toBe("ask:self.escalate");
+    expect(decide(w(path), ctx())).toMatchObject({ offerAlways: false });
+  });
+  test("an agent writing its project's .envrc or .cursor/mcp.json asks", () => {
+    expect(verdict(w(`${PROJECT}/.envrc`), { actor: agent, scope: agentScope })).toBe("ask:self.escalate");
+    expect(verdict(w(`${PROJECT}/.cursor/mcp.json`), { actor: agent, scope: agentScope })).toBe("ask:self.escalate");
+  });
+  test("ordinary files outside stay as they were", () => {
+    expect(verdict(w(`${HOME}/code/other/Makefile`), { initiator: user })).toBe("pass");
+    expect(verdict(w(`${HOME}/Desktop/notes.md`), { initiator: user })).toBe("pass");
+  });
+});
+
 describe("gap 3: save_skill never offers Always", () => {
   test("an unattended save_skill card offers Once, Deny and Never only", () => {
     expect(decide(call("mcp__claudio__save_skill", { name: "x", description: "d", body: "b" }), ctx({ initiator: routine }))).toMatchObject({ kind: "ask", rule: "claudio.save_skill", offerAlways: false });

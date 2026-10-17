@@ -577,8 +577,10 @@ const ESCALATE = {
   config(path: string, ctx: PolicyContext): boolean {
     if (/(^|\/)\.claude\/settings[^/]*$/.test(path) || /(^|\/)\.mcp\.json$/.test(path)) return true;
     if (/(^|\/)\.git\/hooks\//.test(path) || /(^|\/)\.git\/config$/.test(path)) return true;
-    if (/(^|\/)\.(zshrc|zprofile|bashrc|bash_profile|profile)$/.test(path)) return true;
-    if (under(path, resolve(ctx.scope.homedir, "Library/LaunchAgents"))) return true;
+    if (/(^|\/)\.(zshrc|zprofile|zshenv|zlogin|zlogout|bashrc|bash_profile|bash_login|bash_logout|profile|gitconfig|npmrc|envrc)$/.test(path)) return true;
+    if (/(^|\/)\.cursor\/mcp\.json$/.test(path)) return true;
+    // Folders a login shell, git or launchd reads from, or that sit early on PATH.
+    for (const d of ["Library/LaunchAgents", "Library/Preferences", ".config/git", ".config/fish", "bin", ".local/bin"]) if (under(path, resolve(ctx.scope.homedir, d))) return true;
     for (const d of ["hooks", "commands", "agents", "skills", "plugins"]) if (under(path, resolve(ctx.scope.homedir, ".claude", d))) return true;
     // Persistence vectors a committed repo or the home dir can carry: agent instructions and hook scripts.
     if (/(^|\/)(\.claude\/)?CLAUDE\.md$/.test(path)) return true;

@@ -38,6 +38,7 @@ test.each([
   ["a set_fact with a numeric fact id", { type: "set_fact", factId: 3, text: "x" }],
   ["a set_fact with no text", { type: "set_fact", factId: null, text: "" }],
   ["a forget_fact with a null fact id", { type: "forget_fact", factId: null }],
+  ["a confirm_fact with no fact id", { type: "confirm_fact" }],
   ["a set_connector without enabled", { type: "set_connector", botId: "b1", name: "slack" }],
   ["a delete_skill without a name", { type: "delete_skill", botId: "b1" }],
   ["a webhook_token without a routine", { type: "webhook_token", botId: "b1" }],

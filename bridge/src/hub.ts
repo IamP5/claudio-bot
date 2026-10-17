@@ -343,6 +343,9 @@ export function createHub(deps: HubDeps): Hub {
     homes,
     botName: (id) => world.bots.get(id)?.name ?? "a bot",
     changed: () => deps.broadcast({ type: "memory", facts: memory.facts() }),
+    reopen: (id) => {
+      for (const botId of id === null ? world.bots.keys() : [id]) brains.get(botId)?.reopen();
+    },
     now: clockNow,
     log: deps.log,
   });
@@ -367,7 +370,7 @@ export function createHub(deps: HubDeps): Hub {
         cwd: homes.homeOf(bot.id),
         resume: bot.session.id ?? undefined,
         settingSources: ["user", "project"],
-        systemPrompt: { type: "preset", preset: "claude_code", append: [persona({ name: bot.name, userName }), memory.context()].filter(Boolean).join("\n\n") },
+        systemPrompt: { type: "preset", preset: "claude_code", append: [persona({ name: bot.name, userName }), memory.context(bot.id)].filter(Boolean).join("\n\n") },
         permissionMode: "auto",
         mcpServers: { claudio: botToolServer(bot.id, actions) },
         // A bot asks with its own ask tool, which posts a card instead of blocking the turn.
@@ -642,6 +645,8 @@ export function createHub(deps: HubDeps): Hub {
         return replyTo(memory.setFact(message.factId, message.text));
       case "forget_fact":
         return replyTo(memory.forgetFact(message.factId));
+      case "confirm_fact":
+        return replyTo(memory.confirmFact(message.factId));
       case "devices":
       case "revoke_device":
       case "pair_code":

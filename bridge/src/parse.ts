@@ -112,6 +112,7 @@ const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
   memory: () => ({ type: "memory" }),
   set_fact: (o) => ({ type: "set_fact", factId: o.factId === null ? null : factId(o), text: str(o, "text") }),
   forget_fact: (o) => ({ type: "forget_fact", factId: factId(o) }),
+  confirm_fact: (o) => ({ type: "confirm_fact", factId: factId(o) }),
   connectors: (o) => ({ type: "connectors", botId: botId(o) }),
   set_connector: (o) => ({ type: "set_connector", botId: botId(o), name: str(o, "name"), enabled: bool(o, "enabled") }),
   skills: (o) => ({ type: "skills", botId: botId(o) }),

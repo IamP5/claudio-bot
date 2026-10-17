@@ -217,8 +217,11 @@ export type Device = {
 // epoch "" means the bridge keeps no replay ring, so the app never asks to resume.
 export type StreamPosition = { epoch: string; seq: number; resumed: boolean };
 
-/** One line of USER.md's ## Facts: something every bot knows about the user. by: the bot that remembered it, null for the user. */
-export type Fact = { id: FactId; text: string; at: string; by: string | null };
+/**
+ * One line of USER.md's ## Facts. by: the bot that remembered it, null for the user. confirmed: the user added or confirmed
+ * it, so every bot reads it; false is a bot's proposal, read only by that bot until the user confirms it.
+ */
+export type Fact = { id: FactId; text: string; at: string; by: string | null; confirmed: boolean };
 
 /**
  * An MCP server the bot's queries load, by name only: its configuration (commands, URLs, headers) never leaves the
@@ -294,6 +297,8 @@ export type ClientMessage =
   // factId null adds a fact.
   | { type: "set_fact"; factId: FactId | null; text: string }
   | { type: "forget_fact"; factId: FactId }
+  // The user confirms a bot's proposed fact, so every bot reads it.
+  | { type: "confirm_fact"; factId: FactId }
   | { type: "connectors"; botId: BotId }
   // Persisted per bot, covering its agents, so the choice survives a restart and a resume.
   | { type: "set_connector"; botId: BotId; name: string; enabled: boolean }

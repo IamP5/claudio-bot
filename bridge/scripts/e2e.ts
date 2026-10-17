@@ -917,7 +917,7 @@ try {
     await stopServer();
     const sessionId = stateFile().bots.find((b: { id: string }) => b.id === claudio).session.id as string;
     const transcripts = [...new Bun.Glob(`*/${sessionId}.jsonl`).scanSync({ cwd: join(homedir(), ".claude", "projects"), absolute: true })];
-    check(transcripts.length === 1 && transcripts[0]!.includes(claudio), `the bot's own transcript is found: ${JSON.stringify(transcripts)}`);
+    check(transcripts.length === 1 && transcripts[0]!.includes(claudio.replace(/[^A-Za-z0-9]/g, "-")), `the bot's own transcript is found: ${JSON.stringify(transcripts)}`);
     rmSync(transcripts[0]!);
     await startServer();
     const x = connect(token);

@@ -1,17 +1,25 @@
 import { timingSafeEqual } from "node:crypto";
 import { hostname, networkInterfaces } from "node:os";
 import qrcode from "qrcode-terminal";
+import { createHomes } from "./home";
+import { createHub } from "./hub";
 import { parseClientMessage } from "./parse";
+import { scanProjects } from "./projects";
 import type { ServerMessage } from "./protocol";
-import { loadOrCreateToken } from "./store";
+import { bridgeHome, createSaver, loadOrCreateToken, loadWorld } from "./store";
 
 const TOPIC = "all";
 
-async function machineName(): Promise<string> {
-  const proc = Bun.spawn(["scutil", "--get", "ComputerName"], { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
-  const [name, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]).catch(() => ["", 1] as const);
-  return code === 0 && name.trim() !== "" ? name.trim() : hostname().replace(/\.local$/, "");
+async function run(argv: string[]): Promise<string> {
+  const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+  const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]).catch(() => ["", 1] as const);
+  return code === 0 ? out.trim() : "";
 }
+
+const machineName = async () => (await run(["scutil", "--get", "ComputerName"])) || hostname().replace(/\.local$/, "");
+
+const firstName = async () =>
+  process.env.CLAUDEBOT_USER_NAME || (await run(["id", "-F"])).split(/\s+/)[0] || process.env.USER || "there";
 
 function lanAddresses(): string[] {
   return Object.values(networkInterfaces())
@@ -29,6 +37,20 @@ const tokenMatches = (candidate: string | null) => {
 };
 
 const machine = await machineName();
+const { world, firstRun } = loadWorld();
+const saver = createSaver(world);
+const hub = createHub({
+  machine,
+  userName: await firstName(),
+  world,
+  homes: createHomes(bridgeHome()),
+  model: process.env.CLAUDEBOT_MODEL || undefined,
+  scan: () => scanProjects(),
+  broadcast: (message) => server.publish(TOPIC, JSON.stringify(message)),
+  persist: saver.schedule,
+  log: (line) => console.log(line),
+});
+
 const send = (ws: { send(data: string): unknown }, message: ServerMessage) => {
   ws.send(JSON.stringify(message));
 };
@@ -49,19 +71,27 @@ const server = Bun.serve({
   websocket: {
     async open(ws) {
       // Subscribe in the same tick as the snapshot so no broadcast falls between them.
-      send(ws, { type: "hello", machine, userName: "", bots: [] });
+      send(ws, hub.hello());
       ws.subscribe(TOPIC);
     },
     async message(ws, raw) {
       const parsed = parseClientMessage(String(raw));
       if (!parsed.ok) return send(ws, { type: "error", message: parsed.error });
-      send(ws, { type: "error", message: `${parsed.message.type} is not served yet` });
+      try {
+        for (const reply of await hub.handle(parsed.message)) send(ws, reply);
+      } catch (e) {
+        send(ws, { type: "error", message: (e as Error).message });
+      }
     },
   },
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, () => process.exit(0));
+  process.on(signal, () => {
+    hub.close();
+    saver.flush();
+    process.exit(0);
+  });
 }
 
 const urls = (lanAddresses().length > 0 ? lanAddresses() : ["127.0.0.1"]).map((ip) => `ws://${ip}:${server.port}/ws`);
@@ -72,3 +102,6 @@ for (const url of urls) console.log(`  ${url}`);
 console.log(`token: ${token}`);
 console.log(`pair: ${pairLink}`);
 qrcode.generate(pairLink, { small: true }, (qr) => console.log(qr));
+
+hub.boot(firstRun);
+hub.startTicker();

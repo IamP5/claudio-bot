@@ -3,7 +3,7 @@
 // ~/.claudebot or ~/.claudiobot: CLAUDIOBOT_HOME points into a temp folder, which skips migration.
 // E2E_MODEL overrides the model; E2E_BRIDGE_LOG names a file for the bridge's own log.
 import type { Subprocess } from "bun";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Bot, BotId, ClientMessage, Message, ServerMessage } from "../src/protocol";
@@ -373,6 +373,17 @@ try {
   console.log("\n== results");
   for (const x of results) console.log(`${x.ok ? "PASS" : "FAIL"} ${x.scenario}: ${x.evidence}`);
   console.log(`model ${MODEL}; cost charged by the ledger $${total.toFixed(4)}`);
+  // Every call the gate did not pass, so a hold or refusal of ordinary work shows up even when the bot worked around it.
+  const auditDir = join(home, "audit");
+  const audit = existsSync(auditDir)
+    ? readdirSync(auditDir).flatMap((f) => readFileSync(join(auditDir, f), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)))
+    : [];
+  const counts = audit.reduce<Record<string, number>>((n, r) => ({ ...n, [r.decision]: (n[r.decision] ?? 0) + 1 }), {});
+  console.log(`gate: ${audit.length} calls ${JSON.stringify(counts)}`);
+  for (const r of audit.filter((r) => r.decision !== "pass")) {
+    const input = typeof r.input?.command === "string" ? r.input.command : JSON.stringify(r.input);
+    console.log(`gate: ${r.decision} ${r.actor.split(":")[0]} ${r.tool} rule=${r.rule ?? "-"} via=${r.via ?? "-"} ${String(input).slice(0, 140)}`);
+  }
   if (process.env.E2E_BRIDGE_LOG) writeFileSync(process.env.E2E_BRIDGE_LOG, log);
   if (passed) rmSync(scratch, { recursive: true });
   else console.log(`scratch kept for debugging: ${scratch}`);

@@ -10,6 +10,7 @@ import { createSession, usedBudget, type Session, type SessionSpec, type TurnEnd
 import { refused, type Result } from "./result";
 import { AGENT_GIT_ENV } from "./sandbox";
 import type { Persist } from "./store";
+import { evidenceLine, readEvidence } from "./evidence";
 import { errorText } from "./text";
 import type { Isolate } from "./tools";
 import { emptySession, newMessageId, repoTrust, type Actor, type AgentActor, type AgentRecord, type Initiator, type World } from "./world";
@@ -91,6 +92,8 @@ export function createAgents(deps: {
 }): Agents {
   const sessions = new Map<AgentId, Session>();
   const cloudQueues = new Map<AgentId, Promise<void>>();
+  // A report waits for git, so reports run in turn order per agent.
+  const reportQueues = new Map<AgentId, Promise<void>>();
 
   /** A mac agent shows what its session is doing, or an open card; once neither holds, what its last report left. */
   function statusOf(rec: AgentRecord, reported: AgentStatus): AgentStatus {
@@ -125,13 +128,25 @@ export function createAgents(deps: {
     deps.reported(rec, text, by);
   }
 
+  /** The evidence line goes above the agent's words, so nothing the agent writes can stand in for it. */
+  function reportWithEvidence(rec: AgentRecord, status: AgentStatus, text: string, by: Initiator) {
+    const id = rec.agent.id;
+    const next = (reportQueues.get(id) ?? Promise.resolve()).then(async () => {
+      const evidence = await readEvidence(rec.cwd, text, new Date(deps.now()));
+      rec.agent = { ...rec.agent, evidence };
+      update(rec, status, { from: "agent", text });
+      deps.reported(rec, evidence ? `${evidenceLine(evidence)}\n${text}` : text, by);
+    });
+    reportQueues.set(id, next.catch((e) => deps.log(`agent ${id} report: ${errorText(e)}`)));
+  }
+
   function turnEnded(rec: AgentRecord, by: Initiator, end: TurnEnd) {
     if (usedBudget(end)) return report(rec, "failed", "The agent used its budget.", by);
     switch (end.kind) {
       case "done": {
         const m = end.result;
         const text = m.subtype === "success" ? m.result : `The agent stopped with an error: ${m.errors.join("; ") || m.subtype}`;
-        return report(rec, m.subtype === "success" ? "waiting" : "failed", text.trim() || "(no final message)", by);
+        return reportWithEvidence(rec, m.subtype === "success" ? "waiting" : "failed", text.trim() || "(no final message)", by);
       }
       case "stopped":
         return report(rec, "waiting", `Stopped by ${deps.userName}.`, by);

@@ -1,11 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Options, query, SandboxSettings, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createAgents } from "../src/agents";
 import type { Headroom, Ledger } from "../src/ledger";
-import type { AgentId, AgentStatus, BotId, RoutineId, RunId } from "../src/protocol";
+import type { AgentEvidence, AgentId, AgentStatus, BotId, RoutineId, RunId } from "../src/protocol";
 import type { Project } from "../src/projects";
 import { emptySession, emptyWorld, own, type AgentRecord, type GateState, type Initiator, type OpenCard, type World } from "../src/world";
 
@@ -83,6 +83,7 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; p
   const reports: { agentId: AgentId; text: string; by: Initiator }[] = [];
   const notes: { agentId: AgentId; text: string }[] = [];
   const statuses: AgentStatus[] = [];
+  const evidence: (AgentEvidence | null)[] = [];
   const begun: string[] = [];
   const trustCards: { agentId: AgentId; root: string; name: string; found: readonly string[] }[] = [];
   const ledger: Ledger = {
@@ -115,13 +116,16 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; p
     idle: () => {},
     persist: () => {},
     now: () => AT,
-    changed: (rec) => statuses.push(rec.agent.status),
+    changed: (rec) => {
+      statuses.push(rec.agent.status);
+      evidence.push(rec.agent.evidence);
+    },
     reported: (rec, text, by) => reports.push({ agentId: rec.agent.id, text, by }),
     note: (rec, text) => notes.push({ agentId: rec.agent.id, text }),
   });
   const start = (where: "mac" | "cloud" = "mac", initiator: Initiator = user, botId: BotId = B1) =>
     agents.start(botId, { title: "Fix tests", prompt: "Make the suite green.", project: where === "cloud" ? cloudProject : (opts.project ?? project), where, isolate: "auto", botName: "Ana", initiator, budgetUsd: null });
-  return { world, agents, queries, reports, notes, statuses, begun, trustCards, start, q: () => queries.at(-1)! };
+  return { world, agents, queries, reports, notes, statuses, evidence, begun, trustCards, start, q: () => queries.at(-1)! };
 }
 
 const AGENT_PROMPT =
@@ -500,4 +504,54 @@ test("an agent whose Claude Code cannot start shows unavailable, and its bot hea
 
   expect([rec.agent.status, h.statuses.at(-1), h.queries.length]).toEqual(["unavailable", "unavailable", 0]);
   expect(h.notes.map((n) => n.text)).toEqual(["Claude Code could not start: no sandbox for you. Queued messages are kept, and it keeps trying."]);
+});
+
+function gitIn(cwd: string, ...args: string[]) {
+  const r = Bun.spawnSync(["git", "-c", "commit.gpgsign=false", "-c", "user.name=T", "-c", "user.email=t@example.com", ...args], { cwd, stderr: "pipe" });
+  if (r.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr.toString()}`);
+  return r.stdout.toString().trim();
+}
+
+function tempRepo() {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-agents-repo-")));
+  roots.push(dir);
+  gitIn(dir, "init", "-q", "-b", "main");
+  writeFileSync(join(dir, "README.md"), "hi\n");
+  gitIn(dir, "add", ".");
+  gitIn(dir, "commit", "-q", "-m", "init");
+  return dir;
+}
+
+async function until(ok: () => boolean) {
+  for (let i = 0; i < 500 && !ok(); i++) await new Promise((r) => setTimeout(r, 5));
+  expect(ok()).toBe(true);
+}
+
+test("after a turn the bot gets git's facts above the agent's words, and the agent record carries them", async () => {
+  const dir = tempRepo();
+  const h = harness({ project: { name: "shop", path: dir, branch: "main", githubRepo: null } });
+  const rec = await h.start();
+  await flush();
+  gitIn(dir, "checkout", "-q", "-b", "fix");
+  writeFileSync(join(dir, "fix.ts"), "a\nb\n");
+  gitIn(dir, "add", ".");
+  gitIn(dir, "commit", "-q", "-m", "fix");
+  h.q().emit(result("Fixed it in https://github.com/acme/shop/pull/12"));
+  await until(() => h.reports.length === 1);
+
+  expect(rec.agent.evidence).toMatchObject({ branch: "fix", ahead: 1, changed: 1, insertions: 2, dirty: false, pr: "https://github.com/acme/shop/pull/12" });
+  expect(h.reports[0]!.text).toBe(
+    `[Git, read by the bridge after this turn: branch fix at ${gitIn(dir, "rev-parse", "--short", "HEAD")}; 1 commit ahead of the default branch; 1 file changed (+2 -0); nothing uncommitted; PR named: https://github.com/acme/shop/pull/12.]\nFixed it in https://github.com/acme/shop/pull/12`,
+  );
+  expect(rec.messages.at(-1)?.text).toBe("Fixed it in https://github.com/acme/shop/pull/12");
+  expect(h.evidence.at(-1)).toMatchObject({ ahead: 1 });
+});
+
+test("an agent outside a git repo reports its words alone and has no evidence", async () => {
+  const h = harness();
+  const rec = await h.start();
+  await flush();
+  h.q().emit(result("Done."));
+  await flush();
+  expect([h.reports.map((r) => r.text), rec.agent.evidence]).toEqual([["Done."], null]);
 });

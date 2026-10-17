@@ -755,9 +755,19 @@ const BANS: readonly { id: string; tools: readonly string[]; applies: (i: Initia
 function refusedOf(call: ToolCall, ctx: PolicyContext): Decision | null {
   if (isClaudio(call) && claudioEntry(call) === undefined)
     return deny("rule", "claudio.unknown", `The bridge has no tool ${call.tool}. It did not run.`);
-  if (isConnector(call) && call.mcpServer !== null && ctx.connectorsOff.includes(call.mcpServer.name))
-    return deny("rule", "connector.off", `The user turned off the ${call.mcpServer.name} connector for this bot. It did not run. Do not try it again.`);
+  if (isConnector(call) && ctx.connectorsOff.length > 0) {
+    const off = ctx.connectorsOff.find((name) => name === call.mcpServer?.name || call.tool.startsWith(`mcp__${mcpToolPrefix(name)}__`));
+    if (off !== undefined) return deny("rule", "connector.off", `The user turned off the ${off} connector for this bot. It did not run. Do not try it again.`);
+    if (call.mcpServer === null)
+      return deny("rule", "connector.off", "The bridge cannot tell which connector this tool belongs to, and the user turned some off for this bot. It did not run.");
+  }
   return null;
+}
+
+/** Claude Code's server segment in mcp__<server>__<tool> names (its normalizeNameForMCP, read from the SDK bundle). */
+function mcpToolPrefix(server: string): string {
+  const name = server.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return server.startsWith("claude.ai ") ? name.replace(/_+/g, "_").replace(/^_|_$/g, "") : name;
 }
 
 function limitOf(call: ToolCall, ctx: PolicyContext): Decision | null {

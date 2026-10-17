@@ -216,6 +216,20 @@ test("revoking the legacy device stops the shared token", () => {
   expect(devices.authenticate(ws({}, "?token=shared"))).toBeNull();
 });
 
+test("the shared token stops working on 1 January 2027, one release after protocol 3; paired phones keep working", () => {
+  const { devices, advance } = setup();
+  devices.importLegacy("shared");
+  const { deviceId, token } = paired(devices.pair(devices.newCode().code, "phone"));
+  const sunset = Date.parse("2027-01-01T00:00:00.000Z");
+
+  advance(sunset - start.getTime() - 1);
+  expect(devices.authenticate(ws({}, "?token=shared"))).not.toBeNull();
+  advance(1);
+  expect(devices.authenticate(ws({}, "?token=shared"))).toBeNull();
+  expect(devices.authenticate(bearer("shared"))).toBeNull();
+  expect(devices.authenticate(bearer(token))).toBe(deviceId);
+});
+
 test("seen records when the device last connected", () => {
   const { devices, advance } = setup();
   const { deviceId } = paired(devices.pair(devices.newCode().code, "phone"));

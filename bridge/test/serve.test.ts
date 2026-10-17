@@ -275,6 +275,42 @@ test("the legacy phone cannot hand out pairing codes; a paired phone can", async
   expect(await owner.next("pair_code")).toEqual({ type: "pair_code", code: expect.stringMatching(/^\w{4}-\w{4}$/), expiresAt: expect.any(String) });
 });
 
+test("the legacy phone may revoke only itself", async () => {
+  const b = boot(tempHome("shared"));
+  const phone = await pairPhone(b);
+  const old = connect(b, { query: "?token=shared" });
+  await old.next("hello");
+
+  old.send({ type: "revoke_device", deviceId: phone.deviceId });
+  expect(await old.next("error")).toEqual({ type: "error", message: expect.stringContaining("only revoke itself") });
+  expect(b.devices.list(null).map((d) => d.id)).toContain(phone.deviceId);
+
+  old.send({ type: "revoke_device", deviceId: legacyId(b) });
+  expect(await old.closed()).toEqual({ code: 4001, reason: "revoked" });
+  expect(b.devices.list(null).map((d) => d.id)).toEqual([phone.deviceId]);
+});
+
+test("a legacy or protocol 2 socket may decide only Allow once or Deny; a paired protocol 3 app may decide anything", async () => {
+  const b = boot(tempHome("shared"));
+  const { token } = await pairPhone(b);
+  const legacy = connect(b, { query: "?token=shared&protocol=3" });
+  const today = connect(b, { bearer: token });
+  const current = connect(b, { bearer: token, query: "?protocol=3" });
+  for (const c of [legacy, today, current]) await c.next("hello");
+  const decide = (choice: string) => ({ type: "decide", botId: "b_eng", messageId: "m_card", choice });
+
+  legacy.send(decide("always"));
+  today.send(decide("never"));
+  expect(await legacy.next("error")).toEqual({ type: "error", message: expect.stringContaining("Allow once or Deny") });
+  expect(await today.next("error")).toEqual({ type: "error", message: expect.stringContaining("Allow once or Deny") });
+  legacy.send(decide("once"));
+  today.send(decide("deny"));
+  current.send(decide("always"));
+  await until(() => b.handled.length === 3, "the allowed decisions to reach the hub");
+
+  expect(b.handled.map((m) => (m.type === "decide" ? m.choice : m.type)).sort()).toEqual(["always", "deny", "once"]);
+});
+
 test("uploads up to the frame limit reach the hub; a frame over it closes the socket", async () => {
   expect(MAX_FRAME_BYTES).toBeGreaterThan(Math.ceil((10 * 1024 * 1024 * 4) / 3) + 1024);
   const b = boot(tempHome());

@@ -557,17 +557,19 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         return host.sizeThatFits(in: CGSize(width: 390, height: 2000)).height
     }
 
-    @Test func memoryShowsOnlyWhenTheBridgeListsIt() {
+    @Test func memoryShowsWhenTheBridgeListsItAndAnOlderBridgeGetsAShorterUpdateNote() {
         let facts = [Fact(id: FactID("f_1"), text: "Prefers short answers", at: at, by: "Eng")]
+        #expect(height(AppStore()) == 0, "before any hello there is nothing to say")
         let older = AppStore()
         older.apply(hello([]))
         older.apply(.memory(facts))
-        #expect(height(older) == 0)
+        #expect(older.lacks(.memory))
+        #expect(height(older) > 0)
 
         let current = AppStore()
         current.apply(.hello(Hello(features: [.memory], machine: "Mac", userName: "Alex", bots: [])))
         current.apply(.memory(facts))
-        #expect(height(current) > 0)
+        #expect(height(current) > height(older))
     }
 
     @Test func aProposedFactRowIsTallerThanAConfirmedOneBecauseItCarriesConfirmAndForget() {
@@ -705,5 +707,108 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         store.sendStarted(send("first", id: "c1"))
         store.setConnection(.unpaired)
         #expect(store.unechoedSends.isEmpty)
+    }
+
+}
+
+/// Spend, memory proposals, offline and pairing help, delete text, webhook curl: what the app shows from bridge data.
+@MainActor
+@Suite struct ProductSurfaceTests {
+    @Test func aBotsProposalsAreTheUnconfirmedFactsItRememberedAndTheyCountForTheBadge() {
+        let store = AppStore()
+        store.apply(hello([bot("b1"), bot("b2")]))
+        store.apply(.memory([
+            Fact(id: FactID("f_1"), text: "Prefers short answers", at: at, by: nil),
+            Fact(id: FactID("f_2"), text: "Works on acme/web", at: at, by: "bot b1", confirmed: false),
+            Fact(id: FactID("f_3"), text: "Lives in Lisbon", at: at, by: "bot b2", confirmed: false),
+            Fact(id: FactID("f_4"), text: "Uses vim", at: at, by: "bot b1", confirmed: true),
+        ]))
+        #expect(store.proposedFacts.map(\.id.rawValue) == ["f_2", "f_3"])
+        #expect(store.proposedFacts(by: store.bots[BotID("b1")]!).map(\.id.rawValue) == ["f_2"])
+    }
+
+    @Test func aMissingFeatureReadsAsLackingOnlyOnceTheBridgeSaidHello() {
+        let fresh = AppStore()
+        #expect(!fresh.lacks(.spend), "no hello yet: nothing to tell the user")
+        let old = AppStore()
+        old.apply(.hello(Hello(features: [.memory], machine: "Mac", userName: "Alex", bots: [])))
+        #expect(old.lacks(.spend))
+        #expect(!old.lacks(.memory))
+    }
+
+    @Test func spendWarnsAtEightyPercentAndReadsAsMoney() {
+        var b = bot("b1")
+        #expect(b.spend == nil, "a bridge without spend sends no numbers")
+        b.spentTodayUsd = 7.99
+        b.capUsd = 10
+        #expect(b.spend?.nearLimit == false)
+        b.spentTodayUsd = 8
+        #expect(b.spend?.nearLimit == true)
+        #expect(b.spend?.reached == false)
+        #expect(b.spend?.text == "$8.00 of $10.00")
+        #expect(SpendWarning.text(b, b.spend!).hasPrefix("bot b1 has spent $8.00 of $10.00 today."))
+        b.spentTodayUsd = 10
+        #expect(SpendWarning.text(b, b.spend!).hasPrefix("bot b1 reached today's $10.00 cap."))
+        #expect(Spend(spentUsd: 0, limitUsd: 0).reached, "a cap of 0 holds all background work")
+    }
+
+    @Test func theDailyCapRowShowsTheOwnCapOrTheDefaultAndSendsNullForDefault() throws {
+        var b = bot("b1")
+        b.capUsd = 10
+        #expect(SpendingSection.capLabel(b) == "Default ($10.00)")
+        b.dailyCapUsd = 5
+        #expect(SpendingSection.capLabel(b) == "$5.00")
+        let reset = try Wire.encoder().encode(SpendingSection.setCap(BotID("b1"), nil))
+        #expect(String(decoding: reset, as: UTF8.self).contains(#""dailyCapUsd":null"#))
+        #expect(Money.parse("$12,50") == 12.5)
+        #expect(Money.parse("-1") == nil)
+        #expect(Money.parse("ten") == nil)
+    }
+
+    @Test func anAgentShowsItsSpendAgainstItsBudgetAndACloudAgentShowsNone() {
+        var agent = Agent(
+            id: AgentID("a1"), botId: BotID("b1"), title: "Fix", where: .mac, projectName: "web", status: .waiting,
+            url: nil, createdAt: at, updatedAt: at
+        )
+        #expect(ExchangeView.spendLine(agent) == nil)
+        agent.spentUsd = 1.2
+        agent.budgetUsd = 5
+        #expect(ExchangeView.spendLine(agent) == "Spent $1.20 of $5.00 budget")
+        agent.spentUsd = 5
+        #expect(ExchangeView.spendLine(agent) == "Used its $5.00 budget")
+    }
+
+    @Test func theDeleteDialogSaysTheFolderGoesToTrashAndNamesWorktreesLeftBehind() {
+        let b = bot("b1")
+        #expect(HomeView.deleteMessage(b, worktrees: []).contains("trash folder on your Mac, where you can recover it"))
+        #expect(!HomeView.deleteMessage(b, worktrees: []).contains("can't be undone"))
+        #expect(HomeView.deleteMessage(b, worktrees: [Worktree(path: "/w/a", branch: "claudio/fix")]).contains("worktree on claudio/fix stays"))
+        #expect(HomeView.deleteMessage(b, worktrees: [Worktree(path: "/w/a", branch: "x"), Worktree(path: "/w/b", branch: "y")]).contains("2 worktrees stay"))
+    }
+
+    @Test func theConnectionBannerOffersHelpAfterThreeFailedConnects() {
+        #expect(ConnectionBanner.help(failures: 2, address: "10.0.0.20:7878") == nil)
+        #expect(ConnectionBanner.help(failures: 3, address: "10.0.0.20:7878")?.contains("at 10.0.0.20:7878") == true)
+    }
+
+    @Test func theOfflineBarShowsWhileTheMacIsOutOfReach() {
+        #expect(!OfflineBar.shows(.connected(machine: "Mac")))
+        #expect(!OfflineBar.shows(.unpaired))
+        #expect(OfflineBar.shows(.disconnected(retryAt: at)))
+        #expect(OfflineBar.shows(.connecting))
+    }
+
+    @Test func theWebhookCurlCommandCarriesTheTokenAndTheAddress() {
+        let token = WebhookToken(routineId: RoutineID("r2"), url: URL(string: "http://127.0.0.1:7879/hook/r2")!, token: "whk_3s9dK2")
+        #expect(WebhookTokenSection.curl(token) == "curl -X POST -H 'Authorization: Bearer whk_3s9dK2' -d 'test from my phone' http://127.0.0.1:7879/hook/r2")
+    }
+
+    @Test func aStopQueuedOfflineIsDroppedAfterAMinuteAndOtherMessagesAreNot() {
+        let stop = ClientMessage.stop(botId: BotID("b1"))
+        let send = ClientMessage.send(botId: BotID("b1"), text: "hi", uploads: [], clientId: "c1")
+        #expect(BridgeClient.stillWanted(stop, queuedAt: at, now: at + 30, staleStop: 60))
+        #expect(!BridgeClient.stillWanted(stop, queuedAt: at, now: at + 61, staleStop: 60))
+        #expect(!BridgeClient.stillWanted(.stopAgent(agentId: AgentID("a1")), queuedAt: at, now: at + 61, staleStop: 60))
+        #expect(BridgeClient.stillWanted(send, queuedAt: at, now: at + 3600, staleStop: 60))
     }
 }

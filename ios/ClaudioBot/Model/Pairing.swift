@@ -26,6 +26,14 @@ struct PairInvite: Equatable, Sendable {
 
     /// Parses what a person types or pastes. A bare host and port gets the /ws path; any other path must end in /ws.
     init(urlString: String, code: String) throws(Invalid) {
+        let url = try Self.bridgeURL(urlString)
+        let code = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !code.isEmpty else { throw .code }
+        self.init(url: url, code: code)
+    }
+
+    /// A typed bridge address as a socket URL: ws or wss, a host, and a path ending in /ws (added when there is none).
+    static func bridgeURL(_ urlString: String) throws(Invalid) -> URL {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard var components = URLComponents(string: trimmed),
               let scheme = components.scheme?.lowercased(), ["ws", "wss"].contains(scheme),
@@ -40,9 +48,7 @@ struct PairInvite: Equatable, Sendable {
         components.query = nil
         components.fragment = nil
         guard let url = components.url else { throw .url }
-        let code = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        guard !code.isEmpty else { throw .code }
-        self.init(url: url, code: code)
+        return url
     }
 
     /// Parses `claudiobot://pair?url=<ws url>&code=<code>`, the payload of the bridge's QR code.

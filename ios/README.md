@@ -57,25 +57,37 @@ On a reconnect the app passes `epoch` and `after` from the last frame it applied
 
 Settings lists every paired phone. Revoking one closes its socket with code 4001, and that phone returns to the pairing screen. Only that close code unpairs. A 401 on connect may come from another server on the network the phone is on, so the app keeps the pairing and shows **Not recognized** with **Pair again** and **Retry**. Returning to the app retries too. **Unpair this Mac** revokes this phone on the bridge first when connected, then deletes the pairing and clears the app's notifications.
 
-The phone and the Mac need to reach each other. The same Wi-Fi network works, and so does Tailscale from anywhere. Plain `ws://` is allowed for local addresses and `*.ts.net` names only.
+The phone and the Mac need to reach each other. The same Wi-Fi network works, and so does Tailscale from anywhere. Plain `ws://` is allowed for local addresses and `*.ts.net` names only. The bridge's QR code prefers its `*.ts.net` name, then its `.local` name. After three failed connects in a row the Home banner offers **Edit address** (another address of the same Mac, kept only once that Mac says hello with this phone's token) and **Pair again**. Settings has **Change address** too.
+
+A Stop tapped while offline is sent on reconnect only if it is under a minute old, so it never stops a later turn.
 
 ## Screens
 
-**Home.** One row per bot, pinned bots first, then the newest activity. A blue dot means unread. An orange star badge on the avatar means the bot asked you something, and the row shows that question. Long-press a row to pin, mark as unread, rename, hide or delete the bot. The initials button opens Settings, and + opens the new chat picker.
+**Home.** One row per bot, pinned bots first, then the newest activity. A blue dot means unread. An orange star badge on the avatar means the bot asked you something, and the row shows that question. Long-press a row to pin, mark as unread, rename, hide or delete the bot. Delete says the bot's folder moves to the bridge's trash folder, and names any agent worktrees that stay on the Mac. The initials button opens Settings, and an amber number on it counts facts bots proposed that wait for you. + opens the new chat picker. While the Mac is out of reach a banner shows the countdown to the next try.
 
 **New chat.** Create new Bot comes first. The bridge makes the bot, and the app opens it as soon as it exists. Every bot follows, hidden ones included.
 
 **Chat.** Bot messages are gray bubbles with markdown. Your messages use the bot's color. A centered time appears before the first message and after every gap of more than an hour. A question card lists lettered options. Tap one to answer, or tap X to dismiss it. You can also type a free answer while it is open. A question with a deadline closes as Expired when nobody answers in time.
 
-A permission card holds a tool call the bot or one of its agents wants to run. It shows the rule that asked, the exact command in monospace and what Always would cover. Allow once, Always allow, Deny and Never are the only way a held call runs. Typing in the chat never approves one. An unanswered card expires at its deadline and the call does not run. Centered gray lines show what the bot did on its own, such as "Messaged standup notes" or "4 messages with Set up verification skill". Tap one to open that agent, bot or routine. While the bot works, its avatar bobs beside "Typing…", and Stop ends the turn. A bot waiting on a permission card wears an Awaiting approval chip in the list and the chat. A bot paused by the usage limit or its daily cap wears Parked.
+A permission card holds a tool call the bot or one of its agents wants to run. It shows the rule that asked, the exact command in monospace and what Always would cover. Allow once, Always allow, Deny and Never are the only way a held call runs. Typing in the chat never approves one. An unanswered card expires at its deadline and the call does not run. Centered gray lines show what the bot did on its own, such as "Messaged standup notes" or "4 messages with Set up verification skill". Tap one to open that agent, bot or routine. While the bot works, its avatar bobs beside "Typing…", and Stop ends the turn. A bot waiting on a permission card wears an Awaiting approval chip in the list and the chat. A bot paused by the usage limit or its daily cap wears Parked. A bar at the top says when the Mac is out of reach; what you send waits and goes on reconnect. Once the bot and its agents have spent 80% of today's cap, a card says so with **Change the cap**. A fact the bot asked to remember shows as a card with **Confirm** (every bot then knows it) and **Forget**.
 
 The composer's + menu attaches a photo from the library, a new photo or a file. Each upload can be up to 10 MB. The mic dictates into the field with the Speech framework.
 
-**Profile.** Tap the name pill at the top of a chat. You can edit the name and the label. The tabs are Info (routines with on and off switches, and the avatar picker; tap a routine for its next run, its last runs and Run now), Library (files the bot made), Agents (coding agents it started, with their status) and Links (every link in the conversation). On iPhone the profile is its own screen. On iPad it opens as a column beside the chat.
+**Profile.** Tap the name pill at the top of a chat. You can edit the name and the label. The tabs are Info, Library (files the bot made), Agents (coding agents it started, with their status) and Links (every link in the conversation). On iPhone the profile is its own screen. On iPad it opens as a column beside the chat.
 
-**Exchange.** What a bot and one of its agents said to each other, with the agent's status. A working agent has Stop. Cloud agents have Open in Claude.
+Info holds, in order:
+- **Routines** with on and off switches. Tap one for its next run, its last runs and Run now. A webhook routine also makes a token, shown once, with its address and a **Copy** for a `curl` command to run in Terminal on the Mac (the address answers on the Mac only).
+- **Character**, the avatar picker.
+- **Spending**, today's spend against the daily cap with a bar, and **Daily cap**: Default, $1 to $50, or Custom.
+- **Notifications**, the mute switch. Cards still notify.
+- **Connectors**, the bot's MCP servers by name and status, each with a switch.
+- **Skills** the bot saved, each with Delete.
 
-**Settings.** The Mac, the paired phones with Revoke, Pair another device (a code and its QR code), notifications and Unpair.
+A section whose feature the bridge does not list says "Update the bridge on your Mac to …" instead of disappearing.
+
+**Exchange.** What a bot and one of its agents said to each other, with the agent's status and, for a Mac agent, its spend against its budget. A working agent has Stop. Cloud agents have Open in Claude. Below the thread, what the bridge read from git after the agent's last turn: branch, commits ahead, files changed, uncommitted work and a PR link, and the agent's own worktree with **Remove**, which the bridge refuses while the worktree holds uncommitted work.
+
+**Settings.** The Mac with **Change address**, the paired phones with Revoke, Pair another device (a code and its QR code), **Memory** (the facts bots know about you: tap to edit, swipe to forget, Confirm or Forget a bot's proposal), notifications and Unpair.
 
 ## Notifications
 

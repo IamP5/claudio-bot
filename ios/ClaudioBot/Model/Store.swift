@@ -144,6 +144,11 @@ final class AppStore {
         features.contains(feature)
     }
 
+    /// The bridge said hello without this feature, so the screen that needs it says to update the bridge.
+    func lacks(_ feature: Feature) -> Bool {
+        bridgeProtocol != nil && !features.contains(feature)
+    }
+
     func dismissWebhookToken() {
         webhookToken = nil
     }
@@ -367,6 +372,17 @@ final class AppStore {
         return bots.values
             .filter { needle.isEmpty || [$0.name, $0.title ?? "", $0.preview].contains { $0.localizedCaseInsensitiveContains(needle) } }
             .sorted(by: Bot.homeOrder)
+    }
+
+    /// Facts bots proposed that wait for the user's Confirm or Forget.
+    var proposedFacts: [Fact] {
+        facts?.filter { !$0.confirmed } ?? []
+    }
+
+    /// The proposals this bot made. Fact.by is the bot's name when it remembered the fact, so a proposal from before a
+    /// rename shows only in Settings.
+    func proposedFacts(by bot: Bot) -> [Fact] {
+        proposedFacts.filter { $0.by == bot.name }
     }
 
     /// The open question card, newest first, if any.

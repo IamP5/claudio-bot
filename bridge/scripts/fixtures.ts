@@ -1,4 +1,4 @@
-import type { Agent, Bot, Broadcast, ClientMessage, Message, Peer, Routine, ServerMessage } from "../src/protocol";
+import type { AgentView, Bot, Broadcast, ClientMessage, Message, Peer, Routine, ServerMessage } from "../src/protocol";
 
 // The wire form of T: branded ids are plain strings, so fixtures type-check without casts.
 type Wire<T> = T extends string & { readonly __brand: string } ? string : T extends (infer U)[] ? Wire<U>[] : T extends object ? { [K in keyof T]: Wire<T[K]> } : T;
@@ -22,6 +22,7 @@ const bot: Wire<Bot> = {
   pinned: false, hidden: false, status: "idle", unread: 2,
   question: "Want me to merge any of these now?", preview: "Want me to merge any of these now?",
   lastAt: at, createdAt: at, routines: [routine], dailyCapUsd: null, muted: false,
+  spentTodayUsd: 8.4, capUsd: 10,
 };
 const hookRoutine: Wire<Routine> = {
   id: "r2", name: "deploy-watch", schedule: "", describe: "When its webhook is called",
@@ -37,14 +38,15 @@ const permission = {
   detail: "git push origin main", always: "git push to main or master from engineer", answer: null, expiresAt: "2026-10-16T16:00:00.000Z",
 };
 const agentPeer: Wire<Peer> = { kind: "agent", id: "a1", title: "Set up verification skill" };
-const agent: Wire<Agent> = {
+const agent: Wire<AgentView> = {
   id: "a1", botId: "b1", title: "Set up verification skill", where: "mac", projectName: "web",
   status: "waiting", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null,
+  spentUsd: 1.2, budgetUsd: 5,
 };
 
 export const server = [
-  { type: "hello", protocol: 3, features: ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks"], epoch: "e_7f3a", seq: 41, resumed: false, machine: "MacBook", userName: "Alex", bots: [bot] },
-  { type: "bot", seq: 42, bot: { ...bot, id: "b2", name: "news digest", title: "Morning digest", avatar: { shape: "pentagon", color: "teal" }, status: "working", unread: 0, question: null, pinned: true, dailyCapUsd: 5 } },
+  { type: "hello", protocol: 3, features: ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend"], epoch: "e_7f3a", seq: 41, resumed: false, machine: "MacBook", userName: "Alex", bots: [bot] },
+  { type: "bot", seq: 42, bot: { ...bot, id: "b2", name: "news digest", title: "Morning digest", avatar: { shape: "pentagon", color: "teal" }, status: "working", unread: 0, question: null, pinned: true, dailyCapUsd: 5, spentTodayUsd: 0, capUsd: 5 } },
   { type: "bot_removed", botId: "b2" },
   { type: "created", ref: "c1", botId: "b3" },
   {
@@ -63,7 +65,7 @@ export const server = [
     type: "details", botId: "b1",
     library: [{ path: "merge-plan.md", size: 2048, modifiedAt: at }],
     links: [{ url: "https://github.com/acme/web/pull/142", host: "github.com", at }],
-    agents: [agent, { ...agent, id: "a2", where: "cloud", status: "in_cloud", url: "https://claude.ai/code/session_abc" }],
+    agents: [agent, { ...agent, id: "a2", where: "cloud", status: "in_cloud", url: "https://claude.ai/code/session_abc", spentUsd: null, budgetUsd: null }],
     routines: [routine, hookRoutine],
   },
   {

@@ -20,7 +20,7 @@ export type FactId = string & { readonly __brand: "FactId" };
  * list, so a new app on an older bridge never offers a control the bridge would ignore. Additive changes extend this
  * list instead of bumping PROTOCOL.
  */
-export const FEATURES = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks"] as const;
+export const FEATURES = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend"] as const;
 export type Feature = (typeof FEATURES)[number];
 
 export const SHAPES = [
@@ -96,6 +96,17 @@ export type Bot = {
   dailyCapUsd: number | null;
   // No message or result pushes for this bot. Cards still push: a held call waits on the user.
   muted: boolean;
+} & BotSpend;
+
+/**
+ * Spend as the ledger counts it: Claude Code's own cost estimates, summed per turn. Refreshed on every bot frame, so it
+ * can lag until the bot's next change (a new local day included).
+ */
+export type BotSpend = {
+  // The bot and its agents, on the Mac's current local day.
+  spentTodayUsd: number;
+  // The cap in force: dailyCapUsd, or the bridge default when that is null.
+  capUsd: number;
 };
 
 export type Peer =
@@ -196,6 +207,14 @@ export type Agent = {
   worktree: Worktree | null;
 };
 
+/** An agent as the phone sees it: its spend from the ledger, null for cloud agents, which the bridge does not meter. */
+export type AgentView = Agent & {
+  // Lifetime, every turn of every session.
+  spentUsd: number | null;
+  // The lifetime budget in force.
+  budgetUsd: number | null;
+};
+
 export type AgentMessage = { id: MessageId; at: string; from: "bot" | "agent"; text: string };
 
 export type LibraryFile = { path: string; size: number; modifiedAt: string };
@@ -245,8 +264,8 @@ export type ServerMessage =
   // Insert or replace by message.id. Replaying the same message is a no-op.
   | { type: "message"; botId: BotId; message: Message }
   // routines: the bot's routines with their full run history.
-  | { type: "details"; botId: BotId; library: LibraryFile[]; links: Link[]; agents: Agent[]; routines: Routine[] }
-  | { type: "agent"; agent: Agent; messages: AgentMessage[] }
+  | { type: "details"; botId: BotId; library: LibraryFile[]; links: Link[]; agents: AgentView[]; routines: Routine[] }
+  | { type: "agent"; agent: AgentView; messages: AgentMessage[] }
   // content is null when the file is not text or is over 1 MB. data is base64 for images up to 10 MB.
   | { type: "file"; botId: BotId; path: string; mime: string; content: string | null; data: string | null }
   | { type: "devices"; devices: Device[] }

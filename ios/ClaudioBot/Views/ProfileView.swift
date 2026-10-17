@@ -199,6 +199,7 @@ private struct InfoTab: View {
                 routines
                 character
             }
+            SpendingSection(bot: bot)
             MuteSection(bot: bot)
             ConnectorsSection(bot: bot)
             SkillsSection(bot: bot)

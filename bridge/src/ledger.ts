@@ -6,7 +6,7 @@
 // (about 250 bytes), so a year of heavy use is tens of MB and folds in well under a second.
 import { appendFileSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentId, BotId } from "./protocol";
+import type { AgentId, BotId, BotSpend } from "./protocol";
 import { errorText } from "./text";
 import { actorKey, attended, type Actor, type ActorKey, type Initiator } from "./world";
 
@@ -70,6 +70,14 @@ export type Ledger = {
    * passes it (or the smaller of it and budgetLeft, for an agent) as maxBudgetUsd. Check headroom first, as above.
    */
   dailyLeft(botId: BotId): number;
+};
+
+/** What the phone reads. Apart from Ledger, so a session or agent fake need not implement it. */
+export type SpendView = {
+  /** For the bot frame: what the bot and its agents spent on the current local day, and the cap in force. */
+  botSpend(botId: BotId): BotSpend;
+  /** For the agent frame: a mac agent's lifetime spend and the budget in force. */
+  agentSpend(agentId: AgentId): { spentUsd: number; budgetUsd: number };
 };
 
 type Index = {
@@ -146,7 +154,7 @@ export function createLedger(deps: {
   budgetFor: (agentId: AgentId) => number | null;
   now: () => Date;
   log: (line: string) => void;
-}): Ledger {
+}): Ledger & SpendView {
   const defaultCap = usdFromEnv("CLAUDIOBOT_DAILY_USD", DEFAULT_DAILY_CAP_USD);
   const defaultBudget = usdFromEnv("CLAUDIOBOT_AGENT_USD", DEFAULT_AGENT_BUDGET_USD);
   const ix: Index = { baseline: new Map(), spend: new Map(), byAgent: new Map() };
@@ -167,8 +175,9 @@ export function createLedger(deps: {
 
   const cap = (botId: BotId) => usdOr(deps.capFor(botId), defaultCap);
   const spentOn = (day: string, botId: BotId) => ix.spend.get(day)?.get(botId) ?? 0;
-  const budgetLeft = (agentId: AgentId) =>
-    Math.max(0, usdOr(deps.budgetFor(agentId), defaultBudget) - (ix.byAgent.get(agentId) ?? 0));
+  const budget = (agentId: AgentId) => usdOr(deps.budgetFor(agentId), defaultBudget);
+  const spentBy = (agentId: AgentId) => ix.byAgent.get(agentId) ?? 0;
+  const budgetLeft = (agentId: AgentId) => Math.max(0, budget(agentId) - spentBy(agentId));
 
   return {
     add({ actor, sessionId, initiator, cumulativeUsd, fresh }) {
@@ -217,5 +226,9 @@ export function createLedger(deps: {
     budgetLeft,
 
     dailyLeft: (botId) => Math.max(0, cap(botId) - spentOn(localDay(deps.now()), botId)),
+
+    botSpend: (botId) => ({ spentTodayUsd: spentOn(localDay(deps.now()), botId), capUsd: cap(botId) }),
+
+    agentSpend: (agentId) => ({ spentUsd: spentBy(agentId), budgetUsd: budget(agentId) }),
   };
 }

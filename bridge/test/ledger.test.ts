@@ -431,3 +431,23 @@ test("a rebuild after restart gives the same totals and baselines as the live in
   const tail = rowsIn(h.dir).slice(-4).map((r) => r.deltaUsd);
   [0.3, 0.2, 0.3, 0.2].forEach((d, i) => expect(tail[i]).toBeCloseTo(d, 9));
 });
+
+test("botSpend: today's spend by the bot and its agents, against the cap in force, and a new local day starts at 0", () => {
+  const { ledger, clock } = harness({ caps: { b2: 3 } });
+  spend(ledger, bot1, 1.5);
+  spend(ledger, agent1, 2);
+  spend(ledger, bot2, 0.25);
+  expect(ledger.botSpend(B1)).toEqual({ spentTodayUsd: 3.5, capUsd: DEFAULT_DAILY_CAP_USD });
+  expect(ledger.botSpend(B2)).toEqual({ spentTodayUsd: 0.25, capUsd: 3 });
+  clock.now = local(2026, 10, 18, 0, 5);
+  expect(ledger.botSpend(B1)).toEqual({ spentTodayUsd: 0, capUsd: DEFAULT_DAILY_CAP_USD });
+});
+
+test("agentSpend: lifetime spend across days, against the agent's budget in force", () => {
+  const { ledger, clock } = harness({ budgets: { a2: 1 } });
+  spend(ledger, agent1, 0.75);
+  clock.now = local(2026, 10, 19);
+  spend(ledger, agent1, 0.5);
+  expect(ledger.agentSpend(A1)).toEqual({ spentUsd: 1.25, budgetUsd: DEFAULT_AGENT_BUDGET_USD });
+  expect(ledger.agentSpend(A2)).toEqual({ spentUsd: 0, budgetUsd: 1 });
+});

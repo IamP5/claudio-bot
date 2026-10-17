@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
-import { homedir, hostname, networkInterfaces } from "node:os";
+import { homedir, hostname } from "node:os";
 import qrcode from "qrcode-terminal";
+import { bridgeUrls, lanAddresses, readNames } from "./address";
 import { createDevices, type PairCode } from "./devices";
 import { createHomes } from "./home";
 import { createHub } from "./hub";
@@ -24,13 +25,6 @@ const machineName = async () => (await run(["scutil", "--get", "ComputerName"]))
 
 const firstName = async () =>
   process.env.CLAUDIOBOT_USER_NAME || (await run(["id", "-F"])).split(/\s+/)[0] || process.env.USER || "there";
-
-function lanAddresses(): string[] {
-  return Object.values(networkInterfaces())
-    .flat()
-    .filter((a) => a && a.family === "IPv4" && !a.internal)
-    .map((a) => a!.address);
-}
 
 function holdLock(home: string) {
   const lock = lockHome(home);
@@ -123,7 +117,7 @@ function shutdown() {
 }
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, shutdown);
 
-const urls = (lanAddresses().length > 0 ? lanAddresses() : ["127.0.0.1"]).map((ip) => `ws://${ip}:${transport.port}/ws`);
+const urls = bridgeUrls(await readNames(run), lanAddresses(), transport.port);
 
 console.log(`claudiobot bridge on ${machine}`);
 for (const url of urls) console.log(`  ${url}`);

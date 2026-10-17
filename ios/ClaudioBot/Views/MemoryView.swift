@@ -47,6 +47,11 @@ struct MemorySection: View {
                     client.send(.setFact(factId: draft.factId, text: text))
                 }
             }
+        } else if store.lacks(.memory) {
+            Section("Memory") {
+                Text("Update the bridge on your Mac to see and edit what bots remember about you.")
+                    .foregroundStyle(Theme.secondary)
+            }
         }
     }
 }

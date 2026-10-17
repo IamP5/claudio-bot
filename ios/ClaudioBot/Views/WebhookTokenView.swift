@@ -18,7 +18,7 @@ struct WebhookTokenSection: View {
         if Self.shows(routine, features: store.features) {
             CardSection(
                 title: "Webhook",
-                footer: "Programs on this Mac POST to this address with the token. The Mac keeps only a hash of the token, so it is shown once, and a new one replaces the old."
+                footer: "Programs on your Mac POST to this address with the token; it does not answer from the phone or the network. The Mac keeps only a hash of the token, so it is shown once, and a new one replaces the old."
             ) {
                 if let fresh = store.webhookToken, fresh.routineId == routine.id {
                     reveal(fresh)
@@ -30,6 +30,11 @@ struct WebhookTokenSection: View {
                 if store.webhookToken?.routineId == routine.id { store.dismissWebhookToken() }
             }
         }
+    }
+
+    /// A command that fires the routine once, with the token, for pasting into Terminal on the Mac.
+    static func curl(_ token: WebhookToken) -> String {
+        "curl -X POST -H 'Authorization: Bearer \(token.token)' -d 'test from my phone' \(token.url.absoluteString)"
     }
 
     private var makeButton: some View {
@@ -53,6 +58,8 @@ struct WebhookTokenSection: View {
             field("Address", fresh.url.absoluteString)
             Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16)
             field("Token", fresh.token)
+            Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16)
+            field("Test it in Terminal on your Mac", Self.curl(fresh))
             Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16)
             Button("Done") { store.dismissWebhookToken() }
                 .font(.system(size: 16, weight: .semibold))

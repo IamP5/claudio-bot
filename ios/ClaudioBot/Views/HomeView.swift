@@ -83,14 +83,24 @@ struct HomeView: View {
                 if router.selection == bot.id { router.selection = nil }
                 client.send(.deleteBot(botId: bot.id))
             }
-        } message: { _ in
-            Text("This permanently deletes the Bot and its chat history. This can't be undone.")
+        } message: { bot in
+            Text(Self.deleteMessage(bot, worktrees: store.details[bot.id]?.agents.compactMap(\.worktree) ?? []))
+        }
+    }
+
+    /// The bridge moves the bot's home to its trash folder and keeps every agent worktree until the user removes it.
+    static func deleteMessage(_ bot: Bot, worktrees: [Worktree]) -> String {
+        let base = "Deletes \(bot.name) and its chat. Its folder, with its files and memory, moves to the bridge's trash folder on your Mac, where you can recover it."
+        switch worktrees.count {
+        case 0: return base
+        case 1: return base + " Its agent's worktree on \(worktrees[0].branch) stays on your Mac. Remove it from the agent first if you no longer need it."
+        default: return base + " Its agents' \(worktrees.count) worktrees stay on your Mac. Remove them from each agent first if you no longer need them."
         }
     }
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        InitialsItem(name: store.userName) { router.showingSettings = true }
+        InitialsItem(name: store.userName, proposals: store.proposedFacts.count) { router.showingSettings = true }
         ToolbarItem(placement: .topBarTrailing) {
             Button {
                 withAnimation { searching.toggle() }
@@ -155,6 +165,8 @@ struct HomeView: View {
         }
         Button(role: .destructive) {
             deleting = bot
+            // The agents and their worktrees, so the dialog can say which stay behind.
+            client.send(.details(botId: bot.id))
         } label: {
             Label("Delete", systemImage: "trash")
         }
@@ -215,14 +227,41 @@ struct BotRow: View {
 
 struct ConnectionBanner: View {
     let state: ConnectionState
+    @Environment(AppModel.self) private var app
+    @Environment(BridgeClient.self) private var client
+    @State private var editingAddress = false
+
+    /// After a few failed connects in a row the banner stops only counting down and says what to try.
+    static func help(failures: Int, address: String?) -> String? {
+        guard failures >= BridgeClient.failuresBeforeHelp else { return nil }
+        let at = address.map { " at \($0)" } ?? ""
+        return "Your Mac isn't answering\(at). Check the bridge is running. Away from home, connect with your Mac's Tailscale name, or pair again."
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             ConnectionBadge(state: state)
-            Text("ClaudioBot needs the bridge running on your Mac. Your bots keep working there while this phone is away.")
-                .font(.footnote)
-                .foregroundStyle(Theme.secondary)
+            if let help = Self.help(failures: client.failures, address: client.pairing?.url.bridgeAddress) {
+                Text(help)
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondary)
+                HStack(spacing: 8) {
+                    Button("Edit address") { editingAddress = true }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.white)
+                        .foregroundStyle(.black)
+                    Button("Pair again") { app.beginPairing() }
+                        .buttonStyle(.bordered)
+                }
+                .font(.footnote.weight(.semibold))
+                .controlSize(.small)
+            } else {
+                Text("ClaudioBot needs the bridge running on your Mac. Your bots keep working there while this phone is away.")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondary)
+            }
         }
+        .sheet(isPresented: $editingAddress) { EditAddressView() }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -281,6 +320,8 @@ struct UpdateBanner: View {
 /// The account initials that open Settings. On iOS 26 it opts out of the shared glass because it brings its own fill.
 private struct InitialsItem: ToolbarContent {
     let name: String
+    /// Facts bots proposed that wait for the user, badged on the button that leads to them.
+    let proposals: Int
     let action: () -> Void
 
     var body: some ToolbarContent {
@@ -299,9 +340,21 @@ private struct InitialsItem: ToolbarContent {
                 .foregroundStyle(.white)
                 .frame(width: 36, height: 36)
                 .background(Theme.letter, in: Circle())
+                .overlay(alignment: .topTrailing) {
+                    if proposals > 0 {
+                        Text("\(proposals)")
+                            .font(.system(size: 11, weight: .bold).monospacedDigit())
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 5)
+                            .frame(minWidth: 18, minHeight: 18)
+                            .background(Theme.attention, in: Capsule())
+                            .offset(x: 5, y: -5)
+                    }
+                }
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Settings")
+        .accessibilityValue(proposals > 0 ? "\(proposals) to review in Memory" : "")
     }
 }
 

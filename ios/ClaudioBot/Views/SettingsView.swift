@@ -9,6 +9,7 @@ struct SettingsView: View {
     @State private var confirmingUnpair = false
     @State private var revoking: Device?
     @State private var pairingAnother = false
+    @State private var editingAddress = false
 
     var body: some View {
         NavigationStack {
@@ -23,6 +24,7 @@ struct SettingsView: View {
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                         }
+                        Button("Change address") { editingAddress = true }
                     }
                     LabeledContent("Bots", value: "\(store.bots.count)")
                 }
@@ -76,6 +78,7 @@ struct SettingsView: View {
                 Text("That device disconnects at once and can no longer reach your bots.")
             }
             .sheet(isPresented: $pairingAnother) { PairAnotherView() }
+            .sheet(isPresented: $editingAddress) { EditAddressView() }
         }
     }
 

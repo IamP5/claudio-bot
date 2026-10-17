@@ -207,6 +207,29 @@ function extractSubsts(body: string, out: string[]): void {
   }
 }
 
+/** Each line that opens heredocs, with those operators excised, and the joined text of the bodies it feeds. */
+export function heredocBodies(src: string): { line: string; body: string }[] {
+  if (!src.includes("<<")) return [];
+  const out: { line: string; body: string }[] = [];
+  const lines = src.split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    const { cleaned, heredocs } = findHeredocOps(lines[i]!);
+    i++;
+    const bodies: string[] = [];
+    for (const hd of heredocs) {
+      while (i < lines.length) {
+        const line = lines[i]!;
+        i++;
+        if ((hd.strip ? line.replace(/^\t+/, "") : line) === hd.delim) break;
+        bodies.push(line);
+      }
+    }
+    if (heredocs.length > 0) out.push({ line: cleaned, body: bodies.join("\n") });
+  }
+  return out;
+}
+
 /** Remove heredoc bodies so the main scan never sees them. Returns the cleaned source and the substitution bodies of
  *  expanded heredocs (parsed as their own commands). */
 function stripHeredocs(src: string): { code: string; extra: string[] } {

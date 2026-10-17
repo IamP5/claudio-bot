@@ -18,7 +18,7 @@ import type { Headroom } from "./ledger";
 import { PRIVATE } from "./private";
 import type { MessageId } from "./protocol";
 import type { ClaudioTool } from "./tools";
-import { shellCommands, type Word } from "./shell";
+import { heredocBodies, shellCommands, type Word } from "./shell";
 import { BODY_KEYS, sha256 } from "./text";
 import { actorKey, attended, hopsOf, isRoutineChain, type Actor, type Fingerprint, type Grant, type Initiator, type Signature, type StandingRule } from "./world";
 
@@ -505,25 +505,50 @@ function hostsOf(call: ToolCall): string[] {
 }
 
 /** Programs that run code given on the line or on stdin, which can write any file the code names. */
-const INTERPRETER = /^(python[0-9.]*|pypy[0-9.]*|node|nodejs|bun|deno|tsx|ts-node|ruby|perl|php|lua|luajit|osascript|rscript|swift|tclsh|pwsh|awk|gawk|nawk|mawk)$/;
+const INTERPRETER = /^(python[0-9.]*|pypy[0-9.]*|node|nodejs|bun|deno|tsx|ts-node|ruby|perl|php|lua|luajit|osascript|rscript|r|swift|tclsh|pwsh|awk|gawk|nawk|mawk|sqlite3|vim?|nvim|ex|emacs)$/;
+/** Launchers that run an interpreter in a project environment: `uv run python -c …`. */
+const LAUNCHER = /^(uv|uvx|poetry|pipenv|pdm|rye|hatch|conda|mamba|pixi)$/;
+const runsCode = (p: Part): p is Extract<Part, { kind: "bash" }> => p.kind === "bash" && (INTERPRETER.test(p.verb) || LAUNCHER.test(p.verb));
 /** A file the bridge or every bot loads as instructions or config, spelled anywhere in a token of code. */
 const LOADED_FILE = /[^\s'"`(),;<>|&]*(?:CLAUDE\.md|USER\.md|\.mcp\.json|\.claude\/)[^\s'"`(),;<>|&]*/g;
+/** Distinct loaded-file names one interpreter part may name before the call is held rather than checked. */
+const MAX_CODE_NAMES = 64;
 
 /**
  * Code an interpreter runs (python -c, node -e, a heredoc fed to python -) may write any file it names. Each literal
- * spelling of CLAUDE.md, USER.md, .mcp.json or a .claude/ path in the line becomes a write touch of the interpreter's
- * part, so the self-escalation floor and the memory.user and self.escalate rows see it. Reading one this way is held too.
+ * spelling of CLAUDE.md, USER.md, .mcp.json or a .claude/ path in the interpreter's own words, or in a heredoc opened
+ * on its line, becomes a write touch of that part, so the self-escalation floor and the memory.user and self.escalate
+ * rows see it. A USER.md built at runtime (`os.environ['HOME']+'/.claudiobot/USER.md'`) is a touch of the user's
+ * USER.md too. Words of other commands on the line (a commit message, a cat operand) are not code and are not read.
  */
 function interpreterWrites(parts: Part[], raw: string, ctx: PolicyContext): void {
-  const runs = parts.filter((p): p is Extract<Part, { kind: "bash" }> => p.kind === "bash" && INTERPRETER.test(p.verb));
+  const runs = parts.filter(runsCode);
   if (runs.length === 0) return;
-  const names = [...new Set(raw.match(LOADED_FILE) ?? [])];
-  for (const p of runs)
-    for (const name of names)
-      for (const dir of p.cwds) {
-        const t = candidateTouch(name, dir, ctx, {}, false, true);
-        if (t) p.touches.push(t);
-      }
+  // An agent has no USER.md of its own; the user's sits in the bridge home, which its floor already refuses.
+  const userMd = ctx.scope.userMd ?? resolve(ctx.scope.bridgeHome, "USER.md");
+  const fed = new Map<string, string[]>();
+  for (const { line, body } of heredocBodies(raw)) {
+    for (const c of shellCommands(line)) {
+      const u = unwrap(c.words.map((w) => w.text));
+      const verb = "words" in u ? u.words[0] : undefined;
+      if (verb !== undefined) fed.set(verb, [...(fed.get(verb) ?? []), body]);
+    }
+  }
+  for (const p of runs) {
+    const code = [p.text, ...(fed.get(p.verb) ?? [])].join("\n");
+    const names = new Set(code.match(LOADED_FILE) ?? []);
+    if (names.size > MAX_CODE_NAMES) throw new TooManyPaths();
+    const seen = new Set(p.touches.map((t) => `${t.write ? 1 : 0}|${t.lexical}`));
+    const push = (t: Touch | null) => {
+      if (t === null || seen.has(`1|${t.lexical}`)) return;
+      seen.add(`1|${t.lexical}`);
+      p.touches.push(t);
+    };
+    for (const name of names) {
+      for (const dir of p.cwds) push(candidateTouch(name, dir, ctx, {}, false, true));
+      if (basename(name) === "USER.md") push({ lexical: userMd, real: ctx.realpath(userMd), ancestorToo: false, write: true });
+    }
+  }
 }
 
 function viewOf(call: ToolCall, ctx: PolicyContext): View {
@@ -1322,6 +1347,17 @@ function boundedRealpath(realpath: (path: string) => string): (path: string) => 
   };
 }
 
+function rawFloorDeny(call: ToolCall, ctx: PolicyContext): Decision | null {
+  if (call.tool !== "Bash") return null;
+  const raw = String(call.input.command);
+  for (const floor of FLOORS) {
+    if (!floor.rawScan) continue;
+    const roots = floor.roots(ctx);
+    if (rawScanHit(raw, roots, roots.map(ctx.realpath), ctx)) return deny("floor", floor.id, floorReason(floor), floor.handOff ?? false);
+  }
+  return null;
+}
+
 export function decide(call: ToolCall, outer: PolicyContext): Decision {
   if (SDK_INTERNAL.has(call.tool)) return PASS;
   // A command too long to scan in bounded time is held rather than parsed, so the hook never freezes the bridge.
@@ -1390,7 +1426,8 @@ export function decide(call: ToolCall, outer: PolicyContext): Decision {
     if (held) return { kind: "ask", rule: held.row.id, label: held.label, signature: held.signature, always: alwaysText(held.label, isAttended), offerAlways: held.row.offerAlways ?? true };
     return PASS;
   } catch (e) {
-    if (e instanceof TooManyPaths) return TOO_LONG;
+    // Too many paths to resolve one by one: a floor root spelled in the text is still refused, the rest is held.
+    if (e instanceof TooManyPaths) return rawFloorDeny(call, outer) ?? TOO_LONG;
     return deny(at.via, at.rule, `The bridge could not check this call against ${at.rule}, so it was blocked and did not run. Do not retry it this turn.`);
   }
 }

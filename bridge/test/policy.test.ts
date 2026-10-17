@@ -1153,3 +1153,46 @@ describe("gap 3: save_skill never offers Always", () => {
     expect(decide(call("mcp__claudio__save_skill", { name: "x", description: "d", body: "b" }), ctx({ initiator: routine }))).toMatchObject({ kind: "ask", rule: "claudio.save_skill", offerAlways: false });
   });
 });
+
+describe("pass 4: an interpreter's file names come from its own words and heredocs, not the whole line", () => {
+  test.each([
+    "bun test && cat .claude/settings.json",
+    "node build.js; git diff .mcp.json",
+    `python3 -m pytest && git commit -m "fix .claude/settings.json"`,
+    "python3 scripts/check.py | grep CLAUDE.md",
+  ])("%s is not the self-escalation floor", (command) => {
+    expect(verdict(sh(command), { initiator: user })).not.toBe("deny:floor.selfescalate");
+    expect(verdict(sh(command), { initiator: user })).not.toBe("ask:self.escalate");
+  });
+  test("a heredoc fed to the interpreter is still read", () => {
+    expect(verdict(sh(`python3 - <<'EOF'\nopen('.claude/settings.json','w').write('{}')\nEOF`))).toBe("deny:floor.selfescalate");
+  });
+  test("USER.md spelled anywhere in the interpreter's code is a write to the user's USER.md", () => {
+    expect(verdict(sh(`python3 -c "import os;open(os.environ['HOME']+'/.claudiobot/USER.md','a').write('x')"`))).toBe("ask:memory.user");
+    expect(verdict(sh(`node -e "const p=require('path');require('fs').appendFileSync(p.join(process.env.HOME,'.claudiobot','USER.md'),'x')"`))).toBe("ask:memory.user");
+    expect(verdict(sh(`python3 -c "import os;open(os.environ['HOME']+'/.claudiobot/USER.md','a').write('x')"`, { cwd: PROJECT }), { actor: agent, scope: agentScope })).toBe("deny:floor.bridge");
+  });
+  test.each([
+    `uv run python -c "open('.claude/settings.json','w').write('{}')"`,
+    `poetry run python -c "open('.claude/settings.json','w').write('{}')"`,
+    `sqlite3 x.db ".output .claude/settings.json" "select 1"`,
+    `vim -es -c 'w .claude/settings.json' -c q`,
+    `ex -c 'w .mcp.json' -c q x`,
+    `emacs --batch --eval '(write-region "x" nil ".mcp.json")'`,
+    `R -e "writeLines('x', '.claude/settings.json')"`,
+  ])("%s is the self-escalation floor", (command) => {
+    expect(verdict(sh(command))).toBe("deny:floor.selfescalate");
+  });
+  test("many interpreter segments stay fast", () => {
+    const command = Array.from({ length: 1200 }, (_, i) => `python3 d${i}/CLAUDE.md`).join(";");
+    expect(command.length).toBeLessThan(32 * 1024);
+    const t = performance.now();
+    decide(sh(command), ctx());
+    expect(performance.now() - t).toBeLessThan(2000);
+  });
+  test("a command over the path budget is still refused when it names a key, not merely held", () => {
+    const command = "ls " + Array.from({ length: 4200 }, (_, i) => `f${i}`).join(" ") + " ; cat ~/.ssh/id_rsa";
+    expect(command.length).toBeLessThan(32 * 1024);
+    expect(verdict(sh(command))).toBe("deny:floor.keys");
+  });
+});

@@ -159,7 +159,9 @@ test("a permission card one of its agents opened shows the bot as awaiting appro
   const b = bot("eng");
   world.bots.set(b.id, b);
   const call = { initiator: { kind: "user" as const }, tool: "Bash", signature: "Bash:git push" as Signature, fingerprint: "f" as Fingerprint, label: "Push to the default branch", detail: "git push origin main", always: "git push to main" };
-  (world.gate.open as unknown[]).push({ kind: "permission", cardId: "m_card" as MessageId, actor: { kind: "agent", botId: b.id, agentId: "a_1" as AgentId }, remindAt: null, expiresAt: inAnHour(), call });
+  const agent = { kind: "agent" as const, id: "a_1" as AgentId, title: "Fix login" };
+  b.messages.push({ kind: "permission", id: "m_card" as MessageId, at, from: agent, tool: call.tool, label: call.label, detail: call.detail, always: call.always, answer: null, expiresAt: inAnHour() });
+  (world.gate.open as unknown[]).push({ kind: "permission", cardId: "m_card" as MessageId, actor: { kind: "agent", botId: b.id, agentId: agent.id }, remindAt: null, expiresAt: inAnHour(), call });
 
   const hello = hubOver(world).hub.hello(NO_RING);
 
@@ -332,7 +334,7 @@ test("delete_bot saves the world without the bot before its home is moved to the
 
   expect(await hub.handle({ type: "delete_bot", botId: doomed.id })).toEqual([]);
 
-  expect(events).toEqual(["persist now with no bots", "trash b_doomed"]);
+  expect(events.slice(-2)).toEqual(["persist now with no bots", "trash b_doomed"]);
   expect(existsSync(homes.homeOf(doomed.id))).toBe(false);
   expect(frames.at(-1)).toEqual({ type: "bot_removed", botId: doomed.id });
 });

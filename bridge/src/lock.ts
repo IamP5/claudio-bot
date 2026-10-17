@@ -1,4 +1,5 @@
-import { linkSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { uptime } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 // One bridge per home.
@@ -11,6 +12,8 @@ export type HomeLock =
 
 const ATTEMPTS = 20;
 const RETRY_MS = 100;
+/** A lock last written this long before the boot time is from before it; the slack covers uptime's rounding. */
+const BOOT_SLACK_MS = 5_000;
 
 const errno = (e: unknown) => (e as NodeJS.ErrnoException).code;
 
@@ -32,8 +35,24 @@ const readOrNull = (path: string) => {
   }
 };
 
+// A lock is "<pid>\n<start>\n": the pid and when that process started, as ps prints it. After a reboot or a crash the
+// pid can belong to another process; the start time tells them apart. Older bridges wrote the pid alone.
+const LOCK = /^([1-9]\d*)(?:\n([^\n]+))?\n?$/;
+
 /** The pid a lock file names, or null while it is empty or garbled. */
-export const pidIn = (body: string) => (/^[1-9]\d*\n?$/.test(body) ? Number(body.trim()) : null);
+export const pidIn = (body: string) => {
+  const m = LOCK.exec(body);
+  return m ? Number(m[1]) : null;
+};
+
+/** When the process started, as `ps -o lstart=` prints it, or null when there is no such process. */
+function processStart(pid: number): string | null {
+  const ran = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], { stderr: "ignore" });
+  const start = ran.exitCode === 0 ? ran.stdout.toString().trim() : "";
+  return start === "" ? null : start;
+}
+
+const bodyOf = (pid: number, start: string | null) => (start === null ? `${pid}\n` : `${pid}\n${start}\n`);
 
 const unique = (path: string, pid: number, tag: string) => `${path}.${pid}.${crypto.randomUUID().slice(0, 8)}.${tag}`;
 
@@ -47,10 +66,10 @@ export function lockPathOf(home: string, realpath: (path: string) => string = re
   }
 }
 
-/** The pid is written in full before the lock appears, so a reader never sees a half-made lock of ours. */
-function create(path: string, pid: number): boolean {
+/** The body is written in full before the lock appears, so a reader never sees a half-made lock of ours. */
+function create(path: string, pid: number, body: string): boolean {
   const tmp = unique(path, pid, "new");
-  writeFileSync(tmp, `${pid}\n`, { mode: 0o600 });
+  writeFileSync(tmp, body, { mode: 0o600 });
   try {
     linkSync(tmp, path);
     return true;
@@ -83,23 +102,34 @@ function removeStale(path: string, judged: string, pid: number) {
   }
 }
 
+const writtenBefore = (path: string, ms: number) => {
+  try {
+    return statSync(path).mtimeMs < ms - BOOT_SLACK_MS;
+  } catch {
+    return false;
+  }
+};
+
 /**
  * The lock sits beside the home rather than in it, so the migration can move or link the home while the lock is held.
- * A lock whose pid is gone, or is this process's own (a crashed run whose pid came back), was left by a crash and is
- * taken over. Locking a home this process already holds is therefore harmless.
+ * A lock was left by a crash, and is taken over, when its pid is gone, is this process's own, names a process that
+ * started at another time than the lock says, or was written before the Mac booted (a power loss: launchd may hand the
+ * old pid to anything). Locking a home this process already holds is therefore harmless.
  */
-export function lockHome(home: string, deps: { pid?: number; sleep?: (ms: number) => void } = {}): HomeLock {
+export function lockHome(home: string, deps: { pid?: number; sleep?: (ms: number) => void; bootedAt?: number } = {}): HomeLock {
   const pid = deps.pid ?? process.pid;
   const sleep = deps.sleep ?? Bun.sleepSync;
+  const bootedAt = deps.bootedAt ?? Date.now() - uptime() * 1000;
   mkdirSync(dirname(home), { recursive: true });
   const path = lockPathOf(home);
+  const own = bodyOf(pid, processStart(pid));
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-    if (create(path, pid)) {
+    if (create(path, pid, own)) {
       return {
         kind: "held",
         path,
         release: () => {
-          if (readOrNull(path) === `${pid}\n`) rmSync(path, { force: true });
+          if (readOrNull(path) === own) rmSync(path, { force: true });
         },
       };
     }
@@ -110,7 +140,9 @@ export function lockHome(home: string, deps: { pid?: number; sleep?: (ms: number
       sleep(RETRY_MS);
       continue;
     }
-    if (holder !== pid && alive(holder)) return { kind: "busy", path, pid: holder };
+    const recorded = LOCK.exec(body)?.[2] ?? null;
+    const live = holder !== pid && alive(holder) && !writtenBefore(path, bootedAt) && (recorded === null || processStart(holder) === recorded);
+    if (live) return { kind: "busy", path, pid: holder };
     removeStale(path, body, pid);
   }
   return { kind: "unclear", path };

@@ -369,6 +369,8 @@ function bashParts(command: string, cwd: string, ctx: PolicyContext): Part[] {
   const vars = collectVars(commands, ctx, start);
   if (!("TMPDIR" in vars)) vars.TMPDIR = process.env.TMPDIR ?? "/tmp"; // a known scratch root, so $TMPDIR/x resolves
   const addedRemotes = new Set<string>();
+  // A url.<base>.insteadOf set by `git config` on this line, or GIT_CONFIG_* in the environment, can re-point any remote.
+  let repointed = /\bGIT_CONFIG\w*=/.test(command);
 
   // A set of possible cwds, over-approximated: `cd` keeps the old dirs as well as the new, so a conditional or failed cd
   // is still covered, and a dynamic or bare cd adds HOME. A subshell's cd is undone when it closes (restored by depth).
@@ -406,9 +408,16 @@ function bashParts(command: string, cwd: string, ctx: PolicyContext): Part[] {
         const name = g.args.slice(1).find((a) => !a.startsWith("-"));
         if (name !== undefined) addedRemotes.add(name);
       }
+      if (g?.sub === "config") {
+        const key = g.args.find((a) => !a.startsWith("-")) ?? "";
+        const remote = key.match(REMOTE_URL_KEY);
+        if (remote) addedRemotes.add(remote[1]!);
+        if (INSTEAD_OF_KEY.test(key)) repointed = true;
+      }
       if (g?.sub === "push") {
         const remote = g.args.find((a) => !a.startsWith("-") && !a.startsWith("+"));
-        pushUntrusted = remote !== undefined && (isGitUrl(remote) || addedRemotes.has(remote));
+        pushUntrusted =
+          (remote !== undefined && (isGitUrl(remote) || addedRemotes.has(remote))) || repointed || gitConfigRepoints(nWords) || g.args.some((a) => PUSH_TARGET_FLAG.test(a));
       }
     }
     // A surviving shell (sh/bash/zsh with its -c script already unwrapped away) runs piped or here-string/stdin input.
@@ -817,6 +826,23 @@ const git = (sub: string, test: (args: string[]) => boolean = () => true) =>
 function ghArgs(words: string[]): { sub: string; args: string[] } | null {
   if (basename(words[0] ?? "") !== "gh") return null;
   return subcommand(words, 1, ["-R", "--repo", "--hostname"]);
+}
+
+/** `git config` keys that point a remote somewhere else: remote.<name>.url / pushurl, and url.<base>.insteadOf. */
+const REMOTE_URL_KEY = /^remote\.(.+)\.(url|pushurl)(=|$)/i;
+const INSTEAD_OF_KEY = /^url\..+\.(push)?insteadof(=|$)/i;
+/** push options that name the destination or the program run on it, so the configured remote no longer decides. */
+const PUSH_TARGET_FLAG = /^--(repo|receive-pack|exec)(=|$)/;
+
+/** git's global -c / --config-env options before the subcommand re-point a remote for this one command. */
+function gitConfigRepoints(words: string[]): boolean {
+  for (let i = 1; i < words.length && words[i]!.startsWith("-"); i++) {
+    const w = words[i]!;
+    const key = w === "-c" || w === "--config-env" ? words[++i] ?? "" : w.startsWith("--config-env=") ? w.slice("--config-env=".length) : null;
+    if (key !== null && (REMOTE_URL_KEY.test(key) || INSTEAD_OF_KEY.test(key))) return true;
+    if (["-C", "--git-dir", "--work-tree", "--namespace"].includes(w)) i++;
+  }
+  return false;
 }
 
 /** A git remote that is a URL (`https://…`, `git@host:…`, `ssh://…`), not a named remote configured in the repo. */

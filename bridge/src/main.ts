@@ -1,12 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
 import { hostname, networkInterfaces } from "node:os";
 import qrcode from "qrcode-terminal";
-import { createHub } from "./hub";
 import { parseClientMessage } from "./parse";
-import { scanProjects } from "./projects";
 import type { ServerMessage } from "./protocol";
-import { createRunners } from "./runners";
-import { createSaver, loadOrCreateToken, loadTasks } from "./store";
+import { loadOrCreateToken } from "./store";
 
 const TOPIC = "all";
 
@@ -32,20 +29,9 @@ const tokenMatches = (candidate: string | null) => {
 };
 
 const machine = await machineName();
-const saver = createSaver();
-const tasks = await loadTasks();
 const send = (ws: { send(data: string): unknown }, message: ServerMessage) => {
   ws.send(JSON.stringify(message));
 };
-
-const hub = createHub({
-  machine,
-  tasks,
-  runners: createRunners(),
-  scan: () => scanProjects(),
-  broadcast: (message) => server.publish(TOPIC, JSON.stringify(message)),
-  persist: saver.schedule,
-});
 
 const server = Bun.serve({
   hostname: "0.0.0.0",
@@ -62,28 +48,20 @@ const server = Bun.serve({
   },
   websocket: {
     async open(ws) {
-      const hello = await hub.hello();
       // Subscribe in the same tick as the snapshot so no broadcast falls between them.
-      send(ws, hello);
+      send(ws, { type: "hello", machine, userName: "", bots: [] });
       ws.subscribe(TOPIC);
     },
     async message(ws, raw) {
       const parsed = parseClientMessage(String(raw));
       if (!parsed.ok) return send(ws, { type: "error", message: parsed.error });
-      try {
-        for (const reply of await hub.handle(parsed.message)) send(ws, reply);
-      } catch (e) {
-        send(ws, { type: "error", message: (e as Error).message });
-      }
+      send(ws, { type: "error", message: `${parsed.message.type} is not served yet` });
     },
   },
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, () => {
-    saver.flush();
-    process.exit(0);
-  });
+  process.on(signal, () => process.exit(0));
 }
 
 const urls = (lanAddresses().length > 0 ? lanAddresses() : ["127.0.0.1"]).map((ip) => `ws://${ip}:${server.port}/ws`);

@@ -1,4 +1,15 @@
-import type { ClientMessage, Decision, ItemId, PermissionMode, ProjectId, Target, TaskId } from "./protocol";
+import {
+  COLORS,
+  SHAPES,
+  type AgentId,
+  type Avatar,
+  type BotId,
+  type BotPatch,
+  type ClientMessage,
+  type MessageId,
+  type RoutineId,
+  type Upload,
+} from "./protocol";
 
 export type Parsed = { ok: true; message: ClientMessage } | { ok: false; error: string };
 
@@ -11,9 +22,20 @@ function obj(v: unknown, what: string): Obj {
   return v as Obj;
 }
 
-function str(o: Obj, key: string): string {
+function str(o: Obj, key: string, { empty = false } = {}): string {
   const v = o[key];
-  if (typeof v !== "string" || v === "") throw new ParseError(`${key} must be a non-empty string`);
+  if (typeof v !== "string" || (!empty && v === "")) throw new ParseError(`${key} must be a ${empty ? "" : "non-empty "}string`);
+  return v;
+}
+
+function bool(o: Obj, key: string): boolean {
+  if (typeof o[key] !== "boolean") throw new ParseError(`${key} must be a boolean`);
+  return o[key] as boolean;
+}
+
+function index(o: Obj, key: string): number {
+  const v = o[key];
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 0) throw new ParseError(`${key} must be a non-negative integer`);
   return v;
 }
 
@@ -23,47 +45,55 @@ function oneOf<T extends string>(o: Obj, key: string, values: readonly T[]): T {
   return v as T;
 }
 
-function stringRecord(v: unknown, what: string): Record<string, string> {
-  const o = obj(v, what);
-  for (const [k, val] of Object.entries(o)) if (typeof val !== "string") throw new ParseError(`${what}.${k} must be a string`);
-  return o as Record<string, string>;
+function avatar(v: unknown): Avatar {
+  const o = obj(v, "avatar");
+  return { shape: oneOf(o, "shape", SHAPES), color: oneOf(o, "color", COLORS) };
 }
 
-const permissionModes = ["default", "acceptEdits", "plan", "auto", "bypassPermissions"] as const satisfies readonly PermissionMode[];
-const decisions = ["allow", "allow_always", "deny"] as const satisfies readonly Decision[];
-const targetKinds = ["local", "cloud"] as const satisfies readonly Target["kind"][];
+function patch(v: unknown): BotPatch {
+  const o = obj(v, "patch");
+  const p: BotPatch = {};
+  if (o.name !== undefined) p.name = str(o, "name");
+  if (o.title !== undefined) p.title = o.title === null ? null : str(o, "title", { empty: true });
+  if (o.avatar !== undefined) p.avatar = avatar(o.avatar);
+  if (o.pinned !== undefined) p.pinned = bool(o, "pinned");
+  if (o.hidden !== undefined) p.hidden = bool(o, "hidden");
+  return p;
+}
+
+function uploads(v: unknown): Upload[] {
+  if (v === undefined) return [];
+  if (!Array.isArray(v)) throw new ParseError("uploads must be an array");
+  return v.map((u) => {
+    const o = obj(u, "upload");
+    return { name: str(o, "name"), mime: str(o, "mime"), data: str(o, "data") };
+  });
+}
+
+const botId = (o: Obj) => str(o, "botId") as BotId;
 
 const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
-  create: (o) => {
-    const t = obj(o.target, "target");
-    return {
-      type: "create",
-      prompt: str(o, "prompt"),
-      target: { kind: oneOf(t, "kind", targetKinds), projectId: str(t, "projectId") as ProjectId },
-      model: str(o, "model"),
-      permissionMode: oneOf(o, "permissionMode", permissionModes),
-    };
+  create_bot: (o) => ({ type: "create_bot", ref: str(o, "ref") }),
+  open: (o) => ({ type: "open", botId: botId(o) }),
+  send: (o) => {
+    const message = { type: "send", botId: botId(o), text: str(o, "text", { empty: true }), uploads: uploads(o.uploads) } as const;
+    if (message.text.trim() === "" && message.uploads.length === 0) throw new ParseError("send needs text or uploads");
+    return message;
   },
-  subscribe: (o) => ({ type: "subscribe", taskId: str(o, "taskId") as TaskId }),
-  send: (o) => ({ type: "send", taskId: str(o, "taskId") as TaskId, text: str(o, "text") }),
-  decide: (o) => ({
-    type: "decide",
-    taskId: str(o, "taskId") as TaskId,
-    itemId: str(o, "itemId") as ItemId,
-    decision: oneOf(o, "decision", decisions),
-  }),
-  answer: (o) => ({
-    type: "answer",
-    taskId: str(o, "taskId") as TaskId,
-    itemId: str(o, "itemId") as ItemId,
-    answers: stringRecord(o.answers, "answers"),
-  }),
-  stop: (o) => ({ type: "stop", taskId: str(o, "taskId") as TaskId }),
+  answer: (o) => ({ type: "answer", botId: botId(o), messageId: str(o, "messageId") as MessageId, option: index(o, "option") }),
+  dismiss: (o) => ({ type: "dismiss", botId: botId(o), messageId: str(o, "messageId") as MessageId }),
+  update_bot: (o) => ({ type: "update_bot", botId: botId(o), patch: patch(o.patch) }),
+  mark_unread: (o) => ({ type: "mark_unread", botId: botId(o) }),
+  delete_bot: (o) => ({ type: "delete_bot", botId: botId(o) }),
+  set_routine: (o) => ({ type: "set_routine", botId: botId(o), routineId: str(o, "routineId") as RoutineId, enabled: bool(o, "enabled") }),
+  details: (o) => ({ type: "details", botId: botId(o) }),
+  agent: (o) => ({ type: "agent", agentId: str(o, "agentId") as AgentId }),
+  file: (o) => ({ type: "file", botId: botId(o), path: str(o, "path") }),
 };
 
-export function parseClientMessage(raw: unknown): Parsed {
+export function parseClientMessage(raw: string): Parsed {
   try {
-    const o = obj(typeof raw === "string" ? JSON.parse(raw) : raw, "message");
+    const o = obj(JSON.parse(raw), "message");
     const parse = typeof o.type === "string" && Object.hasOwn(parsers, o.type) ? parsers[o.type as ClientMessage["type"]] : null;
     if (!parse) return { ok: false, error: `unknown message type ${JSON.stringify(o.type)}` };
     return { ok: true, message: parse(o) };

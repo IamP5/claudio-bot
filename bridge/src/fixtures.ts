@@ -1,18 +1,21 @@
-import type { ClientMessage, ServerMessage } from "./protocol";
+import type { Agent, Bot, ClientMessage, Peer, Routine, ServerMessage } from "./protocol";
+
+// The wire form of T: branded ids are plain strings, so fixtures type-check without casts.
+type Wire<T> = T extends string & { readonly __brand: string } ? string : T extends (infer U)[] ? Wire<U>[] : T extends object ? { [K in keyof T]: Wire<T[K]> } : T;
 
 const at = "2026-10-16T12:00:00.000Z";
-const routine = {
+const routine: Wire<Routine> = {
   id: "r1", name: "tech-news-digest", schedule: "57 7 * * 1-5", describe: "Weekdays at 7:57 AM",
   prompt: "Post today's tech digest.", enabled: true, lastRunAt: at,
 };
-const bot = {
+const bot: Wire<Bot> = {
   id: "b1", name: "engineer", title: null, avatar: { shape: "hexagon", color: "orange" },
   pinned: false, hidden: false, status: "idle", unread: 2,
   question: "Want me to merge any of these now?", preview: "Want me to merge any of these now?",
   lastAt: at, createdAt: at, routines: [routine],
 };
-const agentPeer = { kind: "agent", id: "a1", title: "Set up verification skill" };
-const agent = {
+const agentPeer: Wire<Peer> = { kind: "agent", id: "a1", title: "Set up verification skill" };
+const agent: Wire<Agent> = {
   id: "a1", botId: "b1", title: "Set up verification skill", where: "mac", projectName: "solta-o-som",
   status: "waiting", url: null, createdAt: at, updatedAt: at,
 };
@@ -49,7 +52,7 @@ export const server = [
   { type: "file", botId: "b1", path: "comment-prune-plan.md", mime: "text/markdown", content: "# Plan\n", data: null },
   { type: "file", botId: "b1", path: "chart.png", mime: "image/png", data: "iVBORw0KGgo=", content: null },
   { type: "error", message: "Unknown bot" },
-] as unknown as ServerMessage[];
+] satisfies Wire<ServerMessage>[];
 
 export const client = [
   { type: "create_bot", ref: "c1" },
@@ -64,8 +67,9 @@ export const client = [
   { type: "details", botId: "b1" },
   { type: "agent", agentId: "a1" },
   { type: "file", botId: "b1", path: "comment-prune-plan.md" },
-] as unknown as ClientMessage[];
+] satisfies Wire<ClientMessage>[];
 
-if (import.meta.main) {
-  await Bun.write(new URL("../../fixtures/protocol.json", import.meta.url), JSON.stringify({ server, client }, null, 2) + "\n");
-}
+export const fixturesJson = () => JSON.stringify({ server, client }, null, 2) + "\n";
+export const fixturesPath = new URL("../../fixtures/protocol.json", import.meta.url);
+
+if (import.meta.main) await Bun.write(fixturesPath, fixturesJson());

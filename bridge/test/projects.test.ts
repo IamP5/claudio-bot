@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseGithubRepo, projectId, scanProjects } from "../src/projects";
+import { parseGithubRepo, scanProjects } from "../src/projects";
 
 test.each([
   ["git@github.com:me/drawdown.git", "me/drawdown"],
@@ -11,11 +11,6 @@ test.each([
   ["https://gitlab.com/me/drawdown.git", null],
 ])("github repo from %s", (url, expected) => {
   expect(parseGithubRepo(url)).toBe(expected);
-});
-
-test("project id is stable per path", () => {
-  expect(projectId("/Users/me/a")).toBe(projectId("/Users/me/a"));
-  expect(projectId("/Users/me/a")).not.toBe(projectId("/Users/me/b"));
 });
 
 test("scan returns realpaths and keeps the folder name of a symlinked project", async () => {

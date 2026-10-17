@@ -1,15 +1,13 @@
-import { createHash } from "node:crypto";
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Project, ProjectId } from "./protocol";
+
+export type Project = { name: string; path: string; branch: string | null; githubRepo: string | null };
 
 export function projectRoots(env = process.env): string[] {
   if (env.CLAUDEBOT_ROOTS) return env.CLAUDEBOT_ROOTS.split(":").filter((r) => r !== "");
   return ["Dev/projects", "code", "Developer", "Projects"].map((r) => join(homedir(), r));
 }
-
-export const projectId = (path: string) => createHash("sha256").update(path).digest("hex").slice(0, 16) as ProjectId;
 
 export function parseGithubRepo(url: string): string | null {
   const m = url.trim().match(/^(?:git@github\.com:|https:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/);
@@ -29,7 +27,6 @@ async function describe({ path, name }: { path: string; name: string }): Promise
     git(path, ["remote", "get-url", "origin"]),
   ]);
   return {
-    id: projectId(path),
     name,
     path,
     branch: branch || null,

@@ -14,15 +14,15 @@ enum Backoff {
 @MainActor
 final class BridgeClient {
     let store: AppStore
-    @ObservationIgnored var onAttention: ([Attention]) -> Void = { _ in }
+    @ObservationIgnored var onAlerts: ([Alert]) -> Void = { _ in }
 
     private(set) var pairing: Pairing?
 
-    /// The task on screen. It is subscribed now and again after every reconnect.
-    var openTask: TaskID? {
+    /// The bot on screen. It is opened now and again after every reconnect, which also marks it read.
+    var openBot: BotID? {
         didSet {
-            guard let openTask, openTask != oldValue else { return }
-            transmitIfConnected(.subscribe(taskId: openTask))
+            guard let openBot, openBot != oldValue else { return }
+            transmitIfConnected(.open(botId: openBot))
         }
     }
 
@@ -151,15 +151,19 @@ final class BridgeClient {
                 log.error("undecodable frame: \(error)")
                 continue
             }
-            let attention = store.apply(msg)
+            let alerts = store.apply(msg)
             if case .hello = msg {
                 greeted = true
-                if let openTask { transmit(.subscribe(taskId: openTask), on: ws) }
+                if let openBot { transmit(.open(botId: openBot), on: ws) }
                 let pending = outbox
                 outbox.removeAll()
                 pending.forEach { transmit($0, on: ws) }
             }
-            onAttention(attention)
+            // The bridge counts a message as unread until the next open, so re-open the bot on screen.
+            if case .bot(let bot) = msg, bot.id == openBot, bot.unread > 0 {
+                transmit(.open(botId: bot.id), on: ws)
+            }
+            onAlerts(alerts)
         }
         return greeted
     }

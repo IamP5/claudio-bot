@@ -1,129 +1,5 @@
 import SwiftUI
 
-extension Color {
-    static let claude = Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
-}
-
-enum ModelChoice: String, CaseIterable, Identifiable {
-    case opus, sonnet, haiku, fable
-    var id: String { rawValue }
-    var title: String { rawValue.capitalized }
-}
-
-extension PermissionMode {
-    static let choices: [PermissionMode] = [.default, .acceptEdits, .plan, .auto]
-
-    var title: String {
-        switch self {
-        case .default: "Ask before edits"
-        case .acceptEdits: "Auto-accept edits"
-        case .plan: "Plan only"
-        case .auto: "Auto"
-        case .bypassPermissions: "Bypass permissions"
-        case .unknown(let raw): raw
-        }
-    }
-
-    var explanation: String {
-        switch self {
-        case .default: "Claude asks you before it edits a file or runs a command."
-        case .acceptEdits: "File edits apply right away. Commands still ask first."
-        case .plan: "Claude reads and proposes a plan. Nothing on disk changes."
-        case .auto: "Claude runs what looks safe and asks only for risky actions."
-        case .bypassPermissions: "Claude never asks. Use only in a sandbox."
-        case .unknown: "A permission mode this version of ClaudeBot does not know."
-        }
-    }
-}
-
-extension StatusDisplay.Tone {
-    var color: Color {
-        switch self {
-        case .running: .claude
-        case .attention: .yellow
-        case .done: .green
-        case .cloud: .cyan
-        case .failed: .red
-        case .stopped, .unknown: .gray
-        }
-    }
-
-    var textColor: Color { self == .attention ? .primary : color }
-}
-
-enum ToolSymbol {
-    private static let table: [String: String] = [
-        "Bash": "terminal",
-        "Read": "doc.text",
-        "Edit": "pencil",
-        "MultiEdit": "pencil",
-        "Write": "pencil",
-        "NotebookEdit": "pencil",
-        "Grep": "magnifyingglass",
-        "Glob": "magnifyingglass",
-        "Task": "person.2",
-        "Agent": "person.2",
-        "TodoWrite": "checklist",
-    ]
-
-    static func name(for tool: String) -> String {
-        if let symbol = table[tool] { return symbol }
-        if tool.hasPrefix("Web") { return "globe" }
-        if tool.hasPrefix("mcp__") { return "puzzlepiece.extension" }
-        return "wrench.and.screwdriver"
-    }
-}
-
-extension Target {
-    var title: String {
-        switch self {
-        case .local: "Mac"
-        case .cloud: "Cloud"
-        case .unknown: "Other"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .local: "laptopcomputer"
-        case .cloud: "cloud"
-        case .unknown: "questionmark.circle"
-        }
-    }
-}
-
-struct TargetBadge: View {
-    let target: Target
-
-    var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: target.symbol)
-            Text(target.title)
-        }
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .foregroundStyle(.secondary)
-            .background(.fill.tertiary, in: Capsule())
-    }
-}
-
-struct StatusPill: View {
-    let display: StatusDisplay
-
-    var body: some View {
-        HStack(spacing: 5) {
-            StatusDot(color: display.tone.color, pulsing: display.pulsing)
-            Text(display.title)
-        }
-        .font(.caption2.weight(.semibold))
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .foregroundStyle(display.tone.textColor)
-        .background(display.tone.color.opacity(0.16), in: Capsule())
-    }
-}
-
 struct StatusDot: View {
     let color: Color
     var pulsing = false
@@ -187,15 +63,55 @@ extension ConnectionState {
     }
 }
 
-enum Format {
-    static func cost(_ usd: Double) -> String {
-        usd < 0.01 && usd > 0 ? String(format: "$%.4f", usd) : String(format: "$%.3f", usd)
+extension View {
+    /// The floating glass look of the reference controls, with a plain fill before iOS 26.
+    @ViewBuilder
+    func glass<S: Shape>(in shape: S) -> some View {
+        if #available(iOS 26.0, *) {
+            glassEffect(.regular, in: shape)
+        } else {
+            background(Theme.raised.opacity(0.92), in: shape)
+        }
+    }
+}
+
+/// The lettered square in front of a question option.
+struct LetterBadge: View {
+    let index: Int
+    var fill: Color = Theme.letter
+    var ink: Color = Theme.secondary
+
+    var body: some View {
+        Text(String(UnicodeScalar(UInt8(65 + index % 26))))
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(ink)
+            .frame(width: 24, height: 24)
+            .background(fill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+}
+
+struct AgentStatusPill: View {
+    let status: AgentStatus
+
+    private var color: Color {
+        switch status {
+        case .working: AvatarColor.orange.color
+        case .waiting: AvatarColor.amber.color
+        case .failed: AvatarColor.red.color
+        case .inCloud: AvatarColor.blue.color
+        case .unknown: Theme.secondary
+        }
     }
 
-    static func duration(ms: Double) -> String {
-        let seconds = ms / 1000
-        if seconds < 60 { return String(format: "%.1fs", seconds) }
-        let whole = Int(seconds.rounded())
-        return "\(whole / 60)m \(String(format: "%02d", whole % 60))s"
+    var body: some View {
+        HStack(spacing: 5) {
+            StatusDot(color: color, pulsing: status == .working)
+            Text(status.title)
+        }
+        .font(.caption.weight(.semibold))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .foregroundStyle(color)
+        .background(color.opacity(0.16), in: Capsule())
     }
 }

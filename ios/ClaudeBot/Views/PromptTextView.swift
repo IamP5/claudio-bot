@@ -16,6 +16,7 @@ struct PromptTextView: View {
                 if text.isEmpty {
                     Text(placeholder)
                         .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                         .allowsHitTesting(false)
                 }
             }

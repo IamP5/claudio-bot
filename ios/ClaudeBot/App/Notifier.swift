@@ -2,27 +2,20 @@ import Foundation
 import UIKit
 import UserNotifications
 
-/// Turns store attention into local notifications and routes taps and approval actions back.
+/// Turns store alerts into local notifications and routes taps and answer actions back.
 @MainActor
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     static let enabledKey = "notificationsEnabled"
-    private static let approvalCategory = "APPROVAL"
-    private static let allowAction = "ALLOW"
-    private static let denyAction = "DENY"
+    private static let optionActions = ["OPTION_0", "OPTION_1"]
 
-    var onOpenTask: (TaskID) -> Void = { _ in }
-    var onDecide: (TaskID, ItemID, Decision) async -> Void = { _, _, _ in }
+    var onOpenBot: (BotID) -> Void = { _ in }
+    var onAnswer: (BotID, MessageID, Int) async -> Void = { _, _, _ in }
 
     private let center = UNUserNotificationCenter.current()
 
     override init() {
         super.init()
         center.delegate = self
-        let allow = UNNotificationAction(identifier: Self.allowAction, title: "Allow", options: [])
-        let deny = UNNotificationAction(identifier: Self.denyAction, title: "Deny", options: [.destructive])
-        center.setNotificationCategories([
-            UNNotificationCategory(identifier: Self.approvalCategory, actions: [allow, deny], intentIdentifiers: []),
-        ])
     }
 
     private var enabled: Bool {
@@ -33,46 +26,51 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
     }
 
-    func post(_ attention: [Attention], viewing: TaskID?) {
+    func post(_ alerts: [Alert], viewing: BotID?) {
         guard enabled else { return }
         let active = UIApplication.shared.applicationState == .active
-        for item in attention where !(active && item.task.id == viewing) {
-            center.add(request(for: item))
+        for alert in alerts where !(active && alert.bot.id == viewing) {
+            Task { await post(alert) }
         }
     }
 
-    func clear(task: TaskID) {
-        let id = Self.identifier(task)
+    func clear(bot: BotID) {
+        let id = Self.identifier(bot)
         center.removeDeliveredNotifications(withIdentifiers: [id])
         center.removePendingNotificationRequests(withIdentifiers: [id])
     }
 
-    // One notification per task: a newer reason replaces the older one instead of stacking.
-    private static func identifier(_ task: TaskID) -> String { "task-\(task.rawValue)" }
+    // One notification per bot: a newer message replaces the older one instead of stacking.
+    private static func identifier(_ bot: BotID) -> String { "bot-\(bot.rawValue)" }
 
-    private func request(for attention: Attention) -> UNNotificationRequest {
+    private func post(_ alert: Alert) async {
         let content = UNMutableNotificationContent()
-        let task = attention.task
-        content.title = task.title
-        content.threadIdentifier = task.id.rawValue
+        content.title = alert.bot.name
+        content.threadIdentifier = alert.bot.id.rawValue
         content.sound = .default
-        content.userInfo = ["taskId": task.id.rawValue]
-        switch attention.reason {
-        case .approval(let a):
-            content.body = "Claude needs approval: \(a.tool) \(a.summary)"
-            content.categoryIdentifier = Self.approvalCategory
-            content.userInfo["itemId"] = a.id.rawValue
-        case .question(let q):
-            content.body = "Claude has a question: \(q.questions.first?.question ?? "tap to answer")"
-        case .needsInput:
-            content.body = "Claude is waiting for you."
-        case .finished:
-            let label = task.statusDisplay.title
-            content.body = task.preview.isEmpty ? "\(label)." : "\(label): \(task.preview)"
-        case .failed:
-            content.body = task.preview.isEmpty ? "The task failed." : "Failed: \(task.preview)"
+        content.userInfo = ["botId": alert.bot.id.rawValue]
+        switch alert.reason {
+        case .message(let text):
+            content.body = text
+        case let .question(id, question, options):
+            content.body = question
+            content.userInfo["messageId"] = id.rawValue
+            content.categoryIdentifier = await registerCategory(for: id, options: options)
         }
-        return UNNotificationRequest(identifier: Self.identifier(task.id), content: content, trigger: nil)
+        try? await center.add(UNNotificationRequest(identifier: Self.identifier(alert.bot.id), content: content, trigger: nil))
+    }
+
+    /// Action titles are fixed per category, so each question gets its own category with its first two options.
+    private func registerCategory(for id: MessageID, options: [String]) async -> String {
+        let name = "QUESTION-\(id.rawValue)"
+        let actions = zip(Self.optionActions, options).map { action, title in
+            UNNotificationAction(identifier: action, title: title, options: [])
+        }
+        let category = UNNotificationCategory(identifier: name, actions: actions, intentIdentifiers: [])
+        let existing = await center.notificationCategories().filter { $0.identifier != name }
+        // Keep the set from growing without bound across many questions.
+        center.setNotificationCategories(Set(existing.suffix(30)).union([category]))
+        return name
     }
 
     nonisolated func userNotificationCenter(
@@ -87,17 +85,17 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse
     ) async {
         let info = response.notification.request.content.userInfo
-        guard let task = info["taskId"] as? String else { return }
-        let item = info["itemId"] as? String
+        guard let bot = info["botId"] as? String else { return }
+        let message = info["messageId"] as? String
         let action = response.actionIdentifier
-        await handle(action: action, task: TaskID(task), item: item.map { ItemID($0) })
+        await handle(action: action, bot: BotID(bot), message: message.map { MessageID($0) })
     }
 
-    private func handle(action: String, task: TaskID, item: ItemID?) async {
-        switch (action, item) {
-        case (Self.allowAction, let item?): await onDecide(task, item, .allow)
-        case (Self.denyAction, let item?): await onDecide(task, item, .deny)
-        default: onOpenTask(task)
+    private func handle(action: String, bot: BotID, message: MessageID?) async {
+        if let message, let option = Self.optionActions.firstIndex(of: action) {
+            await onAnswer(bot, message, option)
+        } else {
+            onOpenBot(bot)
         }
     }
 }

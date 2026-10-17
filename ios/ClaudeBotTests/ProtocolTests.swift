@@ -17,121 +17,106 @@ private func jsonObject(_ data: Data) throws -> NSDictionary {
     try JSONSerialization.jsonObject(with: data) as! NSDictionary
 }
 
+private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
+    try Wire.decoder().decode(type, from: Data(json.utf8))
+}
+
 @Suite struct ProtocolTests {
-    @Test func everyServerFixtureDecodesToAKnownMessage() throws {
+    @Test func everyServerFixtureDecodesToAKnownMessageAndEncodesBackToTheSameJSON() throws {
         let entries = Fixture.entries("server")
-        #expect(entries.count == 5)
+        #expect(entries.count == 12)
         for data in entries {
             let msg = try Wire.decoder().decode(ServerMessage.self, from: data)
             if case .unknown(let type) = msg { Issue.record("fixture decoded as unknown type \(type)") }
+            #expect(try jsonObject(Wire.encoder().encode(msg)) == jsonObject(data))
         }
     }
 
-    @Test func helloCarriesProjectsAndTypedTasks() throws {
-        let msg = try Wire.decoder().decode(ServerMessage.self, from: Fixture.entries("server")[0])
-        guard case let .hello(machine, projects, tasks) = msg else { Issue.record("not hello"); return }
-        #expect(machine == "MacBook")
-        #expect(projects.map(\.githubRepo) == ["me/drawdown", nil])
-        #expect(tasks.first?.status == .needsInput)
-        #expect(tasks.first?.target == .local(ProjectID("p1")))
-        #expect(tasks.first?.createdAt == Date(timeIntervalSince1970: 1_792_152_000))
+    @Test func everyClientFixtureEncodesToTheSameJSON() throws {
+        let entries = Fixture.entries("client")
+        #expect(entries.count == 12)
+        for data in entries {
+            let msg = try Wire.decoder().decode(ClientMessage.self, from: data)
+            #expect(try jsonObject(Wire.encoder().encode(msg)) == jsonObject(data))
+        }
     }
 
-    @Test func transcriptDecodesEveryItemKindInOrder() throws {
-        let msg = try Wire.decoder().decode(ServerMessage.self, from: Fixture.entries("server")[2])
-        guard case let .transcript(taskId, items) = msg else { Issue.record("not transcript"); return }
-        #expect(taskId == TaskID("t1"))
-        let kinds = items.map { item -> String in
-            switch item {
+    @Test func helloCarriesTypedBots() throws {
+        let msg = try Wire.decoder().decode(ServerMessage.self, from: Fixture.entries("server")[0])
+        guard case let .hello(machine, userName, bots) = msg else { Issue.record("not hello"); return }
+        #expect(machine == "MacBook")
+        #expect(userName == "Bruno")
+        let bot = try #require(bots.first)
+        #expect(bot.avatar == Avatar(shape: .hexagon, color: .orange))
+        #expect(bot.title == nil)
+        #expect(bot.question == "Want me to merge any of these now?")
+        #expect(bot.routines.first?.describe == "Weekdays at 7:57 AM")
+        #expect(bot.lastAt == Date(timeIntervalSince1970: 1_792_152_000))
+    }
+
+    @Test func conversationDecodesEveryMessageKindInOrder() throws {
+        let msg = try Wire.decoder().decode(ServerMessage.self, from: Fixture.entries("server")[4])
+        guard case let .conversation(_, messages) = msg else { Issue.record("not conversation"); return }
+        let kinds = messages.map { m -> String in
+            switch m {
             case .user: "user"
-            case .assistant: "assistant"
-            case .tool: "tool"
-            case .approval: "approval"
+            case .bot: "bot"
             case .question: "question"
-            case .result: "result"
-            case .notice: "notice"
+            case .exchange: "exchange"
+            case .note: "note"
             case .unknown: "unknown"
             }
         }
-        #expect(kinds == ["user", "assistant", "tool", "tool", "approval", "question", "result", "notice"])
-        #expect(items.map(\.awaitsUser) == [false, false, false, false, true, true, false, false])
+        #expect(kinds == ["user", "bot", "exchange", "note", "exchange", "question"])
     }
 
-    @Test func clientFixturesRoundTripToIdenticalJSON() throws {
-        let entries = Fixture.entries("client")
-        #expect(entries.count == 6)
-        for data in entries {
-            let msg = try Wire.decoder().decode(ClientMessage.self, from: data)
-            let encoded = try Wire.encoder().encode(msg)
-            #expect(try jsonObject(encoded) == jsonObject(data))
+    @Test func questionAnswersDecodeAsOpenChosenOrDismissed() throws {
+        let entries = Fixture.entries("server")
+        let answers = try [5, 6].map { index -> Answer? in
+            guard case let .message(_, .question(_, _, card)) = try Wire.decoder().decode(ServerMessage.self, from: entries[index])
+            else { return nil }
+            return card.answer
         }
-    }
-
-    @Test func swiftBuiltDecideMatchesTheBridgeFixture() throws {
-        let msg = ClientMessage.decide(taskId: TaskID("t1"), itemId: ItemID("i5"), decision: .allowAlways)
-        #expect(try jsonObject(Wire.encoder().encode(msg)) == jsonObject(Fixture.entries("client")[3]))
-    }
-
-    private func task(id: String, status: String, target: String, permission: String = "default") -> String {
-        """
-        {"id":"\(id)","title":"T","target":\(target),"projectName":"p","model":"opus","permissionMode":"\(permission)",
-        "status":"\(status)","createdAt":"2026-10-16T12:00:00.000Z","updatedAt":"2026-10-16T12:00:00.000Z",
-        "preview":"","costUsd":0,"cloudUrl":null}
-        """
-    }
-
-    @Test func helloWithUnknownStatusAndTargetKindStillDecodes() throws {
-        let tasks = [
-            task(id: "known", status: "idle", target: #"{"kind":"cloud","projectId":"p1"}"#),
-            task(id: "future", status: "paused", target: #"{"kind":"ssh","projectId":"p1","host":"box"}"#, permission: "dontAsk"),
-            task(id: "bare", status: "running", target: #"{"kind":"container"}"#),
-        ].joined(separator: ",")
-        let data = Data(#"{"type":"hello","machine":"Mac","projects":[],"tasks":[\#(tasks)]}"#.utf8)
-        guard case let .hello(_, _, decoded) = try Wire.decoder().decode(ServerMessage.self, from: data) else {
-            Issue.record("expected hello"); return
-        }
-        #expect(decoded.map(\.id.rawValue) == ["known", "future", "bare"])
-        #expect(decoded[0].status == .idle)
-        #expect(decoded[0].target == .cloud(ProjectID("p1")))
-        #expect(decoded[1].status == .unknown("paused"))
-        #expect(decoded[1].permissionMode == .unknown("dontAsk"))
-        #expect(decoded[1].target == .unknown(kind: "ssh", projectId: ProjectID("p1")))
-        #expect(decoded[2].target == .unknown(kind: "container", projectId: nil))
-    }
-
-    @Test func unknownValuesKeepTheirWireStringWhenEncodedAgain() throws {
-        let encoder = Wire.encoder()
-        #expect(try encoder.encode(TaskStatus.unknown("paused")) == Data(#""paused""#.utf8))
-        #expect(try encoder.encode(PermissionMode.unknown("dontAsk")) == Data(#""dontAsk""#.utf8))
-        let target = Target.unknown(kind: "ssh", projectId: ProjectID("p1"))
-        let json = try jsonObject(encoder.encode(target))
-        #expect(json == ["kind": "ssh", "projectId": "p1"] as NSDictionary)
-    }
-
-    @Test func knownStatusesAndModesKeepTheirWireStrings() throws {
-        let decoder = Wire.decoder()
-        for (raw, status) in [("running", TaskStatus.running), ("needs_input", .needsInput), ("idle", .idle), ("failed", .failed), ("stopped", .stopped)] {
-            #expect(try decoder.decode(TaskStatus.self, from: Data("\"\(raw)\"".utf8)) == status)
-            #expect(status.rawValue == raw)
-        }
-        for (raw, mode) in [("default", PermissionMode.default), ("acceptEdits", .acceptEdits), ("plan", .plan), ("auto", .auto), ("bypassPermissions", .bypassPermissions)] {
-            #expect(try decoder.decode(PermissionMode.self, from: Data("\"\(raw)\"".utf8)) == mode)
-            #expect(mode.rawValue == raw)
-        }
+        #expect(answers == [.option(1), .dismissed])
     }
 
     @Test func unknownMessageTypeDecodesInsteadOfThrowing() throws {
-        let data = Data(#"{"type":"usage","tokens":12}"#.utf8)
-        let msg = try Wire.decoder().decode(ServerMessage.self, from: data)
+        let msg = try decode(ServerMessage.self, #"{"type":"usage","tokens":12}"#)
         guard case .unknown(let type) = msg else { Issue.record("expected unknown"); return }
         #expect(type == "usage")
     }
 
-    @Test func unknownItemKindKeepsItsId() throws {
-        let data = Data(#"{"type":"item","taskId":"t1","item":{"kind":"thinking","id":"i9","at":"2026-10-16T12:00:00.000Z"}}"#.utf8)
-        let msg = try Wire.decoder().decode(ServerMessage.self, from: data)
-        guard case let .item(_, item) = msg else { Issue.record("expected item"); return }
-        #expect(item == .unknown(id: ItemID("i9"), kind: "thinking"))
+    @Test func unknownMessageKindKeepsItsIdAndTime() throws {
+        let msg = try decode(ServerMessage.self, #"{"type":"message","botId":"b1","message":{"kind":"poll","id":"m9","at":"2026-10-16T12:00:00.000Z"}}"#)
+        guard case let .message(_, message) = msg else { Issue.record("expected message"); return }
+        #expect(message == .unknown(id: MessageID("m9"), at: Date(timeIntervalSince1970: 1_792_152_000), kind: "poll"))
+    }
+
+    @Test func unknownShapeColorStatusAndPeerDecodeAndKeepTheirWireStrings() throws {
+        #expect(try decode(Avatar.self, #"{"shape":"heart","color":"gold"}"#) == Avatar(shape: .unknown("heart"), color: .unknown("gold")))
+        #expect(try decode(BotStatus.self, #""sleeping""#) == .unknown("sleeping"))
+        #expect(try decode(AgentStatus.self, #""queued""#) == .unknown("queued"))
+        #expect(try decode(AgentPlace.self, #""ssh""#) == .unknown("ssh"))
+        #expect(try decode(Peer.self, #"{"kind":"group","id":"g1"}"#) == .unknown(kind: "group"))
+        #expect(try Wire.encoder().encode(AvatarShape.unknown("heart")) == Data(#""heart""#.utf8))
+    }
+
+    @Test func everyShapeAndColorMatchesTheBridgeLists() {
+        #expect(AvatarShape.allCases.map(\.rawValue) == [
+            "circle", "cloud", "diamond", "star4", "flower", "blob", "scallop",
+            "drop", "pill", "triangle", "pentagon", "star6", "hexagon",
+        ])
+        #expect(AvatarColor.allCases.map(\.rawValue) == [
+            "white", "brown", "red", "orange", "amber", "green", "teal", "blue", "purple", "pink", "gray",
+        ])
+        #expect(AgentStatus.inCloud.rawValue == "in_cloud")
+    }
+
+    @Test func patchSendsOnlyTheFieldsThatAreSet() throws {
+        let rename = try jsonObject(Wire.encoder().encode(ClientMessage.updateBot(botId: BotID("b1"), patch: BotPatch(name: "eng"))))
+        #expect(rename == ["type": "update_bot", "botId": "b1", "patch": ["name": "eng"]] as NSDictionary)
+        let clear = try Wire.encoder().encode(BotPatch(title: .some(nil)))
+        #expect(String(decoding: clear, as: UTF8.self) == #"{"title":null}"#)
     }
 }
 

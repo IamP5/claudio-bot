@@ -26,6 +26,8 @@ struct PairingView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(.white)
+                .foregroundStyle(.black)
                 .controlSize(.large)
 
                 HStack {
@@ -57,13 +59,11 @@ struct PairingView: View {
 
     private var header: some View {
         VStack(spacing: 14) {
-            Image(systemName: "laptopcomputer.and.iphone")
-                .font(.system(size: 54, weight: .light))
-                .foregroundStyle(Color.claude)
+            AvatarView(avatar: .standard, size: 84)
                 .padding(.top, 24)
             Text("Pair with your Mac")
                 .font(.largeTitle.bold())
-            Text("Run `bun run start` in the bridge folder on your Mac. It prints a QR code and a pairing token.")
+            Text("Your bots live on your Mac. Run `bun run start` in the bridge folder there. It prints a QR code and a pairing token.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -136,7 +136,7 @@ private extension View {
     func fieldStyle() -> some View {
         padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Theme.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 

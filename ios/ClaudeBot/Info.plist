@@ -47,9 +47,15 @@
 		</dict>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>ClaudeBot uses the camera to scan the pairing QR code shown by the bridge on your Mac.</string>
+	<string>ClaudeBot uses the camera to scan the pairing QR code from your Mac and to take photos you send to a bot.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>ClaudeBot connects to the ClaudeBot bridge running on your Mac over your local network or Tailscale.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>ClaudeBot listens while you dictate a message to a bot.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>ClaudeBot sends the photos you pick to a bot on your Mac.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>ClaudeBot turns your dictation into text for the message you are writing.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -63,6 +69,13 @@
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 </dict>
 </plist>

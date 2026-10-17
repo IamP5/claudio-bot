@@ -21,13 +21,13 @@ struct SettingsView: View {
                                 .truncationMode(.middle)
                         }
                     }
-                    LabeledContent("Projects", value: "\(store.projects.count)")
+                    LabeledContent("Bots", value: "\(store.bots.count)")
                 }
 
                 Section {
                     Toggle("Notifications", isOn: $notificationsEnabled)
                 } footer: {
-                    Text("Alerts for approvals, questions and finished tasks arrive while ClaudeBot is connected to your Mac.")
+                    Text("Alerts for bot messages and questions arrive while ClaudeBot is connected to your Mac. A question alert lets you pick one of its first two answers.")
                 }
 
                 Section {
@@ -36,6 +36,8 @@ struct SettingsView: View {
                     Text("Removes the bridge address and token from this iPhone.")
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Theme.background)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

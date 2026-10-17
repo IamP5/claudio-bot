@@ -14,26 +14,39 @@ struct ClaudeBotApp: App {
                 .environment(app.client)
                 .environment(app.router)
                 .onOpenURL { app.open($0) }
+                .preferredColorScheme(.dark)
         }
         .onChange(of: scenePhase) { _, phase in app.scenePhaseChanged(phase) }
     }
 }
 
+enum Route: Hashable {
+    case profile(BotID, tab: ProfileView.Tab = .info)
+    case exchange(AgentID)
+    case file(BotID, path: String)
+}
+
 @Observable
 @MainActor
 final class Router {
-    var path: [TaskID] = []
-    var showingNewTask = false
+    /// The bot whose chat is on screen.
+    var selection: BotID?
+    /// Screens pushed on top of the chat.
+    var path: [Route] = []
+    var showingNewChat = false
     var showingSettings = false
-    /// Set after a create is sent; the next new task that arrives is opened.
-    var awaitingNewTask = false
+    /// The profile beside the chat, on iPad.
+    var showingInspector = false
+    /// The ref of a create_bot in flight; the bot it becomes is opened.
+    var pendingCreate: String?
     /// A pairing that arrived through a claudebot://pair link, waiting to be confirmed.
     var pairingLink: Pairing?
 
-    func open(_ task: TaskID) {
-        showingNewTask = false
+    func open(_ bot: BotID) {
+        showingNewChat = false
         showingSettings = false
-        path = [task]
+        path = []
+        selection = bot
     }
 }
 
@@ -51,10 +64,10 @@ final class AppModel {
         self.client = client
         let notifier = notifier
         let router = router
-        client.onAttention = { notifier.post($0, viewing: client.openTask) }
-        notifier.onOpenTask = { router.open($0) }
-        notifier.onDecide = { task, item, decision in
-            client.send(.decide(taskId: task, itemId: item, decision: decision))
+        client.onAlerts = { notifier.post($0, viewing: client.openBot) }
+        notifier.onOpenBot = { router.open($0) }
+        notifier.onAnswer = { bot, message, option in
+            client.send(.answer(botId: bot, messageId: message, option: option))
             await client.waitUntilSent()
         }
         #if DEBUG
@@ -83,11 +96,17 @@ final class AppModel {
         }
     }
 
+    func createBot() {
+        let ref = UUID().uuidString
+        router.pendingCreate = ref
+        client.send(.createBot(ref: ref))
+    }
+
     func scenePhaseChanged(_ phase: ScenePhase) {
         switch phase {
         case .background:
-            // Keeps the socket alive for the short grace period iOS allows, so a quick
-            // approval from a notification still reaches the Mac.
+            // Keeps the socket alive for the short grace period iOS allows, so an answer
+            // tapped on a notification still reaches the Mac.
             guard backgroundTask == .invalid else { return }
             backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "bridge") { [weak self] in
                 MainActor.assumeIsolated { self?.endBackgroundTask() }
@@ -95,7 +114,7 @@ final class AppModel {
         case .active:
             endBackgroundTask()
             client.reconnectNow()
-            if let open = client.openTask { notifier.clear(task: open) }
+            if let open = client.openBot { notifier.clear(bot: open) }
         default:
             break
         }
@@ -110,6 +129,7 @@ final class AppModel {
 
 struct RootView: View {
     @Environment(AppStore.self) private var store
+    @Environment(BridgeClient.self) private var client
     @Environment(Router.self) private var router
 
     var body: some View {
@@ -118,13 +138,20 @@ struct RootView: View {
             if store.connection == .unpaired {
                 PairingView()
             } else {
-                HomeView()
+                MainView()
                     .sheet(item: $router.pairingLink) { link in
                         NavigationStack { PairingView(link: link) }
                     }
             }
         }
-        .tint(.accentColor)
+        .tint(.white)
+        .onChange(of: router.selection, initial: true) { _, bot in client.openBot = bot }
+        .onChange(of: store.created) { _, created in
+            if let ref = router.pendingCreate, let bot = created[ref] {
+                router.pendingCreate = nil
+                router.open(bot)
+            }
+        }
     }
 }
 

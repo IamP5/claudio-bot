@@ -113,6 +113,13 @@ private func assistant(_ id: String, _ text: String) -> Item {
         #expect(sections.last?.tasks.map(\.id.rawValue) == ["c"])
     }
 
+    @Test func unknownStatusGroupsUnderRecentAndRaisesNoAlert() {
+        let store = store(with: [summary("t1", .running)])
+        let alerts = store.apply(.task(summary("t1", .unknown("paused"))))
+        #expect(alerts.isEmpty)
+        #expect(HomeSection.make(from: store.tasks.values, matching: "").map(\.kind) == [.recent])
+    }
+
     @Test func searchFiltersAndDropsEmptySections() {
         let tasks = [summary("a", .running, title: "Fix login"), summary("b", .idle, title: "Dark mode")]
         let sections = HomeSection.make(from: tasks, matching: "LOGIN")

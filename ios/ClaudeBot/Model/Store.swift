@@ -134,7 +134,7 @@ final class AppStore {
             return hasPendingItem ? nil : Attention(task: task, reason: .needsInput)
         case .idle: return Attention(task: task, reason: .finished)
         case .failed: return Attention(task: task, reason: .failed)
-        case .running, .stopped: return nil
+        case .running, .stopped, .unknown: return nil
         }
     }
 
@@ -163,7 +163,7 @@ struct HomeSection: Identifiable, Equatable {
             switch status {
             case .needsInput: self = .needsYou
             case .running: self = .running
-            case .idle, .failed, .stopped: self = .recent
+            case .idle, .failed, .stopped, .unknown: self = .recent
             }
         }
     }

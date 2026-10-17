@@ -20,6 +20,7 @@ extension PermissionMode {
         case .plan: "Plan only"
         case .auto: "Auto"
         case .bypassPermissions: "Bypass permissions"
+        case .unknown(let raw): raw
         }
     }
 
@@ -30,6 +31,7 @@ extension PermissionMode {
         case .plan: "Claude reads and proposes a plan. Nothing on disk changes."
         case .auto: "Claude runs what looks safe and asks only for risky actions."
         case .bypassPermissions: "Claude never asks. Use only in a sandbox."
+        case .unknown: "A permission mode this version of ClaudeBot does not know."
         }
     }
 }
@@ -42,7 +44,7 @@ extension StatusDisplay.Tone {
         case .done: .green
         case .cloud: .cyan
         case .failed: .red
-        case .stopped: .gray
+        case .stopped, .unknown: .gray
         }
     }
 
@@ -72,13 +74,31 @@ enum ToolSymbol {
     }
 }
 
+extension Target {
+    var title: String {
+        switch self {
+        case .local: "Mac"
+        case .cloud: "Cloud"
+        case .unknown: "Other"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .local: "laptopcomputer"
+        case .cloud: "cloud"
+        case .unknown: "questionmark.circle"
+        }
+    }
+}
+
 struct TargetBadge: View {
     let target: Target
 
     var body: some View {
         HStack(spacing: 3) {
-            Image(systemName: target.isCloud ? "cloud" : "laptopcomputer")
-            Text(target.isCloud ? "Cloud" : "Mac")
+            Image(systemName: target.symbol)
+            Text(target.title)
         }
             .font(.caption2.weight(.semibold))
             .padding(.horizontal, 7)

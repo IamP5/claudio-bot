@@ -28,6 +28,12 @@ import Testing
         }
     }
 
+    @Test func unknownStatusIsNeverShownAsDone() {
+        let display = StatusDisplay.of(.unknown("paused"), on: local)
+        #expect(display == StatusDisplay(title: "Unknown", tone: .unknown))
+        #expect(display == StatusDisplay.of(.unknown("paused"), on: cloud))
+    }
+
     @Test func onlyRunningPulses() {
         #expect(StatusDisplay.of(.running, on: cloud).pulsing)
         #expect(!StatusDisplay.of(.idle, on: cloud).pulsing)

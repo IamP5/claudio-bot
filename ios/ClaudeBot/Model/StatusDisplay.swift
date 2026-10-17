@@ -3,7 +3,7 @@ import Foundation
 /// How a task's status reads on screen. Every surface takes its label and tone from here.
 struct StatusDisplay: Equatable, Sendable {
     enum Tone: Equatable, Sendable {
-        case running, attention, done, cloud, failed, stopped
+        case running, attention, done, cloud, failed, stopped, unknown
     }
 
     let title: String
@@ -22,6 +22,7 @@ struct StatusDisplay: Equatable, Sendable {
             : StatusDisplay(title: "Done", tone: .done)
         case .failed: StatusDisplay(title: "Failed", tone: .failed)
         case .stopped: StatusDisplay(title: "Stopped", tone: .stopped)
+        case .unknown: StatusDisplay(title: "Unknown", tone: .unknown)
         }
     }
 }

@@ -72,6 +72,54 @@ private func jsonObject(_ data: Data) throws -> NSDictionary {
         #expect(try jsonObject(Wire.encoder().encode(msg)) == jsonObject(Fixture.entries("client")[3]))
     }
 
+    private func task(id: String, status: String, target: String, permission: String = "default") -> String {
+        """
+        {"id":"\(id)","title":"T","target":\(target),"projectName":"p","model":"opus","permissionMode":"\(permission)",
+        "status":"\(status)","createdAt":"2026-10-16T12:00:00.000Z","updatedAt":"2026-10-16T12:00:00.000Z",
+        "preview":"","costUsd":0,"cloudUrl":null}
+        """
+    }
+
+    @Test func helloWithUnknownStatusAndTargetKindStillDecodes() throws {
+        let tasks = [
+            task(id: "known", status: "idle", target: #"{"kind":"cloud","projectId":"p1"}"#),
+            task(id: "future", status: "paused", target: #"{"kind":"ssh","projectId":"p1","host":"box"}"#, permission: "dontAsk"),
+            task(id: "bare", status: "running", target: #"{"kind":"container"}"#),
+        ].joined(separator: ",")
+        let data = Data(#"{"type":"hello","machine":"Mac","projects":[],"tasks":[\#(tasks)]}"#.utf8)
+        guard case let .hello(_, _, decoded) = try Wire.decoder().decode(ServerMessage.self, from: data) else {
+            Issue.record("expected hello"); return
+        }
+        #expect(decoded.map(\.id.rawValue) == ["known", "future", "bare"])
+        #expect(decoded[0].status == .idle)
+        #expect(decoded[0].target == .cloud(ProjectID("p1")))
+        #expect(decoded[1].status == .unknown("paused"))
+        #expect(decoded[1].permissionMode == .unknown("dontAsk"))
+        #expect(decoded[1].target == .unknown(kind: "ssh", projectId: ProjectID("p1")))
+        #expect(decoded[2].target == .unknown(kind: "container", projectId: nil))
+    }
+
+    @Test func unknownValuesKeepTheirWireStringWhenEncodedAgain() throws {
+        let encoder = Wire.encoder()
+        #expect(try encoder.encode(TaskStatus.unknown("paused")) == Data(#""paused""#.utf8))
+        #expect(try encoder.encode(PermissionMode.unknown("dontAsk")) == Data(#""dontAsk""#.utf8))
+        let target = Target.unknown(kind: "ssh", projectId: ProjectID("p1"))
+        let json = try jsonObject(encoder.encode(target))
+        #expect(json == ["kind": "ssh", "projectId": "p1"] as NSDictionary)
+    }
+
+    @Test func knownStatusesAndModesKeepTheirWireStrings() throws {
+        let decoder = Wire.decoder()
+        for (raw, status) in [("running", TaskStatus.running), ("needs_input", .needsInput), ("idle", .idle), ("failed", .failed), ("stopped", .stopped)] {
+            #expect(try decoder.decode(TaskStatus.self, from: Data("\"\(raw)\"".utf8)) == status)
+            #expect(status.rawValue == raw)
+        }
+        for (raw, mode) in [("default", PermissionMode.default), ("acceptEdits", .acceptEdits), ("plan", .plan), ("auto", .auto), ("bypassPermissions", .bypassPermissions)] {
+            #expect(try decoder.decode(PermissionMode.self, from: Data("\"\(raw)\"".utf8)) == mode)
+            #expect(mode.rawValue == raw)
+        }
+    }
+
     @Test func unknownMessageTypeDecodesInsteadOfThrowing() throws {
         let data = Data(#"{"type":"usage","tokens":12}"#.utf8)
         let msg = try Wire.decoder().decode(ServerMessage.self, from: data)

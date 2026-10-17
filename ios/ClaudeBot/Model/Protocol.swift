@@ -33,13 +33,16 @@ struct Project: Codable, Hashable, Sendable, Identifiable {
     let githubRepo: String?
 }
 
+/// A target kind this build does not know yet decodes to `.unknown` so a newer bridge cannot break the whole hello.
 enum Target: Codable, Hashable, Sendable {
     case local(ProjectID)
     case cloud(ProjectID)
+    case unknown(kind: String, projectId: ProjectID?)
 
-    var projectId: ProjectID {
+    var projectId: ProjectID? {
         switch self {
         case .local(let id), .cloud(let id): id
+        case .unknown(_, let id): id
         }
     }
 
@@ -47,34 +50,105 @@ enum Target: Codable, Hashable, Sendable {
         if case .cloud = self { true } else { false }
     }
 
+    private var kind: String {
+        switch self {
+        case .local: "local"
+        case .cloud: "cloud"
+        case .unknown(let kind, _): kind
+        }
+    }
+
     private enum CodingKeys: String, CodingKey { case kind, projectId }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let projectId = try c.decode(ProjectID.self, forKey: .projectId)
         switch try c.decode(String.self, forKey: .kind) {
-        case "local": self = .local(projectId)
-        case "cloud": self = .cloud(projectId)
-        case let other:
-            throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "unknown target \(other)")
+        case "local": self = .local(try c.decode(ProjectID.self, forKey: .projectId))
+        case "cloud": self = .cloud(try c.decode(ProjectID.self, forKey: .projectId))
+        case let other: self = .unknown(kind: other, projectId: try c.decodeIfPresent(ProjectID.self, forKey: .projectId))
         }
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(isCloud ? "cloud" : "local", forKey: .kind)
-        try c.encode(projectId, forKey: .projectId)
+        try c.encode(kind, forKey: .kind)
+        try c.encodeIfPresent(projectId, forKey: .projectId)
     }
 }
 
-enum PermissionMode: String, Codable, Hashable, Sendable, CaseIterable {
+/// Like `TaskStatus`, a value from a newer bridge is kept as `.unknown` instead of failing the decode.
+enum PermissionMode: RawRepresentable, Codable, Hashable, Sendable {
     case `default`, acceptEdits, plan, auto, bypassPermissions
+    case unknown(String)
+
+    init(rawValue: String) {
+        switch rawValue {
+        case "default": self = .default
+        case "acceptEdits": self = .acceptEdits
+        case "plan": self = .plan
+        case "auto": self = .auto
+        case "bypassPermissions": self = .bypassPermissions
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    var rawValue: String {
+        switch self {
+        case .default: "default"
+        case .acceptEdits: "acceptEdits"
+        case .plan: "plan"
+        case .auto: "auto"
+        case .bypassPermissions: "bypassPermissions"
+        case .unknown(let raw): raw
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
 }
 
-enum TaskStatus: String, Codable, Hashable, Sendable {
-    case running
-    case needsInput = "needs_input"
-    case idle, failed, stopped
+/// A status this build does not know yet is `.unknown`, not `.idle`: idle renders as "Done", which would claim
+/// a result the bridge never reported. Unknown is inactive, groups under Recent and raises no alert.
+enum TaskStatus: RawRepresentable, Codable, Hashable, Sendable {
+    case running, needsInput, idle, failed, stopped
+    case unknown(String)
+
+    init(rawValue: String) {
+        switch rawValue {
+        case "running": self = .running
+        case "needs_input": self = .needsInput
+        case "idle": self = .idle
+        case "failed": self = .failed
+        case "stopped": self = .stopped
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    var rawValue: String {
+        switch self {
+        case .running: "running"
+        case .needsInput: "needs_input"
+        case .idle: "idle"
+        case .failed: "failed"
+        case .stopped: "stopped"
+        case .unknown(let raw): raw
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
 
     var isActive: Bool { self == .running || self == .needsInput }
 }

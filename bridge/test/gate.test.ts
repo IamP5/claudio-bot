@@ -416,8 +416,64 @@ describe("question cards", () => {
     expect(questions[0]).toMatchObject({ answer: null, expiresAt: new Date(START.getTime() + 24 * 3600_000).toISOString() });
     expect(t.notified).toEqual([{ reason: "card", id: questions[0]!.id }]);
     expect(t.gate.answer(B1, questions[0]!.id, { kind: "option", index: 1 })).toEqual({ ok: true });
-    expect(t.delivered).toEqual([{ actor: botActor(B1), e: { from: "answer", question: "Which repo?", option: "ios" } }]);
+    expect(t.delivered).toEqual([{ actor: botActor(B1), e: { from: "answer", question: "Which repo?", option: "ios", initiator: user } }]);
     expect(t.gate.nextDeadline()).toBeNull();
+  });
+
+  test("an answer or a dismissal carries the initiator of the turn that asked, not the user's", () => {
+    const t = setup();
+    t.turn.initiator = routine;
+    t.gate.ask(B1, { question: "Deploy finished. Clean up?", options: ["Yes", "No"] });
+    t.gate.ask(B1, { question: "Which branch?", options: ["a", "b"] });
+    t.turn.initiator = user;
+    const [cleanUp, branch] = t.bot.messages.filter((m) => m.kind === "question");
+    expect(t.gate.answer(B1, cleanUp!.id, { kind: "option", index: 0 })).toEqual({ ok: true });
+    expect(t.gate.answer(B1, branch!.id, { kind: "dismiss" })).toEqual({ ok: true });
+    expect(t.delivered.map((d) => d.e)).toEqual([
+      { from: "answer", question: "Deploy finished. Clean up?", option: "Yes", initiator: routine },
+      { from: "dismiss", question: "Which branch?", initiator: routine },
+    ]);
+  });
+
+  test("a question asked with no turn in flight is answered as system work", () => {
+    const t = setup();
+    t.deps.turnOf = () => null;
+    const gate = createGate(t.deps);
+    gate.ask(B1, { question: "Still there?", options: ["yes", "no"] });
+    const q = t.bot.messages.find((m) => m.kind === "question")!;
+    expect(gate.answer(B1, q.id, { kind: "option", index: 0 })).toEqual({ ok: true });
+    expect(t.delivered[0]!.e).toMatchObject({ from: "answer", initiator: { kind: "system" } });
+  });
+
+  test("the asking turn's initiator survives a reload of the gate state", () => {
+    const t = setup();
+    t.turn.initiator = routine;
+    t.gate.ask(B1, { question: "Clean up?", options: ["Yes", "No"] });
+    t.turn.initiator = user;
+    const reloaded = createGate(t.deps);
+    const q = t.bot.messages.find((m) => m.kind === "question")!;
+    expect(reloaded.answer(B1, q.id, { kind: "option", index: 0 })).toEqual({ ok: true });
+    expect(t.delivered[0]!.e).toMatchObject({ initiator: routine });
+  });
+
+  test("a question whose open card was lost is answered as system work, never as the user", () => {
+    const t = setup();
+    t.gate.ask(B1, { question: "Clean up?", options: ["Yes", "No"] });
+    gateState(t.world).open.splice(0);
+    const reloaded = createGate(t.deps);
+    const q = t.bot.messages.find((m) => m.kind === "question")!;
+    expect(reloaded.answer(B1, q.id, { kind: "option", index: 0 })).toEqual({ ok: true });
+    expect(t.delivered[0]!.e).toMatchObject({ initiator: { kind: "system" } });
+  });
+
+  test("open questions are capped per bot like permission cards", () => {
+    const t = setup();
+    for (let i = 0; i < 10; i++) expect(t.gate.ask(B1, { question: `Q${i}?`, options: ["a", "b"] })).toContain("Card posted");
+    expect(t.gate.ask(B1, { question: "One more?", options: ["a", "b"] })).toContain("already has 10");
+    expect(t.bot.messages.filter((m) => m.kind === "question")).toHaveLength(10);
+    const first = t.bot.messages.find((m) => m.kind === "question")!;
+    t.gate.answer(B1, first.id, { kind: "option", index: 0 });
+    expect(t.gate.ask(B1, { question: "One more?", options: ["a", "b"] })).toContain("Card posted");
   });
 
   test("an expired question leaves a notice, not a turn", () => {

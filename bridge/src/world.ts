@@ -221,7 +221,9 @@ type HeldCall = {
  * a permission card on the wire that asks whether the agents in `root` may load the repo's own Claude Code config.
  */
 export type OpenCard =
-  | { kind: "question"; cardId: MessageId; actor: BotActor; remindAt: string | null; expiresAt: string }
+  // initiator: the turn that asked, so the answer continues that turn's chain instead of becoming the user's. Absent on
+  // cards saved before it was recorded; the gate answers those as system work.
+  | { kind: "question"; cardId: MessageId; actor: BotActor; remindAt: string | null; expiresAt: string; initiator?: Initiator }
   | { kind: "permission"; cardId: MessageId; actor: Actor; remindAt: string | null; expiresAt: string; call: HeldCall }
   | { kind: "trust"; cardId: MessageId; actor: AgentActor; remindAt: string | null; expiresAt: string; root: string };
 

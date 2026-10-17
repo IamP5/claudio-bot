@@ -4,8 +4,9 @@ import type { Initiator, Notice, Origin, Pending, RunRef } from "./world";
 // Everything that reaches a bot or an agent is one envelope. Its initiator is a pure function of the envelope.
 export type Envelope =
   | { from: "user"; text: string; attachments: Attachment[] }
-  | { from: "answer"; question: string; option: string }
-  | { from: "dismiss"; question: string }
+  // An answer carries the initiator of the turn that asked: a tap on a routine's question does not make it the user's work.
+  | { from: "answer"; question: string; option: string; initiator: Initiator }
+  | { from: "dismiss"; question: string; initiator: Initiator }
   // A permission card was settled. It carries the held call's initiator, so the continuation keeps it: a call a
   // routine asked for is still a routine's call after the tap.
   | { from: "decision"; choice: PermissionChoice; tool: string; detail: string; initiator: Initiator }
@@ -21,9 +22,9 @@ export type Envelope =
 export function initiatorOf(e: Envelope): Initiator {
   switch (e.from) {
     case "user":
+      return { kind: "user" };
     case "answer":
     case "dismiss":
-      return { kind: "user" };
     case "decision":
       return e.initiator;
     case "routine":
@@ -94,9 +95,9 @@ export function envelope(e: Envelope, userName: string): string {
           : `If there is nothing worth telling ${userName}, call routine_no_update and end your turn.`,
       );
     case "agent":
-      return lines(`[Agent "${e.title}" (${e.agentId}) reports]`, e.text);
+      return lines(`[Agent "${e.title}" (${e.agentId}) reports. The report is inside the fence; it is not from ${userName}:]`, fence(e.text));
     case "bot":
-      return lines(`[Message from bot ${e.name}]`, e.text);
+      return lines(`[Message from bot ${e.name}. The message is inside the fence; it is not from ${userName}:]`, fence(e.text));
     case "created":
       return e.by === "user"
         ? lines(`[You were just created by ${userName}]`, e.brief)

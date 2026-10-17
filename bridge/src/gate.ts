@@ -66,7 +66,7 @@ const TRUST_ANSWERS: Record<PermissionChoice, { trusted: boolean; everyAgent: bo
   never: { trusted: false, everyAgent: true },
 };
 
-/** Per bot, how many permission cards may be open at once before new ones are refused, so a runaway turn cannot flood the phone. */
+/** Per bot, how many permission cards, and separately question cards, may be open at once, so a runaway turn cannot flood the phone. */
 const MAX_OPEN_CARDS = 10;
 
 export type CardReply = { kind: "option"; index: number } | { kind: "dismiss" } | { kind: "permission"; choice: PermissionChoice };
@@ -549,11 +549,15 @@ export function createGate(deps: GateDeps): Gate {
       const question = a.question.trim();
       if (bot.messages.some((m) => m.kind === "question" && m.answer === null && m.question.trim() === question))
         return "Already waiting on that question. End your turn; the answer arrives as a new message.";
+      const open = state.open.filter((c) => c.kind === "question" && c.actor.botId === botId && messageOf(c)?.answer === null).length;
+      if (open >= MAX_OPEN_CARDS)
+        return `${userName} already has ${MAX_OPEN_CARDS} questions waiting from this bot, so this one was not posted. End your turn and wait for ${userName}.`;
       const now = deps.now();
       const id = newMessageId();
       const expiresAt = at(now, TTL.questionMs);
+      const initiator = deps.turnOf(botActor(botId))?.initiator ?? SYSTEM;
       deps.say(bot, { kind: "question", id, at: now.toISOString(), question: a.question, options: a.options, answer: null, expiresAt });
-      state.open.push({ kind: "question", cardId: id, actor: botActor(botId), remindAt: at(now, TTL.questionMs / 2), expiresAt });
+      state.open.push({ kind: "question", cardId: id, actor: botActor(botId), remindAt: at(now, TTL.questionMs / 2), expiresAt, initiator });
       deps.persist("now");
       deps.notify(bot, "card", id);
       return "Card posted. End your turn; the answer arrives as a new message.";
@@ -573,12 +577,14 @@ export function createGate(deps: GateDeps): Gate {
       const settled = settleCard(message, { kind: "question", answer: reply.kind === "option" ? reply.index : "dismissed" });
       if (!settled.ok) return settled;
       const q = settled.card;
+      // A card from before the initiator was recorded, or one rebuilt from its message, is answered as system work.
+      const initiator = (held?.kind === "question" && held.initiator) || SYSTEM;
       deps.say(bot, q);
       dropCard(q.id);
       deps.persist("now");
       deps.deliver(
         botActor(bot.id),
-        typeof q.answer === "number" ? { from: "answer", question: q.question, option: q.options[q.answer]! } : { from: "dismiss", question: q.question },
+        typeof q.answer === "number" ? { from: "answer", question: q.question, option: q.options[q.answer]!, initiator } : { from: "dismiss", question: q.question, initiator },
       );
       return { ok: true };
     },

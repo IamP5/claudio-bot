@@ -1,11 +1,14 @@
 // End to end against the real bridge and real Claude Code, through the WebSocket like the app, in a temp home.
-// Run: bun run e2e. It spends real usage, never starts a cloud agent, and never touches ~/.claudebot or ~/.claudiobot:
-// CLAUDIOBOT_HOME and every project root point into a temp folder, which skips migration. The bridge gets no
-// SSH_AUTH_SOCK and no GitHub token, push goes to a fake ntfy server here, and claude.ai connectors are off
-// (E2E_CONNECTORS=1 keeps them). E2E_MODEL overrides the model; E2E_BRIDGE_LOG names a file for the bridge's own log.
+// Run: bun run e2e. It spends real usage and never touches ~/.claudebot, ~/.claudiobot or ~/.claudiobot-worktrees:
+// CLAUDIOBOT_HOME, CLAUDIOBOT_WORKTREES and every project root point into a temp folder, which skips migration. HOME
+// stays real only for the Claude login. The bridge gets no SSH_AUTH_SOCK and no GitHub token, push goes to a fake ntfy
+// server here, pushes go to local bare repositories, claude.ai connectors are off, and CLAUDIOBOT_CLAUDE is a wrapper
+// that runs the real claude for local queries and refuses --cloud, so no cloud agent can start. The run checks all of
+// this before it starts the bridge and stops once the ledger has charged E2E_BUDGET_USD (default 8).
+// E2E_MODEL overrides the model; E2E_BRIDGE_LOG names a file for the bridge's own log.
 import type { Subprocess } from "bun";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Bot, BotId, ClientMessage, Message, ServerMessage } from "../src/protocol";
 
@@ -13,6 +16,7 @@ import type { Bot, BotId, ClientMessage, Message, ServerMessage } from "../src/p
 const MODEL = process.env.E2E_MODEL ?? "claude-sonnet-5-5";
 const TURN_MS = 240_000;
 const USER = "Alex";
+const BUDGET_USD = Number(process.env.E2E_BUDGET_USD ?? 8);
 
 const results: { scenario: string; ok: boolean; evidence: string }[] = [];
 
@@ -42,6 +46,13 @@ const pushme = join(roots, "pushme");
 const hooked = join(roots, "hooked");
 const origin = join(scratch, "origin.git");
 const hookMarker = join(scratch, "hook-ran.txt");
+const worktrees = join(scratch, "worktrees");
+const bin = join(scratch, "bin");
+const cloudMarker = join(scratch, "cloud-attempt.txt");
+const mcpServer = join(scratch, "e2e-echo-server.ts");
+const mcpMarker = join(scratch, "mcp-called.txt");
+const realWorktrees = join(homedir(), ".claudiobot-worktrees");
+const realWorktreesBefore = existsSync(realWorktrees) ? readdirSync(realWorktrees).sort().join(",") : null;
 // Commits here are never signed: the bridge gets no SSH agent, so a signing key could not be used inside its sandbox.
 const git = (repo: string, ...args: string[]) => Bun.$`git -C ${repo} -c user.name=e2e -c user.email=e2e@example.com -c commit.gpgsign=false ${args}`.quiet();
 const head = async (repo: string, ref = "main") => (await git(repo, "rev-parse", ref)).text().trim();
@@ -58,7 +69,9 @@ async function pushPair(clone: string, remote: string) {
 mkdirSync(demo, { recursive: true });
 await Bun.$`git init -q -b main ${demo}`.quiet();
 await git(demo, "config", "commit.gpgsign", "false");
-await git(demo, "commit", "-q", "--allow-empty", "-m", "init");
+writeFileSync(join(demo, ".gitignore"), ".env\n");
+await git(demo, "add", ".gitignore");
+await git(demo, "commit", "-q", "-m", "init");
 await pushPair(pushme, origin);
 // A repo whose committed settings run a hook at session start and before every tool call.
 mkdirSync(join(hooked, ".claude"), { recursive: true });
@@ -68,9 +81,42 @@ writeFileSync(join(hooked, ".claude", "settings.json"), JSON.stringify({ hooks: 
 await git(hooked, "add", ".");
 await git(hooked, "commit", "-q", "-m", "commit a project hook");
 
-const probe = Bun.serve({ port: 0, fetch: () => new Response() });
-const port = probe.port;
-probe.stop(true);
+const freePort = () => {
+  const probe = Bun.serve({ port: 0, fetch: () => new Response() });
+  const free = probe.port;
+  probe.stop(true);
+  return free;
+};
+const port = freePort();
+const webhookPort = freePort();
+
+// claude for local queries; --cloud is refused and recorded, so a cloud agent can never start.
+const realClaude = Bun.which("claude");
+if (!realClaude || realClaude.startsWith(scratch)) throw new Error("the real claude CLI is not on PATH");
+mkdirSync(bin);
+const wrapper = join(bin, "claude");
+writeFileSync(
+  wrapper,
+  `#!/bin/sh\nfor a in "$@"; do case "$a" in --cloud|--remote|--teleport) echo "$*" >> '${cloudMarker}'; echo "cloud agents are off in the e2e" >&2; exit 1;; esac; done\nexec '${realClaude}' "$@"\n`,
+  { mode: 0o755 },
+);
+
+// A stdio MCP server the bot's project .mcp.json names: its one tool records every call.
+const sdk = join(import.meta.dir, "../node_modules/@modelcontextprotocol/sdk/dist/esm/server");
+writeFileSync(
+  mcpServer,
+  `import { McpServer } from ${JSON.stringify(join(sdk, "mcp.js"))};
+import { StdioServerTransport } from ${JSON.stringify(join(sdk, "stdio.js"))};
+import { appendFileSync } from "node:fs";
+const server = new McpServer({ name: "e2e-echo", version: "1.0.0" });
+server.tool("ping", "Answers PONG-E2E.", async () => {
+  appendFileSync(${JSON.stringify(mcpMarker)}, "called\\n");
+  return { content: [{ type: "text", text: "PONG-E2E" }] };
+});
+await server.connect(new StdioServerTransport());
+`,
+);
+const mcpCalls = () => (existsSync(mcpMarker) ? readFileSync(mcpMarker, "utf8").trim().split("\n").filter(Boolean).length : 0);
 
 /** The ntfy topic the bridge pushes to: every post, with the time it arrived. */
 const pushes: { at: number; body: string; click: string | null }[] = [];
@@ -84,6 +130,28 @@ const ntfy = Bun.serve({
 
 let server: Subprocess<"ignore", "pipe", "inherit"> | null = null;
 let log = "";
+const spent = () => [...log.matchAll(/^result (\S+) (\S+) session=(\S+) totalCostUsd=\S+ deltaUsd=([\d.e-]+)$/gm)].reduce((n, m) => n + Number(m[4]), 0);
+
+/** Every isolation rule, read from the environment the bridge will get. A failed rule stops the run before it starts. */
+function verifyIsolation(env: Record<string, string | undefined>) {
+  const inScratch = (v: string | undefined) => v !== undefined && v.startsWith(`${scratch}/`);
+  const wrapped = readFileSync(wrapper, "utf8");
+  const rules: [boolean, string][] = [
+    [env.HOME === homedir(), `HOME is the real home, for the Claude login only (${env.HOME})`],
+    [inScratch(env.CLAUDIOBOT_HOME), `CLAUDIOBOT_HOME is temporary (${env.CLAUDIOBOT_HOME})`],
+    [inScratch(env.CLAUDIOBOT_ROOTS), `every project root is temporary (${env.CLAUDIOBOT_ROOTS})`],
+    [inScratch(env.CLAUDIOBOT_WORKTREES), `worktrees are temporary (${env.CLAUDIOBOT_WORKTREES})`],
+    [env.SSH_AUTH_SOCK === undefined, "SSH_AUTH_SOCK is unset"],
+    [env.GH_TOKEN === undefined && env.GITHUB_TOKEN === undefined, "GH_TOKEN and GITHUB_TOKEN are unset"],
+    [env.ENABLE_CLAUDEAI_MCP_SERVERS === "false", "claude.ai connectors are off"],
+    [env.CLAUDIOBOT_CLAUDE === wrapper && wrapped.includes("--cloud") && wrapped.includes(`exec '${realClaude}'`), `CLAUDIOBOT_CLAUDE refuses --cloud and runs ${realClaude} otherwise`],
+    [env.PATH?.startsWith(`${bin}:`) === true, "claude on PATH is the same wrapper"],
+    [env.CLAUDIOBOT_PUSH_URL?.startsWith("http://127.0.0.1:") === true, "push goes to a local fake ntfy"],
+    [MODEL === "claude-sonnet-5-5" || process.env.E2E_MODEL !== undefined, `model ${MODEL}`],
+  ];
+  for (const [ok, what] of rules) console.log(`isolation ${ok ? "ok" : "FAILED"}: ${what}`);
+  if (rules.some(([ok]) => !ok)) throw new Error("isolation check failed; nothing was started");
+}
 
 async function startServer() {
   const env: Record<string, string | undefined> = {
@@ -94,9 +162,14 @@ async function startServer() {
     CLAUDIOBOT_MODEL: MODEL,
     CLAUDIOBOT_USER_NAME: USER,
     CLAUDIOBOT_PUSH_URL: `http://127.0.0.1:${ntfy.port}/e2e`,
-    ...(process.env.E2E_CONNECTORS === "1" ? {} : { ENABLE_CLAUDEAI_MCP_SERVERS: "false" }),
+    CLAUDIOBOT_WORKTREES: worktrees,
+    CLAUDIOBOT_WEBHOOK_PORT: String(webhookPort),
+    CLAUDIOBOT_CLAUDE: wrapper,
+    PATH: `${bin}:${process.env.PATH ?? ""}`,
+    ENABLE_CLAUDEAI_MCP_SERVERS: "false",
   };
   for (const name of ["CLAUDEBOT_HOME", "SSH_AUTH_SOCK", "GH_TOKEN", "GITHUB_TOKEN", "CLAUDIOBOT_ALLOWED_DOMAINS", "CLAUDIOBOT_SANDBOX_STRICT_NETWORK", "CLAUDIOBOT_SANDBOX_GH"]) delete env[name];
+  verifyIsolation(env);
   server = Bun.spawn(["bun", "run", join(import.meta.dir, "../src/main.ts")], { env, stdout: "pipe", stderr: "inherit" });
   const started = log.length;
   (async () => {
@@ -155,6 +228,7 @@ function connect(token: string, protocol3 = true) {
       const found = find();
       if (found !== undefined && found !== null && found !== false) return found;
       if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+      if (spent() > BUDGET_USD) throw new Error(`stopped: the ledger charged $${spent().toFixed(2)}, over the $${BUDGET_USD} budget`);
       await Bun.sleep(250);
     }
   }
@@ -222,17 +296,115 @@ try {
     client.send({ type: "open", botId: claudio });
     const greeting = await client.waitFor(() => client!.botSays(claudio, 0)[0], "the default bot's greeting");
     await client.waitFor(() => client!.resting(claudio), "the greeting turn to end");
+    // The bot's project MCP config, approved in its project settings. Its query picks it up when it next reopens.
+    const own = join(home, "bots", claudio);
+    writeFileSync(join(own, ".mcp.json"), JSON.stringify({ mcpServers: { "e2e-echo": { command: process.execPath, args: [mcpServer] } } }));
+    mkdirSync(join(own, ".claude"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(own, ".claude", "settings.json"), JSON.stringify({ enabledMcpjsonServers: ["e2e-echo"] }));
     legacy = connect(token, false);
     await legacy.opened;
     return `code ${code} paired over POST /pair with a Bearer token; greeting "${greeting.text.split("\n")[0]!.slice(0, 80)}"`;
   });
   const c = client as unknown as Client;
   const old = legacy as unknown as Client;
+  const botHome = join(home, "bots", claudio);
+  const userMd = () => readFileSync(join(home, "USER.md"), "utf8");
+  const framesOf = <T extends ServerMessage["type"]>(x: Client, type: T, after = 0) =>
+    x.received.slice(after).filter((m): m is Extract<ServerMessage, { type: T }> => m.type === type);
+  const cardsSince = (after: number) => c.messages(claudio).slice(after).filter((m) => m.kind === "permission");
 
   await scenario("a user turn", async () => {
     const ack = await c.ask(claudio, "Remember the codeword zephyr-42 for later. Reply with just OK.", "the codeword ack");
     check(ack.length > 0, "the bot answers the user's message");
     return `reply "${ack.slice(0, 60)}"`;
+  });
+
+  await scenario("a remembered fact stays a proposal until the user confirms it, and a resent send posts once", async () => {
+    const before = c.messages(claudio).length;
+    const receivedBefore = c.received.length;
+    const send: ClientMessage = { type: "send", botId: claudio, uploads: [], clientId: "e2e-send-1", text: "Remember with your remember tool that I prefer short answers. Then reply with just OK." };
+    c.send(send);
+    c.send(send);
+    await c.waitFor(() => c.botSays(claudio, before).length > 0 && c.resting(claudio), "the remember turn");
+    const users = c.messages(claudio).slice(before).filter((m) => m.kind === "user");
+    check(users.length === 1 && users[0]!.kind === "user" && users[0]!.clientId === "e2e-send-1", `the send sent twice posted one user message (${users.length})`);
+    const echoes = framesOf(c, "message", receivedBefore).filter((m) => m.message.kind === "user" && m.message.clientId === "e2e-send-1");
+    check(echoes.length === 2 && echoes[0]!.message.id === echoes[1]!.message.id, `the repeat was answered with the same message (${echoes.length} frames)`);
+    check(cardsSince(before).length === 0, "remembering in a user turn opened no card");
+    const remembered = auditRows().filter((r) => r.tool === "mcp__claudio__remember");
+    check(remembered.length > 0 && remembered.every((r) => r.decision === "pass"), `the remember call passed: ${remembered.map((r) => r.decision).join(",")}`);
+    const line = userMd().split("\n").find((l) => /short answers/i.test(l));
+    check(line !== undefined && line.includes(`proposed:${claudio}`), `USER.md holds the fact as this bot's proposal: ${JSON.stringify(line)}`);
+    const proposed = await c.waitFor(() => framesOf(c, "memory", receivedBefore).at(-1)?.facts.find((f) => /short answers/i.test(f.text) && !f.confirmed), "a memory frame with the proposal", 10_000);
+
+    const at = c.received.length;
+    c.send({ type: "confirm_fact", factId: proposed.id });
+    await c.waitFor(() => framesOf(c, "memory", at).at(-1)?.facts.find((f) => f.id === proposed.id && f.confirmed), "the confirmed fact", 10_000);
+    const confirmedLine = userMd().split("\n").find((l) => l.includes(proposed.id));
+    check(confirmedLine !== undefined && !confirmedLine.includes("proposed:"), `confirming drops the proposal mark: ${JSON.stringify(confirmedLine)}`);
+
+    const color = "chartreuse-nine";
+    const set = c.received.length;
+    c.send({ type: "set_fact", factId: null, text: `${USER}'s favorite color is ${color}` });
+    await c.waitFor(() => framesOf(c, "memory", set).at(-1)?.facts.some((f) => f.text.includes(color) && f.confirmed && f.by === null), "the user's own fact", 10_000);
+    const recalled = await c.ask(claudio, "Going only by what you know about me, what is my favorite color? Reply with only the color.", "the recalled color");
+    check(recalled.toLowerCase().includes(color), `a fact the bot never heard in chat reached its next query: "${recalled}"`);
+    return `one user message for two sends; ${JSON.stringify(line)} then confirmed; set_fact color recalled as "${recalled}"`;
+  });
+
+  await scenario("a protocol 3 phone sees what the bot is doing; a protocol 2 phone does not", async () => {
+    writeFileSync(join(botHome, "activity-check.txt"), "lantern\n");
+    const at = c.received.length;
+    const reply = await c.ask(claudio, "Use the Read tool on activity-check.txt in your home folder and reply with only the word in it.", "the read");
+    const lines = framesOf(c, "activity", at).filter((f) => f.botId === claudio && f.agentId === null);
+    const shown = lines.findIndex((f) => f.text !== null);
+    check(shown >= 0 && lines.every((f) => !("seq" in f)), `an activity line arrived without a seq: ${JSON.stringify(lines.map((f) => f.text))}`);
+    check(lines.slice(shown + 1).some((f) => f.text === null) && lines.at(-1)!.text === null, "the line cleared when the turn ended");
+    check(framesOf(old, "activity").length === 0, "the protocol 2 socket received no activity frame");
+    check(reply.toLowerCase().includes("lantern"), `the bot read the file: "${reply}"`);
+    return `lines ${JSON.stringify(lines.map((f) => f.text))}; protocol 2 got none`;
+  });
+
+  await scenario("a skill the bot saves loads in its next turn, and the user deletes it", async () => {
+    const description = 'Reply to "greet": say GREET-OK';
+    const at = c.received.length;
+    await c.ask(
+      claudio,
+      `Call save_skill now with name "greet", description '${description}', and body "When this skill is used, reply with exactly GREET-OK and nothing else." Then confirm in one line.`,
+      "the saved skill",
+    );
+    const listed = await c.waitFor(() => framesOf(c, "skills", at).find((f) => f.botId === claudio && f.skills.some((k) => k.name === "greet")), "a skills frame with greet", 10_000);
+    const file = join(botHome, ".claude", "skills", "greet", "SKILL.md");
+    check(existsSync(file) && readFileSync(file, "utf8").includes(`description: ${JSON.stringify(description)}`), "SKILL.md holds the quoted description");
+    check(listed.skills.find((k) => k.name === "greet")!.description === description, "the phone lists greet with its description");
+    const skillCalls = () => auditRows().filter((r) => r.tool === "Skill").length;
+    const callsBefore = skillCalls();
+    const used = await c.ask(claudio, "Use the greet skill.", "the skill's reply");
+    check(skillCalls() > callsBefore, "the bot called the Skill tool");
+    check(used.includes("GREET-OK"), `the skill's body ran: "${used}"`);
+    const del = c.received.length;
+    c.send({ type: "delete_skill", botId: claudio, name: "greet" });
+    await c.waitFor(() => framesOf(c, "skills", del).find((f) => f.botId === claudio && f.skills.length === 0), "the empty skills list", 10_000);
+    check(!existsSync(join(botHome, ".claude", "skills", "greet")), "the skill's folder is gone");
+    return `saved, Skill tool called, reply "${used}", deleted`;
+  });
+
+  await scenario("the user turns a connector off for a bot", async () => {
+    const reply = await c.ask(claudio, "Call the ping tool of the MCP server named e2e-echo once (load it with ToolSearch if needed) and reply with exactly what it returned.", "the ping");
+    check(mcpCalls() === 1 && reply.includes("PONG-E2E"), `the connector's tool ran once while on: "${reply}"`);
+    check(auditRows().some((r) => r.tool === "mcp__e2e-echo__ping" && r.decision === "pass"), "the gate passed the call");
+    let at = c.received.length;
+    c.send({ type: "connectors", botId: claudio });
+    const listed = await c.waitFor(() => framesOf(c, "connectors", at).find((f) => f.botId === claudio), "the connectors list", 10_000);
+    const echo = listed.connectors.find((x) => x.name === "e2e-echo");
+    check(echo?.status === "connected" && echo.enabled, `the phone sees e2e-echo connected and on: ${JSON.stringify(listed.connectors)}`);
+    check(listed.connectors.every((x) => JSON.stringify(Object.keys(x).sort()) === JSON.stringify(["enabled", "name", "status"])), "the phone gets names, statuses and switches only");
+    at = c.received.length;
+    c.send({ type: "set_connector", botId: claudio, name: "e2e-echo", enabled: false });
+    await c.waitFor(() => framesOf(c, "connectors", at).find((f) => f.connectors.some((x) => x.name === "e2e-echo" && !x.enabled)), "e2e-echo off", 10_000);
+    const off = stateFile().bots.find((b: { id: string }) => b.id === claudio).connectorsOff;
+    check(JSON.stringify(off) === JSON.stringify(["e2e-echo"]), `the choice is saved: ${JSON.stringify(off)}`);
+    return `ran once (${reply.slice(0, 40)}); listed ${JSON.stringify(listed.connectors.map((x) => `${x.name}:${x.status}`))}; turned off`;
   });
 
   await scenario("the sandbox confines a bot's command even after Allow once", async () => {
@@ -266,7 +438,7 @@ try {
     return `card "${card.label}"; audit ${rows.map((r) => `${r.decision}/${r.via ?? "-"}`).join(", ")}; reply "${reply.replace(/\s+/g, " ").slice(0, 220)}"; no written.txt`;
   });
 
-  await scenario("an agent commits in its repo under the sandbox and reports", async () => {
+  await scenario("an agent commits in its repo under the sandbox and reports with git's facts", async () => {
     const before = c.messages(claudio).length;
     c.send({
       type: "send",
@@ -274,8 +446,8 @@ try {
       uploads: [],
       text:
         'Call start_agent now with where "mac", project "demo", title "Add hello file", and this prompt: ' +
-        '"Create hello.txt in the repository root containing exactly the line: hello from agent. Commit it on main. There is no remote: do not push and do not open a PR. Then reply DONE." ' +
-        "When the agent reports, tell me in one line whether hello.txt exists.",
+        '"Create hello.txt in the repository root containing exactly the line: hello from agent. Commit it on a new branch named hello-branch. There is no remote: do not push and do not open a PR. Then reply DONE." ' +
+        "When the agent reports, tell me in one line the branch and the number of commits ahead that the bridge's Git line reports.",
     });
     const report = await c.waitFor(
       () => c.messages(claudio).slice(before).find((m) => m.kind === "exchange" && m.peer.kind === "agent" && m.received >= 1),
@@ -287,12 +459,16 @@ try {
     await c.waitFor(() => c.botSays(claudio, at + 1).length > 0 && c.resting(claudio), "the bot's reply to the report");
     const file = join(demo, "hello.txt");
     check(existsSync(file) && readFileSync(file, "utf8").includes("hello from agent"), "the agent created hello.txt in the demo repo");
-    const committed = (await git(demo, "log", "-1", "--name-only", "--format=%s")).text();
-    check(committed.includes("hello.txt"), `the agent's commit on main holds hello.txt: ${JSON.stringify(committed.trim())}`);
+    const committed = (await git(demo, "log", "-1", "--name-only", "--format=%s", "hello-branch")).text();
+    check(committed.includes("hello.txt"), `the agent's commit on hello-branch holds hello.txt: ${JSON.stringify(committed.trim())}`);
     c.send({ type: "details", botId: claudio });
     const details = await c.waitFor(() => c.received.findLast((m) => m.type === "details"), "details", 10_000);
-    check(details.type === "details" && details.agents.some((a) => a.title === "Add hello file" && a.where === "mac" && a.status === "waiting"), "details lists the mac agent as waiting");
-    return `exchange received ${report.kind === "exchange" ? report.received : 0}; demo HEAD ${(await head(demo)).slice(0, 7)} "${committed.split("\n")[0]}"`;
+    const agent = details.type === "details" ? details.agents.find((a) => a.title === "Add hello file") : undefined;
+    check(agent?.where === "mac" && agent.status === "waiting", "details lists the mac agent as waiting");
+    check(agent.evidence?.branch === "hello-branch" && agent.evidence.ahead >= 1 && !agent.evidence.dirty, `the agent carries git's facts: ${JSON.stringify(agent.evidence)}`);
+    const said = c.botSays(claudio, at + 1).map((m) => m.text).join(" ");
+    check(said.includes("hello-branch") && /\b1\b|\bone\b/i.test(said), `the bot read the bridge's Git line: "${said}"`);
+    return `exchange received ${report.kind === "exchange" ? report.received : 0}; evidence ${agent.evidence.branch} ahead ${agent.evidence.ahead}; bot said "${said.slice(0, 120)}"`;
   });
 
   await scenario("Stop on a running turn", async () => {
@@ -333,8 +509,8 @@ try {
    * Asks the bot to start a mac agent. Claude Code's auto-mode classifier reviews start_agent on its own and may refuse
    * it; when the bot ends its turn with no agent, the user confirms once, as a person at the phone would.
    */
-  async function startAgent(project: string, title: string, prompt: string): Promise<{ confirmed: boolean }> {
-    const ask = `Call start_agent now with where "mac", project "${project}", title "${title}", and this prompt: "${prompt}" Then end your turn.`;
+  async function startAgent(project: string, title: string, prompt: string, extra = ""): Promise<{ confirmed: boolean }> {
+    const ask = `Call start_agent now with where "mac", project "${project}", title "${title}"${extra}, and this prompt: "${prompt}" Then end your turn.`;
     const before = c.messages(claudio).length;
     c.send({ type: "send", botId: claudio, uploads: [], text: ask });
     await c.waitFor(() => agentTitled(title) ?? (c.botSays(claudio, before).length > 0 && c.resting(claudio)), `the bot to start ${title}`);
@@ -422,6 +598,39 @@ try {
     return `no hook output before trust; card "${card.label}: ${card.detail}"; after Always, CLAUDE_PROJECT_DIR seen by the hook ${JSON.stringify(dirs)}`;
   });
 
+  await scenario("an agent in its own worktree commits there, and the user removes the worktree once nothing would be lost", async () => {
+    const before = c.messages(claudio).length;
+    const demoHead = await head(demo, "HEAD");
+    const demoBranch = (await git(demo, "symbolic-ref", "--short", "HEAD")).text().trim();
+    await startAgent("demo", "Worktree file", "Create wt.txt containing exactly the line: from the worktree. Commit it. Do not push and do not open a PR. Reply DONE.", ', isolate "worktree"');
+    await c.waitFor(
+      () => c.messages(claudio).slice(before).some((m) => m.kind === "exchange" && m.peer.kind === "agent" && m.peer.title === "Worktree file" && m.received >= 1),
+      "the worktree agent's report",
+      300_000,
+    );
+    await c.waitFor(() => c.resting(claudio), "the bot to rest after the report", 300_000);
+    const rec = agentTitled("Worktree file") as unknown as { agent: { id: string; worktree: { path: string; branch: string } | null; evidence: { ahead: number } | null } };
+    const wt = rec.agent.worktree;
+    check(wt !== null && wt.path.startsWith(`${realpathSync(worktrees)}/demo/`) && wt.branch.startsWith("claudio/"), `the agent got a worktree under CLAUDIOBOT_WORKTREES: ${JSON.stringify(wt)}`);
+    const there = (await git(wt.path, "log", "-1", "--name-only", "--format=%s")).text();
+    check(there.includes("wt.txt") && (await git(wt.path, "symbolic-ref", "--short", "HEAD")).text().trim() === wt.branch, `the commit landed on ${wt.branch} in the worktree: ${JSON.stringify(there.trim())}`);
+    check((await head(demo, "HEAD")) === demoHead && (await git(demo, "symbolic-ref", "--short", "HEAD")).text().trim() === demoBranch && !existsSync(join(demo, "wt.txt")), "the main checkout is untouched");
+    check((rec.agent.evidence?.ahead ?? 0) >= 1, `evidence counts the commit from where the worktree started: ${JSON.stringify(rec.agent.evidence)}`);
+
+    writeFileSync(join(wt.path, ".env"), "TOKEN=e2e\n");
+    let at = c.received.length;
+    c.send({ type: "remove_worktree", agentId: rec.agent.id as never });
+    const refusal = await c.waitFor(() => framesOf(c, "error", at)[0], "the refusal", 30_000);
+    check(existsSync(join(wt.path, ".env")) && /\.env/.test(refusal.message), `a worktree holding .env is not removed: "${refusal.message}"`);
+    rmSync(join(wt.path, ".env"));
+    at = c.received.length;
+    c.send({ type: "remove_worktree", agentId: rec.agent.id as never });
+    await c.waitFor(() => framesOf(c, "agent", at).find((f) => f.agent.id === rec.agent.id && f.agent.worktree === null), "the agent without its worktree", 30_000);
+    check(!existsSync(wt.path), "the worktree folder is gone");
+    check((await git(demo, "branch", "--list", wt.branch)).text().includes(wt.branch), "its branch keeps the commit");
+    return `${wt.branch} at ${wt.path}; refused with .env ("${refusal.message.slice(0, 80)}"), removed after`;
+  });
+
   await scenario("routines are created", async () => {
     const before = c.messages(claudio).length;
     await c.ask(
@@ -440,6 +649,46 @@ try {
     return routines.map((r) => `${r.name}: ${r.describe}, next ${r.nextRunAt}`).join("; ");
   });
 
+  const routineNamed = (x: Client, name: string) => x.bots.get(claudio)?.routines.find((r) => r.name === name);
+  const mint = async (x: Client, routineId: string) => {
+    const at = x.received.length;
+    x.send({ type: "webhook_token", botId: claudio, routineId: routineId as never });
+    return x.waitFor(() => framesOf(x, "webhook_token", at).find((f) => f.routineId === routineId), "a webhook token", 10_000);
+  };
+  const call = (made: { url: string; token: string }, body: string, headers: Record<string, string> = {}) =>
+    fetch(made.url, { method: "POST", headers: { authorization: `Bearer ${made.token}`, "content-type": "application/json", ...headers }, body });
+
+  await scenario("a webhook routine fires once per call with its payload as data", async () => {
+    await c.ask(
+      claudio,
+      'Call set_routine twice now, both with trigger "webhook" and no schedule. First: name "deploys", prompt "A deploy payload arrived. Tell Alex the value of its sha field in one line." ' +
+        'Second: name "keeper", prompt "Call the remember tool once with about user and the text: Alex ran the webhook test. Then end your turn." Then confirm in one line.',
+      "the webhook routines",
+    );
+    const deploys = await c.waitFor(() => routineNamed(c, "deploys"), "deploys on the bot frame", 10_000);
+    await c.waitFor(() => routineNamed(c, "keeper"), "keeper on the bot frame", 10_000);
+    check(deploys.trigger === "webhook" && deploys.schedule === "" && deploys.describe === "When its webhook is called" && deploys.nextRunAt === null, `deploys waits for its webhook: ${JSON.stringify({ ...deploys, runs: undefined })}`);
+    const first = await mint(c, deploys.id);
+    check(first.url === `http://127.0.0.1:${webhookPort}/hook/${deploys.id}` && /^whk_[\w-]{43}$/.test(first.token) && !log.includes(first.token), `the phone got a loopback URL and a token the bridge never logged: ${first.url}`);
+    const before = c.messages(claudio).length;
+    const sha = "e2e-7f3a91";
+    const fired = await call(first, JSON.stringify({ sha, service: "api" }));
+    check(fired.status === 202, `the call fired the routine (${fired.status})`);
+    const again = await call(first, JSON.stringify({ sha: "second" }));
+    check(again.status === 429, `a second call inside a minute waits (${again.status})`);
+    const browser = await call(first, "{}", { origin: "https://evil.example" });
+    check(browser.status === 403, `a call with an Origin header is refused (${browser.status})`);
+    const second = await mint(c, deploys.id);
+    const stale = await call(first, "{}");
+    check(stale.status === 401, `a rotated token no longer works (${stale.status})`);
+    const fresh = await call(second, "{}");
+    check(fresh.status === 429, `the new token is accepted and still inside the cooldown (${fresh.status})`);
+    await c.waitFor(() => c.botSays(claudio, before).some((m) => m.text.includes(sha)) && c.resting(claudio), "the bot to report the sha");
+    check(cardsSince(before).length === 0, "the webhook turn opened no card");
+    await c.waitFor(() => routineNamed(c, "deploys")?.runs[0]?.status === "ok", "the run to settle ok", 30_000);
+    return `202, 429, Origin 403, rotated 401, new token 429; bot said "${c.botSays(claudio, before).map((m) => m.text).join(" ").slice(0, 100)}"`;
+  });
+
   const countBefore = c.messages(claudio).length;
   const idsBefore = new Set(c.messages(claudio).map((m) => m.id));
   const botsBefore = [...c.bots.keys()].sort();
@@ -453,7 +702,7 @@ try {
   const statePath = join(home, "state.json");
   const state = JSON.parse(readFileSync(statePath, "utf8"));
   const due = new Date(Date.now() - 30_000).toISOString();
-  for (const b of state.bots) for (const r of b.routines) r.nextRunAt = due;
+  for (const b of state.bots) for (const r of b.routines) if (r.trigger.kind === "cron") r.nextRunAt = due;
   writeFileSync(statePath, JSON.stringify(state));
   chmodSync(statePath, 0o600);
 
@@ -509,7 +758,70 @@ try {
     return `recalled "${recalled}"`;
   });
 
-  r.close();
+  await scenario("a connector turned off stays off after a restart, and its tool never runs", async () => {
+    const calls = mcpCalls();
+    const audited = () => auditRows().filter((x) => x.tool.startsWith("mcp__e2e-echo__")).length;
+    const auditedBefore = audited();
+    const reply = await r.ask(claudio, "Call the ping tool of the MCP server named e2e-echo once if you can (load it with ToolSearch if needed). If there is no such tool, reply exactly NO-TOOL.", "the ping attempt");
+    check(mcpCalls() === calls, `the server's tool did not run (calls ${calls} -> ${mcpCalls()})`);
+    check(audited() === auditedBefore, "no PreToolUse for e2e-echo reached the gate");
+    const at = r.received.length;
+    r.send({ type: "connectors", botId: claudio });
+    const listed = await r.waitFor(() => framesOf(r, "connectors", at).find((f) => f.botId === claudio), "the connectors list", 10_000);
+    check(listed.connectors.some((x) => x.name === "e2e-echo" && !x.enabled), `the phone still sees it off: ${JSON.stringify(listed.connectors)}`);
+    return `reply "${reply.slice(0, 80)}"; tool calls stayed ${calls}; listed ${JSON.stringify(listed.connectors)}`;
+  });
+
+  await scenario("a muted bot pushes no update but still pushes a card", async () => {
+    r.send({ type: "update_bot", botId: claudio, patch: { muted: true } });
+    await r.waitFor(() => r.bots.get(claudio)?.muted === true, "the bot to show muted", 10_000);
+    const deploys = await mint(r, routineNamed(r, "deploys")!.id);
+    const keeper = await mint(r, routineNamed(r, "keeper")!.id);
+    const name = r.bots.get(claudio)!.name;
+    r.close();
+    await Bun.sleep(1_000);
+    const mutedAt = Date.now();
+    const runOf = (routine: string) => stateFile().bots.find((b: { id: string }) => b.id === claudio).routines.find((x: { name: string }) => x.name === routine).runs[0];
+    let status = 0;
+    for (const deadline = Date.now() + 75_000; Date.now() < deadline; await Bun.sleep(5_000)) {
+      status = (await call(deploys, JSON.stringify({ sha: "e2e-muted" }))).status;
+      if (status !== 429) break;
+    }
+    check(status === 202, `deploys fired with no phone connected (${status})`);
+    for (const deadline = Date.now() + TURN_MS; runOf("deploys")?.status === "running" && Date.now() < deadline; ) await Bun.sleep(1_000);
+    check(runOf("deploys")?.status === "ok", `the muted bot's routine ran and reported (${runOf("deploys")?.status})`);
+    await Bun.sleep(3_000);
+    check(pushes.filter((p) => p.at >= mutedAt).length === 0, `its update was not pushed: ${JSON.stringify(pushes.filter((p) => p.at >= mutedAt).map((p) => p.body))}`);
+    check((await call(keeper, "{}")).status === 202, "keeper fired");
+    const card = await (async () => {
+      for (const deadline = Date.now() + TURN_MS; Date.now() < deadline; await Bun.sleep(500)) {
+        const p = pushes.find((x) => x.at >= mutedAt);
+        if (p) return p;
+        if (spent() > BUDGET_USD) break;
+      }
+      return null;
+    })();
+    check(card !== null && card.body === `${name} needs you`, `the card pushed though the bot is muted: ${JSON.stringify(card)}`);
+    await Bun.sleep(3_000);
+    check(pushes.filter((p) => p.at >= mutedAt).every((p) => p.body.endsWith("needs you")), `only card pushes: ${JSON.stringify(pushes.filter((p) => p.at >= mutedAt).map((p) => p.body))}`);
+    const back = connect(token);
+    await back.opened;
+    back.send({ type: "open", botId: claudio });
+    const held = await back.waitFor(() => back.messages(claudio).find((m): m is Permission => m.kind === "permission" && m.answer === null && m.tool === "mcp__claudio__remember"), "the remember card", 10_000);
+    back.send({ type: "decide", botId: claudio, messageId: held.id, choice: "deny" });
+    back.send({ type: "update_bot", botId: claudio, patch: { muted: false } });
+    await back.waitFor(() => back.bots.get(claudio)?.muted === false && back.resting(claudio), "the bot unmuted and resting");
+    back.close();
+    return `no push for the muted routine report; card push "${card.body}" for "${held.label}"`;
+  });
+
+  await scenario("nothing left the temp folder", async () => {
+    check(!existsSync(cloudMarker), "no cloud agent was attempted");
+    const now = existsSync(realWorktrees) ? readdirSync(realWorktrees).sort().join(",") : null;
+    check(now === realWorktreesBefore, `~/.claudiobot-worktrees is as it was (${realWorktreesBefore} -> ${now})`);
+    return "no --cloud call; the real worktrees folder untouched";
+  });
+
   passed = true;
 } finally {
   await stopServer();

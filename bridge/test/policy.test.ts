@@ -94,7 +94,7 @@ describe("floors", () => {
     ["its own home by absolute path in Bash", sh(`cat ${OWN}/CLAUDE.md && ls ${OWN}`), {}, "pass"],
     ["its own home by absolute path in Write", call("Write", { file_path: `${OWN}/notes.md`, content: "x" }), {}, "pass"],
     ["its own home by relative path", sh("ls library && cat ./CLAUDE.md"), {}, "pass"],
-    ["USER.md", call("Edit", { file_path: `${BRIDGE}/USER.md`, old_string: "a", new_string: "b" }), {}, "pass"],
+    ["USER.md", call("Edit", { file_path: `${BRIDGE}/USER.md`, old_string: "a", new_string: "b" }), {}, "ask:memory.user"],
     ["USER.md from an agent", call("Read", { file_path: `${BRIDGE}/USER.md` }, { cwd: PROJECT }), { actor: agent, scope: agentScope }, "deny:floor.bridge"],
     ["the bot's home from its agent", call("Read", { file_path: `${OWN}/CLAUDE.md` }, { cwd: PROJECT }), { actor: agent, scope: agentScope }, "deny:floor.bridge"],
     [
@@ -887,6 +887,11 @@ describe("pass 3 rows: memory, skills, the claudio registry and connector toggle
     expect(verdict(claudio(name, input), { initiator: viaBot(1) })).toBe(`ask:${rule}`);
   });
 
+  test("an unattended remember card offers no Always, while save_skill's does", () => {
+    expect(decide(claudio("remember", { text: "Likes jazz", about: "user" }), ctx({ initiator: routine }))).toMatchObject({ kind: "ask", rule: "claudio.remember", offerAlways: false });
+    expect(decide(claudio("save_skill", { name: "x", description: "d", body: "b" }), ctx({ initiator: routine }))).toMatchObject({ kind: "ask", offerAlways: true });
+  });
+
   test("every tool the claudio server offers has a deliberate verdict, and one it does not offer is denied", () => {
     for (const name of CLAUDIO_TOOLS) expect(verdict(claudio(name), { initiator: user })).not.toBe("deny:claudio.unknown");
     expect(decide(claudio("run_routine", { name: "digest" }), ctx())).toMatchObject({ kind: "deny", via: "rule", rule: "claudio.unknown" });
@@ -903,9 +908,10 @@ describe("pass 3 rows: memory, skills, the claudio registry and connector toggle
     expect(decide(claudio("delete_routine", { name: "x" }), ctx({ initiator: viaBot(0) }))).toMatchObject({ signature: "mcp__claudio__delete_routine:claudio.routines" });
   });
 
-  test("a bot writing USER.md passes in an attended turn and asks in an unattended one; an agent never reaches it", () => {
+  test("a bot writing USER.md asks in every turn, with no Always; an agent never reaches it", () => {
     const userMd = `${BRIDGE}/USER.md`;
-    expect(verdict(write(userMd), { initiator: user })).toBe("pass");
+    expect(verdict(write(userMd), { initiator: user })).toBe("ask:memory.user");
+    expect(decide(write(userMd), ctx({ initiator: user }))).toMatchObject({ kind: "ask", offerAlways: false });
     expect(verdict(write(userMd), { initiator: routine })).toBe("ask:memory.user");
     expect(verdict(sh(`echo "- likes tea" >> ${userMd}`), { initiator: routine })).toBe("ask:memory.user");
     expect(verdict(call("Read", { file_path: userMd }), { initiator: routine })).toBe("pass");

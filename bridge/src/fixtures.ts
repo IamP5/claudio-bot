@@ -59,6 +59,7 @@ export const server = [
     library: [{ path: "merge-plan.md", size: 2048, modifiedAt: at }],
     links: [{ url: "https://github.com/acme/web/pull/142", host: "github.com", at }],
     agents: [agent, { ...agent, id: "a2", where: "cloud", status: "in_cloud", url: "https://claude.ai/code/session_abc" }],
+    routines: [routine],
   },
   {
     type: "agent", agent, messages: [

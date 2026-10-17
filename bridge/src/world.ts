@@ -15,7 +15,6 @@ import {
   type Message,
   type MessageId,
   type Peer,
-  type PermissionChoice,
   type Routine,
   type RoutineId,
   type RoutineRun,
@@ -35,25 +34,36 @@ export const botActor = (botId: BotId): BotActor => ({ kind: "bot", botId });
 
 export type RunRef = { routineId: RoutineId; runId: RunId };
 
+/** Where a chain of work began. Bot and agent hops inherit it, so lineage survives any number of hops. */
+export type Origin = { kind: "user" } | { kind: "routine"; run: RunRef; manual: boolean } | { kind: "system" };
+
 /**
  * Who started the work a turn is doing. Derived from the envelope (prompts.initiatorOf), never passed around by hand,
  * and recorded on every audit and usage row.
  * - routine.manual: Run now from the phone. Attended and never quiet, but still a routine for initiator bans.
- * - bot.hops: how many bot-to-bot hops led here. message_bot and create_bot are refused at 2 or more.
+ * - bot, agent: a hop. hops counts the bot-to-bot hops along the whole chain, and an agent hop carries the count
+ *   through without adding one. message_bot and create_bot are refused at 2 or more. origin is where the chain began,
+ *   so a chain that began as a routine stays routine-banned however many hops later.
  * - system: no turn in flight, or work the bridge made itself. Treated as unattended.
  */
 export type Initiator =
-  | { kind: "user" }
-  | { kind: "routine"; run: RunRef; manual: boolean }
-  | { kind: "bot"; botId: BotId; hops: number }
-  | { kind: "agent"; agentId: AgentId }
-  | { kind: "system" };
+  | Origin
+  | { kind: "bot"; botId: BotId; hops: number; origin: Origin }
+  | { kind: "agent"; agentId: AgentId; hops: number; origin: Origin };
 
 /** Someone is at the phone. Unattended work gets the policy's stricter column and is held by the daily cap. */
 export const attended = (i: Initiator): boolean => i.kind === "user" || (i.kind === "routine" && i.manual);
 
+export const rootOf = (i: Initiator): Origin => (i.kind === "bot" || i.kind === "agent" ? i.origin : i);
+
+/** The routine bans (no set_routine or delete_routine) apply to every turn of a chain a routine began. */
+export const isRoutineChain = (i: Initiator): boolean => rootOf(i).kind === "routine";
+
+/** Bot-to-bot hops that led to this turn. The policy refuses message_bot and create_bot at 2 or more. */
+export const hopsOf = (i: Initiator): number => (i.kind === "bot" || i.kind === "agent" ? i.hops : 0);
+
 /** The hop count of a bot message or a bot creation made during a turn that `by` started. */
-export const hopsAfter = (by: Initiator | null): number => (by?.kind === "bot" ? by.hops + 1 : 1);
+export const hopsAfter = (by: Initiator | null): number => (by === null ? 0 : hopsOf(by)) + 1;
 
 /**
  * A slice another module owns: a readonly field holding deeply readonly data, so `bot.routines.push(…)` or
@@ -77,6 +87,12 @@ export type Pending = {
   /** The rendered envelope. Notices are prepended when it starts, not stored here. */
   text: string;
   initiator: Initiator;
+  /**
+   * The routine run this envelope's turn end settles. Set only for a routine's own fire, so an approval continuation
+   * that carries the routine's initiator never settles the run a second time. Optional only until session.ts (U2)
+   * copies it from the queued input; then required.
+   */
+  settles?: RunRef | null;
   /** Starts so far. A replay after a crash or a transient error bumps it; 3 is the poison limit. */
   attempts: number;
 };
@@ -109,6 +125,18 @@ export type Lifecycle =
   | { kind: "stopping"; turn: ActiveTurn; deadline: string }
   | { kind: "backoff"; until: string; attempt: number }
   | { kind: "parked"; reason: ParkReason; until: string };
+
+/** Why a session's queue head waits instead of starting. */
+export type Hold = { reason: ParkReason; until: string };
+
+/**
+ * The hold on the queue head: a park with work queued. A parked lifecycle never carries a turn, so a held bot has
+ * nothing running. session.ts keeps the lifecycle parked exactly while the head is held, for either reason.
+ */
+export function holdOf(state: Owned<SessionState>): Hold | null {
+  const l = state.lifecycle;
+  return l.kind === "parked" && state.pending.length > 0 ? { reason: l.reason, until: l.until } : null;
+}
 
 /** A line told to the actor at the top of its next envelope. How expiry and Stop reach it without spending a turn. */
 export type Notice = { at: string; text: string };
@@ -193,7 +221,7 @@ export type DeviceRecord = {
   legacy: boolean;
 };
 
-/** Pushes already sent, recorded before sending so a crash never double-pushes. key: `${cardId}|card` or `${cardId}|reminder`. Writer: push.ts. */
+/** Pushes already sent, recorded before sending so a crash never double-pushes. key: `${messageId}|${reason}`. Writer: push.ts. */
 export type PushState = { sent: { key: string; at: string }[] };
 
 
@@ -226,6 +254,8 @@ export type AgentRecord = {
   cloudSession: string | null;
   /** null: the bridge default. */
   budgetUsd: number | null;
+  /** The bot turn that started the agent. A report with no turn behind it (a restart cut it off) inherits this lineage. */
+  startedBy: Initiator;
 };
 
 export type World = {
@@ -326,9 +356,7 @@ export function openCard(messages: Message[]): Card | null {
   return null;
 }
 
-export type CardAnswer =
-  | { kind: "question"; answer: number | "dismissed" | "expired" }
-  | { kind: "permission"; answer: PermissionChoice | "expired" };
+export type CardAnswer = { [K in Card["kind"]]: { kind: K; answer: NonNullable<Extract<Card, { kind: K }>["answer"]> } }[Card["kind"]];
 
 const cardWord = { question: "question", permission: "request" } as const;
 
@@ -345,18 +373,21 @@ export function settleCard<A extends CardAnswer>(
   return { ok: true, card: { ...message, answer: a.answer } as Extract<Card, { kind: A["kind"] }> };
 }
 
-/** parked wins (nothing will start), then working, then awaiting_approval (resting with its own permission card open). */
-export function botStatus(s: { parked: boolean; working: boolean; awaitingApproval: boolean }): BotStatus {
-  if (s.parked) return "parked";
+/** working wins (a turn runs), then parked (nothing runs and the queue head is held), then awaiting_approval. */
+export function botStatus(s: { working: boolean; held: boolean; awaitingApproval: boolean }): BotStatus {
   if (s.working) return "working";
+  if (s.held) return "parked";
   return s.awaitingApproval ? "awaiting_approval" : "idle";
 }
 
-/** The wire view of a routine. describe and lastRunAt are derived, never stored. */
 /** The newest run that actually fired. */
 export const lastRunAt = (r: Owned<RoutineRecord>): string | null => r.runs.find((run) => run.status !== "skipped")?.at ?? null;
 
-export function routineView(r: Owned<RoutineRecord>): Routine {
+/** Runs a Bot frame carries per routine, which every broadcast repeats. The details reply carries every kept run. */
+export const RUNS_ON_BOT = 5;
+
+/** The wire view of a routine, with its newest `limit` runs. describe and lastRunAt are derived, never stored. */
+export function routineView(r: Owned<RoutineRecord>, limit = r.runs.length): Routine {
   return {
     id: r.id,
     name: r.name,
@@ -367,7 +398,7 @@ export function routineView(r: Owned<RoutineRecord>): Routine {
     lastRunAt: lastRunAt(r),
     trigger: r.trigger.kind,
     nextRunAt: r.nextRunAt,
-    runs: r.runs.map((run) => ({ ...run })),
+    runs: r.runs.slice(0, limit).map((run) => ({ ...run })),
   };
 }
 
@@ -387,7 +418,7 @@ export function toBot(bot: BotRecord, status: BotStatus): Bot {
     preview: lastBot?.kind === "bot" ? (lastBot.text.trim().split("\n")[0] ?? "") : "",
     lastAt: bot.messages.at(-1)?.at ?? bot.createdAt,
     createdAt: bot.createdAt,
-    routines: bot.routines.map(routineView),
+    routines: bot.routines.map((r) => routineView(r, RUNS_ON_BOT)),
     dailyCapUsd: bot.dailyCapUsd,
   };
 }
@@ -419,7 +450,17 @@ export function linksOf(bot: BotRecord, agents: Agent[]): Link[] {
   return [...newest.values()];
 }
 
-/** Upsert by name into the scheduler's own (writable) list. An update keeps the id, runs and fail streak. */
+function sameTrigger(a: Trigger, b: Trigger): boolean {
+  switch (a.kind) {
+    case "cron":
+      return b.kind === "cron" && a.schedule === b.schedule;
+  }
+}
+
+/**
+ * Upsert by name into the scheduler's own (writable) list. An update keeps the id and runs. A new trigger, pausing or
+ * re-enabling clears nextRunAt for the scheduler to recompute; re-enabling also clears the fail streak.
+ */
 export function upsertRoutine(
   routines: RoutineRecord[],
   fields: { name: string; trigger: Trigger; prompt: string; enabled: boolean },
@@ -427,7 +468,10 @@ export function upsertRoutine(
 ): { routine: RoutineRecord; created: boolean } {
   const existing = routines.find((r) => r.name === fields.name);
   if (existing) {
+    const retimed = !sameTrigger(existing.trigger, fields.trigger) || existing.enabled !== fields.enabled;
+    if (fields.enabled && !existing.enabled) existing.failStreak = 0;
     Object.assign(existing, fields);
+    if (retimed) existing.nextRunAt = null;
     return { routine: existing, created: false };
   }
   const routine: RoutineRecord = { id: newId(), ...fields, nextRunAt: null, runs: [], failStreak: 0 };

@@ -56,7 +56,7 @@ export type Routine = {
   lastRunAt: string | null;
   trigger: TriggerKind;
   nextRunAt: string | null;
-  // Newest first, at most 20.
+  // Newest first. A Bot frame carries the newest 5; details carries every kept run, at most 20.
   runs: RoutineRun[];
 };
 
@@ -183,7 +183,8 @@ export type ServerMessage =
   | { type: "conversation"; botId: BotId; messages: Message[] }
   // Insert or replace by message.id. Replaying the same message is a no-op.
   | { type: "message"; botId: BotId; message: Message }
-  | { type: "details"; botId: BotId; library: LibraryFile[]; links: Link[]; agents: Agent[] }
+  // routines: the bot's routines with their full run history.
+  | { type: "details"; botId: BotId; library: LibraryFile[]; links: Link[]; agents: Agent[]; routines: Routine[] }
   | { type: "agent"; agent: Agent; messages: AgentMessage[] }
   // content is null when the file is not text or is over 1 MB. data is base64 for images up to 10 MB.
   | { type: "file"; botId: BotId; path: string; mime: string; content: string | null; data: string | null }

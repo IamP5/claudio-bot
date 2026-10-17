@@ -312,6 +312,53 @@
           "createdAt": "2026-10-16T12:00:00.000Z",
           "updatedAt": "2026-10-16T12:00:00.000Z"
         }
+      ],
+      "routines": [
+        {
+          "id": "r1",
+          "name": "morning-digest",
+          "schedule": "57 7 * * 1-5",
+          "describe": "Weekdays at 7:57 AM",
+          "prompt": "Post today's tech digest.",
+          "enabled": true,
+          "lastRunAt": "2026-10-16T12:00:00.000Z",
+          "trigger": "cron",
+          "nextRunAt": "2026-10-17T11:57:00.000Z",
+          "runs": [
+            {
+              "id": "run4",
+              "at": "2026-10-16T12:00:00.000Z",
+              "status": "ok",
+              "late": false,
+              "manual": true,
+              "note": null
+            },
+            {
+              "id": "run3",
+              "at": "2026-10-15T11:57:00.000Z",
+              "status": "quiet",
+              "late": true,
+              "manual": false,
+              "note": null
+            },
+            {
+              "id": "run2",
+              "at": "2026-10-14T11:57:00.000Z",
+              "status": "failed",
+              "late": false,
+              "manual": false,
+              "note": "Overloaded"
+            },
+            {
+              "id": "run1",
+              "at": "2026-10-13T11:57:00.000Z",
+              "status": "skipped",
+              "late": false,
+              "manual": false,
+              "note": "Missed while the Mac was asleep"
+            }
+          ]
+        }
       ]
     },
     {

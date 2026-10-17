@@ -1,5 +1,6 @@
 import type * as nodeFs from "node:fs";
 import { join } from "node:path";
+import { bridgeUrls, tailnetName } from "./address";
 import { lockPathOf, pidIn } from "./lock";
 import { projectRoots } from "./projects";
 import { launchctl, readInstalled, type Exec, type InstalledPlist, type LaunchdState, type ServiceTarget } from "./service";
@@ -51,7 +52,8 @@ export type Facts = {
   health: { url: string; ok: boolean; error: string | null };
   lock: LockFacts;
   roots: { explicit: boolean; list: { path: string; exists: boolean; repos: number }[] };
-  tailscale: { path: string | null; ip: string | null };
+  /** url: the socket address on the tailnet name, which the app can reach from anywhere it runs Tailscale. */
+  tailscale: { path: string | null; ip: string | null; url: string | null };
   lan: string[];
   legacy: { homeSet: boolean; oldEnvSet: boolean; oldHome: string; newHome: string; old: Entry; new: Entry };
 };
@@ -139,6 +141,14 @@ async function health(deps: Pick<DoctorDeps, "fetch">, port: number): Promise<Fa
 
 const TAILSCALE_APP = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
 
+async function tailscaleOf(exec: Exec, path: string | null, port: number): Promise<Facts["tailscale"]> {
+  if (path === null) return { path, ip: null, url: null };
+  const ip = await version(exec, [path, "ip", "-4"]);
+  const status = await exec([path, "status", "--json"]).catch(() => null);
+  const name = status && status.code === 0 ? tailnetName(status.stdout) : null;
+  return { path, ip, url: name === null ? null : bridgeUrls({ tailnet: name, localHost: null }, [], port)[0]! };
+}
+
 export async function gather(deps: DoctorDeps, target: ServiceTarget): Promise<Facts> {
   const { fs, exec } = deps;
   const view = await serviceView(deps, target);
@@ -184,7 +194,7 @@ export async function gather(deps: DoctorDeps, target: ServiceTarget): Promise<F
     health: await health(deps, view.port),
     lock: readLock(fs, deps.alive, view.home),
     roots: { explicit: explicitRoots, list: roots },
-    tailscale: { path: tailscalePath, ip: tailscalePath ? await version(exec, [tailscalePath, "ip", "-4"]) : null },
+    tailscale: await tailscaleOf(exec, tailscalePath, view.port),
     lan: deps.lan(),
     legacy: {
       homeSet: view.env.CLAUDIOBOT_HOME !== undefined,
@@ -284,7 +294,8 @@ const CHECKS: Check[] = [
   (f) => {
     if (!f.tailscale.path) return warn("tailscale", "not installed (optional: it lets the phone reach the bridge away from this network)");
     if (!f.tailscale.ip) return warn("tailscale", `installed at ${f.tailscale.path} but has no address; is it signed in and up?`);
-    return pass("tailscale", `${f.tailscale.ip}`);
+    if (!f.tailscale.url) return pass("tailscale", `${f.tailscale.ip}; turn on MagicDNS for a *.ts.net name the app can use`);
+    return pass("tailscale", `${f.tailscale.url} (${f.tailscale.ip}): use it in Edit address to reach the bridge away from home`);
   },
 
   (f) => (f.lan.length === 0 ? warn("lan", "no LAN address: a phone on the same Wi-Fi cannot reach the bridge") : pass("lan", f.lan.join(", "))),

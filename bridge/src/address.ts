@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 
-// The addresses the bridge prints, best first. The first goes in the pairing QR code, so it is the one a phone keeps.
+// The addresses the bridge prints, best first. The pairing QR code carries them all; the app redeems the code at the
+// first that answers and keeps that one.
 // - The tailnet name (mac.tailnet-1234.ts.net) reaches the Mac from anywhere the phone runs Tailscale, and the app's
 //   ATS exception covers ws:// to *.ts.net. A raw 100.x address would also work but changes if the node is re-added.
 // - The Bonjour name (Mac.local) survives the router handing the Mac a new LAN address.
@@ -21,6 +22,11 @@ export function lanAddresses(): string[] {
 export function bridgeUrls(names: Names, lan: string[], port: number): string[] {
   const hosts = [names.tailnet, names.localHost, ...(lan.length > 0 ? lan : ["127.0.0.1"])].filter((h): h is string => h !== null);
   return [...new Set(hosts)].map((host) => `ws://${host}:${port}/ws`);
+}
+
+/** claudiobot://pair?url=…&url=…&code=…, one url per address. An app that reads only the first url still pairs. */
+export function pairLink(urls: string[], code: string): string {
+  return `claudiobot://pair?${urls.map((u) => `url=${encodeURIComponent(u)}`).join("&")}&code=${code}`;
 }
 
 /** Self.DNSName from `tailscale status --json`, when this node is signed in and online. */

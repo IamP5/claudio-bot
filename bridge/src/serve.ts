@@ -163,7 +163,10 @@ export function serve(deps: ServeDeps): Transport {
     async fetch(req, server) {
       if (rejectsOrigin(req)) return new Response("Forbidden", { status: 403 });
       const url = new URL(req.url);
-      if (url.pathname === "/health") return Response.json({ ok: true });
+      if (url.pathname === "/health") {
+        const proof = devices.prove(url.searchParams.get("device") ?? "", url.searchParams.get("nonce") ?? "");
+        return Response.json(proof === null ? { ok: true } : { ok: true, proof });
+      }
       if (url.pathname === "/pair") return pair(req, server.requestIP(req)?.address ?? "");
       if (url.pathname === "/ws") {
         const deviceId = devices.authenticate(req);

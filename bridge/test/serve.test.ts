@@ -366,3 +366,19 @@ test("a protocol 3 app resumes from the replay ring; an app that did not announc
   await Bun.sleep(50);
   expect(today.inbox).toEqual([]);
 });
+
+test("/health proves to a paired phone that it is the same bridge, without the phone sending its token", async () => {
+  const { createHash, createHmac } = await import("node:crypto");
+  const b = boot(tempHome());
+  const phone = await pairPhone(b);
+  const nonce = "9f".repeat(16);
+  const key = createHash("sha256").update(phone.token).digest();
+  const expected = createHmac("sha256", key).update(nonce).digest("hex");
+
+  const proved = (await (await fetch(`${b.http}/health?device=${phone.deviceId}&nonce=${nonce}`)).json()) as { ok: boolean; proof?: string };
+  expect(proved).toEqual({ ok: true, proof: expected });
+
+  expect(await (await fetch(`${b.http}/health`)).json()).toEqual({ ok: true });
+  expect(await (await fetch(`${b.http}/health?device=d_unknown&nonce=${nonce}`)).json()).toEqual({ ok: true });
+  expect(await (await fetch(`${b.http}/health?device=${phone.deviceId}&nonce=short`)).json()).toEqual({ ok: true });
+});

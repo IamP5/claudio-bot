@@ -770,7 +770,11 @@ export function createHub(deps: HubDeps): Hub {
         bot.unread = Math.max(1, bot.unread);
         changed(bot);
         return [];
-      case "delete_bot":
+      case "delete_bot": {
+        // Worktrees outlive the bot and no phone screen reaches them after it goes, so the phone lists them first.
+        const held = [...world.agents.values()].flatMap((rec) => (rec.agent.botId === bot.id && rec.agent.worktree ? [rec.agent.worktree.branch] : []));
+        if (held.length > 0 && message.force !== true)
+          return error(`${bot.name}'s agents still hold worktrees on ${held.join(", ")}. Remove them from each agent, or delete anyway to keep them on the Mac.`);
         brains.get(bot.id)?.close();
         brains.delete(bot.id);
         readings.delete(bot.id);
@@ -794,6 +798,7 @@ export function createHub(deps: HubDeps): Hub {
         }
         deps.broadcast({ type: "bot_removed", botId: bot.id });
         return [];
+      }
       case "set_routine":
         return done(scheduler.setEnabled(bot.id, message.routineId, message.enabled));
       case "run_routine":

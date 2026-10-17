@@ -103,7 +103,7 @@ const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
   stop_agent: (o) => ({ type: "stop_agent", agentId: agentId(o) }),
   update_bot: (o) => ({ type: "update_bot", botId: botId(o), patch: patch(o.patch) }),
   mark_unread: (o) => ({ type: "mark_unread", botId: botId(o) }),
-  delete_bot: (o) => ({ type: "delete_bot", botId: botId(o) }),
+  delete_bot: (o) => (o.force === undefined ? { type: "delete_bot", botId: botId(o) } : { type: "delete_bot", botId: botId(o), force: bool(o, "force") }),
   set_routine: (o) => ({ type: "set_routine", botId: botId(o), routineId: routineId(o), enabled: bool(o, "enabled") }),
   run_routine: (o) => ({ type: "run_routine", botId: botId(o), routineId: routineId(o) }),
   details: (o) => ({ type: "details", botId: botId(o) }),

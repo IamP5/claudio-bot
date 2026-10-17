@@ -1054,6 +1054,30 @@ test("delete_bot removes the config folders of the bot's agents and keeps other 
   expect([...world.agents.keys()]).toEqual(["a_kept" as AgentId]);
 });
 
+test("delete_bot refuses while the bot's agents hold worktrees, and deletes with force", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  world.agents.set("a_1" as AgentId, {
+    agent: { id: "a_1" as AgentId, botId: b.id, title: "Fix", where: "mac", projectName: "app", status: "waiting", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: { path: "/wt/a_1", branch: "claudio/fix" } },
+    cwd: "/wt/a_1",
+    messages: [],
+    session: emptySession(),
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: { kind: "user" },
+  });
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+
+  const refused = await h.hub.handle({ type: "delete_bot", botId: b.id });
+  expect(refused).toEqual([{ type: "error", message: expect.stringContaining("claudio/fix") }]);
+  expect(world.bots.has(b.id)).toBe(true);
+
+  expect(await h.hub.handle({ type: "delete_bot", botId: b.id, force: true })).toEqual([]);
+  expect(world.bots.has(b.id)).toBe(false);
+});
+
 test("saving and deleting a skill sends every phone the bot's new list", async () => {
   const world = emptyWorld();
   const b = bot("eng");

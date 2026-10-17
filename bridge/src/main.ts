@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import qrcode from "qrcode-terminal";
-import { bridgeUrls, lanAddresses, readNames } from "./address";
+import { bridgeUrls, lanAddresses, pairLink, readNames } from "./address";
 import { createDevices, type PairCode } from "./devices";
 import { createHomes } from "./home";
 import { createHub } from "./hub";
@@ -123,7 +123,7 @@ console.log(`claudiobot bridge on ${machine}`);
 for (const url of urls) console.log(`  ${url}`);
 
 function announce({ code, expiresAt }: PairCode) {
-  const link = `claudiobot://pair?url=${encodeURIComponent(urls[0]!)}&code=${code}`;
+  const link = pairLink(urls, code);
   console.log(`pair code: ${code} (single use, until ${new Date(expiresAt).toLocaleTimeString()})`);
   console.log(`pair: ${link}`);
   qrcode.generate(link, { small: true }, (qr) => console.log(qr));

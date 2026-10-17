@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { Device, DeviceId, PairResponse } from "./protocol";
 import type { Persist } from "./store";
 import { displayName } from "./text";
@@ -40,6 +40,12 @@ export type Devices = {
   /** Removes the device. The caller closes its live sockets at once. False when it was not paired. Throws, with the device kept, when the removal cannot be saved. */
   revoke(id: DeviceId): boolean;
   seen(id: DeviceId): void;
+  /**
+   * GET /health?device&nonce, before a phone sends its token to an address it has not used: HMAC-SHA256 of the nonce
+   * keyed by the sha256 of the device's token, which only this bridge and that phone hold. Null for an unknown or
+   * legacy device, or a nonce that is not 32 to 128 hex digits.
+   */
+  prove(id: string, nonce: string): string | null;
   /** Registers protocol 2's shared token as the legacy device (hash only), so a phone paired before protocol 3 keeps working. Idempotent. */
   importLegacy(token: string): void;
 };
@@ -193,6 +199,12 @@ export function createDevices(deps: {
       if (since >= 0 && since < SEEN_EVERY_MS) return;
       record.lastSeenAt = now.toISOString();
       deps.persist();
+    },
+
+    prove(id, nonce) {
+      if (!/^[0-9a-f]{32,128}$/i.test(nonce)) return null;
+      const record = records.find((d) => d.id === id && !d.legacy);
+      return record ? createHmac("sha256", Buffer.from(record.tokenHash, "hex")).update(nonce).digest("hex") : null;
     },
 
     importLegacy(token) {

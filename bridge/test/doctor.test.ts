@@ -23,7 +23,7 @@ const healthy: Facts = {
   health: { url: "http://127.0.0.1:7878/health", ok: true, error: null },
   lock: { path: "/Users/me/.claudiobot.lock", kind: "pid", pid: 4242, alive: true },
   roots: { explicit: true, list: [{ path: "/Users/me/code", exists: true, repos: 3 }] },
-  tailscale: { path: "/usr/local/bin/tailscale", ip: "100.64.0.7" },
+  tailscale: { path: "/usr/local/bin/tailscale", ip: "100.64.0.7", url: "ws://mac.tail-1234.ts.net:7878/ws" },
   lan: ["192.168.1.20"],
   legacy: { homeSet: false, oldEnvSet: false, oldHome: "/Users/me/.claudebot", newHome: "/Users/me/.claudiobot", old: { kind: "absent" }, new: { kind: "dir" } },
 };
@@ -65,8 +65,10 @@ describe("checks", () => {
     ["roots", "explicit root empty", { roots: { explicit: true, list: [{ path: "/empty", exists: true, repos: 0 }] } }, "WARN", "/empty holds no git repos"],
     ["roots", "no repos in defaults", { roots: { explicit: false, list: [{ path: "/d", exists: true, repos: 0 }] } }, "WARN", "no git repos in the default folders; set CLAUDIOBOT_ROOTS and run claudiobot install"],
     ["roots", "repos in defaults", { roots: { explicit: false, list: [{ path: "/a", exists: true, repos: 2 }, { path: "/b", exists: false, repos: 0 }] } }, "PASS", "2 git repos in /a"],
-    ["tailscale", "absent", { tailscale: { path: null, ip: null } }, "WARN", "not installed (optional: it lets the phone reach the bridge away from this network)"],
-    ["tailscale", "down", { tailscale: { path: "/t", ip: null } }, "WARN", "installed at /t but has no address; is it signed in and up?"],
+    ["tailscale", "absent", { tailscale: { path: null, ip: null, url: null } }, "WARN", "not installed (optional: it lets the phone reach the bridge away from this network)"],
+    ["tailscale", "down", { tailscale: { path: "/t", ip: null, url: null } }, "WARN", "installed at /t but has no address; is it signed in and up?"],
+    ["tailscale", "up", {}, "PASS", "ws://mac.tail-1234.ts.net:7878/ws (100.64.0.7): use it in Edit address to reach the bridge away from home"],
+    ["tailscale", "up without MagicDNS", { tailscale: { path: "/t", ip: "100.64.0.7", url: null } }, "PASS", "100.64.0.7; turn on MagicDNS for a *.ts.net name the app can use"],
     ["lan", "no address", { lan: [] }, "WARN", "no LAN address: a phone on the same Wi-Fi cannot reach the bridge"],
   ];
 

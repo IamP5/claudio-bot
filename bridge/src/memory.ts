@@ -135,10 +135,10 @@ function factLines(d: Doc, untaggedAt: string): FactLine[] {
     const tag = TAGGED.exec(item);
     if (tag && tag[1] && !Number.isNaN(Date.parse(tag[3]!))) {
       const proposer = (tag[4] ?? null) as BotId | null;
-      out.push({ line, tagged: true, proposer, fact: { id: tag[2] as FactId, text: tag[1], at: tag[3]!, by: tag[5] ?? null, confirmed: proposer === null } });
+      out.push({ line, tagged: true, proposer, fact: { id: tag[2] as FactId, text: tag[1], at: tag[3]!, by: tag[5] ?? null, confirmed: proposer === null, proposerBotId: proposer } });
     } else {
       const id = `f_${sha256(item).slice(0, 8)}` as FactId;
-      out.push({ line, tagged: false, proposer: null, fact: { id, text: item, at: untaggedAt, by: null, confirmed: true } });
+      out.push({ line, tagged: false, proposer: null, fact: { id, text: item, at: untaggedAt, by: null, confirmed: true, proposerBotId: null } });
     }
   }
   return out;
@@ -241,12 +241,13 @@ export function createMemory(deps: MemoryDeps): Memory {
   }
 
   const unique = (lines: FactLine[]) => lines.filter((f, i) => lines.findIndex((g) => g.fact.id === f.fact.id) === i);
-  const newFact = (text: string, by: string | null, confirmed: boolean): Fact => ({
+  const newFact = (text: string, by: string | null, proposerBotId: BotId | null): Fact => ({
     id: `f_${randomBytes(4).toString("hex")}` as FactId,
     text,
     at: deps.now().toISOString(),
     by,
-    confirmed,
+    confirmed: proposerBotId === null,
+    proposerBotId,
   });
   /** The lines of proposals that a confirmed fact with this text makes redundant. */
   const proposalsLike = (facts: FactLine[], text: string, except: FactId | null) =>
@@ -260,7 +261,7 @@ export function createMemory(deps: MemoryDeps): Memory {
     const known = facts.find((f) => (f.proposer === null || f.proposer === botId) && sameText(f.fact.text, text));
     if (known) return `Already known: ${known.fact.text}`;
     ensureRoom(unique(facts).length);
-    commit(doc, facts, { append: factLine(newFact(text, deps.botName(botId), false), botId) });
+    commit(doc, facts, { append: factLine(newFact(text, deps.botName(botId), botId), botId) });
     deps.reopen(botId);
     return `Remembered: ${text}. You see it from your next turn. Other bots see it once the user confirms it in Settings, Memory.`;
   }
@@ -343,11 +344,11 @@ export function createMemory(deps: MemoryDeps): Memory {
         const drop = proposalsLike(facts, text, factId);
         if (factId === null) {
           ensureRoom(unique(facts).length - drop.size);
-          commit(doc, facts, { drop, append: factLine(newFact(text, null, true), null) });
+          commit(doc, facts, { drop, append: factLine(newFact(text, null, null), null) });
         } else {
           const target = facts.filter((f) => f.fact.id === factId);
           if (target.length === 0) return refused("That fact is no longer in USER.md.");
-          const edited = factLine({ id: factId, text, at: deps.now().toISOString(), by: null, confirmed: true }, null);
+          const edited = factLine({ id: factId, text, at: deps.now().toISOString(), by: null, confirmed: true, proposerBotId: null }, null);
           commit(doc, facts, { set: new Map(target.map((f) => [f.line, edited])), drop });
         }
         deps.reopen(null);
@@ -362,7 +363,7 @@ export function createMemory(deps: MemoryDeps): Memory {
         if (target.length === 0) return refused("That fact is no longer in USER.md.");
         if (target.every((f) => f.proposer === null)) return { ok: true };
         const fact = target[0]!.fact;
-        const confirmed = factLine({ ...fact, confirmed: true }, null);
+        const confirmed = factLine({ ...fact, confirmed: true, proposerBotId: null }, null);
         commit(doc, facts, { set: new Map(target.map((f) => [f.line, confirmed])), drop: proposalsLike(facts, fact.text, factId) });
         deps.reopen(null);
         return { ok: true };

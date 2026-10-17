@@ -57,7 +57,7 @@ async function start(s: ReturnType<typeof setup>, args: string[] = []) {
   }
 }
 
-test("a first start names the Mac, lists its socket URLs and prints a code whose link points at the first of them", async () => {
+test("a first start names the Mac, lists its socket URLs and prints a code whose link carries all of them", async () => {
   const { text, port } = await start(setup());
   const urls = [...text.matchAll(/^ {2}(ws:\/\/\S+)$/gm)].map((m) => m[1]!);
   const code = text.match(/^pair code: (\S+) \(single use, until .+\)$/m)?.[1];
@@ -66,7 +66,7 @@ test("a first start names the Mac, lists its socket URLs and prints a code whose
   expect(urls.length).toBeGreaterThan(0);
   expect(urls.every((u) => u.endsWith(`:${port}/ws`))).toBe(true);
   expect(code).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/);
-  expect(text).toContain(`pair: claudiobot://pair?url=${encodeURIComponent(urls[0]!)}&code=${code}\n`);
+  expect(text).toContain(`pair: claudiobot://pair?${urls.map((u) => `url=${encodeURIComponent(u)}`).join("&")}&code=${code}\n`);
 });
 
 test.each([

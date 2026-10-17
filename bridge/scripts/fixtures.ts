@@ -102,8 +102,8 @@ export const server = [
   { type: "activity", botId: "b1", agentId: null, text: "Reading hub.ts", at },
   { type: "activity", botId: "b1", agentId: "a1", text: null, at },
   { type: "memory", seq: 56, facts: [
-    { id: "f_1", text: "Prefers short answers", at, by: null, confirmed: true },
-    { id: "f_2", text: "Works on acme/web", at, by: "engineer", confirmed: false },
+    { id: "f_1", text: "Prefers short answers", at, by: null, confirmed: true, proposerBotId: null },
+    { id: "f_2", text: "Works on acme/web", at, by: "engineer", confirmed: false, proposerBotId: "b1" },
   ] },
   { type: "connectors", botId: "b1", connectors: [
     { name: "github", status: "connected", enabled: true },
@@ -122,7 +122,7 @@ export const client = [
   { type: "dismiss", botId: "b1", messageId: "m7" },
   { type: "update_bot", botId: "b1", patch: { name: "eng", title: "Ships PRs", avatar: { shape: "star6", color: "blue" }, pinned: true, hidden: false } },
   { type: "mark_unread", botId: "b1" },
-  { type: "delete_bot", botId: "b1" },
+  { type: "delete_bot", botId: "b1", force: true },
   { type: "set_routine", botId: "b1", routineId: "r1", enabled: false },
   { type: "details", botId: "b1" },
   { type: "agent", agentId: "a1" },

@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import * as fs from "node:fs";
-import { homedir, networkInterfaces } from "node:os";
+import { homedir } from "node:os";
+import { lanAddresses } from "./address";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { doctor, serviceView, status, type DoctorDeps } from "./doctor";
@@ -84,13 +85,6 @@ async function ask(question: string): Promise<boolean> {
   }
 }
 
-function lan(): string[] {
-  return Object.values(networkInterfaces())
-    .flat()
-    .filter((a) => a && a.family === "IPv4" && !a.internal)
-    .map((a) => a!.address);
-}
-
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -113,7 +107,7 @@ async function main(argv: string[]): Promise<number> {
     fetch: (url) => fetch(url, { signal: AbortSignal.timeout(2000) }),
     which: (command, path) => Bun.which(command, { PATH: path }),
     alive,
-    lan,
+    lan: lanAddresses,
     platform: process.platform,
     env: process.env,
     homeDir: homedir(),

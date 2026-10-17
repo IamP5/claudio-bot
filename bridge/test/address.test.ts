@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { bonjourName, bridgeUrls, tailnetName } from "../src/address";
+import { bonjourName, bridgeUrls, pairLink, tailnetName } from "../src/address";
 
 test("the tailnet name comes first, then the Bonjour name, then each LAN address", () => {
   expect(bridgeUrls({ tailnet: "mac.tail-1234.ts.net", localHost: "Alexs-Mac.local" }, ["10.0.0.20", "100.64.0.3"], 7878)).toEqual([
@@ -32,4 +32,10 @@ test("bonjourName adds .local to a valid LocalHostName and refuses anything else
   expect(bonjourName("Alexs-MacBook-Pro\n")).toBe("Alexs-MacBook-Pro.local");
   expect(bonjourName("")).toBeNull();
   expect(bonjourName("has space")).toBeNull();
+});
+
+test("the pairing link carries every address, best first, so the app can fall back from the tailnet name", () => {
+  const link = pairLink(["ws://mac.tail-1234.ts.net:7878/ws", "ws://Alexs-Mac.local:7878/ws"], "7KQM-X2PD");
+  expect(link).toBe("claudiobot://pair?url=ws%3A%2F%2Fmac.tail-1234.ts.net%3A7878%2Fws&url=ws%3A%2F%2FAlexs-Mac.local%3A7878%2Fws&code=7KQM-X2PD");
+  expect(new URL(link).searchParams.getAll("url")).toEqual(["ws://mac.tail-1234.ts.net:7878/ws", "ws://Alexs-Mac.local:7878/ws"]);
 });

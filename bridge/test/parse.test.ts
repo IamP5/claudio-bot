@@ -7,7 +7,7 @@ type Raw = Record<string, unknown>;
 const client = fixtures.client as Raw[];
 
 /** Fields a message may leave out. Every other field is required. */
-const OPTIONAL: Record<string, string[]> = { send: ["uploads", "clientId"] };
+const OPTIONAL: Record<string, string[]> = { send: ["uploads", "clientId"], delete_bot: ["force"] };
 
 /** A value of the wrong type for whatever the field holds. */
 const wrongFor = (value: unknown) => (typeof value === "number" ? "5" : 42);

@@ -928,14 +928,16 @@
           "text": "Prefers short answers",
           "at": "2026-10-16T12:00:00.000Z",
           "by": null,
-          "confirmed": true
+          "confirmed": true,
+          "proposerBotId": null
         },
         {
           "id": "f_2",
           "text": "Works on acme/web",
           "at": "2026-10-16T12:00:00.000Z",
           "by": "engineer",
-          "confirmed": false
+          "confirmed": false,
+          "proposerBotId": "b1"
         }
       ]
     },
@@ -1031,7 +1033,8 @@
     },
     {
       "type": "delete_bot",
-      "botId": "b1"
+      "botId": "b1",
+      "force": true
     },
     {
       "type": "set_routine",

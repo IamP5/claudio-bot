@@ -237,10 +237,12 @@ export type Device = {
 export type StreamPosition = { epoch: string; seq: number; resumed: boolean };
 
 /**
- * One line of USER.md's ## Facts. by: the bot that remembered it, null for the user. confirmed: the user added or confirmed
- * it, so every bot reads it; false is a bot's proposal, read only by that bot until the user confirms it.
+ * One line of USER.md's ## Facts. by: the name of the bot that remembered it when it did, null for the user. confirmed:
+ * the user added or confirmed it, so every bot reads it; false is a bot's proposal, read only by that bot until the user
+ * confirms it. proposerBotId: the bot whose proposal it is, null once confirmed; the app matches proposals to a chat by
+ * it, since a bot's name can change.
  */
-export type Fact = { id: FactId; text: string; at: string; by: string | null; confirmed: boolean };
+export type Fact = { id: FactId; text: string; at: string; by: string | null; confirmed: boolean; proposerBotId: BotId | null };
 
 /**
  * An MCP server the bot's queries load, by name only: its configuration (commands, URLs, headers) never leaves the
@@ -306,7 +308,8 @@ export type ClientMessage =
   | { type: "stop_agent"; agentId: AgentId }
   | { type: "update_bot"; botId: BotId; patch: BotPatch }
   | { type: "mark_unread"; botId: BotId }
-  | { type: "delete_bot"; botId: BotId }
+  // Refused while the bot's agents hold worktrees, unless force: the phone shows them first, then deletes anyway.
+  | { type: "delete_bot"; botId: BotId; force?: boolean }
   | { type: "set_routine"; botId: BotId; routineId: RoutineId; enabled: boolean }
   | { type: "run_routine"; botId: BotId; routineId: RoutineId }
   | { type: "details"; botId: BotId }

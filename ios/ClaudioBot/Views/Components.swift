@@ -4,13 +4,14 @@ struct StatusDot: View {
     let color: Color
     var pulsing = false
     @State private var expanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Circle()
             .fill(color)
             .frame(width: 7, height: 7)
             .background {
-                if pulsing {
+                if pulsing && !reduceMotion {
                     Circle()
                         .fill(color.opacity(0.5))
                         .scaleEffect(expanded ? 2.4 : 1)
@@ -20,6 +21,22 @@ struct StatusDot: View {
                 }
             }
     }
+}
+
+/// Shrinks a touch while pressed, the way system controls answer a finger. Reduce Motion dims instead of scaling.
+struct PressableStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
+            .opacity(configuration.isPressed && reduceMotion ? 0.7 : 1)
+            .animation(.easeOut(duration: configuration.isPressed ? 0.08 : 0.18), value: configuration.isPressed)
+    }
+}
+
+extension ButtonStyle where Self == PressableStyle {
+    static var pressable: PressableStyle { PressableStyle() }
 }
 
 struct ConnectionBadge: View {

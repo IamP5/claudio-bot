@@ -171,8 +171,10 @@ struct AvatarView: View {
     let avatar: Avatar
     var size: CGFloat = 40
     var needsAttention = false
-    /// Bobs and blinks while the bot is typing.
+    /// Bobs and blinks while the bot is typing. Reduce Motion keeps the blink and drops the bob and sway.
     var animated = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 30, paused: !animated)) { context in
@@ -188,7 +190,8 @@ struct AvatarView: View {
 
     private func character(time t: Double) -> some View {
         let face = Face.of(avatar.shape)
-        let bob = animated ? sin(t * 5) * size * 0.05 : 0
+        let moves = animated && !reduceMotion
+        let bob = moves ? sin(t * 5) * size * 0.05 : 0
         let blink = animated && t.truncatingRemainder(dividingBy: 2.6) < 0.14
         return ZStack {
             AvatarBody(shape: avatar.shape)
@@ -201,7 +204,7 @@ struct AvatarView: View {
             eye(at: face.right, tilt: face.tilt, blink: blink)
         }
         .frame(width: size, height: size)
-        .rotationEffect(.degrees(animated ? sin(t * 2.5) * 6 : 0))
+        .rotationEffect(.degrees(moves ? sin(t * 2.5) * 6 : 0))
         .offset(y: bob)
     }
 

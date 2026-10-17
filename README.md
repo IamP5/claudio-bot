@@ -47,7 +47,7 @@ Everything runs on **your Mac, with your own Claude Code login**. There is no ho
 - **The bridge** is a small Bun server in [`bridge/`](bridge). It owns every bot. Each bot is one persistent Claude Code session (through the Claude Agent SDK) with its own home folder for memory and files. It resumes after restarts.
 - **Bots act through tools**, not by printing commands. `ask` posts a question card. `start_agent` launches a coding agent. `set_routine` schedules work. `message_bot` and `create_bot` reach other bots.
 - **Agents do the coding.** A bot hands repository work to a Claude Code agent, either on your Mac in the project folder or as a Claude Code cloud session. Mac agents report every result back to their bot, which checks the claim before telling you.
-- **The gate stands between a bot and your machine.** Every tool call a bot or a Mac agent makes passes a check first. Some calls are refused outright, such as reading your SSH keys. Risky ones, such as `git push origin main`, wait for your tap on the phone. The rest go on to Claude Code's own auto mode. See [Safety model](#safety-model).
+- **The gate stands between a bot and your machine.** Every tool call a bot or a Mac agent makes passes a check first. Some calls are refused outright, such as reading your SSH keys. Risky ones, such as `git push origin main`, wait for your tap on the phone. The rest go on to Claude Code's own auto mode. Under the gate, every shell command runs in the operating system's sandbox, which keeps it out of your keys and the bridge's state even when the command hides what it does. See [Safety model](#safety-model).
 - **The app** in [`ios/`](ios) is SwiftUI for iPhone and iPad. It pairs with the bridge by a one-time code and talks to it over one WebSocket.
 
 ## Features
@@ -100,7 +100,7 @@ open ClaudioBot.xcodeproj
 
 Pick your iPhone (or a simulator) and your signing team, then run. A free Apple ID works; the app then expires after 7 days. Tap **Scan QR code** and scan the code from the bridge, or type the address and the code. The app trades the code for a token of its own. The phone and the Mac need to be on the same network, or on the same [Tailscale](https://tailscale.com) tailnet when you're away from home.
 
-To pair another phone, open Settings on a paired phone and tap **Pair another device**, or restart the bridge with `bun run start -- --pair`.
+To pair another phone, open Settings on a paired phone and tap **Pair another device**, or restart the bridge with `bun run start -- --pair`. To keep the bridge running after you close the terminal, see [Run as a service](#run-as-a-service).
 
 **3. Put a bot to work**
 
@@ -108,12 +108,36 @@ To pair another phone, open Settings on a paired phone and tap **Pair another de
 - Tap **+ → Create new Bot** and answer its first question.
 - Ask any bot to *"check my repo every weekday at 9 and tell me what changed"*.
 
+## Run as a service
+
+`bun run start` lasts as long as its terminal. To run the bridge in the background, start it at login and restart it after a crash, install it as a LaunchAgent:
+
+```bash
+cd claudio-bot/bridge
+bun run claudiobot install
+```
+
+`install` writes `~/Library/LaunchAgents/com.claudiobot.bridge.plist` and loads it in your login session (`gui/<uid>`), where the bridge can reach the Keychain item that holds your Claude Code login. launchd starts it at login and restarts it after a crash, at most once every 10 seconds, but not after a clean stop. The log is `~/Library/Logs/ClaudioBot/bridge.log`, readable only by you, because the first pairing code lands there. While no phone is paired, `install` prints the code and the QR code.
+
+launchd gives the service none of your shell's variables. `install` pins the `PATH` and every `CLAUDIOBOT_*` variable (and `ENABLE_CLAUDEAI_MCP_SERVERS`) of the shell you run it from, so set them first, and run `install` again after you change one or move the checkout.
+
+| Command | What it does |
+| --- | --- |
+| `bun run claudiobot status` | launchd's state and pid, whether `/health` answers, and which process holds the lock. |
+| `bun run claudiobot doctor` | Checks macOS, the service, `bun`, `claude` on the service's `PATH`, the home and secret file modes, `state.json` as a start would read it, `/health`, the lock, the project roots, Tailscale and the LAN. Exits 1 on any FAIL. |
+| `bun run claudiobot logs` | Follows the log. |
+| `bun run claudiobot pair` | Stops the service, runs the bridge in this terminal with `--pair` until a phone pairs, then starts the service again. |
+| `bun run claudiobot update` | Fetches, lists the incoming commits, and only on your yes pulls, runs `bun install --frozen-lockfile` and restarts the service. |
+| `bun run claudiobot uninstall` | Stops the service and removes the LaunchAgent. Your bots, their data and the log stay. |
+
+`--label` and `--log-dir` (or `CLAUDIOBOT_SERVICE_LABEL` and `CLAUDIOBOT_LOG_DIR`) set up a second, throwaway service that never touches the real one.
+
 ## Upgrading
 
 The project used to be called claudebot, with its home in `~/.claudebot`. On its first start the new bridge links `~/.claudiobot` to `~/.claudebot`, so every bot keeps its conversation and its Claude Code session. If `~/.claudiobot` already holds only what a first run leaves, the bridge moves it aside to `~/.claudiobot.pre-migrate-<time>` first and says so. If both folders hold bots, it touches neither, uses `~/.claudiobot`, and prints how to switch.
 
 - **Do not run the old bridge after upgrading.** The new bridge rewrites `state.json` as version 3, which an old bridge does not understand. An old bridge treats it as a first run and overwrites it. To go back, stop the new bridge and copy `state.v2.json.bak` over `state.json` first. Anything changed since the upgrade is lost.
-- **`CLAUDEBOT_HOME` is ignored.** If you set it, rename it to `CLAUDIOBOT_HOME`. Until then the bridge warns at every start.
+- **`CLAUDEBOT_HOME` is ignored.** If you set it, rename it to `CLAUDIOBOT_HOME`. While it is set and `CLAUDIOBOT_HOME` is not, the bridge warns at every start.
 - **Your phone keeps working until 1 January 2027.** A phone paired with the old shared token connects as the "legacy" device. The new app trades that token for its own on its first connection. An app build from before this release still connects, and it sees each permission card as a question with **Allow once** and **Deny**. From 1 January 2027 the bridge refuses the shared token, and a phone still on it pairs again with a code.
 - **Fast routines are paused.** Routines may now run at most every 15 minutes. A routine that ran more often is turned off with a note in its chat. Edit its schedule to turn it back on.
 
@@ -131,6 +155,10 @@ The project used to be called claudebot, with its home in `~/.claudebot`. On its
 | `CLAUDIOBOT_DAILY_USD` | `10` | Each bot's daily spend cap in US dollars, its agents included. A bot's own cap, set from its profile, wins. |
 | `CLAUDIOBOT_AGENT_USD` | `5` | Each Mac agent's lifetime budget in US dollars. |
 | `CLAUDIOBOT_PUSH_URL` | off | An [ntfy](https://ntfy.sh) topic URL for pushes while the app is closed. |
+| `CLAUDIOBOT_ALLOWED_DOMAINS` | | Comma-separated hosts that sandboxed commands may reach without review, on top of GitHub, npm, Yarn, PyPI and crates.io. |
+| `CLAUDIOBOT_SANDBOX_STRICT_NETWORK` | off | `1` makes that list the whole allowlist: a command can no longer ask for another host. |
+| `CLAUDIOBOT_SANDBOX_GH` | off | `1` lets Mac agents run `gh`. It needs its config and macOS's TLS trust service, which loosens the agents' network isolation. Bots never get `gh`. |
+| `ENABLE_CLAUDEAI_MCP_SERVERS` | on | Claude Code's own switch. `false` keeps your claude.ai connectors out of every bot and agent (see [Costs](#costs)). |
 
 ### Push
 
@@ -148,26 +176,43 @@ ClaudioBot runs agents unattended on your machine, so read this before you use i
 
 ### What the bridge enforces
 
-- **Pairing.** A phone pairs with a one-time code that the bridge prints. The code lasts 10 minutes and allows 5 tries. Each phone gets its own token. The bridge stores only a hash of it, and never prints or logs it. Settings on any paired phone lists the phones and can revoke one, which closes its connection at once. After 10 failed pairings from one address in 10 minutes, the bridge refuses that address for 10 minutes with HTTP 429. Requests that carry a browser `Origin` header are refused, so a web page cannot reach the bridge. Revoking a phone paired before this release writes `token.revoked`, and the old shared token is never accepted again, even if the `token` file comes back.
+- **Pairing.** A phone pairs with a one-time code that the bridge prints. The code lasts 10 minutes and allows 5 tries. Each phone gets its own token. The bridge stores only a hash of it, and never prints or logs it. Settings on any paired phone lists the phones and can revoke one, which closes its connection at once. Once an address has failed 10 times within 10 minutes of its first failure, the bridge answers it with HTTP 429 until those 10 minutes are up. Requests that carry a browser `Origin` header are refused, so a web page cannot reach the bridge. Revoking a phone paired before this release writes `token.revoked`, and the old shared token is never accepted again, even if the `token` file comes back.
 - **The gate.** Every tool call by a bot or a Mac agent passes a check first. That covers every built-in tool, every MCP tool and every call a subagent makes.
-  - **Always refused:** the bridge's own state and tokens and other bots' folders, config files the bridge itself loads, SSH, GPG and cloud keys and the Keychain, browser profiles and cookies, stored credentials and tokens (`gh`, npm, Docker, kube, git credentials, 1Password, the Claude login and history), and typing passwords, payment details or 2FA codes. The bot is told to hand those back to you. File paths are resolved through symlinks before they are checked.
+  - **Always refused:** the bridge's own state and tokens and other bots' folders, config files the bridge itself loads, SSH, GPG and cloud keys and the Keychain, browser profiles and cookies, stored credentials and tokens (`gh`, 1Password's CLI, `pass`, npm, Docker, kube, the Vercel CLI, git credentials, 1Password, the Claude login and history), Messages, Mail, Contacts and Calendars, and typing passwords, payment details or 2FA codes. The bot is told to hand those back to you. File paths are resolved through symlinks before they are checked. The sandbox below denies the same paths to every shell command.
   - **Held for your tap:** risky commands such as pushing to the default branch, force-pushing or rewriting history, merging a pull request, deleting a GitHub repo, publishing a package, deploying, setting a secret, sending data to a web service, deleting files outside the bot's folder, changing a config file that controls how it runs, and running a command it builds at runtime. The call is blocked and a permission card opens. It runs only after you tap **Allow once** (that exact call, within 10 minutes) or **Always** (that kind of call for this bot). Nothing typed in the chat approves a call. A card expires after 2 hours, with one reminder at the halfway point. An expired call did not run, and the bot is told you did not say no.
-  - **Stricter when you are not there:** routines, messages between bots and agent turns get the stricter column of the rules. There, pushing any branch, writing outside the bot's folder, creating a bot, starting an agent and acting through a connector also wait for your tap. Work that began as a routine cannot create or delete routines, even several bots later. A chain of bot-to-bot messages stops at two hops. A bot may create at most 5 bots and start at most 20 agents a day.
+  - **Stricter when you are not there:** routines, messages between bots and agent turns get the stricter column of the rules. There, pushing any branch, writing outside the bot's folder, creating a bot, starting an agent, acting through a connector and letting a command reach a host outside the sandbox's allowlist also wait for your tap. Work that began as a routine cannot create or delete routines, even several bots later. A chain of bot-to-bot messages stops at two hops. A bot may create at most 5 bots and start at most 20 agents a day.
   - **Fails closed:** if the check itself fails, the call is blocked. Three blocked or held calls in one turn stop that turn.
-- **Spend caps.** Each bot has a daily cap that its agents share (`CLAUDIOBOT_DAILY_USD`, default $10). At the cap, routines and other background work wait until midnight. A message you type still runs, and the bot's chat says the cap is reached. Each Mac agent has a lifetime budget (`CLAUDIOBOT_AGENT_USD`, default $5), and Claude Code stops the agent's turn when it runs out.
+- **The sandbox.** Every shell command a bot or a Mac agent runs, and every process it starts, runs in Claude Code's sandbox (Seatbelt on macOS). The bridge asks for it with `failIfUnavailable` and without unsandboxed commands, so a command never runs outside it, and a model that asks to turn it off is ignored. The operating system enforces it, so it holds for a script, `python -c` or anything else the gate cannot read.
+  - A **bot**'s commands write only its own folder, `USER.md` and the sandbox's own temp folder, and read nothing else of the bridge home.
+  - A **Mac agent**'s commands write its project folder, the git folders a commit there needs (a worktree's, or the repo's `.git` above a subfolder, never their hooks or config), the per-user temp and cache folders and the package and Xcode build caches. They read nothing of the bridge home.
+  - Both are denied the private paths the gate refuses (keys, the Keychain, browsers, stored credentials, Messages, Mail, Contacts, Calendars, the Claude login and history), and the bridge's own `CLAUDIOBOT_*` variables. A Mac agent may read `~/.ssh/config`, `known_hosts`, public keys and the Keychain, which a push needs (below).
+  - Commands reach GitHub, npm, Yarn, PyPI and crates.io without review, plus `CLAUDIOBOT_ALLOWED_DOMAINS`. For any other host Claude Code re-runs the command with that host added; its classifier reviews that, and on unattended turns the gate also holds it for your tap, showing the hosts. `CLAUDIOBOT_SANDBOX_STRICT_NETWORK=1` removes that way out.
+  - If the sandbox cannot start, commands are off. The bot's chat says so, a query that cannot start at all waits and retries every few minutes with the bot shown as **Unavailable**, and nothing runs unsandboxed.
+- **A repo's own Claude Code config waits for your trust.** A Mac agent starts with an empty configuration folder that only the bridge writes, so the `.claude` settings and hooks, `.mcp.json` servers, commands, agents and skills that a repo or any branch commits do not load. They run as you, outside the gate and the sandbox, so a repo that has them gets a card in its bot's chat: **Trust <repo>'s Claude settings**. Allow once trusts the repo for that agent, Always for every agent in it from then on, and Deny or Never keep its config off. An agent picks the change up at its next turn.
+- **Spend caps.** Each bot has a daily cap that its agents share (`CLAUDIOBOT_DAILY_USD`, default $10). At the cap, routines and other background work wait until midnight. A message you type still runs, and the bot's chat says the cap is reached. An unattended turn's query is also capped at what is left of the day, so Claude Code stops a runaway routine at the cap instead of at its end. Each Mac agent has a lifetime budget (`CLAUDIOBOT_AGENT_USD`, default $5), and Claude Code stops the agent's turn when it runs out.
 - **Audit.** Every checked tool call is appended to `audit/YYYY-MM.jsonl` in the bridge home, with secrets and file contents redacted. Every turn's cost is appended to `usage/YYYY-MM.jsonl`. Both files are readable only by you.
-- **State.** `state.json` is written atomically. A file the bridge cannot read stops the bridge instead of being overwritten. Only one bridge runs per home: a lock file sits beside the home (`~/.claudiobot.lock`), and a second bridge refuses to start.
+- **State.** `state.json` is written atomically. A file the bridge cannot read stops the bridge instead of being overwritten. Only one bridge runs per home: a lock file sits beside the home's real path (`~/.claudiobot.lock`, or `~/.claudebot.lock` once the home is a link to `~/.claudebot`; the bridge holds both then), and a second bridge refuses to start.
 - **Files.** File reads from the app are confined to the bot's home. Uploads land in the bot's `inbox/`, at most 10 MB each, inside socket frames of at most 32 MB.
 
 ### What it does not enforce
 
-- **The rules are not a sandbox.** The gate reads command lines and file paths. It does not watch what a program does once it runs. A script the bot writes and then runs, `python -c`, `node -e`, `make` or any interpreter can do anything the rules would have held. Bots and agents run as you, with your files and your network.
+- **The rules read command lines, and the sandbox only covers commands.** The gate reads command lines and file paths. A script, `python -c` or `make` can do what the rules would have held, inside the sandbox's limits: write the bot's or agent's own folders, read any file outside the private paths (`~/Documents`, other repos), and send data to the allowed hosts. Claude Code's file tools (Read, Write, Edit, Grep, Glob) and web fetches do not run in the sandbox. The gate's floors and rules are what cover them, by path.
+- **Files run later run outside the sandbox.** A build script, a `package.json` script, a Makefile or a git hook an agent writes runs unsandboxed when you or another tool runs it later.
+- **A Mac agent's commands can fetch your GitHub token.** Claude Code's sandbox breaks git over ssh (it points ssh at a proxy that refuses it), so the bridge rewrites `git@github.com:` and `ssh://git@github.com/` remotes to https for agents, and git's Keychain helper supplies the token. Any agent command can ask that helper too. It can send the token only to an allowed host or one the classifier approved, and GitHub is allowed.
+- **Signed commits need your SSH agent.** Private key files stay unreadable inside the sandbox, so an agent can sign a commit with an SSH key only through the SSH agent (the bridge lets the sandbox reach `SSH_AUTH_SOCK` when its environment has one). GPG signing fails, because `~/.gnupg` is private. With signing on and no agent, an agent's commit fails with "No private key found"; turn signing off for the repos agents commit in (`git config commit.gpgsign false`) or give the bridge an agent.
+- **Secrets in project files are not floored.** A `.env` file is an ordinary file. On a turn of yours, an agent with `gh` turned on could post it (`gh gist create .env` passes to the classifier).
 - **Unlisted calls go to Claude Code.** A call that no rule mentions passes to Claude Code's auto permission mode, whose classifier decides. That judgment is Claude Code's, not the bridge's.
 - **Cloud agents are not gated or metered.** They run on claude.ai under your account, outside the bridge.
 - **"Ask before outward actions" is a prompt.** Every bot is told never to merge, deploy, post, message people, set secrets, spend money or delete data without your yes. The gate holds the commands it knows. For everything else, that instruction is a prompt, not a guarantee.
-- **Your own tools come along.** Bots load your Claude Code user settings, so your MCP servers and skills are available to them. Their calls pass the same gate, but what a server does on its end is up to that server.
+- **Your own tools come along.** Bots load your Claude Code user settings, so your MCP servers, plugins, hooks and skills are available to them. Their tool calls pass the same gate, but your hooks and MCP servers run outside the sandbox, and what a server does on its end is up to that server.
 - **Costs are estimates.** The caps use the cost Claude Code reports. A cap is checked before a turn starts, so one turn can go past it. The auto classifier's own requests are not counted.
 - **The network is yours to secure.** The bridge listens on every interface with plain `ws://`. Don't expose port 7878 to the internet. Use your LAN, or Tailscale for remote access.
+
+## Costs
+
+Every turn's cost is what Claude Code reports, and it lands in `usage/YYYY-MM.jsonl`. A query that starts cold pays to write its tools and system prompt into the prompt cache. The bridge starts a new query for each bot's first turn, after 15 idle minutes, for each unattended turn (so its spend cap applies), for each agent, and after a restart.
+
+claude.ai connectors make that cold start expensive: Claude Code loads every connector on your account into every query. One measurement put that at about 225,000 tokens, about $0.90 of cache writes at Sonnet's price, on each cold query. If your bots don't need them, turn them off, either by disconnecting the ones you don't use on claude.ai or by starting the bridge with `ENABLE_CLAUDEAI_MCP_SERVERS=false` (`claudiobot install` keeps it). With connectors off, a cold first turn cost $0.12 to $0.20 on `claude-sonnet-5-5` in this project's own tests, and a turn that resumes a warm cache about $0.01 to $0.02. MCP servers from your own Claude Code settings and plugins still load.
 
 ## Project layout
 
@@ -178,8 +223,10 @@ bridge/                 Bun + TypeScript server
   src/world.ts          every persisted shape and the pure rules over them
   src/hub.ts            client messages and tool calls, routed to the modules below
   src/session.ts        one bot's or agent's turns: durable inbox, Stop, retries, parks
-  src/gate.ts           the tool-call check, permission and question cards, audit
+  src/gate.ts           the tool-call check, permission, question and trust cards, audit
   src/policy.ts         the rules the gate applies
+  src/sandbox.ts        the OS sandbox every bot and agent command runs in
+  src/private.ts        the paths both the gate and the sandbox keep private
   src/scheduler.ts      routines, run history and the one clock
   src/ledger.ts         spend, daily caps and agent budgets
   src/devices.ts        pairing and per-device tokens
@@ -188,7 +235,9 @@ bridge/                 Bun + TypeScript server
   src/migrate.ts        the move from ~/.claudebot
   src/tools.ts          the in-process "claudio" MCP tools bots call
   src/agents.ts         mac and cloud agents
+  src/cli.ts            claudiobot install, status, doctor, logs, pair, update
   scripts/e2e.ts        end-to-end test against real Claude Code
+  scripts/fixtures.ts   the protocol fixtures, checked against the types
 ios/                    SwiftUI app (xcodegen project.yml)
   ClaudioBot/Model      protocol, store (reducer), bridge client, pairing
   ClaudioBot/Views      home, chat, question cards, profile, agents, avatars
@@ -204,7 +253,7 @@ decisions.tsv           the decision log from building it
 cd bridge
 bun test                 # unit tests, no network
 bunx tsc --noEmit
-bun run e2e              # real Claude Code (claude-sonnet-5-5) in a temp home, $0.40 to $0.70
+bun run e2e              # real Claude Code (claude-sonnet-5-5) in a temp home, 13 scenarios, about $0.80
 
 # app
 cd ios

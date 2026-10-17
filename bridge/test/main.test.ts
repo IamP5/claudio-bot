@@ -15,7 +15,7 @@ test("SIGTERM still exits when the last save fails, and says the state was not s
   const home = mkdtempSync(join(tmpdir(), "claudiobot-main-"));
   homes.push(home);
   const bridge = Bun.spawn(["bun", join(import.meta.dir, "../src/main.ts")], {
-    env: { PATH: process.env.PATH, HOME: home, CLAUDIOBOT_HOME: home, CLAUDIOBOT_PORT: "0", CLAUDIOBOT_USER_NAME: "Alex", CLAUDIOBOT_CLAUDE: join(home, "no-claude") },
+    env: { PATH: process.env.PATH, HOME: home, CLAUDIOBOT_HOME: home, CLAUDIOBOT_PORT: "0", CLAUDIOBOT_WEBHOOK_PORT: "0", CLAUDIOBOT_USER_NAME: "Alex", CLAUDIOBOT_CLAUDE: join(home, "no-claude") },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -40,7 +40,7 @@ test("a first start creates the home so that only its owner can list it", async 
   homes.push(root);
   const home = join(root, "fresh");
   const bridge = Bun.spawn(["bun", join(import.meta.dir, "../src/main.ts")], {
-    env: { PATH: process.env.PATH, HOME: root, CLAUDIOBOT_HOME: home, CLAUDIOBOT_PORT: "0", CLAUDIOBOT_USER_NAME: "Alex", CLAUDIOBOT_CLAUDE: join(root, "no-claude") },
+    env: { PATH: process.env.PATH, HOME: root, CLAUDIOBOT_HOME: home, CLAUDIOBOT_PORT: "0", CLAUDIOBOT_WEBHOOK_PORT: "0", CLAUDIOBOT_USER_NAME: "Alex", CLAUDIOBOT_CLAUDE: join(root, "no-claude") },
     stdout: "ignore",
     stderr: "ignore",
   });

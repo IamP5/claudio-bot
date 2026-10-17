@@ -1,7 +1,7 @@
 import { linkSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-// One bridge per home. Owner: U5.
+// One bridge per home.
 
 export type HomeLock =
   | { kind: "held"; path: string; release(): void }
@@ -32,17 +32,18 @@ const readOrNull = (path: string) => {
   }
 };
 
-const pidIn = (body: string) => (/^[1-9]\d*\n?$/.test(body) ? Number(body.trim()) : null);
+/** The pid a lock file names, or null while it is empty or garbled. */
+export const pidIn = (body: string) => (/^[1-9]\d*\n?$/.test(body) ? Number(body.trim()) : null);
 
 const unique = (path: string, pid: number, tag: string) => `${path}.${pid}.${crypto.randomUUID().slice(0, 8)}.${tag}`;
 
 /** Two names for one home (a symlink, CLAUDIOBOT_HOME spelled another way) must find the same lock. */
-function lockPath(home: string): string {
+export function lockPathOf(home: string, realpath: (path: string) => string = realpathSync): string {
   try {
-    return `${realpathSync(home)}.lock`;
+    return `${realpath(home)}.lock`;
   } catch (e) {
     if (errno(e) !== "ENOENT") throw e;
-    return `${join(realpathSync(dirname(home)), basename(home))}.lock`;
+    return `${join(realpath(dirname(home)), basename(home))}.lock`;
   }
 }
 
@@ -91,7 +92,7 @@ export function lockHome(home: string, deps: { pid?: number; sleep?: (ms: number
   const pid = deps.pid ?? process.pid;
   const sleep = deps.sleep ?? Bun.sleepSync;
   mkdirSync(dirname(home), { recursive: true });
-  const path = lockPath(home);
+  const path = lockPathOf(home);
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     if (create(path, pid)) {
       return {

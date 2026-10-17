@@ -21,12 +21,14 @@ import {
   type ServerMessage,
   type StreamPosition,
 } from "./protocol";
-import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, onboarding, persona, type Envelope } from "./prompts";
+import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, NO_AUTO_MEMORY, onboarding, persona, type Envelope } from "./prompts";
 import { cardReply } from "./protocol2";
 import type { Push } from "./push";
+import { gitDirsOf, sandboxFor } from "./sandbox";
 import { createScheduler, type RunOutcome } from "./scheduler";
-import { BREAKER_NOTE, createSession, type Session, type SessionSpec, type TurnEnd } from "./session";
+import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { appendArchive, type Persist } from "./store";
+import { errorText } from "./text";
 import { botToolServer, type BotActions } from "./tools";
 import { freshTurn, readTurn, type Bubble, type Turn } from "./turn";
 import {
@@ -157,9 +159,10 @@ export function createHub(deps: HubDeps): Hub {
     return toBot(
       bot,
       botStatus({
+        unavailable: session?.unavailable ?? false,
         working: session?.working ?? false,
         held: session ? session.parkedFor !== null : holdOf(bot.session) !== null,
-        awaitingApproval: world.gate.open.some((c) => c.kind === "permission" && c.actor.botId === bot.id),
+        awaitingApproval: world.gate.open.some((c) => c.kind !== "question" && c.actor.botId === bot.id),
       }),
     );
   }
@@ -184,7 +187,7 @@ export function createHub(deps: HubDeps): Hub {
     try {
       appendArchive(file, split.archived);
     } catch (e) {
-      deps.log(`history: could not archive to ${file}, keeping it in state.json: ${(e as Error).message}`);
+      deps.log(`history: could not archive to ${file}, keeping it in state.json: ${errorText(e)}`);
       return;
     }
     messages.splice(0, messages.length, ...split.kept);
@@ -270,6 +273,8 @@ export function createHub(deps: HubDeps): Hub {
 
   /** quiet: the turn called routine_no_update and asked nothing. */
   function outcomeOf(end: Exclude<TurnEnd, { kind: "deferred" }>, quiet: boolean): RunOutcome {
+    // A run the daily cap cut short is held by a limit, not broken, so it does not count toward turning the routine off.
+    if (usedBudget(end)) return { status: "skipped", note: "Stopped at the daily cap" };
     switch (end.kind) {
       case "done":
         if (end.result.subtype !== "success") return { status: "failed", note: end.result.errors.join("; ") || end.result.subtype };
@@ -289,7 +294,8 @@ export function createHub(deps: HubDeps): Hub {
   function endTurn(bot: BotRecord, turn: Pending, end: TurnEnd, quiet: boolean) {
     switch (end.kind) {
       case "done":
-        if (end.result.subtype !== "success") note(bot, `${bot.name} stopped with an error: ${end.result.errors.join("; ") || end.result.subtype}`);
+        if (usedBudget(end)) note(bot, `${bot.name} used today's budget; routines and other background work wait until tomorrow.`);
+        else if (end.result.subtype !== "success") note(bot, `${bot.name} stopped with an error: ${end.result.errors.join("; ") || end.result.subtype}`);
         break;
       case "failed":
         note(bot, `${bot.name} crashed: ${end.error}`);
@@ -319,6 +325,8 @@ export function createHub(deps: HubDeps): Hub {
       persist: deps.persist,
       userName,
       log: deps.log,
+      name: () => bot.name,
+      continuing: () => gate.beginTurn(actor),
       ...deps.claude,
       options: () => ({
         cwd: homes.homeOf(bot.id),
@@ -331,6 +339,8 @@ export function createHub(deps: HubDeps): Hub {
         disallowedTools: ["AskUserQuestion"],
         model: deps.model,
         hooks: gate.hooks(actor),
+        sandbox: sandboxFor(actor, scopeOf(actor), process.env),
+        settings: NO_AUTO_MEMORY,
       }),
       onMessage(m, pending) {
         if (!world.bots.has(bot.id)) return;
@@ -412,6 +422,7 @@ export function createHub(deps: HubDeps): Hub {
       // The gate posts a card before it records it as open, so the bot frame say() sent did not count it yet.
       if (reason === "card") changed(bot);
     },
+    trusted: (root) => agents.trusted(root),
     persist: deps.persist,
     auditDir: join(root, "audit"),
     userName,
@@ -437,6 +448,13 @@ export function createHub(deps: HubDeps): Hub {
     log: deps.log,
     claude: deps.claude,
     hooks: (actor) => gate.hooks(actor),
+    beginTurn: (actor) => gate.beginTurn(actor),
+    sandbox(actor) {
+      const scope = scopeOf(actor);
+      return sandboxFor(actor, scope, process.env, gitDirsOf(scope.own));
+    },
+    configRoot: (id) => homes.agentConfig(id),
+    trustCard: (actor, repo) => gate.trustCard(actor, repo),
     persist: deps.persist,
     now,
     changed(rec) {

@@ -2,9 +2,9 @@ import type { Tickable } from "./clock";
 import { describe, minGapMinutes, nextAfter, parseCron, type Cron } from "./cron";
 import type { BotId, Peer, RoutineId, RoutineRun, RunId } from "./protocol";
 import type { Envelope } from "./prompts";
-import { routinePeer, upsertRoutine, type BotRecord, type RoutineRecord, type RunRef, type Trigger, type World } from "./world";
+import { own, routinePeer, upsertRoutine, type BotRecord, type RoutineRecord, type RunRef, type Trigger, type World } from "./world";
 
-// Routines: definitions, nextRunAt, run history, fatigue. The only writer of BotRecord.routines. Owner: U4.
+// Routines: definitions, nextRunAt, run history, fatigue. The only writer of BotRecord.routines.
 //
 // nextRunAt is advanced, and the running run recorded, in one urgent persist before the fire is delivered, so a crash
 // can lose a fire but never repeat one. However many times were missed while the Mac slept, that is one decision: the
@@ -19,7 +19,7 @@ import { routinePeer, upsertRoutine, type BotRecord, type RoutineRecord, type Ru
 // The clock has no power-event hook: it notices a wake at its next look, at most 60 s later, so a fire due during
 // sleep is up to a minute later than the wake.
 
-export const ROUTINE_FLOOR_MINUTES = 15;
+const ROUTINE_FLOOR_MINUTES = 15;
 export const ROUTINES_PER_BOT = 20;
 export const RUNS_KEPT = 20;
 export const DISABLE_AFTER_FAILURES = 10;
@@ -113,7 +113,7 @@ function due(r: RoutineRecord, now: Date): Due {
   return lag <= plan.graceMs ? { kind: "fire", at, late: lag > LATE_AFTER_MS, next } : { kind: "miss", at: first, next };
 }
 
-const routinesOf = (bot: BotRecord) => bot.routines as unknown as RoutineRecord[];
+const routinesOf = (bot: BotRecord) => own<RoutineRecord[]>(bot.routines);
 const iso = (d: Date | null) => d?.toISOString() ?? null;
 const newRunId = () => `run_${crypto.randomUUID()}` as RunId;
 

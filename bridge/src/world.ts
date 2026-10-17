@@ -27,7 +27,8 @@ import {
 
 /** Who runs a turn. An agent belongs to a bot: its cards show in the bot's chat and the bot's standing rules apply. */
 export type Actor = { kind: "bot"; botId: BotId } | { kind: "agent"; botId: BotId; agentId: AgentId };
-export type BotActor = Extract<Actor, { kind: "bot" }>;
+type BotActor = Extract<Actor, { kind: "bot" }>;
+export type AgentActor = Extract<Actor, { kind: "agent" }>;
 export type ActorKey = `bot:${string}` | `agent:${string}`;
 export const actorKey = (a: Actor): ActorKey => (a.kind === "bot" ? `bot:${a.botId}` : `agent:${a.agentId}`);
 export const botActor = (botId: BotId): BotActor => ({ kind: "bot", botId });
@@ -67,14 +68,16 @@ export const hopsAfter = (by: Initiator | null): number => (by === null ? 0 : ho
 
 /**
  * A slice another module owns: a readonly field holding deeply readonly data, so `bot.routines.push(…)` or
- * `bot.routines = …` outside the scheduler fails to compile. The owner keeps a module-private `own()` cast and
- * mutates in place; nothing else may make a slice writable.
+ * `bot.routines = …` outside the scheduler fails to compile. The owner calls `own()` and mutates in place.
  */
 export type Owned<T> = T extends string | number | boolean | null | undefined
   ? T
   : T extends readonly (infer U)[]
     ? readonly Owned<U>[]
     : { readonly [K in keyof T]: Owned<T[K]> };
+
+/** The writable view of a slice. Only the slice's writer, named on its type, calls this. */
+export const own = <T>(slice: Owned<T>): T => slice as unknown as T;
 
 
 export type EnvelopeId = string & { readonly __brand: "EnvelopeId" };
@@ -83,6 +86,11 @@ export type EnvelopeId = string & { readonly __brand: "EnvelopeId" };
 export type Pending = {
   /** Stable across replays. */
   id: EnvelopeId;
+  /**
+   * continuation: the decision envelope after a permission card was answered. It runs ahead of other queued work,
+   * Stop keeps it, and its turn's start arms the grant's short window (gate.beginTurn).
+   */
+  kind: "envelope" | "continuation";
   at: string;
   /** The rendered envelope. Notices are prepended when it starts, not stored here. */
   text: string;
@@ -194,7 +202,7 @@ export type StandingRule =
 export type Grant = { actor: ActorKey; fingerprint: Fingerprint; cardId: MessageId; appliesTo: "attended" | "unattended"; expiresAt: string };
 
 /** What a permission decision applies to. The card message is what the user sees; this is the match key behind it. */
-export type HeldCall = {
+type HeldCall = {
   initiator: Initiator;
   tool: string;
   signature: Signature;
@@ -204,16 +212,37 @@ export type HeldCall = {
   always: string;
 };
 
-/** An open card's deadlines. The card shows in actor.botId's chat; a question is always the bot's own. */
+/**
+ * An open card's deadlines. The card shows in actor.botId's chat; a question is always the bot's own. A trust card is
+ * a permission card on the wire that asks whether the agents in `root` may load the repo's own Claude Code config.
+ */
 export type OpenCard =
   | { kind: "question"; cardId: MessageId; actor: BotActor; remindAt: string | null; expiresAt: string }
-  | { kind: "permission"; cardId: MessageId; actor: Actor; remindAt: string | null; expiresAt: string; call: HeldCall };
+  | { kind: "permission"; cardId: MessageId; actor: Actor; remindAt: string | null; expiresAt: string; call: HeldCall }
+  | { kind: "trust"; cardId: MessageId; actor: AgentActor; remindAt: string | null; expiresAt: string; root: string };
+
+/** The kind of message an open card shows as. */
+export const cardMessageKind = (card: OpenCard): Card["kind"] => (card.kind === "question" ? "question" : "permission");
+
+/**
+ * The user's answer on a trust card. Until an agent's repo is trusted, the agent runs with an empty config folder of
+ * the bridge's (projectConfigRoot), so the repo's committed .claude settings and hooks, .mcp.json servers, commands
+ * and skills never load. agentId null: every agent in the repo, from Always or Never; else that agent, from Allow
+ * once or Deny.
+ */
+export type RepoTrust = { root: string; agentId: AgentId | null; trusted: boolean; cardId: MessageId; at: string };
+
+/** Whether this agent may load its repo's own config: its own answer, else the repo's; null when nobody answered. */
+export function repoTrust(gate: Owned<GateState>, root: string, agentId: AgentId): boolean | null {
+  const answer = gate.repos.find((r) => r.root === root && r.agentId === agentId) ?? gate.repos.find((r) => r.root === root && r.agentId === null);
+  return answer?.trusted ?? null;
+}
 
 /** Allowed calls of a capped tool (create_bot, start_agent) per bot per local day. */
 export type DailyCount = { botId: BotId; tool: string; day: string; count: number };
 
 /** Writer: gate.ts. */
-export type GateState = { open: OpenCard[]; grants: Grant[]; daily: DailyCount[] };
+export type GateState = { open: OpenCard[]; grants: Grant[]; daily: DailyCount[]; repos: RepoTrust[] };
 
 
 /** Writer: devices.ts. */
@@ -280,7 +309,7 @@ export type World = {
 export const emptyWorld = (): World => ({
   bots: new Map(),
   agents: new Map(),
-  gate: { open: [], grants: [], daily: [] },
+  gate: { open: [], grants: [], daily: [], repos: [] },
   devices: [],
   push: { sent: [] },
   account: { parkedUntil: null },
@@ -316,7 +345,7 @@ export const agentPeer = (agent: Agent): AgentPeer => ({ kind: "agent", id: agen
 export const routinePeer = (routine: { id: RoutineId; name: string }): Peer => ({ kind: "routine", id: routine.id, name: routine.name });
 
 
-export function unreadDelta(previous: Message | undefined, next: Message): number {
+function unreadDelta(previous: Message | undefined, next: Message): number {
   switch (next.kind) {
     case "bot":
     case "question":
@@ -340,7 +369,7 @@ export function post(bot: BotRecord, message: Message): Message {
 }
 
 // Messages between a bot and one peer group into one exchange while nothing else is said.
-export function exchangeFor(
+function exchangeFor(
   last: Message | undefined,
   peer: Peer,
   direction: "sent" | "received",
@@ -397,8 +426,12 @@ export function settleCard<A extends CardAnswer>(
   return { ok: true, card: { ...message, answer: a.answer } as Extract<Card, { kind: A["kind"] }> };
 }
 
-/** working wins (a turn runs), then parked (nothing runs and the queue head is held), then awaiting_approval. */
-export function botStatus(s: { working: boolean; held: boolean; awaitingApproval: boolean }): BotStatus {
+/**
+ * unavailable wins (Claude Code could not start, so the retry is no turn), then working (a turn runs), then parked
+ * (nothing runs and the queue head is held), then awaiting_approval.
+ */
+export function botStatus(s: { unavailable: boolean; working: boolean; held: boolean; awaitingApproval: boolean }): BotStatus {
+  if (s.unavailable) return "unavailable";
   if (s.working) return "working";
   if (s.held) return "parked";
   return s.awaitingApproval ? "awaiting_approval" : "idle";
@@ -459,7 +492,7 @@ export function findBot(world: World, ref: string): BotRecord | undefined {
 
 const URL_PATTERN = /https?:\/\/[^\s<>()[\]"'`]+/g;
 
-export function extractUrls(text: string): string[] {
+function extractUrls(text: string): string[] {
   return (text.match(URL_PATTERN) ?? []).map((u) => u.replace(/[.,;:!?*_]+$/, ""));
 }
 

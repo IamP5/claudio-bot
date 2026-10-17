@@ -364,8 +364,8 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(TimeLabel.home(now - 7 * 86_400, now: now, calendar: calendar) == "Oct 9")
     }
 
-    @Test func onlyApprovalAndParkedWearAChip() {
-        #expect(BotStatus.allCases.map(\.chip) == [nil, nil, "Awaiting approval", "Parked"])
+    @Test func onlyApprovalParkedAndUnavailableWearAChip() {
+        #expect(BotStatus.allCases.map(\.chip) == [nil, nil, "Awaiting approval", "Parked", "Unavailable"])
         #expect(BotStatus.unknown("sleeping").chip == nil)
     }
 

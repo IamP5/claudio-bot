@@ -11,10 +11,13 @@ import {
 import type { Tickable } from "./clock";
 import type { Headroom, Ledger } from "./ledger";
 import { notices as noticeText, withNotices, type SessionInput } from "./prompts";
+import { sandboxFailure } from "./sandbox";
 import type { Persist } from "./store";
+import { errorText, maskSecrets } from "./text";
 import {
   actorKey,
   attended,
+  own,
   type AccountState,
   type ActiveTurn,
   type Actor,
@@ -28,7 +31,7 @@ import {
   type SessionState,
 } from "./world";
 
-// The turn runner for one actor, and the only writer of its SessionState and of AccountState. Owner: U2.
+// The turn runner for one actor, and the only writer of its SessionState and of AccountState.
 // step() is the whole lifecycle as a pure function; createSession() is the shell that feeds it SDK and caller events
 // and carries out its effects.
 
@@ -38,7 +41,7 @@ export function claudeExecutable(): string | null {
 }
 
 export const STOP_DEADLINE_MS = 15_000;
-export const RETRY_BACKOFF_MS = [1_000, 3_000, 8_000] as const;
+const RETRY_BACKOFF_MS = [1_000, 3_000, 8_000] as const;
 /** The first start plus one retry per backoff step. A replay after a restart is a start too. */
 export const MAX_STARTS = RETRY_BACKOFF_MS.length + 1;
 /**
@@ -46,15 +49,15 @@ export const MAX_STARTS = RETRY_BACKOFF_MS.length + 1;
  * reached Claude, so no attempt is used and nothing else queued is touched. The last wait repeats until a query opens.
  */
 export const START_RETRY_MS = [30_000, 60_000, 120_000, 300_000] as const;
-export const DENIALS_PER_TURN = 3;
+const DENIALS_PER_TURN = 3;
 /** A turn with no SDK message for this long is noted in the owning bot's chat, once per turn. It keeps running. */
-export const STALL_MS = 30 * 60_000;
+const STALL_MS = 30 * 60_000;
 /**
  * A query with no turn in flight and no message for this long is closed, so its claude process exits; the next turn
  * resumes the session on a new one. It counts from the last message, so output after a turn keeps the process. It is
  * well inside the prompt cache's hour, so a resume reads the cache like the closed query would have.
  */
-export const IDLE_MS = 15 * 60_000;
+const IDLE_MS = 15 * 60_000;
 /** When the ledger cannot answer, an unattended start waits this long; an attended one runs. */
 export const HEADROOM_RETRY_MS = 60_000;
 export const USAGE_PARK_SLACK_MS = 30_000;
@@ -75,20 +78,17 @@ export const CAP_NOTE = "Daily cap reached. Your messages still run; routines an
 export const BREAKER_NOTE = `Stopped this turn after ${DENIALS_PER_TURN} held or denied tool calls.`;
 export const RESTARTED_ERROR = "The bridge restarted during this turn.";
 const stallNote = (name: string) => `${name} has been silent for 30 minutes; you can press Stop.`;
-export const startFailedNote = (error: string) =>
+const startFailedNote = (error: string) =>
   `Claude Code could not start: ${error.replace(/\.?\s*$/, ".")} Queued messages are kept, and it keeps trying.`;
 const restartedNotice = (envelopeText: string) =>
   `[The bridge restarted during your turn on: ${envelopeText.split("\n")[0]} It may be partly done; check before redoing it.]`;
-
-/** Pending has no field for an approval continuation, so its id carries it. Only push() mints ids. */
-const CONTINUATION = "c_";
 
 /**
  * Stop drops a routine's scheduled fire and a message from another bot: nobody waits on either. An agent's report and an
  * approval continuation stay, whatever their initiator, because the bot needs the report and the user just answered.
  */
 const droppedByStop = (p: Pending): boolean =>
-  (p.settles !== null && !attended(p.initiator)) || (p.initiator.kind === "bot" && !p.id.startsWith(CONTINUATION));
+  (p.settles !== null && !attended(p.initiator)) || (p.initiator.kind === "bot" && p.kind !== "continuation");
 
 const DROPS_NAMED = 3;
 /** One notice per Stop, however much it dropped, so the notices on the next envelope stay short. */
@@ -97,22 +97,6 @@ function droppedNotice(userName: string, texts: readonly string[]): string {
   const named = texts.slice(0, DROPS_NAMED).map((t) => t.split("\n")[0]).join("; ");
   const rest = texts.length - DROPS_NAMED;
   return `[${userName} pressed Stop, so ${texts.length} queued messages never ran: ${named}${rest > 0 ? `; and ${rest} more` : ""}]`;
-}
-
-const SECRETS: readonly RegExp[] = [
-  /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}/g,
-  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
-  /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi,
-  /\b[A-Za-z0-9_+-]{40,}/g,
-];
-const SECRET_FIELD = /\b((?:api[_-]?key|token|secret|password|passwd|auth)[A-Za-z_-]*["']?\s*[:=]\s*["']?)[^\s"',;]{6,}/gi;
-
-/** Claude Code's stderr can echo keys from the environment or a config file, and its tail goes to the bot's chat. */
-export function redactSecrets(text: string): string {
-  return SECRETS.reduce((out, re) => out.replace(re, "[redacted]"), text).replace(SECRET_FIELD, "$1[redacted]");
 }
 
 /**
@@ -152,7 +136,7 @@ export type Outcome =
   | { kind: "terminal"; error: string };
 
 export type Event =
-  | { kind: "push"; pending: Pending; ahead: boolean }
+  | { kind: "push"; pending: Pending }
   | { kind: "notice"; notice: Notice }
   /** Start the next admissible envelope, if any. Every transition that frees the session also pumps. */
   | { kind: "pump" }
@@ -175,7 +159,7 @@ export type Effect =
   | { kind: "note"; text: string };
 
 /** Lives in memory only; a restart starts from freshMemo(). */
-export type Memo = {
+type Memo = {
   /**
    * How many notices at the front of session.notices the turn in flight carried. They are dropped once the model has
    * seen them (the turn had output or reached a result) and kept when it ends before that, so the next start carries
@@ -193,13 +177,13 @@ export type Memo = {
 export const freshMemo = (): Memo => ({ carried: 0, capNoted: false, told: {}, startFailures: 0 });
 
 export type Core = { session: SessionState; parkedUntil: string | null; memo: Memo };
-export type StepContext = { now: Date; headroom: (initiator: Initiator) => Headroom; userName: string };
+type StepContext = { now: Date; headroom: (initiator: Initiator) => Headroom; userName: string };
 
 const turnOf = (life: Lifecycle): ActiveTurn | null => (life.kind === "working" || life.kind === "stopping" ? life.turn : null);
 
 /**
  * The lifecycle, total over (Lifecycle x Event) and pure. Invariants it keeps:
- * - The envelope in flight is pending[0]; an `ahead` push goes right behind it.
+ * - The envelope in flight is pending[0]; a continuation goes right behind it.
  * - Only idle (or an expired backoff/park, or a daily_cap park for an attended envelope) starts a turn, so nothing
  *   is sent while stopping.
  * - Every envelope removed from pending gets exactly one non-deferred end.
@@ -359,7 +343,7 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
   switch (ev.kind) {
     case "push": {
       const busy = turnOf(s.lifecycle) !== null;
-      if (ev.ahead) s.pending.splice(busy ? 1 : 0, 0, ev.pending);
+      if (ev.pending.kind === "continuation") s.pending.splice(busy ? 1 : 0, 0, ev.pending);
       else s.pending.push(ev.pending);
       pump();
       break;
@@ -455,7 +439,7 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
 }
 
 /** What the SDK said during the turn, before its result. */
-export type Signals = {
+type Signals = {
   /** A rate_limit_event rejected a request that extra usage did not cover. */
   rejected: boolean;
   /** That event's resetsAt as sent; classify() decides whether it is usable. */
@@ -493,7 +477,7 @@ export function classify(r: SDKResultMessage, s: Signals, now: Date): Outcome {
 }
 
 export type Session = Tickable & {
-  /** Queues one envelope; persisted before the SDK sees it. ahead puts it before everything queued (an approval continuation). */
+  /** Queues one envelope; persisted before the SDK sees it. A continuation goes before everything queued. */
   push(input: SessionInput): void;
   /** Adds a line to the top of the next envelope this actor runs. Spends no turn. */
   notice(text: string): void;
@@ -508,6 +492,8 @@ export type Session = Tickable & {
   interrupt(): Promise<boolean>;
   /** The ledger's answer may have changed (update_bot set dailyCapUsd): a daily-cap park asks headroom again now. */
   recheck(): void;
+  /** options() would now give something else: the live query closes now, or when the turn it serves ends. */
+  reopen(): void;
   /** Recovered TurnEnds not yet told are told before it closes. */
   close(): void;
   /** A turn is running or retrying, or envelopes wait and nothing holds them. */
@@ -543,6 +529,8 @@ export type SessionSpec = {
   userName?: string;
   /** Who the stall note names, read when it is left so a rename shows. Default "Claude Code". */
   name?: () => string;
+  /** An approval continuation's turn is being sent on an open query, so the gate starts its grant's short window now. */
+  continuing?: () => void;
   /**
    * Nothing runs, nothing is queued and no query is open. Asked at every tick while so. An owner of many sessions may
    * close and forget this one: a new session over the same state resumes it.
@@ -561,15 +549,28 @@ type Live = {
   fresh: boolean;
   /** Opened for an unattended turn, with maxBudgetUsd at most what was left of the daily cap. */
   capped: boolean;
+  /** Closed once the turn it serves ends, so the next turn opens a query with fresh options and a fresh sandbox. */
+  stale: boolean;
+  /** A tool result said the sandbox could not start, and the owner was told once for this query. */
+  sandboxNoted: boolean;
   send(m: SDKUserMessage): void;
   release(): void;
   stderr(): string;
 };
 
 const SYSTEM: Initiator = { kind: "system" };
-const own = (state: Owned<SessionState>) => state as unknown as SessionState;
-const ownAccount = (account: Owned<AccountState>) => account as unknown as AccountState;
-const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** The reason, when a failed tool result says the sandbox could not start. */
+function sandboxDownIn(m: SDKMessage): string | null {
+  if (m.type !== "user" || typeof m.message.content === "string") return null;
+  for (const block of m.message.content) {
+    if (block.type !== "tool_result" || block.is_error !== true) continue;
+    const text = typeof block.content === "string" ? block.content : (block.content ?? []).map((c) => (c.type === "text" ? c.text : "")).join("\n");
+    const reason = sandboxFailure(text);
+    if (reason !== null) return reason;
+  }
+  return null;
+}
 
 export function createSession(spec: SessionSpec): Session {
   const run = spec.query ?? query;
@@ -630,13 +631,13 @@ export function createSession(spec: SessionSpec): Session {
   function transition(ev: Event, now: Date): Effect[] {
     const before = { session: structuredClone(spec.state) as SessionState, parkedUntil: spec.account.parkedUntil, memo };
     const t = step(before, ev, { now, headroom: (i) => headroom(i, now), userName });
-    const state = own(spec.state);
+    const state = own<SessionState>(spec.state);
     const changed =
       JSON.stringify([before.session, before.parkedUntil]) !== JSON.stringify([t.core.session, t.core.parkedUntil]);
     state.pending = t.core.session.pending;
     state.lifecycle = t.core.session.lifecycle;
     state.notices = t.core.session.notices;
-    ownAccount(spec.account).parkedUntil = t.core.parkedUntil;
+    own<AccountState>(spec.account).parkedUntil = t.core.parkedUntil;
     memo = t.core.memo;
     if (changed) guard("persist", () => spec.persist("now"));
     return t.effects;
@@ -671,16 +672,17 @@ export function createSession(spec: SessionSpec): Session {
    */
   function send(p: Pending, text: string) {
     const unattended = !attended(p.initiator);
-    if (live && (unattended || live.capped)) closeLive();
+    if (live && (unattended || live.capped || live.stale)) closeLive();
     let l: Live;
     try {
       l = live ?? open(unattended);
     } catch (e) {
-      return dispatch({ kind: "unstarted", error: redactSecrets(errorText(e)) });
+      return dispatch({ kind: "unstarted", error: maskSecrets(errorText(e)) });
     }
     signals = noSignals();
     heardAt = clock().getTime();
     stallNoted = false;
+    if (p.kind === "continuation") guard("continuing", () => spec.continuing?.());
     l.send({ type: "user", message: { role: "user", content: text }, parent_tool_use_id: null });
   }
 
@@ -741,6 +743,8 @@ export function createSession(spec: SessionSpec): Session {
       q,
       fresh: !options.resume,
       capped: cap !== null,
+      stale: false,
+      sandboxNoted: false,
       send(m) {
         inbox.push(m);
         wake?.();
@@ -775,17 +779,38 @@ export function createSession(spec: SessionSpec): Session {
     if (l.gen !== generation || closed) return;
     closeLive();
     const tail = l.stderr();
-    if (current()) dispatch({ kind: "end", outcome: { kind: "transient", error: redactSecrets(tail ? `${error}\n${tail}` : error) } });
+    const text = tail ? `${error}\n${tail}` : error;
+    if (!current()) return;
+    if (!startedSandbox(text)) dispatch({ kind: "end", outcome: { kind: "transient", error: maskSecrets(text) } });
+  }
+
+  /**
+   * A query that ended because its sandbox could not start is a configuration failure: no command ran, so the envelope
+   * goes back to the head and waits the long start backoff. The bridge never retries without the sandbox.
+   */
+  function startedSandbox(text: string): boolean {
+    const reason = sandboxFailure(text);
+    if (reason === null || turnOf(spec.state.lifecycle as Lifecycle)?.output !== false) return false;
+    closeLive();
+    dispatch({ kind: "unstarted", error: `the sandbox could not start (${reason})` });
+    return true;
   }
 
   function receive(m: SDKMessage, l: Live) {
     heardAt = clock().getTime();
     if (m.session_id && m.session_id !== spec.state.id) {
-      own(spec.state).id = m.session_id;
+      own<SessionState>(spec.state).id = m.session_id;
       guard("persist", () => spec.persist());
     }
     if (m.type === "assistant" && m.error) signals.apiError = m.error;
     else if (m.type === "assistant" && turnOf(spec.state.lifecycle as Lifecycle)?.output === false) dispatch({ kind: "output" });
+    const down = sandboxDownIn(m);
+    if (down !== null && !l.sandboxNoted) {
+      // Every Bash call fails while the sandbox is down; a new query tries to start it again. Not a gate denial.
+      l.sandboxNoted = true;
+      l.stale = true;
+      guard("note", () => spec.note(`${spec.name?.() ?? "Claude Code"} cannot run commands: the sandbox could not start (${down}).`));
+    }
     // A plan rejection that extra usage covers does not stop the turn, so it is no usage limit.
     if (m.type === "rate_limit_event" && m.rate_limit_info.status === "rejected" && m.rate_limit_info.isUsingOverage !== true) {
       const info = m.rate_limit_info;
@@ -803,7 +828,11 @@ export function createSession(spec: SessionSpec): Session {
     );
     const outcome = classify(m, signals, clock());
     signals = noSignals();
-    if (turn) dispatch({ kind: "end", outcome });
+    if (!turn) return;
+    const failed = m.subtype !== "success" || m.is_error;
+    if (failed && startedSandbox(m.subtype === "success" ? m.result : m.errors.join("\n"))) return;
+    dispatch({ kind: "end", outcome });
+    if (l.stale && live === l && turnOf(spec.state.lifecycle as Lifecycle) === null) closeLive();
   }
 
   const bootStatus = status();
@@ -820,9 +849,8 @@ export function createSession(spec: SessionSpec): Session {
   return {
     push(input) {
       if (closed) return;
-      const id = `${input.ahead ? CONTINUATION : "e_"}${crypto.randomUUID()}` as EnvelopeId;
-      const pending: Pending = { id, at: clock().toISOString(), text: input.text, initiator: input.initiator, settles: input.settles, attempts: 0 };
-      dispatch({ kind: "push", pending, ahead: input.ahead });
+      const pending: Pending = { id: `e_${crypto.randomUUID()}` as EnvelopeId, at: clock().toISOString(), ...input, attempts: 0 };
+      dispatch({ kind: "push", pending });
     },
     notice(text) {
       dispatch({ kind: "notice", notice: { at: clock().toISOString(), text } });
@@ -839,6 +867,11 @@ export function createSession(spec: SessionSpec): Session {
     },
     recheck() {
       dispatch({ kind: "tick" });
+    },
+    reopen() {
+      if (!live) return;
+      if (turnOf(spec.state.lifecycle as Lifecycle) === null) closeLive();
+      else live.stale = true;
     },
     tick(now) {
       dispatch({ kind: "tick" }, now);

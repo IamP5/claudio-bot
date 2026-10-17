@@ -1,6 +1,7 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { COLORS, SHAPES, type BotId, type Color, type Shape } from "./protocol";
+import { BOT_NAME_MAX, errorText, hasHiddenCharacters } from "./text";
 
 export type BotActions = {
   ask(botId: BotId, a: { question: string; options: string[] }): string;
@@ -19,18 +20,16 @@ async function reply(run: () => string | Promise<string>) {
   try {
     return { content: [{ type: "text" as const, text: await run() }] };
   } catch (e) {
-    return { content: [{ type: "text" as const, text: (e as Error).message }], isError: true };
+    return { content: [{ type: "text" as const, text: errorText(e) }], isError: true };
   }
 }
 const always = { alwaysLoad: true };
-/** Push titles and every phone's bot list show the name, so a long one or one with control or bidi characters is refused. */
-export const BOT_NAME_MAX = 40;
-const UNSAFE_NAME = /[\p{Cc}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+/** A name a phone would show cut short or other than it reads is refused rather than cleaned. */
 export const botName = z
   .string()
   .refine(
-    (s) => s.trim() !== "" && Array.from(s.trim()).length <= BOT_NAME_MAX && !UNSAFE_NAME.test(s),
-    `A bot name is 1 to ${BOT_NAME_MAX} characters, with no control characters.`,
+    (s) => s.trim() !== "" && Array.from(s.trim()).length <= BOT_NAME_MAX && !hasHiddenCharacters(s),
+    `A bot name is 1 to ${BOT_NAME_MAX} characters, with no control or invisible characters.`,
   );
 const shape = z.enum(SHAPES).optional();
 const color = z.enum(COLORS).optional();

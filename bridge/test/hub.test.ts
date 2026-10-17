@@ -1,5 +1,5 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { McpSdkServerConfigWithInstance, Options, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -79,7 +79,7 @@ type PushCall = { botId: BotId; reason: PushReason; messageId: MessageId };
 /** sends: whether the fake push goes out (default: always). push: a real push instead of the fake. */
 function hubOver(
   world: World,
-  opts: { persist?: (urgency?: "now") => void; sends?: (call: PushCall, n: number) => boolean; push?: Push; scan?: () => Promise<Project[]> } = {},
+  opts: { persist?: (urgency?: "now") => void; sends?: (call: PushCall, n: number) => boolean; push?: Push; scan?: () => Promise<Project[]>; executable?: string | null } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "claudiobot-hub-"));
   roots.push(root);
@@ -125,7 +125,7 @@ function hubOver(
         queries.push(q);
         return q;
       }) as unknown as typeof query,
-      executable: () => "/fake/claude",
+      executable: () => (opts.executable === undefined ? "/fake/claude" : opts.executable),
     },
   });
   return { hub, homes, root, events, frames, pushes, attempts, queries, q: () => queries.at(-1)! };
@@ -186,7 +186,7 @@ test("a bot shows parked only while its queue head is held, not because another 
   const held = bot("held", {
     session: {
       ...emptySession(),
-      pending: [{ id: "e1" as EnvelopeId, at, text: "[Routine digest fired]", initiator: { kind: "routine", run: { routineId: "r1" as RoutineId, runId: "run1" as RunId }, manual: false }, settles: null, attempts: 0 }],
+      pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "[Routine digest fired]", initiator: { kind: "routine", run: { routineId: "r1" as RoutineId, runId: "run1" as RunId }, manual: false }, settles: null, attempts: 0 }],
       lifecycle: { kind: "parked", reason: "usage_limit", until: inAnHour() },
     },
   });
@@ -460,10 +460,11 @@ test("raising a bot's daily cap starts its held routine at once instead of at th
   const run = { routineId: "r_digest" as RoutineId, runId: "run_1" as RunId };
   const b = bot("eng", {
     dailyCapUsd: 0,
-    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, at, text: "[Routine digest fired]", initiator: { kind: "routine", run, manual: false }, settles: run, attempts: 0 }], lifecycle: { kind: "idle" }, notices: [] },
+    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "[Routine digest fired]", initiator: { kind: "routine", run, manual: false }, settles: run, attempts: 0 }], lifecycle: { kind: "idle" }, notices: [] },
   });
   world.bots.set(b.id, b);
   const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
   h.hub.boot(false);
   await flush();
   const status = () => (h.hub.hello(NO_RING) as Extract<ServerMessage, { type: "hello" }>).bots[0]?.status;
@@ -539,13 +540,13 @@ test("a hold whose time has passed does not skip a fire in the tick that clears 
   const run = { routineId: "r_old" as RoutineId, runId: "run_old" as RunId };
   const lapsed = new Date(Date.now() - 60_000).toISOString();
   const h = await fired({
-    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, at, text: "[Routine old fired]", initiator: { kind: "routine", run, manual: false }, settles: run, attempts: 0 }], lifecycle: { kind: "parked", reason: "daily_cap", until: lapsed }, notices: [] },
+    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "[Routine old fired]", initiator: { kind: "routine", run, manual: false }, settles: run, attempts: 0 }], lifecycle: { kind: "parked", reason: "daily_cap", until: lapsed }, notices: [] },
   });
 
   expect(h.routine.runs.map((r) => r.status)).toEqual(["running"]);
 });
 
-test("today's app answering Allow once on a held call grants it once for the turn's attendance and tells the bot", async () => {
+test("a protocol 2 app answering Allow once on a held call grants it once for the turn's attendance and tells the bot", async () => {
   const world = emptyWorld();
   const b = bot("eng");
   world.bots.set(b.id, b);
@@ -564,6 +565,54 @@ test("today's app answering Allow once on a held call grants it once for the tur
   expect(b.messages.find((m) => m.id === card.id)).toMatchObject({ answer: "once" });
   expect(world.gate.grants.map((g) => g.appliesTo)).toEqual(["attended"]);
   expect(h.q().received.at(-1)).toStartWith("[Alex allowed once: Bash `git push origin main`.");
+});
+
+test("Allow once's ten minutes start when the continuation's turn starts, not at the tap", async () => {
+  setSystemTime(new Date(at));
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "push it", uploads: [] });
+  await flush();
+  await runBash(h.q(), "git push origin main");
+  const card = b.messages.find((m) => m.kind === "permission")!;
+
+  await h.hub.handle({ type: "decide", botId: b.id, messageId: card.id, choice: "once" });
+  const atTap = world.gate.grants.map((g) => g.expiresAt);
+  later(5 * 60_000);
+  h.q().emit(result());
+  await flush();
+
+  expect(h.q().received.at(-1)).toStartWith("[Alex allowed once: Bash `git push origin main`.");
+  expect([atTap, world.gate.grants.map((g) => g.expiresAt)]).toEqual([["2026-10-18T12:00:00.000Z"], ["2026-10-17T12:15:00.000Z"]]);
+});
+
+test("a routine run the daily cap cuts short is skipped and says why, not failed", async () => {
+  const h = await fired();
+  h.q().emit(assistant(text("Half way.")), result(0.5, { subtype: "error_max_budget_usd", is_error: true, errors: ["Reached maximum budget ($0.5)"] }));
+  await flush();
+
+  expect(h.routine.runs.map((r) => [r.status, r.note])).toEqual([["skipped", "Stopped at the daily cap"]]);
+  expect(h.routine.failStreak).toBe(0);
+  expect(h.bot.messages.filter((m) => m.kind === "note").map((m) => m.kind === "note" && m.text)).toEqual([
+    "eng used today's budget; routines and other background work wait until tomorrow.",
+  ]);
+});
+
+test("the stall note names the bot", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "think hard", uploads: [] });
+  await flush();
+  later(31 * 60_000);
+  h.hub.tick(new Date());
+
+  expect(b.messages.filter((m) => m.kind === "note").map((m) => m.kind === "note" && m.text)).toEqual(["eng has been silent for 30 minutes; you can press Stop."]);
 });
 
 test("at the daily cap a scheduled fire is skipped, and Run now from the phone still runs", async () => {
@@ -592,7 +641,7 @@ test("delete_bot saves the world without the bot before its home is moved to the
   expect(frames.at(-1)).toEqual({ type: "bot_removed", botId: doomed.id });
 });
 
-test("an answer to a permission card from today's app is a decision; an option it never showed is refused", async () => {
+test("an answer to a permission card from a protocol 2 app is a decision; an option it never showed is refused", async () => {
   const world = emptyWorld();
   const b = bot("eng");
   const card: Message = { kind: "permission", id: "m_card" as MessageId, at, from: null, tool: "Bash", label: "Push to the default branch", detail: "git push origin main", always: "git push to main", answer: null, expiresAt: inAnHour() };
@@ -708,7 +757,7 @@ test("a permission card an agent opens shows its bot as awaiting approval in the
     agent: { id: "a_1" as AgentId, botId: b.id, title: "Ship it", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at },
     cwd,
     messages: [],
-    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, at, text: "Push the fix.", initiator: { kind: "user" }, settles: null, attempts: 0 }] },
+    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "Push the fix.", initiator: { kind: "user" }, settles: null, attempts: 0 }] },
     cloudSession: null,
     budgetUsd: null,
     startedBy: { kind: "user" },
@@ -722,6 +771,93 @@ test("a permission card an agent opens shows its bot as awaiting approval in the
 
   const frame = h.frames.findLast((f) => f.type === "bot" && f.bot.id === b.id);
   expect(frame?.type === "bot" && frame.bot.status).toBe("awaiting_approval");
+});
+
+test("a bot's commands run sandboxed to its home and USER.md, and a mac agent's to its project, pushing over https", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-agent-")));
+  roots.push(cwd);
+  world.agents.set("a_1" as AgentId, {
+    agent: { id: "a_1" as AgentId, botId: b.id, title: "Ship it", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at },
+    cwd,
+    messages: [],
+    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "Push the fix.", initiator: { kind: "user" }, settles: null, attempts: 0 }] },
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: { kind: "user" },
+  });
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  h.hub.boot(false);
+  await flush();
+  const agentOptions = h.q().options;
+  await h.hub.handle({ type: "send", botId: b.id, text: "hi", uploads: [] });
+  await flush();
+  const botOptions = h.q().options;
+  const home = realpathSync(h.root);
+
+  expect([botOptions.sandbox?.enabled, botOptions.sandbox?.allowUnsandboxedCommands, botOptions.sandbox?.filesystem?.allowWrite]).toEqual([
+    true,
+    false,
+    [join(home, "bots", b.id), join(home, "USER.md")],
+  ]);
+  expect(botOptions.sandbox?.filesystem?.denyRead?.[0]).toBe(home);
+  expect([botOptions.settings, agentOptions.settings]).toEqual([{ autoMemoryEnabled: false }, { autoMemoryEnabled: false }]);
+  expect([agentOptions.sandbox?.filesystem?.allowWrite?.[0], agentOptions.env?.GIT_CONFIG_VALUE_1, botOptions.env]).toEqual([cwd, "ssh://git@github.com/", undefined]);
+});
+
+test("an agent in a repo with committed Claude settings runs on an empty config until the user trusts the repo", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-repo-")));
+  roots.push(repo);
+  mkdirSync(join(repo, ".claude"));
+  writeFileSync(join(repo, ".claude", "settings.json"), "{}");
+  const h = hubOver(world, { scan: async () => [{ name: "app", path: repo, branch: "main", githubRepo: null }] });
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "fix the app", uploads: [] });
+  await flush();
+  await callTool(h.q(), "start_agent", { title: "Fix login", prompt: "Fix it.", project: "app", where: "mac" });
+  await flush();
+  const agentQuery = h.q();
+  const empty = agentQuery.options.projectConfigRoot!;
+  const card = b.messages.find((m): m is Extract<Message, { kind: "permission" }> => m.kind === "permission")!;
+  const status = () => (h.hub.hello(NO_RING) as Extract<ServerMessage, { type: "hello" }>).bots[0]?.status;
+
+  expect([card.label, card.detail, readdirSync(empty), (statSync(empty).mode & 0o777).toString(8)]).toEqual(["Trust app's Claude settings", `.claude/settings.json in ${repo}`, [], "700"]);
+  expect(empty.startsWith(join(h.root, "agent-config"))).toBe(true);
+  agentQuery.emit(result());
+  await flush();
+  h.queries[0]!.emit(result());
+  await flush();
+  // The agent's report is unattended work, so it runs on a query of its own.
+  h.q().emit(result());
+  await flush();
+  expect([h.queries.length, status()]).toEqual([3, "awaiting_approval"]);
+
+  expect(await h.hub.handle({ type: "decide", botId: b.id, messageId: card.id, choice: "always" })).toEqual([]);
+  const rec = [...world.agents.values()][0]!;
+  await callTool(h.queries[2]!, "message_agent", { agentId: rec.agent.id, text: "Also add a test." });
+  await flush();
+
+  expect([h.q() === agentQuery, h.q().options.cwd, h.q().options.projectConfigRoot, status()]).toEqual([false, repo, undefined, "idle"]);
+});
+
+test("a bot whose Claude Code cannot start shows unavailable, not typing, and says why once", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world, { executable: null });
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "hi", uploads: [] });
+  await flush();
+  const frame = h.frames.findLast((f) => f.type === "bot" && f.bot.id === b.id);
+
+  expect([frame?.type === "bot" && frame.bot.status, h.queries.length]).toEqual(["unavailable", 0]);
+  expect(b.messages.filter((m) => m.kind === "note").map((m) => m.kind === "note" && m.text.split(":")[0])).toEqual(["Claude Code could not start"]);
 });
 
 test("one ticker throwing is logged, and the tickers after it still run", () => {

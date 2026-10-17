@@ -1,6 +1,5 @@
 // The whole tool policy, pure: no SDK types, no IO, no clock. gate.ts parses the hook input into a ToolCall at the
 // boundary, gathers the context (including the filesystem's realpath and the known user homes), and calls decide().
-// Owner: U1.
 //
 // Accepted limits (documented so the README can quote them, and so a reviewer knows what is out of scope):
 //   - Interpreters. A protected path reached only through code an interpreter runs (python -c, node -e, ruby -e, a
@@ -14,11 +13,12 @@
 //     and its read is gated, but a plain GET that smuggles data in the URL is not itself held.
 //   - Case folding and Unicode. Matching is byte-exact after realpath; a case-insensitive filesystem may still resolve
 //     a differently-cased spelling, which realpath canonicalises, but homoglyphs and percent-encoding are not decoded.
-import { createHash } from "node:crypto";
 import { basename, isAbsolute, normalize, resolve, sep } from "node:path";
 import type { Headroom } from "./ledger";
+import { PRIVATE } from "./private";
 import type { MessageId } from "./protocol";
 import { shellCommands, type Word } from "./shell";
+import { BODY_KEYS, clip, maskSecrets, sha256 } from "./text";
 import { actorKey, attended, hopsOf, isRoutineChain, type Actor, type Fingerprint, type Grant, type Initiator, type Signature, type StandingRule } from "./world";
 
 /** A tool call as the policy sees it. Nothing in here is `unknown`. */
@@ -72,7 +72,7 @@ export type Decision =
   | { kind: "deny"; via: DenyVia; rule: string; reason: string; handOff: boolean }
   | { kind: "ask"; rule: string; label: string; signature: Signature; always: string; offerAlways: boolean };
 
-export type DenyVia = "floor" | "initiator" | "limit" | "never" | "rule" | "malformed";
+type DenyVia = "floor" | "initiator" | "limit" | "never" | "rule" | "malformed";
 
 /** Allowed calls per bot per local day. Past these, a runaway chain stops making bots and agents. */
 export const DAILY_CAPS: Readonly<Record<string, number>> = { mcp__claudio__create_bot: 5, mcp__claudio__start_agent: 20 };
@@ -147,8 +147,6 @@ const absRaw = (p: string, dir: string) => (isAbsolute(p) ? p : `${dir}${sep}${p
 /** Keys whose string values are paths, in any tool's input (built-in file tools and MCP filesystem servers alike). */
 const PATH_KEY = /path|file|dir|folder|uri|url|location|^(cwd|src|source|dest|destination|target)$/i;
 const looksPath = (v: string) => /^[~/]/.test(v) || v.startsWith("file://") || /\$\{?HOME\b/.test(v) || v.includes("/");
-/** A file's new contents, never a path; scanning it as paths is slow and pointless (perf, SHOULD 10). */
-const BODY_KEYS = new Set(["content", "old_string", "new_string", "new_source"]);
 
 /** Every string in a tool's input that could name a path: keyed as a path, or shaped like one anywhere it appears. */
 function inputPaths(value: unknown, key: string | null, out: string[]) {
@@ -205,7 +203,7 @@ const WRAPPERS: Record<string, readonly string[]> = {
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish"]);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
-/** The executable's name for matching rows: a leading zsh `=` stripped, the basename taken, lower-cased (MUST 3). */
+/** The executable's name for matching rows: a leading zsh `=` stripped, the basename taken, lower-cased. */
 const verbOf = (word: string) => basename(word.startsWith("=") ? word.slice(1) : word).toLowerCase();
 
 /** What a wrapped segment really runs: a command, or a script handed to a shell. `chdir` is set by env -C/--chdir. */
@@ -237,7 +235,7 @@ function unwrap(raw: string[]): Unwrapped {
         if (head === "env" && c) chdir = c[1];
       }
       if (head === "timeout" && i < words.length) i++;
-      // A bare `env` / `env -i` / `env A=1` with no command is an environment dump, not a wrapper; surface it (SHOULD 14).
+      // A bare `env` / `env -i` / `env A=1` with no command is an environment dump, not a wrapper; surface it.
       if (head === "env" && i >= words.length) return { words: ["env"], chdir };
       words = words.slice(i);
       continue;
@@ -282,12 +280,12 @@ const WRITING = (verb: string, words: string[]) =>
 /** A command word is a $PATH lookup, not a cwd-relative file, unless it is spelled as a path. */
 const commandIsPath = (text: string) => text.startsWith("/") || text.startsWith("~") || text.startsWith("./") || text.startsWith("../");
 const META = /[$`*?[{]/;
-/** A path longer than any real filesystem path is a file body or a huge literal, not a path to resolve (perf, SHOULD 10). */
+/** A path longer than any real filesystem path is a file body or a huge literal, not a path to resolve. */
 const MAX_PATH_LEN = 4096;
-/** A Bash command past this is held rather than parsed, so the synchronous hook cannot freeze the bridge (perf, SHOULD 10). */
+/** A Bash command past this is held rather than parsed, so the synchronous hook cannot freeze the bridge. */
 const MAX_BASH_LEN = 256 * 1024;
 
-/** Replace $name / ${name} with a tracked literal assignment's value (SHOULD 8), so `d=.ssh; cat ~/$d/id_rsa` resolves. */
+/** Replace $name / ${name} with a tracked literal assignment's value, so `d=.ssh; cat ~/$d/id_rsa` resolves. */
 function substVars(text: string, vars: Record<string, string>): string {
   if (Object.keys(vars).length === 0 || !text.includes("$")) return text;
   return text.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (m, a: string, b: string) => vars[a ?? b] ?? m);
@@ -296,7 +294,7 @@ function substVars(text: string, vars: Record<string, string>): string {
 /**
  * One path a word names: tracked vars and `~`, `~name`, `~+`, `$HOME` are expanded first, then the path is cut at the
  * first metacharacter still unresolved ($VAR, a backtick, a glob). A word with a leftover metachar only knows the
- * directory above the metachar (cut back to the last `/`, MUST 4), which matches a protected root as an ancestor: the
+ * directory above the metachar (cut back to the last `/`), which matches a protected root as an ancestor: the
  * glob could expand into the root. Empty prefixes resolve to nothing.
  */
 function candidateTouch(raw: string, dir: string, ctx: PolicyContext, vars: Record<string, string>, ancestorAnyway: boolean, write: boolean): Touch | null {
@@ -305,7 +303,7 @@ function candidateTouch(raw: string, dir: string, ctx: PolicyContext, vars: Reco
   const m = expanded.search(META);
   let cut = m === -1 ? expanded : expanded.slice(0, m);
   if (m !== -1) {
-    // The metachar is unresolved, so only the directory above it is a known path; back up to the last `/` (MUST 4).
+    // The metachar is unresolved, so only the directory above it is a known path; back up to the last `/`.
     const slash = cut.lastIndexOf("/");
     if (slash >= 0) cut = cut.slice(0, slash + 1);
   }
@@ -366,7 +364,7 @@ function bashParts(command: string, cwd: string, ctx: PolicyContext): Part[] {
   const start = ctx.realpath(cwd);
   const commands = shellCommands(command);
   const vars = collectVars(commands, ctx, start);
-  if (!("TMPDIR" in vars)) vars.TMPDIR = process.env.TMPDIR ?? "/tmp"; // a known scratch root, so $TMPDIR/x resolves (FP trim)
+  if (!("TMPDIR" in vars)) vars.TMPDIR = process.env.TMPDIR ?? "/tmp"; // a known scratch root, so $TMPDIR/x resolves
   const addedRemotes = new Set<string>();
 
   // A set of possible cwds, over-approximated: `cd` keeps the old dirs as well as the new, so a conditional or failed cd
@@ -397,7 +395,7 @@ function bashParts(command: string, cwd: string, ctx: PolicyContext): Part[] {
     // env -C/--chdir runs just this command elsewhere; otherwise it runs in one of the possible cwds (plus HOME if uncertain).
     const here = u.chdir !== undefined ? dirs.map((d) => resolveDir(u.chdir!, d)) : uncertain ? union(dirs, [home]) : dirs;
     const nWords: string[] = [verb, ...u.words.slice(1).map((w) => substVars(w, vars))];
-    // A push to a remote that is a URL, or one added or re-pointed on this same line, can exfiltrate the repo (SHOULD 12).
+    // A push to a remote that is a URL, or one added or re-pointed on this same line, can exfiltrate the repo.
     let pushUntrusted = false;
     if (verb === "git") {
       const g = gitArgs(nWords);
@@ -457,7 +455,7 @@ function bashParts(command: string, cwd: string, ctx: PolicyContext): Part[] {
     } else if (operand.text === "-") {
       dirs = union(dirs, prev); // `cd -` returns to OLDPWD
     } else if (emptyDynamic(operand, vars)) {
-      dirs = union(dirs, [home]); // a dynamic target could be anywhere; HOME is the common landing (SHOULD "ask on such cd")
+      dirs = union(dirs, [home]); // a dynamic target could be anywhere; HOME is the common landing
       uncertain = true;
     } else {
       dirs = union(dirs, dirs.map((d) => resolveDir(operand.text, d)));
@@ -469,7 +467,7 @@ function bashParts(command: string, cwd: string, ctx: PolicyContext): Part[] {
   return parts;
 }
 
-/** Literal same-line assignments (`d=.ssh`, `h=$HOME`), expanded to an absolute value where one is known (SHOULD 8). */
+/** Literal same-line assignments (`d=.ssh`, `h=$HOME`), expanded to an absolute value where one is known. */
 function collectVars(commands: { words: Word[] }[], ctx: PolicyContext, dir: string): Record<string, string> {
   const vars: Record<string, string> = {};
   for (const c of commands)
@@ -482,10 +480,21 @@ function collectVars(commands: { words: Word[] }[], ctx: PolicyContext, dir: str
   return vars;
 }
 
+/**
+ * Hosts a Bash call asks the sandbox to let through beyond its allowlist (the tool's allowed_domains). The sandbox lets
+ * them through once the call is allowed, so they are part of what the call does.
+ */
+function hostsOf(call: ToolCall): string[] {
+  const hosts = call.tool === "Bash" ? call.input.allowed_domains : undefined;
+  return Array.isArray(hosts) ? hosts.filter((h): h is string => typeof h === "string" && h.trim() !== "").map((h) => h.trim()).sort() : [];
+}
+
 function viewOf(call: ToolCall, ctx: PolicyContext): View {
   if (call.tool === "Bash") {
     const raw = String(call.input.command);
-    return { parts: bashParts(raw, call.cwd, ctx), raw };
+    // The hosts are a part of their own, so the table can hold them however harmless the command is.
+    const hosts: Part[] = hostsOf(call).length > 0 ? [{ kind: "call", call, touches: [] }] : [];
+    return { parts: [...bashParts(raw, call.cwd, ctx), ...hosts], raw };
   }
   const found: string[] = [];
   inputPaths(call.input, null, found);
@@ -528,7 +537,7 @@ const inHome = (...rels: string[]) => (ctx: PolicyContext) => rels.map((r) => re
 
 /** Entering any of these is the user's job (handed off), read or write, by the tool name or an input field. */
 const CREDENTIAL_WORDS = new Set(["password", "passwords", "passcode", "otp", "totp", "2fa", "mfa", "cvv", "cvc", "cardnumber"]);
-/** A payment action is handed off only when it is a write (checkout, pay), never a read (get_purchase_quote, SHOULD 14). */
+/** A payment action is handed off only when it is a write (checkout, pay), never a read (get_purchase_quote). */
 const PAYMENT_WORDS = new Set(["pay", "payment", "payments", "purchase", "checkout"]);
 
 function keyWords(value: unknown, out: Set<string>) {
@@ -568,7 +577,7 @@ const ESCALATE = {
     if (/(^|\/)\.(zshrc|zprofile|bashrc|bash_profile|profile)$/.test(path)) return true;
     if (under(path, resolve(ctx.scope.homedir, "Library/LaunchAgents"))) return true;
     for (const d of ["hooks", "commands", "agents", "skills", "plugins"]) if (under(path, resolve(ctx.scope.homedir, ".claude", d))) return true;
-    // Persistence vectors a committed repo or the home dir can carry (SHOULD 13): agent instructions and hook scripts.
+    // Persistence vectors a committed repo or the home dir can carry: agent instructions and hook scripts.
     if (/(^|\/)(\.claude\/)?CLAUDE\.md$/.test(path)) return true;
     if (/(^|\/)\.claude\/(commands|agents|skills|hooks)\//.test(path)) return true;
     if (/(^|\/)\.(githooks|husky)(\/|$)/.test(path)) return true;
@@ -582,7 +591,7 @@ const FLOORS: readonly Floor[] = [
   {
     id: "floor.bridge",
     label: "ClaudioBot's own state, tokens and other bots' homes",
-    roots: (ctx) => [ctx.scope.bridgeHome, ...inHome(".claudiobot", ".claudebot")(ctx)],
+    roots: (ctx) => [ctx.scope.bridgeHome, ...inHome(...PRIVATE.bridge)(ctx)],
     except: (ctx) => (ctx.actor.kind === "bot" ? [ctx.scope.own, ...(ctx.scope.userMd === null ? [] : [ctx.scope.userMd])] : []),
   },
   {
@@ -594,32 +603,14 @@ const FLOORS: readonly Floor[] = [
   {
     id: "floor.keys",
     label: "SSH, GPG and cloud keys or the Keychain",
-    roots: inHome(".ssh", ".gnupg", ".aws", ".config/gcloud", ".azure", "Library/Keychains"),
+    roots: inHome(...PRIVATE.keys),
     bash: (p) => p.verb === "security" || (p.verb === "ssh-add" && p.words.includes("-L")) || (p.verb === "gpg" && p.words.some((w) => w.includes("export-secret"))),
     rawScan: true,
   },
   {
     id: "floor.browser",
     label: "browser profiles and cookies",
-    roots: inHome(
-      "Library/Application Support/Google/Chrome",
-      "Library/Application Support/Google/Chrome Beta",
-      "Library/Application Support/Chromium",
-      "Library/Application Support/BraveSoftware",
-      "Library/Application Support/Firefox",
-      "Library/Application Support/Mozilla",
-      "Library/Application Support/Arc",
-      "Library/Application Support/Microsoft Edge",
-      "Library/Application Support/com.operasoftware.Opera",
-      "Library/Application Support/Vivaldi",
-      "Library/Application Support/Orion",
-      "Library/Application Support/Zen",
-      "Library/Application Support/Slack",
-      "Library/Application Support/discord",
-      "Library/Safari",
-      "Library/Containers/com.apple.Safari",
-      "Library/Cookies",
-    ),
+    roots: inHome(...PRIVATE.browser),
     rawScan: true,
   },
   {
@@ -631,7 +622,7 @@ const FLOORS: readonly Floor[] = [
   {
     id: "floor.creds",
     label: "a stored credential or token",
-    roots: inHome(".netrc", ".config/gh/hosts.yml", ".config/gh/config.yml", ".npmrc", ".docker/config.json", ".kube/config", ".git-credentials", ".pypirc", ".claude/.credentials.json", ".claude.json", ".claude/history.jsonl", ".claude/projects", "Library/Application Support/1Password"),
+    roots: inHome(...PRIVATE.creds),
     bash: (p) =>
       (p.verb === "gh" && p.words[1] === "auth" && (["token", "refresh"].includes(p.words[2] ?? "") || (p.words[2] === "status" && (p.words.includes("-t") || p.words.includes("--show-token"))))) ||
       (p.verb === "git" && (p.words[1] ?? "").startsWith("credential")) ||
@@ -642,7 +633,7 @@ const FLOORS: readonly Floor[] = [
   {
     id: "floor.personal",
     label: "Messages, Mail, Contacts or Calendars",
-    roots: inHome("Library/Messages", "Library/Mail", "Library/Application Support/AddressBook", "Library/Calendars"),
+    roots: inHome(...PRIVATE.personal),
     rawScan: true,
   },
   {
@@ -700,7 +691,7 @@ const COMMIT_MSG_FLAGS = new Set(["-m", "--message", "-F", "--file"]);
 const GH_BODY_FLAGS = new Set(["-b", "--body", "-F", "--body-file", "-t", "--title"]);
 
 /** The text a floor's raw scan should see: data arguments (an echo string, a commit message, a PR body, a grep pattern)
- *  are dropped, because a protected path named only there is not read (FP trim); a path a command actually reads stays. */
+ *  are dropped, because a protected path named only there is not read; a path a command actually reads stays. */
 function scanTextOf(verb: string, words: string[]): string {
   if (verb === "echo" || verb === "printf") return "";
   if (verb === "git") {
@@ -879,7 +870,7 @@ const SCRATCH_ROOTS = (ctx: PolicyContext) => [
 const inScratch = (real: string, ctx: PolicyContext) => SCRATCH_ROOTS(ctx).some((r) => under(real, ctx.realpath(r)) || under(real, r));
 /** A recursive-delete operand that is outside the bot's own scope and not a throwaway cache/temp dir. */
 const deletesOutside = (path: string, cwd: string, ctx: PolicyContext) => {
-  const p = path.replace(/\$\{?TMPDIR\}?/g, process.env.TMPDIR ?? "/tmp"); // $TMPDIR is a scratch root (FP trim)
+  const p = path.replace(/\$\{?TMPDIR\}?/g, process.env.TMPDIR ?? "/tmp"); // $TMPDIR is a scratch root
   const real = ctx.realpath(absRaw(expandHome(p, ctx, cwd), cwd));
   return !inScope(real, ctx) && !inScratch(real, ctx);
 };
@@ -998,7 +989,7 @@ const TABLE: readonly Row[] = [
     id: "publish",
     label: "Publish a package or a release",
     match: bash((words) => {
-      if (words.includes("--dry-run")) return false; // a dry run uploads nothing (FP trim)
+      if (words.includes("--dry-run")) return false; // a dry run uploads nothing
       const d = deploySub(words);
       if (d && (d.tool === "npm" || d.tool === "pnpm" || d.tool === "yarn" || d.tool === "bun") && ["publish", "unpublish", "dist-tag", "deprecate"].includes(d.sub)) return true;
       const g = ghArgs(words);
@@ -1012,7 +1003,7 @@ const TABLE: readonly Row[] = [
     id: "deploy",
     label: "Deploy or change infrastructure",
     match: bash((words, text) => {
-      if (words.includes("--dry-run")) return false; // a dry run changes nothing (FP trim)
+      if (words.includes("--dry-run")) return false; // a dry run changes nothing
       const v = basename(words[0] ?? "");
       // vercel/netlify take the prod flag with or without a `deploy` subcommand, and promote/rollback also change prod.
       if (v === "vercel" || v === "netlify") return words.some((a) => a.startsWith("--prod") || a === "--target=production") || ["promote", "rollback"].includes(words[1] ?? "");
@@ -1071,12 +1062,20 @@ const TABLE: readonly Row[] = [
     label: "Send data to a web service",
     match: bash((words, _, part) => {
       if (part.verb !== "curl" && part.verb !== "wget") return false;
-      // Posting to the loopback host is a local dev server, not exfiltration (FP trim).
+      // Posting to the loopback host is a local dev server, not exfiltration.
       if (words.some((a) => /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(a) || /\.localhost(:|\/|$)/.test(a))) return false;
       return part.verb === "curl" ? curlSends(words.slice(1)) : wgetSends(words.slice(1));
     }),
     attended: "ask",
     unattended: "ask",
+  },
+  {
+    id: "net.hosts",
+    label: "Reach a host outside the network allowlist",
+    match: tool((call) => hostsOf(call).length > 0),
+    attended: "pass",
+    unattended: "ask",
+    offerAlways: false,
   },
   {
     id: "rm.outside",
@@ -1147,7 +1146,7 @@ const deny = (via: DenyVia, rule: string, reason: string, handOff = false): Deci
  */
 export function decide(call: ToolCall, ctx: PolicyContext): Decision {
   if (SDK_INTERNAL.has(call.tool)) return PASS;
-  // A command too long to scan in bounded time is held rather than parsed, so the hook never freezes the bridge (SHOULD 10).
+  // A command too long to scan in bounded time is held rather than parsed, so the hook never freezes the bridge.
   if (call.tool === "Bash" && typeof call.input.command === "string" && call.input.command.length > MAX_BASH_LEN)
     return { kind: "ask", rule: "bash.toolong", label: "Run a very long shell command", signature: "Bash:bash.toolong" as Signature, always: "", offerAlways: false };
   const at: { via: DenyVia; rule: string } = { via: "floor", rule: "floor.paths" };
@@ -1210,90 +1209,39 @@ export function decide(call: ToolCall, ctx: PolicyContext): Decision {
   }
 }
 
-const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
-
 function sorted(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sorted);
   if (isRecord(value)) return Object.fromEntries(Object.keys(value).sort().map((k) => [k, sorted(value[k])]));
   return value;
 }
 
-/** Tool plus a hash of the meaningful input. Bash: the command only. Write: path and content. MCP: the whole input. */
+/** Tool plus a hash of the meaningful input. Bash: the command and any hosts. Write: path and content. MCP: the whole input. */
 export function fingerprint(call: ToolCall): Fingerprint {
-  const meaningful = call.tool === "Bash" ? String(call.input.command).trim() : JSON.stringify(sorted(call.input));
+  const hosts = hostsOf(call);
+  const command = String(call.input.command).trim();
+  const meaningful = call.tool === "Bash" ? (hosts.length > 0 ? `${command}\nallowed_domains=${hosts.join(",")}` : command) : JSON.stringify(sorted(call.input));
   return `${call.tool}:${sha256(meaningful).slice(0, 32)}` as Fingerprint;
-}
-
-const SECRET_PATTERNS: readonly RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
-  /\bsk-[A-Za-z0-9_-]{16,}/g,
-  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
-  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bAIza[0-9A-Za-z_-]{35}\b/g,
-  /\b[sprk]k_(?:live|test)_[A-Za-z0-9]{16,}/g,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-];
-/** A keyword (any `[\w-]*` prefix allowed, so AWS_SECRET_ACCESS_KEY= and MY_TOKEN= match) then its value after = or :. */
-const KEYED_SECRET = /(\b(?:Bearer|Basic|token)\s+|\b[\w-]*(?:password|passwd|pwd|secret|token|access[_-]?key|api[_-]?key|client[_-]?secret)["']?\s*[=:]\s*["']?)([^\s"'&,;]{3,})/gi;
-/** A URL's user:password, curl's -u user:pass, and mysql's -p<password>. The value is masked; the user is kept. */
-const URL_CREDENTIAL = /(:\/\/[^\s:/@]+:)([^\s@/]+)(@)/g;
-const CURL_USER = /((?:-u|--user)\s+[^\s:]+:)(\S+)/g;
-const MYSQL_PASSWORD = /(^|\s)(-p)([^\s]{2,})/g;
-/** A long run mixing upper case, lower case and digits looks like a key. Commit SHAs (lower-case hex) do not. */
-const LONG_RUN = /[A-Za-z0-9+_=-]{32,}/g;
-
-const masked = (n: number) => `«redacted:${n} chars»`;
-
-/** Secret-shaped substrings become «redacted:N chars». Keyed rules run first so a keyed value is masked once, not twice. */
-function mask(text: string): string {
-  let out = text;
-  out = out.replace(KEYED_SECRET, (_, lead: string, value: string) => lead + masked(value.length));
-  out = out.replace(URL_CREDENTIAL, (_, lead: string, value: string, tail: string) => lead + masked(value.length) + tail);
-  out = out.replace(CURL_USER, (_, lead: string, value: string) => lead + masked(value.length));
-  out = out.replace(MYSQL_PASSWORD, (_, pre: string, flag: string, value: string) => pre + flag + masked(value.length));
-  for (const p of SECRET_PATTERNS) out = out.replace(p, (m) => masked(m.length));
-  return out.replace(LONG_RUN, (m) => (/[a-z]/.test(m) && /[A-Z]/.test(m) && /[0-9]/.test(m) ? masked(m.length) : m));
 }
 
 const lines = (s: string) => (s === "" ? 0 : s.split("\n").length - (s.endsWith("\n") ? 1 : 0));
 const CLIP = 4096;
-const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}… (${s.length - n} more chars)`);
 
 /** The card's detail line: the exact command, "Write <path> (N lines)", or an MCP tool with compact JSON. Secrets masked. */
 export function detailOf(call: ToolCall): string {
   const i = call.input;
   switch (call.tool) {
-    case "Bash":
-      return clip(mask(String(i.command).trim()), CLIP);
+    case "Bash": {
+      const hosts = hostsOf(call);
+      return clip(maskSecrets(String(i.command).trim() + (hosts.length > 0 ? ` (network: ${hosts.join(", ")})` : "")), CLIP);
+    }
     case "Write":
-      return mask(`Write ${String(i.file_path)} (${lines(String(i.content))} lines)`);
+      return maskSecrets(`Write ${String(i.file_path)} (${lines(String(i.content))} lines)`);
     case "Edit":
     case "MultiEdit":
-      return mask(`${call.tool} ${String(i.file_path)}`);
+      return maskSecrets(`${call.tool} ${String(i.file_path)}`);
     case "NotebookEdit":
-      return mask(`NotebookEdit ${String(i.notebook_path)}`);
+      return maskSecrets(`NotebookEdit ${String(i.notebook_path)}`);
     default:
-      return clip(mask(`${call.tool} ${JSON.stringify(i)}`), 500);
+      return clip(maskSecrets(`${call.tool} ${JSON.stringify(i)}`), 500);
   }
-}
-
-/** A key whose value is a secret by its name alone, however short the value. */
-const SECRET_KEY = /secret|token|password|passwd|passcode|api.?key|access.?key|authorization|cookie|credential|otp|totp|cvv|cvc|card.?number|private.?key|client.?secret/i;
-
-function redactAt(value: unknown, key: string | null): unknown {
-  if (typeof value === "string") {
-    if (key !== null && BODY_KEYS.has(key)) return { bytes: Buffer.byteLength(value, "utf8"), sha256: sha256(value) };
-    if (key !== null && SECRET_KEY.test(key)) return masked(value.length);
-    return clip(mask(value), CLIP);
-  }
-  if (Array.isArray(value)) return value.map((v) => redactAt(v, key));
-  if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactAt(v, k)]));
-  return value;
-}
-
-/** For audit rows. Secret-shaped strings become «redacted:N chars», file bodies {bytes, sha256}, long strings clipped. */
-export function redact(input: unknown): unknown {
-  return redactAt(input, null);
 }

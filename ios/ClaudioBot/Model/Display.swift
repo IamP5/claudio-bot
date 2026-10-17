@@ -143,6 +143,7 @@ extension AgentStatus {
         case .inCloud: "In cloud"
         case .awaitingApproval: "Awaiting approval"
         case .parked: "Parked"
+        case .unavailable: "Unavailable"
         case .unknown(let raw): raw.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
@@ -154,6 +155,7 @@ extension BotStatus {
         switch self {
         case .awaitingApproval: "Awaiting approval"
         case .parked: "Parked"
+        case .unavailable: "Unavailable"
         case .idle, .working, .unknown: nil
         }
     }

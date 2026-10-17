@@ -124,7 +124,7 @@ test("a v2 state file is backed up byte for byte, then upgraded in place to v3",
   expect(cloud.session.id).toBeNull();
   expect([...world.agents.values()].map((a) => a.startedBy)).toEqual([{ kind: "system" }, { kind: "system" }, { kind: "system" }]);
 
-  expect(world.gate).toEqual({ open: [], grants: [], daily: [] });
+  expect(world.gate).toEqual({ open: [], grants: [], daily: [], repos: [] });
   expect(world.devices).toEqual([]);
   expect(world.push).toEqual({ sent: [] });
   expect(world.account).toEqual({ parkedUntil: null });
@@ -226,6 +226,7 @@ test.each([
   ["a v3 bot whose queue is not a list", v3({ bots: [{ ...v3Bot, session: { ...emptySession(), pending: {} } }] })],
   ["a v3 routine with no trigger", v3({ bots: [{ ...v3Bot, routines: [{ id: "r1", name: "x", prompt: "p", enabled: true, nextRunAt: null, runs: [], failStreak: 0 }] }] })],
   ["a v3 agent with no startedBy", v3({ agents: [{ ...v3Agent, startedBy: undefined }] })],
+  ["a v3 envelope of an unknown kind", v3({ bots: [{ ...v3Bot, session: { ...emptySession(), pending: [{ id: "e_1", kind: "later", at, text: "x", initiator: { kind: "user" }, settles: null, attempts: 0 }] } }] })],
 ])("refuses to start on %s and leaves every file as it was", (_, body) => {
   const home = freshHome();
   writeState(home, body);
@@ -263,6 +264,19 @@ test("a well-formed v3 file with a bot and an agent loads as written", () => {
   expect([...world.bots.values()]).toEqual([v3Bot]);
   expect([...world.agents.values()]).toEqual([v3Agent as never]);
   expect(readState(home)).toBe(body);
+});
+
+test("a v3 file from before Pending.kind reads an approval continuation from its c_ id", () => {
+  const home = freshHome();
+  const queued = (id: string) => ({ id, at, text: "x", initiator: { kind: "user" }, settles: null, attempts: 0 });
+  writeState(home, v3({ bots: [{ ...v3Bot, session: { ...emptySession(), pending: [queued("c_1"), queued("e_2")] } }] }));
+
+  const { world } = loadWorld(home);
+
+  expect(world.bots.get("b_1" as BotId)!.session.pending.map((p) => [p.id as string, p.kind])).toEqual([
+    ["c_1", "continuation"],
+    ["e_2", "envelope"],
+  ]);
 });
 
 test("no state file is a first run that writes nothing", () => {

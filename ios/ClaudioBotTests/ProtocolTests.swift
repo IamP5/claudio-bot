@@ -134,7 +134,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
             default: ""
             }
         }.filter { !$0.isEmpty }
-        #expect(seqs == ["bot:42", "bot_removed:-", "bot:48", "bot:49"])
+        #expect(seqs == ["bot:42", "bot_removed:-", "bot:48", "bot:49", "bot:51"])
     }
 
     @Test func routinesCarryTheirTriggerNextRunAndRuns() throws {
@@ -167,12 +167,12 @@ private func unknowns(in message: ServerMessage) -> [String] {
     }
 
     @Test func botsAndAgentsCarryTheNewStatusesAndTheDailyCap() throws {
-        #expect(try Fixture.bots().map(\.status) == [.idle, .working, .awaitingApproval, .parked])
-        #expect(try Fixture.bots().map(\.dailyCapUsd) == [nil, 5, nil, nil])
+        #expect(try Fixture.bots().map(\.status) == [.idle, .working, .awaitingApproval, .parked, .unavailable])
+        #expect(try Fixture.bots().map(\.dailyCapUsd) == [nil, 5, nil, nil, nil])
         let agentStatuses = try Fixture.server().compactMap { frame -> AgentStatus? in
             if case .agent(let agent, _) = frame.message { agent.status } else { nil }
         }
-        #expect(agentStatuses == [.waiting, .awaitingApproval])
+        #expect(agentStatuses == [.waiting, .awaitingApproval, .unavailable])
     }
 
     @Test func permissionCardsDecodeOpenOrDecidedWithTheExactCall() throws {
@@ -257,8 +257,8 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(AvatarColor.allCases.map(\.rawValue) == [
             "white", "brown", "red", "orange", "amber", "green", "teal", "blue", "purple", "pink", "gray",
         ])
-        #expect(BotStatus.allCases.map(\.rawValue) == ["idle", "working", "awaiting_approval", "parked"])
-        #expect(AgentStatus.allCases.map(\.rawValue) == ["working", "waiting", "failed", "in_cloud", "awaiting_approval", "parked"])
+        #expect(BotStatus.allCases.map(\.rawValue) == ["idle", "working", "awaiting_approval", "parked", "unavailable"])
+        #expect(AgentStatus.allCases.map(\.rawValue) == ["working", "waiting", "failed", "in_cloud", "awaiting_approval", "parked", "unavailable"])
         #expect(RunStatus.allCases.map(\.rawValue) == ["running", "ok", "quiet", "failed", "skipped"])
         #expect(PermissionChoice.allCases.map(\.rawValue) == ["once", "always", "deny", "never"])
     }

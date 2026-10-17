@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import { homedir, hostname, networkInterfaces } from "node:os";
 import qrcode from "qrcode-terminal";
 import { createDevices, type PairCode } from "./devices";
@@ -11,6 +12,7 @@ import { createPush, senderFromEnv } from "./push";
 import { serve } from "./serve";
 import { bridgeHome, createSaver, loadWorld } from "./store";
 import { createStream } from "./stream";
+import { errorText } from "./text";
 
 async function run(argv: string[]): Promise<string> {
   const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
@@ -67,6 +69,8 @@ if (migration.kind === "conflict") {
 // The home now resolves to ~/.claudebot, a different lock name. Hold that one too, or a bridge started with
 // CLAUDIOBOT_HOME=~/.claudebot could share the home.
 if (migration.kind === "linked" || migration.kind === "moved_aside") holdLock(home);
+// Only after the migration, which links the home into place when it is absent. Other users may not list it.
+mkdirSync(home, { recursive: true, mode: 0o700 });
 
 const port = Number(process.env.CLAUDIOBOT_PORT ?? 7878);
 const machine = await machineName();
@@ -105,13 +109,13 @@ function shutdown() {
   try {
     hub.close();
   } catch (e) {
-    log(`shutdown: closing the bots failed: ${(e as Error).message}`);
+    log(`shutdown: closing the bots failed: ${errorText(e)}`);
   }
   try {
     saver.flush();
   } catch (e) {
     saved = false;
-    log(`shutdown: state.json was not saved: ${(e as Error).message}`);
+    log(`shutdown: state.json was not saved: ${errorText(e)}`);
   }
   process.exit(saved ? 0 : 1);
 }

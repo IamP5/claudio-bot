@@ -1,5 +1,5 @@
 // Usage. The truth is <bridge home>/usage/YYYY-MM.jsonl (mode 0600, append-only). An in-memory index (spend per local
-// day per bot, lifetime spend per agent, last cumulative per session) is rebuilt from those files at start. Owner: U3.
+// day per bot, lifetime spend per agent, last cumulative per session) is rebuilt from those files at start.
 //
 // Boot folds every month file, not only the last two. An agent's budget is lifetime, and a session idle for months
 // still has a true baseline in an old file; a window would undercount the first and re-adopt the second. Rows are small
@@ -7,6 +7,7 @@
 import { appendFileSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentId, BotId } from "./protocol";
+import { errorText } from "./text";
 import { actorKey, attended, type Actor, type ActorKey, type Initiator } from "./world";
 
 /** Per bot per local day, its agents included. Override: CLAUDIOBOT_DAILY_USD. A bot's own dailyCapUsd wins. */
@@ -199,7 +200,7 @@ export function createLedger(deps: {
         appendFileSync(join(deps.dir, name), `${torn.has(name) ? "\n" : ""}${JSON.stringify(row)}\n`, { mode: 0o600 });
         torn.delete(name);
       } catch (e) {
-        deps.log(`usage: could not append to ${name}, the spend counts only until restart: ${(e as Error).message}`);
+        deps.log(`usage: could not append to ${name}, the spend counts only until restart: ${errorText(e)}`);
       }
     },
 

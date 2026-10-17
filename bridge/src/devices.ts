@@ -1,9 +1,10 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { Device, DeviceId, PairResponse } from "./protocol";
 import type { Persist } from "./store";
-import type { DeviceRecord, World } from "./world";
+import { displayName } from "./text";
+import { own, type DeviceRecord, type World } from "./world";
 
-// Pairing and socket auth. The only writer of World.devices; the live pairing code is memory only. Owner: U5.
+// Pairing and socket auth. The only writer of World.devices; the live pairing code is memory only.
 // Tokens are 32 random bytes, stored as sha256 only and compared in constant time. The token is never printed;
 // the bridge prints a one-time code and a claudiobot://pair?url=…&code=… link instead.
 
@@ -13,7 +14,7 @@ export const PAIR_CODE_ATTEMPTS = 5;
  * The protocol 2 shared token authenticates until this moment, one release after protocol 3, and never after it. The
  * README's upgrade notes name the same date; a phone still on the shared token then pairs again with a code.
  */
-export const LEGACY_SUNSET = "2027-01-01T00:00:00.000Z";
+const LEGACY_SUNSET = "2027-01-01T00:00:00.000Z";
 /** The phone reconnects often; the device list shows when it was last seen to the minute, so one save a minute is enough. */
 const SEEN_EVERY_MS = 60_000;
 
@@ -39,7 +40,7 @@ export type Devices = {
   /** Removes the device. The caller closes its live sockets at once. False when it was not paired. Throws, with the device kept, when the removal cannot be saved. */
   revoke(id: DeviceId): boolean;
   seen(id: DeviceId): void;
-  /** Registers protocol 2's shared token as the legacy device (hash only), so today's phone keeps working. Idempotent. */
+  /** Registers protocol 2's shared token as the legacy device (hash only), so a phone paired before protocol 3 keeps working. Idempotent. */
   importLegacy(token: string): void;
 };
 
@@ -67,12 +68,8 @@ const normalize = (code: string) => code.toUpperCase().replace(/[^0-9A-Z]/g, "")
 
 const display = (code: string) => `${code.slice(0, 4)}-${code.slice(4)}`;
 
-// The name lands in logs and in every phone's device list. Format characters include bidi overrides.
-const cleanName = (name: string) =>
-  Array.from(name.replace(/\s+/g, " ").replace(/\p{C}/gu, "").replace(/ {2,}/g, " ").trim())
-    .slice(0, NAME_LIMIT)
-    .join("")
-    .trim() || "Phone";
+// The name lands in logs and in every phone's device list.
+const cleanName = (name: string) => displayName(name, NAME_LIMIT) || "Phone";
 
 type Spent = "none" | "expired" | "burned";
 
@@ -89,7 +86,7 @@ export function createDevices(deps: {
   /** Shows a code the bridge issued on its own on the Mac's terminal. */
   announce: (code: PairCode) => void;
 }): Devices {
-  const records = deps.world.devices as DeviceRecord[];
+  const records = own<DeviceRecord[]>(deps.world.devices);
   let live: { code: string; expiresAt: Date; attemptsLeft: number } | null = null;
 
   function newCode(): PairCode {

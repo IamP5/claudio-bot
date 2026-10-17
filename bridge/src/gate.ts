@@ -3,33 +3,39 @@ import { appendFileSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import type { Tickable } from "./clock";
 import type { Headroom } from "./ledger";
-import { DAILY_CAPS, decide, detailOf, fingerprint, redact, type Decision, type PolicyContext, type Scope, type ToolCall } from "./policy";
+import { DAILY_CAPS, decide, detailOf, fingerprint, type Decision, type PolicyContext, type Scope, type ToolCall } from "./policy";
 import type { AgentId, BotId, Message, MessageId, PermissionChoice } from "./protocol";
 import { notices, type Envelope } from "./prompts";
 import type { Persist } from "./store";
+import { errorText, redact } from "./text";
 import {
   actorKey,
   agentPeer,
   attended,
   botActor,
+  cardMessageKind,
+  isOpenCard,
   newMessageId,
+  own,
+  repoTrust,
   settleCard,
   type Actor,
   type ActorKey,
+  type AgentActor,
   type BotRecord,
   type Card,
   type DailyCount,
   type GateState,
   type Initiator,
   type OpenCard,
-  type Owned,
+  type RepoTrust,
   type StandingRule,
   type World,
 } from "./world";
 
-// Everything that waits on the human: the PreToolUse gate, both card kinds (TTL, reminder, dedupe, settle),
-// standing rules, one-shot grants, and the audit log at <bridge home>/audit/YYYY-MM.jsonl (0600, append-only).
-// The only writer of World.gate and BotRecord.rules. Owner: U1.
+// Everything that waits on the human: the PreToolUse gate, every card kind (TTL, reminder, dedupe, settle), standing
+// rules, one-shot grants, repo trust, and the audit log at <bridge home>/audit/YYYY-MM.jsonl (0600, append-only).
+// The only writer of World.gate and BotRecord.rules.
 //
 // Mechanism: deny-and-regrant. An "ask" decision posts a permission card and denies the call with a "held for
 // approval" reason. Allow once installs an exact-input grant for 10 minutes and delivers a decision envelope that runs
@@ -41,8 +47,8 @@ import {
 // A card's Message.answer is the truth about whether it is open; GateState.open only carries its deadlines and the held
 // call, and is reconciled against the messages at boot and on every tick.
 
-/** A hook that times out fails closed (probe Q6). The gate never awaits I/O, so this is only a backstop. */
-export const HOOK_TIMEOUT_S = 30;
+/** A hook that times out fails closed. The gate never awaits I/O, so this is only a backstop. */
+const HOOK_TIMEOUT_S = 30;
 
 /**
  * Cards remind once at half their life, then expire. A grant lets the exact call run once within grantMs of the
@@ -52,7 +58,15 @@ const TTL = { permissionMs: 2 * 3600_000, questionMs: 24 * 3600_000, grantMs: 10
 
 const VERDICTS_KEPT = 1000;
 
-/** Per bot, how many permission cards may be open at once before new ones are refused (a runaway turn, probe G1 C). */
+/** What each choice on a trust card decides. Nothing is decided by a card that expires. */
+const TRUST_ANSWERS: Record<PermissionChoice, { trusted: boolean; everyAgent: boolean }> = {
+  once: { trusted: true, everyAgent: false },
+  always: { trusted: true, everyAgent: true },
+  deny: { trusted: false, everyAgent: false },
+  never: { trusted: false, everyAgent: true },
+};
+
+/** Per bot, how many permission cards may be open at once before new ones are refused, so a runaway turn cannot flood the phone. */
 const MAX_OPEN_CARDS = 10;
 
 export type CardReply = { kind: "option"; index: number } | { kind: "dismiss" } | { kind: "permission"; choice: PermissionChoice };
@@ -85,8 +99,15 @@ export type Gate = Tickable & {
    * deny; never → deny rule. Only a card tap reaches this; chat text never approves.
    */
   answer(botId: BotId, messageId: MessageId, reply: CardReply): { ok: true } | { ok: false; error: string };
-  /** delete_bot: drops the bot's open cards, its and its agents' grants, its rules and its daily counts. */
+  /** delete_bot: drops the bot's open cards, its and its agents' grants and trust answers, its rules and its daily counts. */
   forgetBot(botId: BotId): void;
+  /**
+   * The agent's repo carries Claude Code config of its own (`found`, relative paths) and nobody has answered for it:
+   * posts "Trust <name>'s Claude settings" in the bot's chat, one open card per repo. Allow once trusts it for this
+   * agent, Always for every agent in the repo, Deny keeps this agent on the bridge's empty config, Never every agent.
+   * An unanswered card expires and decides nothing.
+   */
+  trustCard(actor: AgentActor, repo: { root: string; name: string; found: readonly string[] }): void;
   /**
    * The session/hub calls this at the start of a turn that carries a decision envelope (a continuation), so a grant's
    * 10-minute TTL counts from now rather than from the tap, capped at the 24 h ceiling set when the card was answered.
@@ -110,6 +131,8 @@ export type GateDeps = {
   /** Counts toward the session's 3-denials breaker. */
   denied: (actor: Actor) => void;
   notify: (bot: BotRecord, reason: "card" | "reminder", messageId: MessageId) => void;
+  /** A trust card was answered Allow once or Always: the repo's agents load its config from their next query. */
+  trusted: (root: string) => void;
   persist: Persist;
   auditDir: string;
   userName: string;
@@ -119,20 +142,12 @@ export type GateDeps = {
 
 const COULD_NOT_CHECK = "The bridge could not check this call, so it was blocked and did not run. Do not retry it this turn.";
 
-export const denyOutput = (reason: string): SyncHookJSONOutput => ({
+const denyOutput = (reason: string): SyncHookJSONOutput => ({
   hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
 });
 const allowOutput = (reason: string): SyncHookJSONOutput => ({
   hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: reason },
 });
-
-const describe = (e: unknown): string => {
-  try {
-    return e instanceof Error ? e.message : String(e);
-  } catch {
-    return "unprintable error";
-  }
-};
 
 /** Only {} (no opinion), allow or deny may leave the gate. Anything else, an async result included, would fail open. */
 function checked(out: SyncHookJSONOutput): SyncHookJSONOutput {
@@ -144,7 +159,7 @@ function checked(out: SyncHookJSONOutput): SyncHookJSONOutput {
 }
 
 /**
- * A PreToolUse callback that throws fails OPEN and the tool runs (probe Q6), so every exception, including one from
+ * A PreToolUse callback that throws fails OPEN and the tool runs, so every exception, including one from
  * reading the input or from the error report itself, becomes an explicit deny. The body is synchronous.
  */
 export function failClosed(body: (input: PreToolUseHookInput) => SyncHookJSONOutput, onError: (input: unknown, error: string) => void): HookCallback {
@@ -154,7 +169,7 @@ export function failClosed(body: (input: PreToolUseHookInput) => SyncHookJSONOut
       return checked(body(input));
     } catch (e) {
       try {
-        onError(input, describe(e));
+        onError(input, errorText(e));
       } catch {}
       return denyOutput(COULD_NOT_CHECK);
     }
@@ -235,19 +250,17 @@ function resolveReal(path: string): string {
   }
 }
 
-const own = <T>(slice: Owned<T>): T => slice as unknown as T;
 const pad = (n: number) => String(n).padStart(2, "0");
 const localDay = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const localMonth = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
 const SYSTEM: Initiator = { kind: "system" };
-const isOpenCard = (m: Message): m is Card => (m.kind === "question" || m.kind === "permission") && m.answer === null;
 
 export function createGate(deps: GateDeps): Gate {
   const { world, userName } = deps;
   const state = own<GateState>(world.gate);
   const rulesOf = (bot: BotRecord) => own<StandingRule[]>(bot.rules);
   // A recorded verdict is keyed by tool_use_id but only replayed for the same call fingerprint, so a reused id with a
-  // different input is decided afresh (probe G1). fp null marks a verdict that does not depend on the input (stopping).
+  // different input is decided afresh. fp null marks a verdict that does not depend on the input (stopping).
   const verdicts = new Map<string, { fp: string | null; out: SyncHookJSONOutput }>();
   const at = (date: Date, plusMs = 0) => new Date(date.getTime() + plusMs).toISOString();
 
@@ -261,7 +274,7 @@ export function createGate(deps: GateDeps): Gate {
     key.startsWith("bot:") ? world.bots.has(key.slice(4) as BotId) : world.agents.has(key.slice(6) as AgentId);
   const messageOf = (card: OpenCard): Card | undefined => {
     const m = world.bots.get(card.actor.botId)?.messages.find((m) => m.id === card.cardId);
-    return m?.kind === card.kind ? (m as Card) : undefined;
+    return m?.kind === cardMessageKind(card) ? (m as Card) : undefined;
   };
   const dropCard = (cardId: MessageId) => {
     const i = state.open.findIndex((c) => c.cardId === cardId);
@@ -449,6 +462,7 @@ export function createGate(deps: GateDeps): Gate {
         if (m.kind === "question" && m.answer === null && m.expiresAt !== null && !state.open.some((c) => c.cardId === m.id))
           state.open.push({ kind: "question", cardId: m.id, actor: botActor(bot.id), remindAt: null, expiresAt: m.expiresAt });
     state.grants.splice(0, state.grants.length, ...state.grants.filter((g) => g.expiresAt > iso && keyExists(g.actor)));
+    state.repos.splice(0, state.repos.length, ...state.repos.filter((r) => r.agentId === null || world.agents.has(r.agentId)));
     state.daily.splice(0, state.daily.length, ...state.daily.filter((c) => c.day === day && world.bots.has(c.botId)));
     return JSON.stringify(state) !== before;
   }
@@ -456,10 +470,11 @@ export function createGate(deps: GateDeps): Gate {
   function expire(card: OpenCard) {
     dropCard(card.cardId);
     const bot = world.bots.get(card.actor.botId);
-    const settled = settleCard(messageOf(card), { kind: card.kind, answer: "expired" });
+    const settled = settleCard(messageOf(card), { kind: cardMessageKind(card), answer: "expired" });
     if (!bot || !settled.ok) return;
     deps.say(bot, settled.card);
-    if (!actorExists(card.actor)) return;
+    // The agent never waited on a trust card: it runs on the bridge's empty config until someone answers.
+    if (card.kind === "trust" || !actorExists(card.actor)) return;
     const text =
       card.kind === "permission"
         ? notices.expiredPermission(userName, card.call.tool, card.call.detail)
@@ -475,7 +490,9 @@ export function createGate(deps: GateDeps): Gate {
   function decidePermission(bot: BotRecord, message: Message | undefined, choice: PermissionChoice): { ok: true } | { ok: false; error: string } {
     const settled = settleCard(message, { kind: "permission", answer: choice });
     if (!settled.ok) return settled;
-    const card = state.open.find((c): c is Extract<OpenCard, { kind: "permission" }> => c.kind === "permission" && c.cardId === settled.card.id);
+    const open = state.open.find((c) => c.kind !== "question" && c.cardId === settled.card.id);
+    if (open?.kind === "trust") return decideTrust(bot, settled.card, open, choice);
+    const card = open?.kind === "permission" ? open : undefined;
     if (!card) {
       deps.say(bot, { ...settled.card, answer: "expired" });
       deps.persist("now");
@@ -506,6 +523,20 @@ export function createGate(deps: GateDeps): Gate {
     return { ok: true };
   }
 
+  function decideTrust(bot: BotRecord, settled: Card, card: Extract<OpenCard, { kind: "trust" }>, choice: PermissionChoice): { ok: true } {
+    dropCard(card.cardId);
+    const answer = TRUST_ANSWERS[choice];
+    const agentId = answer.everyAgent ? null : card.actor.agentId;
+    // A repo-wide answer replaces every earlier one for the repo, so the newest answer is the one that holds.
+    const kept = state.repos.filter((r) => r.root !== card.root || (agentId !== null && r.agentId !== agentId));
+    const row: RepoTrust = { root: card.root, agentId, trusted: answer.trusted, cardId: card.cardId, at: deps.now().toISOString() };
+    state.repos.splice(0, state.repos.length, ...kept, row);
+    deps.say(bot, settled);
+    deps.persist("now");
+    if (answer.trusted) deps.trusted(card.root);
+    return { ok: true };
+  }
+
   reconcile(deps.now());
 
   return {
@@ -530,7 +561,7 @@ export function createGate(deps: GateDeps): Gate {
     answer(botId, messageId, reply) {
       const bot = world.bots.get(botId);
       if (!bot) return { ok: false, error: "Unknown bot" };
-      // A card past its deadline is expired, never granted, even before the tick that would have retired it (probe G1).
+      // A card past its deadline is expired, never granted, even before the tick that would have retired it.
       const held = state.open.find((c) => c.cardId === messageId);
       if (held && held.expiresAt <= deps.now().toISOString()) {
         expire(held);
@@ -556,9 +587,35 @@ export function createGate(deps: GateDeps): Gate {
       const keys = new Set<string>([`bot:${botId}`, ...[...world.agents.values()].filter((r) => r.agent.botId === botId).map((r) => `agent:${r.agent.id}`)]);
       state.open.splice(0, state.open.length, ...state.open.filter((c) => c.actor.botId !== botId));
       state.grants.splice(0, state.grants.length, ...state.grants.filter((g) => !keys.has(g.actor)));
+      state.repos.splice(0, state.repos.length, ...state.repos.filter((r) => r.agentId === null || !keys.has(`agent:${r.agentId}`)));
       state.daily.splice(0, state.daily.length, ...state.daily.filter((c) => c.botId !== botId));
       const bot = world.bots.get(botId);
       if (bot) rulesOf(bot).splice(0);
+    },
+
+    trustCard(actor, repo) {
+      if (repoTrust(state, repo.root, actor.agentId) !== null) return;
+      if (state.open.some((c) => c.kind === "trust" && c.root === repo.root && messageOf(c)?.answer === null)) return;
+      const bot = botOf(actor);
+      const agent = world.agents.get(actor.agentId)?.agent;
+      const now = deps.now();
+      const id = newMessageId();
+      const expiresAt = at(now, TTL.questionMs);
+      deps.say(bot, {
+        kind: "permission",
+        id,
+        at: now.toISOString(),
+        from: agent ? agentPeer(agent) : null,
+        tool: "Claude Code settings",
+        label: `Trust ${repo.name}'s Claude settings`,
+        detail: `${repo.found.join(", ")} in ${repo.root}`,
+        always: `Agents in ${repo.name} load its own Claude Code settings, hooks and MCP servers, from now on`,
+        answer: null,
+        expiresAt,
+      });
+      state.open.push({ kind: "trust", cardId: id, actor, remindAt: null, expiresAt, root: repo.root });
+      deps.persist("now");
+      deps.notify(bot, "card", id);
     },
 
     beginTurn(actor) {

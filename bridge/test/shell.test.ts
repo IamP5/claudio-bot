@@ -82,7 +82,7 @@ describe("nesting past the cap throws (fail closed)", () => {
   });
 });
 
-describe("heredocs: the body is stdin, not commands (MUST 1)", () => {
+describe("heredocs: the body is stdin, not commands", () => {
   const verbs = (src: string) => shellCommands(src).map((c) => c.words[0]!.text);
   test("an apostrophe in a quoted heredoc inside $(…) no longer hides the next command", () => {
     const src = `git commit -m "$(cat <<'EOF'\nFix the user's bug\nEOF\n)" && gh pr merge 1`;
@@ -118,7 +118,7 @@ describe("heredocs: the body is stdin, not commands (MUST 1)", () => {
   });
 });
 
-describe("ANSI-C quoting decodes every escape (MUST 5)", () => {
+describe("ANSI-C quoting decodes every escape", () => {
   const first = (src: string) => shellCommands(src)[0]!.words.map((w) => w.text);
   test("hex, octal, unicode and control escapes", () => {
     expect(first(`$'\\x6e\\x70\\x6d' publish`)).toEqual(["npm", "publish"]);
@@ -131,13 +131,13 @@ describe("ANSI-C quoting decodes every escape (MUST 5)", () => {
   });
 });
 
-describe("backticks honour backslash escapes (MUST 5)", () => {
+describe("backticks honour backslash escapes", () => {
   test("an escaped inner backtick nests a second substitution instead of closing the first", () => {
     expect(words("echo `echo \\`npm publish\\``")).toEqual([["npm", "publish"], ["echo", "`npm publish`"], ["echo", "`echo \\`npm publish\\``"]]);
   });
 });
 
-describe("brace expansion is marked on the word (MUST 5)", () => {
+describe("brace expansion is marked on the word", () => {
   const ws = (src: string) => shellCommands(src)[0]!.words;
   test("brace-built flags and paths carry brace, plain words do not", () => {
     expect(ws("rm {-r,-f} dir").map((w) => w.brace)).toEqual([false, true, false]);
@@ -146,7 +146,7 @@ describe("brace expansion is marked on the word (MUST 5)", () => {
   });
 });
 
-describe("commands know their subshell depth and whether they ran conditionally (MUST 6)", () => {
+describe("commands know their subshell depth and whether they ran conditionally", () => {
   const shape = (src: string) => shellCommands(src).map((c) => [c.words[0]!.text, c.subshell, c.cond]);
   test("&& || and | make the next command conditional; ; and newline do not", () => {
     expect(shape("a && b || c | d ; e\nf")).toEqual([["a", 0, false], ["b", 0, true], ["c", 0, true], ["d", 0, true], ["e", 0, false], ["f", 0, false]]);

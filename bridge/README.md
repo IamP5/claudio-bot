@@ -15,9 +15,13 @@ On startup the bridge prints its LAN WebSocket URLs, a one-time pairing code (`p
 
 Once a phone is paired, the bridge prints no code at start. To pair another phone, use Settings, Pair another device on a paired phone, or run `bun run start --pair`. Revoking a phone in Settings closes its socket with code 4001. After 10 failed pairings from one address in 10 minutes, `/pair` answers 429 for that address.
 
-`claude` must be on `PATH` and logged in. To check, run `claude -p hi`. Only one bridge runs per home. A second one exits and names the lock file beside the home (`~/.claudiobot.lock`). If no bridge is running and the lock stays, delete it.
+`claude` must be on `PATH` and logged in. To check, run `claude -p hi`. Only one bridge runs per home. A second one exits and names the lock file beside the home's real path: `~/.claudiobot.lock`, or `~/.claudebot.lock` once `~/.claudiobot` links to `~/.claudebot` (the bridge then holds both). If no bridge is running and the lock stays, delete it.
 
 The first run creates **Claudio Bot**, a general assistant, and it greets you.
+
+## Run as a service
+
+`bun run claudiobot install` runs the bridge as a LaunchAgent in your login session: it starts at login, restarts after a crash at most every 10 seconds, logs to `~/Library/Logs/ClaudioBot/bridge.log` (0600), and keeps the `PATH`, the `CLAUDIOBOT_*` variables and `ENABLE_CLAUDEAI_MCP_SERVERS` of the shell you ran it from. `status`, `doctor`, `logs`, `pair`, `update` and `uninstall` do what the root README's "Run as a service" says. `doctor` never loads the store: it reads `state.json` read-only and asks `store.checkStateFile` what a start would do.
 
 ## Upgrading from claudebot
 
@@ -25,7 +29,7 @@ At its first start the bridge links `~/.claudiobot` to an existing `~/.claudebot
 
 The bridge upgrades `state.json` from version 2 to 3 and keeps the exact old file as `state.v2.json.bak`. **Do not run an older bridge against the same home afterwards.** It does not know version 3, treats the file as a first run and overwrites it. To go back, stop the new bridge and copy `state.v2.json.bak` over `state.json` first. Anything changed since the upgrade is lost.
 
-The phone paired with the old shared token keeps working until 1 January 2027 (`LEGACY_SUNSET` in `src/devices.ts`) as the "legacy" device. From then on the shared token is refused, and that phone pairs again with a code. Revoking it writes `token.revoked`, and that token is never accepted again. An app build that does not announce `?protocol=3` sees each permission card as a question card with **Allow once** and **Deny**, and its answer decides the card. The legacy phone and any app build that does not announce `?protocol=3` can revoke only themselves and can decide a card only with Allow once or Deny.
+The phone paired with the old shared token keeps working until 1 January 2027 (`LEGACY_SUNSET` in `src/devices.ts`, `2027-01-01T00:00:00Z`) as the "legacy" device. A legacy socket that is connected at that moment keeps working until it reconnects. From then on the shared token is refused, and that phone pairs again with a code. Revoking it writes `token.revoked`, and that token is never accepted again. An app build that does not announce `?protocol=3` sees each permission card as a question card with **Allow once** and **Deny**, and its answer decides the card. The legacy phone and any app build that does not announce `?protocol=3` can revoke only themselves and can decide a card only with Allow once or Deny.
 
 ## Environment
 
@@ -36,11 +40,15 @@ The phone paired with the old shared token keeps working until 1 January 2027 (`
 | `CLAUDIOBOT_HOME` | `~/.claudiobot` | The bridge home (below). Setting it skips the migration from `~/.claudebot`. |
 | `CLAUDEBOT_HOME` | | The old name. Ignored, with a warning. Rename it to `CLAUDIOBOT_HOME`. |
 | `CLAUDIOBOT_CLAUDE` | `claude` on `PATH` | Path to the Claude Code executable. Useful when the bridge runs under launchd. |
-| `CLAUDIOBOT_MODEL` | your Claude Code default | Pins the model for bots and agents. Bots run in auto permission mode, so pick a model that supports it: `claude-haiku-4-5` and `claude-sonnet-4-5` silently fall back to default mode. |
+| `CLAUDIOBOT_MODEL` | your Claude Code default | Pins the model for bots and agents. Bots run in auto permission mode, so pick a model that supports it. The SDK probe found that `claude-haiku-4-5` and `claude-sonnet-4-5` silently fall back to default mode. |
 | `CLAUDIOBOT_USER_NAME` | first word of `id -F`, else `$USER` | Your first name, as bots use it. |
 | `CLAUDIOBOT_DAILY_USD` | `10` | Daily spend cap per bot in US dollars, its agents included. The cap set in a bot's profile wins. |
 | `CLAUDIOBOT_AGENT_USD` | `5` | Lifetime budget per Mac agent in US dollars. |
 | `CLAUDIOBOT_PUSH_URL` | off | An ntfy topic URL. When set, the bridge pushes while no phone is connected. |
+| `CLAUDIOBOT_ALLOWED_DOMAINS` | | Comma-separated hosts sandboxed commands reach without review, on top of `github.com`, `*.github.com`, `*.githubusercontent.com`, the npm and Yarn registries, PyPI and crates.io. |
+| `CLAUDIOBOT_SANDBOX_STRICT_NETWORK` | off | `1`: that list is the whole allowlist, and a command cannot ask for another host with `allowed_domains`. |
+| `CLAUDIOBOT_SANDBOX_GH` | off | `1`: Mac agents may run `gh` (its config becomes readable and the sandbox allows the TLS trust service). Bots never get it. |
+| `ENABLE_CLAUDEAI_MCP_SERVERS` | on | Claude Code's switch. `false` leaves claude.ai connectors out of every bot and agent, which saves their tool definitions on every cold query. |
 
 ## What is on disk
 
@@ -57,6 +65,8 @@ The phone paired with the old shared token keeps working until 1 January 2027 (`
     CLAUDE.md           the bot's job and its own notes
     library/            files the bot makes, listed in the app's Library
     inbox/              files you send from the phone
+    .history/           older messages moved out of state.json: bot.jsonl and <agentId>.jsonl
+  agent-config/<agentId>/  the empty folder an agent loads project config from until its repo is trusted (0700)
   trash/<botId>-<ms>/   the home of a deleted bot
 ```
 
@@ -64,7 +74,9 @@ The phone paired with the old shared token keeps working until 1 January 2027 (`
 
 ## How a bot runs
 
-Each bot has one Claude Code session through the Agent SDK, resumed from its stored session id after a restart. The session uses the `claude_code` system prompt with the bot's persona appended, loads your user settings and the bot's `CLAUDE.md`, and runs with `permissionMode: "auto"`.
+Each bot has one Claude Code session through the Agent SDK, resumed from its stored session id after a restart. The session uses the `claude_code` system prompt with the bot's persona appended, loads your user settings and the bot's `CLAUDE.md`, and runs with `permissionMode: "auto"` and Claude Code's auto memory off (its memory folder is under `~/.claude/projects`, which bots may not touch; a bot keeps notes in `CLAUDE.md` and `USER.md`). Every shell command runs in Claude Code's sandbox, which lets it write only the bot's home and `USER.md` (below).
+
+A query with no turn in flight closes after 15 idle minutes, so its `claude` process exits; the next turn resumes the session on a new one, inside the prompt cache's hour. An unattended turn always gets a query of its own, capped at what is left of the day's spend. A turn silent for 30 minutes leaves a note naming the bot. While Claude Code cannot start, the bot shows **Unavailable** and the bridge retries after 30 s, 1, 2 and then every 5 minutes.
 
 Everything that reaches a bot is one message whose first line says where it came from, such as `[Alex]`, `[Routine digest fired]`, `[Agent "Fix login" (a_...) reports]` or `[Alex allowed once: Bash \`git push origin main\`. Run exactly that call again now.]`. Messages wait in a durable inbox inside `state.json`, saved before Claude sees them, and the bot takes them one turn at a time. Each paragraph the bot writes becomes one chat bubble. Tool calls do not show.
 
@@ -76,14 +88,27 @@ A bot acts through the `claudio` MCP tools: `ask` posts a question card, `start_
 
 ## Approvals
 
-Every tool call of a bot or a Mac agent passes a `PreToolUse` hook. Some calls are always refused, such as anything touching the bridge home outside the bot's own folder, keys, the Keychain, browser data or the Claude login. Risky calls, such as pushing to the default branch, are refused with a "held for approval" reason, and a permission card opens in the bot's chat. **Allow once** lets that exact call run once in the next 10 minutes, and the bot is told to run it again. **Always** and **Never** become standing rules for the bot and its agents. A permission card expires after 2 hours and a question card after 24, each with one reminder at half its life. Three held or refused calls in one turn stop the turn. The root README's Safety model has the full list and the limits.
+Every tool call of a bot or a Mac agent passes a `PreToolUse` hook. Some calls are always refused, such as anything touching the bridge home outside the bot's own folder, keys, the Keychain, browser data or the Claude login. Risky calls, such as pushing to the default branch, are refused with a "held for approval" reason, and a permission card opens in the bot's chat. **Allow once** lets that exact call run once within 10 minutes of the turn that re-runs it starting (at most 24 hours after the tap), and the bot is told to run it again. **Always** and **Never** become standing rules for the bot and its agents. A permission card expires after 2 hours and a question card after 24, each with one reminder at half its life. Three held or refused calls in one turn stop the turn. The root README's Safety model has the full list and the limits.
+
+## The sandbox
+
+`src/sandbox.ts` builds the Seatbelt sandbox for every Bash call of a bot or a Mac agent, and `src/private.ts` lists the paths both it and the gate keep private. It is enforced by macOS for the command and everything the command starts, with `failIfUnavailable: true` and `allowUnsandboxedCommands: false`, and `autoAllowBashIfSandboxed: false` keeps the auto-mode classifier on every call. It does not cover Read, Write, Edit, Grep, Glob, WebFetch or MCP tools, and it does not open cards: the gate does both.
+
+- A bot writes its home, `USER.md` and the sandbox's own `TMPDIR`, and reads nothing else of the bridge home. A Mac agent writes its project, the git dirs a commit needs outside it (never their `hooks`, `config` or `config.worktree`), the per-user temp and cache dirs, and the npm, Bun, `~/.cache`, `~/Library/Caches` and Xcode build caches.
+- Both are denied the private paths and the bridge's `CLAUDIOBOT_*` variables. A Mac agent may read `~/.ssh/config`, `~/.ssh/known_hosts`, `~/.ssh/*.pub` and `~/Library/Keychains`.
+- Pushing: inside the sandbox Claude Code points git's ssh at a SOCKS proxy that refuses it (seen with Claude Code 2.1.301), so for agents the bridge sets `GIT_CONFIG_*` to rewrite `git@github.com:` and `ssh://git@github.com/` to `https://github.com/`, and git's osxkeychain helper supplies the token. That helper also answers any other agent command, which can send the token only to allowed hosts or ones the classifier approved.
+- Signing: with `commit.gpgsign` on, `ssh-keygen -Y sign` works only through the SSH agent, which the sandbox may reach when the bridge has `SSH_AUTH_SOCK`; key files stay unreadable and `~/.gnupg` is denied, so GPG signing fails. The e2e runs with no agent and turns signing off in its repos.
+- Network: the hosts above go through without review. For another host Claude Code re-runs the command with it in the Bash tool's `allowed_domains`. The classifier reviews that, and on unattended turns the gate holds it on a card that shows the hosts.
+- When the sandbox cannot start, a tool result says so: the session tells the bot's chat once, does not count it toward the denial breaker, and closes the query at the turn's end so the next turn tries again. A query that ends because its sandbox could not start is a start failure: the message keeps its place and waits the long start backoff. Nothing is retried without the sandbox.
 
 ## Agents
 
 A bot starts an agent for coding work in a project.
 
-- A **mac** agent is a Claude Code session in the project folder, behind the same gate and counted against its bot's daily cap and its own budget. When its turn ends, its final message goes back to the bot, which decides what to tell you.
-- A **cloud** agent runs `claude --cloud` in the project folder, so the project needs a GitHub remote. The bridge neither checks its tool calls nor counts its cost. It does not report back. The bot gives you the claude.ai link instead.
+- A **mac** agent is a Claude Code session in the project folder, behind the same gate and sandbox and counted against its bot's daily cap and its own budget. When its turn ends, its final message goes back to the bot, which decides what to tell you.
+- A **cloud** agent runs `claude --cloud` in the project folder, under `script(1)` because it wants a terminal, with a 90 second limit, so the project needs a GitHub remote. The bridge neither checks its tool calls nor counts its cost. It does not report back. The bot gives you the claude.ai link instead.
+
+A mac agent loads project configuration (`projectConfigRoot`) from `agent-config/<agentId>/`, an empty folder only the bridge writes, until its repo is trusted. The repo's `.claude` settings and hooks, `.mcp.json` servers, commands, agents and skills therefore never load from the checkout or any branch it checks out. When the repo carries any of them, its bot's chat gets one card per repo, "Trust <repo>'s Claude settings", listing what was found. Allow once trusts the repo for that agent, Always for every agent in it (saved in `state.json`), Deny keeps that agent on the empty folder and Never every agent; an expired card decides nothing. Once trusted, each live agent in the repo gets a new query at its next chance, which loads the repo's own config.
 
 If the bridge restarts while a mac agent is working, the agent is marked failed and its bot is told. A message to the agent resumes it.
 
@@ -104,7 +129,7 @@ With `CLAUDIOBOT_PUSH_URL` set to an ntfy topic, the bridge posts when no phone 
 ```sh
 bun test         # unit tests, no network, no Claude
 bunx tsc --noEmit
-bun run e2e      # real Claude Code in a temp home, about $0.40 to $0.70
+bun run e2e      # real Claude Code in a temp home, 13 scenarios, about $0.80 with connectors off
 ```
 
-The e2e script starts the bridge with `CLAUDIOBOT_HOME` in a temp folder, so it never touches `~/.claudebot` or `~/.claudiobot`. It pairs over `POST /pair` and drives the bridge through the socket like the app. It covers a user turn, a mac agent's report, Stop on a running command, a held `git push origin main` that must not reach a local bare remote before Allow once (once through `decide`, once through a protocol 2 socket's answer), quiet and non-quiet routine runs after a restart, and session resume. It pins `claude-sonnet-5-5`, because auto mode needs it. `E2E_MODEL` overrides the model, and `E2E_BRIDGE_LOG=<file>` keeps the bridge's log. It never starts a cloud agent, and it prints the total the ledger charged.
+The e2e script starts the bridge with `CLAUDIOBOT_HOME` and every project root in a temp folder, so it never touches `~/.claudebot` or `~/.claudiobot`. It keeps your `HOME` for the Claude Code login but passes the bridge no `SSH_AUTH_SOCK` or GitHub token, sends pushes to a fake ntfy server of its own, and turns claude.ai connectors off (`E2E_CONNECTORS=1` keeps them). It pairs over `POST /pair` and drives the bridge through the socket like the app. It covers a user turn; a bot command built at runtime that the gate holds and that, after Allow once (which Claude Code runs without asking its classifier), the sandbox still refuses: a read in the bridge home and a write outside the bot's home; a mac agent's commit and report; Stop on a running command; an agent's `git push origin main` to a local bare remote that waits for Allow once; a bot's held push approved through a protocol 2 socket's answer; a repo whose committed hook must not run until the repo is trusted, and does after; no push while a phone is connected and a push once none is; quiet and non-quiet routine runs after a restart; and session resume. It pins `claude-sonnet-5-5`, because auto mode needs it. `E2E_MODEL` overrides the model, and `E2E_BRIDGE_LOG=<file>` keeps the bridge's log. It never starts a cloud agent, and it prints the total the ledger charged.

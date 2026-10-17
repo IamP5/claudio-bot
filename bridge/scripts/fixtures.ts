@@ -1,4 +1,4 @@
-import type { Agent, Bot, Broadcast, ClientMessage, Message, Peer, Routine, ServerMessage } from "./protocol";
+import type { Agent, Bot, Broadcast, ClientMessage, Message, Peer, Routine, ServerMessage } from "../src/protocol";
 
 // The wire form of T: branded ids are plain strings, so fixtures type-check without casts.
 type Wire<T> = T extends string & { readonly __brand: string } ? string : T extends (infer U)[] ? Wire<U>[] : T extends object ? { [K in keyof T]: Wire<T[K]> } : T;
@@ -76,6 +76,8 @@ export const server = [
   { type: "bot", seq: 48, bot: { ...bot, status: "awaiting_approval", question: "Push to the default branch: git push origin main" } },
   { type: "bot", seq: 49, bot: { ...bot, status: "parked" } },
   { type: "agent", seq: 50, agent: { ...agent, status: "awaiting_approval" }, messages: [] },
+  { type: "bot", seq: 51, bot: { ...bot, status: "unavailable" } },
+  { type: "agent", seq: 52, agent: { ...agent, status: "unavailable" }, messages: [] },
   { type: "devices", devices: [
     { id: "d1", name: "Alex's iPhone", createdAt: at, lastSeenAt: later, legacy: false, current: true },
     { id: "d0", name: "Paired before protocol 3", createdAt: at, lastSeenAt: null, legacy: true, current: false },

@@ -350,6 +350,6 @@ test("control and format characters never reach a stored name", () => {
 
 test("a long name is cut between characters, never inside one", () => {
   const { devices } = setup();
-  paired(devices.pair(devices.newCode().code, "x".repeat(63) + "\u{1F600}\u{1F600}"));
-  expect(devices.list(null)[0]!.name).toBe("x".repeat(63) + "\u{1F600}");
+  paired(devices.pair(devices.newCode().code, "x".repeat(62) + "\u{1F600}\u{1F600}\u{1F600}"));
+  expect(devices.list(null)[0]!.name).toBe("x".repeat(62) + "\u{1F600}\u2026");
 });

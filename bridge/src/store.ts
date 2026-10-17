@@ -3,9 +3,11 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import type { Agent, AgentMessage, Avatar, BotId, Message, MessageId, RoutineId, RunId } from "./protocol";
+import { errorText } from "./text";
 import {
   emptySession,
   emptyWorld,
+  own,
   type AccountState,
   type AgentRecord,
   type BotRecord,
@@ -13,12 +15,13 @@ import {
   type GateState,
   type Owned,
   type PushState,
+  type SessionState,
   type World,
 } from "./world";
 
 export const bridgeHome = () => process.env.CLAUDIOBOT_HOME ?? join(homedir(), ".claudiobot");
 
-export const STATE_VERSION = 3;
+const STATE_VERSION = 3;
 
 /**
  * Debounced save. "now" writes synchronously before returning: the path for state that must precede an effect. It
@@ -26,7 +29,7 @@ export const STATE_VERSION = 3;
  */
 export type Persist = (urgency?: "now") => void;
 
-export type StateFileV3 = {
+type StateFileV3 = {
   version: 3;
   bots: BotRecord[];
   agents: AgentRecord[];
@@ -92,7 +95,16 @@ const V2_FILE = z.looseObject({
 const initiator = z.looseObject({ kind: z.enum(["user", "routine", "bot", "agent", "system"]) });
 const session = z.looseObject({
   id: maybeText,
-  pending: z.array(z.looseObject({ id: text, text, initiator, settles: z.looseObject({ routineId: text, runId: text }).nullable(), attempts: z.number() })),
+  pending: z.array(
+    z.looseObject({
+      id: text,
+      kind: z.enum(["envelope", "continuation"]).optional(),
+      text,
+      initiator,
+      settles: z.looseObject({ routineId: text, runId: text }).nullable(),
+      attempts: z.number(),
+    }),
+  ),
   lifecycle: z.looseObject({ kind: z.enum(["idle", "working", "stopping", "backoff", "parked"]) }),
   notices: z.array(z.looseObject({ text })),
 });
@@ -118,7 +130,7 @@ const V3_FILE = z.looseObject({
     }),
   ),
   agents: z.array(z.looseObject({ ...agentThread, session, cloudSession: maybeText, budgetUsd: z.number().nullable(), startedBy: initiator })),
-  gate: z.looseObject({ open: z.array(anyObject), grants: z.array(anyObject), daily: z.array(anyObject) }),
+  gate: z.looseObject({ open: z.array(anyObject), grants: z.array(anyObject), daily: z.array(anyObject), repos: z.array(anyObject).optional() }),
   devices: z.array(anyObject),
   push: z.looseObject({ sent: z.array(anyObject) }),
   account: z.looseObject({ parkedUntil: maybeText }),
@@ -235,15 +247,46 @@ function refuse(path: string, why: string): StateFileError {
   );
 }
 
-function check(schema: z.ZodType, file: unknown, path: string) {
+/** Why the file does not have the shape, or null when it does. */
+function shapeError(schema: z.ZodType, file: unknown): string | null {
   const result = schema.safeParse(file);
-  if (result.success) return;
+  if (result.success) return null;
   const issue = result.error.issues[0]!;
   const where = issue.path.map((k) => (typeof k === "number" ? `[${k}]` : `.${String(k)}`)).join("").replace(/^\./, "");
-  throw refuse(path, `has an invalid ${where || "shape"} (${issue.message})`);
+  return `has an invalid ${where || "shape"} (${issue.message})`;
+}
+
+export type StateCheck =
+  | { kind: "v3"; bots: number; devices: number }
+  | { kind: "v2"; bots: number }
+  | { kind: "v1" }
+  /** why reads after "state.json": "has version 4, which …". */
+  | { kind: "refused"; why: string };
+
+/** Pure: what loadWorld would do with this parsed state.json. The doctor asks the same question without loading it. */
+export function checkStateFile(parsed: unknown): StateCheck {
+  if (!isObject(parsed)) return { kind: "refused", why: "is not a JSON object" };
+  switch (parsed.version) {
+    case 3: {
+      const why = shapeError(V3_FILE, parsed);
+      return why ? { kind: "refused", why } : { kind: "v3", bots: (parsed.bots as unknown[]).length, devices: (parsed.devices as unknown[]).length };
+    }
+    case 2: {
+      const why = shapeError(V2_FILE, parsed);
+      return why ? { kind: "refused", why } : { kind: "v2", bots: (parsed.bots as unknown[]).length };
+    }
+    case 1:
+      return { kind: "v1" };
+    default:
+      return { kind: "refused", why: `has version ${JSON.stringify(parsed.version)}, which this bridge (version ${STATE_VERSION}) does not know` };
+  }
 }
 
 function fromV3(file: StateFileV3): World {
+  // A file written before Pending.kind marked an approval continuation by the c_ prefix of its id.
+  for (const rec of [...file.bots, ...file.agents])
+    for (const p of own<SessionState>(rec.session).pending) p.kind ??= p.id.startsWith("c_") ? "continuation" : "envelope";
+  own<GateState>(file.gate).repos ??= [];
   return {
     bots: new Map(file.bots.map((b) => [b.id, b])),
     agents: new Map(file.agents.map((a) => [a.agent.id, a])),
@@ -279,30 +322,28 @@ export function loadWorld(home = bridgeHome()): { world: World; firstRun: boolea
   try {
     parsed = JSON.parse(raw.toString("utf8"));
   } catch (e) {
-    throw refuse(path, `is not valid JSON (${(e as Error).message})`);
+    throw refuse(path, `is not valid JSON (${errorText(e)})`);
   }
-  if (!isObject(parsed)) throw refuse(path, "is not a JSON object");
-  switch (parsed.version) {
-    case 3:
-      check(V3_FILE, parsed, path);
+  const checked = checkStateFile(parsed);
+  switch (checked.kind) {
+    case "refused":
+      throw refuse(path, checked.why);
+    case "v3":
       return { world: fromV3(parsed as StateFileV3), firstRun: false };
-    case 2: {
-      check(V2_FILE, parsed, path);
+    case "v2": {
       let upgraded: StateFileV3;
       try {
         upgraded = upgradeV2(parsed as StateFileV2);
       } catch (e) {
-        throw refuse(path, `could not be upgraded (${(e as Error).message})`);
+        throw refuse(path, `could not be upgraded (${errorText(e)})`);
       }
       backUp(home, "state.v2.json.bak", raw);
       writeAtomic(path, JSON.stringify(upgraded));
       return { world: fromV3(upgraded), firstRun: false };
     }
-    case 1:
+    case "v1":
       backUp(home, "state.v1.json.bak", raw);
       return { world: emptyWorld(), firstRun: true };
-    default:
-      throw refuse(path, `has version ${JSON.stringify(parsed.version)}, which this bridge (version ${STATE_VERSION}) does not know`);
   }
 }
 
@@ -341,7 +382,7 @@ export function createSaver(world: World, home = bridgeHome(), delayMs = 250, lo
     try {
       flush();
     } catch (e) {
-      log(`state.json was not saved, retrying in ${retryMs} ms: ${(e as Error).message}`);
+      log(`state.json was not saved, retrying in ${retryMs} ms: ${errorText(e)}`);
     }
   }
   const schedule: Persist = (urgency) => {

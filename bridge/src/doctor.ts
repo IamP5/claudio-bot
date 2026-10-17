@@ -1,10 +1,13 @@
 import type * as nodeFs from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
+import { lockPathOf, pidIn } from "./lock";
 import { projectRoots } from "./projects";
 import { launchctl, readInstalled, type Exec, type InstalledPlist, type LaunchdState, type ServiceTarget } from "./service";
+import { checkStateFile, type StateCheck } from "./store";
+import { errorText } from "./text";
 
-// Read-only diagnostics. Never touches the store: loadWorld would upgrade a v2 state.json on the spot, so the doctor
-// parses it itself and only through the fs it was handed, which has no write methods.
+// Read-only diagnostics. Never loads the store: loadWorld would upgrade a v2 state.json on the spot, so the doctor reads
+// the file through the fs it was handed, which has no write methods, and asks checkStateFile what a start would do.
 
 export type DoctorFs = Pick<typeof nodeFs, "existsSync" | "lstatSync" | "statSync" | "readFileSync" | "readdirSync" | "realpathSync" | "readlinkSync">;
 
@@ -26,12 +29,9 @@ export type Finding = { level: Level; check: string; detail: string };
 
 type Entry = { kind: "absent" } | { kind: "dir" } | { kind: "link"; target: string; resolves: boolean } | { kind: "other" };
 
-export type StateFacts =
-  | { kind: "absent" }
-  | { kind: "unreadable"; why: string }
-  | { kind: "parsed"; version: unknown; bots: number | null; devices: number | null };
+type StateFacts = { kind: "absent" } | { kind: "unreadable"; why: string } | StateCheck;
 
-export type LockFacts = { path: string } & ({ kind: "free" } | { kind: "pid"; pid: number; alive: boolean } | { kind: "garbled" });
+type LockFacts = { path: string } & ({ kind: "free" } | { kind: "pid"; pid: number; alive: boolean } | { kind: "garbled" });
 
 export type Facts = {
   platform: string;
@@ -77,21 +77,13 @@ const modeOf = (fs: DoctorFs, path: string) => {
   }
 };
 
-/** The same name lock.ts computes: beside the home's real path. */
-export function lockPathOf(fs: DoctorFs, home: string): string {
+function readLock(fs: DoctorFs, alive: (pid: number) => boolean, home: string): LockFacts {
+  let path: string;
   try {
-    return `${fs.realpathSync(home)}.lock`;
+    path = lockPathOf(home, (p) => fs.realpathSync(p));
   } catch {
-    try {
-      return `${join(fs.realpathSync(dirname(home)), basename(home))}.lock`;
-    } catch {
-      return `${home}.lock`;
-    }
+    path = `${home}.lock`;
   }
-}
-
-export function readLock(fs: DoctorFs, alive: (pid: number) => boolean, home: string): LockFacts {
-  const path = lockPathOf(fs, home);
   let body: string;
   try {
     body = fs.readFileSync(path, "utf8");
@@ -99,24 +91,18 @@ export function readLock(fs: DoctorFs, alive: (pid: number) => boolean, home: st
     if (errno(e) === "ENOENT") return { path, kind: "free" };
     return { path, kind: "garbled" };
   }
-  if (!/^[1-9]\d*\n?$/.test(body)) return { path, kind: "garbled" };
-  const pid = Number(body.trim());
-  return { path, kind: "pid", pid, alive: alive(pid) };
+  const pid = pidIn(body);
+  return pid === null ? { path, kind: "garbled" } : { path, kind: "pid", pid, alive: alive(pid) };
 }
 
-export function readState(fs: DoctorFs, home: string): StateFacts {
+function readState(fs: DoctorFs, home: string): StateFacts {
   const path = join(home, "state.json");
   if (!fs.existsSync(path)) return { kind: "absent" };
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(fs.readFileSync(path, "utf8"));
+    return checkStateFile(JSON.parse(fs.readFileSync(path, "utf8")));
   } catch (e) {
-    return { kind: "unreadable", why: (e as Error).message };
+    return { kind: "unreadable", why: errorText(e) };
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { kind: "unreadable", why: "not a JSON object" };
-  const file = parsed as Record<string, unknown>;
-  const count = (v: unknown) => (Array.isArray(v) ? v.length : null);
-  return { kind: "parsed", version: file.version, bots: count(file.bots), devices: count(file.devices) };
 }
 
 const firstLine = (s: string) => s.trim().split("\n")[0] ?? "";
@@ -126,7 +112,7 @@ async function version(exec: Exec, argv: string[], env?: Record<string, string |
   return ran && ran.code === 0 ? firstLine(ran.stdout) : null;
 }
 
-export type ServiceView = { installed: InstalledPlist | null; env: Record<string, string | undefined>; envFrom: "plist" | "shell"; home: string; port: number };
+type ServiceView = { installed: InstalledPlist | null; env: Record<string, string | undefined>; envFrom: "plist" | "shell"; home: string; port: number };
 
 /** What the service sees: launchd hands it the plist's variables and no others from the shell. */
 export async function serviceView(deps: Pick<DoctorDeps, "exec" | "env" | "homeDir">, target: ServiceTarget): Promise<ServiceView> {
@@ -147,7 +133,7 @@ async function health(deps: Pick<DoctorDeps, "fetch">, port: number): Promise<Fa
     const res = await deps.fetch(url);
     return { url, ok: res.ok, error: res.ok ? null : `HTTP ${res.status}` };
   } catch (e) {
-    return { url, ok: false, error: (e as Error).message };
+    return { url, ok: false, error: errorText(e) };
   }
 }
 
@@ -255,11 +241,16 @@ const CHECKS: Check[] = [
     const s = f.state;
     if (s.kind === "absent") return pass("state", "no state.json yet: the next start is a first run");
     if (s.kind === "unreadable") return fail("state", `state.json cannot be read (${s.why}); the bridge will refuse to start`);
-    const counts = `${plural(s.bots ?? 0, "bot")}, ${plural(s.devices ?? 0, "paired device")}`;
-    if (s.version === 3) return s.bots === null ? fail("state", "state.json v3 has no bots list; the bridge will refuse it") : pass("state", `state.json v3, ${counts}`);
-    if (s.version === 2) return warn("state", "state.json is v2: the next start upgrades it to v3 and keeps state.v2.json.bak");
-    if (s.version === 1) return warn("state", "state.json is v1: the next start backs it up and starts fresh");
-    return fail("state", `state.json has version ${JSON.stringify(s.version)}, which this bridge does not know`);
+    switch (s.kind) {
+      case "v3":
+        return pass("state", `state.json v3, ${plural(s.bots, "bot")}, ${plural(s.devices, "paired device")}`);
+      case "v2":
+        return warn("state", "state.json is v2: the next start upgrades it to v3 and keeps state.v2.json.bak");
+      case "v1":
+        return warn("state", "state.json is v1: the next start backs it up and starts fresh");
+      case "refused":
+        return fail("state", `state.json ${s.why}; the bridge will refuse to start`);
+    }
   },
 
   (f) => {
@@ -323,7 +314,7 @@ const CHECKS: Check[] = [
 
 export const check = (facts: Facts): Finding[] => CHECKS.flatMap((c) => c(facts));
 
-export const formatFinding = (f: Finding) => `${f.level}  ${f.check.padEnd(10)} ${f.detail}`;
+const formatFinding = (f: Finding) => `${f.level}  ${f.check.padEnd(10)} ${f.detail}`;
 
 export async function doctor(deps: DoctorDeps, target: ServiceTarget, out: (text: string) => void): Promise<number> {
   const findings = check(await gather(deps, target));

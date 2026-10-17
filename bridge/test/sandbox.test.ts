@@ -3,7 +3,8 @@ import type { SandboxSettings } from "@anthropic-ai/claude-agent-sdk";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Scope } from "../src/policy";
+import { decide, type PolicyContext, type Scope, type ToolCall } from "../src/policy";
+import { PRIVATE } from "../src/private";
 import { gitDirsOf, sandboxFor, sandboxFailure } from "../src/sandbox";
 import type { Actor } from "../src/world";
 
@@ -306,5 +307,28 @@ test("sandboxFailure reads the reason Claude Code gives, and nothing from other 
     sandboxFailure("Sandbox is required but failed to initialize: tlsTerminate.caCertPath: cannot read /x/ca.pem (ENOENT). Restart to retry."),
     sandboxFailure("Error: sandbox is enabled but dependencies are missing: bubblewrap (bwrap) not installed"),
     sandboxFailure("cat: /x: Operation not permitted"),
-  ]).toEqual(["tlsTerminate.caCertPath: cannot read /x/ca.pem (ENOENT).", "bubblewrap (bwrap) not installed", null]);
+  ]).toEqual(["tlsTerminate.caCertPath: cannot read /x/ca.pem (ENOENT)", "bubblewrap (bwrap) not installed", null]);
+});
+
+test("the gate's floors and the sandbox cover the same private paths", () => {
+  const ctx: PolicyContext = {
+    actor: agent,
+    initiator: { kind: "user" },
+    scope: agentScope(),
+    rules: [],
+    grants: [],
+    headroom: { ok: true, capReached: false },
+    callsToday: {},
+    now: "2026-10-17T12:00:00.000Z",
+    realpath: (p) => p,
+  };
+  const read = (path: string): ToolCall => ({ tool: "Read", input: { file_path: path }, cwd: "/Users/u/Dev/app", toolUseId: "t", subagent: null, mcpServer: null });
+  const botBox = sandboxFor(bot, botScope, ENV);
+  const agentBox = sandboxFor(agent, agentScope(), ENV);
+  const open = Object.values(PRIVATE)
+    .flat()
+    .map((rel) => `${HOME}/${rel}/inner`)
+    .filter((p) => decide(read(p), ctx).kind !== "deny" || canRead(botBox, p) || canRead(agentBox, p));
+  expect(open).toEqual([`${HOME}/Library/Keychains/inner`]);
+  expect([canRead(botBox, open[0]!), canRead(agentBox, open[0]!), decide(read(open[0]!), ctx).kind]).toEqual([false, true, "deny"]);
 });

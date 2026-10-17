@@ -2,9 +2,9 @@ import { claudeExecutable } from "./session";
 
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]|\r/g;
 
-export const stripAnsi = (s: string) => s.replace(ANSI, "");
+const stripAnsi = (s: string) => s.replace(ANSI, "");
 
-export type CloudCreated = { title: string; url: string; sessionId: string };
+type CloudCreated = { title: string; url: string; sessionId: string };
 
 export function parseCloudCreated(stdout: string): CloudCreated | null {
   const text = stripAnsi(stdout);

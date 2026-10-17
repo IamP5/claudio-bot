@@ -24,7 +24,7 @@ enum Demo {
         default: break
         }
         let oldBridge = screen == "oldbridge"
-        store.apply(.hello(Hello(protocol: oldBridge ? 2 : Wire.protocolVersion, machine: "MacBook Pro", userName: "Alex", bots: bots)))
+        store.apply(.hello(Hello(protocol: oldBridge ? 2 : Wire.protocolVersion, features: screen == "live" ? [.activity] : [], machine: "MacBook Pro", userName: "Alex", bots: bots)))
         if !oldBridge { store.apply(.devices(devices)) }
         for (bot, messages) in conversations {
             store.apply(.conversation(botId: BotID(bot), messages: messages))
@@ -58,7 +58,19 @@ enum Demo {
         case "routine":
             router.selection = BotID("news")
             router.path = [.routine(BotID("news"), RoutineID("r1"))]
-        case "approval": router.selection = BotID("release")
+        case "approval", "live": router.selection = BotID("release")
+        case "homelive":
+            // A bot further down posts a question, so Home moves it to the top with the dot and badge.
+            Task {
+                try? await Task.sleep(for: .seconds(6))
+                guard var bot = store.bots[BotID("standup")] else { return }
+                bot.unread = 1
+                bot.question = "Post the notes to #team now?"
+                bot.preview = "Post the notes to #team now?"
+                bot.lastAt = .now
+                bot.status = .idle
+                store.apply(.bot(bot))
+            }
         case "confirm": app.propose(invite)
         case "unrecognized": store.setConnection(.unrecognized)
         case "error":
@@ -97,7 +109,10 @@ enum Demo {
         bot.status = .working
         store.apply(.bot(bot))
         Task {
-            try? await Task.sleep(for: .seconds(4))
+            try? await Task.sleep(for: .seconds(1))
+            store.apply(.activity(botId: botId, agentId: nil, text: "Reading CHANGELOG.md", at: .now))
+            try? await Task.sleep(for: .seconds(3))
+            store.apply(.activity(botId: botId, agentId: nil, text: nil, at: .now))
             store.apply(.message(botId: botId, message: say(UUID().uuidString, .now, "On it. I'll check it against main and report back with anything that blocks a merge.")))
             bot.status = .idle
             store.apply(.bot(bot))

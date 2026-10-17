@@ -26,7 +26,7 @@ import { cardReply } from "./protocol2";
 import type { Push } from "./push";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { BREAKER_NOTE, createSession, type Session, type SessionSpec, type TurnEnd } from "./session";
-import type { Persist } from "./store";
+import { appendArchive, type Persist } from "./store";
 import { botToolServer, type BotActions } from "./tools";
 import { freshTurn, readTurn, type Bubble, type Turn } from "./turn";
 import {
@@ -38,6 +38,7 @@ import {
   holdOf,
   hopsAfter,
   hopsOf,
+  isOpenCard,
   linksOf,
   newBot,
   newMessageId,
@@ -47,6 +48,7 @@ import {
   rootOf,
   routineView,
   sortBots,
+  splitHistory,
   toBot,
   type Actor,
   type BotRecord,
@@ -173,6 +175,21 @@ export function createHub(deps: HubDeps): Hub {
     poke();
   }
 
+  const archiveOf = (botId: BotId, thread: string) => join(homes.homeOf(botId), ".history", `${thread}.jsonl`);
+
+  /** Moves a thread's oldest messages to its archive. Written there first: when that fails they stay in state. */
+  function trim<M>(messages: M[], file: string, pinned: (m: M) => boolean) {
+    const split = splitHistory(messages, pinned);
+    if (split === null) return;
+    try {
+      appendArchive(file, split.archived);
+    } catch (e) {
+      deps.log(`history: could not archive to ${file}, keeping it in state.json: ${(e as Error).message}`);
+      return;
+    }
+    messages.splice(0, messages.length, ...split.kept);
+  }
+
   function say(bot: BotRecord, message: Message) {
     // A card the bot's own turn opens shows after what that turn wrote before it.
     if (message.kind === "permission" && message.from === null && message.answer === null) {
@@ -181,6 +198,7 @@ export function createHub(deps: HubDeps): Hub {
       release(bot);
     }
     deps.broadcast({ type: "message", botId: bot.id, message: post(bot, message) });
+    trim(bot.messages, archiveOf(bot.id, "bot"), isOpenCard);
     changed(bot);
   }
 
@@ -415,6 +433,7 @@ export function createHub(deps: HubDeps): Hub {
     persist: deps.persist,
     now,
     changed(rec) {
+      trim(rec.messages, archiveOf(rec.agent.botId, rec.agent.id), () => false);
       deps.broadcast({ type: "agent", agent: rec.agent, messages: rec.messages });
       deps.persist();
       poke();

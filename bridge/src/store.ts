@@ -199,6 +199,22 @@ function writeAtomic(path: string, body: string | Uint8Array) {
 }
 
 /**
+ * Appends one JSON line per row to `path` (0600, in a 0700 directory) and fsyncs it, so a caller may drop the rows from
+ * state.json once this returns. A crash before that save leaves the rows in both places, and they are archived again:
+ * readers dedupe by id.
+ */
+export function appendArchive(path: string, rows: readonly unknown[]) {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const fd = openSync(path, "a", 0o600);
+  try {
+    writeFileSync(fd, rows.map((r) => `${JSON.stringify(r)}\n`).join(""));
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
  * Copies these exact bytes to `name`, or to `name.1`, `name.2`, … when earlier backups with other bytes hold those
  * names. A backup is never overwritten and the same bytes are never backed up twice, so a rerun after a crash converges.
  */

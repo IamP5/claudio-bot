@@ -355,15 +355,29 @@ export function exchangeFor(
 export const recordExchange = (bot: BotRecord, peer: Peer, direction: "sent" | "received", at: string) =>
   post(bot, exchangeFor(bot.messages.at(-1), peer, direction, { id: newMessageId(), at }));
 
+/** Messages a bot or agent thread keeps in state.json. Older ones move to the thread's archive. */
+export const HISTORY_KEEP = 1000;
+/** How far past HISTORY_KEEP a thread grows before the move, so the archive takes a batch at a time. */
+export const HISTORY_SLACK = 100;
+
+/**
+ * The move for a thread past HISTORY_KEEP + HISTORY_SLACK: what goes to the archive, oldest first, and what stays,
+ * the newest HISTORY_KEEP plus any older message `pinned` holds back. null while the thread is within bounds.
+ */
+export function splitHistory<M>(messages: readonly M[], pinned: (m: M) => boolean): { archived: M[]; kept: M[] } | null {
+  if (messages.length <= HISTORY_KEEP + HISTORY_SLACK) return null;
+  const old = messages.slice(0, messages.length - HISTORY_KEEP);
+  return { archived: old.filter((m) => !pinned(m)), kept: [...old.filter(pinned), ...messages.slice(-HISTORY_KEEP)] };
+}
+
 export type Card = Extract<Message, { kind: "question" | "permission" }>;
+
+/** A card still waiting for its answer. The gate finds it in the bot's messages, so it never leaves state. */
+export const isOpenCard = (m: Message): m is Card => (m.kind === "question" || m.kind === "permission") && m.answer === null;
 
 /** The newest card with no answer. Drives Bot.question and the attention badge. */
 export function openCard(messages: Message[]): Card | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]!;
-    if ((m.kind === "question" || m.kind === "permission") && m.answer === null) return m;
-  }
-  return null;
+  return messages.findLast(isOpenCard) ?? null;
 }
 
 export type CardAnswer = { [K in Card["kind"]]: { kind: K; answer: NonNullable<Extract<Card, { kind: K }>["answer"]> } }[Card["kind"]];

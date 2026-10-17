@@ -35,12 +35,16 @@ export const defaultLogDir = (home = homedir()) => join(home, "Library", "Logs",
 /** Names that steer this CLI, not the bridge, so they stay out of the service's environment. */
 const CONTROL_VARS = ["CLAUDIOBOT_SERVICE_LABEL", "CLAUDIOBOT_LOG_DIR"] as const;
 
+/** Claude Code's own variables the bridge's queries inherit. ENABLE_CLAUDEAI_MCP_SERVERS=false leaves claude.ai connectors out. */
+const CLAUDE_VARS = ["ENABLE_CLAUDEAI_MCP_SERVERS"] as const;
+
 /** launchd starts agents with a bare PATH and none of the shell's variables, so the install-time ones are pinned. */
 export function capturedEnv(env: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) continue;
-    if (key === "PATH" || (key.startsWith("CLAUDIOBOT_") && !(CONTROL_VARS as readonly string[]).includes(key))) out[key] = value;
+    const bridge = key.startsWith("CLAUDIOBOT_") && !(CONTROL_VARS as readonly string[]).includes(key);
+    if (key === "PATH" || bridge || (CLAUDE_VARS as readonly string[]).includes(key)) out[key] = value;
   }
   return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)));
 }

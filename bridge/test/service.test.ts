@@ -97,8 +97,9 @@ test("captures PATH and CLAUDIOBOT_* but not the CLI's own controls or other var
       CLAUDIOBOT_LOG_DIR: "/tmp",
       GITHUB_TOKEN: "secret",
       CLAUDEBOT_HOME: "/old",
+      ENABLE_CLAUDEAI_MCP_SERVERS: "false",
     }),
-  ).toEqual({ CLAUDIOBOT_CLAUDE: "/Users/me/.local/bin/claude", CLAUDIOBOT_PORT: "7999", PATH: "/bin" });
+  ).toEqual({ CLAUDIOBOT_CLAUDE: "/Users/me/.local/bin/claude", CLAUDIOBOT_PORT: "7999", ENABLE_CLAUDEAI_MCP_SERVERS: "false", PATH: "/bin" });
 });
 
 test("reads the service's own state and pid, not the nested blocks'", () => {

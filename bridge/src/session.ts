@@ -846,11 +846,11 @@ export function createSession(spec: SessionSpec): Session {
     },
     nextDeadline() {
       const life = spec.state.lifecycle;
-      const own =
+      const lifecycleAt =
         life.kind === "stopping" ? life.deadline : life.kind === "backoff" || life.kind === "parked" ? life.until : waiting() ? spec.account.parkedUntil : null;
       const watched = watchDeadline();
-      const mine = watched === null ? null : new Date(watched).toISOString();
-      return own === null || (mine !== null && mine < own) ? mine : own;
+      const watchAt = watched === null ? null : new Date(watched).toISOString();
+      return lifecycleAt === null || (watchAt !== null && watchAt < lifecycleAt) ? watchAt : lifecycleAt;
     },
     close() {
       if (closed) return;

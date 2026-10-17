@@ -147,3 +147,33 @@ test("a worktree folder deleted by hand is pruned", async () => {
   expect(await removeWorktree(project.path, ws.worktree!)).toEqual({ ok: true });
   expect(git(project.path, "worktree", "list")).not.toContain(ws.cwd);
 });
+
+test("making the worktree blanks a filter driver whose name holds =", async () => {
+  const project = repo();
+  const out = temp();
+  const script = join(out, "smudge.sh");
+  writeFileSync(script, `#!/bin/sh\ntouch '${join(out, "smudge.ran")}'\ncat\n`);
+  chmodSync(script, 0o755);
+  writeFileSync(join(project.path, ".gitattributes"), "*.txt filter=a=b\n");
+  writeFileSync(join(project.path, "a.txt"), "one\n");
+  git(project.path, "add", ".");
+  git(project.path, "commit", "-q", "-m", "attrs");
+  git(project.path, "config", "filter.a=b.smudge", script);
+
+  const ws = await prepareWorkspace(project, AGENT, "worktree", { root: temp() });
+  expect([existsSync(join(out, "smudge.ran")), git(ws.cwd, "show", "HEAD:a.txt")]).toEqual([false, "one"]);
+});
+
+test("a default branch named like an option never reaches git worktree add as one", async () => {
+  const project = repo();
+  git(project.path, "checkout", "-q", "-b", "elsewhere");
+  writeFileSync(join(project.path, "other.txt"), "x\n");
+  git(project.path, "add", ".");
+  git(project.path, "commit", "-q", "-m", "elsewhere");
+  git(project.path, "update-ref", "refs/heads/--lock", "elsewhere");
+  git(project.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/--lock");
+
+  const ws = await prepareWorkspace(project, AGENT, "worktree", { root: temp() });
+  expect(git(ws.cwd, "rev-parse", "HEAD")).toBe(git(project.path, "rev-parse", "main"));
+  expect(git(project.path, "worktree", "list", "--porcelain")).not.toContain("locked");
+});

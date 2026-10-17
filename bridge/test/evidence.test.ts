@@ -1,5 +1,5 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evidenceLine, prOf, readEvidence } from "../src/evidence";
@@ -132,4 +132,35 @@ test("the evidence line states git's facts in one bracketed line", () => {
   expect(evidenceLine({ ...e, branch: null, head: null, ahead: 0, changed: 1, dirty: false, pr: null })).toBe(
     "[Git, read by the bridge after this turn: branch (detached); 0 commits ahead of the default branch; 1 file changed (+10 -2); nothing uncommitted; no PR URL in its message.]",
   );
+});
+
+test("a filter driver whose name holds = is blanked like any other", async () => {
+  const dir = repo();
+  const out = temp();
+  const script = join(out, "clean.sh");
+  writeFileSync(script, `#!/bin/sh\ntouch '${join(out, "clean.ran")}'\ncat\n`);
+  chmodSync(script, 0o755);
+  writeFileSync(join(dir, ".gitattributes"), "*.txt filter=a=b\n");
+  commit(dir, "a.txt", "one\n");
+  git(dir, "config", "filter.a=b.clean", script);
+  writeFileSync(join(dir, "a.txt"), "two\n");
+
+  expect(await readEvidence(dir, "", NOW)).toMatchObject({ dirty: true });
+  expect(existsSync(join(out, "clean.ran"))).toBe(false);
+  git(dir, "add", "a.txt");
+  expect(existsSync(join(out, "clean.ran"))).toBe(true);
+});
+
+test("a default branch named like an option is never passed to git as one", async () => {
+  const dir = repo();
+  const out = temp();
+  const target = join(out, "PWNED");
+  git(dir, "checkout", "-q", "-b", "fix");
+  commit(dir, "fix.ts", "x\n");
+  git(dir, "update-ref", `refs/heads/--output=${target}`, "main");
+  git(dir, "symbolic-ref", "refs/remotes/origin/HEAD", `refs/remotes/origin/--output=${target}`);
+
+  const evidence = await readEvidence(dir, "", NOW);
+  expect(readdirSync(out)).toEqual([]);
+  expect(evidence).toMatchObject({ branch: "fix", ahead: 1, changed: 1 });
 });

@@ -9,9 +9,15 @@ import { routinePeer, upsertRoutine, type BotRecord, type RoutineRecord, type Ru
 // nextRunAt is advanced, and the running run recorded, in one urgent persist before the fire is delivered, so a crash
 // can lose a fire but never repeat one. However many times were missed while the Mac slept, that is one decision: the
 // newest missed time fires once, marked late, if it is inside the grace window (half the period, clamped to 2 min–2 h),
-// else one skipped run is recorded. A parked bot's fire is recorded skipped. Run now is a manual run: attended, never
-// quiet, runs at the daily cap, and leaves nextRunAt alone. A null nextRunAt (a new, changed or upgraded routine) is
-// computed from now at the next tick, never fired for a time before it.
+// else one skipped run is recorded at the first missed time. A fire is recorded skipped while the bot is parked or the
+// routine's previous run is still queued. Run now is a manual run: attended, never quiet, runs at the daily cap, skips
+// the overlap check, leaves nextRunAt alone, and its failures never count toward turning the routine off. A null
+// nextRunAt (a new, changed or upgraded routine) is computed from now at the next tick, never fired for a time before
+// it. An enabled routine whose schedule cannot run (unparsable, or under the 15-minute floor after the v2 upgrade) is
+// turned off with a note at the next tick; editing its schedule turns it back on.
+//
+// The clock has no power-event hook: it notices a wake at its next look, at most 60 s later, so a fire due during
+// sleep is up to a minute later than the wake.
 
 export const ROUTINE_FLOOR_MINUTES = 15;
 export const ROUTINES_PER_BOT = 20;
@@ -40,13 +46,16 @@ export type Scheduler = Tickable & {
   /**
    * The run's outcome, from the hub's turn end. Never called for a deferred turn. failed: note on the first failure
    * after a success, silence after that, and at 10 in a row turn the routine off with a note. ok/quiet reset the streak.
-   * skipped (Stop) leaves the streak alone. Only a running run settles, so a repeated call changes nothing.
+   * skipped (Stop) and a failed Run now leave the streak alone; the latter is always noted. Only a running run settles,
+   * so a repeated call changes nothing.
    */
   settle(botId: BotId, run: RunRef, outcome: RunOutcome): void;
 };
 
 export type SchedulerDeps = {
   world: World;
+  /** Defaults to stderr. */
+  log?: (line: string) => void;
   deliver: (bot: BotRecord, e: Envelope) => void;
   note: (bot: BotRecord, text: string, refs?: Peer[]) => void;
   /** Broadcast and persist the bot after a routine change. "now" must flush synchronously before returning. */
@@ -59,16 +68,23 @@ export type SchedulerDeps = {
 /** What the clock owes a routine at `now`. One decision, however many times were missed. */
 type Due =
   | { kind: "off" }
+  | { kind: "refuse"; why: string }
   | { kind: "wait" }
   | { kind: "schedule"; next: Date | null }
   | { kind: "fire"; at: Date; late: boolean; next: Date | null }
   | { kind: "miss"; at: Date; next: Date | null };
 
-function cronOf(trigger: Trigger): Cron | null {
+/** A trigger the scheduler can run, or why it cannot (as the end of a sentence). */
+type Plan = { cron: Cron; graceMs: number } | { refused: string };
+
+function planOf(trigger: Trigger): Plan {
   switch (trigger.kind) {
     case "cron": {
       const cron = parseCron(trigger.schedule);
-      return "error" in cron ? null : cron;
+      if ("error" in cron) return { refused: `its schedule "${trigger.schedule}" is invalid: ${cron.error}` };
+      const gap = minGapMinutes(cron);
+      if (gap < ROUTINE_FLOOR_MINUTES) return { refused: `it runs more often than every ${ROUTINE_FLOOR_MINUTES} minutes, which routines no longer allow` };
+      return { cron, graceMs: Math.min(MAX_GRACE_MS, Math.max(MIN_GRACE_MS, (gap * 60_000) / 2)) };
     }
     default: {
       const unhandled: never = trigger.kind;
@@ -77,21 +93,24 @@ function cronOf(trigger: Trigger): Cron | null {
   }
 }
 
-const graceMs = (cron: Cron) => Math.min(MAX_GRACE_MS, Math.max(MIN_GRACE_MS, (minGapMinutes(cron) * 60_000) / 2));
-
 function due(r: RoutineRecord, now: Date): Due {
-  const cron = r.enabled ? cronOf(r.trigger) : null;
-  if (cron === null) return { kind: "off" };
+  if (!r.enabled) return { kind: "off" };
+  const plan = planOf(r.trigger);
+  if ("refused" in plan) return { kind: "refuse", why: plan.refused };
+  const { cron } = plan;
   if (r.nextRunAt === null) return { kind: "schedule", next: nextAfter(cron, now) };
-  let at = new Date(r.nextRunAt);
-  if (at > now) return { kind: "wait" };
-  let next = nextAfter(cron, at);
+  const first = new Date(r.nextRunAt);
+  if (first > now) return { kind: "wait" };
+  // Times older than the widest grace can only be missed, so the walk to the newest one starts there, not at `first`.
+  const horizon = new Date(now.getTime() - MAX_GRACE_MS - 1);
+  let at = first;
+  let next = first < horizon ? nextAfter(cron, horizon) : nextAfter(cron, first);
   while (next !== null && next <= now) {
     at = next;
     next = nextAfter(cron, at);
   }
   const lag = now.getTime() - at.getTime();
-  return lag <= graceMs(cron) ? { kind: "fire", at, late: lag > LATE_AFTER_MS, next } : { kind: "miss", at, next };
+  return lag <= plan.graceMs ? { kind: "fire", at, late: lag > LATE_AFTER_MS, next } : { kind: "miss", at: first, next };
 }
 
 const routinesOf = (bot: BotRecord) => bot.routines as unknown as RoutineRecord[];
@@ -104,8 +123,11 @@ function addRun(r: RoutineRecord, run: Omit<RoutineRun, "id">): RoutineRun {
   return recorded;
 }
 
+const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const { world } = deps;
+  const log = deps.log ?? ((line) => console.error(line));
   let booted = false;
 
   function botOf(botId: BotId): BotRecord {
@@ -116,14 +138,55 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   const firstRun = (cron: Cron) => iso(nextAfter(cron, deps.now()));
 
-  function fire(bot: BotRecord, r: RoutineRecord, run: RoutineRun) {
-    deps.changed(bot, "now");
-    deps.deliver(bot, { from: "routine", name: r.name, prompt: r.prompt, run: { routineId: r.id, runId: run.id }, manual: run.manual, late: run.late });
+  /** True when the run reached the bot's queue; otherwise it is settled failed. */
+  function fire(bot: BotRecord, r: RoutineRecord, run: RoutineRun): boolean {
+    try {
+      deps.changed(bot, "now");
+      deps.deliver(bot, { from: "routine", name: r.name, prompt: r.prompt, run: { routineId: r.id, runId: run.id }, manual: run.manual, late: run.late });
+      return true;
+    } catch (error) {
+      log(`scheduler: could not start ${r.name} for ${bot.id}: ${message(error)}`);
+      try {
+        settleRun(bot, r, run, { status: "failed", note: `The bridge could not start it: ${message(error)}` });
+      } catch (again) {
+        log(`scheduler: could not record the failed start of ${r.name}: ${message(again)}`);
+      }
+      return false;
+    }
   }
+
+  function settleRun(bot: BotRecord, r: RoutineRecord, run: RoutineRun, outcome: RunOutcome) {
+    run.status = outcome.status === "quiet" && run.manual ? "ok" : outcome.status;
+    run.note = outcome.note;
+    switch (run.status) {
+      case "ok":
+      case "quiet":
+        r.failStreak = 0;
+        break;
+      case "failed":
+        if (run.manual) {
+          deps.note(bot, `Routine {0} failed${outcome.note ? `: ${outcome.note}` : ""}`, [routinePeer(r)]);
+          break;
+        }
+        r.failStreak += 1;
+        if (r.failStreak >= DISABLE_AFTER_FAILURES) {
+          r.enabled = false;
+          r.nextRunAt = null;
+          deps.note(bot, `Turned off {0} after ${DISABLE_AFTER_FAILURES} failures in a row`, [routinePeer(r)]);
+        } else if (r.failStreak === 1) {
+          deps.note(bot, `Routine {0} failed${outcome.note ? `: ${outcome.note}` : ""}`, [routinePeer(r)]);
+        }
+        break;
+    }
+    deps.changed(bot);
+  }
+
+  const queuedRuns = (bot: BotRecord) =>
+    new Set(bot.session.pending.flatMap((p) => (p.initiator.kind === "routine" ? [p.initiator.run.runId] : [])));
 
   /** A run left running by a crash between the fire's persist and its delivery has no envelope that will settle it. */
   function settleOrphans(bot: BotRecord): boolean {
-    const queued = new Set(bot.session.pending.flatMap((p) => (p.initiator.kind === "routine" ? [p.initiator.run.runId] : [])));
+    const queued = queuedRuns(bot);
     let found = false;
     for (const r of routinesOf(bot)) {
       for (const run of r.runs) {
@@ -148,7 +211,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (!existing && routines.length >= ROUTINES_PER_BOT) return `A bot can have at most ${ROUTINES_PER_BOT} routines. Delete one first.`;
       const next = firstRun(cron);
       if (next === null) return `Invalid schedule: "${schedule}" never runs.`;
-      const enabled = a.enabled ?? existing?.enabled ?? true;
+      const refused = existing !== undefined && !existing.enabled && "refused" in planOf(existing.trigger);
+      const enabled = a.enabled ?? (refused || (existing?.enabled ?? true));
       const reenabled = existing !== undefined && !existing.enabled && enabled;
       const { routine, created } = upsertRoutine(
         routines,
@@ -176,10 +240,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const r = routinesOf(bot).find((r) => r.id === routineId);
       if (!r) return "Unknown routine";
       if (r.enabled === enabled) return null;
+      const plan = planOf(r.trigger);
+      if (enabled && "refused" in plan) return `Edit the schedule first: ${plan.refused}.`;
       r.enabled = enabled;
       if (enabled) r.failStreak = 0;
-      const cron = enabled ? cronOf(r.trigger) : null;
-      r.nextRunAt = cron === null ? null : firstRun(cron);
+      r.nextRunAt = enabled && "cron" in plan ? firstRun(plan.cron) : null;
       deps.changed(bot);
       return null;
     },
@@ -189,8 +254,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const r = routinesOf(bot).find((r) => r.id === routineId);
       if (!r) return "Unknown routine";
       if (deps.parked(bot, true)) return "Paused by the usage limit. Try again when it resets.";
-      fire(bot, r, addRun(r, { at: deps.now().toISOString(), status: "running", late: false, manual: true, note: null }));
-      return null;
+      const started = fire(bot, r, addRun(r, { at: deps.now().toISOString(), status: "running", late: false, manual: true, note: null }));
+      return started ? null : "Could not start the run. Check the bridge log.";
     },
 
     noUpdate: () => "OK. End your turn.",
@@ -200,59 +265,18 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const r = bot && routinesOf(bot).find((r) => r.id === ref.routineId);
       const run = r?.runs.find((run) => run.id === ref.runId);
       if (!bot || !r || !run || run.status !== "running") return;
-      run.status = outcome.status === "quiet" && run.manual ? "ok" : outcome.status;
-      run.note = outcome.note;
-      switch (run.status) {
-        case "ok":
-        case "quiet":
-          r.failStreak = 0;
-          break;
-        case "failed":
-          r.failStreak += 1;
-          if (r.failStreak >= DISABLE_AFTER_FAILURES) {
-            r.enabled = false;
-            r.nextRunAt = null;
-            deps.note(bot, `Turned off {0} after ${DISABLE_AFTER_FAILURES} failures in a row`, [routinePeer(r)]);
-          } else if (r.failStreak === 1) {
-            deps.note(bot, `Routine {0} failed${outcome.note ? `: ${outcome.note}` : ""}`, [routinePeer(r)]);
-          }
-          break;
-      }
-      deps.changed(bot);
+      settleRun(bot, r, run, outcome);
     },
 
     tick(now) {
       const boot = !booted;
       booted = true;
       for (const bot of world.bots.values()) {
-        let dirty = boot && settleOrphans(bot);
-        for (const r of routinesOf(bot)) {
-          const d = due(r, now);
-          switch (d.kind) {
-            case "off":
-            case "wait":
-              break;
-            case "schedule":
-              r.nextRunAt = iso(d.next);
-              dirty = true;
-              break;
-            case "miss":
-              r.nextRunAt = iso(d.next);
-              addRun(r, { at: d.at.toISOString(), status: "skipped", late: false, manual: false, note: "Missed while the Mac was asleep or the bridge was off" });
-              dirty = true;
-              break;
-            case "fire":
-              r.nextRunAt = iso(d.next);
-              if (deps.parked(bot, false)) {
-                addRun(r, { at: now.toISOString(), status: "skipped", late: d.late, manual: false, note: "Paused by a limit" });
-                dirty = true;
-              } else {
-                fire(bot, r, addRun(r, { at: now.toISOString(), status: "running", late: d.late, manual: false, note: null }));
-              }
-              break;
-          }
+        try {
+          tickBot(bot, now, boot);
+        } catch (error) {
+          log(`scheduler: tick failed for ${bot.id}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
         }
-        if (dirty) deps.changed(bot);
       }
     },
 
@@ -266,4 +290,47 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       return earliest;
     },
   };
+
+  function tickBot(bot: BotRecord, now: Date, boot: boolean) {
+    let dirty = boot && settleOrphans(bot);
+    const queued = queuedRuns(bot);
+    for (const r of routinesOf(bot)) {
+      const d = due(r, now);
+      switch (d.kind) {
+        case "off":
+        case "wait":
+          break;
+        case "refuse":
+          r.enabled = false;
+          r.nextRunAt = null;
+          deps.note(bot, `Turned off {0}: ${d.why}. Editing its schedule turns it back on.`, [routinePeer(r)]);
+          dirty = true;
+          break;
+        case "schedule":
+          if (r.nextRunAt !== iso(d.next)) {
+            r.nextRunAt = iso(d.next);
+            dirty = true;
+          }
+          break;
+        case "miss":
+          r.nextRunAt = iso(d.next);
+          addRun(r, { at: d.at.toISOString(), status: "skipped", late: false, manual: false, note: "Missed while the Mac was asleep or the bridge was off" });
+          dirty = true;
+          break;
+        case "fire":
+          r.nextRunAt = iso(d.next);
+          if (r.runs.some((run) => run.status === "running" && queued.has(run.id))) {
+            addRun(r, { at: now.toISOString(), status: "skipped", late: d.late, manual: false, note: "Previous run still going" });
+            dirty = true;
+          } else if (deps.parked(bot, false)) {
+            addRun(r, { at: now.toISOString(), status: "skipped", late: d.late, manual: false, note: "Paused by a limit" });
+            dirty = true;
+          } else {
+            fire(bot, r, addRun(r, { at: now.toISOString(), status: "running", late: d.late, manual: false, note: null }));
+          }
+          break;
+      }
+    }
+    if (dirty) deps.changed(bot);
+  }
 }

@@ -16,6 +16,12 @@ test.each([
   ["0 0 * * *", "Every day at 12:00 AM"],
   ["0 12 * * 1,3,5", "Mondays, Wednesdays and Fridays at 12:00 PM"],
   ["0 9 1 * *", "0 9 1 * *"],
+  ["*/7 * * * *", "Every hour at :00, :07, :14, :21, :28, :35, :42, :49 and :56"],
+  ["*/20 * * * *", "Every 20 minutes"],
+  ["0 */2 * * *", "Every 2 hours"],
+  ["30 */6 * * *", "Every 6 hours at :30"],
+  ["0 */5 * * *", "0 */5 * * *"],
+  ["0 9 */2 * *", "0 9 */2 * *"],
 ])("describe %s", (schedule, expected) => {
   expect(describe(schedule)).toBe(expected);
 });
@@ -51,6 +57,17 @@ test("with both day fields restricted, either one matching is enough", () => {
   expect(matches(cron("0 9 1 * 1"), monday(9, 0))).toBe(true);
   expect(matches(cron("0 9 1 * 1"), local(2026, 10, 1, 9, 0))).toBe(true);
   expect(matches(cron("0 9 1 * 1"), local(2026, 10, 2, 9, 0))).toBe(false);
+});
+
+test("a stepped star in a day field counts as unrestricted, as Vixie cron does, so both day fields must match", () => {
+  const oddMondays = cron("0 9 */2 * 1");
+  expect(matches(oddMondays, monday(9, 0))).toBe(true);
+  expect(matches(oddMondays, local(2026, 10, 26, 9, 0))).toBe(false);
+  expect(matches(oddMondays, local(2026, 10, 21, 9, 0))).toBe(false);
+  // 2026-10-01 is a Thursday, 2026-10-18 a Sunday, 2027-01-01 a Friday.
+  expect(matches(cron("0 9 1 * */2"), local(2026, 10, 1, 9, 0))).toBe(true);
+  expect(matches(cron("0 9 1 * */2"), local(2026, 10, 18, 9, 0))).toBe(false);
+  expect(matches(cron("0 9 1 * */2"), local(2027, 1, 1, 9, 0))).toBe(false);
 });
 
 const next = (schedule: string, after: Date) => nextAfter(cron(schedule), after);

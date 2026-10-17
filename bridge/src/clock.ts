@@ -1,6 +1,7 @@
 // The one clock. Every timed thing is a deadline stored as data by the module that owns it: card reminder and expiry,
 // grant expiry, backoff end, park end, stop deadline, routine nextRunAt. The clock only decides when to look.
-// Catch-up after a sleep and after a restart is the same path: a late look sees every overdue deadline at once.
+// Catch-up after a sleep and after a restart is the same path: a late look sees every overdue deadline at once. There is
+// no power-event hook, so a wake is noticed at the next look, at most MAX_SLEEP_MS later.
 // Owner: U4.
 
 /** A module with stored deadlines. */

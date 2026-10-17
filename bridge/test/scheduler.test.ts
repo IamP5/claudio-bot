@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import type { BotId, Peer, RoutineId, RunId } from "../src/protocol";
 import type { Envelope } from "../src/prompts";
 import { createScheduler, DISABLE_AFTER_FAILURES, ROUTINES_PER_BOT, RUNS_KEPT, type RunOutcome } from "../src/scheduler";
-import { emptyWorld, newBot, type EnvelopeId, type RoutineRecord, type RunRef } from "../src/world";
+import { emptyWorld, newBot, type EnvelopeId, type Pending, type RoutineRecord, type RunRef } from "../src/world";
 
 // Local wall-clock times. 2026-10-19 is a Monday, away from any DST change.
 const local = (d: number, h: number, mi = 0, s = 0) => new Date(2026, 9, d, h, mi, s);
@@ -12,6 +12,9 @@ type RoutineEnvelope = Extract<Envelope, { from: "routine" }>;
 function harness(start: Date) {
   let now = start;
   let limit: "none" | "daily_cap" | "usage_limit" = "none";
+  let failing: "none" | "deliver" | "flush" = "none";
+  let changes = 0;
+  const logs: string[] = [];
   const world = emptyWorld();
   const bot = newBot({ id: BOT, name: "Eng", avatar: { shape: "circle", color: "white" }, at: start.toISOString() });
   world.bots.set(bot.id, bot);
@@ -20,14 +23,19 @@ function harness(start: Date) {
   let flushed: RoutineRecord[] | null = null;
   const scheduler = createScheduler({
     world,
-    deliver: (_bot, e) => {
+    deliver: (b, e) => {
       if (e.from !== "routine") throw new Error(`unexpected ${e.from}`);
+      if (failing === "deliver") throw new Error("inbox write failed");
       delivered.push({ e, flushedBefore: flushed });
+      (b.session.pending as unknown as Pending[]).push({ id: e.run.runId as string as EnvelopeId, at: now.toISOString(), text: "", initiator: { kind: "routine", run: e.run, manual: e.manual }, attempts: 0 });
     },
     note: (_bot, text, refs: Peer[] = []) => notes.push(text.replace(/\{(\d+)\}/g, (_, i) => refs[Number(i)]?.kind === "routine" ? (refs[Number(i)] as { name: string }).name : "?")),
     changed: (b, urgency) => {
+      changes += 1;
+      if (urgency === "now" && failing === "flush") throw new Error("disk full");
       if (urgency === "now") flushed = structuredClone(b.routines) as RoutineRecord[];
     },
+    log: (line) => logs.push(line),
     parked: (_bot, attended) => limit === "usage_limit" || (limit === "daily_cap" && !attended),
     now: () => now,
   });
@@ -56,6 +64,11 @@ function harness(start: Date) {
     setLimit(l: typeof limit) {
       limit = l;
     },
+    setFailing(f: typeof failing) {
+      failing = f;
+    },
+    logs,
+    changes: () => changes,
     lastRef(): RunRef {
       const last = delivered.at(-1);
       if (!last) throw new Error("nothing delivered");
@@ -64,8 +77,13 @@ function harness(start: Date) {
   };
 }
 
-const settle = (h: ReturnType<typeof harness>, ref: RunRef, status: RunOutcome["status"], note: string | null = null) =>
+/** The hub's turn end: the envelope leaves the queue and the run settles. */
+function settle(h: ReturnType<typeof harness>, ref: RunRef, status: RunOutcome["status"], note: string | null = null) {
+  const pending = h.bot.session.pending as unknown as Pending[];
+  const i = pending.findIndex((p) => p.initiator.kind === "routine" && p.initiator.run.runId === ref.runId);
+  if (i !== -1) pending.splice(i, 1);
   h.scheduler.settle(BOT, ref, { status, note });
+}
 
 test("a new routine is scheduled for its next time and fires once when it arrives", () => {
   const h = harness(local(19, 8, 30));
@@ -351,4 +369,144 @@ test("changing a routine's schedule or re-enabling it through set_routine recomp
   h.scheduler.upsert(BOT, { name: "digest", schedule: "0 10 * * *", prompt: "p", enabled: true });
   expect(r.nextRunAt).toBe(local(20, 10).toISOString());
   expect(h.delivered).toHaveLength(0);
+});
+
+const DAY_MS = 86_400_000;
+
+test("a year-long gap costs one bounded step: one skipped run at the first missed time", () => {
+  const h = harness(local(19, 23, 30));
+  const r = h.add("poll", "*/15 * * * *") as RoutineRecord;
+  const missedSince = new Date(local(19, 23, 45).getTime() - 365 * DAY_MS);
+  r.nextRunAt = missedSince.toISOString();
+  const wake = local(19, 23, 55);
+
+  const started = performance.now();
+  h.at(wake);
+  expect(performance.now() - started).toBeLessThan(50);
+
+  expect(h.delivered).toHaveLength(0);
+  expect(r.runs).toHaveLength(1);
+  expect(r.runs[0]).toMatchObject({ status: "skipped", at: missedSince.toISOString() });
+  expect(r.nextRunAt).toBe(local(20, 0).toISOString());
+});
+
+test("a year-long gap still fires the newest missed time when it is inside the grace window", () => {
+  const h = harness(local(19, 23, 30));
+  const r = h.add("hourly", "0 * * * *") as RoutineRecord;
+  r.nextRunAt = new Date(local(19, 23).getTime() - 365 * DAY_MS).toISOString();
+  const wake = local(20, 7, 10);
+
+  const started = performance.now();
+  h.at(wake);
+  expect(performance.now() - started).toBeLessThan(50);
+
+  expect(h.delivered.map((d) => d.e.late)).toEqual([true]);
+  expect(r.runs).toHaveLength(1);
+  expect(r.nextRunAt).toBe(local(20, 8).toISOString());
+});
+
+test("an upgraded routine under the 15-minute floor is turned off at the first tick and editing its schedule turns it on", () => {
+  const h = harness(local(19, 8, 30));
+  const r = h.add("poll", "*/15 * * * *") as RoutineRecord;
+  r.trigger = { kind: "cron", schedule: "*/5 * * * *" };
+  r.nextRunAt = local(19, 8, 35).toISOString();
+  h.notes.length = 0;
+
+  h.at(local(19, 8, 35));
+  expect(h.delivered).toHaveLength(0);
+  expect(r.enabled).toBe(false);
+  expect(r.nextRunAt).toBeNull();
+  expect(h.scheduler.nextDeadline()).toBeNull();
+  expect(h.notes).toHaveLength(1);
+  expect(h.notes[0]).toContain("poll");
+  expect(h.notes[0]).toContain("15 minutes");
+  expect(h.notes[0]).toContain("schedule");
+
+  expect(h.scheduler.setEnabled(BOT, r.id, true)).toContain("15 minutes");
+  expect(r.enabled).toBe(false);
+
+  expect(h.scheduler.upsert(BOT, { name: "poll", schedule: "*/15 * * * *", prompt: "p" })).toBe("Routine poll: Every 15 minutes.");
+  expect(r.enabled).toBe(true);
+  expect(r.nextRunAt).toBe(local(19, 8, 45).toISOString());
+});
+
+test("an enabled routine with an unparsable schedule is turned off with a note instead of staying overdue", () => {
+  const h = harness(local(19, 8, 30));
+  const r = h.add("digest", "0 9 * * *") as RoutineRecord;
+  r.trigger = { kind: "cron", schedule: "0 9 * *" };
+  r.nextRunAt = local(19, 8).toISOString();
+  h.notes.length = 0;
+
+  h.at(local(19, 8, 31));
+  expect(r.enabled).toBe(false);
+  expect(h.scheduler.nextDeadline()).toBeNull();
+  expect(h.notes).toHaveLength(1);
+  expect(h.notes[0]).toContain("0 9 * *");
+});
+
+test("a valid schedule that never fires is persisted once, not on every tick", () => {
+  const h = harness(local(19, 8, 30));
+  const r = h.add("digest", "0 9 * * *") as RoutineRecord;
+  r.trigger = { kind: "cron", schedule: "0 0 31 2 *" };
+  r.nextRunAt = null;
+  h.at(local(19, 8, 31));
+  const after = h.changes();
+  h.at(local(19, 8, 32));
+  h.at(local(19, 8, 33));
+  expect(h.changes()).toBe(after);
+  expect(r.nextRunAt).toBeNull();
+  expect(r.enabled).toBe(true);
+});
+
+test("a scheduled fire while the previous run is still queued records a skip; run now is exempt", () => {
+  const h = harness(local(19, 0, 1));
+  const r = h.add("poll", "*/15 * * * *");
+  h.at(local(19, 0, 15));
+  const first = h.lastRef();
+
+  h.at(local(19, 0, 30));
+  expect(h.delivered).toHaveLength(1);
+  expect(r.runs[0]).toMatchObject({ status: "skipped", note: "Previous run still going" });
+  expect(r.nextRunAt).toBe(local(19, 0, 45).toISOString());
+
+  expect(h.scheduler.runNow(BOT, r.id)).toBeNull();
+  expect(h.delivered).toHaveLength(2);
+
+  settle(h, first, "ok");
+  settle(h, h.lastRef(), "ok");
+  h.at(local(19, 0, 45));
+  expect(h.delivered).toHaveLength(3);
+  expect(r.runs[0]).toMatchObject({ status: "running", manual: false });
+});
+
+test.each(["deliver", "flush"] as const)("a fire whose %s throws settles failed, logs, and does not throw out of tick", (where) => {
+  const h = harness(local(19, 8, 30));
+  const r = h.add("digest", "0 9 * * *");
+  h.setFailing(where);
+  expect(() => h.at(local(19, 9))).not.toThrow();
+  expect(h.delivered).toHaveLength(0);
+  expect(r.runs).toHaveLength(1);
+  expect(r.runs[0]!.status).toBe("failed");
+  expect(h.logs.join("\n")).toContain("digest");
+  expect(r.nextRunAt).toBe(local(20, 9).toISOString());
+
+  expect(h.scheduler.runNow(BOT, r.id)).not.toBeNull();
+  expect(r.runs[0]!.status).toBe("failed");
+});
+
+test("failed run-now presses never turn a routine off", () => {
+  const h = harness(local(19, 8, 30));
+  const r = h.add("digest", "0 9 * * *");
+  for (let i = 0; i < DISABLE_AFTER_FAILURES + 2; i++) {
+    expect(h.scheduler.runNow(BOT, r.id)).toBeNull();
+    settle(h, h.lastRef(), "failed", "boom");
+  }
+  expect(r.enabled).toBe(true);
+  expect(r.nextRunAt).toBe(local(19, 9).toISOString());
+
+  for (let d = 0; d < DISABLE_AFTER_FAILURES - 1; d++) {
+    h.at(local(19 + d, 9));
+    settle(h, h.lastRef(), "failed");
+  }
+  expect(r.enabled).toBe(true);
 });

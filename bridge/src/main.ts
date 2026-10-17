@@ -1,7 +1,7 @@
 import type { ServerWebSocket } from "bun";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, hostname, networkInterfaces } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import qrcode from "qrcode-terminal";
 import { createDevices, rejectsOrigin } from "./devices";
 import { createHomes } from "./home";
@@ -48,10 +48,54 @@ function unlessStub<T>(what: string, build: () => T): T | undefined {
   }
 }
 
+const alive = (pid: number) => {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+
+/**
+ * One bridge per home. The lock sits beside the home rather than in it, so the migration can move or link the home
+ * while the lock is held. A lock whose pid is gone was left by a crash and is taken over.
+ */
+function lockHome(home: string) {
+  const path = `${home}.lock`;
+  mkdirSync(dirname(path), { recursive: true });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      writeFileSync(path, `${process.pid}\n`, { flag: "wx", mode: 0o600 });
+      process.on("exit", () => {
+        if (existsSync(path) && readFileSync(path, "utf8").trim() === String(process.pid)) rmSync(path, { force: true });
+      });
+      return;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+    const holder = existsSync(path) ? Number(readFileSync(path, "utf8").trim()) : NaN;
+    if (alive(holder)) {
+      console.error(`Another ClaudioBot bridge (pid ${holder}) is using ${home}. Stop it first; if none is running, delete ${path}.`);
+      process.exit(1);
+    }
+    rmSync(path, { force: true });
+  }
+  throw new Error(`Could not take the lock ${path}`);
+}
+
 const isTransport = (m: ClientMessage): m is TransportMessage => m.type === "devices" || m.type === "revoke_device" || m.type === "pair_code";
 
 const now = () => new Date();
 const log = (line: string) => console.log(line);
+
+if (process.env.CLAUDEBOT_HOME && !process.env.CLAUDIOBOT_HOME) {
+  console.warn(`WARNING: CLAUDEBOT_HOME is set but this bridge reads CLAUDIOBOT_HOME. Rename the variable; until then it is ignored.`);
+}
+
+const home = bridgeHome();
+lockHome(home);
 
 const migration = unlessStub("home migration", () => migrateHome({ env: process.env, home: homedir(), now }));
 if (migration?.kind === "conflict") {
@@ -59,10 +103,12 @@ if (migration?.kind === "conflict") {
 } else if (migration?.kind === "linked") {
   log(`linked ${migration.to} to ${migration.from}`);
 } else if (migration?.kind === "moved_aside") {
-  log(`moved ${migration.to} aside to ${migration.aside}, then linked it to ${migration.from}`);
+  console.error(
+    `NOTE: ${migration.to} held no bots of yours, so it was moved to ${migration.aside} and ${migration.to} now links to ${migration.from}.\n` +
+      `  ${migration.aside} is only a backup of that near-empty home. Check it, then delete it when you like.`,
+  );
 }
 
-const home = bridgeHome();
 const port = Number(process.env.CLAUDIOBOT_PORT ?? 7878);
 const machine = await machineName();
 const { world, firstRun } = loadWorld(home);

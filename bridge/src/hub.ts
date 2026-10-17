@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import type { Settings } from "@anthropic-ai/claude-agent-sdk";
@@ -9,7 +9,7 @@ import { connectorSettings, createConnectors } from "./connectors";
 import { createGate } from "./gate";
 import type { Homes } from "./home";
 import { createLedger } from "./ledger";
-import { createMemory } from "./memory";
+import { createMemory, writeAtomic } from "./memory";
 import type { Scope } from "./policy";
 import type { Project } from "./projects";
 import {
@@ -36,7 +36,7 @@ import { createScheduler, type RunOutcome } from "./scheduler";
 import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { createSkills } from "./skills";
 import { appendArchive, type Persist } from "./store";
-import { errorText } from "./text";
+import { BOT_NAME_MAX, errorText, hasHiddenCharacters } from "./text";
 import { botToolServer, type BotActions } from "./tools";
 import { freshTurn, readTurn, type Bubble, type Turn } from "./turn";
 import { createWebhooks } from "./webhook";
@@ -116,6 +116,25 @@ const holdsBubbles = (p: Pending) => p.settles !== null && p.initiator.kind === 
  */
 type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; carded: boolean } & Pushes;
 type Pushes = { pushed: { id: MessageId; at: number } | null; last: MessageId | null };
+
+const BAD_NAME = `A bot name is 1 to ${BOT_NAME_MAX} characters, with no control or invisible characters.`;
+/** The same rule as the bot tools' name: a name a phone would show cut short or other than it reads is refused. */
+const nameOk = (name: string) => name.trim() !== "" && Array.from(name.trim()).length <= BOT_NAME_MAX && !hasHiddenCharacters(name);
+
+/** CLAUDE.md as the bridge wrote it, or null for a link or anything else a bot may have put there. */
+function readOwn(path: string): string | null {
+  try {
+    return lstatSync(path).isFile() ? readFileSync(path, "utf8") : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The text under a markdown "## heading", trimmed, or null. */
+function section(doc: string, heading: string): string | null {
+  const m = new RegExp(`^## ${heading}\\s*\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, "m").exec(doc);
+  return m ? m[1]!.trim() || null : null;
+}
 
 /** Ten years: as long as the bot lives, in practice. */
 const KEEP_TRANSCRIPTS = { cleanupPeriodDays: 3650 } as const;
@@ -339,6 +358,35 @@ export function createHub(deps: HubDeps): Hub {
   }
 
   /** The bot's and its agents' live queries close at their next chance, so the next ones open with fresh options. */
+  const claudeMdOf = (botId: BotId) => join(homes.homeOf(botId), "CLAUDE.md");
+
+  /** A rename reaches CLAUDE.md's heading, which a new session reads as the bot's instructions. */
+  function retitle(botId: BotId, name: string) {
+    const path = claudeMdOf(botId);
+    const doc = readOwn(path);
+    if (doc === null) return;
+    const next = doc.replace(/^# .*$/m, `# ${name}`);
+    if (next === doc) return;
+    try {
+      writeAtomic(path, next);
+    } catch (e) {
+      deps.log(`retitle ${botId}: ${errorText(e)}`);
+    }
+  }
+
+  /**
+   * Who the bot is now. A resumed session keeps the system prompt it started with, so a rename, a new userName or a
+   * newer persona reaches it as this, on the first turn after it changes.
+   */
+  function standingBrief(bot: BotRecord): string {
+    const job = section(readOwn(claudeMdOf(bot.id)) ?? "", "Job");
+    return [
+      "[Standing brief: this replaces what you were told before where they differ.]",
+      persona({ name: bot.name, userName }),
+      ...(job === null ? [] : [`\nYour job: ${job}`]),
+    ].join("\n");
+  }
+
   function reopenAll(botId: BotId) {
     brains.get(botId)?.reopen();
     for (const rec of world.agents.values()) if (rec.agent.botId === botId) agents.session(rec.agent.id)?.reopen();
@@ -378,6 +426,7 @@ export function createHub(deps: HubDeps): Hub {
       name: () => bot.name,
       continuing: () => gate.beginTurn(actor),
       context: () => memory.context(bot.id),
+      brief: () => standingBrief(bot),
       ...deps.claude,
       options: () => ({
         cwd: homes.homeOf(bot.id),
@@ -609,7 +658,10 @@ export function createHub(deps: HubDeps): Hub {
 
     updateSelf(botId, a) {
       const bot = owned(botId);
-      if (a.name !== undefined) bot.name = a.name.trim();
+      if (a.name !== undefined) {
+        bot.name = a.name.trim();
+        retitle(bot.id, bot.name);
+      }
       if (a.title !== undefined) bot.title = a.title.trim() || null;
       bot.avatar = { shape: a.shape ?? bot.avatar.shape, color: a.color ?? bot.avatar.color };
       changed(bot);
@@ -697,7 +749,9 @@ export function createHub(deps: HubDeps): Hub {
       case "stop":
         return (await brains.get(bot.id)?.interrupt()) ? [] : error("Nothing is running.");
       case "update_bot":
-        Object.assign(bot, message.patch);
+        if (message.patch.name !== undefined && !nameOk(message.patch.name)) return error(BAD_NAME);
+        Object.assign(bot, message.patch, message.patch.name !== undefined && { name: message.patch.name.trim() });
+        if (message.patch.name !== undefined) retitle(bot.id, bot.name);
         changed(bot);
         // A raised cap may lift a daily-cap park at once instead of at the next tick.
         if (message.patch.dailyCapUsd !== undefined) {

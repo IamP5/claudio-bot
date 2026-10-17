@@ -199,6 +199,9 @@ private struct InfoTab: View {
                 routines
                 character
             }
+            MuteSection(bot: bot)
+            ConnectorsSection(bot: bot)
+            SkillsSection(bot: bot)
         }
     }
 

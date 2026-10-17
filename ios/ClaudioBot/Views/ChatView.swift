@@ -24,6 +24,7 @@ struct ChatView: View {
                     case .working:
                         TypingRow(avatar: bot.avatar) { client.send(.stop(botId: botId)) }
                             .padding(.top, 12)
+                        ActivityLine(botId: botId)
                     case .unavailable:
                         Text("Claude Code could not start on your Mac. Your messages wait, and the bridge keeps trying.")
                             .font(.system(size: 13))

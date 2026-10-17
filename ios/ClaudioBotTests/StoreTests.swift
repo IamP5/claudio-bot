@@ -44,6 +44,41 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         return store
     }
 
+    @Test func helloSetsTheFeaturesAndClearsLiveActivity() {
+        let store = store()
+        #expect(!store.has(.memory))
+        store.apply(.activity(botId: BotID("b1"), agentId: nil, text: "Reading hub.ts", at: at))
+        store.apply(.activity(botId: BotID("b1"), agentId: AgentID("a1"), text: "Running tests", at: at))
+        #expect(store.activity[ActivityKey(botId: BotID("b1"), agentId: nil)] == "Reading hub.ts")
+        #expect(store.activity[ActivityKey(botId: BotID("b1"), agentId: AgentID("a1"))] == "Running tests")
+        store.apply(.activity(botId: BotID("b1"), agentId: AgentID("a1"), text: nil, at: at))
+        #expect(store.activity[ActivityKey(botId: BotID("b1"), agentId: AgentID("a1"))] == nil)
+
+        store.apply(.hello(Hello(features: [.memory, .skills], machine: "Mac", userName: "Alex", bots: [bot("b1")])))
+        #expect(store.has(.memory) && store.has(.skills) && !store.has(.connectors))
+        #expect(store.activity.isEmpty)
+    }
+
+    @Test func memoryConnectorsSkillsAndWebhookTokensLandInTheStoreAndGoWithTheirBot() {
+        let store = store()
+        let b1 = BotID("b1")
+        store.apply(.memory([Fact(id: FactID("f_1"), text: "Prefers short answers", at: at, by: nil)]))
+        store.apply(.connectors(botId: b1, connectors: [Connector(name: "github", status: .connected, enabled: true)]))
+        store.apply(.skills(botId: b1, skills: [Skill(name: "release-notes", description: "d", updatedAt: at)]))
+        let token = WebhookToken(routineId: RoutineID("r2"), url: URL(string: "http://127.0.0.1:7879/hook/r2")!, token: "whk_1")
+        store.apply(.webhookToken(botId: b1, token: token))
+        #expect(store.facts?.map(\.text) == ["Prefers short answers"])
+        #expect(store.connectors[b1]?.map(\.name) == ["github"])
+        #expect(store.skills[b1]?.map(\.name) == ["release-notes"])
+        #expect(store.webhookToken == token)
+        store.dismissWebhookToken()
+        #expect(store.webhookToken == nil)
+
+        store.apply(.botRemoved(b1))
+        #expect(store.connectors[b1] == nil && store.skills[b1] == nil)
+        #expect(store.facts != nil)
+    }
+
     @Test func helloMeansConnected() {
         let store = store()
         #expect(store.connection == .connected(machine: "Mac"))

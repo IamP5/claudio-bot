@@ -21,6 +21,7 @@ struct ExchangeView: View {
                         }
                         status(thread.agent)
                             .padding(.top, 10)
+                        AgentEvidenceSection(agent: thread.agent)
                     }
                     .padding(16)
                     .frame(maxWidth: 760)

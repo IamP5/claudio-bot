@@ -130,7 +130,7 @@ struct AgentStatusPill: View {
         case .inCloud: AvatarColor.blue.color
         case .awaitingApproval: Theme.attention
         case .unavailable: AvatarColor.red.color
-        case .parked, .unknown: Theme.secondary
+        case .parked, .capped, .unknown: Theme.secondary
         }
     }
 

@@ -22,6 +22,7 @@ struct RoutineView: View {
                                 .padding(16)
                         }
                         runs
+                        WebhookTokenSection(botId: botId, routine: routine)
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)

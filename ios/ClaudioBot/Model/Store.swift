@@ -62,6 +62,12 @@ struct AgentThread: Equatable, Sendable {
     var messages: [AgentMessage]
 }
 
+/// Whose activity line: a bot's own (agentId nil) or one of its agents'.
+struct ActivityKey: Hashable, Sendable {
+    let botId: BotID
+    let agentId: AgentID?
+}
+
 struct FileKey: Hashable, Sendable {
     let botId: BotID
     let path: String
@@ -120,6 +126,24 @@ final class AppStore {
     private(set) var devices: [Device]?
     /// The newest code for pairing another phone.
     private(set) var pairCode: PairCode?
+    /// From the last hello. Empty for a bridge from before features.
+    private(set) var features: Set<Feature> = []
+    /// What each bot or agent is doing right now. Live only: cleared by every hello.
+    private(set) var activity: [ActivityKey: String] = [:]
+    /// USER.md's facts, once Memory asked for them.
+    private(set) var facts: [Fact]?
+    private(set) var connectors: [BotID: [Connector]] = [:]
+    private(set) var skills: [BotID: [Skill]] = [:]
+    /// The newest webhook token, shown once and then dismissed.
+    private(set) var webhookToken: WebhookToken?
+
+    func has(_ feature: Feature) -> Bool {
+        features.contains(feature)
+    }
+
+    func dismissWebhookToken() {
+        webhookToken = nil
+    }
 
     var machine: String? {
         if case .connected(let machine) = connection { machine } else { nil }
@@ -146,6 +170,12 @@ final class AppStore {
             pendingDecisions = [:]
             devices = nil
             pairCode = nil
+            features = []
+            activity = [:]
+            facts = nil
+            connectors = [:]
+            skills = [:]
+            webhookToken = nil
         }
     }
 
@@ -177,11 +207,15 @@ final class AppStore {
             userName = hello.userName
             protocolMismatch = ProtocolMismatch(bridge: hello.protocol)
             bridgeProtocol = hello.protocol
+            features = Set(hello.features)
+            activity = [:]
             // A decision in flight when the socket dropped either landed, and the card says so, or it is lost.
             pendingDecisions = [:]
             bots = Dictionary(hello.bots.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             conversations = conversations.filter { self.bots[$0.key] != nil }
             details = details.filter { self.bots[$0.key] != nil }
+            connectors = connectors.filter { self.bots[$0.key] != nil }
+            skills = skills.filter { self.bots[$0.key] != nil }
             return []
 
         case let .bot(bot):
@@ -194,6 +228,9 @@ final class AppStore {
             details[id] = nil
             agents = agents.filter { $0.value.agent.botId != id }
             files = files.filter { $0.key.botId != id }
+            activity = activity.filter { $0.key.botId != id }
+            connectors[id] = nil
+            skills[id] = nil
             return []
 
         case let .created(ref, botId):
@@ -247,6 +284,26 @@ final class AppStore {
 
         case let .pairCode(code):
             pairCode = code
+            return []
+
+        case let .activity(botId, agentId, text, _):
+            activity[ActivityKey(botId: botId, agentId: agentId)] = text
+            return []
+
+        case let .memory(facts):
+            self.facts = facts
+            return []
+
+        case let .connectors(botId, connectors):
+            self.connectors[botId] = connectors
+            return []
+
+        case let .skills(botId, skills):
+            self.skills[botId] = skills
+            return []
+
+        case let .webhookToken(_, token):
+            webhookToken = token
             return []
 
         case let .error(message):

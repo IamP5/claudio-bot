@@ -29,6 +29,8 @@ struct SettingsView: View {
 
                 devices
 
+                MemorySection()
+
                 Section {
                     Toggle("Notifications", isOn: $notificationsEnabled)
                         .tint(AvatarColor.green.color)

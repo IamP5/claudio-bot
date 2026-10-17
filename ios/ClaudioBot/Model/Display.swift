@@ -144,6 +144,7 @@ extension AgentStatus {
         case .awaitingApproval: "Awaiting approval"
         case .parked: "Parked"
         case .unavailable: "Unavailable"
+        case .capped: "Paused at cap"
         case .unknown(let raw): raw.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }

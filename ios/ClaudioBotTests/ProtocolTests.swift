@@ -134,7 +134,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
             default: ""
             }
         }.filter { !$0.isEmpty }
-        #expect(seqs == ["bot:42", "bot_removed:-", "bot:48", "bot:49", "bot:51"])
+        #expect(seqs == ["bot:42", "bot_removed:-", "bot:48", "bot:49", "bot:51", "bot:54"])
     }
 
     @Test func routinesCarryTheirTriggerNextRunAndRuns() throws {
@@ -158,7 +158,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         let routines = try Fixture.server().flatMap { frame -> [Routine] in
             if case .details(_, _, _, _, let routines) = frame.message { routines } else { [] }
         }
-        #expect(routines.map(\.id) == [RoutineID("r1")])
+        #expect(routines.map(\.id) == [RoutineID("r1"), RoutineID("r2")])
         #expect(routines.first?.runs.map(\.id) == ["run4", "run3", "run2", "run1"].map { RunID($0) })
 
         let old = try decode(ServerMessage.self, #"{"type":"details","botId":"b1","library":[],"links":[],"agents":[]}"#)
@@ -167,12 +167,12 @@ private func unknowns(in message: ServerMessage) -> [String] {
     }
 
     @Test func botsAndAgentsCarryTheNewStatusesAndTheDailyCap() throws {
-        #expect(try Fixture.bots().map(\.status) == [.idle, .working, .awaitingApproval, .parked, .unavailable])
-        #expect(try Fixture.bots().map(\.dailyCapUsd) == [nil, 5, nil, nil, nil])
+        #expect(try Fixture.bots().map(\.status) == [.idle, .working, .awaitingApproval, .parked, .unavailable, .idle])
+        #expect(try Fixture.bots().map(\.dailyCapUsd) == [nil, 5, nil, nil, nil, nil])
         let agentStatuses = try Fixture.server().compactMap { frame -> AgentStatus? in
             if case .agent(let agent, _) = frame.message { agent.status } else { nil }
         }
-        #expect(agentStatuses == [.waiting, .awaitingApproval, .unavailable])
+        #expect(agentStatuses == [.waiting, .awaitingApproval, .unavailable, .capped])
     }
 
     @Test func permissionCardsDecodeOpenOrDecidedWithTheExactCall() throws {
@@ -244,7 +244,9 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(try decode(AgentStatus.self, #""queued""#) == .unknown("queued"))
         #expect(try decode(AgentPlace.self, #""ssh""#) == .unknown("ssh"))
         #expect(try decode(RunStatus.self, #""retrying""#) == .unknown("retrying"))
-        #expect(try decode(TriggerKind.self, #""webhook""#) == .unknown("webhook"))
+        #expect(try decode(TriggerKind.self, #""email""#) == .unknown("email"))
+        #expect(try decode(Feature.self, #""rooms""#) == .unknown("rooms"))
+        #expect(try decode(ConnectorStatus.self, #""disabled""#) == .unknown("disabled"))
         #expect(try decode(Peer.self, #"{"kind":"group","id":"g1"}"#) == .unknown(kind: "group"))
         #expect(try Wire.encoder().encode(AvatarShape.unknown("heart")) == Data(#""heart""#.utf8))
     }
@@ -258,9 +260,54 @@ private func unknowns(in message: ServerMessage) -> [String] {
             "white", "brown", "red", "orange", "amber", "green", "teal", "blue", "purple", "pink", "gray",
         ])
         #expect(BotStatus.allCases.map(\.rawValue) == ["idle", "working", "awaiting_approval", "parked", "unavailable"])
-        #expect(AgentStatus.allCases.map(\.rawValue) == ["working", "waiting", "failed", "in_cloud", "awaiting_approval", "parked", "unavailable"])
+        #expect(AgentStatus.allCases.map(\.rawValue) == ["working", "waiting", "failed", "in_cloud", "awaiting_approval", "parked", "unavailable", "capped"])
+        #expect(Feature.allCases.map(\.rawValue) == ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks"])
+        #expect(ConnectorStatus.allCases.map(\.rawValue) == ["connected", "pending", "failed", "needs_auth", "unchecked"])
         #expect(RunStatus.allCases.map(\.rawValue) == ["running", "ok", "quiet", "failed", "skipped"])
         #expect(PermissionChoice.allCases.map(\.rawValue) == ["once", "always", "deny", "never"])
+    }
+
+    @Test func helloListsTheBridgeFeaturesAndAnOlderHelloListsNone() throws {
+        guard case .hello(let hello) = try Fixture.server()[0].message else { Issue.record("not hello"); return }
+        #expect(hello.features == Feature.allCases)
+        let old = try decode(ServerMessage.self, #"{"type":"hello","protocol":3,"machine":"Mac","userName":"Alex","bots":[]}"#)
+        guard case .hello(let none) = old else { Issue.record("not hello"); return }
+        #expect(none.features.isEmpty)
+    }
+
+    @Test func aBotFromBeforeMuteIsNotMutedAndAnAgentFromBeforeEvidenceHasNone() throws {
+        let bot = try decode(Bot.self, #"{"id":"b1","name":"n","title":null,"avatar":{"shape":"circle","color":"white"},"pinned":false,"hidden":false,"status":"idle","unread":0,"question":null,"preview":"","lastAt":"2026-10-16T12:00:00.000Z","createdAt":"2026-10-16T12:00:00.000Z","routines":[]}"#)
+        #expect(bot.muted == false)
+        let agent = try decode(Agent.self, #"{"id":"a1","botId":"b1","title":"t","where":"mac","projectName":"p","status":"waiting","url":null,"createdAt":"2026-10-16T12:00:00.000Z","updatedAt":"2026-10-16T12:00:00.000Z"}"#)
+        #expect(agent.evidence == nil)
+        #expect(agent.worktree == nil)
+    }
+
+    @Test func theFramesOfThePass3FeaturesDecodeToTypedValues() throws {
+        let frames = try Fixture.server().map(\.message)
+        let activity = frames.compactMap { if case let .activity(botId, agentId, text, _) = $0 { "\(botId):\(agentId.map(\.rawValue) ?? "-"):\(text ?? "-")" } else { nil } }
+        #expect(activity == ["b1:-:Reading hub.ts", "b1:a1:-"])
+        let facts = frames.compactMap { if case .memory(let f) = $0 { f } else { nil } }.first
+        #expect(facts?.map(\.by) == [nil, "engineer"])
+        let connectors = frames.compactMap { if case .connectors(_, let c) = $0 { c } else { nil } }.first
+        #expect(connectors?.map(\.status) == [.connected, .needsAuth, .unchecked])
+        #expect(connectors?.map(\.enabled) == [true, true, false])
+        let skills = frames.compactMap { if case .skills(_, let s) = $0 { s } else { nil } }.first
+        #expect(skills?.map(\.name) == ["release-notes"])
+        let token = frames.compactMap { if case .webhookToken(_, let t) = $0 { t } else { nil } }.first
+        #expect(token == WebhookToken(routineId: RoutineID("r2"), url: URL(string: "http://127.0.0.1:7879/hook/r2")!, token: "whk_3s9dK2"))
+        let capped = frames.compactMap { if case .agent(let a, _) = $0, a.status == .capped { a } else { nil } }.first
+        #expect(capped?.evidence?.ahead == 3)
+        #expect(capped?.evidence?.pr == URL(string: "https://github.com/acme/web/pull/142"))
+        #expect(capped?.worktree == Worktree(path: "/Users/alex/.claudiobot-worktrees/web/a1", branch: "claudio/verify-skill"))
+        let echoed = try Fixture.messages().compactMap { if case let .user(_, _, _, _, clientId) = $0 { clientId } else { nil } }
+        #expect(echoed == ["c_9b1e"])
+        #expect(try Fixture.bots().map(\.muted) == [false, false, false, false, false, true])
+    }
+
+    @Test func aSendWithoutAClientIdLeavesTheKeyOut() throws {
+        let send = try jsonObject(Wire.encoder().encode(ClientMessage.send(botId: BotID("b1"), text: "hi", uploads: [])))
+        #expect(send == ["type": "send", "botId": "b1", "text": "hi", "uploads": []] as NSDictionary)
     }
 
     @Test func patchSendsOnlyTheFieldsThatAreSet() throws {

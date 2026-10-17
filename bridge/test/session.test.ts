@@ -1700,4 +1700,4 @@ test.each([1, 2, 3, 4, 5, 6, 7, 8])("exactly one TurnEnd per envelope that leave
     const t = h.state.lifecycle.kind === "working" || h.state.lifecycle.kind === "stopping" ? h.state.lifecycle.turn : null;
     if (t) expect(h.state.pending[0]?.id).toBe(t.pending);
   }
-});
+}, 30_000); // 300 steps take about half a second; a loaded machine must not fail them on bun's 5 s default

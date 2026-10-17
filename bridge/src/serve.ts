@@ -17,8 +17,15 @@ export const MAX_FRAME_BYTES = 32 << 20;
 // Two burned codes' worth. Each burn while unpaired prints a new code, so this also bounds what a guesser can print.
 export const PAIR_FAILURES_PER_ADDRESS = 10;
 export const PAIR_FAILURE_WINDOW_MS = 10 * 60_000;
+/**
+ * A socket is live while it was heard from this recently. The app pings every 20 s while it runs; a suspended iPhone
+ * stops pinging but keeps the socket open, and push must not mistake it for someone watching.
+ */
+export const LIVE_WINDOW_MS = 45_000;
+// Bun pings a socket silent for 44 s and closes it at 60 s, so a dead one goes away instead of lingering for two minutes.
+const IDLE_TIMEOUT_S = 60;
 
-type SocketData = { deviceId: DeviceId; protocol: 2 | 3; resume: { epoch: string; after: number } | null };
+type SocketData = { deviceId: DeviceId; protocol: 2 | 3; resume: { epoch: string; after: number } | null; heardAt: number };
 type Socket = ServerWebSocket<SocketData>;
 
 export type ServeDeps = {
@@ -36,8 +43,10 @@ export type Transport = {
   readonly port: number;
   /** Stamps the message with the next seq and sends it to every open socket. */
   publish(message: ServerMessage): void;
-  /** Open authenticated sockets. */
+  /** Open authenticated sockets heard from within LIVE_WINDOW_MS. */
   live(): number;
+  /** When the last of those goes quiet, or null when none is live. */
+  liveUntil(): Date | null;
   stop(): void;
 };
 
@@ -65,6 +74,11 @@ export function serve(deps: ServeDeps): Transport {
     for (const [key, old] of failures) if (at - old.since >= PAIR_FAILURE_WINDOW_MS) failures.delete(key);
     failures.set(address, { since: at, count: 1 });
   };
+
+  const heard = (ws: Socket) => {
+    ws.data.heardAt = deps.now().getTime();
+  };
+  const quietAt = () => [...sockets.values()].flatMap((set) => [...set].map((ws) => ws.data.heardAt + LIVE_WINDOW_MS));
 
   const send = (ws: Socket, message: ServerMessage) => {
     ws.send(JSON.stringify(ws.data.protocol === 3 ? message : forProtocol2(message)));
@@ -141,13 +155,17 @@ export function serve(deps: ServeDeps): Transport {
         const epoch = url.searchParams.get("epoch");
         // The ring holds protocol 3 frames, and today's app never asks to resume.
         const resume = epoch && protocol === 3 ? { epoch, after: Number(url.searchParams.get("after") ?? NaN) } : null;
-        if (server.upgrade(req, { data: { deviceId, protocol, resume } })) return;
+        if (server.upgrade(req, { data: { deviceId, protocol, resume, heardAt: deps.now().getTime() } })) return;
         return new Response("Expected a WebSocket upgrade", { status: 426 });
       }
       return new Response("Not found", { status: 404 });
     },
     websocket: {
       maxPayloadLength: MAX_FRAME_BYTES,
+      idleTimeout: IDLE_TIMEOUT_S,
+      sendPings: true,
+      ping: heard,
+      pong: heard,
       open(ws) {
         const { deviceId, resume } = ws.data;
         if (!isPaired(deviceId)) return ws.close(4001, "revoked");
@@ -163,6 +181,7 @@ export function serve(deps: ServeDeps): Transport {
         sockets.get(ws.data.deviceId)?.delete(ws);
       },
       async message(ws, raw) {
+        heard(ws);
         if (!isPaired(ws.data.deviceId)) return ws.close(4001, "revoked");
         const parsed = parseClientMessage(String(raw));
         if (!parsed.ok) return send(ws, { type: "error", message: parsed.error });
@@ -186,7 +205,11 @@ export function serve(deps: ServeDeps): Transport {
       const old = forProtocol2(message);
       server.publish(TOPIC[2], old === message ? frame : JSON.stringify({ ...old, seq: stream.seq }));
     },
-    live: () => [...sockets.values()].reduce((n, set) => n + set.size, 0),
+    live: () => quietAt().filter((t) => t > deps.now().getTime()).length,
+    liveUntil: () => {
+      const last = Math.max(0, ...quietAt());
+      return last > deps.now().getTime() ? new Date(last) : null;
+    },
     stop: () => {
       server.stop(true);
     },

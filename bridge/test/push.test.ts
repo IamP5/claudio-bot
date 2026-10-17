@@ -89,8 +89,9 @@ test.each([
 
 test("notify returns false when push is off, when the push cannot be recorded, and when messages are throttled", () => {
   const h = harness();
-  const off = createPush({ world: h.world, persist: () => {}, sender: null, liveUntil: () => null, now: () => new Date(T0), log: () => {} });
-  const unsaved = createPush({ world: h.world, persist: () => { throw new Error("disk full"); }, sender: async () => {}, liveUntil: () => null, now: () => new Date(T0), log: () => {} });
+  const { world } = harness();
+  const off = createPush({ world, persist: () => {}, sender: null, liveUntil: () => null, now: () => new Date(T0), log: () => {} });
+  const unsaved = createPush({ world, persist: () => { throw new Error("disk full"); }, sender: async () => {}, liveUntil: () => null, now: () => new Date(T0), log: () => {} });
   expect(off.notify(BOT, "card", CARD)).toBe(false);
   expect(unsaved.notify(BOT, "card", CARD)).toBe(false);
   expect(h.push.notify(BOT, "message", h.bubble("m_b1"))).toBe(true);

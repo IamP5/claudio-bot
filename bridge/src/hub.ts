@@ -90,8 +90,9 @@ export type HubDeps = {
 const holdsBubbles = (p: Pending) => p.settles !== null && p.initiator.kind === "routine" && !p.initiator.manual;
 
 /**
- * What the hub has read of one turn's output. held is null once its bubbles go out as they arrive. carded: the turn
- * opened a permission card of its own, so the run has something to tell even if it then calls routine_no_update.
+ * What the hub has read of one turn's output. held is null once its bubbles go out as they arrive. pushed: a push for
+ * one of its bubbles went out; until one does, each new bubble tries again. carded: the turn opened a permission card
+ * of its own, so the run has something to tell even if it then calls routine_no_update.
  */
 type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; pushed: boolean; carded: boolean };
 
@@ -181,8 +182,7 @@ export function createHub(deps: HubDeps): Hub {
   function postBubbles(bot: BotRecord, r: { pushed: boolean }, bubbles: readonly Bubble[]) {
     for (const { id, text } of bubbles) {
       say(bot, { kind: "bot", id, at: now(), text });
-      if (!r.pushed) deps.push.notify(bot, "message", id);
-      r.pushed = true;
+      if (!r.pushed) r.pushed = deps.push.notify(bot, "message", id);
     }
   }
 
@@ -418,7 +418,7 @@ export function createHub(deps: HubDeps): Hub {
     tick: (at) => allSessions().forEach((s) => s.tick(at)),
     nextDeadline: () => earliest(allSessions().map((s) => s.nextDeadline())),
   };
-  const tickers = { scheduler, gate, sessions };
+  const tickers = { scheduler, gate, sessions, push: deps.push };
   const clock = createClock({ tickers: Object.values(tickers), now: clockNow, log: deps.log });
   poke = () => clock.poke();
 

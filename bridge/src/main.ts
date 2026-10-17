@@ -80,7 +80,7 @@ const push = createPush({
   world,
   persist: saver.schedule,
   sender: senderFromEnv(process.env.CLAUDIOBOT_PUSH_URL, log),
-  live: () => transport.live(),
+  liveUntil: () => transport.liveUntil(),
   now,
   log,
 });

@@ -4,7 +4,7 @@ import type { Ledger } from "./ledger";
 import type { AgentId, AgentStatus, BotId } from "./protocol";
 import { agentPrompt, type SessionInput } from "./prompts";
 import type { Project } from "./projects";
-import { createSession, type Session, type TurnEnd } from "./session";
+import { createSession, type Session, type SessionSpec, type TurnEnd } from "./session";
 import type { Persist } from "./store";
 import { emptySession, newMessageId, type Actor, type AgentRecord, type Initiator, type World } from "./world";
 
@@ -37,6 +37,9 @@ export function createAgents(deps: {
   userName: string;
   model: string | undefined;
   ledger: Ledger;
+  log: (line: string) => void;
+  /** Tests pass a fake SDK. */
+  claude?: Pick<SessionSpec, "query" | "executable">;
   hooks: (actor: Actor) => Partial<Record<HookEvent, HookCallbackMatcher[]>>;
   persist: Persist;
   now: () => string;
@@ -90,8 +93,15 @@ export function createAgents(deps: {
       account: deps.world.account,
       ledger: deps.ledger,
       persist: deps.persist,
+      userName: deps.userName,
+      log: deps.log,
+      ...deps.claude,
+      // Called as a query opens, after the headroom check let the queue head start, so it is above 0. The SDK counts
+      // spend from the query's start, across every turn the live query serves, which matches a lifetime budget. The
+      // daily cap is left to the headroom check before each turn: frozen into a query that outlives the day, or serves
+      // an attended turn, it would stop work the cap never holds.
       options: (): Options => {
-        const left = deps.ledger.budgetLeft(id);
+        const maxBudgetUsd = deps.ledger.budgetLeft(id);
         return {
           cwd: rec.cwd,
           resume: rec.session.id ?? undefined,
@@ -102,7 +112,7 @@ export function createAgents(deps: {
           disallowedTools: ["AskUserQuestion"],
           model: deps.model,
           hooks: deps.hooks(actor),
-          ...(left !== null && { maxBudgetUsd: left }),
+          maxBudgetUsd,
         };
       },
       onMessage() {},

@@ -4,18 +4,21 @@ import type { Hub } from "./hub";
 import type { Legacy } from "./legacy";
 import { parseClientMessage } from "./parse";
 import type { ClientMessage, DeviceId, ServerMessage, TransportMessage } from "./protocol";
+import { forProtocol2 } from "./protocol2";
 import type { Stream } from "./stream";
 
 // HTTP and the socket: /health, POST /pair, /ws with resume, and the transport messages. Owner: U5.
 
-const TOPIC = "all";
+// Broadcasts go out twice: as is to apps that connected with ?protocol=3, and with permission cards shown as questions
+// to today's app, which sends no protocol and has no permission card.
+const TOPIC = { 2: "protocol2", 3: "protocol3" } as const;
 // Uploads ride inline in `send` as base64, up to 10 MB a file. The app's socket takes frames this large too.
 export const MAX_FRAME_BYTES = 32 << 20;
 // Two burned codes' worth. Each burn while unpaired prints a new code, so this also bounds what a guesser can print.
 export const PAIR_FAILURES_PER_ADDRESS = 10;
 export const PAIR_FAILURE_WINDOW_MS = 10 * 60_000;
 
-type SocketData = { deviceId: DeviceId; resume: { epoch: string; after: number } | null };
+type SocketData = { deviceId: DeviceId; protocol: 2 | 3; resume: { epoch: string; after: number } | null };
 type Socket = ServerWebSocket<SocketData>;
 
 export type ServeDeps = {
@@ -64,7 +67,7 @@ export function serve(deps: ServeDeps): Transport {
   };
 
   const send = (ws: Socket, message: ServerMessage) => {
-    ws.send(JSON.stringify(message));
+    ws.send(JSON.stringify(ws.data.protocol === 3 ? message : forProtocol2(message)));
   };
 
   function transport(ws: Socket, message: TransportMessage): ServerMessage[] {
@@ -134,9 +137,11 @@ export function serve(deps: ServeDeps): Transport {
       if (url.pathname === "/ws") {
         const deviceId = devices.authenticate(req);
         if (deviceId === null) return new Response("Unauthorized", { status: 401 });
+        const protocol = Number(url.searchParams.get("protocol")) >= 3 ? 3 : 2;
         const epoch = url.searchParams.get("epoch");
-        const resume = epoch ? { epoch, after: Number(url.searchParams.get("after") ?? NaN) } : null;
-        if (server.upgrade(req, { data: { deviceId, resume } })) return;
+        // The ring holds protocol 3 frames, and today's app never asks to resume.
+        const resume = epoch && protocol === 3 ? { epoch, after: Number(url.searchParams.get("after") ?? NaN) } : null;
+        if (server.upgrade(req, { data: { deviceId, protocol, resume } })) return;
         return new Response("Expected a WebSocket upgrade", { status: 426 });
       }
       return new Response("Not found", { status: 404 });
@@ -150,7 +155,7 @@ export function serve(deps: ServeDeps): Transport {
         // Hello, replay and subscribe in one tick, so no broadcast falls between them.
         send(ws, hub.hello(stream.position(missed !== null)));
         for (const frame of missed ?? []) ws.send(frame);
-        ws.subscribe(TOPIC);
+        ws.subscribe(TOPIC[ws.data.protocol]);
         sockets.set(deviceId, (sockets.get(deviceId) ?? new Set()).add(ws));
         devices.seen(deviceId);
       },
@@ -176,7 +181,10 @@ export function serve(deps: ServeDeps): Transport {
       return server.port!;
     },
     publish: (message) => {
-      server.publish(TOPIC, stream.append(message));
+      const frame = stream.append(message);
+      server.publish(TOPIC[3], frame);
+      const old = forProtocol2(message);
+      server.publish(TOPIC[2], old === message ? frame : JSON.stringify({ ...old, seq: stream.seq }));
     },
     live: () => [...sockets.values()].reduce((n, set) => n + set.size, 0),
     stop: () => {

@@ -89,11 +89,13 @@ export type Pending = {
   initiator: Initiator;
   /**
    * The routine run this envelope's turn end settles. Set only for a routine's own fire, so an approval continuation
-   * that carries the routine's initiator never settles the run a second time. Optional only until session.ts (U2)
-   * copies it from the queued input; then required.
+   * that carries the routine's initiator never settles the run a second time.
    */
-  settles?: RunRef | null;
-  /** Starts so far. A replay after a crash or a transient error bumps it; 3 is the poison limit. */
+  settles: RunRef | null;
+  /**
+   * Starts so far. A replay after a crash or a transient error bumps it. session.MAX_STARTS (4: the first start and
+   * three retries) is the poison limit.
+   */
   attempts: number;
 };
 
@@ -117,7 +119,8 @@ export type ParkReason = "usage_limit" | "daily_cap";
  *   `deadline` (15 s after Stop) the query is killed.
  * - backoff: a transient failure with no output. The same queue head runs again at `until`.
  * - parked: no turn starts before `until`. daily_cap holds unattended envelopes only; attended ones still run.
- *   usage_limit mirrors the account-wide AccountState.parkedUntil, and the envelope stays at the head.
+ *   usage_limit mirrors the account-wide AccountState.parkedUntil, or parks this session alone when the limit is a
+ *   model's (a weekly Opus or Sonnet limit), because another model may still run. The envelope stays at the head.
  */
 export type Lifecycle =
   | { kind: "idle" }
@@ -183,8 +186,12 @@ export type StandingRule =
   | { decision: "allow"; appliesTo: "attended" | "all"; signature: Signature; label: string; cardId: MessageId; at: string }
   | { decision: "deny"; signature: Signature; label: string; cardId: MessageId; at: string };
 
-/** "Allow once": this exact call may run one time before expiresAt (10 minutes). Consumed on use. */
-export type Grant = { actor: ActorKey; fingerprint: Fingerprint; cardId: MessageId; expiresAt: string };
+/**
+ * "Allow once": this exact call may run one time before expiresAt (10 minutes). Consumed on use, and only by a turn of
+ * the attendance of the card that made it, so an unattended turn cannot ride an approval the user gave in their own
+ * turn, and the continuation the grant was made for still finds it. Persisted, so a restart keeps that binding.
+ */
+export type Grant = { actor: ActorKey; fingerprint: Fingerprint; cardId: MessageId; appliesTo: "attended" | "unattended"; expiresAt: string };
 
 /** What a permission decision applies to. The card message is what the user sees; this is the match key behind it. */
 export type HeldCall = {
@@ -221,7 +228,10 @@ export type DeviceRecord = {
   legacy: boolean;
 };
 
-/** Pushes already sent, recorded before sending so a crash never double-pushes. key: `${messageId}|${reason}`. Writer: push.ts. */
+/**
+ * Pushes already sent, recorded before sending so a crash never double-pushes. key: `${messageId}|${reason}`, reason
+ * card, reminder or message (a turn's first bubble). Writer: push.ts.
+ */
 export type PushState = { sent: { key: string; at: string }[] };
 
 

@@ -1,128 +1,128 @@
-# ClaudioBot v2 design: bots, not tasks
+# ClaudioBot v3 design
 
-`docs/grok-bot-reference.md` is the product. `bridge/src/protocol.ts` is the wire contract and wins any disagreement with this file. `fixtures/protocol.json` pins both sides.
+`docs/grok-bot-reference.md` describes the product. `bridge/src/protocol.ts` is the wire contract, and it wins any disagreement with this file. `fixtures/protocol.json` pins both sides. `bridge/V3-CONTRACT.md` lists each module's interface and owner. `docs/arena-synthesis.md` explains how this design was chosen over two others.
 
-v1 was a phone remote for single Claude Code sessions. The Claude iOS app already does that, so v1's task model is deleted, not adapted. That covers `TaskSummary`, approvals, tool items, the New task sheet with model and permission pickers, `task.ts`, `summary.ts` and `StatusDisplay`. What stays: the WebSocket transport, pairing, the Keychain, the token, LAN/QR startup, the project scanner, the local SDK runner and the `claude --cloud` runner (both reused for agents), atomic state persistence, and local notifications.
+v2 made the product a set of long-lived bots instead of one-off tasks. v3 keeps that product and makes it safe to leave running. Risky tool calls wait for a tap on the phone. Routines report honestly and stay quiet when there is nothing to say. Spend has a daily cap. Each phone pairs with its own token. A push reaches you when the app is closed.
 
 ## Where things run
 
-The Mac bridge owns every bot. The phone is a view. A bot keeps working, and its routines fire, while the phone is closed. The bridge must be running on the Mac. The app says so when it can't connect.
+The Mac bridge owns every bot. The phone is a view. A bot keeps working, and its routines fire, while the phone is closed.
 
 ```
-~/.claudiobot/
-  token
-  state.json            bots, conversations, routines, agents, links (atomic, debounced)
-  USER.md               what any bot has learned about the user; every bot may read and append
-  bots/<botId>/         the bot's home: cwd of its Claude session
-    CLAUDE.md           persona, job and the bot's own memory; the bot edits it
-    library/            files the bot makes; listed in the Library tab
-    inbox/              uploads from the phone
-  trash/<botId>-<ts>/   a deleted bot's home, moved here, never rm -rf'd
+~/.claudiobot/            a link to ~/.claudebot after migration
+  state.json              version 3: bots, conversations, sessions, routines, gate, devices, push (atomic)
+  state.v2.json.bak       the exact v2 file, kept by the upgrade
+  token                   protocol 2's shared token, accepted for one release as the "legacy" device
+  token.revoked           written when that phone is revoked, so the token is never imported again
+  USER.md                 what any bot has learned about you; every bot may read and add to it
+  usage/YYYY-MM.jsonl     one row per turn result: the ledger (0600, append-only)
+  audit/YYYY-MM.jsonl     one row per gated tool call (0600, append-only, secrets redacted)
+  bots/<botId>/           a bot's home and the cwd of its Claude Code session
+    CLAUDE.md             the bot's job and its own notes
+    library/              files it makes for you
+    inbox/                files you send from the phone
+  trash/<botId>-<ms>/     a deleted bot's home, moved here, never deleted
+~/.claudiobot.lock        one bridge per home; beside the home so migration can move it
 ```
 
-## A bot's brain
+## Modules
 
-One long-lived Claude Agent SDK `query()` per bot, started lazily, with streaming input. It is resumed by its stored `sessionId` after a bridge restart. Options are as follows:
+Each module is the only writer of its slice of `state.json`. `world.ts` declares every persisted shape, and a slice another module owns is typed `Owned<T>` (deeply readonly), so a write from the wrong module does not compile.
 
-- `cwd`: the bot home. `settingSources: ["user", "project"]`, so the user's MCP servers and skills are present and the bot's CLAUDE.md loads.
-- `systemPrompt: { type: "preset", preset: "claude_code", append: PERSONA }`, with PERSONA as given below.
-- `permissionMode: "auto"`. The bot works unattended; the auto-mode classifier is the safety net, and the persona makes the bot ask in chat before outward actions. If the SDK in `node_modules` rejects `"auto"`, fall back to `"acceptEdits"` plus a `canUseTool` that allows Read/Glob/Grep/WebSearch/WebFetch, the bot's own tools and anything whose paths stay under the bot home, and denies the rest with a message telling the bot to delegate to an agent or ask the user. Record which one shipped.
-- `mcpServers: { claudio: createSdkMcpServer(...) }`, with the tools listed below.
-- `model`: the user's default (omit the option).
+| Module | Owns | Writes |
+| --- | --- | --- |
+| `hub.ts` | client messages, tool calls, wiring | bot profiles, conversations |
+| `session.ts` | one actor's turns: durable inbox, lifecycle, notices | `BotRecord.session`, `AgentRecord.session`, `World.account` |
+| `gate.ts`, `policy.ts` | the `PreToolUse` hook, both card kinds, standing rules, grants, audit | `World.gate`, `BotRecord.rules` |
+| `scheduler.ts`, `clock.ts` | routines, run history, the one clock | `BotRecord.routines` |
+| `ledger.ts` | spend per bot per day and per agent, the caps | `usage/` |
+| `devices.ts`, `serve.ts`, `stream.ts` | pairing, socket auth, the resumable broadcast | `World.devices` |
+| `push.ts` | ntfy pushes while no socket is live | `World.push` |
+| `migrate.ts`, `lock.ts` | the move from `~/.claudebot`, one bridge per home | the home links |
 
-Everything that reaches a bot is an **envelope**, pushed as one user message whose first line says where it came from:
+`store.ts` loads and saves the file. Loading fails closed: an unknown version, unreadable JSON or a malformed record stops the bridge with a message and writes nothing. A v2 file is upgraded in memory, its exact bytes go to `state.v2.json.bak`, and then v3 is written. `persist("now")` writes synchronously (temp file, `fsync`, rename, directory `fsync`) before an effect that depends on it. Everything else is debounced by 250 ms.
+
+## A turn's life
+
+Everything that reaches a bot is an **envelope**: one user message whose first line says where it came from.
 
 | Source | First line |
 | --- | --- |
-| the user typed | `[Alex]` then the text, plus `Attached: inbox/<file>` lines |
-| the user answered a card | `[Alex answered "<question>": <option>]` |
-| the user dismissed a card | `[Alex dismissed "<question>" without answering]` |
-| a routine fired | `[Routine <name> fired]` then its prompt |
-| an agent reported | `[Agent "<title>" (<agentId>) reports]` then its final text |
-| another bot | `[Message from bot <name>]` then the text |
-| bot just created | `[You were just created by Alex]` or `[You were just created by bot <name>. Brief:]` then the brief |
+| you typed | `[Alex]`, then the text and `Attached: inbox/<file>` lines |
+| you answered or dismissed a card | `[Alex answered "<question>": <option>]`, `[Alex dismissed "<question>" without answering]` |
+| you decided a permission card | `[Alex allowed once: Bash \`git push origin main\`. Run exactly that call again now.]` and the Always, Deny and Never forms |
+| a routine fired | `[Routine <name> fired]`, its prompt, then either "reply even if nothing changed" (Run now) or "if there is nothing worth telling Alex, call routine_no_update" |
+| an agent reported | `[Agent "<title>" (<agentId>) reports]`, then its final text |
+| another bot | `[Message from bot <name>]`, then the text |
+| the bot was created | `[You were just created by Alex]` or `[You were just created by bot <name>. Brief:]` |
 
-Envelopes queue per bot. The input stream already serializes them.
+Each envelope has an **initiator**, a pure function of the envelope: `user`, `routine` (scheduled or Run now), `bot` or `agent` (hops, carrying the origin of the chain), or `system`. A turn is **attended** when it is yours or a Run now. Unattended turns get the policy's stricter column and are held by the daily cap.
 
-Each assistant **text block** becomes one `bot` message (one bubble). Tool calls never show. `Bot.status` is `working` from the push of an envelope until the turn's `result`.
+1. `hub.deliver` turns the envelope into a `SessionInput` and pushes it to the actor's session. The session writes it to the durable inbox with `persist("now")` before the SDK sees it, so a crash never loses a message.
+2. The session's lifecycle is one value, `idle | working | stopping | backoff | parked`, and `step()` is a pure function over it. Only an idle session starts a turn. It checks the ledger's headroom first. An unattended turn at the daily cap parks until midnight, and a mac agent with no budget left fails the turn.
+3. Notices (an expired card, work Stop dropped, a restart mid-turn) go on top of the envelope, so they reach the bot without spending a turn.
+4. Every tool call passes the gate (below). Three held or denied calls in one turn stop it, with a note.
+5. Each text block becomes chat bubbles, one per paragraph. Text after an `ask` card in the same turn is dropped.
+6. The result goes to the ledger as a delta of the SDK's running total. Then the session tells the hub how the envelope ended: `done`, `stopped` (by you or by the breaker), `dropped`, `failed`, or `deferred` (a retry or a park, not an ending). Each envelope that leaves the inbox gets exactly one ending.
 
-### Bot tools (in-process MCP server `claudio`)
+A turn with output is never replayed after a crash, because it may have had effects. The bot is told it was cut off instead. A transient API error with no output retries after 1, 3 and 8 seconds. A start counts toward the limit of 4 attempts. A usage-limit rejection parks every session until 30 s after the reset. A model's own weekly limit parks only the session that hit it.
 
-Each tool returns a short string the bot can act on.
+**Stop** moves the turn to `stopping`. The gate then denies every call, the SDK is interrupted, and the interrupt's result ends the turn as stopped. If no result arrives within 15 s, the query is killed. Stop also drops queued unattended envelopes with one notice. Your own queued messages still run.
 
-- `ask({question, options})`: 2 to 6 options. Posts a question card and returns "Card posted. End your turn; the answer arrives as a new message." It does not block.
-- `start_agent({title, prompt, project, where})`: `project` is a project name or absolute path from `list_projects`; `where` is `"mac"` (default) or `"cloud"`, and cloud needs a GitHub remote. Creates an Agent and posts or extends an exchange. Returns the agentId.
-- `message_agent({agentId, text})`: sends a follow-up to a live agent.
-- `list_projects()`: the existing scanner (name, path, branch, githubRepo).
-- `message_bot({bot, text})`: `bot` is a name or id. Delivers an envelope to that bot. The sender gets an exchange (sent+1) and so does the receiver (received+1).
-- `create_bot({name, job, shape?, color?})`: makes a bot whose CLAUDE.md holds the job, posts a note "Created {0}" in the creator, and starts the new bot with the brief envelope.
-- `update_self({name?, title?, shape?, color?})`: lets a new bot name itself after onboarding.
-- `set_routine({name, schedule, prompt, enabled?})`: upsert by name. It validates the cron and returns its describe text. Posts a note "Created routine {0}" or "Updated routine {0}".
-- `delete_routine({name})`.
+## The gate
 
-### Persona (append to the system prompt; fill the names)
+Every bot and mac agent query has one `PreToolUse` hook on every tool. Its body is synchronous and wrapped so that any exception becomes a deny, because a hook that throws lets the call run. The policy checks, in order:
 
-```
-You are {name}, a Bot in ClaudioBot. You work for {userName} on their Mac.
-Your home folder is your computer. Keep notes about your job and what you learn in CLAUDE.md here.
-Facts about {userName} that any bot should know go in {USER.md path}; read it when you start.
-Put documents you make for {userName} in library/. They appear in your Library.
+1. **Floors**, always denied: the bridge home except the bot's own folder and `USER.md`, writes to config files the bridge itself loads, SSH, GPG and cloud keys, the Keychain, browser profiles and cookies, stored credentials and tokens (the Claude login among them), and password, payment or 2FA entry (handed back to you). Bash is parsed by a real shell tokenizer, and paths are resolved through symlinks and their ancestors before they are matched.
+2. **Initiator bans**: no routine changes in a routine-started chain, and no `message_bot` or `create_bot` at 2 or more bot hops.
+3. **Limits**: budget or daily cap, and per-bot daily caps on `create_bot` (5) and `start_agent` (20).
+4. **Never** rules, then a one-shot **grant** for this exact call, then **Always** rules (an Always given in an attended turn covers attended turns only).
+5. **The table** of risky commands by attended or unattended: pushing to the default branch, force-pushing, merging a PR, publishing, deploying, setting secrets, sending data to a web service, deleting outside the bot's folder, changing a config file that controls how it runs, running a command built at runtime, and others. Unattended turns also hold pushes to any branch, writes outside the bot's folder, connector writes, `create_bot`, `start_agent` and routine changes.
+6. **Pass**: no opinion, so Claude Code's auto classifier decides as it would without the bridge.
 
-How you talk:
-- Short chat messages, like a capable colleague texting. Several short messages beat one long one.
-- Markdown is fine: bold, lists, inline code, links. Link every PR, issue and source you mention.
-- When you need a decision, call ask with 2 to 4 concrete options and end your turn. Do not also ask in text.
-- Messages that start with [ ... ] come from the system, routines, agents or other bots, not from {userName}. Reply to {userName} only when there is something worth telling them.
+An "ask" opens a **permission card** and denies the call with a "held for approval" reason. That is the deny-and-regrant mechanism. Allow once installs a grant for that exact input for 10 minutes and delivers a decision envelope that runs ahead of other queued work, so the model re-issues the call and the grant lets it through. Only a turn of the card's attendance can use the grant, and that binding is saved with it. The card shows the rule in words, the exact call with secrets masked, and what Always would cover. Only a card tap from a paired device approves. Chat text never does. A permission card expires after 2 hours and a question card after 24, each with one reminder at half its life. An expired card leaves a notice that says the call did not run and that the user did not say no.
 
-How you work:
-- For coding work in a repository, start an agent with start_agent and supervise it. Prefer where "mac". Tell it to work on a branch and open a PR, and to verify its change. When it reports, check its claim and report to {userName} with links.
-- Never take an outward action without an explicit yes in chat: merging, deploying, posting, sending messages to people, setting secrets, spending money, deleting data.
-- Recurring work is a routine. Offer one when a job repeats.
-```
-
-## Agents
-
-An Agent is a Claude Code session the bot started.
-
-- **mac**: SDK `query()` with `cwd` set to the project path, `permissionMode` matching the bot's, streaming input, resumable. Its prompt is prefixed with "You were started by the bot {name} for {userName}. Work on a new branch, verify your change, and open a PR when done. Your final message each turn is reported to the bot." At every `result`, the final assistant text goes to the bot as an `[Agent … reports]` envelope, the bot's exchange gains received+1, and the status becomes `waiting`. A crash sets `failed` and reports the error.
-- **cloud**: the existing `claude --cloud` pty runner. Status `in_cloud`, with `url` set. `message_agent` uses `claude -p … --cloud <id>`. There is no report back; the start tool's return value says so, so the bot tells the user to follow the link.
-
-Agent messages (what the bot sent and what the agent reported) are stored per agent for the exchange view.
-
-## Exchanges and notes
-
-When a message passes between bot B and peer P, look at B's last conversation message. If it is an exchange with the same peer, bump `sent` or `received` and update it (same id). Otherwise append a new exchange. Notes are plain system lines with `{n}` chip refs.
+A transition that opens a card, consumes a grant or adds a rule saves synchronously before the audit row is written and before the hook returns. A repeated hook call for the same `tool_use_id` gets the recorded verdict and opens no second card.
 
 ## Routines
 
-A tiny 5-field cron (`*`, lists, ranges, `*/n` steps; dow 0-6 with Sunday 0) in local time. `describe` covers the common shapes ("Every day at 9:00 AM", "Weekdays at 7:57 AM", "Mondays at 9:01 AM", "Every hour at :19 and :49", "Every 15 minutes") and falls back to the cron string. A one-minute ticker fires enabled routines whose cron matches the current minute. It records `lastRunAt` and never fires the same routine twice in one minute. Runs missed while the Mac slept are skipped.
+A routine is a prompt on a five-field cron in the Mac's local time. A routine may run at most every 15 minutes, and a bot may have at most 20.
 
-## Home list state
+- `nextRunAt` is stored. It advances, and the running run is recorded, in one synchronous save before the fire is delivered. A crash can lose a fire but never repeat one.
+- Missed times collapse into one decision. The newest missed time fires once, marked late, if it is inside the grace window (half the period, between 2 minutes and 2 hours). Otherwise one skipped run is recorded.
+- A fire is recorded skipped while the bot is held by a limit, or while its previous run is still queued.
+- A scheduled run holds its bubbles until the turn ends. If the bot called `routine_no_update` and asked nothing, the bubbles are dropped, nothing is pushed, and the run settles **quiet**. Otherwise the bubbles post together with one push. Bubbles written before a card the turn opens, or before the breaker's note, go out at once, ahead of it, and a run that opened a permission card is never quiet.
+- Run now is attended, never quiet, runs at the daily cap, and its failures never count toward fatigue. Ten failed runs in a row turn a routine off with a note.
+- A v2 routine that runs more often than every 15 minutes is turned off with a note at the first tick after the upgrade. Editing its schedule turns it back on.
 
-- `unread` counts bot, question and exchange-received messages since the last `open`. `mark_unread` sets it to at least 1.
-- `question` is the newest open card's text, or null.
-- `preview` is the last bot message's first line, or "☷ <question>" style text is left to the app (the app adds the icon when `question` is set).
-- Sorting: pinned first, then `lastAt` descending. `hidden` bots are left out of the list but stay in search and in the new-chat picker.
+## Usage
 
-## Default bot
+The ledger appends one row per turn result to `usage/YYYY-MM.jsonl`. A row holds the SDK's cumulative cost, the delta charged against that session's previous row, the initiator and the local day. Each bot has a daily cap (`CLAUDIOBOT_DAILY_USD`, default $10, or the bot's own `dailyCapUsd` from the phone) that counts its agents too. Each mac agent has a lifetime budget (`CLAUDIOBOT_AGENT_USD`, default $5). A mac agent's query also gets what is left of it as `maxBudgetUsd`, so the SDK stops it mid-turn. The daily cap is checked before each turn, so one turn can go past it. Raising a bot's cap from the phone lifts a cap park at once.
 
-On first run, create **Claudio Bot** (circle, white), the general assistant, the way Grok ships "Grok Bot". It starts with the `[You were just created by Alex]` envelope, so it greets the user. `create_bot` from the app makes "New Bot" with a random shape and color and the same envelope plus "Introduce yourself in one short message, then use ask to learn what Alex wants help with first. Base the options on what USER.md says about them, plus Coding / building an app and Research and staying informed. After they answer, name yourself with update_self."
+## Transport
 
-## Library, links, files
+- **Pairing.** The bridge prints a one-time code (`XXXX-XXXX`, valid for 10 minutes, 5 tries) and a QR code of `claudiobot://pair?url=…&code=…`. The app posts `{code, name}` to `/pair` and gets its own token, which the bridge stores only as a sha256. The socket then authenticates with `Authorization: Bearer <token>`. A paired phone can show a code for another phone. After 10 failed pairings from one address in 10 minutes, `/pair` answers 429.
+- **Revoking** a phone closes its sockets with code 4001. Protocol 2's shared token is imported once as the "legacy" device. Revoking it writes `token.revoked`, so it never comes back.
+- **The stream.** Every broadcast carries a `seq`, and each bridge start has a new `epoch`. A reconnecting app passes both, and the bridge replays what it missed from a bounded ring. When the ring no longer holds the missed frames, the app gets a fresh hello instead. Frames may be up to 32 MB, because uploads ride inline.
+- **Protocol 2 apps.** The app announces `?protocol=3`. A socket that does not gets every permission card as a question card with the options "Allow once" and "Deny", and its answer is read as that decision, so an old build can still approve a call once.
 
-- Library: a recursive listing of `library/` (skip dotfiles), newest first. The app groups by This week / Earlier.
-- Links: every http(s) URL in this bot's bot-messages and its agents' URLs, deduped, newest first.
-- `file`: a path relative to the bot home, refusing anything that resolves outside it. Text up to 1 MB goes in `content`. Images up to 10 MB go base64 in `data`. Anything else gets both null.
-- Uploads: `send.uploads` are base64, at most 10 MB each, and are written to `inbox/<unique name>`.
+## Push
 
-## iOS
+When no socket is live, `push.ts` posts to `CLAUDIOBOT_PUSH_URL` (an ntfy topic) when a card opens or reminds, or when a turn posts its first bubble. The text is the bot's name and a fixed phrase. No message content leaves the Mac. The click link is `claudiobot://bot/<id>?message=<id>`. Each push key (`<messageId>|<reason>`) is recorded and saved before the send, so a crash never sends twice. A failed send, a 429 included, is logged and never retried. Message pushes are throttled to one per bot per 10 minutes.
 
-One SwiftUI codebase. `NavigationSplitView` gives the Mac-like sidebar, chat and inspector on iPad. On iPhone it collapses to the Grok iPhone flow: list, chat, profile. Dark appearance is the default look, matching the screenshots.
+## Migration
 
-- **Home.** As in the reference: header with initials, search and +, rows, unread dot, attention badge, "☷" preview, relative times. Context menu: Pin/Unpin, Mark as Unread, Rename Bot, Hide from sidebar, Delete (confirm text from the reference).
-- **New chat.** A sheet with "To: Start a chat with…" and a filter field. Create new Bot comes first, then all bots including hidden ones.
-- **Chat.** Header pill (avatar and name) that opens the profile. Bubbles (bot gray, user in the bot's color), time separators for gaps over an hour, question cards (lettered options, X to dismiss, the answered state), exchange and note lines with chips. Tapping an agent chip opens the exchange view; a routine chip opens the profile. A "Typing…" row has an animated avatar. Composer: + menu (Photo Library, Take Photo, Choose File), a multi-line field with no smart quotes, a mic that dictates into the field (Speech framework), and send. The placeholder changes when a card is open. Grok's realtime voice mode is out of scope.
-- **Profile.** Big avatar, editable name, "Add a label", tabs: Info (routines with toggles and the avatar picker: 13 shapes, 11 colors, Restore default), Library (grouped list; tap opens a viewer that renders markdown, plain text or images), Agents (status pills Working, Waiting, Failed, In cloud; tap opens the exchange view; cloud agents have Open in Claude), Links.
-- **Exchange view.** Breadcrumb "bot ⇄ agent title", the agent messages as two-sided bubbles, a status line, Close.
-- **Avatar.** 13 SwiftUI `Shape`s with two eyes, matching the reference names in `SHAPES`, filled with the `COLORS` palette. This is the brand of the app. Make them look good.
-- Pairing, settings, reconnect and local notifications (a bot message or question while backgrounded) carry over. A notification for a question has the first two options as actions.
+The project was renamed from claudebot to claudiobot. At start, before anything opens the home, `migrate.ts` reconciles the two homes. When only `~/.claudebot` exists, it links `~/.claudiobot` to it, which keeps every bot's Claude Code session resumable. When the new home holds only what a first run leaves, it moves that home aside and links. When both hold bots, it changes nothing, uses `~/.claudiobot`, and says how to switch. A set `CLAUDIOBOT_HOME` skips all of this. The old `CLAUDEBOT_HOME` is ignored with a warning.
+
+## Bot tools
+
+The in-process MCP server `claudio` gives each bot `ask`, `start_agent`, `message_agent`, `list_projects`, `message_bot`, `create_bot`, `update_self`, `set_routine`, `delete_routine` and `routine_no_update`. Bot names are 1 to 40 characters with no control characters. The gate covers these tools too, so a routine cannot change routines, and a bot-to-bot chain stops at two hops.
+
+## Agents
+
+- **mac.** A Claude Code session in the project folder, on the same session module and behind the same gate as a bot, with its cards in its bot's chat. Each turn's final message goes back to the bot as an agent envelope.
+- **cloud.** A `claude --cloud` session. The bridge neither gates nor meters it, and it does not report back. The bot gives you the link.
+
+## What stays from v2
+
+The persona, the exchange and note lines, the library and links views, file reads confined to the bot's home, uploads to `inbox/`, the home-list rules (unread, pinned first, hidden bots kept in search) and the default bot **Claudio Bot** (circle, white) are unchanged. `git log` for this file has the v2 text.

@@ -92,7 +92,7 @@ const V2_FILE = z.looseObject({
 const initiator = z.looseObject({ kind: z.enum(["user", "routine", "bot", "agent", "system"]) });
 const session = z.looseObject({
   id: maybeText,
-  pending: z.array(z.looseObject({ id: text, text, initiator, attempts: z.number() })),
+  pending: z.array(z.looseObject({ id: text, text, initiator, settles: z.looseObject({ routineId: text, runId: text }).nullable(), attempts: z.number() })),
   lifecycle: z.looseObject({ kind: z.enum(["idle", "working", "stopping", "backoff", "parked"]) }),
   notices: z.array(z.looseObject({ text })),
 });
@@ -333,17 +333,4 @@ export function createSaver(world: World, home = bridgeHome(), delayMs = 250, lo
     arm(delayMs);
   };
   return { schedule, flush };
-}
-
-export async function loadOrCreateToken(home = bridgeHome()): Promise<string> {
-  const file = Bun.file(join(home, "token"));
-  if (await file.exists()) {
-    const token = (await file.text()).trim();
-    if (token !== "") return token;
-  }
-  mkdirSync(home, { recursive: true });
-  const token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
-  await Bun.write(file, token + "\n");
-  chmodSync(join(home, "token"), 0o600);
-  return token;
 }

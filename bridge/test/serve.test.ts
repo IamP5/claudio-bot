@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDevices, type Devices, type PairCode } from "../src/devices";
 import { legacyToken } from "../src/legacy";
-import type { ClientMessage, DeviceId, PairResponse, ServerMessage } from "../src/protocol";
+import type { BotId, ClientMessage, DeviceId, Message, MessageId, PairResponse, ServerMessage, StreamPosition } from "../src/protocol";
 import { MAX_FRAME_BYTES, PAIR_FAILURE_WINDOW_MS, PAIR_FAILURES_PER_ADDRESS, serve } from "../src/serve";
 import { createSaver, loadWorld } from "../src/store";
 import { createStream } from "../src/stream";
@@ -22,7 +22,7 @@ function tempHome(legacy?: string) {
 }
 
 /** What main.ts does at start, against a temp home, with a fake hub and a clock the test moves. */
-function boot(home: string, opts: { wrap?: (d: Devices) => Devices } = {}) {
+function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m: ClientMessage) => ServerMessage[] } = {}) {
   let now = new Date("2026-10-17T09:00:00.000Z");
   let saving = true;
   const { world } = loadWorld(home);
@@ -37,10 +37,10 @@ function boot(home: string, opts: { wrap?: (d: Devices) => Devices } = {}) {
   legacy.reconcile(devices);
   const handled: ClientMessage[] = [];
   const hub = {
-    hello: (): ServerMessage => ({ type: "hello", protocol: 3, epoch: "", seq: 0, resumed: false, machine: "Mac", userName: "Alex", bots: [] }),
+    hello: (position: StreamPosition): ServerMessage => ({ type: "hello", protocol: 3, ...position, machine: "Mac", userName: "Alex", bots: [] }),
     handle: async (message: ClientMessage): Promise<ServerMessage[]> => {
       handled.push(message);
-      return [];
+      return opts.replies?.(message) ?? [];
     },
   };
   const transport = serve({
@@ -93,8 +93,8 @@ async function until<T>(get: () => T | undefined | false, what: string): Promise
   throw new Error(`timed out waiting for ${what}`);
 }
 
-function connect(b: Booted, auth: { bearer: string } | { query: string }) {
-  const url = `ws://127.0.0.1:${b.transport.port}/ws${"query" in auth ? auth.query : ""}`;
+function connect(b: Booted, auth: { bearer: string; query?: string } | { query: string }) {
+  const url = `ws://127.0.0.1:${b.transport.port}/ws${auth.query ?? ""}`;
   const ws = "bearer" in auth ? new WebSocket(url, { headers: { Authorization: `Bearer ${auth.bearer}` } } as never) : new WebSocket(url);
   const inbox: ServerMessage[] = [];
   let closed: { code: number; reason: string } | null = null;
@@ -267,4 +267,44 @@ test("uploads up to the frame limit reach the hub; a frame over it closes the so
   client.raw.send("x".repeat(MAX_FRAME_BYTES + 1));
   await client.closed();
   expect(b.handled).toHaveLength(1);
+});
+
+test("an app that did not announce protocol 3 gets permission cards as Allow once / Deny questions; a protocol 3 app gets them as they are", async () => {
+  const botId = "b_eng" as BotId;
+  const card: Message = { kind: "permission", id: "m_card" as MessageId, at: "2026-10-17T09:00:00.000Z", from: null, tool: "Bash", label: "Push to the default branch", detail: "git push origin main", always: "git push to main", answer: null, expiresAt: "2026-10-17T11:00:00.000Z" };
+  const b = boot(tempHome(), { replies: (m) => (m.type === "open" ? [{ type: "conversation", botId, messages: [card] }] : []) });
+  const { token } = await pairPhone(b);
+  const today = connect(b, { bearer: token });
+  const next = connect(b, { bearer: token, query: "?protocol=3" });
+  await today.next("hello");
+  await next.next("hello");
+
+  b.transport.publish({ type: "message", botId, message: card });
+  const shown = await today.next("message");
+  const asIs = await next.next("message");
+  today.send({ type: "open", botId });
+  const conversation = await today.next("conversation");
+
+  expect(shown.message).toMatchObject({ kind: "question", id: card.id, options: ["Allow once", "Deny"], answer: null });
+  expect((shown as unknown as { seq: number }).seq).toBe((asIs as unknown as { seq: number }).seq);
+  expect(asIs.message).toEqual(card);
+  expect(conversation.messages.map((m) => m.kind)).toEqual(["question"]);
+});
+
+test("a protocol 3 app resumes from the replay ring; an app that did not announce protocol 3 gets a fresh hello only", async () => {
+  const b = boot(tempHome());
+  const { token } = await pairPhone(b);
+  const first = connect(b, { bearer: token, query: "?protocol=3" });
+  const { epoch } = await first.next("hello");
+  b.transport.publish({ type: "bot_removed", botId: "b_gone" as BotId });
+  await first.next("bot_removed");
+
+  const resumed = connect(b, { bearer: token, query: `?protocol=3&epoch=${epoch}&after=0` });
+  const today = connect(b, { bearer: token, query: `?epoch=${epoch}&after=0` });
+
+  expect(await resumed.next("hello")).toMatchObject({ epoch, seq: 1, resumed: true });
+  expect(await resumed.next("bot_removed")).toMatchObject({ botId: "b_gone", seq: 1 });
+  expect(await today.next("hello")).toMatchObject({ epoch, seq: 1, resumed: false });
+  await Bun.sleep(50);
+  expect(today.inbox).toEqual([]);
 });

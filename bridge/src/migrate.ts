@@ -2,7 +2,7 @@
 // Resume finds transcripts by session id, so a symlink in either direction keeps every bot's session (probe Q8).
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
-import { botMemory } from "./prompts";
+import { botMemory, DEFAULT_BOT, defaultBotJob } from "./prompts";
 
 const OLD = ".claudebot";
 const NEW = ".claudiobot";
@@ -128,10 +128,9 @@ function isFreshHome(dir: string): boolean {
 }
 
 // The default bot as hub.ts boot creates it; first run differs only in the user's name.
-const DEFAULT_BOT = "Claudio Bot";
 const USER_NAME = "\u0000";
 const DEFAULT_MEMORY = new RegExp(
-  `^${escapeRegExp(botMemory({ name: DEFAULT_BOT, job: `General assistant. Take real work off ${USER_NAME}'s plate.` }).trim()).replace(USER_NAME, "[^\\n]*")}$`,
+  `^${escapeRegExp(botMemory({ name: DEFAULT_BOT.name, job: defaultBotJob(USER_NAME) }).trim()).replace(USER_NAME, "[^\\n]*")}$`,
 );
 
 function escapeRegExp(text: string): string {
@@ -166,11 +165,11 @@ function isFreshBot(bot: unknown): boolean {
   return (
     isObject(bot) &&
     typeof bot.id === "string" &&
-    bot.name === DEFAULT_BOT &&
+    bot.name === DEFAULT_BOT.name &&
     bot.title === null &&
     isObject(bot.avatar) &&
-    bot.avatar.shape === "circle" &&
-    bot.avatar.color === "white" &&
+    bot.avatar.shape === DEFAULT_BOT.avatar.shape &&
+    bot.avatar.color === DEFAULT_BOT.avatar.color &&
     bot.pinned === false &&
     bot.hidden === false &&
     (bot.dailyCapUsd === undefined || bot.dailyCapUsd === null) &&

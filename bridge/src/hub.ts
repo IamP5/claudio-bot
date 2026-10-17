@@ -1,9 +1,9 @@
 import { realpathSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { createAgents } from "./agents";
 import { createClock, type Tickable } from "./clock";
-import { createGate, type Gate } from "./gate";
+import { createGate } from "./gate";
 import type { Homes } from "./home";
 import { createLedger } from "./ledger";
 import type { Scope } from "./policy";
@@ -20,13 +20,14 @@ import {
   type ServerMessage,
   type StreamPosition,
 } from "./protocol";
-import { botMemory, inputOf, onboarding, persona, type Envelope } from "./prompts";
+import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, onboarding, persona, type Envelope } from "./prompts";
+import { cardReply } from "./protocol2";
 import type { Push } from "./push";
 import { createScheduler, type RunOutcome } from "./scheduler";
-import { createSession, type Session, type TurnEnd } from "./session";
+import { BREAKER_NOTE, createSession, type Session, type SessionSpec, type TurnEnd } from "./session";
 import type { Persist } from "./store";
 import { botToolServer, type BotActions } from "./tools";
-import { freshTurn, readTurn } from "./turn";
+import { freshTurn, readTurn, type Bubble, type Turn } from "./turn";
 import {
   agentPeer,
   botActor,
@@ -48,6 +49,7 @@ import {
   toBot,
   type Actor,
   type BotRecord,
+  type EnvelopeId,
   type Initiator,
   type Pending,
   type World,
@@ -57,8 +59,8 @@ import {
 // card, routine, policy, usage and session logic live in those modules.
 
 export type Hub = {
-  /** The snapshot a socket gets first. main.ts passes the stream's position; without one, there is no replay ring. */
-  hello(position?: StreamPosition): ServerMessage;
+  /** The snapshot a socket gets first, at the stream's position. */
+  hello(position: StreamPosition): ServerMessage;
   /** Every client message. The transport ones (devices, revoke_device, pair_code) belong to main.ts, which answers them first. */
   handle(message: ClientMessage): Promise<ServerMessage[]>;
   /** Runs every stored-deadline owner once at `now`. One that throws is logged and the rest still run. */
@@ -79,11 +81,19 @@ export type HubDeps = {
   broadcast: (message: ServerMessage) => void;
   persist: Persist;
   log: (line: string) => void;
-  /** main.ts passes this once push exists; without it nothing is pushed. */
-  push?: Push;
+  push: Push;
+  /** Tests pass a fake SDK. The bridge uses the real query and the claude on PATH. */
+  claude?: Pick<SessionSpec, "query" | "executable">;
 };
 
-const NO_RING: StreamPosition = { epoch: "", seq: 0, resumed: false };
+/** The routine's own scheduled fire. Its bubbles wait for the result, so a run with nothing to say posts nothing. */
+const holdsBubbles = (p: Pending) => p.settles !== null && p.initiator.kind === "routine" && !p.initiator.manual;
+
+/**
+ * What the hub has read of one turn's output. held is null once its bubbles go out as they arrive. carded: the turn
+ * opened a permission card of its own, so the run has something to tell even if it then calls routine_no_update.
+ */
+type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; pushed: boolean; carded: boolean };
 
 const earliest = (deadlines: (string | null)[]): string | null =>
   deadlines.reduce<string | null>((min, d) => (d !== null && (min === null || d < min) ? d : min), null);
@@ -106,6 +116,8 @@ export function createHub(deps: HubDeps): Hub {
   const clockNow = () => new Date();
   const now = () => clockNow().toISOString();
   const brains = new Map<BotId, Session>();
+  // Each bot's turn in flight, as read so far. Stop can end queued envelopes while it runs, and those must not reset it.
+  const readings = new Map<BotId, Reading>();
   const system: Initiator = { kind: "system" };
   // The clock is created last, once every ticker exists; a module may report a change while the hub is being built.
   let poke = () => {};
@@ -119,31 +131,68 @@ export function createHub(deps: HubDeps): Hub {
   });
 
   const accountParked = () => world.account.parkedUntil !== null && world.account.parkedUntil > now();
-  // No turn of that attendance can start now: the usage limit holds every turn, the daily cap only unattended ones.
-  // attended defaults to false only until U4's SchedulerDeps passes it.
-  const parked = (bot: BotRecord, attended = false) => accountParked() || (!attended && !ledger.headroom(botActor(bot.id), system).ok);
+  /**
+   * No turn of that attendance can start now. The account's usage limit holds every turn, and so does a model limit
+   * that parked this bot's session alone. The daily cap, reached or parking the session, holds only unattended ones.
+   */
+  function parked(bot: BotRecord, attended: boolean): boolean {
+    // The scheduler ticks before the sessions, so it can see a hold whose time has passed but is not yet cleared.
+    const hold = holdOf(bot.session);
+    const held = hold !== null && hold.until > now() ? hold : null;
+    if (accountParked() || held?.reason === "usage_limit") return true;
+    return !attended && (held !== null || !ledger.headroom(botActor(bot.id), system).ok);
+  }
 
-  const view = (bot: BotRecord): Bot =>
-    toBot(
+  function view(bot: BotRecord): Bot {
+    const session = brains.get(bot.id);
+    return toBot(
       bot,
       botStatus({
-        working: brains.get(bot.id)?.working ?? false,
-        held: holdOf(bot.session) !== null,
-        awaitingApproval: world.gate.open.some((c) => c.kind === "permission" && c.actor.kind === "bot" && c.actor.botId === bot.id),
+        working: session?.working ?? false,
+        held: session ? session.parkedFor !== null : holdOf(bot.session) !== null,
+        awaitingApproval: world.gate.open.some((c) => c.kind === "permission" && c.actor.botId === bot.id),
       }),
     );
+  }
 
-  // Every deadline change reaches the clock through here: say, note, scheduler and gate changes, and each session's
-  // onChange all call it. A module that moves a deadline any other way leaves the clock asleep until its 60 s cap.
-  function changed(bot: BotRecord) {
+  /**
+   * Every deadline change reaches the clock through here: say, note, scheduler and gate changes, and each session's
+   * onChange all call it. A module that moves a deadline any other way leaves the clock asleep until its 60 s cap.
+   * "now" saves before returning and throws when it cannot: the scheduler's at-most-once fire rests on it.
+   */
+  function changed(bot: BotRecord, urgency?: "now") {
+    deps.persist(urgency);
     deps.broadcast({ type: "bot", bot: view(bot) });
-    deps.persist();
     poke();
   }
 
   function say(bot: BotRecord, message: Message) {
+    // A card the bot's own turn opens shows after what that turn wrote before it.
+    if (message.kind === "permission" && message.from === null && message.answer === null) {
+      const r = readings.get(bot.id);
+      if (r) r.carded = true;
+      release(bot);
+    }
     deps.broadcast({ type: "message", botId: bot.id, message: post(bot, message) });
     changed(bot);
+  }
+
+  // The message is in bot.messages before the push, because the push's throttle reads it.
+  function postBubbles(bot: BotRecord, r: { pushed: boolean }, bubbles: readonly Bubble[]) {
+    for (const { id, text } of bubbles) {
+      say(bot, { kind: "bot", id, at: now(), text });
+      if (!r.pushed) deps.push.notify(bot, "message", id);
+      r.pushed = true;
+    }
+  }
+
+  /** The turn's held bubbles go out now, ahead of a card or note it caused; the rest of the turn posts as it arrives. */
+  function release(bot: BotRecord) {
+    const r = readings.get(bot.id);
+    if (!r || r.held === null) return;
+    const held = r.held;
+    r.held = null;
+    postBubbles(bot, r, held);
   }
 
   const note = (bot: BotRecord, text: string, refs: Peer[] = []) => say(bot, { kind: "note", id: newMessageId(), at: now(), text, refs });
@@ -160,10 +209,13 @@ export function createHub(deps: HubDeps): Hub {
 
   function scopeOf(actor: Actor): Scope {
     const bridgeHome = realpathSync(root);
-    if (actor.kind === "bot") return { bridgeHome, own: realpathSync(homes.homeOf(actor.botId)), userMd: join(bridgeHome, "USER.md"), homedir: realpathSync(homedir()) };
+    const home = realpathSync(homedir());
+    // So ~name in a command resolves for the user and for root.
+    const users = { [userInfo().username]: home, root: process.platform === "darwin" ? "/var/root" : "/root" };
+    if (actor.kind === "bot") return { bridgeHome, own: realpathSync(homes.homeOf(actor.botId)), userMd: join(bridgeHome, "USER.md"), homedir: home, users };
     const rec = world.agents.get(actor.agentId);
     if (!rec) throw new Error(`Unknown agent ${actor.agentId}`);
-    return { bridgeHome, own: realpathSync(rec.cwd), userMd: null, homedir: realpathSync(homedir()) };
+    return { bridgeHome, own: realpathSync(rec.cwd), userMd: null, homedir: home, users };
   }
 
   function deliver(actor: Actor, e: Envelope) {
@@ -181,13 +233,16 @@ export function createHub(deps: HubDeps): Hub {
     agents.deliver(rec, input);
   }
 
-  function outcomeOf(end: Exclude<TurnEnd, { kind: "deferred" }>): RunOutcome {
+  /** quiet: the turn called routine_no_update and asked nothing. */
+  function outcomeOf(end: Exclude<TurnEnd, { kind: "deferred" }>, quiet: boolean): RunOutcome {
     switch (end.kind) {
       case "done":
-        return end.result.subtype === "success" ? { status: "ok", note: null } : { status: "failed", note: end.result.errors.join("; ") || end.result.subtype };
+        if (end.result.subtype !== "success") return { status: "failed", note: end.result.errors.join("; ") || end.result.subtype };
+        return { status: quiet ? "quiet" : "ok", note: null };
       case "failed":
         return { status: "failed", note: end.error };
       case "stopped":
+        return { status: "skipped", note: end.by === "breaker" ? BREAKER_NOTE : `Stopped by ${userName}` };
       case "dropped":
         return { status: "skipped", note: `Stopped by ${userName}` };
     }
@@ -196,7 +251,7 @@ export function createHub(deps: HubDeps): Hub {
   const pausedNote = (until: string, why: "usage_limit" | "daily_cap") =>
     `Paused until ${new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} (${why === "usage_limit" ? "usage limit" : "daily cap"})`;
 
-  function endTurn(bot: BotRecord, turn: Pending, end: TurnEnd) {
+  function endTurn(bot: BotRecord, turn: Pending, end: TurnEnd, quiet: boolean) {
     switch (end.kind) {
       case "done":
         if (end.result.subtype !== "success") note(bot, `${bot.name} stopped with an error: ${end.result.errors.join("; ") || end.result.subtype}`);
@@ -205,7 +260,8 @@ export function createHub(deps: HubDeps): Hub {
         note(bot, `${bot.name} crashed: ${end.error}`);
         break;
       case "stopped":
-        note(bot, `Stopped by ${userName}`);
+        // The breaker already left its own note.
+        if (end.by === "user") note(bot, `Stopped by ${userName}`);
         break;
       case "deferred":
         if (end.why !== "retry") note(bot, pausedNote(end.until, end.why));
@@ -213,21 +269,22 @@ export function createHub(deps: HubDeps): Hub {
       case "dropped":
         break;
     }
-    if (turn.settles) scheduler.settle(bot.id, turn.settles, outcomeOf(end));
+    if (turn.settles !== null) scheduler.settle(bot.id, turn.settles, outcomeOf(end, quiet));
   }
 
   function brain(bot: BotRecord): Session {
     const existing = brains.get(bot.id);
     if (existing) return existing;
     const actor = botActor(bot.id);
-    let turn = freshTurn;
-    let pushed = false;
     const session = createSession({
       actor,
       state: bot.session,
       account: world.account,
       ledger,
       persist: deps.persist,
+      userName,
+      log: deps.log,
+      ...deps.claude,
       options: () => ({
         cwd: homes.homeOf(bot.id),
         resume: bot.session.id ?? undefined,
@@ -240,26 +297,41 @@ export function createHub(deps: HubDeps): Hub {
         model: deps.model,
         hooks: gate.hooks(actor),
       }),
-      onMessage(m) {
+      onMessage(m, pending) {
         if (!world.bots.has(bot.id)) return;
-        const read = readTurn(turn, m);
-        turn = read.turn;
-        for (const { id, text } of read.bubbles) {
-          say(bot, { kind: "bot", id, at: now(), text });
-          if (!pushed) deps.push?.notify(bot, "message", id);
-          pushed = true;
+        // Output between turns, such as a background task finishing, has no turn to wait for.
+        if (pending === null) return postBubbles(bot, { pushed: false }, readTurn(freshTurn, m).bubbles);
+        let r = readings.get(bot.id);
+        if (r?.id !== pending.id) {
+          r = { id: pending.id, turn: freshTurn, held: holdsBubbles(pending) ? [] : null, pushed: false, carded: false };
+          readings.set(bot.id, r);
         }
+        const read = readTurn(r.turn, m);
+        r.turn = read.turn;
+        if (r.held === null) return postBubbles(bot, r, read.bubbles);
+        r.held.push(...read.bubbles);
+        // A question card is the last thing a turn shows, so what led up to it goes out before the card does.
+        if (r.turn.asked) release(bot);
       },
       onTurnEnd(pending, end) {
-        turn = freshTurn;
-        pushed = false;
-        if (world.bots.has(bot.id)) endTurn(bot, pending, end);
+        if (!world.bots.has(bot.id)) return;
+        const r = readings.get(bot.id);
+        let quiet = false;
+        if (end.kind !== "deferred" && r?.id === pending.id) {
+          readings.delete(bot.id);
+          quiet = r.turn.quiet && !r.turn.asked && !r.carded;
+          if (r.held !== null && !quiet) postBubbles(bot, r, r.held);
+        }
+        endTurn(bot, pending, end, quiet);
       },
       onChange() {
         if (world.bots.has(bot.id)) changed(bot);
       },
       note(text) {
-        if (world.bots.has(bot.id)) note(bot, text);
+        if (!world.bots.has(bot.id)) return;
+        // The breaker's note comes mid-turn; what the turn wrote before it goes first.
+        release(bot);
+        note(bot, text);
       },
     });
     brains.set(bot.id, session);
@@ -296,7 +368,7 @@ export function createHub(deps: HubDeps): Hub {
       if (rec) agents.notice(rec, text);
     },
     denied: (actor) => sessionOf(actor)?.denied(),
-    notify: (bot, reason, id) => deps.push?.notify(bot, reason, id),
+    notify: (bot, reason, id) => deps.push.notify(bot, reason, id),
     persist: deps.persist,
     auditDir: join(root, "audit"),
     userName,
@@ -306,6 +378,7 @@ export function createHub(deps: HubDeps): Hub {
 
   const scheduler = createScheduler({
     world,
+    log: deps.log,
     deliver: (bot, e) => deliver(botActor(bot.id), e),
     note,
     changed,
@@ -318,6 +391,8 @@ export function createHub(deps: HubDeps): Hub {
     userName,
     model: deps.model,
     ledger,
+    log: deps.log,
+    claude: deps.claude,
     hooks: (actor) => gate.hooks(actor),
     persist: deps.persist,
     now,
@@ -344,7 +419,7 @@ export function createHub(deps: HubDeps): Hub {
     nextDeadline: () => earliest(allSessions().map((s) => s.nextDeadline())),
   };
   const tickers = { scheduler, gate, sessions };
-  const clock = createClock({ tickers: Object.values(tickers), now: clockNow });
+  const clock = createClock({ tickers: Object.values(tickers), now: clockNow, log: deps.log });
   poke = () => clock.poke();
 
   function owned(botId: BotId): BotRecord {
@@ -403,14 +478,14 @@ export function createHub(deps: HubDeps): Hub {
       const avatar = { ...randomAvatar(), ...(a.shape && { shape: a.shape }), ...(a.color && { color: a.color }) };
       const turn = initiatorNow(creator);
       const by = { bot: creator.name, botId: creator.id, hops: hopsAfter(turn), origin: rootOf(turn) };
-      const bot = makeBot({ name: a.name, avatar, job: a.job }, { from: "created", by, brief: a.job });
+      const bot = makeBot({ name: a.name.trim(), avatar, job: a.job }, { from: "created", by, brief: a.job });
       note(creator, "Created {0}", [botPeer(bot)]);
       return `Created ${bot.name} (${bot.id}). It has its brief and starts now.`;
     },
 
     updateSelf(botId, a) {
       const bot = owned(botId);
-      if (a.name !== undefined) bot.name = a.name;
+      if (a.name !== undefined) bot.name = a.name.trim();
       if (a.title !== undefined) bot.title = a.title.trim() || null;
       bot.avatar = { shape: a.shape ?? bot.avatar.shape, color: a.color ?? bot.avatar.color };
       changed(bot);
@@ -466,9 +541,10 @@ export function createHub(deps: HubDeps): Hub {
         return [];
       }
       case "answer":
-        return replyTo(gate.answer(bot.id, message.messageId, { kind: "option", index: message.option }));
-      case "dismiss":
-        return replyTo(gate.answer(bot.id, message.messageId, { kind: "dismiss" }));
+      case "dismiss": {
+        const reply = cardReply(bot.messages.find((m) => m.id === message.messageId), message);
+        return reply ? replyTo(gate.answer(bot.id, message.messageId, reply)) : error("Unknown option");
+      }
       case "decide":
         return replyTo(gate.answer(bot.id, message.messageId, { kind: "permission", choice: message.choice }));
       case "stop":
@@ -476,6 +552,11 @@ export function createHub(deps: HubDeps): Hub {
       case "update_bot":
         Object.assign(bot, message.patch);
         changed(bot);
+        // A raised cap may lift a daily-cap park at once instead of at the next tick.
+        if (message.patch.dailyCapUsd !== undefined) {
+          brains.get(bot.id)?.recheck();
+          for (const rec of world.agents.values()) if (rec.agent.botId === bot.id) agents.session(rec.agent.id)?.recheck();
+        }
         return [];
       case "mark_unread":
         bot.unread = Math.max(1, bot.unread);
@@ -484,11 +565,12 @@ export function createHub(deps: HubDeps): Hub {
       case "delete_bot":
         brains.get(bot.id)?.close();
         brains.delete(bot.id);
+        readings.delete(bot.id);
         agents.stopFor(bot.id);
+        // Before the agents go: the gate finds the agents' grants through them.
+        gate.forgetBot(bot.id);
         for (const [id, rec] of world.agents) if (rec.agent.botId === bot.id) world.agents.delete(id);
         world.bots.delete(bot.id);
-        // U1 adds forgetBot to Gate; this cast goes once it lands.
-        (gate as Gate & { forgetBot?(botId: BotId): void }).forgetBot?.(bot.id);
         // A crash between these two leaves an orphan home rather than a bot whose home is gone.
         deps.persist("now");
         homes.trash(bot.id, new Date());
@@ -512,7 +594,7 @@ export function createHub(deps: HubDeps): Hub {
   }
 
   return {
-    hello: (position = NO_RING) => ({
+    hello: (position) => ({
       type: "hello",
       protocol: PROTOCOL,
       ...position,
@@ -527,7 +609,7 @@ export function createHub(deps: HubDeps): Hub {
       homes.ensureUserMd(userName);
       if (firstRun) {
         makeBot(
-          { name: "Claudio Bot", avatar: { shape: "circle", color: "white" }, job: `General assistant. Take real work off ${userName}'s plate.` },
+          { name: DEFAULT_BOT.name, avatar: { ...DEFAULT_BOT.avatar }, job: defaultBotJob(userName) },
           { from: "created", by: "user", brief: null },
         );
       }

@@ -81,7 +81,9 @@ The composer's + menu attaches a photo from the library, a new photo or a file. 
 
 After pairing, ClaudioBot asks for permission to notify you. It posts a local notification when a bot sends a message, asks a question or needs an approval, unless that chat is on screen. Messages from one bot share a notification, so a newer one replaces the older. Each question and approval gets its own, so a later message cannot replace a card still waiting on you. An approval alert only opens the chat, so the decision is made with the exact command in view. `claudiobot://bot/<id>?message=<id>` opens that bot. A question notification offers its first two options as actions. Picking one sends the answer to the bridge.
 
-These notifications need the socket to the Mac. When you leave the app, iOS gives ClaudioBot a short grace period, and the app keeps the socket open during it. After that iOS suspends the app, and alerts stop until you open it again. Alerts on a locked phone at any time would need Apple Push Notification service and a relay server. That is out of scope for this version.
+These notifications need the socket to the Mac. When you leave the app, iOS gives ClaudioBot a short grace period, and the app keeps the socket open during it. After that iOS suspends the app, and alerts stop until you open it again. For alerts after that, the bridge can push through ntfy. Set `CLAUDIOBOT_PUSH_URL` on the Mac (see the bridge README) and subscribe to the same topic in the ntfy app. The ntfy alert names the bot, and tapping it opens ClaudioBot at that message through `claudiobot://bot/<id>?message=<id>`. Native alerts from ClaudioBot itself would need Apple Push Notification service and a relay server, which are out of scope for this version.
+
+An app build from before protocol 3 still connects to a new bridge. It does not announce `?protocol=3`, so the bridge shows it each permission card as a question card with **Allow once** and **Deny**.
 
 ## Layout
 

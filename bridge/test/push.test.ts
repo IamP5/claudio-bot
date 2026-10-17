@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { BotId, MessageId } from "../src/protocol";
 import { createPush, MESSAGE_THROTTLE_MS, ntfySender, senderFromEnv, type PushReason, type Sender } from "../src/push";
 import { createSaver, loadWorld } from "../src/store";
-import { newBot, post, type PushState, type World } from "../src/world";
+import { botActor, newBot, post, type GateState, type PushState, type World } from "../src/world";
 
 const homes: string[] = [];
 afterEach(() => {
@@ -21,7 +21,8 @@ const SECRET_CHAT = "the merger closes on Friday, see plan-final.pdf";
 
 type Call = { url: string; init: RequestInit };
 
-function harness(opts: { home?: string; live?: number; respond?: () => Promise<Response> } = {}) {
+/** liveFor: a socket was heard from just now and stays live this many ms; 0: none is live. */
+function harness(opts: { home?: string; liveFor?: number; respond?: () => Promise<Response> } = {}) {
   const home = opts.home ?? mkdtempSync(join(tmpdir(), "claudiobot-push-"));
   if (!opts.home) homes.push(home);
   const { world } = loadWorld(home);
@@ -41,12 +42,12 @@ function harness(opts: { home?: string; live?: number; respond?: () => Promise<R
   }) as unknown as typeof fetch;
   const logs: string[] = [];
   const clock = { t: T0 };
-  const sockets = { live: opts.live ?? 0 };
+  const sockets = { until: opts.liveFor ? new Date(T0 + opts.liveFor) : null };
   const push = createPush({
     world,
     persist: saver.schedule,
     sender: ntfySender(URL_, fakeFetch),
-    live: () => sockets.live,
+    liveUntil: () => sockets.until,
     now: () => new Date(clock.t),
     log: (l) => logs.push(l),
   });
@@ -63,11 +64,73 @@ const keys = (world: World) => world.push.sent.map((s) => s.key);
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
 test.each(["card", "reminder", "message"] as PushReason[])("a live socket suppresses a %s push and records nothing", async (reason) => {
-  const h = harness({ live: 1 });
+  const h = harness({ liveFor: 45_000 });
   h.push.notify(BOT, reason, reason === "message" ? h.bubble("m_bubble") : CARD);
   await settle();
   expect(h.calls).toEqual([]);
   expect(keys(h.world)).toEqual([]);
+});
+
+test("a socket last heard from before now is not live, so its stale deadline does not hold a push back", async () => {
+  const h = harness({ liveFor: 45_000 });
+  h.clock.t = T0 + 45_000;
+  expect(h.push.notify(BOT, "card", CARD)).toBe(true);
+});
+
+test.each([
+  ["it went out", {}, () => {}, true],
+  ["a socket is live", { liveFor: 45_000 }, () => {}, false],
+  ["it already went out once", {}, (h: ReturnType<typeof harness>) => h.push.notify(BOT, "card", CARD), false],
+] as [string, Parameters<typeof harness>[0], (h: ReturnType<typeof harness>) => void, boolean][])("notify returns whether the push went out: %s", (_, opts, before, sent) => {
+  const h = harness(opts);
+  before(h);
+  expect(h.push.notify(BOT, "card", CARD)).toBe(sent);
+});
+
+test("notify returns false when push is off, when the push cannot be recorded, and when messages are throttled", () => {
+  const h = harness();
+  const { world } = harness();
+  const off = createPush({ world, persist: () => {}, sender: null, liveUntil: () => null, now: () => new Date(T0), log: () => {} });
+  const unsaved = createPush({ world, persist: () => { throw new Error("disk full"); }, sender: async () => {}, liveUntil: () => null, now: () => new Date(T0), log: () => {} });
+  expect(off.notify(BOT, "card", CARD)).toBe(false);
+  expect(unsaved.notify(BOT, "card", CARD)).toBe(false);
+  expect(h.push.notify(BOT, "message", h.bubble("m_b1"))).toBe(true);
+  expect(h.push.notify(BOT, "message", h.bubble("m_b2"))).toBe(false);
+});
+
+function openCard(world: World, cardId = CARD) {
+  (world.gate as GateState).open.push({ kind: "question", cardId, actor: botActor(BOT.id), remindAt: null, expiresAt: new Date(T0 + 3_600_000).toISOString() });
+}
+
+test("a card push held back by a live socket goes out once, at the first tick after the socket lapses", async () => {
+  const h = harness({ liveFor: 45_000 });
+  openCard(h.world);
+  expect(h.push.notify(BOT, "card", CARD)).toBe(false);
+  expect(h.push.nextDeadline()).toBe(new Date(T0 + 45_000).toISOString());
+
+  h.push.tick(new Date(T0 + 30_000));
+  await settle();
+  expect(h.calls).toEqual([]);
+
+  h.clock.t = T0 + 46_000;
+  h.push.tick(new Date(h.clock.t));
+  h.push.tick(new Date(h.clock.t));
+  await settle();
+  expect(h.calls.map((c) => c.init.body)).toEqual(["Claudio Bot needs you"]);
+  expect(h.push.nextDeadline()).toBeNull();
+});
+
+test("a card answered while the socket was live is never pushed", async () => {
+  const h = harness({ liveFor: 45_000 });
+  openCard(h.world);
+  h.push.notify(BOT, "card", CARD);
+  (h.world.gate as GateState).open.splice(0);
+
+  h.clock.t = T0 + 46_000;
+  h.push.tick(new Date(h.clock.t));
+  await settle();
+  expect(h.calls).toEqual([]);
+  expect(h.push.nextDeadline()).toBeNull();
 });
 
 test("the payload is the bot's name, a fixed phrase and the deep link, never content", async () => {
@@ -90,9 +153,10 @@ test.each([
   ["card", "Claudio Bot needs you"],
   ["reminder", "Claudio Bot is still waiting for you"],
   ["message", "Claudio Bot has an update for you"],
+  ["result", "Claudio Bot has an update for you"],
 ] as [PushReason, string][])("reason %s reads %p", async (reason, text) => {
   const h = harness();
-  const id = reason === "message" ? h.bubble("m_bubble") : CARD;
+  const id = reason === "message" || reason === "result" ? h.bubble("m_bubble") : CARD;
   h.push.notify(BOT, reason, id);
   await settle();
   expect(h.calls.map((c) => c.init.body)).toEqual([text]);
@@ -125,7 +189,7 @@ test("a card and its reminder each push once, across a restart", async () => {
   expect(restarted.calls.map((c) => c.init.body)).toEqual(["Claudio Bot is still waiting for you"]);
 });
 
-test("messages push at most once per bot per throttle window; cards and reminders are never throttled", async () => {
+test("only message pushes throttle message pushes; cards and reminders are never throttled and throttle nothing", async () => {
   const h = harness();
   const pushedAt = (minutes: number, reason: PushReason, id: MessageId) => {
     h.clock.t = T0 + minutes * 60_000;
@@ -137,9 +201,24 @@ test("messages push at most once per bot per throttle window; cards and reminder
   expect(await pushedAt(5, "message", h.bubble("m_b2"))).toBe(false);
   expect(await pushedAt(6, "card", CARD)).toBe(true);
   expect(await pushedAt(7, "reminder", CARD)).toBe(true);
-  expect(await pushedAt(12, "message", h.bubble("m_b3"))).toBe(false);
-  expect(await pushedAt(7 + MESSAGE_THROTTLE_MS / 60_000, "message", h.bubble("m_b4"))).toBe(true);
-  expect(keys(h.world)).toEqual(["m_b1|message", "m_card|card", "m_card|reminder", "m_b4|message"]);
+  expect(await pushedAt(12, "message", h.bubble("m_b3"))).toBe(true);
+  expect(await pushedAt(12 + MESSAGE_THROTTLE_MS / 60_000 - 1, "message", h.bubble("m_b4"))).toBe(false);
+  expect(keys(h.world)).toEqual(["m_b1|message", "m_card|card", "m_card|reminder", "m_b3|message"]);
+});
+
+test("a turn's result push is never throttled and throttles no message push", async () => {
+  const h = harness();
+  const pushedAt = (minutes: number, reason: PushReason, id: MessageId) => {
+    h.clock.t = T0 + minutes * 60_000;
+    const before = h.calls.length;
+    h.push.notify(BOT, reason, id);
+    return settle().then(() => h.calls.length > before);
+  };
+  expect(await pushedAt(0, "message", h.bubble("m_b1"))).toBe(true);
+  expect(await pushedAt(1, "result", h.bubble("m_b2"))).toBe(true);
+  expect(await pushedAt(2, "result", h.bubble("m_b3"))).toBe(true);
+  expect(await pushedAt(10, "message", h.bubble("m_b4"))).toBe(true);
+  expect(h.calls.map((c) => c.init.body)).toEqual(Array(4).fill("Claudio Bot has an update for you"));
 });
 
 test("the throttle survives a restart", async () => {
@@ -185,7 +264,7 @@ test("a sender that throws synchronously never reaches the caller", async () => 
   const throwing: Sender = () => {
     throw new Error("boom");
   };
-  const push = createPush({ world: h.world, persist: () => {}, sender: throwing, live: () => 0, now: () => new Date(T0), log: (l) => logs.push(l) });
+  const push = createPush({ world: h.world, persist: () => {}, sender: throwing, liveUntil: () => null, now: () => new Date(T0), log: (l) => logs.push(l) });
   expect(() => push.notify(BOT, "card", CARD)).not.toThrow();
   await settle();
   expect(logs).toEqual(["push: card for b_claudio failed: boom"]);
@@ -204,7 +283,7 @@ test("push is off when the URL is unset, blank or not http(s)", async () => {
 
   const h = harness();
   const persisted: unknown[] = [];
-  const off = createPush({ world: h.world, persist: (u) => persisted.push(u), sender: null, live: () => 0, now: () => new Date(T0), log: (l) => logs.push(l) });
+  const off = createPush({ world: h.world, persist: (u) => persisted.push(u), sender: null, liveUntil: () => null, now: () => new Date(T0), log: (l) => logs.push(l) });
   expect(() => off.notify(BOT, "card", CARD)).not.toThrow();
   await settle();
   expect(fetchCalls).toEqual([]);
@@ -247,7 +326,7 @@ test("a failed flush skips the send and never reaches the caller", async () => {
   const persist = () => {
     throw new Error("ENOSPC: no space left on device");
   };
-  const push = createPush({ world: h.world, persist, sender: async (n) => void sent.push(n), live: () => 0, now: () => new Date(T0), log: (l) => logs.push(l) });
+  const push = createPush({ world: h.world, persist, sender: async (n) => void sent.push(n), liveUntil: () => null, now: () => new Date(T0), log: (l) => logs.push(l) });
   expect(() => push.notify(BOT, "card", CARD)).not.toThrow();
   await settle();
   expect(sent).toEqual([]);

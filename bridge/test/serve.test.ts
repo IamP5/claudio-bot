@@ -69,6 +69,7 @@ function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m
     http: `http://127.0.0.1:${transport.port}`,
     savesFail: (fail = true) => (saving = !fail),
     advance: (ms: number) => (now = new Date(now.getTime() + ms)),
+    now: () => now,
     stop,
   };
 }
@@ -121,7 +122,7 @@ test("a revoked legacy phone stays revoked after a restart, even when its token 
   let b = boot(home);
   expect((await fetch(`${b.http}/ws?token=shared`)).status).toBe(426);
   const phone = await pairPhone(b);
-  const owner = connect(b, { bearer: phone.token });
+  const owner = connect(b, { bearer: phone.token, query: "?protocol=3" });
   const old = connect(b, { query: "?token=shared" });
   await owner.next("hello");
   await old.next("hello");
@@ -142,7 +143,7 @@ test("a legacy revoke that cannot be saved still closes the phone, and a restart
   const home = tempHome("shared");
   let b = boot(home);
   const phone = await pairPhone(b);
-  const owner = connect(b, { bearer: phone.token });
+  const owner = connect(b, { bearer: phone.token, query: "?protocol=3" });
   const old = connect(b, { query: "?token=shared" });
   await owner.next("hello");
   await old.next("hello");
@@ -162,7 +163,7 @@ test("revoking a phone closes its sockets and its token opens no new one", async
   const b = boot(tempHome());
   const keep = await pairPhone(b, "keep");
   const drop = await pairPhone(b, "drop");
-  const owner = connect(b, { bearer: keep.token });
+  const owner = connect(b, { bearer: keep.token, query: "?protocol=3" });
   const doomed = connect(b, { bearer: drop.token });
   await owner.next("hello");
   await doomed.next("hello");
@@ -173,6 +174,27 @@ test("revoking a phone closes its sockets and its token opens no new one", async
   await until(() => b.transport.live() === 1, "one live socket");
   const retry = await fetch(`${b.http}/ws`, { headers: { authorization: `Bearer ${drop.token}` } });
   expect(retry.status).toBe(401);
+});
+
+test("a socket is live only while the app was heard from within the window; its pings and messages renew it", async () => {
+  const b = boot(tempHome());
+  const phone = await pairPhone(b);
+  const client = connect(b, { bearer: phone.token, query: "?protocol=3" });
+  await client.next("hello");
+  expect(b.transport.live()).toBe(1);
+  expect(b.transport.liveUntil()).toEqual(new Date(b.now().getTime() + 45_000));
+
+  b.advance(45_000);
+  expect(b.transport.live()).toBe(0);
+  expect(b.transport.liveUntil()).toBeNull();
+
+  client.raw.ping();
+  await until(() => b.transport.live() === 1, "a ping to renew the socket");
+  expect(b.transport.liveUntil()).toEqual(new Date(b.now().getTime() + 45_000));
+
+  b.advance(45_000);
+  client.send({ type: "open", botId: "b_1" });
+  await until(() => b.transport.live() === 1, "a message to renew the socket");
 });
 
 test("a socket whose device is gone by the time it opens is closed before any hello", async () => {
@@ -251,6 +273,42 @@ test("the legacy phone cannot hand out pairing codes; a paired phone can", async
   await owner.next("hello");
   owner.send({ type: "pair_code" });
   expect(await owner.next("pair_code")).toEqual({ type: "pair_code", code: expect.stringMatching(/^\w{4}-\w{4}$/), expiresAt: expect.any(String) });
+});
+
+test("the legacy phone may revoke only itself", async () => {
+  const b = boot(tempHome("shared"));
+  const phone = await pairPhone(b);
+  const old = connect(b, { query: "?token=shared" });
+  await old.next("hello");
+
+  old.send({ type: "revoke_device", deviceId: phone.deviceId });
+  expect(await old.next("error")).toEqual({ type: "error", message: expect.stringContaining("only revoke itself") });
+  expect(b.devices.list(null).map((d) => d.id)).toContain(phone.deviceId);
+
+  old.send({ type: "revoke_device", deviceId: legacyId(b) });
+  expect(await old.closed()).toEqual({ code: 4001, reason: "revoked" });
+  expect(b.devices.list(null).map((d) => d.id)).toEqual([phone.deviceId]);
+});
+
+test("a legacy or protocol 2 socket may decide only Allow once or Deny; a paired protocol 3 app may decide anything", async () => {
+  const b = boot(tempHome("shared"));
+  const { token } = await pairPhone(b);
+  const legacy = connect(b, { query: "?token=shared&protocol=3" });
+  const today = connect(b, { bearer: token });
+  const current = connect(b, { bearer: token, query: "?protocol=3" });
+  for (const c of [legacy, today, current]) await c.next("hello");
+  const decide = (choice: string) => ({ type: "decide", botId: "b_eng", messageId: "m_card", choice });
+
+  legacy.send(decide("always"));
+  today.send(decide("never"));
+  expect(await legacy.next("error")).toEqual({ type: "error", message: expect.stringContaining("Allow once or Deny") });
+  expect(await today.next("error")).toEqual({ type: "error", message: expect.stringContaining("Allow once or Deny") });
+  legacy.send(decide("once"));
+  today.send(decide("deny"));
+  current.send(decide("always"));
+  await until(() => b.handled.length === 3, "the allowed decisions to reach the hub");
+
+  expect(b.handled.map((m) => (m.type === "decide" ? m.choice : m.type)).sort()).toEqual(["always", "deny", "once"]);
 });
 
 test("uploads up to the frame limit reach the hub; a frame over it closes the socket", async () => {

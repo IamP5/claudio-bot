@@ -216,12 +216,44 @@ test("revoking the legacy device stops the shared token", () => {
   expect(devices.authenticate(ws({}, "?token=shared"))).toBeNull();
 });
 
+test("the shared token stops working on 1 January 2027, one release after protocol 3; paired phones keep working", () => {
+  const { devices, advance } = setup();
+  devices.importLegacy("shared");
+  const { deviceId, token } = paired(devices.pair(devices.newCode().code, "phone"));
+  const sunset = Date.parse("2027-01-01T00:00:00.000Z");
+
+  advance(sunset - start.getTime() - 1);
+  expect(devices.authenticate(ws({}, "?token=shared"))).not.toBeNull();
+  advance(1);
+  expect(devices.authenticate(ws({}, "?token=shared"))).toBeNull();
+  expect(devices.authenticate(bearer("shared"))).toBeNull();
+  expect(devices.authenticate(bearer(token))).toBe(deviceId);
+});
+
 test("seen records when the device last connected", () => {
   const { devices, advance } = setup();
   const { deviceId } = paired(devices.pair(devices.newCode().code, "phone"));
   advance(60_000);
   devices.seen(deviceId);
   expect(devices.list(null)[0]!.lastSeenAt).toBe(new Date(start.getTime() + 60_000).toISOString());
+});
+
+test("a device reconnecting within a minute of the last stamp neither restamps nor saves", () => {
+  const { devices, advance, persists } = setup();
+  const { deviceId } = paired(devices.pair(devices.newCode().code, "phone"));
+  const lastSeen = () => devices.list(null)[0]!.lastSeenAt;
+  devices.seen(deviceId);
+  const saves = persists.length;
+
+  advance(59_000);
+  devices.seen(deviceId);
+  expect(lastSeen()).toBe(start.toISOString());
+  expect(persists.length).toBe(saves);
+
+  advance(1_000);
+  devices.seen(deviceId);
+  expect(lastSeen()).toBe(new Date(start.getTime() + 60_000).toISOString());
+  expect(persists.slice(saves)).toEqual([undefined]);
 });
 
 test("any request carrying an Origin header is refused", () => {

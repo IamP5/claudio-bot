@@ -86,7 +86,7 @@ export function createCloudRunner(): Runner {
   };
 }
 
-// The JSON shape of a cloud follow-up is not documented, so accept anything that does not say it failed.
+// Observed shape is {"ok":true,"session_id","url"}. It is undocumented, so anything not reporting failure counts.
 export function followUpAccepted(stdout: string): boolean {
   try {
     const parsed = JSON.parse(stripAnsi(stdout).trim());

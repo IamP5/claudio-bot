@@ -1,7 +1,6 @@
 import type { Decision, ItemId, PermissionMode, TaskId } from "../protocol";
 import type { TaskEvent } from "../task";
 
-// What a runner needs to know about a task, plus the one way it reports back.
 export type RunContext = {
   taskId: TaskId;
   cwd: string;

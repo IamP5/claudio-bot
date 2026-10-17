@@ -1,5 +1,5 @@
-import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { branchOf, prepareWorkspace, removeWorktree, worktreesRoot } from "../src/worktree";
@@ -25,13 +25,20 @@ function git(cwd: string, ...args: string[]) {
   return r.stdout.toString().trim();
 }
 
+// One committed repo, made once and copied per case: git init and the first commit are the same every time.
+let template = "";
+beforeAll(() => {
+  template = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-worktree-template-")));
+  git(template, "init", "-q", "-b", "main");
+  writeFileSync(join(template, "README.md"), "hello\n");
+  git(template, "add", ".");
+  git(template, "commit", "-q", "-m", "init");
+});
+afterAll(() => rmSync(template, { recursive: true, force: true }));
+
 function repo() {
   const dir = join(temp(), "shop");
-  Bun.spawnSync(["mkdir", dir]);
-  git(dir, "init", "-q", "-b", "main");
-  writeFileSync(join(dir, "README.md"), "hello\n");
-  git(dir, "add", ".");
-  git(dir, "commit", "-q", "-m", "init");
+  cpSync(template, dir, { recursive: true });
   return { path: dir, name: "shop" };
 }
 

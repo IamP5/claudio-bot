@@ -9,6 +9,7 @@ import {
   type Avatar,
   type Bot,
   type BotId,
+  type BotSpend,
   type BotStatus,
   type DeviceId,
   type Link,
@@ -477,7 +478,8 @@ export function routineView(r: Owned<RoutineRecord>, limit = r.runs.length): Rou
   };
 }
 
-export function toBot(bot: BotRecord, status: BotStatus): Bot {
+/** The bot frame without its spend, which the ledger adds. */
+export function toBot(bot: BotRecord, status: BotStatus): Omit<Bot, keyof BotSpend> {
   const lastBot = bot.messages.findLast((m) => m.kind === "bot");
   const card = openCard(bot.messages);
   return {
@@ -499,7 +501,7 @@ export function toBot(bot: BotRecord, status: BotStatus): Bot {
   };
 }
 
-export const sortBots = (bots: Bot[]): Bot[] =>
+export const sortBots = <B extends Pick<Bot, "pinned" | "lastAt">>(bots: B[]): B[] =>
   [...bots].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastAt.localeCompare(a.lastAt));
 
 export function findBot(world: World, ref: string): BotRecord | undefined {

@@ -15,7 +15,9 @@ import type { Project } from "./projects";
 import {
   FEATURES,
   PROTOCOL,
+  type Agent,
   type AgentId,
+  type AgentView,
   type Avatar,
   type Bot,
   type BotId,
@@ -170,16 +172,17 @@ export function createHub(deps: HubDeps): Hub {
 
   function view(bot: BotRecord): Bot {
     const session = brains.get(bot.id);
-    return toBot(
-      bot,
-      botStatus({
-        unavailable: session?.unavailable ?? false,
-        working: session?.working ?? false,
-        held: session ? session.parkedFor !== null : holdOf(bot.session) !== null,
-        awaitingApproval: world.gate.open.some((c) => c.kind !== "question" && c.actor.botId === bot.id),
-      }),
-    );
+    const status = botStatus({
+      unavailable: session?.unavailable ?? false,
+      working: session?.working ?? false,
+      held: session ? session.parkedFor !== null : holdOf(bot.session) !== null,
+      awaitingApproval: world.gate.open.some((c) => c.kind !== "question" && c.actor.botId === bot.id),
+    });
+    return { ...toBot(bot, status), ...ledger.botSpend(bot.id) };
   }
+
+  const agentView = (agent: Agent): AgentView =>
+    agent.where === "mac" ? { ...agent, ...ledger.agentSpend(agent.id) } : { ...agent, spentUsd: null, budgetUsd: null };
 
   /**
    * Every deadline change reaches the clock through here: say, note, scheduler and gate changes, and each session's
@@ -511,7 +514,7 @@ export function createHub(deps: HubDeps): Hub {
     now,
     changed(rec) {
       trim(rec.messages, archiveOf(rec.agent.botId, rec.agent.id), () => false);
-      deps.broadcast({ type: "agent", agent: rec.agent, messages: rec.messages });
+      deps.broadcast({ type: "agent", agent: agentView(rec.agent), messages: rec.messages });
       deps.persist();
       poke();
     },
@@ -637,7 +640,7 @@ export function createHub(deps: HubDeps): Hub {
       }
       case "agent": {
         const rec = world.agents.get(message.agentId);
-        return rec ? [{ type: "agent", agent: rec.agent, messages: rec.messages }] : error("Unknown agent");
+        return rec ? [{ type: "agent", agent: agentView(rec.agent), messages: rec.messages }] : error("Unknown agent");
       }
       case "stop_agent": {
         const rec = world.agents.get(message.agentId);
@@ -734,7 +737,7 @@ export function createHub(deps: HubDeps): Hub {
       case "details": {
         const own = [...world.agents.values()].filter((a) => a.agent.botId === bot.id).map((a) => a.agent);
         own.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-        return [{ type: "details", botId: bot.id, library: homes.library(bot.id), links: linksOf(bot, own), agents: own, routines: bot.routines.map((r) => routineView(r)) }];
+        return [{ type: "details", botId: bot.id, library: homes.library(bot.id), links: linksOf(bot, own), agents: own.map(agentView), routines: bot.routines.map((r) => routineView(r)) }];
       }
       case "file": {
         const file = await homes.read(bot.id, message.path);

@@ -10,7 +10,8 @@
         "worktrees",
         "connectors",
         "skills",
-        "webhooks"
+        "webhooks",
+        "spend"
       ],
       "epoch": "e_7f3a",
       "seq": 41,
@@ -82,7 +83,9 @@
             }
           ],
           "dailyCapUsd": null,
-          "muted": false
+          "muted": false,
+          "spentTodayUsd": 8.4,
+          "capUsd": 10
         }
       ]
     },
@@ -153,7 +156,9 @@
           }
         ],
         "dailyCapUsd": 5,
-        "muted": false
+        "muted": false,
+        "spentTodayUsd": 0,
+        "capUsd": 5
       }
     },
     {
@@ -312,7 +317,9 @@
           "createdAt": "2026-10-16T12:00:00.000Z",
           "updatedAt": "2026-10-16T12:00:00.000Z",
           "evidence": null,
-          "worktree": null
+          "worktree": null,
+          "spentUsd": 1.2,
+          "budgetUsd": 5
         },
         {
           "id": "a2",
@@ -325,7 +332,9 @@
           "createdAt": "2026-10-16T12:00:00.000Z",
           "updatedAt": "2026-10-16T12:00:00.000Z",
           "evidence": null,
-          "worktree": null
+          "worktree": null,
+          "spentUsd": null,
+          "budgetUsd": null
         }
       ],
       "routines": [
@@ -401,7 +410,9 @@
         "createdAt": "2026-10-16T12:00:00.000Z",
         "updatedAt": "2026-10-16T12:00:00.000Z",
         "evidence": null,
-        "worktree": null
+        "worktree": null,
+        "spentUsd": 1.2,
+        "budgetUsd": 5
       },
       "messages": [
         {
@@ -561,7 +572,9 @@
           }
         ],
         "dailyCapUsd": null,
-        "muted": false
+        "muted": false,
+        "spentTodayUsd": 8.4,
+        "capUsd": 10
       }
     },
     {
@@ -631,7 +644,9 @@
           }
         ],
         "dailyCapUsd": null,
-        "muted": false
+        "muted": false,
+        "spentTodayUsd": 8.4,
+        "capUsd": 10
       }
     },
     {
@@ -648,7 +663,9 @@
         "createdAt": "2026-10-16T12:00:00.000Z",
         "updatedAt": "2026-10-16T12:00:00.000Z",
         "evidence": null,
-        "worktree": null
+        "worktree": null,
+        "spentUsd": 1.2,
+        "budgetUsd": 5
       },
       "messages": []
     },
@@ -719,7 +736,9 @@
           }
         ],
         "dailyCapUsd": null,
-        "muted": false
+        "muted": false,
+        "spentTodayUsd": 8.4,
+        "capUsd": 10
       }
     },
     {
@@ -736,7 +755,9 @@
         "createdAt": "2026-10-16T12:00:00.000Z",
         "updatedAt": "2026-10-16T12:00:00.000Z",
         "evidence": null,
-        "worktree": null
+        "worktree": null,
+        "spentUsd": 1.2,
+        "budgetUsd": 5
       },
       "messages": []
     },
@@ -846,7 +867,9 @@
           }
         ],
         "dailyCapUsd": null,
-        "muted": true
+        "muted": true,
+        "spentTodayUsd": 8.4,
+        "capUsd": 10
       }
     },
     {
@@ -877,7 +900,9 @@
         "worktree": {
           "path": "/Users/alex/.claudiobot-worktrees/web/a1",
           "branch": "claudio/verify-skill"
-        }
+        },
+        "spentUsd": 1.2,
+        "budgetUsd": 5
       }
     },
     {

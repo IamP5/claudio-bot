@@ -83,9 +83,11 @@ struct TargetBadge: View {
     let target: Target
 
     var body: some View {
-        Label(target.isCloud ? "Cloud" : "Mac", systemImage: target.isCloud ? "cloud" : "laptopcomputer")
+        HStack(spacing: 3) {
+            Image(systemName: target.isCloud ? "cloud" : "laptopcomputer")
+            Text(target.isCloud ? "Cloud" : "Mac")
+        }
             .font(.caption2.weight(.semibold))
-            .labelStyle(.titleAndIcon)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .foregroundStyle(.secondary)
@@ -156,7 +158,19 @@ struct ConnectionBadge: View {
             }
         }
         .font(.footnote.weight(.medium))
+        .foregroundStyle(.primary)
         .lineLimit(1)
+    }
+}
+
+extension ConnectionState {
+    var summary: String {
+        switch self {
+        case .unpaired: "Not paired"
+        case .connecting: "Connecting"
+        case .connected: "Connected"
+        case .disconnected: "Reconnecting"
+        }
     }
 }
 

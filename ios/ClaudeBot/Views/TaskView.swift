@@ -38,6 +38,11 @@ struct TaskView: View {
             } action: { _, atBottom in
                 pinnedToBottom = atBottom
             }
+            .task {
+                // LazyVStack only knows its real height after the first layout pass.
+                try? await Task.sleep(for: .milliseconds(150))
+                proxy.scrollTo(Self.bottom, anchor: .bottom)
+            }
             .onChange(of: items) {
                 guard pinnedToBottom else { return }
                 withAnimation(.snappy) { proxy.scrollTo(Self.bottom, anchor: .bottom) }
@@ -129,15 +134,17 @@ private struct TaskHeader: View {
             Text(task.title)
                 .font(.headline)
                 .lineLimit(1)
-            HStack(spacing: 6) {
-                Text(task.projectName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                TargetBadge(target: task.target)
-                StatusPill(status: task.status)
+            HStack(spacing: 4) {
+                Image(systemName: task.target.isCloud ? "cloud" : "laptopcomputer")
+                Text("\(task.projectName) · \(task.target.isCloud ? "Cloud" : "Mac") ·")
+                StatusDot(color: task.status.color, pulsing: task.status == .running)
+                Text(task.status.title)
             }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
         }
-        .frame(maxWidth: 260)
+        .frame(maxWidth: 240)
     }
 }
 

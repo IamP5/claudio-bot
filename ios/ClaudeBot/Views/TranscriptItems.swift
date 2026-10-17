@@ -70,7 +70,7 @@ struct ToolRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(!hasOutput)
+            .allowsHitTesting(hasOutput)
 
             if expanded, let output = item.output {
                 Divider()
@@ -171,13 +171,19 @@ struct ApprovalCard: View {
                     Text("Sending…").font(.subheadline).foregroundStyle(.secondary)
                 }
             } else {
-                HStack(spacing: 8) {
-                    decisionButton("Deny", .deny, role: .destructive)
-                        .buttonStyle(.bordered)
-                    decisionButton("Always allow", .allowAlways)
-                        .buttonStyle(.bordered)
-                    decisionButton("Allow", .allow)
-                        .buttonStyle(.borderedProminent)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        decisionButton("Deny", .deny, role: .destructive).buttonStyle(.bordered)
+                        decisionButton("Always allow", .allowAlways).buttonStyle(.bordered)
+                        decisionButton("Allow", .allow).buttonStyle(.borderedProminent)
+                    }
+                    VStack(spacing: 8) {
+                        HStack(spacing: 8) {
+                            decisionButton("Deny", .deny, role: .destructive).buttonStyle(.bordered)
+                            decisionButton("Allow", .allow).buttonStyle(.borderedProminent)
+                        }
+                        decisionButton("Always allow", .allowAlways).buttonStyle(.bordered)
+                    }
                 }
                 .controlSize(.large)
             }
@@ -199,6 +205,8 @@ struct ApprovalCard: View {
         } label: {
             Text(title)
                 .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .fixedSize()
                 .frame(maxWidth: .infinity)
         }
     }

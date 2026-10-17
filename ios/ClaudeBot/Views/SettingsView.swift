@@ -11,7 +11,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section("Mac") {
-                    LabeledContent("Status") { ConnectionBadge(state: store.connection) }
+                    LabeledContent("Status", value: store.connection.summary)
                     LabeledContent("Machine", value: store.machine ?? "Unknown")
                     if let url = client.pairing?.url {
                         LabeledContent("Bridge") {

@@ -787,7 +787,7 @@ test("a permission card an agent opens shows its bot as awaiting approval in the
   expect(frame?.type === "bot" && frame.bot.status).toBe("awaiting_approval");
 });
 
-test("a bot's commands run sandboxed to its home and USER.md, and a mac agent's to its project, pushing over https", async () => {
+test("a bot's commands run sandboxed to its home, never writing USER.md or its CLAUDE.md, and a mac agent's to its project, pushing over https", async () => {
   const world = emptyWorld();
   const b = bot("eng");
   world.bots.set(b.id, b);
@@ -815,8 +815,9 @@ test("a bot's commands run sandboxed to its home and USER.md, and a mac agent's 
   expect([botOptions.sandbox?.enabled, botOptions.sandbox?.allowUnsandboxedCommands, botOptions.sandbox?.filesystem?.allowWrite]).toEqual([
     true,
     false,
-    [join(home, "bots", b.id), join(home, "USER.md")],
+    [join(home, "bots", b.id)],
   ]);
+  expect(botOptions.sandbox?.filesystem?.denyWrite).toEqual(expect.arrayContaining([join(home, "bots", b.id, "CLAUDE.md"), join(home, "USER.md")]));
   expect(botOptions.sandbox?.filesystem?.denyRead?.[0]).toBe(home);
   expect([botOptions.settings, agentOptions.settings]).toEqual([{ autoMemoryEnabled: false }, { autoMemoryEnabled: false }]);
   expect([agentOptions.sandbox?.filesystem?.allowWrite?.[0], agentOptions.env?.GIT_CONFIG_VALUE_1, botOptions.env]).toEqual([cwd, "ssh://git@github.com/", undefined]);

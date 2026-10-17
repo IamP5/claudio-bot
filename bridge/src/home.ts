@@ -1,9 +1,12 @@
-import { existsSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import type { AgentId, Attachment, BotId, LibraryFile, Upload } from "./protocol";
 
 const TEXT_LIMIT = 1024 * 1024;
 const BINARY_LIMIT = 10 * 1024 * 1024;
+/** How many folders deep under library/ the listing goes, and how many entries it looks at in all. */
+export const LIBRARY_DEPTH_MAX = 8;
+export const LIBRARY_ENTRIES_MAX = 1000;
 
 function utf8Text(bytes: Uint8Array): string | null {
   if (bytes.includes(0)) return null;
@@ -28,13 +31,25 @@ export function createHomes(root: string) {
     return real === home || real.startsWith(home + sep) ? real : null;
   }
 
-  function walk(dir: string, base: string, out: LibraryFile[]) {
-    for (const name of readdirSync(dir)) {
+  /**
+   * The bot writes its library, so the walk never follows a symlink (a loop, or a link to / or out of the home), and an
+   * entry it cannot read is left out rather than failing the whole listing.
+   */
+  function walk(dir: string, depth: number, base: string, out: LibraryFile[], seen: { entries: number }) {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
       if (name.startsWith(".")) continue;
+      if (++seen.entries > LIBRARY_ENTRIES_MAX) return;
       const path = join(dir, name);
-      const stat = statSync(path);
-      if (stat.isDirectory()) walk(path, base, out);
-      else if (stat.isFile()) out.push({ path: relative(base, path), size: stat.size, modifiedAt: stat.mtime.toISOString() });
+      const stat = lstatSync(path, { throwIfNoEntry: false });
+      if (stat?.isDirectory()) {
+        if (depth + 1 < LIBRARY_DEPTH_MAX) walk(path, depth + 1, base, out, seen);
+      } else if (stat?.isFile()) out.push({ path: relative(base, path), size: stat.size, modifiedAt: stat.mtime.toISOString() });
     }
   }
 
@@ -71,7 +86,7 @@ export function createHomes(root: string) {
     library(id: BotId): LibraryFile[] {
       const home = homeOf(id);
       const out: LibraryFile[] = [];
-      if (existsSync(join(home, "library"))) walk(join(home, "library"), home, out);
+      if (lstatSync(join(home, "library"), { throwIfNoEntry: false })?.isDirectory()) walk(join(home, "library"), 0, home, out, { entries: 0 });
       return out.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
     },
 

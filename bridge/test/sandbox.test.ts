@@ -73,10 +73,15 @@ describe("a bot", () => {
     });
   });
 
-  test("writes only its own home and USER.md", () => {
+  test("writes only its own home, and never USER.md or the files Claude Code loads as its instructions and config", () => {
     expect(
       writesOf(s, [
         "/Users/u/.claudiobot/bots/b_alpha/library/n.md",
+        "/Users/u/.claudiobot/bots/b_alpha/CLAUDE.md",
+        "/Users/u/.claudiobot/bots/b_alpha/CLAUDE.local.md",
+        "/Users/u/.claudiobot/bots/b_alpha/.claude/skills/x/SKILL.md",
+        "/Users/u/.claudiobot/bots/b_alpha/.claude/settings.json",
+        "/Users/u/.claudiobot/bots/b_alpha/.mcp.json",
         "/Users/u/.claudiobot/USER.md",
         "/Users/u/.claudiobot/bots/b_beta/x",
         "/Users/u/.claudiobot/state.json",
@@ -86,7 +91,12 @@ describe("a bot", () => {
       ]),
     ).toEqual({
       "/Users/u/.claudiobot/bots/b_alpha/library/n.md": true,
-      "/Users/u/.claudiobot/USER.md": true,
+      "/Users/u/.claudiobot/bots/b_alpha/CLAUDE.md": false,
+      "/Users/u/.claudiobot/bots/b_alpha/CLAUDE.local.md": false,
+      "/Users/u/.claudiobot/bots/b_alpha/.claude/skills/x/SKILL.md": false,
+      "/Users/u/.claudiobot/bots/b_alpha/.claude/settings.json": false,
+      "/Users/u/.claudiobot/bots/b_alpha/.mcp.json": false,
+      "/Users/u/.claudiobot/USER.md": false,
       "/Users/u/.claudiobot/bots/b_beta/x": false,
       "/Users/u/.claudiobot/state.json": false,
       "/Users/u/Dev/app/x": false,
@@ -332,4 +342,61 @@ test("the gate's floors and the sandbox cover the same private paths", () => {
     .filter((p) => decide(read(p), ctx).kind !== "deny" || canRead(botBox, p) || canRead(agentBox, p));
   expect(open).toEqual([`${HOME}/Library/Keychains/inner`]);
   expect([canRead(botBox, open[0]!), canRead(agentBox, open[0]!), decide(read(open[0]!), ctx).kind]).toEqual([false, true, "deny"]);
+});
+
+test("shell histories, CLI tokens and the Claude desktop and Cursor logins are private to bots, agents and the gate, but their projects are not", () => {
+  const ctx: PolicyContext = {
+    actor: bot,
+    initiator: { kind: "user" },
+    scope: botScope,
+    rules: [],
+    grants: [],
+    headroom: { ok: true, capReached: false },
+    callsToday: {},
+    connectorsOff: [],
+    now: "2026-10-17T12:00:00.000Z",
+    realpath: (p) => p,
+  };
+  const read = (path: string): ToolCall => ({ tool: "Read", input: { file_path: path }, cwd: botScope.own, toolUseId: "t", subagent: null, mcpServer: null });
+  const boxes = [sandboxFor(bot, botScope, ENV), sandboxFor(agent, agentScope(), ENV)];
+  const reachable = (p: string) => boxes.some((b) => canRead(b, p)) || decide(read(p), ctx).kind !== "deny";
+  const secret = [
+    ".zsh_history",
+    ".zsh_sessions/A.history",
+    ".bash_history",
+    ".local/share/fish/fish_history",
+    ".python_history",
+    ".node_repl_history",
+    ".psql_history",
+    ".mysql_history",
+    ".cargo/credentials.toml",
+    ".cargo/credentials",
+    ".terraform.d/credentials.tfrc.json",
+    ".terraformrc",
+    ".gem/credentials",
+    ".m2/settings.xml",
+    ".m2/settings-security.xml",
+    ".config/stripe/config.toml",
+    ".config/doctl/config.yaml",
+    "Library/Application Support/doctl/config.yaml",
+    "Library/Preferences/netlify/config.json",
+    ".netlify/config.json",
+    ".config/configstore/firebase-tools.json",
+    ".local/share/com.vercel.cli/auth.json",
+    ".oci/config",
+    "Library/Application Support/Claude/claude_desktop_config.json",
+    "Library/Application Support/Claude/config.json",
+    "Library/Application Support/Claude/Cookies",
+    "Library/Application Support/Claude/Local Storage/leveldb/1.ldb",
+    "Library/Application Support/Claude/claude-code-sessions/s.json",
+    "Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+    ".cursor/mcp.json",
+    ".cursor/cli-config.json",
+    ".cursor/projects/p/t.jsonl",
+  ].map((rel) => `${HOME}/${rel}`);
+  expect(secret.filter(reachable)).toEqual([]);
+  const work = [".cargo/registry/index/x", ".m2/repository/x.jar", "Library/Application Support/Claude/scratch-workspaces/w/a.ts", ".cursor/plugins/p/SKILL.md"].map(
+    (rel) => `${HOME}/${rel}`,
+  );
+  expect(work.filter((p) => !canRead(boxes[1]!, p))).toEqual([]);
 });

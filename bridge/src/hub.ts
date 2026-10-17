@@ -349,7 +349,13 @@ export function createHub(deps: HubDeps): Hub {
     now: clockNow,
     log: deps.log,
   });
-  const skills = createSkills({ homes, reopen: (id) => brains.get(id)?.reopen(), now: clockNow });
+  const skills = createSkills({
+    homes,
+    changed: (id) => {
+      brains.get(id)?.reopen();
+      deps.broadcast({ type: "skills", botId: id, skills: skills.list(id) });
+    },
+  });
 
   function brain(bot: BotRecord): Session {
     const existing = brains.get(bot.id);
@@ -738,7 +744,7 @@ export function createHub(deps: HubDeps): Hub {
         return [{ type: "skills", botId: bot.id, skills: skills.list(bot.id) }];
       case "delete_skill": {
         const result = skills.remove(bot.id, message.name);
-        return result.ok ? [{ type: "skills", botId: bot.id, skills: skills.list(bot.id) }] : error(result.error);
+        return result.ok ? [] : error(result.error);
       }
       case "webhook_token": {
         const made = webhooks.token(bot.id, message.routineId);

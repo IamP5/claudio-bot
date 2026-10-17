@@ -21,7 +21,7 @@ function setup() {
   const homes = createHomes(root);
   homes.create(BOT, "# Ada\n");
   const reopened: BotId[] = [];
-  const skills = createSkills({ homes, reopen: (id) => reopened.push(id), now: () => new Date("2026-10-17T12:00:00Z") });
+  const skills = createSkills({ homes, changed: (id) => reopened.push(id) });
   const home = homes.homeOf(BOT);
   const skillsDir = join(home, ".claude", "skills");
   return { root, homes, home, skillsDir, skills, reopened };
@@ -67,7 +67,7 @@ test("saving a name again replaces that skill", () => {
   expect(readFileSync(join(s.skillsDir, "greet", "SKILL.md"), "utf8")).toContain("Reply exactly HI");
 });
 
-test("reopen is called once per save and per remove, and not for a refusal", () => {
+test("changed is called once per save and per remove, and not for a refusal", () => {
   const s = setup();
   s.skills.save(BOT, greet);
   s.skills.save(BOT, greet);
@@ -88,6 +88,9 @@ test.each([
   ["a name over 64 characters", { name: "a".repeat(65) }],
   ["an empty description", { description: "  " }],
   ["a two-line description", { description: "Greet\nthe user" }],
+  ["a line separator in the description", { description: "Greet\u2028the user" }],
+  ["a lone surrogate in the description", { description: "Greet \ud800 the user" }],
+  ["a lone surrogate in the body", { body: "Reply \udc00 exactly" }],
   ["a description over 200 characters", { description: "d".repeat(201) }],
   ["an empty body", { body: "\n" }],
   ["a body over 20 KB", { body: "b".repeat(20 * 1024 + 1) }],
@@ -100,6 +103,28 @@ test.each([
   expect(() => s.skills.save(BOT, { ...greet, ...patch })).toThrow();
   expect(s.skills.list(BOT)).toEqual([]);
   expect(s.reopened).toEqual([]);
+});
+
+test("a SKILL.md that is not a plain file is not replaced, and a failed write leaves no temp file", () => {
+  const s = setup();
+  mkdirSync(join(s.skillsDir, "greet", "SKILL.md"), { recursive: true });
+  expect(() => s.skills.save(BOT, greet)).toThrow("not a plain folder with a plain SKILL.md");
+
+  const outside = join(s.root, "elsewhere.md");
+  writeFileSync(outside, "keep\n");
+  mkdirSync(join(s.skillsDir, "notes"));
+  symlinkSync(outside, join(s.skillsDir, "notes", "SKILL.md"));
+  expect(() => s.skills.save(BOT, { ...greet, name: "notes" })).toThrow();
+  expect(readFileSync(outside, "utf8")).toBe("keep\n");
+  expect(s.reopened).toEqual([]);
+});
+
+test("list reads only the start of a SKILL.md for its frontmatter", () => {
+  const s = setup();
+  s.skills.save(BOT, greet);
+  const file = join(s.skillsDir, "greet", "SKILL.md");
+  writeFileSync(file, `---\nname: greet\ndescription: Short\n---\n\n${"x".repeat(1024 * 1024)}`);
+  expect(s.skills.list(BOT).map((k) => k.description)).toEqual(["Short"]);
 });
 
 test("the edges of the limits are accepted, and a body keeps its line breaks and tabs", () => {

@@ -1048,3 +1048,21 @@ test("delete_bot removes the config folders of the bot's agents and keeps other 
   expect(existsSync(stays)).toBe(true);
   expect([...world.agents.keys()]).toEqual(["a_kept" as AgentId]);
 });
+
+test("saving and deleting a skill sends every phone the bot's new list", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "save a greet skill", uploads: [] });
+  await flush();
+
+  await callTool(h.q(), "save_skill", { name: "greet", description: "Greet the user", body: "Reply exactly GREET-OK" });
+  const saved = h.frames.filter((f) => f.type === "skills");
+  expect(saved.map((f) => f.type === "skills" && [f.botId, f.skills.map((k) => k.name)])).toEqual([[b.id, ["greet"]]]);
+
+  expect(await h.hub.handle({ type: "delete_skill", botId: b.id, name: "greet" })).toEqual([]);
+  expect(h.frames.filter((f) => f.type === "skills").at(-1)).toEqual({ type: "skills", botId: b.id, skills: [] });
+  expect(await h.hub.handle({ type: "delete_skill", botId: b.id, name: "greet" })).toEqual([{ type: "error", message: "This bot has no skill named greet." }]);
+});

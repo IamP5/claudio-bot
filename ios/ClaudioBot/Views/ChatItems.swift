@@ -100,6 +100,8 @@ private struct QuestionCardBody: View {
     let color: AvatarColor
 
     @Environment(BridgeClient.self) private var client
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var taps = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -128,11 +130,12 @@ private struct QuestionCardBody: View {
                     ForEach(Array(card.options.enumerated()), id: \.offset) { index, option in
                         if index > 0 { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 48) }
                         Button {
+                            taps += 1
                             client.send(.answer(botId: botId, messageId: messageId, option: index))
                         } label: {
                             OptionRow(index: index, text: option)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.pressable)
                     }
                 }
                 .background(Theme.inset, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -151,6 +154,8 @@ private struct QuestionCardBody: View {
         .padding(16)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .padding(.trailing, 20)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: answer)
+        .sensoryFeedback(.selection, trigger: taps)
     }
 }
 
@@ -175,6 +180,7 @@ private struct PermissionCardBody: View {
 
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var sent: PermissionChoice? { store.pendingDecisions[messageId] }
 
@@ -237,6 +243,10 @@ private struct PermissionCardBody: View {
         .padding(16)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .padding(.trailing, 20)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: answer)
+        .sensoryFeedback(trigger: sent) { _, choice in
+            choice.map { $0.allows ? .success : .warning }
+        }
     }
 
     private var buttons: some View {
@@ -268,7 +278,7 @@ private struct PermissionCardBody: View {
             .background(background(choice), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .opacity(sent == nil || sent == choice ? 1 : 0.5)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
     }
 
     private func foreground(_ choice: PermissionChoice) -> Color {

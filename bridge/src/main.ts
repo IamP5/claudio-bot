@@ -97,9 +97,11 @@ const hub = createHub({
   model: process.env.CLAUDIOBOT_MODEL || undefined,
   scan: () => scanProjects(),
   broadcast: (message) => transport.publish(message),
+  signal: (message) => transport.signal(message),
   persist: saver.schedule,
   log,
   push,
+  webhookPort: Number(process.env.CLAUDIOBOT_WEBHOOK_PORT ?? port + 1),
 });
 
 const transport = serve({ devices, stream: createStream(), hub, legacy, log, now, port });

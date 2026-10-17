@@ -11,6 +11,7 @@ import type { Project } from "../src/projects";
 import type { AgentId, BotId, Message, MessageId, RoutineId, RunId, ServerMessage, StreamPosition } from "../src/protocol";
 import { createPush, type Push, type PushReason } from "../src/push";
 import { BREAKER_NOTE } from "../src/session";
+import { CLAUDIO_TOOLS } from "../src/tools";
 import { emptySession, emptyWorld, newBot, type AgentRecord, type BotRecord, type EnvelopeId, type Fingerprint, type GateState, type RoutineRecord, type Signature, type World } from "../src/world";
 
 const roots: string[] = [];
@@ -103,6 +104,8 @@ function hubOver(
     model: undefined,
     scan: opts.scan ?? (async () => []),
     broadcast: (m) => frames.push(m),
+    signal: () => {},
+    webhookPort: null,
     persist: (urgency) => {
       opts.persist?.(urgency);
       events.push(`persist ${urgency ?? "later"} with ${[...world.bots.keys()].join(",") || "no bots"}`);
@@ -687,7 +690,7 @@ test("an agent thread keeps its newest 1000 messages; older ones go to its own a
   roots.push(cwd);
   const thread = Array.from({ length: 1100 }, (_, i) => ({ id: `m_${i}` as MessageId, at, from: "agent" as const, text: `step ${i}` }));
   const rec: AgentRecord = {
-    agent: { id: "a_1" as AgentId, botId: b.id, title: "Fix login", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at },
+    agent: { id: "a_1" as AgentId, botId: b.id, title: "Fix login", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null },
     cwd,
     messages: [...thread],
     session: emptySession(),
@@ -754,7 +757,7 @@ test("a permission card an agent opens shows its bot as awaiting approval in the
   const cwd = mkdtempSync(join(tmpdir(), "claudiobot-agent-"));
   roots.push(cwd);
   world.agents.set("a_1" as AgentId, {
-    agent: { id: "a_1" as AgentId, botId: b.id, title: "Ship it", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at },
+    agent: { id: "a_1" as AgentId, botId: b.id, title: "Ship it", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null },
     cwd,
     messages: [],
     session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "Push the fix.", initiator: { kind: "user" }, settles: null, attempts: 0 }] },
@@ -780,7 +783,7 @@ test("a bot's commands run sandboxed to its home and USER.md, and a mac agent's 
   const cwd = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-agent-")));
   roots.push(cwd);
   world.agents.set("a_1" as AgentId, {
-    agent: { id: "a_1" as AgentId, botId: b.id, title: "Ship it", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at },
+    agent: { id: "a_1" as AgentId, botId: b.id, title: "Ship it", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null },
     cwd,
     messages: [],
     session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "Push the fix.", initiator: { kind: "user" }, settles: null, attempts: 0 }] },
@@ -878,4 +881,56 @@ test("one ticker throwing is logged, and the tickers after it still run", () => 
   expect(logs).toHaveLength(1);
   expect(logs[0]).toContain("scheduler");
   expect(logs[0]).toContain("bad routine");
+});
+
+test("hello lists every feature this bridge has", () => {
+  const hello = hubOver(emptyWorld()).hub.hello(NO_RING);
+  expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks"]);
+});
+
+test("a send's clientId comes back on the user's message, and a send without one adds none", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+
+  await h.hub.handle({ type: "send", botId: b.id, text: "ship it", uploads: [], clientId: "c_1" });
+  await h.hub.handle({ type: "send", botId: b.id, text: "and tests", uploads: [] });
+
+  const users = b.messages.filter((m) => m.kind === "user");
+  expect(users.map((m) => m.kind === "user" && m.clientId)).toEqual(["c_1", undefined]);
+  expect(Object.hasOwn(users[1]!, "clientId")).toBe(false);
+});
+
+test("the bot's tool server offers every claudio tool, and list_routines and set_routine reach the scheduler", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  await h.hub.handle({ type: "send", botId: b.id, text: "hi", uploads: [] });
+  await flush();
+
+  const [server, client] = InMemoryTransport.createLinkedPair();
+  await (h.q().options.mcpServers!.claudio as McpSdkServerConfigWithInstance).instance.connect(server);
+  const mcp = new Client({ name: "test", version: "1" });
+  await mcp.connect(client);
+  expect((await mcp.listTools()).tools.map((t) => t.name).sort()).toEqual([...CLAUDIO_TOOLS].sort());
+
+  const text = async (name: string, args: Record<string, unknown>) => ((await mcp.callTool({ name, arguments: args })).content as { text: string }[])[0]!.text;
+  expect(await text("list_routines", {})).toBe("No routines.");
+  expect(await text("set_routine", { name: "digest", prompt: "p" })).toBe("A cron routine needs a schedule.");
+  expect(await text("set_routine", { name: "digest", schedule: "0 9 * * *", prompt: "p" })).toStartWith("Routine digest: Every day at 9:00 AM");
+  expect(await text("list_routines", {})).toStartWith("- digest: Every day at 9:00 AM (0 9 * * *), next ");
+});
+
+test("the client requests of the pass 3 units answer through their modules", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+
+  expect(await h.hub.handle({ type: "memory" })).toEqual([{ type: "memory", facts: [] }]);
+  expect(await h.hub.handle({ type: "connectors", botId: b.id })).toEqual([{ type: "connectors", botId: b.id, connectors: [] }]);
+  expect(await h.hub.handle({ type: "skills", botId: b.id })).toEqual([{ type: "skills", botId: b.id, skills: [] }]);
+  expect(await h.hub.handle({ type: "remove_worktree", agentId: "a_none" as AgentId })).toEqual([{ type: "error", message: "Unknown agent" }]);
 });

@@ -17,6 +17,7 @@ import { basename, isAbsolute, normalize, resolve, sep } from "node:path";
 import type { Headroom } from "./ledger";
 import { PRIVATE } from "./private";
 import type { MessageId } from "./protocol";
+import type { ClaudioTool } from "./tools";
 import { shellCommands, type Word } from "./shell";
 import { BODY_KEYS, clip, maskSecrets, sha256 } from "./text";
 import { actorKey, attended, hopsOf, isRoutineChain, type Actor, type Fingerprint, type Grant, type Initiator, type Signature, type StandingRule } from "./world";
@@ -53,6 +54,8 @@ export type PolicyContext = {
   headroom: Headroom;
   /** This bot's allowed calls today, by tool name, for the daily caps on create_bot and start_agent. */
   callsToday: Readonly<Record<string, number>>;
+  /** MCP servers the user turned off for this bot and its agents (BotRecord.connectorsOff). */
+  connectorsOff: readonly string[];
   now: string;
   /** Resolves symlinks in the longest existing prefix of an absolute path. Floors match on what a path really is. */
   realpath: (path: string) => string;
@@ -748,6 +751,15 @@ const BANS: readonly { id: string; tools: readonly string[]; applies: (i: Initia
   },
 ];
 
+/** A call the bridge refuses outright before the table: a claudio tool it does not serve, or a connector the user turned off. */
+function refusedOf(call: ToolCall, ctx: PolicyContext): Decision | null {
+  if (isClaudio(call) && claudioEntry(call) === undefined)
+    return deny("rule", "claudio.unknown", `The bridge has no tool ${call.tool}. It did not run.`);
+  if (isConnector(call) && call.mcpServer !== null && ctx.connectorsOff.includes(call.mcpServer.name))
+    return deny("rule", "connector.off", `The user turned off the ${call.mcpServer.name} connector for this bot. It did not run. Do not try it again.`);
+  return null;
+}
+
 function limitOf(call: ToolCall, ctx: PolicyContext): Decision | null {
   const h = ctx.headroom;
   if (!h.ok)
@@ -898,6 +910,36 @@ function deploySub(words: string[]): { tool: string; sub: string; args: string[]
   return s === null ? null : { tool: t, sub: s.sub, args: s.args };
 }
 
+/**
+ * The policy of each tool on the bridge's own claudio server: null passes, else a row (by attended/unattended). Keyed on
+ * every name tools.ts serves, so a new tool cannot ship unclassified; a call naming any other claudio tool is denied.
+ * The row ids are the signatures' suffixes, so they never change once an Always rule may name them.
+ */
+const CLAUDIO: Readonly<Record<ClaudioTool, { id: string; label: string; attended: Cell; unattended: Cell } | null>> = {
+  ask: null,
+  start_agent: { id: "claudio.start_agent", label: "Start a coding agent", attended: "pass", unattended: "ask" },
+  message_agent: null,
+  list_projects: null,
+  message_bot: null,
+  create_bot: { id: "claudio.create_bot", label: "Create a bot", attended: "pass", unattended: "ask" },
+  update_self: null,
+  set_routine: { id: "claudio.routines", label: "Change routines", attended: "pass", unattended: "ask" },
+  delete_routine: { id: "claudio.routines", label: "Change routines", attended: "pass", unattended: "ask" },
+  list_routines: null,
+  routine_no_update: null,
+  remember: { id: "claudio.remember", label: "Remember something", attended: "pass", unattended: "ask" },
+  save_skill: { id: "claudio.save_skill", label: "Save a skill", attended: "pass", unattended: "ask" },
+};
+const claudioName = (call: ToolCall) => call.tool.slice("mcp__claudio__".length);
+const claudioEntry = (call: ToolCall) => (Object.hasOwn(CLAUDIO, claudioName(call)) ? CLAUDIO[claudioName(call) as ClaudioTool] : undefined);
+const CLAUDIO_ROWS: readonly Row[] = [...new Map(Object.values(CLAUDIO).flatMap((e) => (e === null ? [] : [[e.id, e] as const]))).values()].map((e) => ({
+  id: e.id,
+  label: e.label,
+  match: tool((c) => isClaudio(c) && claudioEntry(c)?.id === e.id),
+  attended: e.attended,
+  unattended: e.unattended,
+}));
+
 /** First matching row wins per part; the strictest part wins per call. The only list of risky commands in the bridge. */
 const TABLE: readonly Row[] = [
   {
@@ -907,6 +949,13 @@ const TABLE: readonly Row[] = [
     attended: "ask",
     unattended: "ask",
     offerAlways: false,
+  },
+  {
+    id: "memory.user",
+    label: "Edit USER.md, which every bot reads",
+    match: (p, ctx) => ctx.scope.userMd !== null && p.touches.some((t) => t.write && (t.real === ctx.scope.userMd || t.lexical === ctx.scope.userMd)),
+    attended: "pass",
+    unattended: "ask",
   },
   {
     id: "dynamic.command",
@@ -1109,15 +1158,7 @@ const TABLE: readonly Row[] = [
     attended: (p) => (p.kind === "call" && verbsOf(p.call).some((w) => WRITE_VERBS.has(w)) ? "ask" : "pass"),
     unattended: (p) => (p.kind === "call" && verbsOf(p.call).some((w) => READ_VERBS.has(w)) ? "pass" : "ask"),
   },
-  { id: "claudio.create_bot", label: "Create a bot", match: tool((c) => isClaudio(c) && c.tool === claudio("create_bot")), attended: "pass", unattended: "ask" },
-  { id: "claudio.start_agent", label: "Start a coding agent", match: tool((c) => isClaudio(c) && c.tool === claudio("start_agent")), attended: "pass", unattended: "ask" },
-  {
-    id: "claudio.routines",
-    label: "Change routines",
-    match: tool((c) => isClaudio(c) && (c.tool === claudio("set_routine") || c.tool === claudio("delete_routine"))),
-    attended: "pass",
-    unattended: "ask",
-  },
+  ...CLAUDIO_ROWS,
 ];
 
 /** A part's row: the cell for this initiator and the signature Always and Never cover. */
@@ -1136,7 +1177,8 @@ const deny = (via: DenyVia, rule: string, reason: string, handOff = false): Deci
  *      written and on realpath; ancestors of a root count for recursive verbs and glob/$ words; the raw text is
  *      scanned for a root spelled literally; the bot's own absolute home path never matches the bridge floor.
  *   2. initiator bans: no set_routine / delete_routine in a routine chain (world.isRoutineChain); message_bot and
- *      create_bot at world.hopsOf >= 2; message_bot with no turn in flight.
+ *      create_bot at world.hopsOf >= 2; message_bot with no turn in flight. Then refusals: a claudio tool the bridge
+ *      does not serve, and a connector the user turned off for this bot.
  *   3. limits: headroom not ok; daily caps on create_bot and start_agent per bot.
  *   4. Never rules, on any part's signature.
  *   5. a one-shot grant with this actor and fingerprint (the gate consumes it).
@@ -1162,6 +1204,11 @@ export function decide(call: ToolCall, ctx: PolicyContext): Decision {
       at.rule = ban.id;
       if (ban.tools.includes(call.tool) && ban.applies(ctx.initiator)) return deny("initiator", ban.id, ban.reason);
     }
+
+    at.via = "rule";
+    at.rule = "refused";
+    const refusal = refusedOf(call, ctx);
+    if (refusal) return refusal;
 
     at.via = "limit";
     at.rule = "limit";

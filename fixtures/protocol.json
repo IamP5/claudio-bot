@@ -3,6 +3,15 @@
     {
       "type": "hello",
       "protocol": 3,
+      "features": [
+        "memory",
+        "activity",
+        "mute",
+        "worktrees",
+        "connectors",
+        "skills",
+        "webhooks"
+      ],
       "epoch": "e_7f3a",
       "seq": 41,
       "resumed": false,
@@ -72,7 +81,8 @@
               ]
             }
           ],
-          "dailyCapUsd": null
+          "dailyCapUsd": null,
+          "muted": false
         }
       ]
     },
@@ -142,7 +152,8 @@
             ]
           }
         ],
-        "dailyCapUsd": 5
+        "dailyCapUsd": 5,
+        "muted": false
       }
     },
     {
@@ -299,7 +310,9 @@
           "status": "waiting",
           "url": null,
           "createdAt": "2026-10-16T12:00:00.000Z",
-          "updatedAt": "2026-10-16T12:00:00.000Z"
+          "updatedAt": "2026-10-16T12:00:00.000Z",
+          "evidence": null,
+          "worktree": null
         },
         {
           "id": "a2",
@@ -310,7 +323,9 @@
           "status": "in_cloud",
           "url": "https://claude.ai/code/session_abc",
           "createdAt": "2026-10-16T12:00:00.000Z",
-          "updatedAt": "2026-10-16T12:00:00.000Z"
+          "updatedAt": "2026-10-16T12:00:00.000Z",
+          "evidence": null,
+          "worktree": null
         }
       ],
       "routines": [
@@ -358,6 +373,18 @@
               "note": "Missed while the Mac was asleep"
             }
           ]
+        },
+        {
+          "id": "r2",
+          "name": "deploy-watch",
+          "schedule": "",
+          "describe": "When its webhook is called",
+          "prompt": "Summarize the deploy that just finished.",
+          "enabled": true,
+          "lastRunAt": null,
+          "trigger": "webhook",
+          "nextRunAt": null,
+          "runs": []
         }
       ]
     },
@@ -372,7 +399,9 @@
         "status": "waiting",
         "url": null,
         "createdAt": "2026-10-16T12:00:00.000Z",
-        "updatedAt": "2026-10-16T12:00:00.000Z"
+        "updatedAt": "2026-10-16T12:00:00.000Z",
+        "evidence": null,
+        "worktree": null
       },
       "messages": [
         {
@@ -531,7 +560,8 @@
             ]
           }
         ],
-        "dailyCapUsd": null
+        "dailyCapUsd": null,
+        "muted": false
       }
     },
     {
@@ -600,7 +630,8 @@
             ]
           }
         ],
-        "dailyCapUsd": null
+        "dailyCapUsd": null,
+        "muted": false
       }
     },
     {
@@ -615,7 +646,9 @@
         "status": "awaiting_approval",
         "url": null,
         "createdAt": "2026-10-16T12:00:00.000Z",
-        "updatedAt": "2026-10-16T12:00:00.000Z"
+        "updatedAt": "2026-10-16T12:00:00.000Z",
+        "evidence": null,
+        "worktree": null
       },
       "messages": []
     },
@@ -685,7 +718,8 @@
             ]
           }
         ],
-        "dailyCapUsd": null
+        "dailyCapUsd": null,
+        "muted": false
       }
     },
     {
@@ -700,7 +734,9 @@
         "status": "unavailable",
         "url": null,
         "createdAt": "2026-10-16T12:00:00.000Z",
-        "updatedAt": "2026-10-16T12:00:00.000Z"
+        "updatedAt": "2026-10-16T12:00:00.000Z",
+        "evidence": null,
+        "worktree": null
       },
       "messages": []
     },
@@ -729,6 +765,191 @@
       "type": "pair_code",
       "code": "K7QD-M2XP",
       "expiresAt": "2026-10-16T12:10:00.000Z"
+    },
+    {
+      "type": "message",
+      "seq": 53,
+      "botId": "b1",
+      "message": {
+        "kind": "user",
+        "id": "m11",
+        "at": "2026-10-16T12:00:00.000Z",
+        "text": "Ship it",
+        "attachments": [],
+        "clientId": "c_9b1e"
+      }
+    },
+    {
+      "type": "bot",
+      "seq": 54,
+      "bot": {
+        "id": "b1",
+        "name": "engineer",
+        "title": null,
+        "avatar": {
+          "shape": "hexagon",
+          "color": "orange"
+        },
+        "pinned": false,
+        "hidden": false,
+        "status": "idle",
+        "unread": 2,
+        "question": "Want me to merge any of these now?",
+        "preview": "Want me to merge any of these now?",
+        "lastAt": "2026-10-16T12:00:00.000Z",
+        "createdAt": "2026-10-16T12:00:00.000Z",
+        "routines": [
+          {
+            "id": "r1",
+            "name": "morning-digest",
+            "schedule": "57 7 * * 1-5",
+            "describe": "Weekdays at 7:57 AM",
+            "prompt": "Post today's tech digest.",
+            "enabled": true,
+            "lastRunAt": "2026-10-16T12:00:00.000Z",
+            "trigger": "cron",
+            "nextRunAt": "2026-10-17T11:57:00.000Z",
+            "runs": [
+              {
+                "id": "run4",
+                "at": "2026-10-16T12:00:00.000Z",
+                "status": "ok",
+                "late": false,
+                "manual": true,
+                "note": null
+              },
+              {
+                "id": "run3",
+                "at": "2026-10-15T11:57:00.000Z",
+                "status": "quiet",
+                "late": true,
+                "manual": false,
+                "note": null
+              },
+              {
+                "id": "run2",
+                "at": "2026-10-14T11:57:00.000Z",
+                "status": "failed",
+                "late": false,
+                "manual": false,
+                "note": "Overloaded"
+              },
+              {
+                "id": "run1",
+                "at": "2026-10-13T11:57:00.000Z",
+                "status": "skipped",
+                "late": false,
+                "manual": false,
+                "note": "Missed while the Mac was asleep"
+              }
+            ]
+          }
+        ],
+        "dailyCapUsd": null,
+        "muted": true
+      }
+    },
+    {
+      "type": "agent",
+      "seq": 55,
+      "messages": [],
+      "agent": {
+        "id": "a1",
+        "botId": "b1",
+        "title": "Set up verification skill",
+        "where": "mac",
+        "projectName": "web",
+        "status": "capped",
+        "url": null,
+        "createdAt": "2026-10-16T12:00:00.000Z",
+        "updatedAt": "2026-10-16T12:00:00.000Z",
+        "evidence": {
+          "at": "2026-10-16T14:00:00.000Z",
+          "branch": "claudio/verify-skill",
+          "head": "4f2a9c1",
+          "ahead": 3,
+          "changed": 5,
+          "insertions": 120,
+          "deletions": 14,
+          "dirty": false,
+          "pr": "https://github.com/acme/web/pull/142"
+        },
+        "worktree": {
+          "path": "/Users/alex/.claudiobot-worktrees/web/a1",
+          "branch": "claudio/verify-skill"
+        }
+      }
+    },
+    {
+      "type": "activity",
+      "botId": "b1",
+      "agentId": null,
+      "text": "Reading hub.ts",
+      "at": "2026-10-16T12:00:00.000Z"
+    },
+    {
+      "type": "activity",
+      "botId": "b1",
+      "agentId": "a1",
+      "text": null,
+      "at": "2026-10-16T12:00:00.000Z"
+    },
+    {
+      "type": "memory",
+      "seq": 56,
+      "facts": [
+        {
+          "id": "f_1",
+          "text": "Prefers short answers",
+          "at": "2026-10-16T12:00:00.000Z",
+          "by": null
+        },
+        {
+          "id": "f_2",
+          "text": "Works on acme/web",
+          "at": "2026-10-16T12:00:00.000Z",
+          "by": "engineer"
+        }
+      ]
+    },
+    {
+      "type": "connectors",
+      "botId": "b1",
+      "connectors": [
+        {
+          "name": "github",
+          "status": "connected",
+          "enabled": true
+        },
+        {
+          "name": "linear",
+          "status": "needs_auth",
+          "enabled": true
+        },
+        {
+          "name": "slack",
+          "status": "unchecked",
+          "enabled": false
+        }
+      ]
+    },
+    {
+      "type": "skills",
+      "botId": "b1",
+      "skills": [
+        {
+          "name": "release-notes",
+          "description": "Write release notes from merged PRs",
+          "updatedAt": "2026-10-16T12:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "type": "webhook_token",
+      "botId": "b1",
+      "routineId": "r2",
+      "url": "http://127.0.0.1:7879/hook/r2",
+      "token": "whk_3s9dK2"
     }
   ],
   "client": [
@@ -839,6 +1060,65 @@
     },
     {
       "type": "pair_code"
+    },
+    {
+      "type": "send",
+      "botId": "b1",
+      "text": "Ship it",
+      "uploads": [],
+      "clientId": "c_9b1e"
+    },
+    {
+      "type": "update_bot",
+      "botId": "b1",
+      "patch": {
+        "muted": true
+      }
+    },
+    {
+      "type": "memory"
+    },
+    {
+      "type": "set_fact",
+      "factId": null,
+      "text": "Prefers short answers"
+    },
+    {
+      "type": "set_fact",
+      "factId": "f_2",
+      "text": "Works on acme/web and acme/api"
+    },
+    {
+      "type": "forget_fact",
+      "factId": "f_1"
+    },
+    {
+      "type": "connectors",
+      "botId": "b1"
+    },
+    {
+      "type": "set_connector",
+      "botId": "b1",
+      "name": "slack",
+      "enabled": false
+    },
+    {
+      "type": "skills",
+      "botId": "b1"
+    },
+    {
+      "type": "delete_skill",
+      "botId": "b1",
+      "name": "release-notes"
+    },
+    {
+      "type": "webhook_token",
+      "botId": "b1",
+      "routineId": "r2"
+    },
+    {
+      "type": "remove_worktree",
+      "agentId": "a1"
     }
   ]
 }

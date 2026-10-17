@@ -8,6 +8,7 @@ import {
   type BotPatch,
   type ClientMessage,
   type DeviceId,
+  type FactId,
   type MessageId,
   type RoutineId,
   type Upload,
@@ -68,6 +69,7 @@ function patch(v: unknown): BotPatch {
   if (o.pinned !== undefined) p.pinned = bool(o, "pinned");
   if (o.hidden !== undefined) p.hidden = bool(o, "hidden");
   if (o.dailyCapUsd !== undefined) p.dailyCapUsd = usd(o, "dailyCapUsd");
+  if (o.muted !== undefined) p.muted = bool(o, "muted");
   return p;
 }
 
@@ -84,6 +86,7 @@ const botId = (o: Obj) => str(o, "botId") as BotId;
 const messageId = (o: Obj) => str(o, "messageId") as MessageId;
 const agentId = (o: Obj) => str(o, "agentId") as AgentId;
 const routineId = (o: Obj) => str(o, "routineId") as RoutineId;
+const factId = (o: Obj) => str(o, "factId") as FactId;
 
 const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
   create_bot: (o) => ({ type: "create_bot", ref: str(o, "ref") }),
@@ -91,7 +94,7 @@ const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
   send: (o) => {
     const message = { type: "send", botId: botId(o), text: str(o, "text", { empty: true }), uploads: uploads(o.uploads) } as const;
     if (message.text.trim() === "" && message.uploads.length === 0) throw new ParseError("send needs text or uploads");
-    return message;
+    return o.clientId === undefined ? message : { ...message, clientId: str(o, "clientId") };
   },
   answer: (o) => ({ type: "answer", botId: botId(o), messageId: messageId(o), option: index(o, "option") }),
   dismiss: (o) => ({ type: "dismiss", botId: botId(o), messageId: messageId(o) }),
@@ -106,6 +109,15 @@ const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
   details: (o) => ({ type: "details", botId: botId(o) }),
   agent: (o) => ({ type: "agent", agentId: agentId(o) }),
   file: (o) => ({ type: "file", botId: botId(o), path: str(o, "path") }),
+  memory: () => ({ type: "memory" }),
+  set_fact: (o) => ({ type: "set_fact", factId: o.factId === null ? null : factId(o), text: str(o, "text") }),
+  forget_fact: (o) => ({ type: "forget_fact", factId: factId(o) }),
+  connectors: (o) => ({ type: "connectors", botId: botId(o) }),
+  set_connector: (o) => ({ type: "set_connector", botId: botId(o), name: str(o, "name"), enabled: bool(o, "enabled") }),
+  skills: (o) => ({ type: "skills", botId: botId(o) }),
+  delete_skill: (o) => ({ type: "delete_skill", botId: botId(o), name: str(o, "name") }),
+  webhook_token: (o) => ({ type: "webhook_token", botId: botId(o), routineId: routineId(o) }),
+  remove_worktree: (o) => ({ type: "remove_worktree", agentId: agentId(o) }),
   devices: () => ({ type: "devices" }),
   revoke_device: (o) => ({ type: "revoke_device", deviceId: str(o, "deviceId") as DeviceId }),
   pair_code: () => ({ type: "pair_code" }),

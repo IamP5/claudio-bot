@@ -207,7 +207,7 @@ const v2Agent = V2.agents[0]!;
 const v3 = (patch: object) => JSON.stringify({ version: 3, bots: [], agents: [], gate: { open: [], grants: [], daily: [] }, devices: [], push: { sent: [] }, account: { parkedUntil: null }, ...patch });
 const v3Bot = { ...newBot({ id: "b_1" as BotId, name: "engineer", avatar: { shape: "hexagon", color: "orange" }, at }) };
 const v3Agent = {
-  agent: { ...v2Agent.agent, status: "waiting" }, cwd: v2Agent.cwd, messages: [], session: emptySession(), cloudSession: null, budgetUsd: null, startedBy: { kind: "user" },
+  agent: { ...v2Agent.agent, status: "waiting", evidence: null, worktree: null }, cwd: v2Agent.cwd, messages: [], session: emptySession(), cloudSession: null, budgetUsd: null, startedBy: { kind: "user" },
 };
 
 test.each([
@@ -277,6 +277,39 @@ test("a v3 file from before Pending.kind reads an approval continuation from its
     ["c_1", "continuation"],
     ["e_2", "envelope"],
   ]);
+});
+
+test("a v3 file from before mute, connector toggles, agent evidence and worktrees reads them as empty", () => {
+  const home = freshHome();
+  const { muted: _m, connectorsOff: _c, ...oldBot } = v3Bot;
+  const { evidence: _e, worktree: _w, ...oldAgent } = v3Agent.agent;
+  writeState(home, v3({ bots: [oldBot], agents: [{ ...v3Agent, agent: oldAgent }] }));
+
+  const { world } = loadWorld(home);
+
+  expect(world.bots.get("b_1" as BotId)).toMatchObject({ muted: false, connectorsOff: [] });
+  expect([...world.agents.values()][0]!.agent).toMatchObject({ evidence: null, worktree: null });
+});
+
+test("a v3 file with a webhook routine loads, and an unknown trigger kind is refused", () => {
+  const routine = (trigger: object) => ({ id: "r_1", name: "deploys", trigger, prompt: "p", enabled: true, nextRunAt: null, runs: [], failStreak: 0 });
+  const ok = freshHome();
+  writeState(ok, v3({ bots: [{ ...v3Bot, routines: [routine({ kind: "webhook", tokenHash: null })] }] }));
+  expect(loadWorld(ok).world.bots.get("b_1" as BotId)!.routines[0]!.trigger).toEqual({ kind: "webhook", tokenHash: null });
+
+  const bad = freshHome();
+  writeState(bad, v3({ bots: [{ ...v3Bot, routines: [routine({ kind: "email" })] }] }));
+  expect(() => loadWorld(bad)).toThrow(StateFileError);
+});
+
+test("a v2 upgrade gives bots no mute and no connectors off, and agents no evidence or worktree", () => {
+  const home = freshHome();
+  writeState(home, JSON.stringify(V2));
+
+  const { world } = loadWorld(home);
+
+  for (const bot of world.bots.values()) expect(bot).toMatchObject({ muted: false, connectorsOff: [] });
+  for (const rec of world.agents.values()) expect(rec.agent).toMatchObject({ evidence: null, worktree: null });
 });
 
 test("no state file is a first run that writes nothing", () => {

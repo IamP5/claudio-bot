@@ -319,6 +319,7 @@ test("the gate's floors and the sandbox cover the same private paths", () => {
     grants: [],
     headroom: { ok: true, capReached: false },
     callsToday: {},
+        connectorsOff: [],
     now: "2026-10-17T12:00:00.000Z",
     realpath: (p) => p,
   };

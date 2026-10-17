@@ -35,6 +35,15 @@ export type RunOutcome = { status: "ok" | "quiet" | "failed" | "skipped"; note: 
 export type Scheduler = Tickable & {
   /** The set_routine tool. Validates the cron, the 15-minute floor and the 20-per-bot cap. Returns the tool's reply. */
   upsert(botId: BotId, a: { name: string; schedule: string; prompt: string; enabled?: boolean }): string;
+  /** The set_routine tool with trigger webhook: no schedule, no nextRunAt; the routine-per-bot cap applies. */
+  upsertHook(botId: BotId, a: { name: string; prompt: string; enabled?: boolean }): string;
+  /** Stores the sha256 of a new webhook token on the routine. Null on success, else the error. */
+  setHookToken(botId: BotId, routineId: RoutineId, tokenHash: string): string | null;
+  /**
+   * A webhook call that presented a valid token: one fire, persisted before delivery like a cron fire, with the payload
+   * as data. Null when it fired, else why not (paused, still running, cooling down).
+   */
+  hook(botId: BotId, routineId: RoutineId, payload: string): string | null;
   /** The delete_routine tool. Returns the tool's reply. */
   remove(botId: BotId, name: string): string;
   /** The phone's toggle. Re-enabling resets the fail streak and recomputes nextRunAt. Null on success, else the error. */
@@ -74,8 +83,8 @@ type Due =
   | { kind: "fire"; at: Date; late: boolean; next: Date | null }
   | { kind: "miss"; at: Date; next: Date | null };
 
-/** A trigger the scheduler can run, or why it cannot (as the end of a sentence). */
-type Plan = { cron: Cron; graceMs: number } | { refused: string };
+/** A trigger the scheduler can run, or why it cannot (as the end of a sentence). onDemand: only a call fires it. */
+type Plan = { cron: Cron; graceMs: number } | { refused: string } | { onDemand: true };
 
 function planOf(trigger: Trigger): Plan {
   switch (trigger.kind) {
@@ -86,10 +95,8 @@ function planOf(trigger: Trigger): Plan {
       if (gap < ROUTINE_FLOOR_MINUTES) return { refused: `it runs more often than every ${ROUTINE_FLOOR_MINUTES} minutes, which routines no longer allow` };
       return { cron, graceMs: Math.min(MAX_GRACE_MS, Math.max(MIN_GRACE_MS, (gap * 60_000) / 2)) };
     }
-    default: {
-      const unhandled: never = trigger.kind;
-      return unhandled;
-    }
+    case "webhook":
+      return { onDemand: true };
   }
 }
 
@@ -97,6 +104,7 @@ function due(r: RoutineRecord, now: Date): Due {
   if (!r.enabled) return { kind: "off" };
   const plan = planOf(r.trigger);
   if ("refused" in plan) return { kind: "refuse", why: plan.refused };
+  if ("onDemand" in plan) return { kind: "wait" };
   const { cron } = plan;
   if (r.nextRunAt === null) return { kind: "schedule", next: nextAfter(cron, now) };
   const first = new Date(r.nextRunAt);
@@ -142,7 +150,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   function fire(bot: BotRecord, r: RoutineRecord, run: RoutineRun): boolean {
     try {
       deps.changed(bot, "now");
-      deps.deliver(bot, { from: "routine", name: r.name, prompt: r.prompt, run: { routineId: r.id, runId: run.id }, manual: run.manual, late: run.late });
+      deps.deliver(bot, { from: "routine", name: r.name, prompt: r.prompt, run: { routineId: r.id, runId: run.id }, manual: run.manual, late: run.late, payload: null });
       return true;
     } catch (error) {
       log(`scheduler: could not start ${r.name} for ${bot.id}: ${message(error)}`);
@@ -223,6 +231,18 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (reenabled) routine.failStreak = 0;
       deps.note(bot, created ? "Created routine {0}" : "Updated routine {0}", [routinePeer(routine)]);
       return `Routine ${routine.name}: ${describe(schedule)}${routine.enabled ? "" : " (paused)"}.`;
+    },
+
+    upsertHook() {
+      return "Webhook routines are not available on this bridge yet.";
+    },
+
+    setHookToken() {
+      return "Webhook routines are not available on this bridge yet.";
+    },
+
+    hook() {
+      return "Webhook routines are not available on this bridge yet.";
     },
 
     remove(botId, name) {

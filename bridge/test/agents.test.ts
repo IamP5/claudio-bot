@@ -110,6 +110,9 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; p
     sandbox: opts.sandbox ?? ((actor) => ({ enabled: true, filesystem: { allowWrite: [actor.kind === "agent" ? actor.agentId : actor.botId] } })),
     configRoot: (id) => `/bridge/agent-config/${id}`,
     trustCard: (actor, repo) => trustCards.push({ agentId: actor.agentId, ...repo }),
+    settings: () => ({ autoMemoryEnabled: false }),
+    observe: () => {},
+    idle: () => {},
     persist: () => {},
     now: () => AT,
     changed: (rec) => statuses.push(rec.agent.status),
@@ -117,7 +120,7 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; p
     note: (rec, text) => notes.push({ agentId: rec.agent.id, text }),
   });
   const start = (where: "mac" | "cloud" = "mac", initiator: Initiator = user, botId: BotId = B1) =>
-    agents.start(botId, { title: "Fix tests", prompt: "Make the suite green.", project: where === "cloud" ? cloudProject : (opts.project ?? project), where, botName: "Ana", initiator, budgetUsd: null });
+    agents.start(botId, { title: "Fix tests", prompt: "Make the suite green.", project: where === "cloud" ? cloudProject : (opts.project ?? project), where, isolate: "auto", botName: "Ana", initiator, budgetUsd: null });
   return { world, agents, queries, reports, notes, statuses, begun, trustCards, start, q: () => queries.at(-1)! };
 }
 
@@ -350,7 +353,7 @@ test("resume starts mac agents with queued work and tells bots about agents a re
     const session = emptySession("s_old");
     if (queued) session.pending.push({ id: `e_${id}` as never, kind: "envelope", at: AT, text: `[queued for ${id}]`, initiator: user, settles: null, attempts: 0 });
     return {
-      agent: { id: id as AgentId, botId: B1, title: id, where, projectName: "shop", status, url: null, createdAt: AT, updatedAt: AT },
+      agent: { id: id as AgentId, botId: B1, title: id, where, projectName: "shop", status, url: null, createdAt: AT, updatedAt: AT, evidence: null, worktree: null },
       cwd: "/code/shop",
       messages: [],
       session,

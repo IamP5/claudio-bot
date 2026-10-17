@@ -33,6 +33,15 @@ test.each([
   ["a revoke_device without a device", { type: "revoke_device", deviceId: "" }],
   ["a negative daily cap", { type: "update_bot", botId: "b1", patch: { dailyCapUsd: -1 } }],
   ["a daily cap that is not a number", { type: "update_bot", botId: "b1", patch: { dailyCapUsd: "10" } }],
+  ["an empty clientId", { type: "send", botId: "b1", text: "hi", uploads: [], clientId: "" }],
+  ["a mute that is not a boolean", { type: "update_bot", botId: "b1", patch: { muted: 1 } }],
+  ["a set_fact with a numeric fact id", { type: "set_fact", factId: 3, text: "x" }],
+  ["a set_fact with no text", { type: "set_fact", factId: null, text: "" }],
+  ["a forget_fact with a null fact id", { type: "forget_fact", factId: null }],
+  ["a set_connector without enabled", { type: "set_connector", botId: "b1", name: "slack" }],
+  ["a delete_skill without a name", { type: "delete_skill", botId: "b1" }],
+  ["a webhook_token without a routine", { type: "webhook_token", botId: "b1" }],
+  ["a remove_worktree without an agent", { type: "remove_worktree" }],
 ])("rejects %s", (_, raw) => {
   expect(parseClientMessage(typeof raw === "string" ? raw : JSON.stringify(raw)).ok).toBe(false);
 });

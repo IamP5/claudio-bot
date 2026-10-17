@@ -1,14 +1,19 @@
 import { realpathSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
+import type { Settings } from "@anthropic-ai/claude-agent-sdk";
+import { createActivity } from "./activity";
 import { createAgents } from "./agents";
 import { createClock, type Tickable } from "./clock";
+import { connectorSettings, createConnectors } from "./connectors";
 import { createGate } from "./gate";
 import type { Homes } from "./home";
 import { createLedger } from "./ledger";
+import { createMemory } from "./memory";
 import type { Scope } from "./policy";
 import type { Project } from "./projects";
 import {
+  FEATURES,
   PROTOCOL,
   type AgentId,
   type Avatar,
@@ -19,18 +24,22 @@ import {
   type MessageId,
   type Peer,
   type ServerMessage,
+  type Signal,
   type StreamPosition,
 } from "./protocol";
 import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, NO_AUTO_MEMORY, onboarding, persona, type Envelope } from "./prompts";
 import { cardReply } from "./protocol2";
 import type { Push } from "./push";
+import type { Result } from "./result";
 import { gitDirsOf, sandboxFor } from "./sandbox";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
+import { createSkills } from "./skills";
 import { appendArchive, type Persist } from "./store";
 import { errorText } from "./text";
 import { botToolServer, type BotActions } from "./tools";
 import { freshTurn, readTurn, type Bubble, type Turn } from "./turn";
+import { createWebhooks } from "./webhook";
 import {
   agentPeer,
   botActor,
@@ -48,6 +57,7 @@ import {
   randomAvatar,
   recordExchange,
   rootOf,
+  routinesText,
   routineView,
   sortBots,
   splitHistory,
@@ -84,9 +94,13 @@ export type HubDeps = {
   model: string | undefined;
   scan: () => Promise<Project[]>;
   broadcast: (message: ServerMessage) => void;
+  /** Live sockets only, no seq, no replay: the activity line. */
+  signal: (message: Signal) => void;
   persist: Persist;
   log: (line: string) => void;
   push: Push;
+  /** The loopback port webhook routines answer on; null: no listener. */
+  webhookPort: number | null;
   /** Tests pass a fake SDK. The bridge uses the real query and the claude on PATH. */
   claude?: Pick<SessionSpec, "query" | "executable">;
 };
@@ -313,6 +327,27 @@ export function createHub(deps: HubDeps): Hub {
     if (turn.settles !== null) scheduler.settle(bot.id, turn.settles, outcomeOf(end, quiet));
   }
 
+  /** The flag settings of every query the bot and its agents open. */
+  function settingsFor(botId: BotId): Settings {
+    return { ...NO_AUTO_MEMORY, ...connectorSettings(world.bots.get(botId)?.connectorsOff ?? []) };
+  }
+
+  /** The bot's and its agents' live queries close at their next chance, so the next ones open with fresh options. */
+  function reopenAll(botId: BotId) {
+    brains.get(botId)?.reopen();
+    for (const rec of world.agents.values()) if (rec.agent.botId === botId) agents.session(rec.agent.id)?.reopen();
+  }
+
+  const activity = createActivity({ signal: deps.signal, now: clockNow });
+  const memory = createMemory({
+    homes,
+    botName: (id) => world.bots.get(id)?.name ?? "a bot",
+    changed: () => deps.broadcast({ type: "memory", facts: memory.facts() }),
+    now: clockNow,
+    log: deps.log,
+  });
+  const skills = createSkills({ homes, reopen: (id) => brains.get(id)?.reopen(), now: clockNow });
+
   function brain(bot: BotRecord): Session {
     const existing = brains.get(bot.id);
     if (existing) return existing;
@@ -332,7 +367,7 @@ export function createHub(deps: HubDeps): Hub {
         cwd: homes.homeOf(bot.id),
         resume: bot.session.id ?? undefined,
         settingSources: ["user", "project"],
-        systemPrompt: { type: "preset", preset: "claude_code", append: persona({ name: bot.name, userName, userMd: homes.userMd }) },
+        systemPrompt: { type: "preset", preset: "claude_code", append: [persona({ name: bot.name, userName }), memory.context()].filter(Boolean).join("\n\n") },
         permissionMode: "auto",
         mcpServers: { claudio: botToolServer(bot.id, actions) },
         // A bot asks with its own ask tool, which posts a card instead of blocking the turn.
@@ -340,10 +375,11 @@ export function createHub(deps: HubDeps): Hub {
         model: deps.model,
         hooks: gate.hooks(actor),
         sandbox: sandboxFor(actor, scopeOf(actor), process.env),
-        settings: NO_AUTO_MEMORY,
+        settings: settingsFor(bot.id),
       }),
       onMessage(m, pending) {
         if (!world.bots.has(bot.id)) return;
+        activity.observe(actor, m);
         // Output between turns, such as a background task finishing, has no turn to wait for.
         if (pending === null) return postBubbles(bot, { pushed: null, last: null }, readTurn(freshTurn, m).bubbles);
         let r = readings.get(bot.id);
@@ -360,6 +396,7 @@ export function createHub(deps: HubDeps): Hub {
       },
       onTurnEnd(pending, end) {
         if (!world.bots.has(bot.id)) return;
+        if (end.kind !== "deferred") activity.clear(actor);
         const r = readings.get(bot.id);
         let quiet = false;
         if (end.kind !== "deferred" && r?.id === pending.id) {
@@ -455,6 +492,9 @@ export function createHub(deps: HubDeps): Hub {
     },
     configRoot: (id) => homes.agentConfig(id),
     trustCard: (actor, repo) => gate.trustCard(actor, repo),
+    settings: (actor) => settingsFor(actor.botId),
+    observe: (actor, m) => activity.observe(actor, m),
+    idle: (actor) => activity.clear(actor),
     persist: deps.persist,
     now,
     changed(rec) {
@@ -474,6 +514,9 @@ export function createHub(deps: HubDeps): Hub {
       if (bot) note(bot, `{0}: ${text}`, [agentPeer(rec.agent)]);
     },
   });
+
+  const connectors = createConnectors({ world, live: (id) => brains.get(id)?.mcp() ?? null, reopen: reopenAll, persist: deps.persist, log: deps.log });
+  const webhooks = createWebhooks({ world, scheduler, persist: deps.persist, port: deps.webhookPort, now: clockNow, log: deps.log });
 
   const allSessions = () => [...brains.values(), ...agents.sessions()];
   const sessions: Tickable = {
@@ -555,13 +598,20 @@ export function createHub(deps: HubDeps): Hub {
       return "Updated.";
     },
 
-    setRoutine: (botId, a) => scheduler.upsert(botId, a),
+    setRoutine(botId, a) {
+      if (a.trigger === "webhook") return scheduler.upsertHook(botId, a);
+      if (a.schedule === undefined) return "A cron routine needs a schedule.";
+      return scheduler.upsert(botId, { ...a, schedule: a.schedule });
+    },
     deleteRoutine: (botId, a) => scheduler.remove(botId, a.name),
+    listRoutines: (botId) => routinesText(owned(botId).routines),
     routineNoUpdate: (botId) => scheduler.noUpdate(botId),
+    remember: (botId, a) => memory.remember(botId, a),
+    saveSkill: (botId, a) => skills.save(botId, a),
   };
 
   const error = (message: string): ServerMessage[] => [{ type: "error", message }];
-  const replyTo = (r: { ok: true } | { ok: false; error: string }): ServerMessage[] => (r.ok ? [] : error(r.error));
+  const replyTo = (r: Result): ServerMessage[] => (r.ok ? [] : error(r.error));
   const done = (failure: string | null): ServerMessage[] => (failure === null ? [] : error(failure));
 
   async function handle(message: ClientMessage): Promise<ServerMessage[]> {
@@ -582,6 +632,16 @@ export function createHub(deps: HubDeps): Hub {
         if (!rec) return error("Unknown agent");
         return (await agents.stop(rec)) ? [] : error("Nothing is running.");
       }
+      case "remove_worktree": {
+        const rec = world.agents.get(message.agentId);
+        return rec ? replyTo(await agents.removeWorktree(rec)) : error("Unknown agent");
+      }
+      case "memory":
+        return [{ type: "memory", facts: memory.facts() }];
+      case "set_fact":
+        return replyTo(memory.setFact(message.factId, message.text));
+      case "forget_fact":
+        return replyTo(memory.forgetFact(message.factId));
       case "devices":
       case "revoke_device":
       case "pair_code":
@@ -599,7 +659,7 @@ export function createHub(deps: HubDeps): Hub {
       case "send": {
         const attachments = homes.saveUploads(bot.id, message.uploads);
         if ("error" in attachments) return error(attachments.error);
-        say(bot, { kind: "user", id: newMessageId(), at: now(), text: message.text, attachments });
+        say(bot, { kind: "user", id: newMessageId(), at: now(), text: message.text, attachments, ...(message.clientId !== undefined && { clientId: message.clientId }) });
         deliver(botActor(bot.id), { from: "user", text: message.text, attachments });
         return [];
       }
@@ -653,6 +713,22 @@ export function createHub(deps: HubDeps): Hub {
         if ("error" in file) return error(file.error);
         return [{ type: "file", botId: bot.id, path: message.path, ...file }];
       }
+      case "connectors":
+        return [{ type: "connectors", botId: bot.id, connectors: await connectors.list(bot.id) }];
+      case "set_connector": {
+        const result = await connectors.set(bot.id, message.name, message.enabled);
+        return result.ok ? [{ type: "connectors", botId: bot.id, connectors: await connectors.list(bot.id) }] : error(result.error);
+      }
+      case "skills":
+        return [{ type: "skills", botId: bot.id, skills: skills.list(bot.id) }];
+      case "delete_skill": {
+        const result = skills.remove(bot.id, message.name);
+        return result.ok ? [{ type: "skills", botId: bot.id, skills: skills.list(bot.id) }] : error(result.error);
+      }
+      case "webhook_token": {
+        const made = webhooks.token(bot.id, message.routineId);
+        return "error" in made ? error(made.error) : [{ type: "webhook_token", botId: bot.id, routineId: message.routineId, ...made }];
+      }
     }
   }
 
@@ -660,6 +736,7 @@ export function createHub(deps: HubDeps): Hub {
     hello: (position) => ({
       type: "hello",
       protocol: PROTOCOL,
+      features: [...FEATURES],
       ...position,
       machine: deps.machine,
       userName,
@@ -680,6 +757,7 @@ export function createHub(deps: HubDeps): Hub {
         if (bot.session.pending.length > 0 || bot.session.lifecycle.kind !== "idle") brain(bot);
       }
       agents.resume();
+      webhooks.start();
     },
 
     startTicker() {
@@ -689,6 +767,7 @@ export function createHub(deps: HubDeps): Hub {
 
     close() {
       clock.stop();
+      webhooks.stop();
       for (const session of brains.values()) session.close();
       for (const bot of world.bots.values()) agents.stopFor(bot.id);
     },

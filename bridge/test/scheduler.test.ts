@@ -98,7 +98,7 @@ test("a new routine is scheduled for its next time and fires once when it arrive
   h.at(local(19, 9));
   h.at(local(19, 9, 0, 30));
   expect(h.delivered.map((d) => d.e)).toEqual([
-    { from: "routine", name: "digest", prompt: "do digest", run: { routineId: r.id, runId: r.runs[0]!.id }, manual: false, late: false },
+    { from: "routine", name: "digest", prompt: "do digest", run: { routineId: r.id, runId: r.runs[0]!.id }, manual: false, late: false, payload: null },
   ]);
   expect(r.nextRunAt).toBe(local(20, 9).toISOString());
   expect(r.runs.map((run) => [run.status, run.late, run.manual])).toEqual([["running", false, false]]);

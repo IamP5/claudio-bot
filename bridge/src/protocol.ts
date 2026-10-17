@@ -13,6 +13,15 @@ export type AgentId = string & { readonly __brand: "AgentId" };
 export type RoutineId = string & { readonly __brand: "RoutineId" };
 export type RunId = string & { readonly __brand: "RunId" };
 export type DeviceId = string & { readonly __brand: "DeviceId" };
+export type FactId = string & { readonly __brand: "FactId" };
+
+/**
+ * What this bridge can do beyond protocol 3's base, sent in hello.features. An app hides the screens a bridge does not
+ * list, so a new app on an older bridge never offers a control the bridge would ignore. Additive changes extend this
+ * list instead of bumping PROTOCOL.
+ */
+export const FEATURES = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks"] as const;
+export type Feature = (typeof FEATURES)[number];
 
 export const SHAPES = [
   "circle", "cloud", "diamond", "star4", "flower", "blob", "scallop",
@@ -26,8 +35,8 @@ export type Shape = (typeof SHAPES)[number];
 export type Color = (typeof COLORS)[number];
 export type Avatar = { shape: Shape; color: Color };
 
-// What starts a routine. A webhook kind joins later; the app treats an unknown kind as "other".
-export type TriggerKind = "cron";
+// What starts a routine: its cron schedule, or a call to its local webhook. The app treats an unknown kind as "other".
+export type TriggerKind = "cron" | "webhook";
 
 // running: fired, turn not finished. quiet: ran and had nothing to say, so nothing was posted.
 // skipped: not run (missed while the Mac slept, paused by a limit, or dropped by Stop).
@@ -47,7 +56,7 @@ export type RoutineRun = {
 export type Routine = {
   id: RoutineId;
   name: string;
-  // Five-field cron in the Mac's local time zone.
+  // Five-field cron in the Mac's local time zone. "" for a webhook routine.
   schedule: string;
   // "Weekdays at 7:57 AM", computed by the bridge.
   describe: string;
@@ -85,6 +94,8 @@ export type Bot = {
   routines: Routine[];
   // Spend cap per local day for this bot and its agents. null: the bridge default.
   dailyCapUsd: number | null;
+  // No message or result pushes for this bot. Cards still push: a held call waits on the user.
+  muted: boolean;
 };
 
 export type Peer =
@@ -101,7 +112,9 @@ export const PERMISSION_CHOICES = ["once", "always", "deny", "never"] as const;
 export type PermissionChoice = (typeof PERMISSION_CHOICES)[number];
 
 export type Message =
-  | { kind: "user"; id: MessageId; at: string; text: string; attachments: Attachment[] }
+  // clientId: the id the app gave its send, echoed so the app can replace its optimistic bubble. Absent on messages
+  // from before it existed and on sends that carried none.
+  | { kind: "user"; id: MessageId; at: string; text: string; attachments: Attachment[]; clientId?: string }
   | { kind: "bot"; id: MessageId; at: string; text: string }
   | {
       kind: "question";
@@ -138,7 +151,33 @@ export type Message =
   // A system line such as "Created routines {0} and {1}". Each {n} is replaced by a tappable chip for refs[n].
   | { kind: "note"; id: MessageId; at: string; text: string; refs: Peer[] };
 
-export type AgentStatus = "working" | "waiting" | "failed" | "in_cloud" | "awaiting_approval" | "parked" | "unavailable";
+// capped: the bot's daily cap stopped the agent's turn. Not a failure: a message tomorrow, or a raised cap, resumes it.
+export type AgentStatus = "working" | "waiting" | "failed" | "in_cloud" | "awaiting_approval" | "parked" | "unavailable" | "capped";
+
+/**
+ * What the bridge itself read from git after a mac agent's turn, so the bot checks the agent's claim against facts
+ * rather than the agent's own words. Read with git only (hooks and fsmonitor off); the bridge never runs the repo's
+ * own commands.
+ */
+export type AgentEvidence = {
+  at: string;
+  branch: string | null;
+  /** Short sha of HEAD. */
+  head: string | null;
+  /** Commits on the branch that its base (the default branch) does not have. */
+  ahead: number;
+  /** Diffstat of the branch against its base, committed work only. */
+  changed: number;
+  insertions: number;
+  deletions: number;
+  /** Uncommitted changes in the checkout. */
+  dirty: boolean;
+  /** A pull request URL the agent's final message named. */
+  pr: string | null;
+};
+
+/** A git worktree the bridge made for one mac agent, outside every bot home. Removed only when the user asks. */
+export type Worktree = { path: string; branch: string };
 
 export type Agent = {
   id: AgentId;
@@ -151,6 +190,10 @@ export type Agent = {
   url: string | null;
   createdAt: string;
   updatedAt: string;
+  // null until a mac agent's first turn ends, and always for cloud agents.
+  evidence: AgentEvidence | null;
+  // The isolated checkout the agent works in; null when it works in the project folder itself.
+  worktree: Worktree | null;
 };
 
 export type AgentMessage = { id: MessageId; at: string; from: "bot" | "agent"; text: string };
@@ -174,9 +217,22 @@ export type Device = {
 // epoch "" means the bridge keeps no replay ring, so the app never asks to resume.
 export type StreamPosition = { epoch: string; seq: number; resumed: boolean };
 
+/** One line of USER.md's ## Facts: something every bot knows about the user. by: the bot that remembered it, null for the user. */
+export type Fact = { id: FactId; text: string; at: string; by: string | null };
+
+/**
+ * An MCP server the bot's queries load, by name only: its configuration (commands, URLs, headers) never leaves the
+ * Mac. status: as the live query last reported it; unchecked while no query is open to ask.
+ */
+export type ConnectorStatus = "connected" | "pending" | "failed" | "needs_auth" | "unchecked";
+export type Connector = { name: string; status: ConnectorStatus; enabled: boolean };
+
+/** A skill in the bot's own .claude/skills, saved with save_skill. */
+export type Skill = { name: string; description: string; updatedAt: string };
+
 export type ServerMessage =
   // The app shows "Update the bridge" or "Update the app" when protocol is outside the range it speaks.
-  | ({ type: "hello"; protocol: number; machine: string; userName: string; bots: Bot[] } & StreamPosition)
+  | ({ type: "hello"; protocol: number; features: Feature[]; machine: string; userName: string; bots: Bot[] } & StreamPosition)
   | { type: "bot"; bot: Bot }
   | { type: "bot_removed"; botId: BotId }
   // Answers create_bot with the ref the client sent, so the app can open the new bot.
@@ -193,20 +249,32 @@ export type ServerMessage =
   | { type: "devices"; devices: Device[] }
   // A one-time code another phone can pair with, valid until expiresAt.
   | { type: "pair_code"; code: string; expiresAt: string }
+  // What a bot or one of its agents is doing right now ("Reading hub.ts"). text null: it stopped. Live sockets only:
+  // never sequenced, never replayed, never pushed.
+  | { type: "activity"; botId: BotId; agentId: AgentId | null; text: string | null; at: string }
+  // USER.md's facts, in answer to memory and broadcast after each change.
+  | { type: "memory"; facts: Fact[] }
+  | { type: "connectors"; botId: BotId; connectors: Connector[] }
+  | { type: "skills"; botId: BotId; skills: Skill[] }
+  // A new token for a webhook routine, shown once. The bridge keeps only its hash. url answers on this Mac only.
+  | { type: "webhook_token"; botId: BotId; routineId: RoutineId; url: string; token: string }
   | { type: "error"; message: string };
+
+/** Sent to live sockets only, without a seq: not kept for replay. */
+export type Signal = Extract<ServerMessage, { type: "activity" }>;
 
 // A frame published to every socket carries the stream seq. Replies to one client do not.
 export type Broadcast = ServerMessage & { seq: number };
 
 export type Upload = { name: string; mime: string; data: string };
 
-export type BotPatch = Partial<Pick<Bot, "name" | "title" | "avatar" | "pinned" | "hidden" | "dailyCapUsd">>;
+export type BotPatch = Partial<Pick<Bot, "name" | "title" | "avatar" | "pinned" | "hidden" | "dailyCapUsd" | "muted">>;
 
 export type ClientMessage =
   | { type: "create_bot"; ref: string }
   // Sends the conversation and marks the bot read.
   | { type: "open"; botId: BotId }
-  | { type: "send"; botId: BotId; text: string; uploads: Upload[] }
+  | { type: "send"; botId: BotId; text: string; uploads: Upload[]; clientId?: string }
   | { type: "answer"; botId: BotId; messageId: MessageId; option: number }
   | { type: "dismiss"; botId: BotId; messageId: MessageId }
   // Answers a permission card. The only way a held call can run: chat text never approves.
@@ -222,6 +290,19 @@ export type ClientMessage =
   | { type: "details"; botId: BotId }
   | { type: "agent"; agentId: AgentId }
   | { type: "file"; botId: BotId; path: string }
+  | { type: "memory" }
+  // factId null adds a fact.
+  | { type: "set_fact"; factId: FactId | null; text: string }
+  | { type: "forget_fact"; factId: FactId }
+  | { type: "connectors"; botId: BotId }
+  // Persisted per bot, covering its agents, so the choice survives a restart and a resume.
+  | { type: "set_connector"; botId: BotId; name: string; enabled: boolean }
+  | { type: "skills"; botId: BotId }
+  | { type: "delete_skill"; botId: BotId; name: string }
+  // Makes a new token for a webhook routine and invalidates the old one.
+  | { type: "webhook_token"; botId: BotId; routineId: RoutineId }
+  // Removes the agent's worktree. Refused while the agent runs or the worktree holds uncommitted or unpushed work.
+  | { type: "remove_worktree"; agentId: AgentId }
   // Transport messages: the socket layer answers these, because they need the socket's own device.
   | { type: "devices" }
   | { type: "revoke_device"; deviceId: DeviceId }

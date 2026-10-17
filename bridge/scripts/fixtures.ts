@@ -21,7 +21,12 @@ const bot: Wire<Bot> = {
   id: "b1", name: "engineer", title: null, avatar: { shape: "hexagon", color: "orange" },
   pinned: false, hidden: false, status: "idle", unread: 2,
   question: "Want me to merge any of these now?", preview: "Want me to merge any of these now?",
-  lastAt: at, createdAt: at, routines: [routine], dailyCapUsd: null,
+  lastAt: at, createdAt: at, routines: [routine], dailyCapUsd: null, muted: false,
+};
+const hookRoutine: Wire<Routine> = {
+  id: "r2", name: "deploy-watch", schedule: "", describe: "When its webhook is called",
+  prompt: "Summarize the deploy that just finished.", enabled: true, lastRunAt: null,
+  trigger: "webhook", nextRunAt: null, runs: [],
 };
 const question = (answer: Wire<Extract<Message, { kind: "question" }>>["answer"]) => ({
   kind: "question" as const, id: "m6", at, question: "Want me to merge any of these now?",
@@ -34,11 +39,11 @@ const permission = {
 const agentPeer: Wire<Peer> = { kind: "agent", id: "a1", title: "Set up verification skill" };
 const agent: Wire<Agent> = {
   id: "a1", botId: "b1", title: "Set up verification skill", where: "mac", projectName: "web",
-  status: "waiting", url: null, createdAt: at, updatedAt: at,
+  status: "waiting", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null,
 };
 
 export const server = [
-  { type: "hello", protocol: 3, epoch: "e_7f3a", seq: 41, resumed: false, machine: "MacBook", userName: "Alex", bots: [bot] },
+  { type: "hello", protocol: 3, features: ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks"], epoch: "e_7f3a", seq: 41, resumed: false, machine: "MacBook", userName: "Alex", bots: [bot] },
   { type: "bot", seq: 42, bot: { ...bot, id: "b2", name: "news digest", title: "Morning digest", avatar: { shape: "pentagon", color: "teal" }, status: "working", unread: 0, question: null, pinned: true, dailyCapUsd: 5 } },
   { type: "bot_removed", botId: "b2" },
   { type: "created", ref: "c1", botId: "b3" },
@@ -59,7 +64,7 @@ export const server = [
     library: [{ path: "merge-plan.md", size: 2048, modifiedAt: at }],
     links: [{ url: "https://github.com/acme/web/pull/142", host: "github.com", at }],
     agents: [agent, { ...agent, id: "a2", where: "cloud", status: "in_cloud", url: "https://claude.ai/code/session_abc" }],
-    routines: [routine],
+    routines: [routine, hookRoutine],
   },
   {
     type: "agent", agent, messages: [
@@ -83,6 +88,28 @@ export const server = [
     { id: "d0", name: "Paired before protocol 3", createdAt: at, lastSeenAt: null, legacy: true, current: false },
   ] },
   { type: "pair_code", code: "K7QD-M2XP", expiresAt: "2026-10-16T12:10:00.000Z" },
+  { type: "message", seq: 53, botId: "b1", message: { kind: "user", id: "m11", at, text: "Ship it", attachments: [], clientId: "c_9b1e" } },
+  { type: "bot", seq: 54, bot: { ...bot, muted: true } },
+  {
+    type: "agent", seq: 55, messages: [], agent: {
+      ...agent, status: "capped",
+      evidence: { at: later, branch: "claudio/verify-skill", head: "4f2a9c1", ahead: 3, changed: 5, insertions: 120, deletions: 14, dirty: false, pr: "https://github.com/acme/web/pull/142" },
+      worktree: { path: "/Users/alex/.claudiobot-worktrees/web/a1", branch: "claudio/verify-skill" },
+    },
+  },
+  { type: "activity", botId: "b1", agentId: null, text: "Reading hub.ts", at },
+  { type: "activity", botId: "b1", agentId: "a1", text: null, at },
+  { type: "memory", seq: 56, facts: [
+    { id: "f_1", text: "Prefers short answers", at, by: null },
+    { id: "f_2", text: "Works on acme/web", at, by: "engineer" },
+  ] },
+  { type: "connectors", botId: "b1", connectors: [
+    { name: "github", status: "connected", enabled: true },
+    { name: "linear", status: "needs_auth", enabled: true },
+    { name: "slack", status: "unchecked", enabled: false },
+  ] },
+  { type: "skills", botId: "b1", skills: [{ name: "release-notes", description: "Write release notes from merged PRs", updatedAt: at }] },
+  { type: "webhook_token", botId: "b1", routineId: "r2", url: "http://127.0.0.1:7879/hook/r2", token: "whk_3s9dK2" },
 ] satisfies (Wire<ServerMessage> | Wire<Broadcast>)[];
 
 export const client = [
@@ -106,6 +133,18 @@ export const client = [
   { type: "devices" },
   { type: "revoke_device", deviceId: "d0" },
   { type: "pair_code" },
+  { type: "send", botId: "b1", text: "Ship it", uploads: [], clientId: "c_9b1e" },
+  { type: "update_bot", botId: "b1", patch: { muted: true } },
+  { type: "memory" },
+  { type: "set_fact", factId: null, text: "Prefers short answers" },
+  { type: "set_fact", factId: "f_2", text: "Works on acme/web and acme/api" },
+  { type: "forget_fact", factId: "f_1" },
+  { type: "connectors", botId: "b1" },
+  { type: "set_connector", botId: "b1", name: "slack", enabled: false },
+  { type: "skills", botId: "b1" },
+  { type: "delete_skill", botId: "b1", name: "release-notes" },
+  { type: "webhook_token", botId: "b1", routineId: "r2" },
+  { type: "remove_worktree", agentId: "a1" },
 ] satisfies Wire<ClientMessage>[];
 
 // Compile-time coverage: every server type, client type and message kind has a fixture, so the Swift mirror is pinned

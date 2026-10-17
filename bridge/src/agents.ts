@@ -1,15 +1,17 @@
-import type { HookCallbackMatcher, HookEvent, Options, SandboxSettings } from "@anthropic-ai/claude-agent-sdk";
+import type { HookCallbackMatcher, HookEvent, Options, SandboxSettings, SDKMessage, Settings } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { createCloudSession, followUpCloudSession } from "./cloud";
 import type { Ledger } from "./ledger";
 import type { AgentId, AgentStatus, BotId } from "./protocol";
-import { agentPrompt, NO_AUTO_MEMORY, type SessionInput } from "./prompts";
+import { agentPrompt, type SessionInput } from "./prompts";
 import type { Project } from "./projects";
 import { createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
+import { refused, type Result } from "./result";
 import { AGENT_GIT_ENV } from "./sandbox";
 import type { Persist } from "./store";
 import { errorText } from "./text";
+import type { Isolate } from "./tools";
 import { emptySession, newMessageId, repoTrust, type Actor, type AgentActor, type AgentRecord, type Initiator, type World } from "./world";
 
 // Agents are actors like bots: mac agents run on the same session module behind the same gate, metered by the same
@@ -18,8 +20,10 @@ export type Agents = {
   /** initiator: the bot turn's, so an agent started by a routine runs as routine work; kept as startedBy. budgetUsd null: the default. */
   start(
     botId: BotId,
-    a: { title: string; prompt: string; project: Project; where: "mac" | "cloud"; botName: string; initiator: Initiator; budgetUsd: number | null },
+    a: { title: string; prompt: string; project: Project; where: "mac" | "cloud"; isolate: Isolate; botName: string; initiator: Initiator; budgetUsd: number | null },
   ): Promise<AgentRecord>;
+  /** The phone's remove_worktree. Refused while the agent runs or its worktree holds uncommitted work. */
+  removeWorktree(rec: AgentRecord): Promise<Result>;
   /** Bot → agent follow-up: recorded in the agent's thread, queued with the bot turn's initiator. */
   message(rec: AgentRecord, text: string, initiator: Initiator): Promise<string>;
   /** Gate → mac agent (a decision envelope): queued, not recorded in the thread. Ignored for cloud agents. */
@@ -78,6 +82,12 @@ export function createAgents(deps: {
   reported: (agent: AgentRecord, text: string, by: Initiator) => void;
   /** A line about the agent in its bot's chat. */
   note: (agent: AgentRecord, text: string) => void;
+  /** Flag settings for the agent's queries: no auto memory, and its bot's connector choices. */
+  settings: (actor: AgentActor) => Settings;
+  /** Every SDK message of a mac agent's live query (activity.observe). */
+  observe: (actor: AgentActor, m: SDKMessage) => void;
+  /** A mac agent's turn ended (activity.clear). */
+  idle: (actor: AgentActor) => void;
 }): Agents {
   const sessions = new Map<AgentId, Session>();
   const cloudQueues = new Map<AgentId, Promise<void>>();
@@ -137,7 +147,7 @@ export function createAgents(deps: {
     const id = rec.agent.id;
     const existing = sessions.get(id);
     if (existing) return existing;
-    const actor: Actor = { kind: "agent", botId: rec.agent.botId, agentId: id };
+    const actor: AgentActor = { kind: "agent", botId: rec.agent.botId, agentId: id };
     const session = createSession({
       actor,
       state: rec.session,
@@ -169,14 +179,17 @@ export function createAgents(deps: {
           model: deps.model,
           hooks: deps.hooks(actor),
           sandbox: deps.sandbox(actor),
-          settings: NO_AUTO_MEMORY,
+          settings: deps.settings(actor),
           // The SDK replaces the environment rather than adding to it.
           env: { ...process.env, ...AGENT_GIT_ENV },
           maxBudgetUsd,
         };
       },
-      onMessage() {},
-      onTurnEnd: (pending, end) => turnEnded(rec, pending.initiator, end),
+      onMessage: (m) => deps.observe(actor, m),
+      onTurnEnd(pending, end) {
+        if (end.kind !== "deferred") deps.idle(actor);
+        turnEnded(rec, pending.initiator, end);
+      },
       onChange: () => refresh(rec),
       note: (text) => deps.note(rec, text),
       // Its record keeps everything; a follow-up or decision makes a new session that resumes it.
@@ -210,6 +223,8 @@ export function createAgents(deps: {
           url: null,
           createdAt: at,
           updatedAt: at,
+          evidence: null,
+          worktree: null,
         },
         cwd: a.project.path,
         messages: [{ id: newMessageId(), at, from: "bot", text: a.prompt }],
@@ -274,6 +289,8 @@ export function createAgents(deps: {
       macSession(rec).notice(text);
       refresh(rec);
     },
+
+    removeWorktree: async () => refused("Worktrees are not available on this bridge yet."),
 
     async stop(rec) {
       const session = sessions.get(rec.agent.id);

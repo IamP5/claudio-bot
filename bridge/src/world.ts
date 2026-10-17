@@ -161,8 +161,12 @@ export const emptySession = (id: string | null = null): SessionState => ({ id, p
 export type AccountState = { parkedUntil: string | null };
 
 
-/** A union so a webhook trigger can join later; the scheduler switches over it exhaustively. */
-export type Trigger = { kind: "cron"; schedule: string };
+/**
+ * What fires a routine; the scheduler switches over it exhaustively. A webhook routine fires only when a local caller
+ * presents its token: tokenHash is the token's sha256, null until the user makes one on the phone. It has no
+ * nextRunAt, and the clock never fires it.
+ */
+export type Trigger = { kind: "cron"; schedule: string } | { kind: "webhook"; tokenHash: string | null };
 
 /** Writer: scheduler.ts. */
 export type RoutineRecord = {
@@ -277,6 +281,10 @@ export type BotRecord = {
   unread: number;
   /** null: the bridge default. Writer: hub (update_bot). */
   dailyCapUsd: number | null;
+  /** No message or result pushes. Writer: hub (update_bot); push.ts reads it. */
+  muted: boolean;
+  /** MCP servers the user turned off for this bot and its agents, by name. Writer: connectors.ts. */
+  readonly connectorsOff: Owned<string[]>;
   readonly session: Owned<SessionState>;
   readonly routines: Owned<RoutineRecord[]>;
   readonly rules: Owned<StandingRule[]>;
@@ -329,6 +337,8 @@ export function newBot(fields: { id: BotId; name: string; avatar: Avatar; at: st
     messages: [],
     unread: 0,
     dailyCapUsd: null,
+    muted: false,
+    connectorsOff: [],
     session: emptySession(),
     routines: [],
     rules: [],
@@ -445,11 +455,12 @@ export const RUNS_ON_BOT = 5;
 
 /** The wire view of a routine, with its newest `limit` runs. describe and lastRunAt are derived, never stored. */
 export function routineView(r: Owned<RoutineRecord>, limit = r.runs.length): Routine {
+  const schedule = r.trigger.kind === "cron" ? r.trigger.schedule : "";
   return {
     id: r.id,
     name: r.name,
-    schedule: r.trigger.schedule,
-    describe: describe(r.trigger.schedule),
+    schedule,
+    describe: r.trigger.kind === "cron" ? describe(schedule) : "When its webhook is called",
     prompt: r.prompt,
     enabled: r.enabled,
     lastRunAt: lastRunAt(r),
@@ -477,6 +488,7 @@ export function toBot(bot: BotRecord, status: BotStatus): Bot {
     createdAt: bot.createdAt,
     routines: bot.routines.map((r) => routineView(r, RUNS_ON_BOT)),
     dailyCapUsd: bot.dailyCapUsd,
+    muted: bot.muted,
   };
 }
 
@@ -511,7 +523,22 @@ function sameTrigger(a: Trigger, b: Trigger): boolean {
   switch (a.kind) {
     case "cron":
       return b.kind === "cron" && a.schedule === b.schedule;
+    case "webhook":
+      return b.kind === "webhook";
   }
+}
+
+/** The list_routines tool's answer: each routine's name, when it runs, whether it is on, and its newest run. */
+export function routinesText(routines: Owned<RoutineRecord[]>): string {
+  if (routines.length === 0) return "No routines.";
+  return routines
+    .map((r) => {
+      const v = routineView(r, 1);
+      const last = v.runs[0];
+      const state = v.enabled ? (v.nextRunAt ? `next ${v.nextRunAt}` : "on") : "paused";
+      return `- ${v.name}: ${v.describe} (${v.trigger === "cron" ? v.schedule : "webhook"}), ${state}; last run: ${last ? `${last.status} at ${last.at}` : "never"}`;
+    })
+    .join("\n");
 }
 
 /**

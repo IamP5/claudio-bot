@@ -385,6 +385,7 @@ export function createGate(deps: GateDeps): Gate {
       grants: state.grants.filter((g) => g.appliesTo === (isAttended ? "attended" : "unattended")),
       headroom: deps.headroom(actor, initiator),
       callsToday: todayCounts(actor.botId, now),
+      connectorsOff: botOf(actor).connectorsOff,
       now: now.toISOString(),
       realpath: resolveReal,
     };

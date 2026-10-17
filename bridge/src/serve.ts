@@ -3,7 +3,7 @@ import { rejectsOrigin, type Devices } from "./devices";
 import type { Hub } from "./hub";
 import type { Legacy } from "./legacy";
 import { parseClientMessage } from "./parse";
-import type { ClientMessage, DeviceId, ServerMessage, TransportMessage } from "./protocol";
+import type { ClientMessage, DeviceId, ServerMessage, Signal, TransportMessage } from "./protocol";
 import { forProtocol2 } from "./protocol2";
 import type { Stream } from "./stream";
 import { errorText } from "./text";
@@ -45,6 +45,8 @@ export type Transport = {
   readonly port: number;
   /** Stamps the message with the next seq and sends it to every open socket. */
   publish(message: ServerMessage): void;
+  /** Sends the message to protocol 3 sockets as it is: no seq, not kept for replay. */
+  signal(message: Signal): void;
   /** Open authenticated sockets heard from within LIVE_WINDOW_MS. */
   live(): number;
   /** When the last of those goes quiet, or null when none is live. */
@@ -222,6 +224,9 @@ export function serve(deps: ServeDeps): Transport {
       server.publish(TOPIC[3], frame);
       const old = forProtocol2(message);
       server.publish(TOPIC[2], old === message ? frame : JSON.stringify({ ...old, seq: stream.seq }));
+    },
+    signal: (message) => {
+      server.publish(TOPIC[3], JSON.stringify(message));
     },
     live: () => quietAt().filter((t) => t > deps.now().getTime()).length,
     liveUntil: () => {

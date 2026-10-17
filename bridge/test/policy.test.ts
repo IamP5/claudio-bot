@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { decide, detailOf, fingerprint, type Decision, type PolicyContext, type Scope, type ToolCall } from "../src/policy";
 import type { AgentId, BotId, MessageId, RoutineId, RunId } from "../src/protocol";
+import { CLAUDIO_TOOLS } from "../src/tools";
 import type { Actor, Fingerprint, Grant, Initiator, Signature, StandingRule } from "../src/world";
 
 const HOME = "/Users/alex";
@@ -29,6 +30,7 @@ const ctx = (over: Partial<PolicyContext> = {}): PolicyContext => ({
   grants: [],
   headroom: { ok: true, capReached: false },
   callsToday: {},
+  connectorsOff: [],
   now: NOW,
   realpath: (p) => p,
   ...over,
@@ -867,5 +869,60 @@ describe("hosts a Bash call adds to the sandbox's network allowlist", () => {
     ]);
     expect(new Set([fingerprint(curl()), fingerprint(curl(["example.com"])), fingerprint(curl(["evil.test"]))]).size).toBe(3);
     expect(fingerprint(curl([]))).toBe(fingerprint(curl()));
+  });
+});
+
+describe("pass 3 rows: memory, skills, the claudio registry and connector toggles", () => {
+  const claudio = (name: string, input: Record<string, unknown> = {}) => call(`mcp__claudio__${name}`, input);
+  const write = (path: string) => call("Write", { file_path: path, content: "x" });
+
+  test.each([
+    ["remember", { text: "Prefers short answers", about: "user" }, "claudio.remember"],
+    ["save_skill", { name: "release-notes", description: "d", body: "b" }, "claudio.save_skill"],
+  ])("%s passes in an attended turn and asks in an unattended one", (name, input, rule) => {
+    expect(verdict(claudio(name, input), { initiator: user })).toBe("pass");
+    expect(verdict(claudio(name, input), { initiator: runNow })).toBe("pass");
+    expect(verdict(claudio(name, input), { initiator: routine })).toBe(`ask:${rule}`);
+    expect(verdict(claudio(name, input), { initiator: system })).toBe(`ask:${rule}`);
+    expect(verdict(claudio(name, input), { initiator: viaBot(1) })).toBe(`ask:${rule}`);
+  });
+
+  test("every tool the claudio server offers has a deliberate verdict, and one it does not offer is denied", () => {
+    for (const name of CLAUDIO_TOOLS) expect(verdict(claudio(name), { initiator: user })).not.toBe("deny:claudio.unknown");
+    expect(decide(claudio("run_routine", { name: "digest" }), ctx())).toMatchObject({ kind: "deny", via: "rule", rule: "claudio.unknown" });
+    expect(verdict(claudio("__proto__"))).toBe("deny:claudio.unknown");
+  });
+
+  test("a user server that happens to be named claudio is a connector, not the bridge's own server", () => {
+    const fake = claudio("run_routine", { name: "digest" });
+    expect(verdict({ ...fake, mcpServer: { name: "claudio", source: "user" } }, { initiator: routine })).toBe("ask:connector.act");
+  });
+
+  test("the claudio rows keep the signatures earlier Always rules were stored under", () => {
+    expect(decide(claudio("create_bot", { name: "x", job: "y" }), ctx({ initiator: routine }))).toMatchObject({ signature: "mcp__claudio__create_bot:claudio.create_bot" });
+    expect(decide(claudio("delete_routine", { name: "x" }), ctx({ initiator: viaBot(0) }))).toMatchObject({ signature: "mcp__claudio__delete_routine:claudio.routines" });
+  });
+
+  test("a bot writing USER.md passes in an attended turn and asks in an unattended one; an agent never reaches it", () => {
+    const userMd = `${BRIDGE}/USER.md`;
+    expect(verdict(write(userMd), { initiator: user })).toBe("pass");
+    expect(verdict(write(userMd), { initiator: routine })).toBe("ask:memory.user");
+    expect(verdict(sh(`echo "- likes tea" >> ${userMd}`), { initiator: routine })).toBe("ask:memory.user");
+    expect(verdict(call("Read", { file_path: userMd }), { initiator: routine })).toBe("pass");
+    expect(verdict(write(userMd), { actor: agent, scope: agentScope })).toBe("deny:floor.bridge");
+  });
+
+  test("the bot's own skills and CLAUDE.md stay a self-escalation card in every turn: skills go through save_skill", () => {
+    for (const initiator of [user, routine]) {
+      expect(verdict(write(`${OWN}/.claude/skills/x/SKILL.md`), { initiator })).toBe("ask:self.escalate");
+      expect(verdict(write(`${OWN}/CLAUDE.md`), { initiator })).toBe("ask:self.escalate");
+    }
+  });
+
+  test("a call to a connector the user turned off is denied; other connectors and the claudio server are not", () => {
+    const off = { connectorsOff: ["slack"] };
+    expect(decide(call("mcp__slack__list_channels", {}), ctx(off))).toMatchObject({ kind: "deny", rule: "connector.off" });
+    expect(verdict(call("mcp__github__list_issues", {}), off)).toBe("pass");
+    expect(verdict(claudio("list_routines"), { connectorsOff: ["claudio"] })).toBe("pass");
   });
 });

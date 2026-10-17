@@ -37,7 +37,7 @@ function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m
   legacy.reconcile(devices);
   const handled: ClientMessage[] = [];
   const hub = {
-    hello: (position: StreamPosition): ServerMessage => ({ type: "hello", protocol: 3, ...position, machine: "Mac", userName: "Alex", bots: [] }),
+    hello: (position: StreamPosition): ServerMessage => ({ type: "hello", protocol: 3, features: [], ...position, machine: "Mac", userName: "Alex", bots: [] }),
     handle: async (message: ClientMessage): Promise<ServerMessage[]> => {
       handled.push(message);
       return opts.replies?.(message) ?? [];

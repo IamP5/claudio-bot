@@ -292,7 +292,7 @@ describe("the permission flow", () => {
 
   test("an agent's card shows in its bot's chat and the decision goes to the agent", async () => {
     const t = setup();
-    const agent: Agent = { id: A1, botId: B1, title: "Fix login", where: "mac", projectName: "app", status: "working", url: null, createdAt: START.toISOString(), updatedAt: START.toISOString() };
+    const agent: Agent = { id: A1, botId: B1, title: "Fix login", where: "mac", projectName: "app", status: "working", url: null, createdAt: START.toISOString(), updatedAt: START.toISOString(), evidence: null, worktree: null };
     t.world.agents.set(A1, { agent, cwd: t.root, messages: [], session: emptySession(), cloudSession: null, budgetUsd: null, startedBy: user });
     const actor: Actor = { kind: "agent", botId: B1, agentId: A1 };
     await t.call("Bash", { command: "npm publish" }, { cwd: t.root }, actor);
@@ -691,7 +691,7 @@ describe("trust cards", () => {
   function withAgents() {
     const t = setup();
     for (const id of [A1, A2]) {
-      const agent: Agent = { id, botId: B1, title: `Agent ${id}`, where: "mac", projectName: "app", status: "working", url: null, createdAt: START.toISOString(), updatedAt: START.toISOString() };
+      const agent: Agent = { id, botId: B1, title: `Agent ${id}`, where: "mac", projectName: "app", status: "working", url: null, createdAt: START.toISOString(), updatedAt: START.toISOString(), evidence: null, worktree: null };
       t.world.agents.set(id, { agent, cwd: REPO, messages: [], session: emptySession(), cloudSession: null, budgetUsd: null, startedBy: user });
     }
     const ask = (actor = asker) => t.gate.trustCard(actor, { root: REPO, name: "app", found: [".claude/settings.json", ".mcp.json"] });

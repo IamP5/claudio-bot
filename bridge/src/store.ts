@@ -78,7 +78,15 @@ const profile = {
   unread: z.number(),
 };
 const agentThread = {
-  agent: z.looseObject({ id: text, botId: text, title: text, where: z.enum(["mac", "cloud"]), status: text }),
+  agent: z.looseObject({
+    id: text,
+    botId: text,
+    title: text,
+    where: z.enum(["mac", "cloud"]),
+    status: text,
+    evidence: anyObject.nullable().optional(),
+    worktree: z.looseObject({ path: text, branch: text }).nullable().optional(),
+  }),
   cwd: text,
   messages: z.array(z.looseObject({ id: text, at: text, from: text, text })),
 };
@@ -113,12 +121,17 @@ const V3_FILE = z.looseObject({
     z.looseObject({
       ...profile,
       dailyCapUsd: z.number().nullable(),
+      muted: z.boolean().optional(),
+      connectorsOff: z.array(text).optional(),
       session,
       routines: z.array(
         z.looseObject({
           id: text,
           name: text,
-          trigger: z.looseObject({ kind: z.literal("cron"), schedule: text }),
+          trigger: z.discriminatedUnion("kind", [
+            z.looseObject({ kind: z.literal("cron"), schedule: text }),
+            z.looseObject({ kind: z.literal("webhook"), tokenHash: maybeText }),
+          ]),
           prompt: text,
           enabled: z.boolean(),
           nextRunAt: maybeText,
@@ -150,6 +163,8 @@ export function upgradeV2(v2: StateFileV2): StateFileV3 {
     ...profile,
     messages: messages.map((m): Message => (m.kind === "question" ? { ...m, expiresAt: null } : m)),
     dailyCapUsd: null,
+    muted: false,
+    connectorsOff: [],
     session: emptySession(sessionId),
     routines: routines.map((r) => ({
       id: r.id,
@@ -165,6 +180,7 @@ export function upgradeV2(v2: StateFileV2): StateFileV3 {
   }));
   const agents = v2.agents.map(({ sessionId, ...rest }): AgentRecord => ({
     ...rest,
+    agent: { ...rest.agent, evidence: null, worktree: null },
     session: emptySession(rest.agent.where === "mac" ? sessionId : null),
     cloudSession: rest.agent.where === "cloud" ? sessionId : null,
     budgetUsd: null,
@@ -287,6 +303,12 @@ function fromV3(file: StateFileV3): World {
   for (const rec of [...file.bots, ...file.agents])
     for (const p of own<SessionState>(rec.session).pending) p.kind ??= p.id.startsWith("c_") ? "continuation" : "envelope";
   own<GateState>(file.gate).repos ??= [];
+  // Fields added after version 3 shipped. A file from before them reads as their empty value.
+  for (const bot of file.bots) {
+    bot.muted ??= false;
+    if (bot.connectorsOff === undefined) Object.assign(bot, { connectorsOff: [] });
+  }
+  for (const rec of file.agents) rec.agent = { ...rec.agent, evidence: rec.agent.evidence ?? null, worktree: rec.agent.worktree ?? null };
   return {
     bots: new Map(file.bots.map((b) => [b.id, b])),
     agents: new Map(file.agents.map((a) => [a.agent.id, a])),

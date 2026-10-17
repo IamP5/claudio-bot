@@ -494,6 +494,8 @@ export type Session = Tickable & {
   recheck(): void;
   /** options() would now give something else: the live query closes now, or when the turn it serves ends. */
   reopen(): void;
+  /** The live query's MCP controls (status and live toggles), or null while no query is open. */
+  mcp(): Pick<Query, "mcpServerStatus" | "toggleMcpServer"> | null;
   /** Recovered TurnEnds not yet told are told before it closes. */
   close(): void;
   /** A turn is running or retrying, or envelopes wait and nothing holds them. */
@@ -868,6 +870,7 @@ export function createSession(spec: SessionSpec): Session {
     recheck() {
       dispatch({ kind: "tick" });
     },
+    mcp: () => live?.q ?? null,
     reopen() {
       if (!live) return;
       if (turnOf(spec.state.lifecycle as Lifecycle) === null) closeLive();

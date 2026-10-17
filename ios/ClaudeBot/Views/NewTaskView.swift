@@ -57,16 +57,20 @@ struct NewTaskView: View {
 
                 Section {
                     projectPicker
-                    Picker("Model", selection: $model) {
-                        ForEach(ModelChoice.allCases) { Text($0.title).tag($0.rawValue) }
+                    if place == .local {
+                        Picker("Model", selection: $model) {
+                            ForEach(ModelChoice.allCases) { Text($0.title).tag($0.rawValue) }
+                        }
+                        .pickerStyle(.menu)
+                        Picker("Permissions", selection: $permission) {
+                            ForEach(PermissionMode.choices, id: \.self) { Text($0.title).tag($0) }
+                        }
+                        .pickerStyle(.menu)
                     }
-                    .pickerStyle(.menu)
-                    Picker("Permissions", selection: $permission) {
-                        ForEach(PermissionMode.choices, id: \.self) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.menu)
                 } footer: {
-                    Text(permission.explanation)
+                    Text(place == .local
+                        ? permission.explanation
+                        : "Cloud sessions use your claude.ai defaults. Follow along in the Claude app.")
                 }
             }
             .navigationTitle("New task")

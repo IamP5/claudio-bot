@@ -1,5 +1,5 @@
-// Usage. The truth is <bridge home>/usage/YYYY-MM.jsonl (mode 0600, append-only). An in-memory index (today's spend
-// per bot, lifetime spend per agent, last cumulative per session) is rebuilt from those files at start. Owner: U3.
+// Usage. The truth is <bridge home>/usage/YYYY-MM.jsonl (mode 0600, append-only). An in-memory index (spend per local
+// day per bot, lifetime spend per agent, last cumulative per session) is rebuilt from those files at start. Owner: U3.
 //
 // Boot folds every month file, not only the last two. An agent's budget is lifetime, and a session idle for months
 // still has a true baseline in an old file; a window would undercount the first and re-adopt the second. Rows are small
@@ -28,6 +28,8 @@ export type UsageRow = {
   deltaUsd: number;
   /** Local calendar day, YYYY-MM-DD. */
   day: string;
+  /** The query started this session, so its baseline is 0 even when this result is 0. */
+  fresh?: true;
 };
 
 /**
@@ -43,25 +45,37 @@ export type Headroom =
 
 export type Ledger = {
   /**
-   * Records one result and appends its row before returning. The cost baseline lives here: the delta is against this
-   * session's last row. A session with no row adopts the first result and charges nothing. A cumulative of 0 or less
-   * (crash and startup results carry zeros) charges nothing and never lowers the baseline. A cumulative below the
-   * baseline means the running total restarted (/clear), so the delta is the cumulative itself.
+   * Records one result. Never throws: the index takes the row first and a failed append is only logged, so the cap
+   * still sees the spend and the caller never mistakes a finished turn for a crash.
+   *
+   * The delta is against the session's baseline, its last positive cumulative.
+   * - fresh: the query started a new session (no resume id). The baseline is 0 and the first result is charged in full.
+   * - A resumed session with no row adopts its first result and charges nothing: that total carries history the
+   *   ledger never saw.
+   * - A cumulative of 0 or less (crash and startup results carry zeros) charges nothing and never lowers the baseline.
+   * - A cumulative below the baseline charges nothing, becomes the baseline, and logs a warning. Fresh queries are
+   *   handled by `fresh`, so this is an anomaly: a stale total, or two queries resuming one session id.
    */
-  add(result: { actor: Actor; sessionId: string; initiator: Initiator; cumulativeUsd: number }): void;
+  add(result: { actor: Actor; sessionId: string; initiator: Initiator; cumulativeUsd: number; fresh?: boolean }): void;
   headroom(actor: Actor, initiator: Initiator): Headroom;
   /**
-   * What is left of a mac agent's budget, passed as Options.maxBudgetUsd when its query starts so the SDK enforces it
-   * mid-turn (the SDK counts only spend since that query started). null: no limit to pass.
+   * What is left of a mac agent's lifetime budget, never below 0. Passed as Options.maxBudgetUsd when its query starts
+   * so the SDK enforces it mid-turn (the SDK counts only spend since that query started). Check headroom first: at 0
+   * the agent is held, and a query must not start with maxBudgetUsd 0.
    */
-  budgetLeft(agentId: AgentId): number | null;
+  budgetLeft(agentId: AgentId): number;
+  /**
+   * What is left of a bot's daily cap on the current local day, its agents included, never below 0. An unattended query
+   * passes it (or the smaller of it and budgetLeft, for an agent) as maxBudgetUsd. Check headroom first, as above.
+   */
+  dailyLeft(botId: BotId): number;
 };
 
 type Index = {
-  /** The last positive cumulative per session: its baseline. */
+  /** The baseline per session: its last positive cumulative, or 0 for a fresh session with no positive result yet. */
   baseline: Map<string, number>;
-  /** Spend on the latest local day seen; a row from a later day starts a new bucket. */
-  today: { day: string; byBot: Map<BotId, number> };
+  /** Spend per local day per bot. Every day is kept, so a clock or time zone that moves back still finds its day. */
+  spend: Map<string, Map<BotId, number>>;
   byAgent: Map<AgentId, number>;
 };
 
@@ -73,15 +87,17 @@ const localDay = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad
 const nextLocalMidnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
 const monthFile = (day: string) => `${day.slice(0, 7)}.jsonl`;
 
-function charge(baseline: number | undefined, cumulativeUsd: number): number {
-  if (cumulativeUsd <= 0 || baseline === undefined) return 0;
-  return cumulativeUsd >= baseline ? cumulativeUsd - baseline : cumulativeUsd;
+function charge(baseline: number | undefined, cumulativeUsd: number): { deltaUsd: number; below: boolean } {
+  if (cumulativeUsd <= 0 || baseline === undefined) return { deltaUsd: 0, below: false };
+  if (cumulativeUsd < baseline) return { deltaUsd: 0, below: true };
+  return { deltaUsd: cumulativeUsd - baseline, below: false };
 }
 
 function fold(ix: Index, row: UsageRow): void {
-  if (row.cumulativeUsd > 0) ix.baseline.set(row.sessionId, row.cumulativeUsd);
-  if (row.day > ix.today.day) ix.today = { day: row.day, byBot: new Map() };
-  if (row.day === ix.today.day) ix.today.byBot.set(row.botId, (ix.today.byBot.get(row.botId) ?? 0) + row.deltaUsd);
+  if (row.cumulativeUsd > 0 || row.fresh) ix.baseline.set(row.sessionId, Math.max(0, row.cumulativeUsd));
+  let day = ix.spend.get(row.day);
+  if (!day) ix.spend.set(row.day, (day = new Map()));
+  day.set(row.botId, (day.get(row.botId) ?? 0) + row.deltaUsd);
   if (row.actor.startsWith(AGENT_PREFIX)) {
     const agentId = row.actor.slice(AGENT_PREFIX.length) as AgentId;
     ix.byAgent.set(agentId, (ix.byAgent.get(agentId) ?? 0) + row.deltaUsd);
@@ -108,28 +124,31 @@ function parseRow(line: string): UsageRow | null {
     Number.isFinite(r.cumulativeUsd) &&
     Number.isFinite(r.deltaUsd) &&
     typeof r.day === "string" &&
-    /^\d{4}-\d{2}-\d{2}$/.test(r.day);
+    /^\d{4}-\d{2}-\d{2}$/.test(r.day) &&
+    (r.fresh === undefined || r.fresh === true);
   return ok ? (v as UsageRow) : null;
 }
 
+const usdOr = (usd: number | null, fallback: number) =>
+  usd !== null && Number.isFinite(usd) && usd >= 0 ? usd : fallback;
+
 function usdFromEnv(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
-  const n = raw ? Number(raw) : NaN;
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
+  return usdOr(raw ? Number(raw) : null, fallback);
 }
 
 export function createLedger(deps: {
   dir: string;
-  /** The bot's own cap; null means the default. */
+  /** The bot's own cap; null, or anything but a finite non-negative number, means the default. */
   capFor: (botId: BotId) => number | null;
-  /** The agent's own budget; null means the default. */
+  /** The agent's own budget; null, or anything but a finite non-negative number, means the default. */
   budgetFor: (agentId: AgentId) => number | null;
   now: () => Date;
   log: (line: string) => void;
 }): Ledger {
   const defaultCap = usdFromEnv("CLAUDIOBOT_DAILY_USD", DEFAULT_DAILY_CAP_USD);
   const defaultBudget = usdFromEnv("CLAUDIOBOT_AGENT_USD", DEFAULT_AGENT_BUDGET_USD);
-  const ix: Index = { baseline: new Map(), today: { day: "", byBot: new Map() }, byAgent: new Map() };
+  const ix: Index = { baseline: new Map(), spend: new Map(), byAgent: new Map() };
   // A file whose last line was torn by a crash; the next append starts on a fresh line so it does not glue onto it.
   const torn = new Set<string>();
 
@@ -145,16 +164,17 @@ export function createLedger(deps: {
     }
   }
 
-  const spentToday = (botId: BotId, now: Date) =>
-    ix.today.day === localDay(now) ? (ix.today.byBot.get(botId) ?? 0) : 0;
-
-  const budgetLeft = (agentId: AgentId): number =>
-    Math.max(0, (deps.budgetFor(agentId) ?? defaultBudget) - (ix.byAgent.get(agentId) ?? 0));
+  const cap = (botId: BotId) => usdOr(deps.capFor(botId), defaultCap);
+  const spentOn = (day: string, botId: BotId) => ix.spend.get(day)?.get(botId) ?? 0;
+  const budgetLeft = (agentId: AgentId) =>
+    Math.max(0, usdOr(deps.budgetFor(agentId), defaultBudget) - (ix.byAgent.get(agentId) ?? 0));
 
   return {
-    add({ actor, sessionId, initiator, cumulativeUsd }) {
+    add({ actor, sessionId, initiator, cumulativeUsd, fresh }) {
       const now = deps.now();
       const cumulative = Number.isFinite(cumulativeUsd) ? cumulativeUsd : 0;
+      const baseline = fresh ? 0 : ix.baseline.get(sessionId);
+      const { deltaUsd, below } = charge(baseline, cumulative);
       const row: UsageRow = {
         at: now.toISOString(),
         actor: actorKey(actor),
@@ -162,20 +182,31 @@ export function createLedger(deps: {
         sessionId,
         initiator,
         cumulativeUsd: cumulative,
-        deltaUsd: charge(ix.baseline.get(sessionId), cumulative),
+        deltaUsd,
         day: localDay(now),
+        ...(fresh && { fresh: true as const }),
       };
-      const name = monthFile(row.day);
-      const lead = torn.delete(name) ? "\n" : "";
-      appendFileSync(join(deps.dir, name), `${lead}${JSON.stringify(row)}\n`, { mode: 0o600 });
+      if (below) {
+        deps.log(
+          `usage: WARNING session=${sessionId} totalCostUsd=${cumulative} is below its baseline ${baseline}; charged 0 and rebaselined (a stale total, or two queries resuming one session)`,
+        );
+      }
       fold(ix, row);
-      deps.log(`result ${row.actor.replace(":", " ")} session=${sessionId} totalCostUsd=${cumulative} deltaUsd=${row.deltaUsd}`);
+      deps.log(`result ${row.actor.replace(":", " ")} session=${sessionId} totalCostUsd=${cumulative} deltaUsd=${deltaUsd}`);
+
+      const name = monthFile(row.day);
+      try {
+        appendFileSync(join(deps.dir, name), `${torn.has(name) ? "\n" : ""}${JSON.stringify(row)}\n`, { mode: 0o600 });
+        torn.delete(name);
+      } catch (e) {
+        deps.log(`usage: could not append to ${name}, the spend counts only until restart: ${(e as Error).message}`);
+      }
     },
 
     headroom(actor, initiator) {
       if (actor.kind === "agent" && budgetLeft(actor.agentId) <= 0) return { ok: false, reason: "agent_budget" };
       const now = deps.now();
-      const capReached = spentToday(actor.botId, now) >= (deps.capFor(actor.botId) ?? defaultCap);
+      const capReached = spentOn(localDay(now), actor.botId) >= cap(actor.botId);
       if (capReached && !attended(initiator)) {
         return { ok: false, reason: "daily_cap", until: nextLocalMidnight(now).toISOString() };
       }
@@ -183,5 +214,7 @@ export function createLedger(deps: {
     },
 
     budgetLeft,
+
+    dailyLeft: (botId) => Math.max(0, cap(botId) - spentOn(localDay(deps.now()), botId)),
   };
 }

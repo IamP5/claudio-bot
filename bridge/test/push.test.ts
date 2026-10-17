@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { BotId, MessageId } from "../src/protocol";
 import { createPush, MESSAGE_THROTTLE_MS, ntfySender, senderFromEnv, type PushReason, type Sender } from "../src/push";
 import { createSaver, loadWorld } from "../src/store";
-import { newBot, post, type World } from "../src/world";
+import { newBot, post, type PushState, type World } from "../src/world";
 
 const homes: string[] = [];
 afterEach(() => {
@@ -62,9 +62,9 @@ const diskKeys = (home: string): string[] =>
 const keys = (world: World) => world.push.sent.map((s) => s.key);
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
-test("a live socket suppresses the push and records nothing", async () => {
+test.each(["card", "reminder", "message"] as PushReason[])("a live socket suppresses a %s push and records nothing", async (reason) => {
   const h = harness({ live: 1 });
-  h.push.notify(BOT, "card", CARD);
+  h.push.notify(BOT, reason, reason === "message" ? h.bubble("m_bubble") : CARD);
   await settle();
   expect(h.calls).toEqual([]);
   expect(keys(h.world)).toEqual([]);
@@ -227,4 +227,53 @@ test("records older than the retention window are pruned on the next push", asyn
   h.push.notify(BOT, "message", h.bubble("m_late"));
   await settle();
   expect(keys(h.world)).toEqual(["m_late|message"]);
+});
+
+test.each([
+  ["a 5 KB name with newlines and control characters", "Evil\n\n  Bot\u0000\u001b[31m\r\n" + "x".repeat(5_000), "Evil Bot[31m " + "x".repeat(26) + "\u2026"],
+  ["a 40-character name", "y".repeat(40), "y".repeat(40)],
+  ["a 41-character name", "y".repeat(41), "y".repeat(39) + "\u2026"],
+])("%s is cleaned and capped at 40 characters before it leaves", async (_, name, shown) => {
+  const h = harness();
+  h.push.notify({ id: BOT.id, name }, "card", CARD);
+  await settle();
+  expect(h.calls.map((c) => c.init.body)).toEqual([`${shown} needs you`]);
+});
+
+test("a failed flush skips the send and never reaches the caller", async () => {
+  const h = harness();
+  const logs: string[] = [];
+  const sent: unknown[] = [];
+  const persist = () => {
+    throw new Error("ENOSPC: no space left on device");
+  };
+  const push = createPush({ world: h.world, persist, sender: async (n) => void sent.push(n), live: () => 0, now: () => new Date(T0), log: (l) => logs.push(l) });
+  expect(() => push.notify(BOT, "card", CARD)).not.toThrow();
+  await settle();
+  expect(sent).toEqual([]);
+  expect(logs).toEqual(["push: card for b_claudio skipped, could not record it: ENOSPC: no space left on device"]);
+});
+
+test("a record stamped after now does not throttle, so a clock set back still pushes", async () => {
+  const h = harness();
+  const pushedAt = (minutes: number, id: MessageId) => {
+    h.clock.t = T0 + minutes * 60_000;
+    const before = h.calls.length;
+    h.push.notify(BOT, "message", id);
+    return settle().then(() => h.calls.length > before);
+  };
+  expect(await pushedAt(0, h.bubble("m_b1"))).toBe(true);
+  expect(await pushedAt(-60, h.bubble("m_b2"))).toBe(true);
+  expect(await pushedAt(-55, h.bubble("m_b3"))).toBe(false);
+});
+
+test("an unparseable record does not hide a recent push from the throttle", async () => {
+  const h = harness();
+  const b0 = h.bubble("m_b0");
+  const b1 = h.bubble("m_b1");
+  (h.world.push as PushState).sent.push({ key: `${b0}|message`, at: "not a date" }, { key: `${b1}|message`, at: new Date(T0).toISOString() });
+  h.clock.t = T0 + 60_000;
+  h.push.notify(BOT, "message", h.bubble("m_b2"));
+  await settle();
+  expect(h.calls).toEqual([]);
 });

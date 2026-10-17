@@ -4,7 +4,8 @@ import type { Owned, PushState, World } from "./world";
 
 // "<bot> needs you" when no socket is live: an ntfy-style POST to CLAUDIOBOT_PUSH_URL now, APNs later behind the
 // same Sender. The only writer of World.push. Owner: U6.
-// No message content ever leaves the Mac: the text is the bot's name and a fixed phrase per reason, the click link
+// No message content ever leaves the Mac: the text is the bot's name (cleaned, at most 40 characters) and a fixed
+// phrase per reason, the click link
 // claudiobot://bot/<id>?message=<id>.
 // Every push has one key, `${messageId}|${reason}`: a card, its reminder, and a turn's first bubble each push at most
 // once. The key is recorded and flushed before the send, so a crash never double-pushes and a failed send is not
@@ -24,6 +25,7 @@ export const MESSAGE_THROTTLE_MS = 10 * 60_000;
 // Far longer than any card stays open, so a key is never forgotten while its card can still remind.
 const RETAIN_MS = 7 * 24 * 60 * 60_000;
 const SEND_TIMEOUT_MS = 10_000;
+const NAME_MAX = 40;
 
 const PHRASE: Record<PushReason, string> = {
   card: "needs you",
@@ -62,6 +64,12 @@ export function senderFromEnv(value: string | undefined, log: (line: string) => 
 const own = (slice: Owned<PushState>) => slice as PushState;
 const idOf = (key: string) => key.slice(0, key.lastIndexOf("|"));
 
+// The name is the one bot-controlled free text that leaves the Mac, so a renamed bot cannot smuggle content out.
+const shownName = (name: string) => {
+  const chars = Array.from(name.replace(/\s+/g, " ").replace(/\p{Cc}/gu, "").trim());
+  return chars.length <= NAME_MAX ? chars.join("") : `${chars.slice(0, NAME_MAX - 1).join("")}\u2026`;
+};
+
 export function createPush(deps: {
   world: World;
   persist: Persist;
@@ -74,16 +82,14 @@ export function createPush(deps: {
 }): Push {
   const { world, sender } = deps;
 
-  // Derived from the durable log rather than held in memory, so the throttle survives a restart.
-  function lastPushAt(botId: BotId): number | null {
+  // Derived from the durable log rather than held in memory, so the throttle survives a restart. A record stamped
+  // after now (the clock moved back) does not throttle.
+  function throttled(botId: BotId, now: number): boolean {
     const ids = new Set(world.bots.get(botId)?.messages.map((m) => m.id));
-    let last: number | null = null;
-    for (const s of world.push.sent) {
-      if (!ids.has(idOf(s.key) as MessageId)) continue;
+    return world.push.sent.some((s) => {
       const at = Date.parse(s.at);
-      if (last === null || at > last) last = at;
-    }
-    return last;
+      return ids.has(idOf(s.key) as MessageId) && !Number.isNaN(at) && now - at >= 0 && now - at < MESSAGE_THROTTLE_MS;
+    });
   }
 
   return {
@@ -92,17 +98,20 @@ export function createPush(deps: {
       const key = `${messageId}|${reason}`;
       if (world.push.sent.some((s) => s.key === key)) return;
       const now = deps.now().getTime();
-      if (reason === "message") {
-        const last = lastPushAt(bot.id);
-        if (last !== null && now - last < MESSAGE_THROTTLE_MS) return;
-      }
+      if (reason === "message" && throttled(bot.id, now)) return;
 
       const state = own(world.push);
       state.sent = state.sent.filter((s) => now - Date.parse(s.at) < RETAIN_MS);
       state.sent.push({ key, at: new Date(now).toISOString() });
-      deps.persist("now");
+      try {
+        deps.persist("now");
+      } catch (e) {
+        // Never send unrecorded. The key stays in memory, so this push is lost rather than doubled.
+        deps.log(`push: ${reason} for ${bot.id} skipped, could not record it: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
 
-      const n: Notification = { botId: bot.id, messageId, text: `${bot.name} ${PHRASE[reason]}`, link: linkTo(bot.id, messageId) };
+      const n: Notification = { botId: bot.id, messageId, text: `${shownName(bot.name)} ${PHRASE[reason]}`, link: linkTo(bot.id, messageId) };
       // Through a promise so a sender that throws synchronously cannot escape into the caller's turn.
       Promise.resolve()
         .then(() => sender(n))

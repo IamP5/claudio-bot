@@ -1,20 +1,48 @@
-import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import type { HookCallbackMatcher, HookEvent, Options } from "@anthropic-ai/claude-agent-sdk";
 import { createCloudSession, followUpCloudSession } from "./cloud";
+import type { Ledger } from "./ledger";
 import type { AgentId, AgentStatus, BotId } from "./protocol";
 import { agentPrompt } from "./prompts";
 import type { Project } from "./projects";
-import { createSession, type Session } from "./session";
-import { newMessageId, type AgentRecord, type World } from "./world";
+import { createSession, type Session, type TurnEnd } from "./session";
+import type { Persist } from "./store";
+import { emptySession, newMessageId, type Actor, type AgentRecord, type Initiator, type World } from "./world";
+
+// Agents are actors like bots: mac agents run on the same session module behind the same gate, metered by the same
+// ledger. Cloud agents run on claude.ai: the bridge neither gates nor meters them.
+export type Agents = {
+  /** initiator: the bot turn's, so an agent started by a routine runs as routine work. budgetUsd null: the default. */
+  start(
+    botId: BotId,
+    a: { title: string; prompt: string; project: Project; where: "mac" | "cloud"; botName: string; initiator: Initiator; budgetUsd: number | null },
+  ): Promise<AgentRecord>;
+  /** Bot → agent follow-up: recorded in the agent's thread, queued with the bot turn's initiator. */
+  message(rec: AgentRecord, text: string, initiator: Initiator): Promise<string>;
+  /** Gate → mac agent (a decision envelope): queued, not recorded in the thread. Ignored for cloud agents. */
+  deliver(rec: AgentRecord, input: { text: string; initiator: Initiator; ahead: boolean }): void;
+  notice(rec: AgentRecord, text: string): void;
+  /** Stop from the phone. False when nothing runs (and always for cloud agents). The turn's end reports to the bot. */
+  stop(rec: AgentRecord): Promise<boolean>;
+  session(id: AgentId): Session | null;
+  sessions(): Session[];
+  /** At start: tell bots about mac agents a restart cut off, and start sessions with queued envelopes. */
+  resume(): void;
+  stopFor(botId: BotId): void;
+};
 
 export function createAgents(deps: {
   world: World;
   userName: string;
   model: string | undefined;
+  ledger: Ledger;
+  hooks: (actor: Actor) => Partial<Record<HookEvent, HookCallbackMatcher[]>>;
+  persist: Persist;
   now: () => string;
   changed: (agent: AgentRecord) => void;
   reported: (agent: AgentRecord, text: string) => void;
-  logResult: (label: string, sessionId: string, totalCostUsd: number) => void;
-}) {
+  /** A line about the agent in its bot's chat. */
+  note: (agent: AgentRecord, text: string) => void;
+}): Agents {
   const sessions = new Map<AgentId, Session>();
   const cloudQueues = new Map<AgentId, Promise<void>>();
 
@@ -30,35 +58,53 @@ export function createAgents(deps: {
     deps.reported(rec, text);
   }
 
+  function turnEnded(rec: AgentRecord, end: TurnEnd) {
+    switch (end.kind) {
+      case "done": {
+        const m = end.result;
+        const text = m.subtype === "success" ? m.result : `The agent stopped with an error: ${m.errors.join("; ") || m.subtype}`;
+        return report(rec, m.subtype === "success" ? "waiting" : "failed", text.trim() || "(no final message)");
+      }
+      case "stopped":
+        return report(rec, "waiting", `Stopped by ${deps.userName}.`);
+      case "failed":
+        return report(rec, "failed", `The agent crashed: ${end.error}`);
+      case "dropped":
+      case "deferred":
+        return;
+    }
+  }
+
   function macSession(rec: AgentRecord): Session {
     const id = rec.agent.id;
     const existing = sessions.get(id);
     if (existing) return existing;
+    const actor: Actor = { kind: "agent", botId: rec.agent.botId, agentId: id };
     const session = createSession({
-      options: (): Options => ({
-        cwd: rec.cwd,
-        resume: rec.sessionId ?? undefined,
-        settingSources: ["user", "project"],
-        systemPrompt: { type: "preset", preset: "claude_code" },
-        permissionMode: "auto",
-        // Nobody is at the agent's terminal to answer; it reports to its bot instead.
-        disallowedTools: ["AskUserQuestion"],
-        model: deps.model,
-      }),
-      onMessage(m) {
-        if (m.session_id && m.session_id !== rec.sessionId) {
-          rec.sessionId = m.session_id;
-          deps.changed(rec);
-        }
-        if (m.type !== "result") return;
-        deps.logResult(`agent ${id}`, m.session_id, m.total_cost_usd);
-        const text = m.subtype === "success" ? m.result : `The agent stopped with an error: ${m.errors.join("; ") || m.subtype}`;
-        report(rec, m.subtype === "success" ? "waiting" : "failed", text.trim() || "(no final message)");
+      actor,
+      state: rec.session,
+      account: deps.world.account,
+      ledger: deps.ledger,
+      persist: deps.persist,
+      options: (): Options => {
+        const left = deps.ledger.budgetLeft(id);
+        return {
+          cwd: rec.cwd,
+          resume: rec.session.id ?? undefined,
+          settingSources: ["user", "project"],
+          systemPrompt: { type: "preset", preset: "claude_code" },
+          permissionMode: "auto",
+          // Nobody is at the agent's terminal to answer; it reports to its bot instead.
+          disallowedTools: ["AskUserQuestion"],
+          model: deps.model,
+          hooks: deps.hooks(actor),
+          ...(left !== null && { maxBudgetUsd: left }),
+        };
       },
-      onWorking() {},
-      onCrash(error) {
-        report(rec, "failed", `The agent crashed: ${error}`);
-      },
+      onMessage() {},
+      onTurnEnd: (_, end) => turnEnded(rec, end),
+      onChange() {},
+      note: (text) => deps.note(rec, text),
     });
     sessions.set(id, session);
     return session;
@@ -72,7 +118,7 @@ export function createAgents(deps: {
   }
 
   return {
-    async start(botId: BotId, a: { title: string; prompt: string; project: Project; where: "mac" | "cloud"; botName: string }) {
+    async start(botId, a) {
       const at = deps.now();
       const rec: AgentRecord = {
         agent: {
@@ -88,19 +134,21 @@ export function createAgents(deps: {
         },
         cwd: a.project.path,
         messages: [{ id: newMessageId(), at, from: "bot", text: a.prompt }],
-        sessionId: null,
+        session: emptySession(),
+        cloudSession: null,
+        budgetUsd: a.budgetUsd,
       };
       deps.world.agents.set(rec.agent.id, rec);
       deps.changed(rec);
       const prompt = agentPrompt({ botName: a.botName, userName: deps.userName, prompt: a.prompt });
       if (a.where === "mac") {
-        macSession(rec).push(prompt);
+        macSession(rec).push({ text: prompt, initiator: a.initiator, ahead: false });
         return rec;
       }
       await cloud(rec, async () => {
         try {
           const created = await createCloudSession(rec.cwd, prompt);
-          rec.sessionId = created.sessionId;
+          rec.cloudSession = created.sessionId;
           rec.agent = { ...rec.agent, url: created.url };
           update(rec, "in_cloud");
         } catch (e) {
@@ -110,18 +158,19 @@ export function createAgents(deps: {
       return rec;
     },
 
-    async message(rec: AgentRecord, text: string): Promise<string> {
+    async message(rec, text, initiator) {
       if (rec.agent.where === "mac") {
         update(rec, "working", { from: "bot", text });
-        macSession(rec).push(text);
+        macSession(rec).push({ text, initiator, ahead: false });
         return `Sent. ${rec.agent.title} will report back.`;
       }
-      if (!rec.sessionId) return "This cloud agent has no session to follow up on.";
+      const cloudSession = rec.cloudSession;
+      if (!cloudSession) return "This cloud agent has no session to follow up on.";
       update(rec, rec.agent.status, { from: "bot", text });
       let result = "";
       await cloud(rec, async () => {
         try {
-          await followUpCloudSession(rec.cwd, rec.sessionId!, text);
+          await followUpCloudSession(rec.cwd, cloudSession, text);
           result = `Sent to the cloud session. Follow it at ${rec.agent.url}`;
         } catch (e) {
           result = (e as Error).message;
@@ -130,16 +179,32 @@ export function createAgents(deps: {
       return result;
     },
 
-    // A mac agent that was mid-turn when the bridge stopped will never report, so tell its bot.
-    recover() {
+    deliver(rec, input) {
+      if (rec.agent.where === "mac") macSession(rec).push(input);
+    },
+
+    notice(rec, text) {
+      if (rec.agent.where === "mac") macSession(rec).notice(text);
+    },
+
+    async stop(rec) {
+      const session = sessions.get(rec.agent.id);
+      return session ? session.interrupt() : false;
+    },
+
+    session: (id) => sessions.get(id) ?? null,
+    sessions: () => [...sessions.values()],
+
+    resume() {
       for (const rec of deps.world.agents.values()) {
-        if (rec.agent.where === "mac" && rec.agent.status === "working") {
-          report(rec, "failed", "The bridge restarted while this agent was working. Send it a message to resume it.");
-        }
+        if (rec.agent.where !== "mac") continue;
+        if (rec.session.pending.length > 0) macSession(rec);
+        // A mac agent cut off mid-turn with nothing queued will never report, so tell its bot.
+        else if (rec.agent.status === "working") report(rec, "failed", "The bridge restarted while this agent was working. Send it a message to resume it.");
       }
     },
 
-    stopFor(botId: BotId) {
+    stopFor(botId) {
       for (const [id, session] of sessions) {
         if (deps.world.agents.get(id)?.agent.botId !== botId) continue;
         session.close();
@@ -148,5 +213,3 @@ export function createAgents(deps: {
     },
   };
 }
-
-export type Agents = ReturnType<typeof createAgents>;

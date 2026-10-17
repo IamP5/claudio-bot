@@ -25,6 +25,14 @@ test.each([
   ["a non-boolean pin", { type: "update_bot", botId: "b1", patch: { pinned: "yes" } }],
   ["a malformed upload", { type: "send", botId: "b1", text: "hi", uploads: [{ name: "a.png" }] }],
   ["a non-boolean routine toggle", { type: "set_routine", botId: "b1", routineId: "r1", enabled: 1 }],
+  ["a permission choice the bridge does not know", { type: "decide", botId: "b1", messageId: "m8", choice: "maybe" }],
+  ["a decide without a card", { type: "decide", botId: "b1", choice: "once" }],
+  ["a stop without a bot", { type: "stop" }],
+  ["a stop_agent without an agent", { type: "stop_agent", botId: "b1" }],
+  ["a run_routine without a routine", { type: "run_routine", botId: "b1" }],
+  ["a revoke_device without a device", { type: "revoke_device", deviceId: "" }],
+  ["a negative daily cap", { type: "update_bot", botId: "b1", patch: { dailyCapUsd: -1 } }],
+  ["a daily cap that is not a number", { type: "update_bot", botId: "b1", patch: { dailyCapUsd: "10" } }],
 ])("rejects %s", (_, raw) => {
   expect(parseClientMessage(typeof raw === "string" ? raw : JSON.stringify(raw)).ok).toBe(false);
 });
@@ -32,4 +40,9 @@ test.each([
 test("a send with only an upload is accepted", () => {
   const parsed = parseClientMessage(JSON.stringify({ type: "send", botId: "b1", text: "", uploads: [{ name: "a.png", mime: "image/png", data: "AA==" }] }));
   expect(parsed.ok).toBe(true);
+});
+
+test("a daily cap of null goes back to the bridge default", () => {
+  const parsed = parseClientMessage(JSON.stringify({ type: "update_bot", botId: "b1", patch: { dailyCapUsd: null } }));
+  expect(parsed).toEqual({ ok: true, message: { type: "update_bot", botId: "b1", patch: { dailyCapUsd: null } } } as never);
 });

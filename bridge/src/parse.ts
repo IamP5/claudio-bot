@@ -1,11 +1,13 @@
 import {
   COLORS,
+  PERMISSION_CHOICES,
   SHAPES,
   type AgentId,
   type Avatar,
   type BotId,
   type BotPatch,
   type ClientMessage,
+  type DeviceId,
   type MessageId,
   type RoutineId,
   type Upload,
@@ -45,6 +47,13 @@ function oneOf<T extends string>(o: Obj, key: string, values: readonly T[]): T {
   return v as T;
 }
 
+function usd(o: Obj, key: string): number | null {
+  const v = o[key];
+  if (v === null) return null;
+  if (typeof v !== "number" || !Number.isFinite(v) || v < 0) throw new ParseError(`${key} must be null or a non-negative number`);
+  return v;
+}
+
 function avatar(v: unknown): Avatar {
   const o = obj(v, "avatar");
   return { shape: oneOf(o, "shape", SHAPES), color: oneOf(o, "color", COLORS) };
@@ -58,6 +67,7 @@ function patch(v: unknown): BotPatch {
   if (o.avatar !== undefined) p.avatar = avatar(o.avatar);
   if (o.pinned !== undefined) p.pinned = bool(o, "pinned");
   if (o.hidden !== undefined) p.hidden = bool(o, "hidden");
+  if (o.dailyCapUsd !== undefined) p.dailyCapUsd = usd(o, "dailyCapUsd");
   return p;
 }
 
@@ -71,6 +81,9 @@ function uploads(v: unknown): Upload[] {
 }
 
 const botId = (o: Obj) => str(o, "botId") as BotId;
+const messageId = (o: Obj) => str(o, "messageId") as MessageId;
+const agentId = (o: Obj) => str(o, "agentId") as AgentId;
+const routineId = (o: Obj) => str(o, "routineId") as RoutineId;
 
 const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
   create_bot: (o) => ({ type: "create_bot", ref: str(o, "ref") }),
@@ -80,15 +93,22 @@ const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
     if (message.text.trim() === "" && message.uploads.length === 0) throw new ParseError("send needs text or uploads");
     return message;
   },
-  answer: (o) => ({ type: "answer", botId: botId(o), messageId: str(o, "messageId") as MessageId, option: index(o, "option") }),
-  dismiss: (o) => ({ type: "dismiss", botId: botId(o), messageId: str(o, "messageId") as MessageId }),
+  answer: (o) => ({ type: "answer", botId: botId(o), messageId: messageId(o), option: index(o, "option") }),
+  dismiss: (o) => ({ type: "dismiss", botId: botId(o), messageId: messageId(o) }),
+  decide: (o) => ({ type: "decide", botId: botId(o), messageId: messageId(o), choice: oneOf(o, "choice", PERMISSION_CHOICES) }),
+  stop: (o) => ({ type: "stop", botId: botId(o) }),
+  stop_agent: (o) => ({ type: "stop_agent", agentId: agentId(o) }),
   update_bot: (o) => ({ type: "update_bot", botId: botId(o), patch: patch(o.patch) }),
   mark_unread: (o) => ({ type: "mark_unread", botId: botId(o) }),
   delete_bot: (o) => ({ type: "delete_bot", botId: botId(o) }),
-  set_routine: (o) => ({ type: "set_routine", botId: botId(o), routineId: str(o, "routineId") as RoutineId, enabled: bool(o, "enabled") }),
+  set_routine: (o) => ({ type: "set_routine", botId: botId(o), routineId: routineId(o), enabled: bool(o, "enabled") }),
+  run_routine: (o) => ({ type: "run_routine", botId: botId(o), routineId: routineId(o) }),
   details: (o) => ({ type: "details", botId: botId(o) }),
-  agent: (o) => ({ type: "agent", agentId: str(o, "agentId") as AgentId }),
+  agent: (o) => ({ type: "agent", agentId: agentId(o) }),
   file: (o) => ({ type: "file", botId: botId(o), path: str(o, "path") }),
+  devices: () => ({ type: "devices" }),
+  revoke_device: (o) => ({ type: "revoke_device", deviceId: str(o, "deviceId") as DeviceId }),
+  pair_code: () => ({ type: "pair_code" }),
 };
 
 export function parseClientMessage(raw: string): Parsed {

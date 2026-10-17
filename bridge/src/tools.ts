@@ -12,6 +12,7 @@ export type BotActions = {
   updateSelf(botId: BotId, a: { name?: string; title?: string; shape?: Shape; color?: Color }): string;
   setRoutine(botId: BotId, a: { name: string; schedule: string; prompt: string; enabled?: boolean }): string;
   deleteRoutine(botId: BotId, a: { name: string }): string;
+  routineNoUpdate(botId: BotId): string;
 };
 
 async function reply(run: () => string | Promise<string>) {
@@ -80,6 +81,13 @@ export function botToolServer(botId: BotId, act: BotActions) {
         always,
       ),
       tool("delete_routine", "Delete one of your routines by name.", { name: z.string().min(1) }, (a) => reply(() => act.deleteRoutine(botId, a)), always),
+      tool(
+        "routine_no_update",
+        "In a routine run, call this when there is nothing worth telling the user, then end your turn. Nothing you wrote this turn is shown.",
+        {},
+        () => reply(() => act.routineNoUpdate(botId)),
+        always,
+      ),
     ],
   });
 }

@@ -2,6 +2,10 @@
   "server": [
     {
       "type": "hello",
+      "protocol": 3,
+      "epoch": "e_7f3a",
+      "seq": 41,
+      "resumed": false,
       "machine": "MacBook",
       "userName": "Alex",
       "bots": [
@@ -29,14 +33,52 @@
               "describe": "Weekdays at 7:57 AM",
               "prompt": "Post today's tech digest.",
               "enabled": true,
-              "lastRunAt": "2026-10-16T12:00:00.000Z"
+              "lastRunAt": "2026-10-16T12:00:00.000Z",
+              "trigger": "cron",
+              "nextRunAt": "2026-10-17T11:57:00.000Z",
+              "runs": [
+                {
+                  "id": "run4",
+                  "at": "2026-10-16T12:00:00.000Z",
+                  "status": "ok",
+                  "late": false,
+                  "manual": true,
+                  "note": null
+                },
+                {
+                  "id": "run3",
+                  "at": "2026-10-15T11:57:00.000Z",
+                  "status": "quiet",
+                  "late": true,
+                  "manual": false,
+                  "note": null
+                },
+                {
+                  "id": "run2",
+                  "at": "2026-10-14T11:57:00.000Z",
+                  "status": "failed",
+                  "late": false,
+                  "manual": false,
+                  "note": "Overloaded"
+                },
+                {
+                  "id": "run1",
+                  "at": "2026-10-13T11:57:00.000Z",
+                  "status": "skipped",
+                  "late": false,
+                  "manual": false,
+                  "note": "Missed while the Mac was asleep"
+                }
+              ]
             }
-          ]
+          ],
+          "dailyCapUsd": null
         }
       ]
     },
     {
       "type": "bot",
+      "seq": 42,
       "bot": {
         "id": "b2",
         "name": "news digest",
@@ -61,9 +103,46 @@
             "describe": "Weekdays at 7:57 AM",
             "prompt": "Post today's tech digest.",
             "enabled": true,
-            "lastRunAt": "2026-10-16T12:00:00.000Z"
+            "lastRunAt": "2026-10-16T12:00:00.000Z",
+            "trigger": "cron",
+            "nextRunAt": "2026-10-17T11:57:00.000Z",
+            "runs": [
+              {
+                "id": "run4",
+                "at": "2026-10-16T12:00:00.000Z",
+                "status": "ok",
+                "late": false,
+                "manual": true,
+                "note": null
+              },
+              {
+                "id": "run3",
+                "at": "2026-10-15T11:57:00.000Z",
+                "status": "quiet",
+                "late": true,
+                "manual": false,
+                "note": null
+              },
+              {
+                "id": "run2",
+                "at": "2026-10-14T11:57:00.000Z",
+                "status": "failed",
+                "late": false,
+                "manual": false,
+                "note": "Overloaded"
+              },
+              {
+                "id": "run1",
+                "at": "2026-10-13T11:57:00.000Z",
+                "status": "skipped",
+                "late": false,
+                "manual": false,
+                "note": "Missed while the Mac was asleep"
+              }
+            ]
           }
-        ]
+        ],
+        "dailyCapUsd": 5
       }
     },
     {
@@ -154,12 +233,14 @@
             "Merge #139 and #142",
             "Keep holding everything"
           ],
-          "answer": null
+          "answer": null,
+          "expiresAt": "2026-10-17T12:00:00.000Z"
         }
       ]
     },
     {
       "type": "message",
+      "seq": 44,
       "botId": "b1",
       "message": {
         "kind": "question",
@@ -171,7 +252,8 @@
           "Merge #139 and #142",
           "Keep holding everything"
         ],
-        "answer": 1
+        "answer": 1,
+        "expiresAt": "2026-10-17T12:00:00.000Z"
       }
     },
     {
@@ -186,7 +268,8 @@
           "Yes",
           "Not yet"
         ],
-        "answer": "dismissed"
+        "answer": "dismissed",
+        "expiresAt": null
       }
     },
     {
@@ -278,6 +361,242 @@
     {
       "type": "error",
       "message": "Unknown bot"
+    },
+    {
+      "type": "message",
+      "seq": 45,
+      "botId": "b1",
+      "message": {
+        "kind": "permission",
+        "id": "m8",
+        "at": "2026-10-16T14:00:00.000Z",
+        "from": null,
+        "tool": "Bash",
+        "label": "Push to the default branch",
+        "detail": "git push origin main",
+        "always": "git push to main or master from engineer",
+        "answer": null,
+        "expiresAt": "2026-10-16T16:00:00.000Z"
+      }
+    },
+    {
+      "type": "message",
+      "seq": 46,
+      "botId": "b1",
+      "message": {
+        "kind": "permission",
+        "id": "m9",
+        "at": "2026-10-16T14:00:00.000Z",
+        "from": {
+          "kind": "agent",
+          "id": "a1",
+          "title": "Set up verification skill"
+        },
+        "tool": "mcp__github__merge_pull_request",
+        "label": "Merge a pull request",
+        "detail": "mcp__github__merge_pull_request {\"repo\":\"acme/web\",\"number\":142}",
+        "always": "merging pull requests from engineer",
+        "answer": "once",
+        "expiresAt": "2026-10-16T16:00:00.000Z"
+      }
+    },
+    {
+      "type": "message",
+      "seq": 47,
+      "botId": "b1",
+      "message": {
+        "kind": "question",
+        "id": "m10",
+        "at": "2026-10-16T12:00:00.000Z",
+        "question": "Want me to merge any of these now?",
+        "options": [
+          "Merge only #142",
+          "Merge #139 and #142",
+          "Keep holding everything"
+        ],
+        "answer": "expired",
+        "expiresAt": "2026-10-17T12:00:00.000Z"
+      }
+    },
+    {
+      "type": "bot",
+      "seq": 48,
+      "bot": {
+        "id": "b1",
+        "name": "engineer",
+        "title": null,
+        "avatar": {
+          "shape": "hexagon",
+          "color": "orange"
+        },
+        "pinned": false,
+        "hidden": false,
+        "status": "awaiting_approval",
+        "unread": 2,
+        "question": "Push to the default branch: git push origin main",
+        "preview": "Want me to merge any of these now?",
+        "lastAt": "2026-10-16T12:00:00.000Z",
+        "createdAt": "2026-10-16T12:00:00.000Z",
+        "routines": [
+          {
+            "id": "r1",
+            "name": "morning-digest",
+            "schedule": "57 7 * * 1-5",
+            "describe": "Weekdays at 7:57 AM",
+            "prompt": "Post today's tech digest.",
+            "enabled": true,
+            "lastRunAt": "2026-10-16T12:00:00.000Z",
+            "trigger": "cron",
+            "nextRunAt": "2026-10-17T11:57:00.000Z",
+            "runs": [
+              {
+                "id": "run4",
+                "at": "2026-10-16T12:00:00.000Z",
+                "status": "ok",
+                "late": false,
+                "manual": true,
+                "note": null
+              },
+              {
+                "id": "run3",
+                "at": "2026-10-15T11:57:00.000Z",
+                "status": "quiet",
+                "late": true,
+                "manual": false,
+                "note": null
+              },
+              {
+                "id": "run2",
+                "at": "2026-10-14T11:57:00.000Z",
+                "status": "failed",
+                "late": false,
+                "manual": false,
+                "note": "Overloaded"
+              },
+              {
+                "id": "run1",
+                "at": "2026-10-13T11:57:00.000Z",
+                "status": "skipped",
+                "late": false,
+                "manual": false,
+                "note": "Missed while the Mac was asleep"
+              }
+            ]
+          }
+        ],
+        "dailyCapUsd": null
+      }
+    },
+    {
+      "type": "bot",
+      "seq": 49,
+      "bot": {
+        "id": "b1",
+        "name": "engineer",
+        "title": null,
+        "avatar": {
+          "shape": "hexagon",
+          "color": "orange"
+        },
+        "pinned": false,
+        "hidden": false,
+        "status": "parked",
+        "unread": 2,
+        "question": "Want me to merge any of these now?",
+        "preview": "Want me to merge any of these now?",
+        "lastAt": "2026-10-16T12:00:00.000Z",
+        "createdAt": "2026-10-16T12:00:00.000Z",
+        "routines": [
+          {
+            "id": "r1",
+            "name": "morning-digest",
+            "schedule": "57 7 * * 1-5",
+            "describe": "Weekdays at 7:57 AM",
+            "prompt": "Post today's tech digest.",
+            "enabled": true,
+            "lastRunAt": "2026-10-16T12:00:00.000Z",
+            "trigger": "cron",
+            "nextRunAt": "2026-10-17T11:57:00.000Z",
+            "runs": [
+              {
+                "id": "run4",
+                "at": "2026-10-16T12:00:00.000Z",
+                "status": "ok",
+                "late": false,
+                "manual": true,
+                "note": null
+              },
+              {
+                "id": "run3",
+                "at": "2026-10-15T11:57:00.000Z",
+                "status": "quiet",
+                "late": true,
+                "manual": false,
+                "note": null
+              },
+              {
+                "id": "run2",
+                "at": "2026-10-14T11:57:00.000Z",
+                "status": "failed",
+                "late": false,
+                "manual": false,
+                "note": "Overloaded"
+              },
+              {
+                "id": "run1",
+                "at": "2026-10-13T11:57:00.000Z",
+                "status": "skipped",
+                "late": false,
+                "manual": false,
+                "note": "Missed while the Mac was asleep"
+              }
+            ]
+          }
+        ],
+        "dailyCapUsd": null
+      }
+    },
+    {
+      "type": "agent",
+      "seq": 50,
+      "agent": {
+        "id": "a1",
+        "botId": "b1",
+        "title": "Set up verification skill",
+        "where": "mac",
+        "projectName": "web",
+        "status": "awaiting_approval",
+        "url": null,
+        "createdAt": "2026-10-16T12:00:00.000Z",
+        "updatedAt": "2026-10-16T12:00:00.000Z"
+      },
+      "messages": []
+    },
+    {
+      "type": "devices",
+      "devices": [
+        {
+          "id": "d1",
+          "name": "Alex's iPhone",
+          "createdAt": "2026-10-16T12:00:00.000Z",
+          "lastSeenAt": "2026-10-16T14:00:00.000Z",
+          "legacy": false,
+          "current": true
+        },
+        {
+          "id": "d0",
+          "name": "Paired before protocol 3",
+          "createdAt": "2026-10-16T12:00:00.000Z",
+          "lastSeenAt": null,
+          "legacy": true,
+          "current": false
+        }
+      ]
+    },
+    {
+      "type": "pair_code",
+      "code": "K7QD-M2XP",
+      "expiresAt": "2026-10-16T12:10:00.000Z"
     }
   ],
   "client": [
@@ -352,6 +671,42 @@
       "type": "file",
       "botId": "b1",
       "path": "merge-plan.md"
+    },
+    {
+      "type": "decide",
+      "botId": "b1",
+      "messageId": "m8",
+      "choice": "once"
+    },
+    {
+      "type": "stop",
+      "botId": "b1"
+    },
+    {
+      "type": "stop_agent",
+      "agentId": "a1"
+    },
+    {
+      "type": "run_routine",
+      "botId": "b1",
+      "routineId": "r1"
+    },
+    {
+      "type": "update_bot",
+      "botId": "b1",
+      "patch": {
+        "dailyCapUsd": 5
+      }
+    },
+    {
+      "type": "devices"
+    },
+    {
+      "type": "revoke_device",
+      "deviceId": "d0"
+    },
+    {
+      "type": "pair_code"
     }
   ]
 }

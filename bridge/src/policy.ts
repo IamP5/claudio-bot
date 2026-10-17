@@ -19,7 +19,7 @@ import { PRIVATE } from "./private";
 import type { MessageId } from "./protocol";
 import type { ClaudioTool } from "./tools";
 import { shellCommands, type Word } from "./shell";
-import { BODY_KEYS, clip, maskSecrets, sha256 } from "./text";
+import { BODY_KEYS, sha256 } from "./text";
 import { actorKey, attended, hopsOf, isRoutineChain, type Actor, type Fingerprint, type Grant, type Initiator, type Signature, type StandingRule } from "./world";
 
 /** A tool call as the policy sees it. Nothing in here is `unknown`. */
@@ -1412,22 +1412,33 @@ export function fingerprint(call: ToolCall): Fingerprint {
 const lines = (s: string) => (s === "" ? 0 : s.split("\n").length - (s.endsWith("\n") ? 1 : 0));
 const CLIP = 4096;
 
-/** The card's detail line: the exact command, "Write <path> (N lines)", or an MCP tool with compact JSON. Secrets masked. */
+/** Control and format characters (bidi overrides, isolates, zero-width ones) as <U+XXXX>; newline, tab and the emoji joiner stay. */
+const visible = (s: string) =>
+  s.replace(/(?![\n\t\u200D])[\p{Cc}\p{Cf}]/gu, (ch) => `<U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}>`);
+
+/** Cut at n characters, then the full length and a hash, so two long payloads that share a prefix never look alike. */
+const clipExact = (s: string, n: number) => (s.length <= n ? visible(s) : `${visible(s.slice(0, n))}… (${s.length} chars, sha256 ${sha256(s).slice(0, 12)})`);
+
+/**
+ * The card's detail line: the exact command, "Write <path> (N lines)", or an MCP tool with compact JSON. Nothing is
+ * masked, since the approver must see what runs (a masked base64 run could be the payload), and hidden characters are
+ * shown as escapes, since a bidi override could make the line read as something else.
+ */
 export function detailOf(call: ToolCall): string {
   const i = call.input;
   switch (call.tool) {
     case "Bash": {
       const hosts = hostsOf(call);
-      return clip(maskSecrets(String(i.command).trim() + (hosts.length > 0 ? ` (network: ${hosts.join(", ")})` : "")), CLIP);
+      return clipExact(String(i.command).trim() + (hosts.length > 0 ? ` (network: ${hosts.join(", ")})` : ""), CLIP);
     }
     case "Write":
-      return maskSecrets(`Write ${String(i.file_path)} (${lines(String(i.content))} lines)`);
+      return clipExact(`Write ${String(i.file_path)} (${lines(String(i.content))} lines)`, CLIP);
     case "Edit":
     case "MultiEdit":
-      return maskSecrets(`${call.tool} ${String(i.file_path)}`);
+      return clipExact(`${call.tool} ${String(i.file_path)}`, CLIP);
     case "NotebookEdit":
-      return maskSecrets(`NotebookEdit ${String(i.notebook_path)}`);
+      return clipExact(`NotebookEdit ${String(i.notebook_path)}`, CLIP);
     default:
-      return clip(maskSecrets(`${call.tool} ${JSON.stringify(i)}`), 500);
+      return clipExact(`${call.tool} ${JSON.stringify(i)}`, 500);
   }
 }

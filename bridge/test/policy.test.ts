@@ -435,10 +435,8 @@ describe("detailOf", () => {
   test("Bash shows the exact command", () => {
     expect(detailOf(sh("  git push origin main  "))).toBe("git push origin main");
   });
-  test("secrets in a command are masked", () => {
-    const d = detailOf(sh('curl -H "Authorization: Bearer abcd1234efgh5678" https://api.example.com'));
-    expect(d).not.toContain("abcd1234efgh5678");
-    expect(d).toContain("«redacted:16 chars»");
+  test("a token in a command is shown as it will run, since the approver must see the call", () => {
+    expect(detailOf(sh('curl -H "Authorization: Bearer abcd1234efgh5678" https://api.example.com'))).toBe('curl -H "Authorization: Bearer abcd1234efgh5678" https://api.example.com');
   });
   test("Write shows the path and line count, never the content", () => {
     expect(detailOf(call("Write", { file_path: "notes.md", content: "a\nb\n" }))).toBe("Write notes.md (2 lines)");
@@ -447,7 +445,7 @@ describe("detailOf", () => {
     expect(detailOf(call("mcp__slack__send_message", { channel: "#x", text: "hi" }))).toBe('mcp__slack__send_message {"channel":"#x","text":"hi"}');
     const long = detailOf(call("mcp__slack__send_message", { text: "word ".repeat(200) }));
     expect(long.length).toBeLessThan(560);
-    expect(long).toContain("more chars)");
+    expect(long).toContain(" chars, sha256 ");
   });
 });
 
@@ -1125,6 +1123,26 @@ describe("gap 3: WebFetch and WebSearch", () => {
   test("a search passes in a user's turn and asks in an unattended one", () => {
     expect(verdict(search("SECRET site:evil.example"), { initiator: user })).toBe("pass");
     expect(verdict(search("SECRET site:evil.example"), { initiator: routine })).toBe("ask:web.search");
+  });
+});
+
+describe("gap 3: the card shows exactly what runs", () => {
+  test("bidi overrides, isolates and zero-width characters are escaped visibly", () => {
+    const d = detailOf(sh("git push origin feature ‮ niam:daeh⁦ # harmless​"));
+    expect(d).toBe("git push origin feature <U+202E> niam:daeh<U+2066> # harmless<U+200B>");
+  });
+  test("a control character in a Write path is escaped too", () => {
+    expect(detailOf(call("Write", { file_path: "notes\u001b[2K.md", content: "x" }))).toBe("Write notes<U+001B>[2K.md (1 lines)");
+  });
+  test("a base64 payload is shown, not masked", () => {
+    const payload = "aGVsbG9Xb3JsZEFsb25nQmFzZTY0VGV4dFdpdGhNaXhlZENhc2U5OTk=";
+    expect(detailOf(sh(`echo ${payload} | base64 -d | sh`))).toBe(`echo ${payload} | base64 -d | sh`);
+  });
+  test("a clipped detail ends with its full length and a hash, so two long payloads never look alike", () => {
+    const a = detailOf(sh("echo " + "a".repeat(5000) + " x"));
+    const b = detailOf(sh("echo " + "a".repeat(5000) + " y"));
+    expect(a).toContain("5007 chars");
+    expect(a).not.toBe(b);
   });
 });
 

@@ -574,3 +574,60 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(height(rendered(confirmed: false)) > height(rendered(confirmed: true)))
     }
 }
+
+@MainActor
+@Suite struct AgentEvidenceTests {
+    private func agent(evidence: AgentEvidence?, worktree: Worktree? = nil) -> Agent {
+        Agent(
+            id: AgentID("a1"), botId: BotID("b1"), title: "Fix login", where: .mac, projectName: "app",
+            status: .waiting, url: nil, createdAt: at, updatedAt: at, evidence: evidence, worktree: worktree
+        )
+    }
+
+    private let evidence = AgentEvidence(
+        at: at, branch: "claudio/ab12cd34", head: "1a2b3c4", ahead: 2, changed: 1, insertions: 12, deletions: 3,
+        dirty: true, pr: URL(string: "https://github.com/acme/app/pull/7")
+    )
+
+    @Test func showsGitsFactsOnlyWhenTheBridgeListsWorktrees() {
+        #expect(AgentEvidenceSummary.of(agent(evidence: evidence), features: []) == nil)
+        #expect(AgentEvidenceSummary.of(agent(evidence: nil), features: [.worktrees]) == nil)
+        #expect(AgentEvidenceSummary.of(agent(evidence: evidence), features: [.worktrees]) == AgentEvidenceSummary(
+            place: "On claudio/ab12cd34 at 1a2b3c4", work: "2 commits ahead, 1 file changed (+12 −3)",
+            dirty: true, pr: URL(string: "https://github.com/acme/app/pull/7"), checkedAt: at
+        ))
+    }
+
+    @Test func aDetachedHeadSaysSo() {
+        var detached = evidence
+        detached.branch = nil
+        detached.ahead = 1
+        let summary = AgentEvidenceSummary.of(agent(evidence: detached), features: [.worktrees])
+        #expect(summary?.place == "Detached at 1a2b3c4")
+        #expect(summary?.work.hasPrefix("1 commit ahead") == true)
+    }
+}
+
+@Suite struct AgentWorktreeTests {
+    private func agent(_ status: AgentStatus, worktree: Worktree?) -> Agent {
+        Agent(
+            id: AgentID("a1"), botId: BotID("b1"), title: "Fix login", where: .mac, projectName: "app",
+            status: status, url: nil, createdAt: at, updatedAt: at, evidence: nil, worktree: worktree
+        )
+    }
+
+    private let worktree = Worktree(path: "/Users/alex/.claudiobot-worktrees/app/a1", branch: "claudio/ab12cd34")
+
+    @Test func theRemoveButtonShowsOnlyWithWorktreesAndAWorktree() {
+        #expect(AgentWorktreeRow.of(agent(.waiting, worktree: worktree), features: []) == nil)
+        #expect(AgentWorktreeRow.of(agent(.waiting, worktree: nil), features: [.worktrees]) == nil)
+        #expect(AgentWorktreeRow.of(agent(.waiting, worktree: worktree), features: [.worktrees]) == AgentWorktreeRow(branch: "claudio/ab12cd34", removable: true))
+    }
+
+    @Test func removingWaitsWhileTheAgentWorks() {
+        for status: AgentStatus in [.working, .awaitingApproval, .parked] {
+            #expect(AgentWorktreeRow.of(agent(status, worktree: worktree), features: [.worktrees])?.removable == false)
+        }
+        #expect(AgentWorktreeRow.of(agent(.failed, worktree: worktree), features: [.worktrees])?.removable == true)
+    }
+}

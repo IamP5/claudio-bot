@@ -1060,6 +1060,33 @@ describe("gap 3: persistence paths a shell, git or direnv loads are self-escalat
   });
 });
 
+describe("gap 3: decide stays bounded on a large command", () => {
+  test("a command past 32 KB is held, not parsed", () => {
+    expect(decide(sh("echo " + "x".repeat(33 * 1024)), ctx())).toMatchObject({ kind: "ask", rule: "bash.toolong", offerAlways: false });
+  });
+  test("a command that would resolve too many paths is held once the budget runs out, and the realpath calls stop there", () => {
+    let calls = 0;
+    const realpath = (p: string) => {
+      calls++;
+      return p;
+    };
+    const cds = Array.from({ length: 16 }, (_, i) => `cd /tmp/d${i} ||`).join(" ") + " true; ";
+    const command = cds + "ls " + Array.from({ length: 3000 }, (_, i) => `f${i}/g`).join(" ");
+    expect(command.length).toBeLessThan(32 * 1024);
+    expect(decide(sh(command), ctx({ realpath }))).toMatchObject({ kind: "ask", rule: "bash.toolong" });
+    expect(calls).toBeLessThan(10_000);
+  });
+  test("the same path named many times is resolved once", () => {
+    let calls = 0;
+    const realpath = (p: string) => {
+      calls++;
+      return p;
+    };
+    expect(decide(sh("cat " + "notes.md ".repeat(2000)), ctx({ realpath }))).toEqual({ kind: "pass" });
+    expect(calls).toBeLessThan(50);
+  });
+});
+
 describe("gap 3: save_skill never offers Always", () => {
   test("an unattended save_skill card offers Once, Deny and Never only", () => {
     expect(decide(call("mcp__claudio__save_skill", { name: "x", description: "d", body: "b" }), ctx({ initiator: routine }))).toMatchObject({ kind: "ask", rule: "claudio.save_skill", offerAlways: false });

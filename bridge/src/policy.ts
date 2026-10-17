@@ -286,7 +286,10 @@ const META = /[$`*?[{]/;
 /** A path longer than any real filesystem path is a file body or a huge literal, not a path to resolve. */
 const MAX_PATH_LEN = 4096;
 /** A Bash command past this is held rather than parsed, so the synchronous hook cannot freeze the bridge. */
-const MAX_BASH_LEN = 256 * 1024;
+const MAX_BASH_LEN = 32 * 1024;
+/** Distinct paths one call may resolve. Each is a realpath syscall chain; past this the call is held, not checked. */
+const REALPATH_BUDGET = 4096;
+class TooManyPaths extends Error {}
 
 /** Replace $name / ${name} with a tracked literal assignment's value, so `d=.ssh; cat ~/$d/id_rsa` resolves. */
 function substVars(text: string, vars: Record<string, string>): string {
@@ -1256,11 +1259,27 @@ const deny = (via: DenyVia, rule: string, reason: string, handOff = false): Deci
  *   7. the rule table, by attended(initiator). Bash is split into segments and the strictest segment wins.
  *   8. pass. The SDK's own Agent and SubagentHandback calls always pass.
  */
-export function decide(call: ToolCall, ctx: PolicyContext): Decision {
+const TOO_LONG: Decision = { kind: "ask", rule: "bash.toolong", label: "Run a very long shell command", signature: "Bash:bash.toolong" as Signature, always: "", offerAlways: false };
+
+/** The context's realpath, memoised for one call and capped at REALPATH_BUDGET distinct paths. */
+function boundedRealpath(realpath: (path: string) => string): (path: string) => string {
+  const seen = new Map<string, string>();
+  return (path) => {
+    let real = seen.get(path);
+    if (real === undefined) {
+      if (seen.size >= REALPATH_BUDGET) throw new TooManyPaths();
+      real = realpath(path);
+      seen.set(path, real);
+    }
+    return real;
+  };
+}
+
+export function decide(call: ToolCall, outer: PolicyContext): Decision {
   if (SDK_INTERNAL.has(call.tool)) return PASS;
   // A command too long to scan in bounded time is held rather than parsed, so the hook never freezes the bridge.
-  if (call.tool === "Bash" && typeof call.input.command === "string" && call.input.command.length > MAX_BASH_LEN)
-    return { kind: "ask", rule: "bash.toolong", label: "Run a very long shell command", signature: "Bash:bash.toolong" as Signature, always: "", offerAlways: false };
+  if (call.tool === "Bash" && typeof call.input.command === "string" && call.input.command.length > MAX_BASH_LEN) return TOO_LONG;
+  const ctx: PolicyContext = { ...outer, realpath: boundedRealpath(outer.realpath) };
   const at: { via: DenyVia; rule: string } = { via: "floor", rule: "floor.paths" };
   try {
     const view = viewOf(call, ctx);
@@ -1321,7 +1340,8 @@ export function decide(call: ToolCall, ctx: PolicyContext): Decision {
     const held = ruled.find((r, i) => r !== null && r.cell === "ask" && covers[i] === undefined);
     if (held) return { kind: "ask", rule: held.row.id, label: held.label, signature: held.signature, always: alwaysText(held.label, isAttended), offerAlways: held.row.offerAlways ?? true };
     return PASS;
-  } catch {
+  } catch (e) {
+    if (e instanceof TooManyPaths) return TOO_LONG;
     return deny(at.via, at.rule, `The bridge could not check this call against ${at.rule}, so it was blocked and did not run. Do not retry it this turn.`);
   }
 }

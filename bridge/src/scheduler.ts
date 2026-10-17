@@ -147,10 +147,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const firstRun = (cron: Cron) => iso(nextAfter(cron, deps.now()));
 
   /** True when the run reached the bot's queue; otherwise it is settled failed. */
-  function fire(bot: BotRecord, r: RoutineRecord, run: RoutineRun): boolean {
+  function fire(bot: BotRecord, r: RoutineRecord, run: RoutineRun, payload: string | null): boolean {
     try {
       deps.changed(bot, "now");
-      deps.deliver(bot, { from: "routine", name: r.name, prompt: r.prompt, run: { routineId: r.id, runId: run.id }, manual: run.manual, late: run.late, payload: null });
+      deps.deliver(bot, { from: "routine", name: r.name, prompt: r.prompt, run: { routineId: r.id, runId: run.id }, manual: run.manual, late: run.late, payload });
       return true;
     } catch (error) {
       log(`scheduler: could not start ${r.name} for ${bot.id}: ${message(error)}`);
@@ -233,16 +233,52 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       return `Routine ${routine.name}: ${describe(schedule)}${routine.enabled ? "" : " (paused)"}.`;
     },
 
-    upsertHook() {
-      return "Webhook routines are not available on this bridge yet.";
+    upsertHook(botId, a) {
+      const bot = botOf(botId);
+      const routines = routinesOf(bot);
+      const existing = routines.find((r) => r.name === a.name);
+      if (!existing && routines.length >= ROUTINES_PER_BOT) return `A bot can have at most ${ROUTINES_PER_BOT} routines. Delete one first.`;
+      const tokenHash = existing?.trigger.kind === "webhook" ? existing.trigger.tokenHash : null;
+      const refused = existing !== undefined && !existing.enabled && "refused" in planOf(existing.trigger);
+      const { routine, created } = upsertRoutine(
+        routines,
+        { name: a.name, trigger: { kind: "webhook", tokenHash }, prompt: a.prompt, enabled: a.enabled ?? (refused || (existing?.enabled ?? true)) },
+        () => `r_${crypto.randomUUID()}` as RoutineId,
+      );
+      routine.nextRunAt = null;
+      deps.note(bot, created ? "Created routine {0}" : "Updated routine {0}", [routinePeer(routine)]);
+      const state = routine.enabled ? "" : " (paused)";
+      const token = tokenHash === null ? " The user makes its token on the phone, in the routine's screen." : "";
+      return `Routine ${routine.name}: when its webhook is called${state}.${token}`;
     },
 
-    setHookToken() {
-      return "Webhook routines are not available on this bridge yet.";
+    setHookToken(botId, routineId, tokenHash) {
+      const bot = botOf(botId);
+      const r = routinesOf(bot).find((r) => r.id === routineId);
+      if (!r) return "Unknown routine";
+      if (r.trigger.kind !== "webhook") return "This routine runs on a schedule, not a webhook.";
+      const old = r.trigger.tokenHash;
+      r.trigger.tokenHash = tokenHash;
+      try {
+        deps.changed(bot, "now");
+        return null;
+      } catch (error) {
+        r.trigger.tokenHash = old;
+        log(`scheduler: could not save the webhook token of ${r.name}: ${message(error)}`);
+        return "Could not save the token. Check the bridge log.";
+      }
     },
 
-    hook() {
-      return "Webhook routines are not available on this bridge yet.";
+    hook(botId, routineId, payload) {
+      const bot = botOf(botId);
+      const r = routinesOf(bot).find((r) => r.id === routineId);
+      if (!r || r.trigger.kind !== "webhook") return "Unknown routine";
+      if (!r.enabled) return "The routine is paused.";
+      const queued = queuedRuns(bot);
+      if (r.runs.some((run) => run.status === "running" && queued.has(run.id))) return "Its previous run is still going.";
+      if (deps.parked(bot, false)) return "Paused by a limit. Try again later.";
+      const run = addRun(r, { at: deps.now().toISOString(), status: "running", late: false, manual: false, note: null });
+      return fire(bot, r, run, payload) ? null : "Could not start the run. Check the bridge log.";
     },
 
     remove(botId, name) {
@@ -274,7 +310,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const r = routinesOf(bot).find((r) => r.id === routineId);
       if (!r) return "Unknown routine";
       if (deps.parked(bot, true)) return "Paused by the usage limit. Try again when it resets.";
-      const started = fire(bot, r, addRun(r, { at: deps.now().toISOString(), status: "running", late: false, manual: true, note: null }));
+      const started = fire(bot, r, addRun(r, { at: deps.now().toISOString(), status: "running", late: false, manual: true, note: null }), null);
       return started ? null : "Could not start the run. Check the bridge log.";
     },
 
@@ -346,7 +382,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             addRun(r, { at: now.toISOString(), status: "skipped", late: d.late, manual: false, note: "Paused by a limit" });
             dirty = true;
           } else {
-            fire(bot, r, addRun(r, { at: now.toISOString(), status: "running", late: d.late, manual: false, note: null }));
+            fire(bot, r, addRun(r, { at: now.toISOString(), status: "running", late: d.late, manual: false, note: null }), null);
           }
           break;
       }

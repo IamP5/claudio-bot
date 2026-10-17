@@ -108,6 +108,7 @@ struct ExchangeView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
                         .glass(in: Capsule())
+                        .contentShape(Capsule())
                         .foregroundStyle(Theme.danger)
                 }
             }
@@ -125,6 +126,8 @@ struct ExchangeView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
                     .glass(in: Capsule())
+                    // The glass isn't hit-testable on its own, so without this only the word takes a tap.
+                    .contentShape(Capsule())
                     .foregroundStyle(.white)
             }
         }

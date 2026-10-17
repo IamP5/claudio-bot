@@ -48,6 +48,8 @@ struct SkillsSection: View {
             } message: { _ in
                 Text("\(bot.name) will no longer load it.")
             }
+        } else if store.lacks(.skills) {
+            NeedsNewerBridge(title: "Skills", what: "see and delete the skills this Bot saved")
         }
     }
 

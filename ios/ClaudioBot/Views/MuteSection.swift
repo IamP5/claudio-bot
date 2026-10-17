@@ -19,6 +19,8 @@ struct MuteSection: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
+        } else if store.lacks(.mute) {
+            NeedsNewerBridge(title: "Notifications", what: "mute this Bot's updates")
         }
     }
 }

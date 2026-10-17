@@ -56,6 +56,8 @@ struct ConnectorsSection: View {
                 }
             }
             .task(id: bot.id) { client.send(.connectors(botId: bot.id)) }
+        } else if store.lacks(.connectors) {
+            NeedsNewerBridge(title: "Connectors", what: "turn this Bot's connectors on and off")
         }
     }
 

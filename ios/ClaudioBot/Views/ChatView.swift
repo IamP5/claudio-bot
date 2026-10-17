@@ -20,6 +20,14 @@ struct ChatView: View {
                         ChatRowView(row: row, bot: bot, onPeer: open)
                             .padding(.top, index == 0 ? 8 : Self.gap(between: rows[index - 1], and: row))
                     }
+                    ForEach(store.proposedFacts(by: bot)) { fact in
+                        ProposedFactCard(bot: bot, fact: fact)
+                            .padding(.top, 14)
+                    }
+                    if let spend = bot.spend, spend.nearLimit {
+                        SpendWarning(bot: bot, spend: spend, onChangeCap: openProfile)
+                            .padding(.top, 14)
+                    }
                     switch bot.status {
                     case .working:
                         TypingRow(avatar: bot.avatar) { client.send(.stop(botId: botId)) }
@@ -64,6 +72,12 @@ struct ChatView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .background(Theme.background)
+            .safeAreaInset(edge: .top) {
+                if OfflineBar.shows(store.connection) {
+                    OfflineBar(state: store.connection)
+                        .frame(maxWidth: 760)
+                }
+            }
             .safeAreaInset(edge: .bottom) {
                 Composer(bot: bot, openQuestion: store.openQuestion(in: botId) != nil) {
                     followsBottom = true

@@ -53,6 +53,7 @@ const agentMail: Initiator = { kind: "agent", agentId: "a_1" as AgentId, hops: 0
 const attendedNow = attended;
 
 const roomy = (): Headroom => ({ ok: true, capReached: false });
+const fired: RunRef = { routineId: "r_1" as RoutineId, runId: "run_1" as RunId };
 
 // ─── step(): the lifecycle as a table ───────────────────────────────────────────────────────────────────────────────
 
@@ -64,6 +65,8 @@ const env = (id: string, initiator: Initiator = user, attempts = 0): Pending => 
   settles: null,
   attempts,
 });
+/** A routine's scheduled fire: the only envelope that settles a run. */
+const fire = (id: string): Pending => ({ ...env(id, routine), settles: routine.kind === "routine" ? routine.run : null });
 const turn = (id: string, over: Partial<ActiveTurn> = {}): ActiveTurn => ({ pending: id as EnvelopeId, startedAt: NOW.toISOString(), output: false, denials: 0, ...over });
 const core = (lifecycle: Lifecycle, pending: Pending[], over: Partial<Core> = {}): Core => ({
   session: { id: "s_1", pending, lifecycle, notices: [] },
@@ -192,25 +195,32 @@ describe("step", () => {
     expect(t.core.session).toMatchObject({ pending: [], lifecycle: { kind: "idle" } });
   });
 
-  test("Stop on a working turn interrupts it and drops queued unattended envelopes, each with a notice", () => {
-    const pending = [env("a", routine, 1), env("u1"), env("r", routine), env("b", botMail), env("m", manualRun), env("g", agentMail)];
+  test("Stop on a working turn interrupts it and drops queued routine fires and bot messages, with one notice", () => {
+    const pending = [env("a", routine, 1), env("u1"), fire("r"), env("b", botMail), env("m", manualRun), env("g", agentMail)];
     const t = run(core({ kind: "working", turn: turn("a") }, pending), { kind: "stop" });
     expect(t.core.session.lifecycle).toEqual({ kind: "stopping", turn: turn("a"), deadline: later(STOP_DEADLINE_MS) });
-    expect(t.core.session.pending.map((p) => p.id as string)).toEqual(["a", "u1", "m"]);
-    expect(kinds(t.effects)).toEqual(["interrupt", "end", "end", "end"]);
+    expect(t.core.session.pending.map((p) => p.id as string)).toEqual(["a", "u1", "m", "g"]);
+    expect(kinds(t.effects)).toEqual(["interrupt", "end", "end"]);
     expect(endsOf(t.effects)).toEqual([
       ["r", "dropped"],
       ["b", "dropped"],
-      ["g", "dropped"],
     ]);
-    expect(t.core.session.notices.map((n) => n.text)).toEqual(["[Alex pressed Stop, so 3 queued messages never ran: [r]; [b]; [g]]"]);
+    expect(t.core.session.notices.map((n) => n.text)).toEqual(["[Alex pressed Stop, so 2 queued messages never ran: [r]; [b]]"]);
+  });
+
+  test("Stop keeps agent reports and the continuations of calls a routine or the bridge asked for", () => {
+    const system: Initiator = { kind: "system" };
+    const pending = [env("a", user, 1), env("g", agentMail), env("rc", routine), env("sc", system)];
+    const t = run(core({ kind: "working", turn: turn("a") }, pending), { kind: "stop" });
+    expect(t.core.session.pending.map((p) => p.id as string)).toEqual(["a", "g", "rc", "sc"]);
+    expect([kinds(t.effects), t.core.session.notices]).toEqual([["interrupt"], []]);
   });
 
   test.each([
     [1, ["[Alex pressed Stop, so this never ran: [r1]]"]],
     [5, ["[Alex pressed Stop, so 5 queued messages never ran: [r1]; [r2]; [r3]; and 2 more]"]],
   ] as const)("Stop dropping %i envelopes leaves one notice", (n, notices) => {
-    const queued = Array.from({ length: n }, (_, i) => env(`r${i + 1}`, routine));
+    const queued = Array.from({ length: n }, (_, i) => fire(`r${i + 1}`));
     const t = run(core({ kind: "working", turn: turn("a") }, [env("a", user, 1), ...queued]), { kind: "stop" });
     expect(t.core.session.notices.map((x) => x.text)).toEqual([...notices]);
   });
@@ -233,7 +243,7 @@ describe("step", () => {
   test("Stop while parked for the usage limit drops queued unattended work and keeps the user's message parked", () => {
     const until = later(60_000);
     const parked: Lifecycle = { kind: "parked", reason: "usage_limit", until };
-    const t = run(core(parked, [env("u"), env("r", routine), env("b", botMail)], { parkedUntil: until }), { kind: "stop" });
+    const t = run(core(parked, [env("u"), fire("r"), env("b", botMail)], { parkedUntil: until }), { kind: "stop" });
     expect(t.core.session.pending.map((p) => p.id as string)).toEqual(["u"]);
     expect(t.core.session.lifecycle).toEqual(parked);
     expect(endsOf(t.effects)).toEqual([
@@ -244,7 +254,7 @@ describe("step", () => {
   });
 
   test("Stop while parked at the daily cap with only unattended work empties the queue", () => {
-    const t = run(core({ kind: "parked", reason: "daily_cap", until: later(60_000) }, [env("r1", routine), env("r2", routine)]), { kind: "stop" });
+    const t = run(core({ kind: "parked", reason: "daily_cap", until: later(60_000) }, [fire("r1"), fire("r2")]), { kind: "stop" });
     expect(t.core.session).toMatchObject({ pending: [], lifecycle: { kind: "idle" } });
     expect(endsOf(t.effects)).toEqual([
       ["r1", "dropped"],
@@ -895,7 +905,7 @@ describe("session", () => {
 
   test("while stopping nothing new is sent; queued unattended mail is dropped and the user's queued message runs after", async () => {
     const { h, id: a } = await started("[a]");
-    const r = h.push("[Routine Digest fired]\nsummarize", routine);
+    const r = h.push("[Routine Digest fired]\nsummarize", routine, false, fired);
     const u = h.push("[Alex]\nactually, wait");
     const b = h.push("[Message from bot Scout]\nping", botMail);
     await h.session.interrupt();
@@ -913,6 +923,17 @@ describe("session", () => {
       "[Alex pressed Stop, so 2 queued messages never ran: [Routine Digest fired]; [Message from bot Scout]]\n[Alex]\nactually, wait",
     ]);
     expect(h.queries).toHaveLength(1);
+  });
+
+  test("Stop keeps the continuation of a call a bot's message asked for, and drops the bot's message itself", async () => {
+    const { h } = await started("[a]");
+    const b = h.push("[Message from bot Scout]\nping", botMail);
+    const c = h.push("[Alex allowed Bash `make` once]", botMail, true);
+    const g = h.push("[Agent Fix tests reports]\ndone", agentMail);
+    await h.session.interrupt();
+    expect(h.finals(b)).toMatchObject([{ end: { kind: "dropped" } }]);
+    expect(h.state.pending.map((p) => p.text)).toEqual(["[a]", "[Alex allowed Bash `make` once]", "[Agent Fix tests reports]\ndone"]);
+    expect([h.finals(c), h.finals(g)]).toEqual([[], []]);
   });
 
   test("Stop with no answer kills the query at 15 s, and the next envelope starts a fresh one", async () => {
@@ -1065,7 +1086,7 @@ describe("session", () => {
     const until = later(60_000);
     const h = harness({ account: { parkedUntil: until } });
     const u = h.push("[u]");
-    const r = h.push("[r]", routine);
+    const r = h.push("[r]", routine, false, fired);
     await flush();
     expect(h.session.parkedFor).toBe("usage_limit");
     expect(await h.session.interrupt()).toBe(true);

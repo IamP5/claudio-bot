@@ -71,6 +71,16 @@ export const startFailedNote = (error: string) =>
 const restartedNotice = (envelopeText: string) =>
   `[The bridge restarted during your turn on: ${envelopeText.split("\n")[0]} It may be partly done; check before redoing it.]`;
 
+/** Pending has no field for an approval continuation, so its id carries it. Only push() mints ids. */
+const CONTINUATION = "c_";
+
+/**
+ * Stop drops a routine's scheduled fire and a message from another bot: nobody waits on either. An agent's report and an
+ * approval continuation stay, whatever their initiator, because the bot needs the report and the user just answered.
+ */
+const droppedByStop = (p: Pending): boolean =>
+  (p.settles !== null && !attended(p.initiator)) || (p.initiator.kind === "bot" && !p.id.startsWith(CONTINUATION));
+
 const DROPS_NAMED = 3;
 /** One notice per Stop, however much it dropped, so the notices on the next envelope stay short. */
 function droppedNotice(userName: string, texts: readonly string[]): string {
@@ -104,7 +114,7 @@ export function redactSecrets(text: string): string {
  *   the turn's final report is kept.
  * - stopped: Stop landed while it ran (by "user"), or the 3-denials breaker did (by "breaker"). The interrupt's
  *   error_during_execution result maps here, never to done/failed, and is never retried.
- * - dropped: Stop removed it from the queue before it started. Only unattended envelopes are dropped.
+ * - dropped: Stop removed it from the queue before it started: a routine's scheduled fire or a message from a bot.
  * - failed: removed without a usable result: a crash after output, a terminal error, the poison limit, no budget.
  * - deferred: still queued and will run later (a retry, a start that could not open, or a park). Not an ending; a
  *   routine run stays running. Told once per park, however often its deadline moves.
@@ -242,8 +252,8 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
     if (c.parkedUntil === null || due(c.parkedUntil) || until > c.parkedUntil) c.parkedUntil = until;
   }
 
-  function dropUnattended(keep: EnvelopeId | null) {
-    const dropped = s.pending.filter((p) => p.id !== keep && !attended(p.initiator));
+  function dropOnStop(keep: EnvelopeId | null) {
+    const dropped = s.pending.filter((p) => p.id !== keep && droppedByStop(p));
     if (dropped.length === 0) return;
     s.pending = s.pending.filter((p) => !dropped.includes(p));
     s.notices.push({ at: iso(now), text: droppedNotice(ctx.userName, dropped.map((p) => p.text)) });
@@ -392,15 +402,15 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
       if (life.kind === "working") {
         s.lifecycle = { kind: "stopping", turn: life.turn, deadline: iso(now + STOP_DEADLINE_MS) };
         fx.push({ kind: "interrupt" });
-        dropUnattended(life.turn.pending);
+        dropOnStop(life.turn.pending);
       } else if (life.kind === "backoff") {
         const head = s.pending.shift();
         s.lifecycle = { kind: "idle" };
         if (head) end(head, { kind: "stopped", by: "user" });
-        dropUnattended(null);
+        dropOnStop(null);
         pump();
       } else if (life.kind === "parked" || life.kind === "idle") {
-        dropUnattended(null);
+        dropOnStop(null);
         pump();
       }
       break;
@@ -482,9 +492,9 @@ export type Session = Tickable & {
   denied(): void;
   /**
    * Stop: working → stopping, where the gate denies every call; the next result, or the 15 s deadline, ends the turn
-   * as stopped. A head waiting in backoff ends as stopped at once. Queued unattended envelopes are dropped, with one
-   * notice; the user's own envelopes still run after the stopped turn ends, or when the park lifts. Resolves false only
-   * when nothing runs and nothing waits.
+   * as stopped. A head waiting in backoff ends as stopped at once. Queued routine fires and bot messages are dropped,
+   * with one notice; everything else queued still runs after the stopped turn ends, or when the park lifts. Resolves
+   * false only when nothing runs and nothing waits.
    */
   interrupt(): Promise<boolean>;
   /** The ledger's answer may have changed (update_bot set dailyCapUsd): a daily-cap park asks headroom again now. */
@@ -747,7 +757,7 @@ export function createSession(spec: SessionSpec): Session {
   return {
     push(input) {
       if (closed) return;
-      const id = `e_${crypto.randomUUID()}` as EnvelopeId;
+      const id = `${input.ahead ? CONTINUATION : "e_"}${crypto.randomUUID()}` as EnvelopeId;
       const pending: Pending = { id, at: clock().toISOString(), text: input.text, initiator: input.initiator, settles: input.settles, attempts: 0 };
       dispatch({ kind: "push", pending, ahead: input.ahead });
     },

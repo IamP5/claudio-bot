@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { createAgents } from "./agents";
 import { createClock, type Tickable } from "./clock";
-import { createGate } from "./gate";
+import { createGate, type Gate } from "./gate";
 import type { Homes } from "./home";
 import { createLedger } from "./ledger";
 import type { Scope } from "./policy";
@@ -20,7 +20,7 @@ import {
   type ServerMessage,
   type StreamPosition,
 } from "./protocol";
-import { botMemory, envelope, initiatorOf, onboarding, persona, runsAhead, type Envelope } from "./prompts";
+import { botMemory, inputOf, onboarding, persona, type Envelope } from "./prompts";
 import type { Push } from "./push";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { createSession, type Session, type TurnEnd } from "./session";
@@ -33,13 +33,17 @@ import {
   botPeer,
   botStatus,
   findBot,
+  holdOf,
   hopsAfter,
+  hopsOf,
   linksOf,
   newBot,
   newMessageId,
   post,
   randomAvatar,
   recordExchange,
+  rootOf,
+  routineView,
   sortBots,
   toBot,
   type Actor,
@@ -57,7 +61,7 @@ export type Hub = {
   hello(position?: StreamPosition): ServerMessage;
   /** Every client message. The transport ones (devices, revoke_device, pair_code) belong to main.ts, which answers them first. */
   handle(message: ClientMessage): Promise<ServerMessage[]>;
-  /** Runs every stored-deadline owner once at `now`. */
+  /** Runs every stored-deadline owner once at `now`. One that throws is logged and the rest still run. */
   tick(now: Date): void;
   /** USER.md, the first bot on a first run, and sessions with queued envelopes (bots and agents). */
   boot(firstRun: boolean): void;
@@ -84,6 +88,17 @@ const NO_RING: StreamPosition = { epoch: "", seq: 0, resumed: false };
 const earliest = (deadlines: (string | null)[]): string | null =>
   deadlines.reduce<string | null>((min, d) => (d !== null && (min === null || d < min) ? d : min), null);
 
+/** Ticks each in turn. A throw is logged under the ticker's name and never stops the ones after it. */
+export function tickEach(tickers: Readonly<Record<string, Tickable>>, now: Date, log: (line: string) => void) {
+  for (const [name, ticker] of Object.entries(tickers)) {
+    try {
+      ticker.tick(now);
+    } catch (e) {
+      log(`tick ${name} failed: ${(e as Error).stack ?? e}`);
+    }
+  }
+}
+
 export function createHub(deps: HubDeps): Hub {
   const { world, homes, userName } = deps;
   // USER.md sits at the root of the bridge home, the only path Homes exposes there.
@@ -92,6 +107,8 @@ export function createHub(deps: HubDeps): Hub {
   const now = () => clockNow().toISOString();
   const brains = new Map<BotId, Session>();
   const system: Initiator = { kind: "system" };
+  // The clock is created last, once every ticker exists; a module may report a change while the hub is being built.
+  let poke = () => {};
 
   const ledger = createLedger({
     dir: join(root, "usage"),
@@ -102,21 +119,26 @@ export function createHub(deps: HubDeps): Hub {
   });
 
   const accountParked = () => world.account.parkedUntil !== null && world.account.parkedUntil > now();
-  const parked = (bot: BotRecord) => accountParked() || bot.session.lifecycle.kind === "parked";
+  // No turn of that attendance can start now: the usage limit holds every turn, the daily cap only unattended ones.
+  // attended defaults to false only until U4's SchedulerDeps passes it.
+  const parked = (bot: BotRecord, attended = false) => accountParked() || (!attended && !ledger.headroom(botActor(bot.id), system).ok);
 
   const view = (bot: BotRecord): Bot =>
     toBot(
       bot,
       botStatus({
-        parked: parked(bot),
         working: brains.get(bot.id)?.working ?? false,
+        held: holdOf(bot.session) !== null,
         awaitingApproval: world.gate.open.some((c) => c.kind === "permission" && c.actor.kind === "bot" && c.actor.botId === bot.id),
       }),
     );
 
+  // Every deadline change reaches the clock through here: say, note, scheduler and gate changes, and each session's
+  // onChange all call it. A module that moves a deadline any other way leaves the clock asleep until its 60 s cap.
   function changed(bot: BotRecord) {
     deps.broadcast({ type: "bot", bot: view(bot) });
     deps.persist();
+    poke();
   }
 
   function say(bot: BotRecord, message: Message) {
@@ -145,18 +167,17 @@ export function createHub(deps: HubDeps): Hub {
   }
 
   function deliver(actor: Actor, e: Envelope) {
-    const text = envelope(e, userName);
-    const input = { text, initiator: initiatorOf(e), ahead: runsAhead(e) };
+    const input = inputOf(e, userName);
     if (actor.kind === "bot") {
       const bot = world.bots.get(actor.botId);
       if (!bot) return;
-      deps.log(`envelope ${bot.id} ${text.split("\n")[0]}`);
+      deps.log(`envelope ${bot.id} ${input.text.split("\n")[0]}`);
       brain(bot).push(input);
       return;
     }
     const rec = world.agents.get(actor.agentId);
     if (!rec) return;
-    deps.log(`envelope ${rec.agent.id} ${text.split("\n")[0]}`);
+    deps.log(`envelope ${rec.agent.id} ${input.text.split("\n")[0]}`);
     agents.deliver(rec, input);
   }
 
@@ -192,7 +213,7 @@ export function createHub(deps: HubDeps): Hub {
       case "dropped":
         break;
     }
-    if (turn.initiator.kind === "routine") scheduler.settle(bot.id, turn.initiator.run, outcomeOf(end));
+    if (turn.settles) scheduler.settle(bot.id, turn.settles, outcomeOf(end));
   }
 
   function brain(bot: BotRecord): Session {
@@ -303,12 +324,13 @@ export function createHub(deps: HubDeps): Hub {
     changed(rec) {
       deps.broadcast({ type: "agent", agent: rec.agent, messages: rec.messages });
       deps.persist();
+      poke();
     },
-    reported(rec, text) {
+    reported(rec, text, by) {
       const bot = world.bots.get(rec.agent.botId);
       if (!bot) return;
       exchange(bot, agentPeer(rec.agent), "received");
-      deliver(botActor(bot.id), { from: "agent", title: rec.agent.title, agentId: rec.agent.id, text });
+      deliver(botActor(bot.id), { from: "agent", title: rec.agent.title, agentId: rec.agent.id, text, hops: hopsOf(by), origin: rootOf(by) });
     },
     note(rec, text) {
       const bot = world.bots.get(rec.agent.botId);
@@ -321,8 +343,9 @@ export function createHub(deps: HubDeps): Hub {
     tick: (at) => allSessions().forEach((s) => s.tick(at)),
     nextDeadline: () => earliest(allSessions().map((s) => s.nextDeadline())),
   };
-  const tickers: Tickable[] = [scheduler, gate, sessions];
-  const clock = createClock({ tickers, now: clockNow });
+  const tickers = { scheduler, gate, sessions };
+  const clock = createClock({ tickers: Object.values(tickers), now: clockNow });
+  poke = () => clock.poke();
 
   function owned(botId: BotId): BotRecord {
     const bot = world.bots.get(botId);
@@ -370,14 +393,16 @@ export function createHub(deps: HubDeps): Hub {
       if (to.id === from.id) return "That is you.";
       exchange(from, botPeer(to), "sent");
       exchange(to, botPeer(from), "received");
-      deliver(botActor(to.id), { from: "bot", name: from.name, botId: from.id, hops: hopsAfter(initiatorNow(from)), text: a.text });
+      const by = initiatorNow(from);
+      deliver(botActor(to.id), { from: "bot", name: from.name, botId: from.id, hops: hopsAfter(by), origin: rootOf(by), text: a.text });
       return `Delivered to ${to.name}.`;
     },
 
     createBot(botId, a) {
       const creator = owned(botId);
       const avatar = { ...randomAvatar(), ...(a.shape && { shape: a.shape }), ...(a.color && { color: a.color }) };
-      const by = { bot: creator.name, botId: creator.id, hops: hopsAfter(initiatorNow(creator)) };
+      const turn = initiatorNow(creator);
+      const by = { bot: creator.name, botId: creator.id, hops: hopsAfter(turn), origin: rootOf(turn) };
       const bot = makeBot({ name: a.name, avatar, job: a.job }, { from: "created", by, brief: a.job });
       note(creator, "Created {0}", [botPeer(bot)]);
       return `Created ${bot.name} (${bot.id}). It has its brief and starts now.`;
@@ -462,9 +487,12 @@ export function createHub(deps: HubDeps): Hub {
         agents.stopFor(bot.id);
         for (const [id, rec] of world.agents) if (rec.agent.botId === bot.id) world.agents.delete(id);
         world.bots.delete(bot.id);
+        // U1 adds forgetBot to Gate; this cast goes once it lands.
+        (gate as Gate & { forgetBot?(botId: BotId): void }).forgetBot?.(bot.id);
+        // A crash between these two leaves an orphan home rather than a bot whose home is gone.
+        deps.persist("now");
         homes.trash(bot.id, new Date());
         deps.broadcast({ type: "bot_removed", botId: bot.id });
-        deps.persist();
         return [];
       case "set_routine":
         return done(scheduler.setEnabled(bot.id, message.routineId, message.enabled));
@@ -473,7 +501,7 @@ export function createHub(deps: HubDeps): Hub {
       case "details": {
         const own = [...world.agents.values()].filter((a) => a.agent.botId === bot.id).map((a) => a.agent);
         own.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-        return [{ type: "details", botId: bot.id, library: homes.library(bot.id), links: linksOf(bot, own), agents: own }];
+        return [{ type: "details", botId: bot.id, library: homes.library(bot.id), links: linksOf(bot, own), agents: own, routines: bot.routines.map((r) => routineView(r)) }];
       }
       case "file": {
         const file = await homes.read(bot.id, message.path);
@@ -493,7 +521,7 @@ export function createHub(deps: HubDeps): Hub {
       bots: sortBots([...world.bots.values()].map(view)),
     }),
     handle,
-    tick: (at) => tickers.forEach((t) => t.tick(at)),
+    tick: (at) => tickEach(tickers, at, deps.log),
 
     boot(firstRun) {
       homes.ensureUserMd(userName);

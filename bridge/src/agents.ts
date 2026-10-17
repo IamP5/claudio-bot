@@ -2,7 +2,7 @@ import type { HookCallbackMatcher, HookEvent, Options } from "@anthropic-ai/clau
 import { createCloudSession, followUpCloudSession } from "./cloud";
 import type { Ledger } from "./ledger";
 import type { AgentId, AgentStatus, BotId } from "./protocol";
-import { agentPrompt } from "./prompts";
+import { agentPrompt, type SessionInput } from "./prompts";
 import type { Project } from "./projects";
 import { createSession, type Session, type TurnEnd } from "./session";
 import type { Persist } from "./store";
@@ -11,7 +11,7 @@ import { emptySession, newMessageId, type Actor, type AgentRecord, type Initiato
 // Agents are actors like bots: mac agents run on the same session module behind the same gate, metered by the same
 // ledger. Cloud agents run on claude.ai: the bridge neither gates nor meters them.
 export type Agents = {
-  /** initiator: the bot turn's, so an agent started by a routine runs as routine work. budgetUsd null: the default. */
+  /** initiator: the bot turn's, so an agent started by a routine runs as routine work; kept as startedBy. budgetUsd null: the default. */
   start(
     botId: BotId,
     a: { title: string; prompt: string; project: Project; where: "mac" | "cloud"; botName: string; initiator: Initiator; budgetUsd: number | null },
@@ -19,7 +19,7 @@ export type Agents = {
   /** Bot → agent follow-up: recorded in the agent's thread, queued with the bot turn's initiator. */
   message(rec: AgentRecord, text: string, initiator: Initiator): Promise<string>;
   /** Gate → mac agent (a decision envelope): queued, not recorded in the thread. Ignored for cloud agents. */
-  deliver(rec: AgentRecord, input: { text: string; initiator: Initiator; ahead: boolean }): void;
+  deliver(rec: AgentRecord, input: SessionInput): void;
   notice(rec: AgentRecord, text: string): void;
   /** Stop from the phone. False when nothing runs (and always for cloud agents). The turn's end reports to the bot. */
   stop(rec: AgentRecord): Promise<boolean>;
@@ -30,6 +30,8 @@ export type Agents = {
   stopFor(botId: BotId): void;
 };
 
+const queued = (text: string, initiator: Initiator): SessionInput => ({ text, initiator, settles: null, ahead: false });
+
 export function createAgents(deps: {
   world: World;
   userName: string;
@@ -38,8 +40,10 @@ export function createAgents(deps: {
   hooks: (actor: Actor) => Partial<Record<HookEvent, HookCallbackMatcher[]>>;
   persist: Persist;
   now: () => string;
+  /** The record or something its status derives from changed, including its session's lifecycle and deadlines. */
   changed: (agent: AgentRecord) => void;
-  reported: (agent: AgentRecord, text: string) => void;
+  /** by: the initiator of the agent turn that reported, so the bot's turn continues that chain's lineage. */
+  reported: (agent: AgentRecord, text: string, by: Initiator) => void;
   /** A line about the agent in its bot's chat. */
   note: (agent: AgentRecord, text: string) => void;
 }): Agents {
@@ -53,22 +57,22 @@ export function createAgents(deps: {
     deps.changed(rec);
   }
 
-  function report(rec: AgentRecord, status: AgentStatus, text: string) {
+  function report(rec: AgentRecord, status: AgentStatus, text: string, by: Initiator) {
     update(rec, status, { from: "agent", text });
-    deps.reported(rec, text);
+    deps.reported(rec, text, by);
   }
 
-  function turnEnded(rec: AgentRecord, end: TurnEnd) {
+  function turnEnded(rec: AgentRecord, by: Initiator, end: TurnEnd) {
     switch (end.kind) {
       case "done": {
         const m = end.result;
         const text = m.subtype === "success" ? m.result : `The agent stopped with an error: ${m.errors.join("; ") || m.subtype}`;
-        return report(rec, m.subtype === "success" ? "waiting" : "failed", text.trim() || "(no final message)");
+        return report(rec, m.subtype === "success" ? "waiting" : "failed", text.trim() || "(no final message)", by);
       }
       case "stopped":
-        return report(rec, "waiting", `Stopped by ${deps.userName}.`);
+        return report(rec, "waiting", `Stopped by ${deps.userName}.`, by);
       case "failed":
-        return report(rec, "failed", `The agent crashed: ${end.error}`);
+        return report(rec, "failed", `The agent crashed: ${end.error}`, by);
       case "dropped":
       case "deferred":
         return;
@@ -102,8 +106,8 @@ export function createAgents(deps: {
         };
       },
       onMessage() {},
-      onTurnEnd: (_, end) => turnEnded(rec, end),
-      onChange() {},
+      onTurnEnd: (pending, end) => turnEnded(rec, pending.initiator, end),
+      onChange: () => deps.changed(rec),
       note: (text) => deps.note(rec, text),
     });
     sessions.set(id, session);
@@ -137,12 +141,13 @@ export function createAgents(deps: {
         session: emptySession(),
         cloudSession: null,
         budgetUsd: a.budgetUsd,
+        startedBy: a.initiator,
       };
       deps.world.agents.set(rec.agent.id, rec);
       deps.changed(rec);
       const prompt = agentPrompt({ botName: a.botName, userName: deps.userName, prompt: a.prompt });
       if (a.where === "mac") {
-        macSession(rec).push({ text: prompt, initiator: a.initiator, ahead: false });
+        macSession(rec).push(queued(prompt, a.initiator));
         return rec;
       }
       await cloud(rec, async () => {
@@ -161,7 +166,7 @@ export function createAgents(deps: {
     async message(rec, text, initiator) {
       if (rec.agent.where === "mac") {
         update(rec, "working", { from: "bot", text });
-        macSession(rec).push({ text, initiator, ahead: false });
+        macSession(rec).push(queued(text, initiator));
         return `Sent. ${rec.agent.title} will report back.`;
       }
       const cloudSession = rec.cloudSession;
@@ -200,7 +205,7 @@ export function createAgents(deps: {
         if (rec.agent.where !== "mac") continue;
         if (rec.session.pending.length > 0) macSession(rec);
         // A mac agent cut off mid-turn with nothing queued will never report, so tell its bot.
-        else if (rec.agent.status === "working") report(rec, "failed", "The bridge restarted while this agent was working. Send it a message to resume it.");
+        else if (rec.agent.status === "working") report(rec, "failed", "The bridge restarted while this agent was working. Send it a message to resume it.", rec.startedBy);
       }
     },
 

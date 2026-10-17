@@ -1,6 +1,7 @@
-import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { z } from "zod";
 import type { Agent, AgentMessage, Avatar, BotId, Message, MessageId, RoutineId, RunId } from "./protocol";
 import {
   emptySession,
@@ -19,7 +20,10 @@ export const bridgeHome = () => process.env.CLAUDIOBOT_HOME ?? join(homedir(), "
 
 export const STATE_VERSION = 3;
 
-/** Debounced save. "now" writes synchronously before returning: the path for state that must precede an effect. */
+/**
+ * Debounced save. "now" writes synchronously before returning: the path for state that must precede an effect. It
+ * throws when the write fails, and the caller must then skip the effect.
+ */
 export type Persist = (urgency?: "now") => void;
 
 export type StateFileV3 = {
@@ -55,12 +59,78 @@ export type StateFileV2 = { version: 2; bots: V2Bot[]; agents: V2Agent[] };
 /** loadWorld refused the state file. The file is untouched; the message says why and what to do. */
 export class StateFileError extends Error {}
 
+// Only what the bridge reads without a check. Keys not named here are kept as they are.
+const text = z.string();
+const maybeText = z.string().nullable();
+const anyObject = z.looseObject({});
+const profile = {
+  id: text,
+  name: text,
+  title: maybeText,
+  avatar: z.looseObject({ shape: text, color: text }),
+  pinned: z.boolean(),
+  hidden: z.boolean(),
+  createdAt: text,
+  messages: z.array(z.looseObject({ kind: text, id: text, at: text })),
+  unread: z.number(),
+};
+const agentThread = {
+  agent: z.looseObject({ id: text, botId: text, title: text, where: z.enum(["mac", "cloud"]), status: text }),
+  cwd: text,
+  messages: z.array(z.looseObject({ id: text, at: text, from: text, text })),
+};
+const V2_FILE = z.looseObject({
+  bots: z.array(
+    z.looseObject({
+      ...profile,
+      routines: z.array(z.looseObject({ id: text, name: text, schedule: text, prompt: text, enabled: z.boolean(), lastRunAt: maybeText })),
+      sessionId: maybeText,
+    }),
+  ),
+  agents: z.array(z.looseObject({ ...agentThread, sessionId: maybeText })),
+});
+const initiator = z.looseObject({ kind: z.enum(["user", "routine", "bot", "agent", "system"]) });
+const session = z.looseObject({
+  id: maybeText,
+  pending: z.array(z.looseObject({ id: text, text, initiator, attempts: z.number() })),
+  lifecycle: z.looseObject({ kind: z.enum(["idle", "working", "stopping", "backoff", "parked"]) }),
+  notices: z.array(z.looseObject({ text })),
+});
+const V3_FILE = z.looseObject({
+  bots: z.array(
+    z.looseObject({
+      ...profile,
+      dailyCapUsd: z.number().nullable(),
+      session,
+      routines: z.array(
+        z.looseObject({
+          id: text,
+          name: text,
+          trigger: z.looseObject({ kind: z.literal("cron"), schedule: text }),
+          prompt: text,
+          enabled: z.boolean(),
+          nextRunAt: maybeText,
+          runs: z.array(z.looseObject({ id: text, at: text, status: text })),
+          failStreak: z.number(),
+        }),
+      ),
+      rules: z.array(z.looseObject({ decision: z.enum(["allow", "deny"]), signature: text })),
+    }),
+  ),
+  agents: z.array(z.looseObject({ ...agentThread, session, cloudSession: maybeText, budgetUsd: z.number().nullable(), startedBy: initiator })),
+  gate: z.looseObject({ open: z.array(anyObject), grants: z.array(anyObject), daily: z.array(anyObject) }),
+  devices: z.array(anyObject),
+  push: z.looseObject({ sent: z.array(anyObject) }),
+  account: z.looseObject({ parkedUntil: maybeText }),
+});
+
 /**
  * v2 → v3, pure. Nothing is dropped:
  * - sessionId → session.id (mac agents) or cloudSession (cloud agents). The cost baseline lives in the ledger, so a
  *   session with no ledger row adopts its first result and charges nothing.
  * - routines get trigger {cron, schedule}; lastRunAt becomes one "ok" run; nextRunAt stays null for the scheduler.
  * - questions get expiresAt null: cards from before protocol 3 never expire.
+ * - agents get startedBy system: protocol 2 never recorded who started them.
  * - no standing rules, default caps and budgets, an empty gate, no devices.
  */
 export function upgradeV2(v2: StateFileV2): StateFileV3 {
@@ -86,24 +156,58 @@ export function upgradeV2(v2: StateFileV2): StateFileV3 {
     session: emptySession(rest.agent.where === "mac" ? sessionId : null),
     cloudSession: rest.agent.where === "cloud" ? sessionId : null,
     budgetUsd: null,
+    startedBy: { kind: "system" },
   }));
   const world = emptyWorld();
   return { version: 3, bots, agents, gate: world.gate, devices: world.devices, push: world.push, account: world.account };
 }
 
-/** Write to a temp file, fsync, then rename: a crash leaves the old file or the new one, never half of one. */
-function writeAtomic(path: string, body: string) {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
-  const fd = openSync(tmp, "w", 0o600);
+/**
+ * Writes the whole body to a fresh temp file, fsyncs it, checks its size, renames it over `path`, then fsyncs the
+ * directory so the rename is recorded too. A crash of this process leaves the old file or the new one, never part of
+ * one. That is the whole guarantee: on macOS fsync does not flush the drive's own cache (only F_FULLFSYNC does), so a
+ * power loss can still lose the newest write.
+ */
+function writeAtomic(path: string, body: string | Uint8Array) {
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true });
+  const bytes = typeof body === "string" ? Buffer.from(body) : body;
+  // Unique per write, so two writers (an old process still exiting) never write into the same temp file.
+  const tmp = `${path}.${crypto.randomUUID()}.tmp`;
   try {
-    writeSync(fd, body);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
+    const fd = openSync(tmp, "wx", 0o600);
+    try {
+      writeFileSync(fd, bytes);
+      fsyncSync(fd);
+      const size = fstatSync(fd).size;
+      if (size !== bytes.length) throw new Error(`${tmp} holds ${size} of ${bytes.length} bytes`);
+    } finally {
+      closeSync(fd);
+    }
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, path);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
   }
-  chmodSync(tmp, 0o600);
-  renameSync(tmp, path);
+  const dirFd = openSync(dir, "r");
+  try {
+    fsyncSync(dirFd);
+  } finally {
+    closeSync(dirFd);
+  }
+}
+
+/**
+ * Copies these exact bytes to `name`, or to `name.1`, `name.2`, … when earlier backups with other bytes hold those
+ * names. A backup is never overwritten and the same bytes are never backed up twice, so a rerun after a crash converges.
+ */
+function backUp(home: string, name: string, raw: Buffer) {
+  for (let n = 0; ; n++) {
+    const path = join(home, n === 0 ? name : `${name}.${n}`);
+    if (!existsSync(path)) return writeAtomic(path, raw);
+    if (readFileSync(path).equals(raw)) return;
+  }
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -115,15 +219,13 @@ function refuse(path: string, why: string): StateFileError {
   );
 }
 
-function checkShape(file: Record<string, unknown>, path: string, keys: Record<string, "array" | "object">) {
-  for (const [key, kind] of Object.entries(keys)) {
-    const ok = kind === "array" ? Array.isArray(file[key]) : isObject(file[key]);
-    if (!ok) throw refuse(path, `has no valid "${key}"`);
-  }
+function check(schema: z.ZodType, file: unknown, path: string) {
+  const result = schema.safeParse(file);
+  if (result.success) return;
+  const issue = result.error.issues[0]!;
+  const where = issue.path.map((k) => (typeof k === "number" ? `[${k}]` : `.${String(k)}`)).join("").replace(/^\./, "");
+  throw refuse(path, `has an invalid ${where || "shape"} (${issue.message})`);
 }
-
-const V2_KEYS = { bots: "array", agents: "array" } as const;
-const V3_KEYS = { bots: "array", agents: "array", gate: "object", devices: "array", push: "object", account: "object" } as const;
 
 function fromV3(file: StateFileV3): World {
   return {
@@ -147,35 +249,41 @@ const toFile = (world: World): StateFileV3 => ({
 });
 
 /**
- * Fails closed. No file: first run. Version 3: as is. Version 2: copy the exact bytes to state.v2.json.bak, then
- * upgrade in place. Version 1 (the old task list, which v3 does not carry over): back up to state.v1.json.bak, then
- * first run, as before. Anything else, including unreadable JSON, throws StateFileError and writes nothing.
- * Running it again after a crash at any point converges: the backup is rewritten from the same v2 bytes.
+ * Fails closed. No file: first run. Version 3: as is, once every record has the shape the bridge reads. Version 2:
+ * check every record and upgrade in memory, back the exact bytes up to state.v2.json.bak (or the next free suffix),
+ * then write v3 in place. Version 1 (the old task list, which v3 does not carry over): back up to state.v1.json.bak
+ * the same way, then first run, as before. Anything else, including unreadable JSON, a malformed record or a failed
+ * upgrade, throws StateFileError and writes nothing. Running it again after a crash at any point converges.
  */
 export function loadWorld(home = bridgeHome()): { world: World; firstRun: boolean } {
   const path = join(home, "state.json");
   if (!existsSync(path)) return { world: emptyWorld(), firstRun: true };
-  const raw = readFileSync(path, "utf8");
+  const raw = readFileSync(path);
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(raw.toString("utf8"));
   } catch (e) {
     throw refuse(path, `is not valid JSON (${(e as Error).message})`);
   }
   if (!isObject(parsed)) throw refuse(path, "is not a JSON object");
   switch (parsed.version) {
     case 3:
-      checkShape(parsed, path, V3_KEYS);
+      check(V3_FILE, parsed, path);
       return { world: fromV3(parsed as StateFileV3), firstRun: false };
     case 2: {
-      checkShape(parsed, path, V2_KEYS);
-      writeAtomic(join(home, "state.v2.json.bak"), raw);
-      const upgraded = upgradeV2(parsed as StateFileV2);
+      check(V2_FILE, parsed, path);
+      let upgraded: StateFileV3;
+      try {
+        upgraded = upgradeV2(parsed as StateFileV2);
+      } catch (e) {
+        throw refuse(path, `could not be upgraded (${(e as Error).message})`);
+      }
+      backUp(home, "state.v2.json.bak", raw);
       writeAtomic(path, JSON.stringify(upgraded));
       return { world: fromV3(upgraded), firstRun: false };
     }
     case 1:
-      writeAtomic(join(home, "state.v1.json.bak"), raw);
+      backUp(home, "state.v1.json.bak", raw);
       return { world: emptyWorld(), firstRun: true };
     default:
       throw refuse(path, `has version ${JSON.stringify(parsed.version)}, which this bridge (version ${STATE_VERSION}) does not know`);
@@ -187,16 +295,42 @@ export function flushNow(world: World, home = bridgeHome()) {
   writeAtomic(join(home, "state.json"), JSON.stringify(toFile(world)));
 }
 
-export function createSaver(world: World, home = bridgeHome(), delayMs = 250) {
+const MAX_RETRY_MS = 30_000;
+
+/**
+ * The hub's Persist. schedule() writes within delayMs. A failed background write is logged, stays pending and is
+ * retried with a doubling delay up to 30 s, so nothing is lost while the process lives. schedule("now") and flush()
+ * write before returning and throw when the write fails, with the retry still armed.
+ */
+export function createSaver(world: World, home = bridgeHome(), delayMs = 250, log: (line: string) => void = console.error) {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const flush = () => {
+  let retryMs = delayMs;
+  const arm = (ms: number) => {
+    timer ??= setTimeout(background, ms);
+  };
+  function flush() {
     if (timer) clearTimeout(timer);
     timer = null;
-    flushNow(world, home);
-  };
+    try {
+      flushNow(world, home);
+      retryMs = delayMs;
+    } catch (e) {
+      retryMs = Math.min(retryMs * 2, MAX_RETRY_MS);
+      arm(retryMs);
+      throw e;
+    }
+  }
+  function background() {
+    timer = null;
+    try {
+      flush();
+    } catch (e) {
+      log(`state.json was not saved, retrying in ${retryMs} ms: ${(e as Error).message}`);
+    }
+  }
   const schedule: Persist = (urgency) => {
     if (urgency === "now") return flush();
-    timer ??= setTimeout(flush, delayMs);
+    arm(delayMs);
   };
   return { schedule, flush };
 }

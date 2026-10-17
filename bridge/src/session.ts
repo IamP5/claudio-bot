@@ -9,6 +9,7 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Tickable } from "./clock";
+import { sandboxFailure } from "./sandbox";
 import type { Headroom, Ledger } from "./ledger";
 import { notices as noticeText, withNotices, type SessionInput } from "./prompts";
 import type { Persist } from "./store";
@@ -491,6 +492,8 @@ export type Session = Tickable & {
   interrupt(): Promise<boolean>;
   /** The ledger's answer may have changed (update_bot set dailyCapUsd): a daily-cap park asks headroom again now. */
   recheck(): void;
+  /** options() would now give something else: the live query closes now, or when the turn it serves ends. */
+  reopen(): void;
   /** Recovered TurnEnds not yet told are told before it closes. */
   close(): void;
   /** A turn is running or retrying, or envelopes wait and nothing holds them. */
@@ -546,12 +549,28 @@ type Live = {
   fresh: boolean;
   /** Opened for an unattended turn, with maxBudgetUsd at most what was left of the daily cap. */
   capped: boolean;
+  /** Closed once the turn it serves ends, so the next turn opens a query with fresh options and a fresh sandbox. */
+  stale: boolean;
+  /** A tool result said the sandbox could not start, and the owner was told once for this query. */
+  sandboxNoted: boolean;
   send(m: SDKUserMessage): void;
   release(): void;
   stderr(): string;
 };
 
 const SYSTEM: Initiator = { kind: "system" };
+
+/** The reason, when a failed tool result says the sandbox could not start. */
+function sandboxDownIn(m: SDKMessage): string | null {
+  if (m.type !== "user" || typeof m.message.content === "string") return null;
+  for (const block of m.message.content) {
+    if (block.type !== "tool_result" || block.is_error !== true) continue;
+    const text = typeof block.content === "string" ? block.content : (block.content ?? []).map((c) => (c.type === "text" ? c.text : "")).join("\n");
+    const reason = sandboxFailure(text);
+    if (reason !== null) return reason;
+  }
+  return null;
+}
 
 export function createSession(spec: SessionSpec): Session {
   const run = spec.query ?? query;
@@ -653,7 +672,7 @@ export function createSession(spec: SessionSpec): Session {
    */
   function send(p: Pending, text: string) {
     const unattended = !attended(p.initiator);
-    if (live && (unattended || live.capped)) closeLive();
+    if (live && (unattended || live.capped || live.stale)) closeLive();
     let l: Live;
     try {
       l = live ?? open(unattended);
@@ -724,6 +743,8 @@ export function createSession(spec: SessionSpec): Session {
       q,
       fresh: !options.resume,
       capped: cap !== null,
+      stale: false,
+      sandboxNoted: false,
       send(m) {
         inbox.push(m);
         wake?.();
@@ -758,7 +779,21 @@ export function createSession(spec: SessionSpec): Session {
     if (l.gen !== generation || closed) return;
     closeLive();
     const tail = l.stderr();
-    if (current()) dispatch({ kind: "end", outcome: { kind: "transient", error: maskSecrets(tail ? `${error}\n${tail}` : error) } });
+    const text = tail ? `${error}\n${tail}` : error;
+    if (!current()) return;
+    if (!startedSandbox(text)) dispatch({ kind: "end", outcome: { kind: "transient", error: maskSecrets(text) } });
+  }
+
+  /**
+   * A query that ended because its sandbox could not start is a configuration failure: no command ran, so the envelope
+   * goes back to the head and waits the long start backoff. The bridge never retries without the sandbox.
+   */
+  function startedSandbox(text: string): boolean {
+    const reason = sandboxFailure(text);
+    if (reason === null || turnOf(spec.state.lifecycle as Lifecycle)?.output !== false) return false;
+    closeLive();
+    dispatch({ kind: "unstarted", error: `the sandbox could not start (${reason})` });
+    return true;
   }
 
   function receive(m: SDKMessage, l: Live) {
@@ -769,6 +804,13 @@ export function createSession(spec: SessionSpec): Session {
     }
     if (m.type === "assistant" && m.error) signals.apiError = m.error;
     else if (m.type === "assistant" && turnOf(spec.state.lifecycle as Lifecycle)?.output === false) dispatch({ kind: "output" });
+    const down = sandboxDownIn(m);
+    if (down !== null && !l.sandboxNoted) {
+      // Every Bash call fails while the sandbox is down; a new query tries to start it again. Not a gate denial.
+      l.sandboxNoted = true;
+      l.stale = true;
+      guard("note", () => spec.note(`${spec.name?.() ?? "Claude Code"} cannot run commands: the sandbox could not start (${down}).`));
+    }
     // A plan rejection that extra usage covers does not stop the turn, so it is no usage limit.
     if (m.type === "rate_limit_event" && m.rate_limit_info.status === "rejected" && m.rate_limit_info.isUsingOverage !== true) {
       const info = m.rate_limit_info;
@@ -786,7 +828,11 @@ export function createSession(spec: SessionSpec): Session {
     );
     const outcome = classify(m, signals, clock());
     signals = noSignals();
-    if (turn) dispatch({ kind: "end", outcome });
+    if (!turn) return;
+    const failed = m.subtype !== "success" || m.is_error;
+    if (failed && startedSandbox(m.subtype === "success" ? m.result : m.errors.join("\n"))) return;
+    dispatch({ kind: "end", outcome });
+    if (l.stale && live === l && turnOf(spec.state.lifecycle as Lifecycle) === null) closeLive();
   }
 
   const bootStatus = status();
@@ -821,6 +867,11 @@ export function createSession(spec: SessionSpec): Session {
     },
     recheck() {
       dispatch({ kind: "tick" });
+    },
+    reopen() {
+      if (!live) return;
+      if (turnOf(spec.state.lifecycle as Lifecycle) === null) closeLive();
+      else live.stale = true;
     },
     tick(now) {
       dispatch({ kind: "tick" }, now);

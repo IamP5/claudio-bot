@@ -143,5 +143,5 @@ export function gitDirsOf(cwd: string): string[] {
  */
 export function sandboxFailure(text: string): string | null {
   const m = text.match(/(?:Sandbox is required but failed to initialize|sandbox is enabled but dependencies are missing): (.+)/i);
-  return m ? m[1]!.replace(/\s*Restart to retry\.\s*$/, "").trim() : null;
+  return m ? m[1]!.replace(/\s*Restart to retry\.\s*$/, "").trim().replace(/\.$/, "") : null;
 }

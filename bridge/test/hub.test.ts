@@ -1,5 +1,5 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { McpSdkServerConfigWithInstance, Options, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -464,6 +464,7 @@ test("raising a bot's daily cap starts its held routine at once instead of at th
   });
   world.bots.set(b.id, b);
   const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
   h.hub.boot(false);
   await flush();
   const status = () => (h.hub.hello(NO_RING) as Extract<ServerMessage, { type: "hello" }>).bots[0]?.status;
@@ -770,6 +771,40 @@ test("a permission card an agent opens shows its bot as awaiting approval in the
 
   const frame = h.frames.findLast((f) => f.type === "bot" && f.bot.id === b.id);
   expect(frame?.type === "bot" && frame.bot.status).toBe("awaiting_approval");
+});
+
+test("a bot's commands run sandboxed to its home and USER.md, and a mac agent's to its project, pushing over https", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-agent-")));
+  roots.push(cwd);
+  world.agents.set("a_1" as AgentId, {
+    agent: { id: "a_1" as AgentId, botId: b.id, title: "Ship it", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at },
+    cwd,
+    messages: [],
+    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "Push the fix.", initiator: { kind: "user" }, settles: null, attempts: 0 }] },
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: { kind: "user" },
+  });
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  h.hub.boot(false);
+  await flush();
+  const agentOptions = h.q().options;
+  await h.hub.handle({ type: "send", botId: b.id, text: "hi", uploads: [] });
+  await flush();
+  const botOptions = h.q().options;
+  const home = realpathSync(h.root);
+
+  expect([botOptions.sandbox?.enabled, botOptions.sandbox?.allowUnsandboxedCommands, botOptions.sandbox?.filesystem?.allowWrite]).toEqual([
+    true,
+    false,
+    [join(home, "bots", b.id), join(home, "USER.md")],
+  ]);
+  expect(botOptions.sandbox?.filesystem?.denyRead?.[0]).toBe(home);
+  expect([agentOptions.sandbox?.filesystem?.allowWrite?.[0], agentOptions.env?.GIT_CONFIG_VALUE_1, botOptions.env]).toEqual([cwd, "ssh://git@github.com/", undefined]);
 });
 
 test("one ticker throwing is logged, and the tickers after it still run", () => {

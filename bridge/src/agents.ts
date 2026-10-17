@@ -1,10 +1,11 @@
-import type { HookCallbackMatcher, HookEvent, Options } from "@anthropic-ai/claude-agent-sdk";
+import type { HookCallbackMatcher, HookEvent, Options, SandboxSettings } from "@anthropic-ai/claude-agent-sdk";
 import { createCloudSession, followUpCloudSession } from "./cloud";
 import type { Ledger } from "./ledger";
 import type { AgentId, AgentStatus, BotId } from "./protocol";
 import { agentPrompt, type SessionInput } from "./prompts";
 import type { Project } from "./projects";
 import { createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
+import { AGENT_GIT_ENV } from "./sandbox";
 import type { Persist } from "./store";
 import { errorText } from "./text";
 import { emptySession, newMessageId, type Actor, type AgentRecord, type Initiator, type World } from "./world";
@@ -47,6 +48,8 @@ export function createAgents(deps: {
   hooks: (actor: Actor) => Partial<Record<HookEvent, HookCallbackMatcher[]>>;
   /** An approval continuation's turn starts (gate.beginTurn). */
   beginTurn: (actor: Actor) => void;
+  /** The OS sandbox for the agent's Bash calls (sandbox.sandboxFor), read as each query opens. */
+  sandbox: (actor: Actor) => SandboxSettings;
   persist: Persist;
   now: () => string;
   /** The record or something its status derives from changed, including its session's lifecycle and deadlines. */
@@ -140,6 +143,9 @@ export function createAgents(deps: {
           disallowedTools: ["AskUserQuestion"],
           model: deps.model,
           hooks: deps.hooks(actor),
+          sandbox: deps.sandbox(actor),
+          // The SDK replaces the environment rather than adding to it.
+          env: { ...process.env, ...AGENT_GIT_ENV },
           maxBudgetUsd,
         };
       },

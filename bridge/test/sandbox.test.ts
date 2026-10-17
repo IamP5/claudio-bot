@@ -307,7 +307,7 @@ test("sandboxFailure reads the reason Claude Code gives, and nothing from other 
     sandboxFailure("Sandbox is required but failed to initialize: tlsTerminate.caCertPath: cannot read /x/ca.pem (ENOENT). Restart to retry."),
     sandboxFailure("Error: sandbox is enabled but dependencies are missing: bubblewrap (bwrap) not installed"),
     sandboxFailure("cat: /x: Operation not permitted"),
-  ]).toEqual(["tlsTerminate.caCertPath: cannot read /x/ca.pem (ENOENT).", "bubblewrap (bwrap) not installed", null]);
+  ]).toEqual(["tlsTerminate.caCertPath: cannot read /x/ca.pem (ENOENT)", "bubblewrap (bwrap) not installed", null]);
 });
 
 test("the gate's floors and the sandbox cover the same private paths", () => {

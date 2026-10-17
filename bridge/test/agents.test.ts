@@ -106,6 +106,7 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom } 
     },
     hooks: (actor) => ({ PreToolUse: [{ matcher: actor.kind === "agent" ? actor.agentId : "bot", hooks: [] }] }),
     beginTurn: (actor) => begun.push(actor.kind === "agent" ? actor.agentId : actor.botId),
+    sandbox: (actor) => ({ enabled: true, filesystem: { allowWrite: [actor.kind === "agent" ? actor.agentId : actor.botId] } }),
     persist: () => {},
     now: () => AT,
     changed: (rec) => statuses.push(rec.agent.status),
@@ -152,6 +153,8 @@ test("a mac agent starts on its project with the agent prompt, its budget, no re
     "claude-sonnet-5-5",
     rec.agent.id,
   ]);
+  expect(o.sandbox).toEqual({ enabled: true, filesystem: { allowWrite: [rec.agent.id] } });
+  expect([o.env?.PATH, o.env?.GIT_CONFIG_KEY_0, o.env?.GIT_CONFIG_VALUE_0]).toEqual([process.env.PATH, "url.https://github.com/.insteadOf", "git@github.com:"]);
   expect(h.world.agents.get(rec.agent.id)).toMatchObject({
     agent: { botId: B1, title: "Fix tests", where: "mac", projectName: "shop", status: "working", url: null },
     cwd: "/code/shop",

@@ -24,6 +24,7 @@ import {
 import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, onboarding, persona, type Envelope } from "./prompts";
 import { cardReply } from "./protocol2";
 import type { Push } from "./push";
+import { gitDirsOf, sandboxFor } from "./sandbox";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { appendArchive, type Persist } from "./store";
@@ -337,6 +338,7 @@ export function createHub(deps: HubDeps): Hub {
         disallowedTools: ["AskUserQuestion"],
         model: deps.model,
         hooks: gate.hooks(actor),
+        sandbox: sandboxFor(actor, scopeOf(actor), process.env),
       }),
       onMessage(m, pending) {
         if (!world.bots.has(bot.id)) return;
@@ -444,6 +446,10 @@ export function createHub(deps: HubDeps): Hub {
     claude: deps.claude,
     hooks: (actor) => gate.hooks(actor),
     beginTurn: (actor) => gate.beginTurn(actor),
+    sandbox(actor) {
+      const scope = scopeOf(actor);
+      return sandboxFor(actor, scope, process.env, gitDirsOf(scope.own));
+    },
     persist: deps.persist,
     now,
     changed(rec) {

@@ -589,6 +589,9 @@ const resultMsg = (cost: number, over: object = {}) =>
 const apiErrorResult = (cost: number) => resultMsg(cost, { is_error: true, result: "API Error: overloaded" });
 const interruptedResult = (cost: number) =>
   resultMsg(cost, { subtype: "error_during_execution", is_error: true, errors: ["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use"] });
+const SANDBOX_DOWN = "Sandbox is required but failed to initialize: sandbox-exec: execvp() failed. Restart to retry.";
+const toolFailed = (content: string) =>
+  ({ type: "user", uuid: `u${++uuid}`, session_id: "s_1", parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${uuid}`, is_error: true, content }] } }) as unknown as SDKMessage;
 const rejected = (resetsAt: unknown, info: object = {}) =>
   ({ type: "rate_limit_event", uuid: "rl", session_id: "s_1", rate_limit_info: { status: "rejected", resetsAt, ...info } }) as unknown as SDKMessage;
 
@@ -1293,6 +1296,60 @@ describe("session", () => {
     expect(h.ends).toMatchObject([{ id, end: { kind: "deferred", why: "usage_limit", until } }]);
   });
 
+  test("a sandbox that cannot start is told once, is no denial, and the next turn gets a new query", async () => {
+    const { h, id } = await started("[a]");
+    const first = h.q();
+    first.emit(toolFailed(SANDBOX_DOWN), toolFailed(SANDBOX_DOWN), toolFailed(SANDBOX_DOWN), toolFailed(SANDBOX_DOWN));
+    await flush();
+    expect([h.notes, h.state.lifecycle.kind]).toEqual([["Ana cannot run commands: the sandbox could not start (sandbox-exec: execvp() failed)."], "working"]);
+    first.emit(resultMsg(0.1, { result: "Commands are failing." }));
+    await flush();
+    expect([h.finals(id).map((e) => e.end.kind), first.closed]).toEqual([["done"], true]);
+    h.push("[b]");
+    await flush();
+    expect([h.queries.length, h.q().received.map((r) => r.text)]).toEqual([2, ["[b]"]]);
+  });
+
+  test("a command whose own output names the sandbox error is not a sandbox failure", async () => {
+    const { h } = await started("[a]");
+    h.q().emit({ ...(toolFailed(SANDBOX_DOWN) as object), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", is_error: false, content: SANDBOX_DOWN }] } } as unknown as SDKMessage);
+    await flush();
+    expect(h.notes).toEqual([]);
+  });
+
+  test("a query that ends because its sandbox could not start is a start failure: the envelope waits the long backoff", async () => {
+    const { h, id } = await started("[a]");
+    h.q().emit(resultMsg(0, { subtype: "error_during_execution", is_error: true, errors: ["sandbox is enabled but dependencies are missing: ripgrep (rg) not found"] }));
+    await flush();
+    expect(h.state.pending.map((p) => [p.id as string, p.attempts])).toEqual([[id, 0]]);
+    expect(h.state.lifecycle).toEqual({ kind: "backoff", until: new Date(h.clock.t + START_RETRY_MS[0]).toISOString(), attempt: 0 });
+    expect([h.notes, h.session.unavailable, h.q().closed]).toEqual([
+      ["Claude Code could not start: the sandbox could not start (ripgrep (rg) not found). Queued messages are kept, and it keeps trying."],
+      true,
+      true,
+    ]);
+    await h.advance(START_RETRY_MS[0]);
+    expect(h.queries.map((q) => q.options.sandbox ?? null)).toEqual([null, null]);
+    expect(h.q().received.map((r) => r.text)).toEqual(["[a]"]);
+  });
+
+  test("reopen closes an idle query now, and a busy one when its turn ends", async () => {
+    const { h, id } = await started("[a]");
+    const busy = h.q();
+    h.session.reopen();
+    expect(busy.closed).toBe(false);
+    busy.emit(resultMsg(0.1));
+    await flush();
+    expect([h.finals(id).map((e) => e.end.kind), busy.closed]).toEqual([["done"], true]);
+    h.push("[b]");
+    await flush();
+    const idle = h.q();
+    idle.emit(resultMsg(0.2));
+    await flush();
+    h.session.reopen();
+    expect([h.queries.length, idle.closed]).toEqual([2, true]);
+  });
+
   test("a secret in Claude Code's stderr is redacted before the error reaches the chat", async () => {
     const { h, id } = await started("[a]");
     const secret = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
@@ -1449,6 +1506,9 @@ test.each([1, 2, 3, 4, 5, 6, 7, 8])("exactly one TurnEnd per envelope that leave
     () => h.session.denied(),
     () => h.session.notice("[n]"),
     () => h.session.recheck(),
+    () => h.session.reopen(),
+    () => live()?.emit(toolFailed(SANDBOX_DOWN)),
+    () => live()?.emit(resultMsg(random(), { subtype: "error_during_execution", is_error: true, errors: [SANDBOX_DOWN] })),
     () => void (openFails = random() < 0.3),
     () => live()?.emit(rejected(Math.floor(h.clock.t / 1000) + 600, { rateLimitType: "seven_day_opus" }), apiErrorResult(random())),
     () => h.advance(pick([500, 1_000, 3_000, 8_000, 15_000, 30_000, 120_000, 300_000])),

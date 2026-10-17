@@ -452,3 +452,24 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(MarkdownBlock.parse("## Plan\nstep one") == [.heading("Plan"), .prose("step one")])
     }
 }
+
+@MainActor
+@Suite struct SkillsSectionTests {
+    @Test func skillsShowOnlyWithTheFeatureAndFollowTheBridgesList() {
+        let b1 = BotID("b1")
+        let store = AppStore()
+        store.apply(hello([bot("b1")]))
+        store.apply(.skills(botId: b1, skills: [Skill(name: "greet", description: "d", updatedAt: at)]))
+        #expect(SkillsSection.content(store, bot: b1) == .hidden)
+
+        store.apply(.hello(Hello(features: [.skills], machine: "Mac", userName: "Alex", bots: [bot("b1")])))
+        #expect(SkillsSection.content(store, bot: b1) == .loading)
+        let greet = Skill(name: "greet", description: "Greet the user", updatedAt: at)
+        let notes = Skill(name: "notes", description: "Take notes", updatedAt: at)
+        store.apply(.skills(botId: b1, skills: [greet, notes]))
+        #expect(SkillsSection.content(store, bot: b1) == .skills([greet, notes]))
+
+        store.apply(.skills(botId: b1, skills: [notes]))
+        #expect(SkillsSection.content(store, bot: b1) == .skills([notes]))
+    }
+}

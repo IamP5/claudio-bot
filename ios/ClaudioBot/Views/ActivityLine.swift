@@ -13,8 +13,12 @@ struct ActivityLine: View {
         return store.activity[ActivityKey(botId: botId, agentId: agentId)]
     }
 
+    /// The animation sits on a Group outside the `if`, so the line fades in and out, not only between texts. A Group adds no
+    /// view of its own, so an empty line takes no slot in the parent stack's spacing.
     var body: some View {
-        if let text = Self.text(in: store, botId: botId, agentId: agentId) {
+        let text = Self.text(in: store, botId: botId, agentId: agentId)
+        Group {
+            if let text {
             Label {
                 Text(text).lineLimit(1).truncationMode(.middle)
             } icon: {
@@ -25,8 +29,9 @@ struct ActivityLine: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 6)
             .transition(.opacity)
-            .animation(.easeInOut(duration: 0.2), value: text)
             .accessibilityLabel(text)
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: text)
     }
 }

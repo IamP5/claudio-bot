@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import { homedir, hostname, networkInterfaces } from "node:os";
 import qrcode from "qrcode-terminal";
 import { createDevices, type PairCode } from "./devices";
@@ -68,6 +69,8 @@ if (migration.kind === "conflict") {
 // The home now resolves to ~/.claudebot, a different lock name. Hold that one too, or a bridge started with
 // CLAUDIOBOT_HOME=~/.claudebot could share the home.
 if (migration.kind === "linked" || migration.kind === "moved_aside") holdLock(home);
+// Only after the migration, which links the home into place when it is absent. Other users may not list it.
+mkdirSync(home, { recursive: true, mode: 0o700 });
 
 const port = Number(process.env.CLAUDIOBOT_PORT ?? 7878);
 const machine = await machineName();

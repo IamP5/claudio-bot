@@ -1,11 +1,13 @@
 import type * as nodeFs from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
+import { lockPathOf, pidIn } from "./lock";
 import { projectRoots } from "./projects";
 import { launchctl, readInstalled, type Exec, type InstalledPlist, type LaunchdState, type ServiceTarget } from "./service";
+import { checkStateFile, type StateCheck } from "./store";
 import { errorText } from "./text";
 
-// Read-only diagnostics. Never touches the store: loadWorld would upgrade a v2 state.json on the spot, so the doctor
-// parses it itself and only through the fs it was handed, which has no write methods.
+// Read-only diagnostics. Never loads the store: loadWorld would upgrade a v2 state.json on the spot, so the doctor reads
+// the file through the fs it was handed, which has no write methods, and asks checkStateFile what a start would do.
 
 export type DoctorFs = Pick<typeof nodeFs, "existsSync" | "lstatSync" | "statSync" | "readFileSync" | "readdirSync" | "realpathSync" | "readlinkSync">;
 
@@ -27,10 +29,7 @@ export type Finding = { level: Level; check: string; detail: string };
 
 type Entry = { kind: "absent" } | { kind: "dir" } | { kind: "link"; target: string; resolves: boolean } | { kind: "other" };
 
-type StateFacts =
-  | { kind: "absent" }
-  | { kind: "unreadable"; why: string }
-  | { kind: "parsed"; version: unknown; bots: number | null; devices: number | null };
+type StateFacts = { kind: "absent" } | { kind: "unreadable"; why: string } | StateCheck;
 
 type LockFacts = { path: string } & ({ kind: "free" } | { kind: "pid"; pid: number; alive: boolean } | { kind: "garbled" });
 
@@ -78,21 +77,13 @@ const modeOf = (fs: DoctorFs, path: string) => {
   }
 };
 
-/** The same name lock.ts computes: beside the home's real path. */
-export function lockPathOf(fs: DoctorFs, home: string): string {
-  try {
-    return `${fs.realpathSync(home)}.lock`;
-  } catch {
-    try {
-      return `${join(fs.realpathSync(dirname(home)), basename(home))}.lock`;
-    } catch {
-      return `${home}.lock`;
-    }
-  }
-}
-
 function readLock(fs: DoctorFs, alive: (pid: number) => boolean, home: string): LockFacts {
-  const path = lockPathOf(fs, home);
+  let path: string;
+  try {
+    path = lockPathOf(home, (p) => fs.realpathSync(p));
+  } catch {
+    path = `${home}.lock`;
+  }
   let body: string;
   try {
     body = fs.readFileSync(path, "utf8");
@@ -100,24 +91,18 @@ function readLock(fs: DoctorFs, alive: (pid: number) => boolean, home: string): 
     if (errno(e) === "ENOENT") return { path, kind: "free" };
     return { path, kind: "garbled" };
   }
-  if (!/^[1-9]\d*\n?$/.test(body)) return { path, kind: "garbled" };
-  const pid = Number(body.trim());
-  return { path, kind: "pid", pid, alive: alive(pid) };
+  const pid = pidIn(body);
+  return pid === null ? { path, kind: "garbled" } : { path, kind: "pid", pid, alive: alive(pid) };
 }
 
-export function readState(fs: DoctorFs, home: string): StateFacts {
+function readState(fs: DoctorFs, home: string): StateFacts {
   const path = join(home, "state.json");
   if (!fs.existsSync(path)) return { kind: "absent" };
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(fs.readFileSync(path, "utf8"));
+    return checkStateFile(JSON.parse(fs.readFileSync(path, "utf8")));
   } catch (e) {
     return { kind: "unreadable", why: errorText(e) };
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { kind: "unreadable", why: "not a JSON object" };
-  const file = parsed as Record<string, unknown>;
-  const count = (v: unknown) => (Array.isArray(v) ? v.length : null);
-  return { kind: "parsed", version: file.version, bots: count(file.bots), devices: count(file.devices) };
 }
 
 const firstLine = (s: string) => s.trim().split("\n")[0] ?? "";
@@ -256,11 +241,16 @@ const CHECKS: Check[] = [
     const s = f.state;
     if (s.kind === "absent") return pass("state", "no state.json yet: the next start is a first run");
     if (s.kind === "unreadable") return fail("state", `state.json cannot be read (${s.why}); the bridge will refuse to start`);
-    const counts = `${plural(s.bots ?? 0, "bot")}, ${plural(s.devices ?? 0, "paired device")}`;
-    if (s.version === 3) return s.bots === null ? fail("state", "state.json v3 has no bots list; the bridge will refuse it") : pass("state", `state.json v3, ${counts}`);
-    if (s.version === 2) return warn("state", "state.json is v2: the next start upgrades it to v3 and keeps state.v2.json.bak");
-    if (s.version === 1) return warn("state", "state.json is v1: the next start backs it up and starts fresh");
-    return fail("state", `state.json has version ${JSON.stringify(s.version)}, which this bridge does not know`);
+    switch (s.kind) {
+      case "v3":
+        return pass("state", `state.json v3, ${plural(s.bots, "bot")}, ${plural(s.devices, "paired device")}`);
+      case "v2":
+        return warn("state", "state.json is v2: the next start upgrades it to v3 and keeps state.v2.json.bak");
+      case "v1":
+        return warn("state", "state.json is v1: the next start backs it up and starts fresh");
+      case "refused":
+        return fail("state", `state.json ${s.why}; the bridge will refuse to start`);
+    }
   },
 
   (f) => {

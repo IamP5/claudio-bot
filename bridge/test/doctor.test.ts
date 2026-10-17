@@ -19,7 +19,7 @@ const healthy: Facts = {
   claude: { asked: "claude", path: "/Users/me/.local/bin/claude", version: "2.1.0 (Claude Code)" },
   home: { path: "/Users/me/.claudiobot", mode: 0o700 },
   secrets: [{ path: "/Users/me/.claudiobot/state.json", mode: 0o600 }],
-  state: { kind: "parsed", version: 3, bots: 2, devices: 1 },
+  state: { kind: "v3", bots: 2, devices: 1 },
   health: { url: "http://127.0.0.1:7878/health", ok: true, error: null },
   lock: { path: "/Users/me/.claudiobot.lock", kind: "pid", pid: 4242, alive: true },
   roots: { explicit: true, list: [{ path: "/Users/me/code", exists: true, repos: 3 }] },
@@ -53,8 +53,8 @@ describe("checks", () => {
     ["home", "not created yet", { home: { path: "/h", mode: null } }, "WARN", "/h does not exist yet; the bridge creates it on first start"],
     ["secrets", "token readable by others", { secrets: [{ path: "/h/token", mode: 0o644 }] }, "FAIL", "/h/token is 0644. Run: chmod 600 /h/token"],
     ["state", "first run", { state: { kind: "absent" } }, "PASS", "no state.json yet: the next start is a first run"],
-    ["state", "v2 awaiting upgrade", { state: { kind: "parsed", version: 2, bots: 1, devices: null } }, "WARN", "state.json is v2: the next start upgrades it to v3 and keeps state.v2.json.bak"],
-    ["state", "unknown version", { state: { kind: "parsed", version: 9, bots: 1, devices: 0 } }, "FAIL", "state.json has version 9, which this bridge does not know"],
+    ["state", "v2 awaiting upgrade", { state: { kind: "v2", bots: 1 } }, "WARN", "state.json is v2: the next start upgrades it to v3 and keeps state.v2.json.bak"],
+    ["state", "refused", { state: { kind: "refused", why: "has version 9, which this bridge (version 3) does not know" } }, "FAIL", "state.json has version 9, which this bridge (version 3) does not know; the bridge will refuse to start"],
     ["state", "broken JSON", { state: { kind: "unreadable", why: "Unexpected end" } }, "FAIL", "state.json cannot be read (Unexpected end); the bridge will refuse to start"],
     ["health", "down while installed", { health: { url: "http://127.0.0.1:7878/health", ok: false, error: "Unable to connect" } }, "FAIL", "http://127.0.0.1:7878/health does not answer (Unable to connect)"],
     ["health", "down, nothing installed", { installed: null, health: { url: "u", ok: false, error: "refused" } }, "WARN", "u does not answer (refused); no service is installed"],
@@ -120,7 +120,8 @@ function world(opts: { plistEnv?: Record<string, string> } = {}) {
   const home = join(root, "home");
   mkdirSync(home, { mode: 0o700 });
   chmodSync(home, 0o700);
-  const v2 = JSON.stringify({ version: 2, bots: [{ id: "bot_1" }], agents: [] });
+  const bot = { id: "bot_1", name: "Digest", title: null, avatar: { shape: "circle", color: "white" }, pinned: false, hidden: false, createdAt: "2026-10-01T00:00:00.000Z", messages: [], unread: 0, routines: [], sessionId: null };
+  const v2 = JSON.stringify({ version: 2, bots: [bot], agents: [] });
   writeFileSync(join(home, "state.json"), v2, { mode: 0o600 });
   writeFileSync(join(home, "token"), "shared-secret\n", { mode: 0o644 });
   chmodSync(join(home, "token"), 0o644);
@@ -194,6 +195,13 @@ describe("gather", () => {
     const facts = await gather(deps, target);
     expect(facts.state.kind).toBe("unreadable");
     expect(check(facts).find((f) => f.check === "state")?.level).toBe("FAIL");
+  });
+
+  test("a v3 state.json the bridge would refuse is a FAIL that names the bad field", async () => {
+    const { home, target, deps } = world();
+    writeFileSync(join(home, "state.json"), JSON.stringify({ version: 3, bots: [{ id: "b_1" }], agents: [], gate: { open: [], grants: [], daily: [] }, devices: [], push: { sent: [] }, account: { parkedUntil: null } }));
+    const finding = check(await gather(deps, target)).find((f) => f.check === "state");
+    expect(finding).toEqual({ level: "FAIL", check: "state", detail: "state.json has an invalid bots[0].name (Invalid input: expected string, received undefined); the bridge will refuse to start" });
   });
 
   test("sees the ~/.claudiobot link when no CLAUDIOBOT_HOME is set", async () => {

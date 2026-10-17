@@ -236,12 +236,39 @@ function refuse(path: string, why: string): StateFileError {
   );
 }
 
-function check(schema: z.ZodType, file: unknown, path: string) {
+/** Why the file does not have the shape, or null when it does. */
+function shapeError(schema: z.ZodType, file: unknown): string | null {
   const result = schema.safeParse(file);
-  if (result.success) return;
+  if (result.success) return null;
   const issue = result.error.issues[0]!;
   const where = issue.path.map((k) => (typeof k === "number" ? `[${k}]` : `.${String(k)}`)).join("").replace(/^\./, "");
-  throw refuse(path, `has an invalid ${where || "shape"} (${issue.message})`);
+  return `has an invalid ${where || "shape"} (${issue.message})`;
+}
+
+export type StateCheck =
+  | { kind: "v3"; bots: number; devices: number }
+  | { kind: "v2"; bots: number }
+  | { kind: "v1" }
+  /** why reads after "state.json": "has version 4, which …". */
+  | { kind: "refused"; why: string };
+
+/** Pure: what loadWorld would do with this parsed state.json. The doctor asks the same question without loading it. */
+export function checkStateFile(parsed: unknown): StateCheck {
+  if (!isObject(parsed)) return { kind: "refused", why: "is not a JSON object" };
+  switch (parsed.version) {
+    case 3: {
+      const why = shapeError(V3_FILE, parsed);
+      return why ? { kind: "refused", why } : { kind: "v3", bots: (parsed.bots as unknown[]).length, devices: (parsed.devices as unknown[]).length };
+    }
+    case 2: {
+      const why = shapeError(V2_FILE, parsed);
+      return why ? { kind: "refused", why } : { kind: "v2", bots: (parsed.bots as unknown[]).length };
+    }
+    case 1:
+      return { kind: "v1" };
+    default:
+      return { kind: "refused", why: `has version ${JSON.stringify(parsed.version)}, which this bridge (version ${STATE_VERSION}) does not know` };
+  }
 }
 
 function fromV3(file: StateFileV3): World {
@@ -282,13 +309,13 @@ export function loadWorld(home = bridgeHome()): { world: World; firstRun: boolea
   } catch (e) {
     throw refuse(path, `is not valid JSON (${errorText(e)})`);
   }
-  if (!isObject(parsed)) throw refuse(path, "is not a JSON object");
-  switch (parsed.version) {
-    case 3:
-      check(V3_FILE, parsed, path);
+  const checked = checkStateFile(parsed);
+  switch (checked.kind) {
+    case "refused":
+      throw refuse(path, checked.why);
+    case "v3":
       return { world: fromV3(parsed as StateFileV3), firstRun: false };
-    case 2: {
-      check(V2_FILE, parsed, path);
+    case "v2": {
       let upgraded: StateFileV3;
       try {
         upgraded = upgradeV2(parsed as StateFileV2);
@@ -299,11 +326,9 @@ export function loadWorld(home = bridgeHome()): { world: World; firstRun: boolea
       writeAtomic(path, JSON.stringify(upgraded));
       return { world: fromV3(upgraded), firstRun: false };
     }
-    case 1:
+    case "v1":
       backUp(home, "state.v1.json.bak", raw);
       return { world: emptyWorld(), firstRun: true };
-    default:
-      throw refuse(path, `has version ${JSON.stringify(parsed.version)}, which this bridge (version ${STATE_VERSION}) does not know`);
   }
 }
 

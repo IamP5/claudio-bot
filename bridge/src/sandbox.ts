@@ -2,58 +2,16 @@ import type { SandboxSettings } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import type { Scope } from "./policy";
+import { PRIVATE } from "./private";
 import type { Actor } from "./world";
 
 type SandboxEnv = Readonly<Record<string, string | undefined>>;
 
-/** Under the user's home: what no sandboxed command reads. Mirrors the gate's floor roots in policy.ts. */
-const PRIVATE: readonly string[] = [
-  ".claudiobot",
-  ".claudebot",
-  ".ssh",
-  ".gnupg",
-  ".aws",
-  ".azure",
-  ".kube",
-  ".config/gcloud",
-  ".config/gh",
-  ".config/op",
-  ".password-store",
-  ".docker/config.json",
-  ".netrc",
-  ".npmrc",
-  ".pypirc",
-  ".git-credentials",
-  ".claude.json",
-  ".claude/.credentials.json",
-  ".claude/history.jsonl",
-  ".claude/projects",
-  "Library/Keychains",
-  "Library/Messages",
-  "Library/Mail",
-  "Library/Calendars",
-  "Library/Application Support/AddressBook",
-  "Library/Application Support/1Password",
-  "Library/Application Support/com.vercel.cli",
-  "Library/Application Support/Google/Chrome",
-  "Library/Application Support/Google/Chrome Beta",
-  "Library/Application Support/Chromium",
-  "Library/Application Support/BraveSoftware",
-  "Library/Application Support/Firefox",
-  "Library/Application Support/Mozilla",
-  "Library/Application Support/Arc",
-  "Library/Application Support/Microsoft Edge",
-  "Library/Application Support/com.operasoftware.Opera",
-  "Library/Application Support/Vivaldi",
-  "Library/Application Support/Slack",
-  "Library/Application Support/discord",
-  "Library/Safari",
-  "Library/Containers/com.apple.Safari",
-  "Library/Cookies",
-];
+/** Under the user's home: what no sandboxed command reads, the same paths the gate's floors refuse. */
+const DENIED: readonly string[] = Object.values(PRIVATE).flat();
 
 /**
- * Re-opened inside PRIVATE for a mac agent, so it can commit and push. ssh and `ssh-keygen -Y sign` load `<key>.pub`
+ * Re-opened inside DENIED for a mac agent, so it can commit and push. ssh and `ssh-keygen -Y sign` load `<key>.pub`
  * and sign through the agent socket, so private keys stay unreadable whatever they are named. The keychain is what
  * git's osxkeychain credential helper reads for an https push; it also lets any sandboxed command of the agent fetch
  * the GitHub https token through that helper.
@@ -109,7 +67,7 @@ export const AGENT_GIT_ENV: Readonly<Record<string, string>> = {
  */
 export function sandboxFor(actor: Actor, scope: Scope, env: SandboxEnv, gitDirs: readonly string[] = []): SandboxSettings {
   const home = (rel: string) => join(scope.homedir, rel);
-  const denyRead = [scope.bridgeHome, ...PRIVATE.map(home)];
+  const denyRead = [scope.bridgeHome, ...DENIED.map(home)];
   const bridgeVars = Object.keys(env).filter((k) => /^CLAUD(IO|E)BOT_/.test(k)).sort();
   const common = {
     enabled: true,

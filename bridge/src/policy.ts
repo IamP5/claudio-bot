@@ -15,6 +15,7 @@
 //     a differently-cased spelling, which realpath canonicalises, but homoglyphs and percent-encoding are not decoded.
 import { basename, isAbsolute, normalize, resolve, sep } from "node:path";
 import type { Headroom } from "./ledger";
+import { PRIVATE } from "./private";
 import type { MessageId } from "./protocol";
 import { shellCommands, type Word } from "./shell";
 import { BODY_KEYS, clip, maskSecrets, sha256 } from "./text";
@@ -579,7 +580,7 @@ const FLOORS: readonly Floor[] = [
   {
     id: "floor.bridge",
     label: "ClaudioBot's own state, tokens and other bots' homes",
-    roots: (ctx) => [ctx.scope.bridgeHome, ...inHome(".claudiobot", ".claudebot")(ctx)],
+    roots: (ctx) => [ctx.scope.bridgeHome, ...inHome(...PRIVATE.bridge)(ctx)],
     except: (ctx) => (ctx.actor.kind === "bot" ? [ctx.scope.own, ...(ctx.scope.userMd === null ? [] : [ctx.scope.userMd])] : []),
   },
   {
@@ -591,32 +592,14 @@ const FLOORS: readonly Floor[] = [
   {
     id: "floor.keys",
     label: "SSH, GPG and cloud keys or the Keychain",
-    roots: inHome(".ssh", ".gnupg", ".aws", ".config/gcloud", ".azure", "Library/Keychains"),
+    roots: inHome(...PRIVATE.keys),
     bash: (p) => p.verb === "security" || (p.verb === "ssh-add" && p.words.includes("-L")) || (p.verb === "gpg" && p.words.some((w) => w.includes("export-secret"))),
     rawScan: true,
   },
   {
     id: "floor.browser",
     label: "browser profiles and cookies",
-    roots: inHome(
-      "Library/Application Support/Google/Chrome",
-      "Library/Application Support/Google/Chrome Beta",
-      "Library/Application Support/Chromium",
-      "Library/Application Support/BraveSoftware",
-      "Library/Application Support/Firefox",
-      "Library/Application Support/Mozilla",
-      "Library/Application Support/Arc",
-      "Library/Application Support/Microsoft Edge",
-      "Library/Application Support/com.operasoftware.Opera",
-      "Library/Application Support/Vivaldi",
-      "Library/Application Support/Orion",
-      "Library/Application Support/Zen",
-      "Library/Application Support/Slack",
-      "Library/Application Support/discord",
-      "Library/Safari",
-      "Library/Containers/com.apple.Safari",
-      "Library/Cookies",
-    ),
+    roots: inHome(...PRIVATE.browser),
     rawScan: true,
   },
   {
@@ -628,7 +611,7 @@ const FLOORS: readonly Floor[] = [
   {
     id: "floor.creds",
     label: "a stored credential or token",
-    roots: inHome(".netrc", ".config/gh/hosts.yml", ".config/gh/config.yml", ".npmrc", ".docker/config.json", ".kube/config", ".git-credentials", ".pypirc", ".claude/.credentials.json", ".claude.json", ".claude/history.jsonl", ".claude/projects", "Library/Application Support/1Password"),
+    roots: inHome(...PRIVATE.creds),
     bash: (p) =>
       (p.verb === "gh" && p.words[1] === "auth" && (["token", "refresh"].includes(p.words[2] ?? "") || (p.words[2] === "status" && (p.words.includes("-t") || p.words.includes("--show-token"))))) ||
       (p.verb === "git" && (p.words[1] ?? "").startsWith("credential")) ||
@@ -639,7 +622,7 @@ const FLOORS: readonly Floor[] = [
   {
     id: "floor.personal",
     label: "Messages, Mail, Contacts or Calendars",
-    roots: inHome("Library/Messages", "Library/Mail", "Library/Application Support/AddressBook", "Library/Calendars"),
+    roots: inHome(...PRIVATE.personal),
     rawScan: true,
   },
   {

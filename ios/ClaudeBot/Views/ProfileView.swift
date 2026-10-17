@@ -41,23 +41,23 @@ struct ProfileView: View {
             .toolbar {
                 // On iPad the profile sits beside the chat, whose own menu already fills this slot.
                 if sizeClass == .compact {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button {
-                            client.send(.updateBot(botId: botId, patch: BotPatch(pinned: !bot.pinned)))
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu {
+                            Button {
+                                client.send(.updateBot(botId: botId, patch: BotPatch(pinned: !bot.pinned)))
+                            } label: {
+                                Label(bot.pinned ? "Unpin" : "Pin", systemImage: bot.pinned ? "pin.slash" : "pin")
+                            }
+                            Button {
+                                client.send(.updateBot(botId: botId, patch: BotPatch(hidden: !bot.hidden)))
+                            } label: {
+                                Label(bot.hidden ? "Show in sidebar" : "Hide from sidebar", systemImage: bot.hidden ? "eye" : "eye.slash")
+                            }
                         } label: {
-                            Label(bot.pinned ? "Unpin" : "Pin", systemImage: bot.pinned ? "pin.slash" : "pin")
+                            Image(systemName: "ellipsis")
                         }
-                        Button {
-                            client.send(.updateBot(botId: botId, patch: BotPatch(hidden: !bot.hidden)))
-                        } label: {
-                            Label(bot.hidden ? "Show in sidebar" : "Hide from sidebar", systemImage: bot.hidden ? "eye" : "eye.slash")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
+                        .accessibilityLabel("More")
                     }
-                    .accessibilityLabel("More")
-                }
                 }
             }
             .onAppear {

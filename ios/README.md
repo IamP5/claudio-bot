@@ -1,12 +1,12 @@
-# ClaudeBot for iPhone
+# ClaudeBot for iPhone and iPad
 
-ClaudeBot lets you hand coding tasks to Claude from your phone. You chat with each task, approve tool calls from cards, answer Claude's questions with a tap, and get a notification when Claude needs you or finishes. Each task runs either in Claude Code on your Mac or in a Claude Code cloud session.
+ClaudeBot is a phone for your bots. A bot is a persistent assistant with one long conversation and one job, such as "tech news" or "engineer". Your bots live on your Mac, in the bridge. They keep working, run their routines and start coding agents while the phone is closed. The app shows them, lets you chat with them, and tells you when one needs you.
 
-The app talks to one thing only: the bridge in `../bridge`, over a single WebSocket. The wire contract is `../bridge/src/protocol.ts`, and `../fixtures/protocol.json` holds a sample of every message. `ClaudeBot/Model/Protocol.swift` mirrors that file, and the tests decode every fixture.
+The app talks to one thing only: the bridge in `../bridge`, over a single WebSocket. The wire contract is `../bridge/src/protocol.ts`, and `../fixtures/protocol.json` holds a sample of every message. `ClaudeBot/Model/Protocol.swift` mirrors that file. The tests decode every server message and encode every client message in the fixture, and each must round-trip to equal JSON.
 
 ## Build and run
 
-Requirements are Xcode 26 and an iOS 18.0 or later simulator or device. There are no package dependencies.
+Requirements are Xcode 26 and an iOS 18.0 or later simulator or device. The app runs on iPhone and iPad. There are no package dependencies.
 
 ```sh
 open ios/ClaudeBot.xcodeproj
@@ -29,7 +29,11 @@ To run on your own iPhone, pick your team under Signing & Capabilities for the C
 
 ### Demo mode and screenshots
 
-Debug builds accept `-demo`, which loads sample tasks into the store without a bridge. Add `-demoScreen home|new|task|cloud|pair|settings` to open a screen directly. `scripts/screenshots.sh <udid> <path/to/ClaudeBot.app>` launches each screen and saves PNGs to `screenshots/`.
+Debug builds accept `-demo`. It loads sample bots into the store through the same reducer the bridge feeds, with no bridge running. Add `-demoScreen <name>` to open a screen directly. The names are `home`, `newchat`, `chat`, `profile`, `links`, `library`, `file`, `agent`, `digest`, `engineer`, `factory`, `pair` and `settings`.
+
+`scripts/screenshots.sh <udid> <path/to/ClaudeBot.app>` launches each screen and saves PNGs to `screenshots/`.
+
+`scripts/avatar-sheet.sh <out.png>` builds the avatar code for macOS and renders all 13 shapes and 11 colors to one image. Use it to tune the shapes without a simulator.
 
 The app icon comes from `scripts/make-icon.swift`:
 
@@ -47,29 +51,38 @@ The QR code encodes `claudebot://pair?url=<urlencoded ws url>&token=<hex>`. Open
 
 The phone and the Mac need to reach each other. The same Wi-Fi network works, and so does Tailscale from anywhere. Plain `ws://` is allowed for local addresses and `*.ts.net` names only.
 
-## Mac tasks and cloud tasks
+## Screens
 
-When you start a task you choose where it runs.
+**Home.** One row per bot, pinned bots first, then the newest activity. A blue dot means unread. An orange star badge on the avatar means the bot asked you something, and the row shows that question. Long-press a row to pin, mark as unread, rename, hide or delete the bot. The initials button opens Settings, and + opens the new chat picker.
 
-**Mac.** The bridge runs Claude Code in the project folder on your Mac, with your own Claude login. Every message, tool call and result streams into the chat. When Claude wants to edit a file or run a command, the bridge holds the call and the app shows an approval card with Deny, Always allow and Allow. Questions from Claude appear as tappable options.
+**New chat.** Create new Bot comes first. The bridge makes the bot, and the app opens it as soon as it exists. Every bot follows, hidden ones included.
 
-**Cloud.** The bridge starts a Claude Code cloud session on the project's GitHub repository, so only projects with a GitHub remote are listed. The session runs on Anthropic's infrastructure and keeps going when your Mac sleeps. Its live output streams in the Claude app rather than in ClaudeBot. The task screen shows a banner and an Open in Claude button that hands the claude.ai/code link to the Claude app. Follow-ups you send from ClaudeBot are queued to the session by the bridge.
+**Chat.** Bot messages are gray bubbles with markdown. Your messages use the bot's color. A centered time appears before the first message and after every gap of more than an hour. A question card lists lettered options. Tap one to answer, or tap X to dismiss it. You can also type a free answer while it is open. Centered gray lines show what the bot did on its own, such as "Messaged linkedin coach" or "4 messages with Set up verification skill". Tap one to open that agent, bot or routine. While the bot works, its avatar bobs beside "Typing…".
+
+The composer's + menu attaches a photo from the library, a new photo or a file. Each upload can be up to 10 MB. The mic dictates into the field with the Speech framework.
+
+**Profile.** Tap the name pill at the top of a chat. You can edit the name and the label. The tabs are Info (routines with on and off switches, and the avatar picker), Library (files the bot made), Agents (coding agents it started, with their status) and Links (every link in the conversation). On iPhone the profile is its own screen. On iPad it opens as a column beside the chat.
+
+**Exchange.** What a bot and one of its agents said to each other, with the agent's status. Cloud agents have Open in Claude.
 
 ## Notifications
 
-After pairing, ClaudeBot asks for permission to notify you. It posts a local notification when an approval or question arrives, or when a task finishes or fails, unless you are looking at that task. Approval notifications have Allow and Deny actions that send the decision straight to the bridge.
+After pairing, ClaudeBot asks for permission to notify you. It posts a local notification when a bot sends a message or asks a question, unless that chat is on screen. A question notification offers its first two options as actions. Picking one sends the answer to the bridge.
 
-These notifications need the socket to the Mac. When you leave the app, iOS gives ClaudeBot a short grace period, and the app keeps the socket open during it. After that iOS suspends the app and alerts stop until you open it again. Alerts that reach a locked phone at any time would need Apple Push Notification service and a relay server that the bridge can post to. That is out of scope for this version.
+These notifications need the socket to the Mac. When you leave the app, iOS gives ClaudeBot a short grace period, and the app keeps the socket open during it. After that iOS suspends the app, and alerts stop until you open it again. Alerts on a locked phone at any time would need Apple Push Notification service and a relay server. That is out of scope for this version.
 
 ## Layout
 
 | Path | Owns |
 | --- | --- |
 | `ClaudeBot/Model/Protocol.swift` | Codable mirror of the wire protocol |
-| `ClaudeBot/Model/Store.swift` | `AppStore`, the reducer every server message goes through, and home list grouping |
-| `ClaudeBot/Model/BridgeClient.swift` | The WebSocket, reconnect backoff, ping and resubscribe |
+| `ClaudeBot/Model/Store.swift` | `AppStore`, the reducer every server message goes through, and the alerts it returns |
+| `ClaudeBot/Model/Display.swift` | Pure display rules: row badges, event line labels, time separators, time labels, library groups |
+| `ClaudeBot/Model/BridgeClient.swift` | The WebSocket, reconnect backoff, ping, outbox and reopening the visible bot |
 | `ClaudeBot/Model/Pairing.swift` | Pairing parsing and Keychain storage |
+| `ClaudeBot/Model/Dictation.swift` | Speech framework dictation |
 | `ClaudeBot/App/` | App entry, routing, background grace period and notifications |
-| `ClaudeBot/Views/` | Screens and transcript item views |
-| `ClaudeBot/Demo/` | Debug-only sample data |
-| `ClaudeBotTests/` | Fixture decoding, reducer, pairing and markdown tests |
+| `ClaudeBot/Views/Avatar.swift` | The 13 avatar shapes, the 11 colors and the character with its eyes |
+| `ClaudeBot/Views/` | Screens, the chat items, the composer and the dark theme |
+| `ClaudeBot/Demo/` | Debug-only sample bots |
+| `ClaudeBotTests/` | Fixture round trips, reducer, display rules, pairing and markdown tests |

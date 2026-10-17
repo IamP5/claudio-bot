@@ -6,6 +6,7 @@ import type { AgentId, Avatar, Bot, BotId, ClientMessage, Message, RoutineId, Se
 import { botMemory, envelope, onboarding, persona, type Envelope } from "./prompts";
 import { createSession, type Session } from "./session";
 import { botToolServer, type BotActions } from "./tools";
+import { freshTurn, readTurn } from "./turn";
 import {
   agentPeer,
   botPeer,
@@ -65,6 +66,7 @@ export function createHub(deps: {
   function brain(bot: BotRecord): Session {
     const existing = brains.get(bot.id);
     if (existing) return existing;
+    let turn = freshTurn;
     const session = createSession({
       options: () => ({
         cwd: homes.homeOf(bot.id),
@@ -83,11 +85,9 @@ export function createHub(deps: {
           bot.sessionId = m.session_id;
           deps.persist();
         }
-        if (m.type === "assistant" && m.parent_tool_use_id === null) {
-          for (const block of m.message.content) {
-            if (block.type === "text" && block.text.trim() !== "") say(bot, { kind: "bot", id: newMessageId(), at: now(), text: block.text.trim() });
-          }
-        }
+        const read = readTurn(turn, m);
+        turn = read.turn;
+        for (const { id, text } of read.bubbles) say(bot, { kind: "bot", id, at: now(), text });
         if (m.type === "result") {
           logResult(`bot ${bot.id}`, m.session_id, m.total_cost_usd);
           if (m.subtype !== "success") note(bot, `${bot.name} stopped with an error: ${m.errors.join("; ") || m.subtype}`);
@@ -97,6 +97,7 @@ export function createHub(deps: {
         if (world.bots.has(bot.id)) changed(bot);
       },
       onCrash(error) {
+        turn = freshTurn;
         if (world.bots.has(bot.id)) note(bot, `${bot.name} crashed: ${error}`);
       },
     });

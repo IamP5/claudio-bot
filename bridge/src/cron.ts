@@ -38,13 +38,83 @@ export function parseCron(schedule: string): Cron | { error: string } {
   return cron as Cron;
 }
 
-export function matches(cron: Cron, at: Date): boolean {
-  const has = (f: Field, v: number) => f.values.includes(v);
-  const dom = has(cron.dom, at.getDate());
-  const dow = has(cron.dow, at.getDay());
+const dayMatches = (cron: Cron, month: number, dom: number, dow: number): boolean => {
+  if (!cron.month.values.includes(month)) return false;
+  const d = cron.dom.values.includes(dom);
+  const w = cron.dow.values.includes(dow);
   // Standard cron: when both day fields are restricted, either one matching is enough.
-  const day = !cron.dom.star && !cron.dow.star ? dom || dow : dom && dow;
-  return has(cron.minute, at.getMinutes()) && has(cron.hour, at.getHours()) && has(cron.month, at.getMonth() + 1) && day;
+  return !cron.dom.star && !cron.dow.star ? d || w : d && w;
+};
+
+export function matches(cron: Cron, at: Date): boolean {
+  return (
+    cron.minute.values.includes(at.getMinutes()) &&
+    cron.hour.values.includes(at.getHours()) &&
+    dayMatches(cron, at.getMonth() + 1, at.getDate(), at.getDay())
+  );
+}
+
+// Two leap days apart, so a February 29 schedule still has a next run.
+const SEARCH_DAYS = 8 * 366;
+const DAY_MS = 86_400_000;
+
+/** The same wall-clock time an hour or so later, when a fall-back change makes it happen twice; else null. */
+function repeatOf(at: Date): Date | null {
+  const shiftMs = (new Date(at.getTime() + 3 * 3_600_000).getTimezoneOffset() - at.getTimezoneOffset()) * 60_000;
+  if (shiftMs <= 0) return null;
+  const again = new Date(at.getTime() + shiftMs);
+  return again.getHours() === at.getHours() && again.getMinutes() === at.getMinutes() ? again : null;
+}
+
+/**
+ * The first fire strictly after `after`, or null when the schedule never fires. The search walks local wall-clock
+ * days and times, as cron does:
+ * - A time skipped by a spring-forward change fires once, shifted forward by the gap (2:30 becomes 3:30).
+ * - A time repeated by a fall-back change fires once, at its first occurrence, unless the schedule runs every hour,
+ *   which keeps its real-time rhythm through the repeated hour.
+ */
+export function nextAfter(cron: Cron, after: Date): Date | null {
+  const everyHour = cron.hour.values.length === 24;
+  // UTC is only a calendar here: stepping it by whole days never meets a DST change.
+  const first = Date.UTC(after.getFullYear(), after.getMonth(), after.getDate());
+  for (let i = 0; i <= SEARCH_DAYS; i++) {
+    const day = new Date(first + i * DAY_MS);
+    if (!dayMatches(cron, day.getUTCMonth() + 1, day.getUTCDate(), day.getUTCDay())) continue;
+    let best: Date | null = null;
+    const consider = (at: Date | null) => {
+      if (at !== null && at > after && (best === null || at < best)) best = at;
+    };
+    for (const hour of cron.hour.values) {
+      for (const minute of cron.minute.values) {
+        const at = new Date(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), hour, minute);
+        consider(at);
+        if (everyHour) consider(repeatOf(at));
+      }
+    }
+    if (best !== null) return best;
+  }
+  return null;
+}
+
+/**
+ * The smallest wall-clock gap in minutes between two consecutive fires, or Infinity when it fires at most once. It
+ * ignores DST, so "every day at 9" is 1440. Used for the 15-minute floor and the grace window.
+ */
+export function minGapMinutes(cron: Cron): number {
+  const times = cron.hour.values.flatMap((h) => cron.minute.values.map((m) => h * 60 + m));
+  let gap = Infinity;
+  for (let i = 1; i < times.length; i++) gap = Math.min(gap, times[i]! - times[i - 1]!);
+  // Every firing day shares the same times, so the gap across days only depends on the closest two firing days.
+  const start = Date.UTC(2024, 0, 1);
+  let previous: number | null = null;
+  let closestDays = Infinity;
+  for (let i = 0; i <= SEARCH_DAYS; i++) {
+    const day = new Date(start + i * DAY_MS);
+    if (!dayMatches(cron, day.getUTCMonth() + 1, day.getUTCDate(), day.getUTCDay())) continue;
+    if (previous !== null) closestDays = Math.min(closestDays, i - previous);
+    previous = i;
+  }
+  return Math.min(gap, closestDays * 1440 - (times.at(-1)! - times[0]!));
 }
 
 const DAYS = ["Sundays", "Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays"];
@@ -83,13 +153,4 @@ export function describe(schedule: string): string {
   if (days === "1,2,3,4,5") return `Weekdays at ${at}`;
   if (days === "0,6") return `Weekends at ${at}`;
   return `${and(dow.values.map((d) => DAYS[d]!))} at ${at}`;
-}
-
-const minuteOf = (d: Date) => Math.floor(d.getTime() / 60_000);
-
-export function isDue(routine: { schedule: string; enabled: boolean; lastRunAt: string | null }, now: Date): boolean {
-  if (!routine.enabled) return false;
-  if (routine.lastRunAt !== null && minuteOf(new Date(routine.lastRunAt)) === minuteOf(now)) return false;
-  const cron = parseCron(routine.schedule);
-  return !("error" in cron) && matches(cron, now);
 }

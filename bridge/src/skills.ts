@@ -40,6 +40,9 @@ function contentError(description: string, body: string): string | null {
   if (Buffer.byteLength(body) > SKILL_BODY_MAX) return `A skill's body is at most ${SKILL_BODY_MAX / 1024} KB.`;
   if (hasHiddenCharacters(description) || hasHiddenCharacters(body.replace(/\r?\n|\t/g, ""))) return "A skill cannot contain hidden characters.";
   if (maskSecrets(description) !== description || maskSecrets(body) !== body) return "A skill cannot contain secrets, passwords or tokens.";
+  // Claude Code runs !`cmd` and ```! blocks and pastes their output in as it loads a skill, not as a tool call the model makes.
+  if ([description, body].some((t) => t.includes("!`") || t.includes("```!")))
+    return "A skill cannot contain !` or ```! shell blocks, which run when the skill loads. Describe the command for the model to run instead.";
   return null;
 }
 

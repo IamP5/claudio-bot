@@ -5,10 +5,19 @@ import type { Persist } from "./store";
 import { hasHiddenCharacters } from "./text";
 import { own, type World } from "./world";
 
-// Connectors are the MCP servers a bot's queries load (user, project and claude.ai servers; the
+// Connectors are the MCP servers a bot's queries load (user, project, plugin and claude.ai servers; the
 // bridge's own claudio server is never listed). The phone sees names and statuses only, never configuration. Turning
 // one off is persisted in BotRecord.connectorsOff, covers the bot's agents, applies to the live query at once and to
-// every later query through connectorSettings; the gate denies a call to an off server whatever the SDK loaded.
+// every later query through connectorSettings; the gate denies a call to an off server whatever the SDK loaded,
+// including from an agent whose turn began before the toggle and keeps its query until that turn ends.
+//
+// Proven by isolated probes:
+//  - research/pass3/probe-c: a resumed query given deniedMcpServers does not list or load the user server chrome-devtools.
+//  - research/pass3/probe-c2: the plugin server plugin:vercel:vercel has that name in mcpServerStatus and in the
+//    PreToolUse hook's mcp_server (source "plugin"), its tools are named mcp__plugin_vercel_vercel__*, and
+//    deniedMcpServers [{ serverName: "plugin:vercel:vercel" }] keeps it out of the status list and the tool list.
+// Not proven: claude.ai servers ("claude.ai Gmail"). Their hook name and whether the deny list matches their status name
+// are untested; the gate also matches their tool prefix (mcp__claude_ai_Gmail__) as Claude Code's bundle normalizes it.
 
 /** The live query's MCP controls. null while the bot has no query open. */
 export type McpControl = Pick<Query, "mcpServerStatus" | "toggleMcpServer">;
@@ -19,7 +28,7 @@ const OFF_MAX = 64;
 
 /**
  * Flag settings merged into every query of the bot and its agents so the off servers do not load. Pure.
- * Probed (research/pass3/probe-c): a resumed query given deniedMcpServers does not list or load a user server.
+ * The deny list matches the status name verbatim (proven for user and plugin servers, see the header).
  */
 export function connectorSettings(off: readonly string[]): Settings {
   return off.length === 0 ? {} : { deniedMcpServers: off.map((serverName) => ({ serverName })) };

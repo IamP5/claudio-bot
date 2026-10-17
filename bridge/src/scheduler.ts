@@ -111,7 +111,11 @@ function due(r: RoutineRecord, now: Date): Due {
   const { cron } = plan;
   if (r.nextRunAt === null) return { kind: "schedule", next: nextAfter(cron, now) };
   const first = new Date(r.nextRunAt);
-  if (first > now) return { kind: "wait" };
+  if (first > now) {
+    // A stored time past the next real one was computed while the clock ran ahead; waiting for it could take a year.
+    const soonest = nextAfter(cron, now);
+    return soonest !== null && soonest < first ? { kind: "schedule", next: soonest } : { kind: "wait" };
+  }
   // Times older than the widest grace can only be missed, so the walk to the newest one starts there, not at `first`.
   const horizon = new Date(now.getTime() - MAX_GRACE_MS - 1);
   let at = first;

@@ -690,6 +690,94 @@ try {
     return `202, 429, Origin 403, rotated 401, new token 429; bot said "${c.botSays(claudio, before).map((m) => m.text).join(" ").slice(0, 100)}"`;
   });
 
+  const questionCard = (after: number) => c.messages(claudio).slice(after).find((m): m is Extract<Message, { kind: "question" }> => m.kind === "question" && m.answer === null);
+
+  await scenario("the user's answer to a routine's question keeps the routine's initiator", async () => {
+    await c.ask(
+      claudio,
+      'Call set_routine twice now, both with trigger "webhook" and no schedule. First: name "asker", prompt "Use the ask tool now to ask Alex: Which fruit? with the options Apple and Pear, then end your turn. When the answer arrives, call the remember tool once with about user and the text: Alex picked that fruit. Then end your turn." ' +
+        'Second: name "capped", prompt "Reply with just OK." Then confirm in one line.',
+      "the asker and capped routines",
+    );
+    const asker = await c.waitFor(() => routineNamed(c, "asker"), "asker on the bot frame", 10_000);
+    await c.waitFor(() => routineNamed(c, "capped"), "capped on the bot frame", 10_000);
+    const before = c.messages(claudio).length;
+    check((await call(await mint(c, asker.id), "{}")).status === 202, "the asker webhook fired");
+    const question = await c.waitFor(() => questionCard(before), "the routine's question card");
+    await c.waitFor(() => c.resting(claudio), "the asking turn to end");
+    c.send({ type: "answer", botId: claudio, messageId: question.id, option: 0 });
+    const held = await c.waitFor(
+      () => c.messages(claudio).slice(before).find((m): m is Permission => m.kind === "permission" && m.answer === null && m.tool === "mcp__claudio__remember"),
+      "the remember card from the answer turn",
+    );
+    const row = auditRows().findLast((r) => r.tool === "mcp__claudio__remember") as { decision: string; initiator?: { kind: string } } | undefined;
+    check(row?.decision === "ask" && row.initiator?.kind === "routine", `the answer turn ran as the routine's: ${JSON.stringify(row && { decision: row.decision, initiator: row.initiator })}`);
+    c.send({ type: "decide", botId: claudio, messageId: held.id, choice: "deny" });
+    await c.waitFor(() => c.resting(claudio), "the bot to rest after the denial");
+    check(!userMd().includes("picked"), "nothing reached USER.md");
+    return `question "${question.question}" answered; remember held as "${held.label}" with initiator ${row.initiator!.kind}`;
+  });
+
+  await scenario("an interpreter's write to USER.md or CLAUDE.md is held, and a nested CLAUDE.md is refused by the sandbox", async () => {
+    const heldFor = async (command: string, what: string) => {
+      const before = c.messages(claudio).length;
+      c.send({ type: "send", botId: claudio, uploads: [], text: `Run exactly this shell command once and nothing else:\n${command}\nIf it is held for approval, end your turn.` });
+      const card = await c.waitFor(() => c.messages(claudio).slice(before).find((m): m is Permission => m.kind === "permission" && m.answer === null && m.tool === "Bash"), what);
+      await c.waitFor(() => c.resting(claudio), `${what}: the held turn to end`);
+      c.send({ type: "decide", botId: claudio, messageId: card.id, choice: "deny" });
+      await c.waitFor(() => c.resting(claudio), `${what}: rest after the denial`);
+      return card;
+    };
+    const userCard = await heldFor(`python3 -c "open('../../USER.md','a').write('- planted-e2e\\n')"`, "the USER.md card");
+    check(userCard.label === "Edit USER.md, which every bot reads", `the USER.md write asks: "${userCard.label}"`);
+    check(!userMd().includes("planted-e2e"), "USER.md is unchanged");
+    const claudeCard = await heldFor(`python3 -c "open('CLAUDE.md','a').write('planted-e2e')"`, "the CLAUDE.md card");
+    check(!readFileSync(join(botHome, "CLAUDE.md"), "utf8").includes("planted-e2e"), `the CLAUDE.md write was held ("${claudeCard.label}") and CLAUDE.md is unchanged`);
+    mkdirSync(join(botHome, "work"), { recursive: true });
+    writeFileSync(join(botHome, "work", "nest.py"), `import os\nos.makedirs("library/deep", exist_ok=True)\nopen(os.path.join("library/deep", "CLAU" + "DE.md"), "w").write("planted")\n`);
+    const reply = await c.ask(claudio, "Run exactly this shell command once: python3 work/nest.py\nThen reply with its complete output verbatim in a code block.", "the nested write");
+    check(!existsSync(join(botHome, "library", "deep", "CLAUDE.md")), `no nested CLAUDE.md was written: "${reply.replace(/\s+/g, " ").slice(0, 200)}"`);
+    check(auditRows().some((r) => r.tool === "Bash" && String(r.input.command).includes("nest.py") && r.decision === "pass"), "the gate passed the script, so the sandbox refused the write");
+    return `USER.md card "${userCard.label}", CLAUDE.md card "${claudeCard.label}", nested write refused: "${reply.replace(/\s+/g, " ").slice(0, 120)}"`;
+  });
+
+  await scenario("WebFetch of the bridge's own address is refused", async () => {
+    const reply = await c.ask(claudio, `Use the WebFetch tool once on http://127.0.0.1:${port}/health and reply with what happened in one line.`, "the local fetch");
+    const rows = auditRows().filter((r) => r.tool === "WebFetch");
+    check(rows.length > 0 && rows.every((r) => r.decision === "deny" && r.rule === "floor.localnet"), `the fetch was refused: ${JSON.stringify(rows.map((r) => `${r.decision}/${r.rule}`))}`);
+    return `refused (${rows.length} call); reply "${reply.slice(0, 80)}"`;
+  });
+
+  await scenario("the phone sees today's spend, and the daily cap holds an unattended run until it is raised", async () => {
+    const bot = c.bots.get(claudio)!;
+    check(bot.spentTodayUsd > 0 && bot.capUsd !== null && bot.capUsd > 0, `the bot frame carries spend ${bot.spentTodayUsd} of ${bot.capUsd}`);
+    let at = c.received.length;
+    c.send({ type: "details", botId: claudio });
+    const details = await c.waitFor(() => framesOf(c, "details", at).find((f) => f.botId === claudio), "details", 10_000);
+    const metered = details.agents.filter((a) => a.where === "mac");
+    check(metered.length > 0 && metered.every((a) => typeof a.spentUsd === "number") && metered.some((a) => a.spentUsd! > 0), `mac agents carry their spend: ${JSON.stringify(metered.map((a) => [a.spentUsd, a.budgetUsd]))}`);
+    c.send({ type: "update_bot", botId: claudio, patch: { dailyCapUsd: 0.01 } });
+    await c.waitFor(() => c.bots.get(claudio)?.capUsd === 0.01, "the cap of $0.01", 10_000);
+    const before = c.messages(claudio).length;
+    const capped = routineNamed(c, "capped")!;
+    check((await call(await mint(c, capped.id), "{}")).status === 202, "capped fired");
+    await c.waitFor(() => notesOf(c, claudio, before).some((n) => /daily cap/.test(n)) || c.status(claudio) === "parked", "the daily cap to hold the run", 60_000);
+    check(c.botSays(claudio, before).length === 0, "the held run said nothing");
+    at = c.messages(claudio).length;
+    c.send({ type: "update_bot", botId: claudio, patch: { dailyCapUsd: null } });
+    await c.waitFor(() => routineNamed(c, "capped")?.runs[0]?.status === "ok" && c.resting(claudio), "the run once the cap is lifted");
+    return `spend $${bot.spentTodayUsd.toFixed(3)} of $${bot.capUsd}; held at $0.01 (${notesOf(c, claudio, before).join(" | ").slice(0, 120)}); ran after the cap was lifted`;
+  });
+
+  await scenario("a rename reaches the bot's resumed session", async () => {
+    c.send({ type: "update_bot", botId: claudio, patch: { name: "Juno" } });
+    await c.waitFor(() => c.bots.get(claudio)?.name === "Juno", "the new name", 10_000);
+    const said = await c.ask(claudio, "What is your name? Reply with only your name.", "the name");
+    check(/juno/i.test(said), `the bot answers to its new name: "${said}"`);
+    check(readFileSync(join(botHome, "CLAUDE.md"), "utf8").startsWith("# Juno\n"), "CLAUDE.md's heading is the new name");
+    return `"${said}"`;
+  });
+
   const countBefore = c.messages(claudio).length;
   const idsBefore = new Set(c.messages(claudio).map((m) => m.id));
   const botsBefore = [...c.bots.keys()].sort();
@@ -759,6 +847,12 @@ try {
     return `recalled "${recalled}"`;
   });
 
+  await scenario("the facts about the user survive a restart", async () => {
+    const recalled = await r.ask(claudio, "Going only by what you know about me, what is my favorite color? Reply with only the color.", "the color after restart");
+    check(recalled.toLowerCase().includes("chartreuse-nine"), `the confirmed fact reached the bot after the restart: "${recalled}"`);
+    return `"${recalled}"`;
+  });
+
   await scenario("a connector turned off stays off after a restart, and its tool never runs", async () => {
     const calls = mcpCalls();
     const audited = () => auditRows().filter((x) => x.tool.startsWith("mcp__e2e-echo__")).length;
@@ -814,6 +908,28 @@ try {
     await back.waitFor(() => back.bots.get(claudio)?.muted === false && back.resting(claudio), "the bot unmuted and resting");
     back.close();
     return `no push for the muted routine report; card push "${card.body}" for "${held.label}"`;
+  });
+
+  await scenario("a bot whose transcript Claude Code deleted starts a new conversation and keeps its notes", async () => {
+    await stopServer();
+    const sessionId = stateFile().bots.find((b: { id: string }) => b.id === claudio).session.id as string;
+    const transcripts = [...new Bun.Glob(`*/${sessionId}.jsonl`).scanSync({ cwd: join(homedir(), ".claude", "projects"), absolute: true })];
+    check(transcripts.length === 1 && transcripts[0]!.includes(claudio), `the bot's own transcript is found: ${JSON.stringify(transcripts)}`);
+    rmSync(transcripts[0]!);
+    await startServer();
+    const x = connect(token);
+    await x.opened;
+    x.send({ type: "open", botId: claudio });
+    await x.waitFor(() => x.received.find((m) => m.type === "conversation"), "the conversation", 10_000);
+    const before = x.messages(claudio).length;
+    const said = await x.ask(claudio, "Going only by what you know about me, what is my favorite color? Reply with only the color.", "a reply on the new conversation");
+    const notes = notesOf(x, claudio, before);
+    check(notes.some((n) => n.includes("earlier conversation was cleared")), `the user is told: ${JSON.stringify(notes)}`);
+    const fresh = stateFile().bots.find((b: { id: string }) => b.id === claudio).session.id;
+    check(fresh !== null && fresh !== sessionId, `the bot runs on a new session (${sessionId} -> ${fresh})`);
+    check(said.toLowerCase().includes("chartreuse-nine"), `its facts came along: "${said}"`);
+    x.close();
+    return `deleted ${sessionId}; note "${notes.find((n) => n.includes("cleared"))}"; new session ${fresh}; "${said}"`;
   });
 
   await scenario("nothing left the temp folder", async () => {

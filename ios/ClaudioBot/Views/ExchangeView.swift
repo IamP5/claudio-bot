@@ -21,6 +21,7 @@ struct ExchangeView: View {
                         }
                         status(thread.agent)
                             .padding(.top, 10)
+                        ActivityLine(botId: thread.agent.botId, agentId: thread.agent.id)
                         AgentEvidenceSection(agent: thread.agent)
                     }
                     .padding(16)

@@ -101,7 +101,7 @@ const hub = createHub({
   persist: saver.schedule,
   log,
   push,
-  webhookPort: Number(process.env.CLAUDIOBOT_WEBHOOK_PORT ?? port + 1),
+  webhookPort: Number(process.env.CLAUDIOBOT_WEBHOOK_PORT ?? 7879),
 });
 
 const transport = serve({ devices, stream: createStream(), hub, legacy, log, now, port });

@@ -7,6 +7,7 @@ import { createHomes } from "../src/home";
 import { createHub, tickEach } from "../src/hub";
 import type { AgentId, BotId, Message, MessageId, RoutineId, RunId, ServerMessage, StreamPosition } from "../src/protocol";
 import type { PushReason } from "../src/push";
+import { BREAKER_NOTE } from "../src/session";
 import { emptySession, emptyWorld, newBot, type BotRecord, type EnvelopeId, type Fingerprint, type RoutineRecord, type Signature, type World } from "../src/world";
 
 const roots: string[] = [];
@@ -368,6 +369,20 @@ test("a held routine run that still finishes quiet after Stop dropped the queued
 
   expect(bubbles(h.bot)).toEqual([]);
   expect([running!.runs[0]?.status, queued!.runs[0]?.status]).toEqual(["quiet", "skipped"]);
+});
+
+test("three refused calls stop a routine run with the breaker's note alone, after what the run wrote", async () => {
+  const h = await fired();
+  h.q().emit(assistant(text("Checking the deploy keys.")));
+  await flush();
+
+  for (let i = 0; i < 3; i++) await runBash(h.q(), "cat ~/.ssh/id_rsa");
+  expect(h.q().interrupts).toBe(1);
+  h.q().emit(result(0.1, { subtype: "error_during_execution", is_error: true, errors: ["interrupted"] }));
+  await flush();
+
+  expect(h.bot.messages.flatMap((m) => (m.kind === "bot" ? [m.text] : m.kind === "note" ? [`note: ${m.text}`] : []))).toEqual(["Checking the deploy keys.", `note: ${BREAKER_NOTE}`]);
+  expect(h.routine.runs.map((r) => [r.status, r.note])).toEqual([["skipped", BREAKER_NOTE]]);
 });
 
 test("a hold whose time has passed does not skip a fire in the tick that clears it", async () => {

@@ -887,9 +887,8 @@ describe("pass 3 rows: memory, skills, the claudio registry and connector toggle
     expect(verdict(claudio(name, input), { initiator: viaBot(1) })).toBe(`ask:${rule}`);
   });
 
-  test("an unattended remember card offers no Always, while save_skill's does", () => {
+  test("an unattended remember card offers no Always", () => {
     expect(decide(claudio("remember", { text: "Likes jazz", about: "user" }), ctx({ initiator: routine }))).toMatchObject({ kind: "ask", rule: "claudio.remember", offerAlways: false });
-    expect(decide(claudio("save_skill", { name: "x", description: "d", body: "b" }), ctx({ initiator: routine }))).toMatchObject({ kind: "ask", offerAlways: true });
   });
 
   test("every tool the claudio server offers has a deliberate verdict, and one it does not offer is denied", () => {
@@ -946,5 +945,35 @@ describe("pass 3 rows: memory, skills, the claudio registry and connector toggle
     expect(verdict(unnamed, { connectorsOff: ["slack"] })).toBe("deny:connector.off");
     expect(verdict(unnamed)).toBe("pass");
     expect(verdict(call("mcp__claudio__list_routines", {}, { mcpServer: null }), { connectorsOff: ["slack"] })).toBe("pass");
+  });
+});
+
+describe("gap 3: a connector call passes unattended only when every verb in its name is a read", () => {
+  const conn = (tool: string) => call(tool, { q: "x" });
+  test.each([
+    "mcp__gmail__search_and_send",
+    "mcp__slack__list_and_delete_messages",
+    "mcp__x__get_then_post_comment",
+    "mcp__db__query",
+    "mcp__chrome-devtools__evaluate_script",
+    "mcp__chrome-devtools__click",
+    "mcp__chrome-devtools__fill",
+    "mcp__db__execute_sql",
+  ])("%s asks in a routine's turn", (tool) => {
+    expect(verdict(conn(tool), { initiator: routine })).toBe("ask:connector.act");
+  });
+  test("query, evaluate, click and fill are writes in a user's turn too", () => {
+    for (const tool of ["mcp__db__query", "mcp__chrome-devtools__evaluate_script", "mcp__chrome-devtools__click", "mcp__chrome-devtools__fill"])
+      expect(verdict(conn(tool), { initiator: user })).toBe("ask:connector.act");
+  });
+  test("plain reads still pass unattended", () => {
+    for (const tool of ["mcp__slack__search_messages", "mcp__github__list_issues", "mcp__x__getThing", "mcp__drive__read_file"])
+      expect(verdict(conn(tool), { initiator: routine })).toBe("pass");
+  });
+});
+
+describe("gap 3: save_skill never offers Always", () => {
+  test("an unattended save_skill card offers Once, Deny and Never only", () => {
+    expect(decide(call("mcp__claudio__save_skill", { name: "x", description: "d", body: "b" }), ctx({ initiator: routine }))).toMatchObject({ kind: "ask", rule: "claudio.save_skill", offerAlways: false });
   });
 });

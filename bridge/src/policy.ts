@@ -904,8 +904,10 @@ const WRITE_VERBS = new Set([
   "push", "upload", "share", "archive", "close", "approve", "submit", "cancel", "write", "edit", "move", "set", "put",
   "patch", "run", "exec", "execute", "trigger", "deploy", "enable", "disable", "revoke", "buy", "order", "charge", "pay",
   "tweet", "drop", "rm", "provision", "destroy", "scale", "rollout", "restart", "dispatch", "star", "insert", "add", "draft",
+  // A query can be SQL that writes; evaluate runs script in a page; click, fill, type and press act in a browser.
+  "query", "evaluate", "eval", "click", "fill", "type", "press", "drag", "replace", "save",
 ]);
-const READ_VERBS = new Set(["get", "list", "read", "search", "find", "fetch", "describe", "view", "query", "count"]);
+const READ_VERBS = new Set(["get", "list", "read", "search", "find", "fetch", "describe", "view", "count"]);
 const verbsOf = (call: ToolCall) => wordsOf(call.tool.split("__").slice(2).join("_"));
 const SHELL_DEPLOY = { npm: ["-w", "--workspace", "--otp", "--prefix", "--registry"], pnpm: ["--filter", "-C", "--dir"], yarn: [], bun: [], kubectl: ["--context", "-n", "--namespace"], terraform: [], aws: [], gcloud: [], az: [], wrangler: [], docker: [], helm: [], sam: [], cdk: [], eas: [] } as const;
 const DEPLOY_VERBS = new Set(["deploy", "publish", "push", "apply", "destroy", "delete", "create", "update", "sync", "promote", "rollback", "install", "upgrade", "uninstall", "submit", "up", "scale", "rollout", "unpublish"]);
@@ -937,9 +939,10 @@ const CLAUDIO: Readonly<Record<ClaudioTool, { id: string; label: string; attende
   delete_routine: { id: "claudio.routines", label: "Change routines", attended: "pass", unattended: "ask" },
   list_routines: null,
   routine_no_update: null,
-  // No Always: a standing yes would let every later routine write what the bot believes about the user unseen.
+  // No Always on either: a standing yes would let every later routine write what the bot believes about the user, or a
+  // standing instruction it follows from then on, unseen.
   remember: { id: "claudio.remember", label: "Remember something", attended: "pass", unattended: "ask", offerAlways: false },
-  save_skill: { id: "claudio.save_skill", label: "Save a skill", attended: "pass", unattended: "ask" },
+  save_skill: { id: "claudio.save_skill", label: "Save a skill", attended: "pass", unattended: "ask", offerAlways: false },
 };
 const claudioName = (call: ToolCall) => call.tool.slice("mcp__claudio__".length);
 const claudioEntry = (call: ToolCall) => (Object.hasOwn(CLAUDIO, claudioName(call)) ? CLAUDIO[claudioName(call) as ClaudioTool] : undefined);
@@ -1170,7 +1173,8 @@ const TABLE: readonly Row[] = [
     label: "Act through a connector",
     match: tool((call) => isConnector(call)),
     attended: (p) => (p.kind === "call" && verbsOf(p.call).some((w) => WRITE_VERBS.has(w)) ? "ask" : "pass"),
-    unattended: (p) => (p.kind === "call" && verbsOf(p.call).some((w) => READ_VERBS.has(w)) ? "pass" : "ask"),
+    // Unattended, a name must read and nothing else: search_and_send carries a read verb and a write one.
+    unattended: (p) => (p.kind === "call" && verbsOf(p.call).some((w) => READ_VERBS.has(w)) && !verbsOf(p.call).some((w) => WRITE_VERBS.has(w)) ? "pass" : "ask"),
   },
   ...CLAUDIO_ROWS,
 ];

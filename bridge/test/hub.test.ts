@@ -8,7 +8,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHomes } from "../src/home";
 import { createHub, tickEach } from "../src/hub";
 import type { Project } from "../src/projects";
-import type { AgentId, BotId, Message, MessageId, RoutineId, RunId, ServerMessage, StreamPosition } from "../src/protocol";
+import type { AgentId, BotId, ClientMessage, Message, MessageId, RoutineId, RunId, ServerMessage, StreamPosition } from "../src/protocol";
 import { createPush, type Push, type PushReason } from "../src/push";
 import { BREAKER_NOTE } from "../src/session";
 import { CLAUDIO_TOOLS } from "../src/tools";
@@ -941,7 +941,7 @@ test("a send repeated with the same clientId posts one user message and delivers
   world.bots.set(b.id, b);
   const h = hubOver(world);
   h.homes.create(b.id, "# eng\n");
-  const send = { type: "send", botId: b.id, text: "status?", uploads: [], clientId: "c-1" } as const;
+  const send: ClientMessage = { type: "send", botId: b.id, text: "status?", uploads: [], clientId: "c-1" };
   expect(await h.hub.handle(send)).toEqual([]);
   expect(await h.hub.handle(send)).toEqual([]);
   await flush();
@@ -983,5 +983,5 @@ test("delete_bot removes the config folders of the bot's agents and keeps other 
 
   expect(existsSync(gone)).toBe(false);
   expect(existsSync(stays)).toBe(true);
-  expect([...world.agents.keys()]).toEqual(["a_kept"]);
+  expect([...world.agents.keys()]).toEqual(["a_kept" as AgentId]);
 });

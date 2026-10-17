@@ -55,6 +55,7 @@ export function projectConfigOf(root: string): string[] {
 }
 
 /** Statuses that hold only while the session or an open card says so. */
+const CAPPED = "Paused at today's spending cap; it resumes when you message it tomorrow or raise the cap.";
 const LIVE: ReadonlySet<AgentStatus> = new Set(["working", "parked", "awaiting_approval", "unavailable"]);
 
 export function createAgents(deps: {
@@ -126,7 +127,7 @@ export function createAgents(deps: {
   }
 
   function turnEnded(rec: AgentRecord, by: Initiator, end: TurnEnd) {
-    if (usedBudget(end)) return report(rec, "failed", "The agent used its budget.", by);
+    if (usedBudget(end)) return deps.ledger.budgetLeft(rec.agent.id) > 0 ? report(rec, "capped", CAPPED, by) : report(rec, "failed", "The agent used its budget.", by);
     switch (end.kind) {
       case "done": {
         const m = end.result;

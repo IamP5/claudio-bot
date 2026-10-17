@@ -563,6 +563,8 @@ type Floor = {
   /** A command that is itself forbidden, regardless of the paths it names (the `security` CLI, `ssh-add -L`). */
   bash?: (part: Extract<Part, { kind: "bash" }>) => boolean;
   connector?: (call: ToolCall) => boolean;
+  /** Any tool call, by its input alone (a WebFetch of a loopback or private address). */
+  call?: (call: ToolCall) => boolean;
   /** A write to a config file the bridge itself loads (self-escalation), by its target path. */
   write?: (path: string, ctx: PolicyContext) => boolean;
   /** Scan the raw command text for the root spelled literally, to catch it inside an interpreter or a heredoc. */
@@ -685,7 +687,33 @@ const FLOORS: readonly Floor[] = [
     raw: (parts) => parts.some((p) => dumpsEnv(p) || p.text.match(SENSITIVE_ENV) !== null),
   },
   { id: "floor.payment", label: "a password, a payment or a 2FA code", roots: () => [], connector: handsOff, handOff: true },
+  // The bridge itself listens on loopback, and the LAN, the tailnet and cloud metadata sit on private addresses.
+  { id: "floor.localnet", label: "a loopback or private network address", roots: () => [], call: (c) => c.tool === "WebFetch" && isPrivateHost(fetchHost(c)) },
 ];
+
+/** The lower-case host a WebFetch call names, IPv6 without brackets; null when its url does not parse. */
+function fetchHost(call: ToolCall): string | null {
+  try {
+    return new URL(String(call.input.url)).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  } catch {
+    return null;
+  }
+}
+
+/** Loopback, private, link-local, CGNAT (Tailscale) and unspecified addresses, and names that only resolve locally.
+ *  URL parsing has already turned decimal and hex IPv4 spellings into dotted quads. A public name that resolves to a
+ *  private address (DNS rebinding) is not caught here. */
+function isPrivateHost(host: string | null): boolean {
+  if (host === null) return false;
+  if (host === "localhost" || /\.(localhost|local|internal|home\.arpa)$/.test(host)) return true;
+  const v4 = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+  }
+  if (host.includes(":")) return host === "::1" || host === "::" || /^(fc|fd|fe[89ab])/.test(host) || host.startsWith("::ffff:");
+  return false;
+}
 
 /** A command that prints the whole environment (`env`, `printenv`) or one variable (`printenv VAR`), leaking the bridge's secrets. */
 const dumpsEnv = (p: Extract<Part, { kind: "bash" }>) => p.verb === "env" || p.verb === "printenv";
@@ -694,6 +722,7 @@ const SENSITIVE_ENV = /\$\{?(CLAUDIOBOT_[A-Za-z0-9_]+|[A-Za-z][A-Za-z0-9]*_(TOKE
 
 function floorHit(floor: Floor, call: ToolCall, view: View, ctx: PolicyContext): boolean {
   if (floor.connector && isConnector(call) && floor.connector(call)) return true;
+  if (floor.call?.(call)) return true;
   if (floor.bash && view.parts.some((p) => p.kind === "bash" && floor.bash!(p))) return true;
   if (floor.raw && floor.raw(view.parts.filter((p): p is Extract<Part, { kind: "bash" }> => p.kind === "bash"), ctx)) return true;
   if (floor.write) {
@@ -824,7 +853,16 @@ function limitOf(call: ToolCall, ctx: PolicyContext): Decision | null {
 
 type Cell = "pass" | "ask";
 type CellOf = Cell | ((part: Part, ctx: PolicyContext) => Cell);
-type Row = { id: string; label: string; match: (part: Part, ctx: PolicyContext) => boolean; attended: CellOf; unattended: CellOf; offerAlways?: boolean };
+type Row = {
+  id: string;
+  label: string;
+  match: (part: Part, ctx: PolicyContext) => boolean;
+  attended: CellOf;
+  unattended: CellOf;
+  offerAlways?: boolean;
+  /** Narrows the row's signature and label to one target (a host), so Always and Never cover only that target. */
+  target?: (part: Part) => string | null;
+};
 
 const bash = (test: (words: string[], text: string, part: Extract<Part, { kind: "bash" }>, ctx: PolicyContext) => boolean) => (p: Part, ctx: PolicyContext) =>
   p.kind === "bash" && test(p.words, p.text, p, ctx);
@@ -1224,6 +1262,15 @@ const TABLE: readonly Row[] = [
     unattended: "ask",
   },
   {
+    id: "web.fetch",
+    label: "Fetch a web page",
+    match: tool((call) => call.tool === "WebFetch"),
+    attended: "pass",
+    unattended: "ask",
+    target: (p) => (p.kind === "call" ? fetchHost(p.call) : null),
+  },
+  { id: "web.search", label: "Search the web", match: tool((call) => call.tool === "WebSearch"), attended: "pass", unattended: "ask" },
+  {
     id: "connector.act",
     label: "Act through a connector",
     match: tool((call) => isConnector(call)),
@@ -1310,10 +1357,12 @@ export function decide(call: ToolCall, outer: PolicyContext): Decision {
       for (const row of TABLE) {
         at.rule = row.id;
         if (row.match(part, ctx)) {
-          const subject = part.kind === "call" && isConnector(part.call) ? `${row.label}: ${mcpName(part.call.tool)}` : row.label;
+          const target = row.target?.(part) ?? null;
+          const subject = part.kind === "call" && isConnector(part.call) ? `${row.label}: ${mcpName(part.call.tool)}` : target !== null ? `${row.label}: ${target}` : row.label;
           const toolName = part.kind === "bash" ? "Bash" : part.call.tool;
           const cellOf = isAttended ? row.attended : row.unattended;
-          return { row, cell: typeof cellOf === "function" ? cellOf(part, ctx) : cellOf, signature: `${toolName}:${row.id}` as Signature, label: subject };
+          const signature = `${toolName}:${row.id}${target === null ? "" : `:${target}`}` as Signature;
+          return { row, cell: typeof cellOf === "function" ? cellOf(part, ctx) : cellOf, signature, label: subject };
         }
       }
       return null;

@@ -224,6 +224,24 @@ test("seen records when the device last connected", () => {
   expect(devices.list(null)[0]!.lastSeenAt).toBe(new Date(start.getTime() + 60_000).toISOString());
 });
 
+test("a device reconnecting within a minute of the last stamp neither restamps nor saves", () => {
+  const { devices, advance, persists } = setup();
+  const { deviceId } = paired(devices.pair(devices.newCode().code, "phone"));
+  const lastSeen = () => devices.list(null)[0]!.lastSeenAt;
+  devices.seen(deviceId);
+  const saves = persists.length;
+
+  advance(59_000);
+  devices.seen(deviceId);
+  expect(lastSeen()).toBe(start.toISOString());
+  expect(persists.length).toBe(saves);
+
+  advance(1_000);
+  devices.seen(deviceId);
+  expect(lastSeen()).toBe(new Date(start.getTime() + 60_000).toISOString());
+  expect(persists.slice(saves)).toEqual([undefined]);
+});
+
 test("any request carrying an Origin header is refused", () => {
   expect(rejectsOrigin(new Request("http://127.0.0.1:7878/ws", { headers: { origin: "https://evil.example" } }))).toBe(true);
   expect(rejectsOrigin(new Request("http://127.0.0.1:7878/ws", { headers: { origin: "null" } }))).toBe(true);

@@ -2,9 +2,12 @@ import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Options, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { McpSdkServerConfigWithInstance, Options, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHomes } from "../src/home";
 import { createHub, tickEach } from "../src/hub";
+import type { Project } from "../src/projects";
 import type { AgentId, BotId, Message, MessageId, RoutineId, RunId, ServerMessage, StreamPosition } from "../src/protocol";
 import { createPush, type Push, type PushReason } from "../src/push";
 import { BREAKER_NOTE } from "../src/session";
@@ -74,7 +77,10 @@ const result = (cost = 0.25, over: object = {}) =>
 type PushCall = { botId: BotId; reason: PushReason; messageId: MessageId };
 
 /** sends: whether the fake push goes out (default: always). push: a real push instead of the fake. */
-function hubOver(world: World, opts: { persist?: (urgency?: "now") => void; sends?: (call: PushCall, n: number) => boolean; push?: Push } = {}) {
+function hubOver(
+  world: World,
+  opts: { persist?: (urgency?: "now") => void; sends?: (call: PushCall, n: number) => boolean; push?: Push; scan?: () => Promise<Project[]> } = {},
+) {
   const root = mkdtempSync(join(tmpdir(), "claudiobot-hub-"));
   roots.push(root);
   const homes = createHomes(root);
@@ -95,7 +101,7 @@ function hubOver(world: World, opts: { persist?: (urgency?: "now") => void; send
       },
     },
     model: undefined,
-    scan: async () => [],
+    scan: opts.scan ?? (async () => []),
     broadcast: (m) => frames.push(m),
     persist: (urgency) => {
       opts.persist?.(urgency);
@@ -130,6 +136,15 @@ function runBash(q: FakeQuery, command: string) {
   const id = `toolu_${++uuid}`;
   const input = { hook_event_name: "PreToolUse", session_id: "s_1", transcript_path: "/tmp/t.jsonl", cwd: q.options.cwd!, tool_name: "Bash", tool_input: { command, description: "run" }, tool_use_id: id };
   return q.options.hooks!.PreToolUse![0]!.hooks[0]!(input as never, id, { signal: new AbortController().signal });
+}
+
+/** One of the bot's own tools, called the way Claude Code calls it: over MCP. */
+async function callTool(q: FakeQuery, name: string, args: object) {
+  const [server, client] = InMemoryTransport.createLinkedPair();
+  await (q.options.mcpServers!.claudio as McpSdkServerConfigWithInstance).instance.connect(server);
+  const mcp = new Client({ name: "test", version: "1" });
+  await mcp.connect(client);
+  return mcp.callTool({ name, arguments: args });
 }
 
 const bot = (name: string, patch: Partial<BotRecord> = {}): BotRecord => ({ ...newBot({ id: `b_${name}` as BotId, name, avatar: { shape: "circle", color: "white" }, at }), ...patch });
@@ -643,6 +658,70 @@ test("an agent thread keeps its newest 1000 messages; older ones go to its own a
   expect(kept[0]?.id).toBe("m_101" as MessageId);
   expect(kept.at(-1)?.text).toContain("bridge restarted");
   expect(archived(join(h.homes.homeOf(b.id), ".history", "a_1.jsonl"))).toEqual(thread.slice(0, 101).map((m) => m.id));
+});
+
+test("a routine run's held report and its settled run are saved before its turn end returns", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const routine = dueRoutine(b);
+  const saves: { bubbles: number; run: string | undefined }[] = [];
+  const h = hubOver(world, { persist: (urgency) => urgency === "now" && saves.push({ bubbles: bubbles(b).length, run: routine.runs[0]?.status }) });
+  h.homes.create(b.id, "# eng\n");
+  h.hub.tick(new Date());
+  await flush();
+
+  h.q().emit(assistant(text("Two PRs merged.")), result());
+  await flush();
+
+  expect(saves.at(-1)).toEqual({ bubbles: 1, run: "ok" });
+});
+
+test("start_agent on a bot deleted while the projects were being scanned starts nothing", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const cwd = mkdtempSync(join(tmpdir(), "claudiobot-project-"));
+  roots.push(cwd);
+  let scanned: (projects: Project[]) => void = () => {};
+  const h = hubOver(world, { scan: () => new Promise((resolve) => (scanned = resolve)) });
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "fix the app", uploads: [] });
+  await flush();
+
+  const reply = callTool(h.q(), "start_agent", { title: "Fix login", prompt: "Fix it.", project: "app", where: "mac" });
+  await Bun.sleep(20);
+  await h.hub.handle({ type: "delete_bot", botId: b.id });
+  scanned([{ name: "app", path: cwd, branch: "main", githubRepo: null }]);
+
+  expect(await reply).toMatchObject({ isError: true, content: [{ type: "text", text: "This bot no longer exists." }] });
+  expect([...world.agents.keys()]).toEqual([]);
+});
+
+test("a permission card an agent opens shows its bot as awaiting approval in the next bot frame", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const cwd = mkdtempSync(join(tmpdir(), "claudiobot-agent-"));
+  roots.push(cwd);
+  world.agents.set("a_1" as AgentId, {
+    agent: { id: "a_1" as AgentId, botId: b.id, title: "Ship it", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at },
+    cwd,
+    messages: [],
+    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, at, text: "Push the fix.", initiator: { kind: "user" }, settles: null, attempts: 0 }] },
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: { kind: "user" },
+  });
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  h.hub.boot(false);
+  await flush();
+
+  await runBash(h.q(), "git push origin main");
+
+  const frame = h.frames.findLast((f) => f.type === "bot" && f.bot.id === b.id);
+  expect(frame?.type === "bot" && frame.bot.status).toBe("awaiting_approval");
 });
 
 test("one ticker throwing is logged, and the tickers after it still run", () => {

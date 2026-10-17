@@ -1,5 +1,5 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { McpSdkServerConfigWithInstance, Options, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -805,6 +805,44 @@ test("a bot's commands run sandboxed to its home and USER.md, and a mac agent's 
   ]);
   expect(botOptions.sandbox?.filesystem?.denyRead?.[0]).toBe(home);
   expect([agentOptions.sandbox?.filesystem?.allowWrite?.[0], agentOptions.env?.GIT_CONFIG_VALUE_1, botOptions.env]).toEqual([cwd, "ssh://git@github.com/", undefined]);
+});
+
+test("an agent in a repo with committed Claude settings runs on an empty config until the user trusts the repo", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-repo-")));
+  roots.push(repo);
+  mkdirSync(join(repo, ".claude"));
+  writeFileSync(join(repo, ".claude", "settings.json"), "{}");
+  const h = hubOver(world, { scan: async () => [{ name: "app", path: repo, branch: "main", githubRepo: null }] });
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "fix the app", uploads: [] });
+  await flush();
+  await callTool(h.q(), "start_agent", { title: "Fix login", prompt: "Fix it.", project: "app", where: "mac" });
+  await flush();
+  const agentQuery = h.q();
+  const empty = agentQuery.options.projectConfigRoot!;
+  const card = b.messages.find((m): m is Extract<Message, { kind: "permission" }> => m.kind === "permission")!;
+  const status = () => (h.hub.hello(NO_RING) as Extract<ServerMessage, { type: "hello" }>).bots[0]?.status;
+
+  expect([card.label, card.detail, readdirSync(empty), (statSync(empty).mode & 0o777).toString(8)]).toEqual(["Trust app's Claude settings", `.claude/settings.json in ${repo}`, [], "700"]);
+  expect(empty.startsWith(join(h.root, "agent-config"))).toBe(true);
+  agentQuery.emit(result());
+  await flush();
+  h.queries[0]!.emit(result());
+  await flush();
+  // The agent's report is unattended work, so it runs on a query of its own.
+  h.q().emit(result());
+  await flush();
+  expect([h.queries.length, status()]).toEqual([3, "awaiting_approval"]);
+
+  expect(await h.hub.handle({ type: "decide", botId: b.id, messageId: card.id, choice: "always" })).toEqual([]);
+  const rec = [...world.agents.values()][0]!;
+  await callTool(h.queries[2]!, "message_agent", { agentId: rec.agent.id, text: "Also add a test." });
+  await flush();
+
+  expect([h.q() === agentQuery, h.q().options.cwd, h.q().options.projectConfigRoot, status()]).toEqual([false, repo, undefined, "idle"]);
 });
 
 test("one ticker throwing is logged, and the tickers after it still run", () => {

@@ -7,7 +7,7 @@ import { createGate, failClosed, toCall, toHookOutput, type AuditRow, type GateD
 import { flushNow, loadWorld } from "../src/store";
 import type { Agent, AgentId, BotId, Message, MessageId, RoutineId, RunId } from "../src/protocol";
 import type { Envelope } from "../src/prompts";
-import { botActor, emptySession, emptyWorld, newBot, post, type Actor, type DailyCount, type GateState, type Initiator, type StandingRule } from "../src/world";
+import { botActor, emptySession, emptyWorld, newBot, post, repoTrust, type Actor, type AgentActor, type DailyCount, type GateState, type Initiator, type StandingRule } from "../src/world";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -44,6 +44,7 @@ function setup(opts: { bridgeName?: string } = {}) {
   const notified: { reason: string; id: MessageId }[] = [];
   const persisted: Persisted[] = [];
   const logged: string[] = [];
+  const trusted: string[] = [];
   let denials = 0;
   const deps: GateDeps = {
     world,
@@ -72,6 +73,7 @@ function setup(opts: { bridgeName?: string } = {}) {
       events.push(`persist:${urgency ?? "later"}`);
       persisted.push({ urgency, open: world.gate.open.length, grants: world.gate.grants.length, rules: bot.rules.length, auditRows: auditRows().length });
     },
+    trusted: (repo) => trusted.push(repo),
     auditDir,
     userName: "Alex",
     now: () => clock,
@@ -109,6 +111,7 @@ function setup(opts: { bridgeName?: string } = {}) {
     notified,
     persisted,
     logged,
+    trusted,
     denials: () => denials,
     auditRows,
     input,
@@ -468,7 +471,7 @@ describe("reconciling against the messages", () => {
     t.gate.answer(B1, t.cards()[0]!.id, { kind: "permission", choice: "always" });
     gateState(t.world).daily.push({ botId: B1, tool: "mcp__claudio__create_bot", day: "2026-10-17", count: 1 });
     t.gate.forgetBot(B1);
-    expect(gateState(t.world)).toEqual({ open: [], grants: [], daily: [] });
+    expect(gateState(t.world)).toEqual({ open: [], grants: [], daily: [], repos: [] });
     expect(t.bot.rules).toHaveLength(0);
     expect(t.persisted.at(-1)!.urgency).toBe("now");
   });
@@ -677,6 +680,77 @@ describe("gate-level hardening (U1 fix round)", () => {
     t.events.length = 0;
     t.gate.forgetBot(B1);
     expect(t.events).toEqual([]); // forgetBot itself does not persist
-    expect(gateState(t.world)).toEqual({ open: [], grants: [], daily: [] });
+    expect(gateState(t.world)).toEqual({ open: [], grants: [], daily: [], repos: [] });
+  });
+});
+
+describe("trust cards", () => {
+  const A2 = "a_2" as AgentId;
+  const REPO = "/Users/alex/code/app";
+  const asker: AgentActor = { kind: "agent", botId: B1, agentId: A1 };
+  function withAgents() {
+    const t = setup();
+    for (const id of [A1, A2]) {
+      const agent: Agent = { id, botId: B1, title: `Agent ${id}`, where: "mac", projectName: "app", status: "working", url: null, createdAt: START.toISOString(), updatedAt: START.toISOString() };
+      t.world.agents.set(id, { agent, cwd: REPO, messages: [], session: emptySession(), cloudSession: null, budgetUsd: null, startedBy: user });
+    }
+    const ask = (actor = asker) => t.gate.trustCard(actor, { root: REPO, name: "app", found: [".claude/settings.json", ".mcp.json"] });
+    return { ...t, ask, trust: (id: AgentId) => repoTrust(t.world.gate, REPO, id) };
+  }
+
+  test("one card per repo shows what would load, and it holds nobody up", () => {
+    const t = withAgents();
+    t.ask();
+    t.ask({ ...asker, agentId: A2 });
+
+    expect(t.cards().map((c) => [c.from?.id, c.tool, c.label, c.detail, c.always, c.answer])).toEqual([
+      [A1, "Claude Code settings", "Trust app's Claude settings", `.claude/settings.json, .mcp.json in ${REPO}`, "Agents in app load its own Claude Code settings, hooks and MCP servers, from now on", null],
+    ]);
+    expect([t.notified.map((n) => n.reason), t.trust(A1), t.denials()]).toEqual([["card"], null, 0]);
+  });
+
+  test.each([
+    ["once", true, null],
+    ["always", true, true],
+    ["deny", false, null],
+    ["never", false, false],
+  ] as const)("%s decides it for the asker (%p) and for another agent in the repo (%p), and sends no turn", (choice, asker, other) => {
+    const t = withAgents();
+    t.ask();
+
+    expect(t.gate.answer(B1, t.cards()[0]!.id, { kind: "permission", choice })).toEqual({ ok: true });
+
+    expect([t.trust(A1), t.trust(A2), t.delivered, t.cards()[0]!.answer]).toEqual([asker, other, [], choice]);
+    expect(t.trusted).toEqual(asker ? [REPO] : []);
+    expect(t.persisted.at(-1)?.urgency).toBe("now");
+  });
+
+  test("a repo-wide answer replaces an agent's own earlier one, and no new card is posted once answered", () => {
+    const t = withAgents();
+    t.ask();
+    t.gate.answer(B1, t.cards()[0]!.id, { kind: "permission", choice: "deny" });
+    t.ask({ ...asker, agentId: A2 });
+    t.gate.answer(B1, t.cards()[1]!.id, { kind: "permission", choice: "always" });
+    t.ask();
+
+    expect([t.trust(A1), t.trust(A2), t.cards().length]).toEqual([true, true, 2]);
+  });
+
+  test("an unanswered card expires without deciding or telling the agent anything", () => {
+    const t = withAgents();
+    t.ask();
+    t.gate.tick(t.advance(24 * 3600_000));
+
+    expect([t.cards()[0]!.answer, t.trust(A1), t.noticed, t.world.gate.open]).toEqual(["expired", null, [], []]);
+  });
+
+  test("deleting the bot forgets its agents' own answers and keeps the repo's", () => {
+    const t = withAgents();
+    t.ask();
+    t.gate.answer(B1, t.cards()[0]!.id, { kind: "permission", choice: "once" });
+    gateState(t.world).repos.push({ root: "/elsewhere", agentId: null, trusted: true, cardId: "m_x" as MessageId, at: START.toISOString() });
+    t.gate.forgetBot(B1);
+
+    expect(t.world.gate.repos.map((r) => [r.root, r.agentId])).toEqual([["/elsewhere", null]]);
   });
 });

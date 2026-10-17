@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, join, relative, resolve, sep } from "node:path";
-import type { Attachment, BotId, LibraryFile, Upload } from "./protocol";
+import type { AgentId, Attachment, BotId, LibraryFile, Upload } from "./protocol";
 
 const TEXT_LIMIT = 1024 * 1024;
 const BINARY_LIMIT = 10 * 1024 * 1024;
@@ -41,6 +41,13 @@ export function createHomes(root: string) {
   return {
     userMd,
     homeOf,
+
+    /** An empty folder, in the bridge home where no bot or agent reaches, that stands in for an untrusted repo's config. */
+    agentConfig(id: AgentId): string {
+      const dir = join(root, "agent-config", id);
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      return dir;
+    },
 
     ensureUserMd(userName: string) {
       mkdirSync(root, { recursive: true });

@@ -161,7 +161,7 @@ export function createHub(deps: HubDeps): Hub {
       botStatus({
         working: session?.working ?? false,
         held: session ? session.parkedFor !== null : holdOf(bot.session) !== null,
-        awaitingApproval: world.gate.open.some((c) => c.kind === "permission" && c.actor.botId === bot.id),
+        awaitingApproval: world.gate.open.some((c) => c.kind !== "question" && c.actor.botId === bot.id),
       }),
     );
   }
@@ -420,6 +420,7 @@ export function createHub(deps: HubDeps): Hub {
       // The gate posts a card before it records it as open, so the bot frame say() sent did not count it yet.
       if (reason === "card") changed(bot);
     },
+    trusted: (root) => agents.trusted(root),
     persist: deps.persist,
     auditDir: join(root, "audit"),
     userName,
@@ -450,6 +451,8 @@ export function createHub(deps: HubDeps): Hub {
       const scope = scopeOf(actor);
       return sandboxFor(actor, scope, process.env, gitDirsOf(scope.own));
     },
+    configRoot: (id) => homes.agentConfig(id),
+    trustCard: (actor, repo) => gate.trustCard(actor, repo),
     persist: deps.persist,
     now,
     changed(rec) {

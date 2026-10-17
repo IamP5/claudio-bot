@@ -124,7 +124,7 @@ test("a v2 state file is backed up byte for byte, then upgraded in place to v3",
   expect(cloud.session.id).toBeNull();
   expect([...world.agents.values()].map((a) => a.startedBy)).toEqual([{ kind: "system" }, { kind: "system" }, { kind: "system" }]);
 
-  expect(world.gate).toEqual({ open: [], grants: [], daily: [] });
+  expect(world.gate).toEqual({ open: [], grants: [], daily: [], repos: [] });
   expect(world.devices).toEqual([]);
   expect(world.push).toEqual({ sent: [] });
   expect(world.account).toEqual({ parkedUntil: null });

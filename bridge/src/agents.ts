@@ -1,4 +1,6 @@
 import type { HookCallbackMatcher, HookEvent, Options, SandboxSettings } from "@anthropic-ai/claude-agent-sdk";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { createCloudSession, followUpCloudSession } from "./cloud";
 import type { Ledger } from "./ledger";
 import type { AgentId, AgentStatus, BotId } from "./protocol";
@@ -8,7 +10,7 @@ import { createSession, usedBudget, type Session, type SessionSpec, type TurnEnd
 import { AGENT_GIT_ENV } from "./sandbox";
 import type { Persist } from "./store";
 import { errorText } from "./text";
-import { emptySession, newMessageId, type Actor, type AgentRecord, type Initiator, type World } from "./world";
+import { emptySession, newMessageId, repoTrust, type Actor, type AgentActor, type AgentRecord, type Initiator, type World } from "./world";
 
 // Agents are actors like bots: mac agents run on the same session module behind the same gate, metered by the same
 // ledger. Cloud agents run on claude.ai: the bridge neither gates nor meters them.
@@ -30,9 +32,23 @@ export type Agents = {
   /** At start: tell bots about mac agents a restart cut off, and start sessions with queued envelopes. */
   resume(): void;
   stopFor(botId: BotId): void;
+  /** The agents in this repo may now load its own config: each live query is replaced at its next chance. */
+  trusted(root: string): void;
 };
 
 const queued = (text: string, initiator: Initiator): SessionInput => ({ kind: "envelope", text, initiator, settles: null });
+
+/**
+ * What a repo carries that Claude Code would load and run from it: project settings and their hooks, .mcp.json
+ * servers, commands, agents and skills. Relative paths, sorted.
+ */
+export function projectConfigOf(root: string): string[] {
+  const found = existsSync(join(root, ".mcp.json")) ? [".mcp.json"] : [];
+  try {
+    found.push(...readdirSync(join(root, ".claude")).map((name) => `.claude/${name}`));
+  } catch {}
+  return found.sort();
+}
 
 /** Statuses that hold only while the session or an open card says so. */
 const LIVE: ReadonlySet<AgentStatus> = new Set(["working", "parked", "awaiting_approval"]);
@@ -50,6 +66,10 @@ export function createAgents(deps: {
   beginTurn: (actor: Actor) => void;
   /** The OS sandbox for the agent's Bash calls (sandbox.sandboxFor), read as each query opens. */
   sandbox: (actor: Actor) => SandboxSettings;
+  /** An empty folder only the bridge writes, standing in for the repo's own config until the repo is trusted. */
+  configRoot: (agentId: AgentId) => string;
+  /** gate.trustCard: ask the user whether the repo's own config may load. */
+  trustCard: (actor: AgentActor, repo: { root: string; name: string; found: readonly string[] }) => void;
   persist: Persist;
   now: () => string;
   /** The record or something its status derives from changed, including its session's lifecycle and deadlines. */
@@ -133,8 +153,12 @@ export function createAgents(deps: {
       // session lowers it to what is left of the daily cap for a query it opens for an unattended turn.
       options: (): Options => {
         const maxBudgetUsd = deps.ledger.budgetLeft(id);
+        const trusted = repoTrust(deps.world.gate, rec.cwd, id) === true;
         return {
           cwd: rec.cwd,
+          // Project settings, hooks and .mcp.json come from here instead of the checkout, which the agent and every
+          // branch it checks out can change.
+          ...(trusted ? {} : { projectConfigRoot: deps.configRoot(id) }),
           resume: rec.session.id ?? undefined,
           settingSources: ["user", "project"],
           systemPrompt: { type: "preset", preset: "claude_code" },
@@ -197,6 +221,8 @@ export function createAgents(deps: {
       const prompt = agentPrompt({ botName: a.botName, userName: deps.userName, prompt: a.prompt });
       if (a.where === "mac") {
         macSession(rec).push(queued(prompt, a.initiator));
+        const found = projectConfigOf(rec.cwd);
+        if (found.length > 0) deps.trustCard({ kind: "agent", botId, agentId: rec.agent.id }, { root: rec.cwd, name: a.project.name, found });
         return rec;
       }
       await cloud(rec, async () => {
@@ -262,6 +288,10 @@ export function createAgents(deps: {
         // A mac agent cut off mid-turn with nothing queued will never report, so tell its bot.
         else if (rec.agent.status === "working") report(rec, "failed", "The bridge restarted while this agent was working. Send it a message to resume it.", rec.startedBy);
       }
+    },
+
+    trusted(root) {
+      for (const [id, session] of sessions) if (deps.world.agents.get(id)?.cwd === root) session.reopen();
     },
 
     stopFor(botId) {

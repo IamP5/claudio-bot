@@ -130,7 +130,7 @@ const V3_FILE = z.looseObject({
     }),
   ),
   agents: z.array(z.looseObject({ ...agentThread, session, cloudSession: maybeText, budgetUsd: z.number().nullable(), startedBy: initiator })),
-  gate: z.looseObject({ open: z.array(anyObject), grants: z.array(anyObject), daily: z.array(anyObject) }),
+  gate: z.looseObject({ open: z.array(anyObject), grants: z.array(anyObject), daily: z.array(anyObject), repos: z.array(anyObject).optional() }),
   devices: z.array(anyObject),
   push: z.looseObject({ sent: z.array(anyObject) }),
   account: z.looseObject({ parkedUntil: maybeText }),
@@ -286,6 +286,7 @@ function fromV3(file: StateFileV3): World {
   // A file written before Pending.kind marked an approval continuation by the c_ prefix of its id.
   for (const rec of [...file.bots, ...file.agents])
     for (const p of own<SessionState>(rec.session).pending) p.kind ??= p.id.startsWith("c_") ? "continuation" : "envelope";
+  own<GateState>(file.gate).repos ??= [];
   return {
     bots: new Map(file.bots.map((b) => [b.id, b])),
     agents: new Map(file.agents.map((a) => [a.agent.id, a])),

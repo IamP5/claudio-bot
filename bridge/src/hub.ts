@@ -878,6 +878,7 @@ export function createHub(deps: HubDeps): Hub {
     tick: (at) => tickEach(tickers, at, deps.log),
 
     boot(firstRun) {
+      gate.resume(clockNow());
       // Without USER.md the bots still run; remember about the user fails until the folder is writable again.
       try {
         homes.ensureUserMd(userName);

@@ -259,7 +259,8 @@ export function repoTrust(gate: Owned<GateState>, root: string, agentId: AgentId
 export type DailyCount = { botId: BotId; tool: string; day: string; count: number };
 
 /** Writer: gate.ts. */
-export type GateState = { open: OpenCard[]; grants: Grant[]; daily: DailyCount[]; repos: RepoTrust[] };
+/** aliveAt: the last minute the bridge ran with a card open, so a restart can give cards back the time it was down. */
+export type GateState = { open: OpenCard[]; grants: Grant[]; daily: DailyCount[]; repos: RepoTrust[]; aliveAt?: string };
 
 
 /** Writer: devices.ts. */

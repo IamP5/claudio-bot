@@ -334,7 +334,7 @@ describe("deadlines", () => {
     t.gate.tick(t.advance(1));
     t.gate.tick(t.advance(60_000));
     expect(t.notified.filter((x) => x.reason === "reminder")).toEqual([{ reason: "reminder", id: card.id }]);
-    expect(t.gate.nextDeadline()).toBe(card.expiresAt);
+    expect(t.gate.nextDeadline()).toBe(new Date(t.now().getTime() + 60_000).toISOString());
   });
 
   test("an expired card says so, leaves a notice that it did not run, and spends no turn", async () => {
@@ -403,6 +403,29 @@ describe("deadlines", () => {
     expect(t.cards()[0]!.answer).toBeNull();
     expect(t.cards()[0]!.expiresAt).toBe(new Date(START.getTime() + 2 * 3600_000 + sleep).toISOString());
     expect(t.gate.answer(B1, card.id, { kind: "permission", choice: "once" })).toEqual({ ok: true });
+  });
+});
+
+describe("downtime", () => {
+  test("while a card is open the gate notes it is alive each minute, and a restart gives the card back the time the bridge was down", async () => {
+    const t = setup();
+    t.turn.initiator = routine;
+    await t.bash("git push origin feature");
+    t.gate.tick(t.advance(60_000));
+    expect(gateState(t.world).aliveAt).toBe(t.now().toISOString());
+    expect(t.gate.nextDeadline()! <= new Date(t.now().getTime() + 60_000).toISOString()).toBe(true);
+    const lastAlive = t.now().getTime();
+    const down = 8 * 3600_000;
+    t.advance(down);
+    t.gate.resume(t.now());
+    t.gate.tick(t.now());
+    expect(t.cards()[0]!.answer).toBeNull();
+    expect(Date.parse(t.cards()[0]!.expiresAt!)).toBe(START.getTime() + 2 * 3600_000 + (t.now().getTime() - lastAlive - 60_000));
+  });
+  test("with no card open nothing is written each minute", () => {
+    const t = setup();
+    t.gate.tick(t.advance(60_000));
+    expect(gateState(t.world).aliveAt).toBeUndefined();
   });
 });
 

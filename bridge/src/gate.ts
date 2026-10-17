@@ -88,6 +88,8 @@ export type AuditRow = {
 };
 
 export type Gate = Tickable & {
+  /** At start: open cards get back the time since the bridge last ran with them open, as after a sleep. */
+  resume(now: Date): void;
   /** The SDK adapter for one actor: a PreToolUse matcher on every tool. Bots and mac agents both get it. */
   hooks(actor: Actor): Partial<Record<HookEvent, HookCallbackMatcher[]>>;
   /** The bot's ask tool. Returns the tool's reply. An identical open question gets "Already waiting" instead of a second card. */
@@ -254,6 +256,9 @@ const pad = (n: number) => String(n).padStart(2, "0");
 const localDay = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const localMonth = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
 const SYSTEM: Initiator = { kind: "system" };
+
+/** How often the gate notes it is alive while a card is open; a restart counts downtime from the last note. */
+const ALIVE_EVERY_MS = 60_000;
 
 export function createGate(deps: GateDeps): Gate {
   const { world, userName } = deps;
@@ -654,9 +659,18 @@ export function createGate(deps: GateDeps): Gate {
       if (changed) deps.persist("now");
     },
 
+    resume(now) {
+      if (state.aliveAt === undefined || state.open.length === 0) return;
+      this.wake!(now.getTime() - Date.parse(state.aliveAt) - ALIVE_EVERY_MS);
+    },
+
     tick(now) {
       const iso = now.toISOString();
       let changed = reconcile(now);
+      if (state.open.length > 0 && (state.aliveAt === undefined || Date.parse(state.aliveAt) + ALIVE_EVERY_MS <= now.getTime())) {
+        state.aliveAt = iso;
+        deps.persist();
+      }
       for (const bot of world.bots.values())
         for (const m of bot.messages)
           if (m.kind === "permission" && isOpenCard(m) && !state.open.some((c) => c.cardId === m.id)) {
@@ -678,7 +692,8 @@ export function createGate(deps: GateDeps): Gate {
     },
 
     nextDeadline() {
-      const deadlines = [...state.open.flatMap((c) => (c.remindAt === null ? [c.expiresAt] : [c.remindAt, c.expiresAt])), ...state.grants.map((g) => g.expiresAt)];
+      const alive = state.open.length > 0 && state.aliveAt !== undefined ? [new Date(Date.parse(state.aliveAt) + ALIVE_EVERY_MS).toISOString()] : [];
+      const deadlines = [...state.open.flatMap((c) => (c.remindAt === null ? [c.expiresAt] : [c.remindAt, c.expiresAt])), ...state.grants.map((g) => g.expiresAt), ...alive];
       return deadlines.reduce<string | null>((min, d) => (min === null || d < min ? d : min), null);
     },
   };

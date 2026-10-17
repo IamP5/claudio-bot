@@ -29,6 +29,7 @@ const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 /** A live SDK query the test drives: what the session sent it, and what it answers. */
 class FakeQuery {
   readonly received: string[] = [];
+  readonly toggles: string[] = [];
   interrupts = 0;
   private queue: SDKMessage[] = [];
   private done = false;
@@ -48,6 +49,15 @@ class FakeQuery {
   }
   async interrupt() {
     this.interrupts++;
+  }
+  async mcpServerStatus() {
+    return [
+      { name: "claudio", status: "connected", source: "sdk" },
+      { name: "chrome-devtools", status: "connected", source: "user" },
+    ];
+  }
+  async toggleMcpServer(name: string, enabled: boolean) {
+    this.toggles.push(`${name} ${enabled}`);
   }
   close() {
     this.done = true;
@@ -933,4 +943,57 @@ test("the client requests of the pass 3 units answer through their modules", asy
   expect(await h.hub.handle({ type: "connectors", botId: b.id })).toEqual([{ type: "connectors", botId: b.id, connectors: [] }]);
   expect(await h.hub.handle({ type: "skills", botId: b.id })).toEqual([{ type: "skills", botId: b.id, skills: [] }]);
   expect(await h.hub.handle({ type: "remove_worktree", agentId: "a_none" as AgentId })).toEqual([{ type: "error", message: "Unknown agent" }]);
+});
+
+test("turning a connector off answers with the new list, toggles the live query, and every later bot and agent query denies it", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-agent-")));
+  roots.push(cwd);
+  world.agents.set("a_1" as AgentId, {
+    agent: { id: "a_1" as AgentId, botId: b.id, title: "Ship it", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null },
+    cwd,
+    messages: [],
+    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "Push the fix.", initiator: { kind: "user" }, settles: null, attempts: 0 }] },
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: { kind: "user" },
+  });
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  h.hub.boot(false);
+  await flush();
+  const agentBefore = h.q();
+  await h.hub.handle({ type: "send", botId: b.id, text: "hi", uploads: [] });
+  await flush();
+  const botBefore = h.q();
+
+  expect(await h.hub.handle({ type: "set_connector", botId: b.id, name: "chrome-devtools", enabled: false })).toEqual([
+    { type: "connectors", botId: b.id, connectors: [{ name: "chrome-devtools", status: "connected", enabled: false }] },
+  ]);
+  expect(await h.hub.handle({ type: "set_connector", botId: b.id, name: "made-up", enabled: false })).toEqual([{ type: "error", message: "That bot has no connector by that name." }]);
+  expect(botBefore.toggles).toEqual(["chrome-devtools false"]);
+
+  botBefore.emit(result());
+  await flush();
+  await h.hub.handle({ type: "send", botId: b.id, text: "again", uploads: [] });
+  await flush();
+  const botAfter = h.q();
+  agentBefore.emit(result());
+  await flush();
+  await callTool(botAfter, "message_agent", { agentId: "a_1", text: "And the docs." });
+  await flush();
+  const agentAfter = h.queries.findLast((q) => q.options.cwd === cwd)!;
+
+  const denied = { autoMemoryEnabled: false, deniedMcpServers: [{ serverName: "chrome-devtools" }] };
+  expect([botAfter === botBefore, agentAfter === agentBefore]).toEqual([false, false]);
+  expect([botAfter.received.length, botAfter.received[0], agentAfter.received.length, agentAfter.received[0]]).toEqual([
+    1,
+    expect.stringContaining("again"),
+    1,
+    expect.stringContaining("And the docs."),
+  ]);
+  expect([botBefore.options.settings, agentBefore.options.settings]).toEqual([{ autoMemoryEnabled: false }, { autoMemoryEnabled: false }]);
+  expect([botAfter.options.settings, agentAfter.options.settings]).toEqual([denied, denied]);
 });

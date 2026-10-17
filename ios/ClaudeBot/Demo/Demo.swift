@@ -48,6 +48,20 @@ enum Demo {
         }
     }
 
+    /// Stands in for the bridge after a send: echoes the message, types for a few seconds, then replies.
+    static func respond(to msg: ClientMessage, store: AppStore) {
+        guard case let .send(botId, text, _) = msg, var bot = store.bots[botId] else { return }
+        store.apply(.message(botId: botId, message: me(UUID().uuidString, .now, text)))
+        bot.status = .working
+        store.apply(.bot(bot))
+        Task {
+            try? await Task.sleep(for: .seconds(4))
+            store.apply(.message(botId: botId, message: say(UUID().uuidString, .now, "On it. I'll check the PRs against main and report back with anything that blocks a merge.")))
+            bot.status = .idle
+            store.apply(.bot(bot))
+        }
+    }
+
     /// A time `days` ago at the given clock time.
     private static func at(_ days: Int, _ hour: Int, _ minute: Int) -> Date {
         let calendar = Calendar.current

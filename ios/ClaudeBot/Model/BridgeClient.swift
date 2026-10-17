@@ -73,6 +73,9 @@ final class BridgeClient {
 
     /// Sends now when connected; otherwise holds the message until the next hello.
     func send(_ msg: ClientMessage) {
+        #if DEBUG
+        if Demo.isEnabled { return Demo.respond(to: msg, store: store) }
+        #endif
         if let socket, store.machine != nil {
             transmit(msg, on: socket)
         } else {

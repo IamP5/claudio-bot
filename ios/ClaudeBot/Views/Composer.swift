@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct Composer: View {
     let bot: Bot
     let openQuestion: Bool
+    var onSend: () -> Void = {}
 
     @Environment(BridgeClient.self) private var client
     @State private var text = ""
@@ -154,6 +155,7 @@ struct Composer: View {
         text = ""
         uploads = []
         problem = nil
+        onSend()
     }
 
     private func add(_ upload: Upload, size: Int) {

@@ -7,6 +7,9 @@ struct ChatView: View {
     @Environment(BridgeClient.self) private var client
     @Environment(Router.self) private var router
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var position = ScrollPosition(edge: .bottom)
+    /// Whether the list follows new content down. Dragging lets go; settling near the bottom or sending takes hold again.
+    @State private var followsBottom = true
 
     var body: some View {
         if let bot = store.bots[botId] {
@@ -27,11 +30,25 @@ struct ChatView: View {
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
             }
+            .scrollPosition($position)
             .defaultScrollAnchor(.bottom)
+            .onScrollPhaseChange { _, phase, context in
+                switch phase {
+                case .interacting: followsBottom = false
+                case .idle: if !followsBottom { followsBottom = Self.bottomGap(context.geometry) < 60 }
+                default: break
+                }
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height + $0.contentInsets.bottom } action: { _, _ in
+                if followsBottom { position.scrollTo(edge: .bottom) }
+            }
             .scrollDismissesKeyboard(.interactively)
             .background(Theme.background)
             .safeAreaInset(edge: .bottom) {
-                Composer(bot: bot, openQuestion: store.openQuestion(in: botId) != nil)
+                Composer(bot: bot, openQuestion: store.openQuestion(in: botId) != nil) {
+                    followsBottom = true
+                    withAnimation { position.scrollTo(edge: .bottom) }
+                }
                     .frame(maxWidth: 760)
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -51,6 +68,10 @@ struct ChatView: View {
                 }
             }
         }
+    }
+
+    private static func bottomGap(_ geometry: ScrollGeometry) -> CGFloat {
+        geometry.contentSize.height + geometry.contentInsets.bottom - geometry.visibleRect.maxY
     }
 
     /// Bubbles in a run sit close together; anything else gets air around it.

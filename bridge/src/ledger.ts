@@ -7,6 +7,7 @@
 import { appendFileSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentId, BotId } from "./protocol";
+import { errorText } from "./text";
 import { actorKey, attended, type Actor, type ActorKey, type Initiator } from "./world";
 
 /** Per bot per local day, its agents included. Override: CLAUDIOBOT_DAILY_USD. A bot's own dailyCapUsd wins. */
@@ -199,7 +200,7 @@ export function createLedger(deps: {
         appendFileSync(join(deps.dir, name), `${torn.has(name) ? "\n" : ""}${JSON.stringify(row)}\n`, { mode: 0o600 });
         torn.delete(name);
       } catch (e) {
-        deps.log(`usage: could not append to ${name}, the spend counts only until restart: ${(e as Error).message}`);
+        deps.log(`usage: could not append to ${name}, the spend counts only until restart: ${errorText(e)}`);
       }
     },
 

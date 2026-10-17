@@ -13,11 +13,11 @@
 //     and its read is gated, but a plain GET that smuggles data in the URL is not itself held.
 //   - Case folding and Unicode. Matching is byte-exact after realpath; a case-insensitive filesystem may still resolve
 //     a differently-cased spelling, which realpath canonicalises, but homoglyphs and percent-encoding are not decoded.
-import { createHash } from "node:crypto";
 import { basename, isAbsolute, normalize, resolve, sep } from "node:path";
 import type { Headroom } from "./ledger";
 import type { MessageId } from "./protocol";
 import { shellCommands, type Word } from "./shell";
+import { BODY_KEYS, clip, maskSecrets, sha256 } from "./text";
 import { actorKey, attended, hopsOf, isRoutineChain, type Actor, type Fingerprint, type Grant, type Initiator, type Signature, type StandingRule } from "./world";
 
 /** A tool call as the policy sees it. Nothing in here is `unknown`. */
@@ -146,8 +146,6 @@ const absRaw = (p: string, dir: string) => (isAbsolute(p) ? p : `${dir}${sep}${p
 /** Keys whose string values are paths, in any tool's input (built-in file tools and MCP filesystem servers alike). */
 const PATH_KEY = /path|file|dir|folder|uri|url|location|^(cwd|src|source|dest|destination|target)$/i;
 const looksPath = (v: string) => /^[~/]/.test(v) || v.startsWith("file://") || /\$\{?HOME\b/.test(v) || v.includes("/");
-/** A file's new contents, never a path; scanning it as paths is slow and pointless. */
-const BODY_KEYS = new Set(["content", "old_string", "new_string", "new_source"]);
 
 /** Every string in a tool's input that could name a path: keyed as a path, or shaped like one anywhere it appears. */
 function inputPaths(value: unknown, key: string | null, out: string[]) {
@@ -1209,8 +1207,6 @@ export function decide(call: ToolCall, ctx: PolicyContext): Decision {
   }
 }
 
-const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
-
 function sorted(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sorted);
   if (isRecord(value)) return Object.fromEntries(Object.keys(value).sort().map((k) => [k, sorted(value[k])]));
@@ -1223,76 +1219,23 @@ export function fingerprint(call: ToolCall): Fingerprint {
   return `${call.tool}:${sha256(meaningful).slice(0, 32)}` as Fingerprint;
 }
 
-const SECRET_PATTERNS: readonly RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
-  /\bsk-[A-Za-z0-9_-]{16,}/g,
-  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
-  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bAIza[0-9A-Za-z_-]{35}\b/g,
-  /\b[sprk]k_(?:live|test)_[A-Za-z0-9]{16,}/g,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-];
-/** A keyword (any `[\w-]*` prefix allowed, so AWS_SECRET_ACCESS_KEY= and MY_TOKEN= match) then its value after = or :. */
-const KEYED_SECRET = /(\b(?:Bearer|Basic|token)\s+|\b[\w-]*(?:password|passwd|pwd|secret|token|access[_-]?key|api[_-]?key|client[_-]?secret)["']?\s*[=:]\s*["']?)([^\s"'&,;]{3,})/gi;
-/** A URL's user:password, curl's -u user:pass, and mysql's -p<password>. The value is masked; the user is kept. */
-const URL_CREDENTIAL = /(:\/\/[^\s:/@]+:)([^\s@/]+)(@)/g;
-const CURL_USER = /((?:-u|--user)\s+[^\s:]+:)(\S+)/g;
-const MYSQL_PASSWORD = /(^|\s)(-p)([^\s]{2,})/g;
-/** A long run mixing upper case, lower case and digits looks like a key. Commit SHAs (lower-case hex) do not. */
-const LONG_RUN = /[A-Za-z0-9+_=-]{32,}/g;
-
-const masked = (n: number) => `«redacted:${n} chars»`;
-
-/** Secret-shaped substrings become «redacted:N chars». Keyed rules run first so a keyed value is masked once, not twice. */
-function mask(text: string): string {
-  let out = text;
-  out = out.replace(KEYED_SECRET, (_, lead: string, value: string) => lead + masked(value.length));
-  out = out.replace(URL_CREDENTIAL, (_, lead: string, value: string, tail: string) => lead + masked(value.length) + tail);
-  out = out.replace(CURL_USER, (_, lead: string, value: string) => lead + masked(value.length));
-  out = out.replace(MYSQL_PASSWORD, (_, pre: string, flag: string, value: string) => pre + flag + masked(value.length));
-  for (const p of SECRET_PATTERNS) out = out.replace(p, (m) => masked(m.length));
-  return out.replace(LONG_RUN, (m) => (/[a-z]/.test(m) && /[A-Z]/.test(m) && /[0-9]/.test(m) ? masked(m.length) : m));
-}
-
 const lines = (s: string) => (s === "" ? 0 : s.split("\n").length - (s.endsWith("\n") ? 1 : 0));
 const CLIP = 4096;
-const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}… (${s.length - n} more chars)`);
 
 /** The card's detail line: the exact command, "Write <path> (N lines)", or an MCP tool with compact JSON. Secrets masked. */
 export function detailOf(call: ToolCall): string {
   const i = call.input;
   switch (call.tool) {
     case "Bash":
-      return clip(mask(String(i.command).trim()), CLIP);
+      return clip(maskSecrets(String(i.command).trim()), CLIP);
     case "Write":
-      return mask(`Write ${String(i.file_path)} (${lines(String(i.content))} lines)`);
+      return maskSecrets(`Write ${String(i.file_path)} (${lines(String(i.content))} lines)`);
     case "Edit":
     case "MultiEdit":
-      return mask(`${call.tool} ${String(i.file_path)}`);
+      return maskSecrets(`${call.tool} ${String(i.file_path)}`);
     case "NotebookEdit":
-      return mask(`NotebookEdit ${String(i.notebook_path)}`);
+      return maskSecrets(`NotebookEdit ${String(i.notebook_path)}`);
     default:
-      return clip(mask(`${call.tool} ${JSON.stringify(i)}`), 500);
+      return clip(maskSecrets(`${call.tool} ${JSON.stringify(i)}`), 500);
   }
-}
-
-/** A key whose value is a secret by its name alone, however short the value. */
-const SECRET_KEY = /secret|token|password|passwd|passcode|api.?key|access.?key|authorization|cookie|credential|otp|totp|cvv|cvc|card.?number|private.?key|client.?secret/i;
-
-function redactAt(value: unknown, key: string | null): unknown {
-  if (typeof value === "string") {
-    if (key !== null && BODY_KEYS.has(key)) return { bytes: Buffer.byteLength(value, "utf8"), sha256: sha256(value) };
-    if (key !== null && SECRET_KEY.test(key)) return masked(value.length);
-    return clip(mask(value), CLIP);
-  }
-  if (Array.isArray(value)) return value.map((v) => redactAt(v, key));
-  if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactAt(v, k)]));
-  return value;
-}
-
-/** For audit rows. Secret-shaped strings become «redacted:N chars», file bodies {bytes, sha256}, long strings clipped. */
-export function redact(input: unknown): unknown {
-  return redactAt(input, null);
 }

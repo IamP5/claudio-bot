@@ -6,6 +6,7 @@ import { parseClientMessage } from "./parse";
 import type { ClientMessage, DeviceId, ServerMessage, TransportMessage } from "./protocol";
 import { forProtocol2 } from "./protocol2";
 import type { Stream } from "./stream";
+import { errorText } from "./text";
 
 // HTTP and the socket: /health, POST /pair, /ws with resume, and the transport messages.
 
@@ -137,7 +138,7 @@ export function serve(deps: ServeDeps): Transport {
     try {
       result = devices.pair(code, name);
     } catch (e) {
-      log(`pairing not saved: ${(e as Error).message}`);
+      log(`pairing not saved: ${errorText(e)}`);
       return Response.json({ error: "The Mac could not save the pairing. Try the same code again." }, { status: 500 });
     }
     if ("error" in result) {
@@ -206,7 +207,7 @@ export function serve(deps: ServeDeps): Transport {
           const replies = isTransport(parsed.message) ? transport(ws, parsed.message) : await hub.handle(parsed.message);
           for (const reply of replies) send(ws, reply);
         } catch (e) {
-          send(ws, { type: "error", message: (e as Error).message });
+          send(ws, { type: "error", message: errorText(e) });
         }
       },
     },

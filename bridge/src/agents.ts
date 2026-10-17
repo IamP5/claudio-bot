@@ -6,6 +6,7 @@ import { agentPrompt, type SessionInput } from "./prompts";
 import type { Project } from "./projects";
 import { createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import type { Persist } from "./store";
+import { errorText } from "./text";
 import { emptySession, newMessageId, type Actor, type AgentRecord, type Initiator, type World } from "./world";
 
 // Agents are actors like bots: mac agents run on the same session module behind the same gate, metered by the same
@@ -196,7 +197,7 @@ export function createAgents(deps: {
           rec.agent = { ...rec.agent, url: created.url };
           update(rec, "in_cloud");
         } catch (e) {
-          update(rec, "failed", { from: "agent", text: (e as Error).message });
+          update(rec, "failed", { from: "agent", text: errorText(e) });
         }
       });
       return rec;
@@ -219,7 +220,7 @@ export function createAgents(deps: {
           await followUpCloudSession(rec.cwd, cloudSession, text);
           result = `Sent to the cloud session. Follow it at ${rec.agent.url}`;
         } catch (e) {
-          result = (e as Error).message;
+          result = errorText(e);
         }
       });
       return result;

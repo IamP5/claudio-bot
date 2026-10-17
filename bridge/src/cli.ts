@@ -17,6 +17,7 @@ import {
   type Foreground,
   type ServiceDeps,
 } from "./service";
+import { errorText } from "./text";
 
 const USAGE = `usage: claudiobot <install|uninstall|status|doctor|logs|pair|update> [--label <label>] [--log-dir <dir>]
 
@@ -48,7 +49,7 @@ const exec: Exec = async (argv, opts) => {
     const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     return { code, stdout, stderr };
   } catch (e) {
-    return { code: 127, stdout: "", stderr: (e as Error).message };
+    return { code: 127, stdout: "", stderr: errorText(e) };
   }
 };
 

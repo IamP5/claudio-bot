@@ -27,6 +27,7 @@ import type { Push } from "./push";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { BREAKER_NOTE, createSession, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { appendArchive, type Persist } from "./store";
+import { errorText } from "./text";
 import { botToolServer, type BotActions } from "./tools";
 import { freshTurn, readTurn, type Bubble, type Turn } from "./turn";
 import {
@@ -184,7 +185,7 @@ export function createHub(deps: HubDeps): Hub {
     try {
       appendArchive(file, split.archived);
     } catch (e) {
-      deps.log(`history: could not archive to ${file}, keeping it in state.json: ${(e as Error).message}`);
+      deps.log(`history: could not archive to ${file}, keeping it in state.json: ${errorText(e)}`);
       return;
     }
     messages.splice(0, messages.length, ...split.kept);

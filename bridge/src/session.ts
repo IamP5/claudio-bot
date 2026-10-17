@@ -12,6 +12,7 @@ import type { Tickable } from "./clock";
 import type { Headroom, Ledger } from "./ledger";
 import { notices as noticeText, withNotices, type SessionInput } from "./prompts";
 import type { Persist } from "./store";
+import { errorText, maskSecrets } from "./text";
 import {
   actorKey,
   attended,
@@ -98,22 +99,6 @@ function droppedNotice(userName: string, texts: readonly string[]): string {
   const named = texts.slice(0, DROPS_NAMED).map((t) => t.split("\n")[0]).join("; ");
   const rest = texts.length - DROPS_NAMED;
   return `[${userName} pressed Stop, so ${texts.length} queued messages never ran: ${named}${rest > 0 ? `; and ${rest} more` : ""}]`;
-}
-
-const SECRETS: readonly RegExp[] = [
-  /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}/g,
-  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
-  /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi,
-  /\b[A-Za-z0-9_+-]{40,}/g,
-];
-const SECRET_FIELD = /\b((?:api[_-]?key|token|secret|password|passwd|auth)[A-Za-z_-]*["']?\s*[:=]\s*["']?)[^\s"',;]{6,}/gi;
-
-/** Claude Code's stderr can echo keys from the environment or a config file, and its tail goes to the bot's chat. */
-export function redactSecrets(text: string): string {
-  return SECRETS.reduce((out, re) => out.replace(re, "[redacted]"), text).replace(SECRET_FIELD, "$1[redacted]");
 }
 
 /**
@@ -568,7 +553,6 @@ type Live = {
 };
 
 const SYSTEM: Initiator = { kind: "system" };
-const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function createSession(spec: SessionSpec): Session {
   const run = spec.query ?? query;
@@ -675,7 +659,7 @@ export function createSession(spec: SessionSpec): Session {
     try {
       l = live ?? open(unattended);
     } catch (e) {
-      return dispatch({ kind: "unstarted", error: redactSecrets(errorText(e)) });
+      return dispatch({ kind: "unstarted", error: maskSecrets(errorText(e)) });
     }
     signals = noSignals();
     heardAt = clock().getTime();
@@ -774,7 +758,7 @@ export function createSession(spec: SessionSpec): Session {
     if (l.gen !== generation || closed) return;
     closeLive();
     const tail = l.stderr();
-    if (current()) dispatch({ kind: "end", outcome: { kind: "transient", error: redactSecrets(tail ? `${error}\n${tail}` : error) } });
+    if (current()) dispatch({ kind: "end", outcome: { kind: "transient", error: maskSecrets(tail ? `${error}\n${tail}` : error) } });
   }
 
   function receive(m: SDKMessage, l: Live) {

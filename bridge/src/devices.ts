@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { Device, DeviceId, PairResponse } from "./protocol";
 import type { Persist } from "./store";
+import { displayName } from "./text";
 import { own, type DeviceRecord, type World } from "./world";
 
 // Pairing and socket auth. The only writer of World.devices; the live pairing code is memory only.
@@ -67,12 +68,8 @@ const normalize = (code: string) => code.toUpperCase().replace(/[^0-9A-Z]/g, "")
 
 const display = (code: string) => `${code.slice(0, 4)}-${code.slice(4)}`;
 
-// The name lands in logs and in every phone's device list. Format characters include bidi overrides.
-const cleanName = (name: string) =>
-  Array.from(name.replace(/\s+/g, " ").replace(/\p{C}/gu, "").replace(/ {2,}/g, " ").trim())
-    .slice(0, NAME_LIMIT)
-    .join("")
-    .trim() || "Phone";
+// The name lands in logs and in every phone's device list.
+const cleanName = (name: string) => displayName(name, NAME_LIMIT) || "Phone";
 
 type Spent = "none" | "expired" | "burned";
 

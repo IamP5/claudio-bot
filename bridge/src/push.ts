@@ -1,6 +1,7 @@
 import type { Tickable } from "./clock";
 import type { BotId, MessageId } from "./protocol";
 import type { Persist } from "./store";
+import { BOT_NAME_MAX, displayName, errorText } from "./text";
 import { own, type PushState, type World } from "./world";
 
 // "<bot> needs you" when no socket is live: an ntfy-style POST to CLAUDIOBOT_PUSH_URL now, APNs later behind the
@@ -35,7 +36,6 @@ export const MESSAGE_THROTTLE_MS = 10 * 60_000;
 // Far longer than any card stays open, so a key is never forgotten while its card can still remind.
 const RETAIN_MS = 7 * 24 * 60 * 60_000;
 const SEND_TIMEOUT_MS = 10_000;
-const NAME_MAX = 40;
 
 const PHRASE: Record<PushReason, string> = {
   card: "needs you",
@@ -74,11 +74,6 @@ export function senderFromEnv(value: string | undefined, log: (line: string) => 
 
 const idOf = (key: string) => key.slice(0, key.lastIndexOf("|"));
 
-// The name is the one bot-controlled free text that leaves the Mac, so a renamed bot cannot smuggle content out.
-const shownName = (name: string) => {
-  const chars = Array.from(name.replace(/\s+/g, " ").replace(/\p{Cc}/gu, "").trim());
-  return chars.length <= NAME_MAX ? chars.join("") : `${chars.slice(0, NAME_MAX - 1).join("")}\u2026`;
-};
 
 export function createPush(deps: {
   world: World;
@@ -120,15 +115,16 @@ export function createPush(deps: {
       deps.persist("now");
     } catch (e) {
       // Never send unrecorded. The key stays in memory, so this push is lost rather than doubled.
-      deps.log(`push: ${reason} for ${bot.id} skipped, could not record it: ${e instanceof Error ? e.message : String(e)}`);
+      deps.log(`push: ${reason} for ${bot.id} skipped, could not record it: ${errorText(e)}`);
       return false;
     }
 
-    const n: Notification = { botId: bot.id, messageId, text: `${shownName(bot.name)} ${PHRASE[reason]}`, link: linkTo(bot.id, messageId) };
+    const n: Notification = { botId: bot.id, messageId, // The name is the one bot-controlled free text that leaves the Mac, so a renamed bot cannot smuggle content out.
+    text: `${displayName(bot.name, BOT_NAME_MAX)} ${PHRASE[reason]}`, link: linkTo(bot.id, messageId) };
     // Through a promise so a sender that throws synchronously cannot escape into the caller's turn.
     Promise.resolve()
       .then(() => sender(n))
-      .catch((e: unknown) => deps.log(`push: ${reason} for ${bot.id} failed: ${e instanceof Error ? e.message : String(e)}`));
+      .catch((e: unknown) => deps.log(`push: ${reason} for ${bot.id} failed: ${errorText(e)}`));
     return true;
   }
 

@@ -2,6 +2,7 @@ import type * as nodeFs from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { projectRoots } from "./projects";
 import { launchctl, readInstalled, type Exec, type InstalledPlist, type LaunchdState, type ServiceTarget } from "./service";
+import { errorText } from "./text";
 
 // Read-only diagnostics. Never touches the store: loadWorld would upgrade a v2 state.json on the spot, so the doctor
 // parses it itself and only through the fs it was handed, which has no write methods.
@@ -111,7 +112,7 @@ export function readState(fs: DoctorFs, home: string): StateFacts {
   try {
     parsed = JSON.parse(fs.readFileSync(path, "utf8"));
   } catch (e) {
-    return { kind: "unreadable", why: (e as Error).message };
+    return { kind: "unreadable", why: errorText(e) };
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { kind: "unreadable", why: "not a JSON object" };
   const file = parsed as Record<string, unknown>;
@@ -147,7 +148,7 @@ async function health(deps: Pick<DoctorDeps, "fetch">, port: number): Promise<Fa
     const res = await deps.fetch(url);
     return { url, ok: res.ok, error: res.ok ? null : `HTTP ${res.status}` };
   } catch (e) {
-    return { url, ok: false, error: (e as Error).message };
+    return { url, ok: false, error: errorText(e) };
   }
 }
 

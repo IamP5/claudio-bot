@@ -11,6 +11,7 @@ import { createPush, senderFromEnv } from "./push";
 import { serve } from "./serve";
 import { bridgeHome, createSaver, loadWorld } from "./store";
 import { createStream } from "./stream";
+import { errorText } from "./text";
 
 async function run(argv: string[]): Promise<string> {
   const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
@@ -105,13 +106,13 @@ function shutdown() {
   try {
     hub.close();
   } catch (e) {
-    log(`shutdown: closing the bots failed: ${(e as Error).message}`);
+    log(`shutdown: closing the bots failed: ${errorText(e)}`);
   }
   try {
     saver.flush();
   } catch (e) {
     saved = false;
-    log(`shutdown: state.json was not saved: ${(e as Error).message}`);
+    log(`shutdown: state.json was not saved: ${errorText(e)}`);
   }
   process.exit(saved ? 0 : 1);
 }

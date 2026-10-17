@@ -3,10 +3,11 @@ import { appendFileSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import type { Tickable } from "./clock";
 import type { Headroom } from "./ledger";
-import { DAILY_CAPS, decide, detailOf, fingerprint, redact, type Decision, type PolicyContext, type Scope, type ToolCall } from "./policy";
+import { DAILY_CAPS, decide, detailOf, fingerprint, type Decision, type PolicyContext, type Scope, type ToolCall } from "./policy";
 import type { AgentId, BotId, Message, MessageId, PermissionChoice } from "./protocol";
 import { notices, type Envelope } from "./prompts";
 import type { Persist } from "./store";
+import { errorText, redact } from "./text";
 import {
   actorKey,
   agentPeer,
@@ -128,14 +129,6 @@ const allowOutput = (reason: string): SyncHookJSONOutput => ({
   hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: reason },
 });
 
-const describe = (e: unknown): string => {
-  try {
-    return e instanceof Error ? e.message : String(e);
-  } catch {
-    return "unprintable error";
-  }
-};
-
 /** Only {} (no opinion), allow or deny may leave the gate. Anything else, an async result included, would fail open. */
 function checked(out: SyncHookJSONOutput): SyncHookJSONOutput {
   const keys = Object.keys(out);
@@ -156,7 +149,7 @@ export function failClosed(body: (input: PreToolUseHookInput) => SyncHookJSONOut
       return checked(body(input));
     } catch (e) {
       try {
-        onError(input, describe(e));
+        onError(input, errorText(e));
       } catch {}
       return denyOutput(COULD_NOT_CHECK);
     }

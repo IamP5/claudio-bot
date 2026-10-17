@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decide, detailOf, fingerprint, redact, type Decision, type PolicyContext, type Scope, type ToolCall } from "../src/policy";
+import { decide, detailOf, fingerprint, type Decision, type PolicyContext, type Scope, type ToolCall } from "../src/policy";
 import type { AgentId, BotId, MessageId, RoutineId, RunId } from "../src/protocol";
 import type { Actor, Fingerprint, Grant, Initiator, Signature, StandingRule } from "../src/world";
 
@@ -446,41 +446,6 @@ describe("detailOf", () => {
     const long = detailOf(call("mcp__slack__send_message", { text: "word ".repeat(200) }));
     expect(long.length).toBeLessThan(560);
     expect(long).toContain("more chars)");
-  });
-});
-
-describe("redact", () => {
-  const secrets = [
-    "sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
-    "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
-    "xoxb-1234567890-abcdefghij",
-    "AKIAABCDEFGHIJKLMNOP",
-    "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----",
-    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
-    "Q2xhdWRpb0JvdERldmljZVRva2VuMTIzNDU2Nzg5MA",
-  ];
-  for (const secret of secrets) {
-    test(`masks ${secret.slice(0, 8)}…`, () => {
-      const out = JSON.stringify(redact({ command: `deploy --key ${secret} now` }));
-      expect(out).not.toContain(secret);
-      expect(out).toContain("«redacted:");
-    });
-  }
-  test("masks keyed values and secret-named fields, however short", () => {
-    const out = JSON.stringify(redact({ command: "login --password=hunter22 && curl -H 'Authorization: Bearer tok123456'", token: "abc", apiKey: "k1" }));
-    for (const s of ["hunter22", "tok123456", '"abc"', '"k1"']) expect(out).not.toContain(s);
-  });
-  test("file bodies become their size and hash", () => {
-    expect(redact({ file_path: "a.md", content: "hello" })).toEqual({
-      file_path: "a.md",
-      content: { bytes: 5, sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" },
-    });
-    const edits = redact({ file_path: "a.md", edits: [{ old_string: "hello", new_string: "héllo" }] }) as { edits: { new_string: { bytes: number } }[] };
-    expect(edits.edits[0]!.new_string.bytes).toBe(6);
-  });
-  test("keeps ordinary text, paths and commit SHAs", () => {
-    const input = { command: "git checkout 3f2a9c1e5b7d4a6f8e0c2b4d6f8a0c2e4b6d8f0a && cat /Users/alex/Projects/app2/src/Component.tsx" };
-    expect(redact(input)).toEqual(input);
   });
 });
 

@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import type { Agent, AgentMessage, Avatar, BotId, Message, MessageId, RoutineId, RunId } from "./protocol";
+import { errorText } from "./text";
 import {
   emptySession,
   emptyWorld,
@@ -279,7 +280,7 @@ export function loadWorld(home = bridgeHome()): { world: World; firstRun: boolea
   try {
     parsed = JSON.parse(raw.toString("utf8"));
   } catch (e) {
-    throw refuse(path, `is not valid JSON (${(e as Error).message})`);
+    throw refuse(path, `is not valid JSON (${errorText(e)})`);
   }
   if (!isObject(parsed)) throw refuse(path, "is not a JSON object");
   switch (parsed.version) {
@@ -292,7 +293,7 @@ export function loadWorld(home = bridgeHome()): { world: World; firstRun: boolea
       try {
         upgraded = upgradeV2(parsed as StateFileV2);
       } catch (e) {
-        throw refuse(path, `could not be upgraded (${(e as Error).message})`);
+        throw refuse(path, `could not be upgraded (${errorText(e)})`);
       }
       backUp(home, "state.v2.json.bak", raw);
       writeAtomic(path, JSON.stringify(upgraded));
@@ -341,7 +342,7 @@ export function createSaver(world: World, home = bridgeHome(), delayMs = 250, lo
     try {
       flush();
     } catch (e) {
-      log(`state.json was not saved, retrying in ${retryMs} ms: ${(e as Error).message}`);
+      log(`state.json was not saved, retrying in ${retryMs} ms: ${errorText(e)}`);
     }
   }
   const schedule: Persist = (urgency) => {

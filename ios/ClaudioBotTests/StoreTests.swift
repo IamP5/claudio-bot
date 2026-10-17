@@ -79,6 +79,21 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(store.facts != nil)
     }
 
+    @Test func theWebhookTokenSectionShowsOnlyForWebhookRoutinesOnABridgeWithWebhooks() {
+        let hook = Routine(
+            id: RoutineID("r2"), name: "deploys", schedule: "", describe: "When its webhook is called",
+            prompt: "Summarize it.", enabled: true, lastRunAt: nil, trigger: .webhook
+        )
+        var cron = hook
+        cron.trigger = .cron
+        #expect(WebhookTokenSection.shows(hook, features: [.webhooks]))
+        #expect(!WebhookTokenSection.shows(hook, features: [.memory, .skills]))
+        #expect(!WebhookTokenSection.shows(cron, features: [.webhooks]))
+        #expect(!WebhookTokenSection.shows(Routine(
+            id: RoutineID("r3"), name: "x", schedule: "", describe: "", prompt: "", enabled: true, lastRunAt: nil, trigger: .unknown("email")
+        ), features: [.webhooks]))
+    }
+
     @Test func helloMeansConnected() {
         let store = store()
         #expect(store.connection == .connected(machine: "Mac"))

@@ -88,7 +88,15 @@ export function createLocalRunner(): Runner {
               pending.delete(itemId);
               resolve(r);
             };
-            signal.addEventListener("abort", () => settle(deny("Cancelled")), { once: true });
+            signal.addEventListener(
+              "abort",
+              () => {
+                if (!pending.has(itemId)) return;
+                if (!isQuestion) ctx.dispatch({ type: "approval_decided", itemId, decision: "deny", at: now() });
+                settle(deny("Cancelled"));
+              },
+              { once: true },
+            );
             if (isQuestion) {
               pending.set(itemId, { kind: "question", input: toolInput, settle });
               ctx.dispatch({ type: "question_asked", itemId, questions: parseQuestions(toolInput), at: now() });

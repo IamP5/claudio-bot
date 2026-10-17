@@ -24,15 +24,15 @@ async function git(cwd: string, args: string[]): Promise<string | null> {
 
 async function describe(path: string): Promise<Project> {
   const [branch, origin] = await Promise.all([
-    git(path, ["rev-parse", "--abbrev-ref", "HEAD"]),
+    // symbolic-ref names the branch even before the first commit, and fails when HEAD is detached.
+    git(path, ["symbolic-ref", "--short", "-q", "HEAD"]),
     git(path, ["remote", "get-url", "origin"]),
   ]);
   return {
     id: projectId(path),
     name: basename(path),
     path,
-    // A repo with no commits reports "HEAD" or fails; neither is a branch name.
-    branch: branch && branch !== "HEAD" ? branch : null,
+    branch: branch || null,
     githubRepo: origin ? parseGithubRepo(origin) : null,
   };
 }
@@ -40,10 +40,11 @@ async function describe(path: string): Promise<Project> {
 export async function scanProjects(roots = projectRoots()): Promise<Project[]> {
   const dirs: string[] = [];
   for (const root of roots) {
-    if (!existsSync(root)) continue;
-    for (const entry of readdirSync(root, { withFileTypes: true })) {
-      const path = join(root, entry.name);
-      if (entry.isDirectory() && existsSync(join(path, ".git")) && statSync(path).isDirectory()) dirs.push(path);
+    if (!existsSync(root) || !statSync(root).isDirectory()) continue;
+    // existsSync follows symlinks, so a symlinked project folder counts too.
+    for (const name of readdirSync(root)) {
+      const path = join(root, name);
+      if (existsSync(join(path, ".git"))) dirs.push(path);
     }
   }
   const projects = await Promise.all(dirs.map(describe));

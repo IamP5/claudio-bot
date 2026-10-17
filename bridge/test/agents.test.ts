@@ -264,13 +264,23 @@ test("a notice tops the agent's next envelope", async () => {
   expect(h.q().received.at(-1)).toBe("[Your request expired.]\nTry again.");
 });
 
-test("an agent whose budget is used up never starts its turn and reports it to the bot", async () => {
+test("an agent whose budget is used up never starts its turn and reports that it used its budget", async () => {
   const h = harness({ headroom: () => ({ ok: false, reason: "agent_budget" }) });
   const rec = await h.start();
   await flush();
   expect(h.queries).toEqual([]);
   expect(rec.agent.status).toBe("failed");
-  expect(h.reports).toHaveLength(1);
+  expect(h.reports.map((r) => r.text)).toEqual(["The agent used its budget."]);
+});
+
+test("an agent whose query ran out of budget mid-turn reports that it used its budget", async () => {
+  const h = harness();
+  const rec = await h.start();
+  await flush();
+  h.q().emit(said("Running the tests."), result("", { subtype: "error_max_budget_usd", is_error: true, errors: ["Reached maximum budget ($4.5)"] }));
+  await flush();
+  expect(rec.agent.status).toBe("failed");
+  expect(h.reports.map((r) => r.text)).toEqual(["The agent used its budget."]);
 });
 
 test("resume starts mac agents with queued work and tells bots about agents a restart cut off", async () => {

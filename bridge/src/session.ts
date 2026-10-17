@@ -118,6 +118,12 @@ export type TurnEnd =
 
 type Deferral = "retry" | ParkReason;
 
+const BUDGET_USED = "The agent's budget is used up.";
+
+/** The turn ended because a budget ran out: the agent's, before it started, or the query's maxBudgetUsd during it. */
+export const usedBudget = (end: TurnEnd): boolean =>
+  (end.kind === "failed" && end.error === BUDGET_USED) || (end.kind === "done" && end.result.subtype === "error_max_budget_usd");
+
 /** How the turn in flight ended, as the shell read it at the SDK boundary. */
 export type Outcome =
   | { kind: "result"; result: SDKResultMessage }
@@ -281,7 +287,7 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
       if (room.ok) return begin(next, room.capReached);
       if (room.reason === "agent_budget") {
         remove(next.id);
-        end(next, { kind: "failed", error: "The agent's budget is used up." });
+        end(next, { kind: "failed", error: BUDGET_USED });
         continue;
       }
       if (capped) return;

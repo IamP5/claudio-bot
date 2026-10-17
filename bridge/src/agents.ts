@@ -4,7 +4,7 @@ import type { Ledger } from "./ledger";
 import type { AgentId, AgentStatus, BotId } from "./protocol";
 import { agentPrompt, type SessionInput } from "./prompts";
 import type { Project } from "./projects";
-import { createSession, type Session, type SessionSpec, type TurnEnd } from "./session";
+import { createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import type { Persist } from "./store";
 import { emptySession, newMessageId, type Actor, type AgentRecord, type Initiator, type World } from "./world";
 
@@ -66,6 +66,7 @@ export function createAgents(deps: {
   }
 
   function turnEnded(rec: AgentRecord, by: Initiator, end: TurnEnd) {
+    if (usedBudget(end)) return report(rec, "failed", "The agent used its budget.", by);
     switch (end.kind) {
       case "done": {
         const m = end.result;

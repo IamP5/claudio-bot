@@ -26,6 +26,7 @@ import {
   type Event,
   type Outcome,
   type TurnEnd,
+  usedBudget,
 } from "../src/session";
 import type { SessionInput } from "../src/prompts";
 import {
@@ -390,6 +391,22 @@ describe("step", () => {
     const t = run(core({ kind: "idle" }, []), { kind: "push", pending: env("a", botMail), ahead: false }, () => ({ ok: false, reason: "agent_budget" }));
     expect(endsOf(t.effects)).toEqual([["a", "failed"]]);
     expect(t.core.session).toMatchObject({ pending: [], lifecycle: { kind: "idle" } });
+  });
+
+  test("a budget that ran out, before the turn or during it, reads as used up; other ends do not", () => {
+    const outOfBudget = run(core({ kind: "idle" }, []), { kind: "push", pending: env("a", botMail), ahead: false }, () => ({ ok: false, reason: "agent_budget" }));
+    const outOfAttempts = run(core({ kind: "idle" }, [env("a", user, 4)]), { kind: "pump" });
+    const endOf = (fx: Effect[]) => fx.flatMap((e) => (e.kind === "end" ? [e.end] : []))[0]!;
+    const result = (subtype: string) => ({ type: "result", subtype, is_error: subtype !== "success", errors: [], total_cost_usd: 1 }) as unknown as SDKResultMessage;
+    const ends: TurnEnd[] = [
+      endOf(outOfBudget.effects),
+      { kind: "done", result: result("error_max_budget_usd") },
+      endOf(outOfAttempts.effects),
+      { kind: "done", result: result("success") },
+      { kind: "done", result: result("error_max_turns") },
+      { kind: "stopped", by: "user" },
+    ];
+    expect(ends.map(usedBudget)).toEqual([true, true, false, false, false, false]);
   });
 
   test("an envelope out of attempts fails instead of starting a fifth time", () => {

@@ -69,7 +69,7 @@ enum Demo {
         }
     }
 
-    /// Stands in for the bridge: answers devices and pair_code, settles a permission card, and replies to a send.
+    /// Stands in for the bridge: answers devices and pair_code, settles question and permission cards, and replies to a send.
     static func respond(to msg: ClientMessage, store: AppStore) {
         switch msg {
         case .devices:
@@ -83,6 +83,12 @@ enum Demo {
             var decided = card
             decided.answer = .chose(choice)
             store.apply(.message(botId: botId, message: .permission(id: id, at: at, card: decided)))
+            return
+        case let .answer(botId, messageId, option):
+            guard case let .question(id, at, card)? = store.conversations[botId]?[messageId] else { return }
+            var answered = card
+            answered.answer = .option(option)
+            store.apply(.message(botId: botId, message: .question(id: id, at: at, card: answered)))
             return
         default: break
         }

@@ -35,8 +35,9 @@ const readOrNull = (path: string) => {
   }
 };
 
-// A lock is "<pid>\n<start>\n": the pid and when that process started, as ps prints it. After a reboot or a crash the
-// pid can belong to another process; the start time tells them apart. Older bridges wrote the pid alone.
+// A lock is "<pid>\n<start>\n": the pid and when that process started, as ps prints it in UTC. After a reboot or a
+// crash the pid can belong to another process; the start time tells them apart. Older bridges wrote the pid alone, or
+// the start in the Mac's time zone.
 const LOCK = /^([1-9]\d*)(?:\n([^\n]+))?\n?$/;
 
 /** The pid a lock file names, or null while it is empty or garbled. */
@@ -45,9 +46,11 @@ export const pidIn = (body: string) => {
   return m ? Number(m[1]) : null;
 };
 
-/** When the process started, as `ps -o lstart=` prints it, or null when there is no such process. */
-function processStart(pid: number): string | null {
-  const ran = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], { stderr: "ignore" });
+/** When the process started, as `ps -o lstart=` prints it in a time zone (the Mac's when tz is null), or null when ps
+ *  cannot tell: no such process, or ps failed. */
+function processStart(pid: number, tz: string | null = "UTC"): string | null {
+  const env = tz === null ? process.env : { ...process.env, TZ: tz };
+  const ran = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], { stderr: "ignore", env });
   const start = ran.exitCode === 0 ? ran.stdout.toString().trim() : "";
   return start === "" ? null : start;
 }
@@ -112,17 +115,25 @@ const writtenBefore = (path: string, ms: number) => {
 
 /**
  * The lock sits beside the home rather than in it, so the migration can move or link the home while the lock is held.
- * A lock was left by a crash, and is taken over, when its pid is gone, is this process's own, names a process that
- * started at another time than the lock says, or was written before the Mac booted (a power loss: launchd may hand the
- * old pid to anything). Locking a home this process already holds is therefore harmless.
+ * A lock was left by a crash, and is taken over, when its pid is gone, is this process's own, or names a process that
+ * started at another time than the lock says. A lock with no recorded start (an older bridge's) is also stale when it
+ * was written before the Mac booted (a power loss: launchd may hand the old pid to anything). A live holder whose start
+ * ps cannot read is busy: nothing proves it is someone else. Locking a home this process already holds is harmless.
  */
-export function lockHome(home: string, deps: { pid?: number; sleep?: (ms: number) => void; bootedAt?: number } = {}): HomeLock {
+export function lockHome(home: string, deps: { pid?: number; sleep?: (ms: number) => void; bootedAt?: number; startOf?: (pid: number, tz: string | null) => string | null } = {}): HomeLock {
   const pid = deps.pid ?? process.pid;
   const sleep = deps.sleep ?? Bun.sleepSync;
   const bootedAt = deps.bootedAt ?? Date.now() - uptime() * 1000;
+  const startOf = deps.startOf ?? processStart;
   mkdirSync(dirname(home), { recursive: true });
   const path = lockPathOf(home);
-  const own = bodyOf(pid, processStart(pid));
+  const own = bodyOf(pid, startOf(pid, "UTC"));
+  const live = (holder: number, recorded: string | null) => {
+    if (holder === pid || !alive(holder)) return false;
+    if (recorded === null) return !writtenBefore(path, bootedAt);
+    const utc = startOf(holder, "UTC");
+    return utc === null || utc === recorded || startOf(holder, null) === recorded;
+  };
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     if (create(path, pid, own)) {
       return {
@@ -140,9 +151,7 @@ export function lockHome(home: string, deps: { pid?: number; sleep?: (ms: number
       sleep(RETRY_MS);
       continue;
     }
-    const recorded = LOCK.exec(body)?.[2] ?? null;
-    const live = holder !== pid && alive(holder) && !writtenBefore(path, bootedAt) && (recorded === null || processStart(holder) === recorded);
-    if (live) return { kind: "busy", path, pid: holder };
+    if (live(holder, LOCK.exec(body)?.[2] ?? null)) return { kind: "busy", path, pid: holder };
     removeStale(path, body, pid);
   }
   return { kind: "unclear", path };

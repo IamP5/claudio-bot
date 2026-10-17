@@ -19,8 +19,9 @@ function scratch() {
 
 const deadPid = () => Bun.spawnSync(["true"]).pid;
 const noWait = () => {};
-const startOf = (pid: number) => Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)]).stdout.toString().trim();
-const mine = () => `${process.pid}\n${startOf(process.pid)}\n`;
+const startOf = (pid: number, tz?: string) =>
+  Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], { env: { ...process.env, ...(tz ? { TZ: tz } : {}) } }).stdout.toString().trim();
+const mine = () => `${process.pid}\n${startOf(process.pid, "UTC")}\n`;
 
 test("a free home is locked with this process's pid and start time, and release frees it", () => {
   const { dir, home, lock } = scratch();
@@ -118,4 +119,37 @@ test("a lock written before the Mac booted is stale, though its pid is alive aga
 
 test("pidIn reads the pid of both lock formats", () => {
   expect([pidIn("42\n"), pidIn("42\nSat Oct 17 14:54:01 2026\n"), pidIn("42\n\n"), pidIn("x\n")]).toEqual([42, 42, null, null]);
+});
+
+test("the start time is recorded in UTC, so a time-zone change never makes a live lock look stale", () => {
+  const { home, lock } = scratch();
+  writeFileSync(lock, `${process.ppid}\n${startOf(process.ppid, "UTC")}\n`);
+  const prior = process.env.TZ;
+  process.env.TZ = "Pacific/Kiritimati";
+  try {
+    expect(lockHome(home, { sleep: noWait })).toEqual({ kind: "busy", path: lock, pid: process.ppid });
+  } finally {
+    if (prior === undefined) delete process.env.TZ;
+    else process.env.TZ = prior;
+  }
+});
+
+test("a lock an older bridge wrote with a local start time is still busy while that process lives", () => {
+  const { home, lock } = scratch();
+  writeFileSync(lock, `${process.ppid}\n${startOf(process.ppid)}\n`);
+  expect(lockHome(home, { sleep: noWait })).toEqual({ kind: "busy", path: lock, pid: process.ppid });
+});
+
+test("a live holder whose start time cannot be read is busy, not taken over", () => {
+  const { home, lock } = scratch();
+  writeFileSync(lock, `${process.ppid}\nMon Jan  1 00:00:00 2001\n`);
+  expect(lockHome(home, { sleep: noWait, startOf: (p) => (p === process.ppid ? null : "Sat Oct 17 09:00:00 2026") })).toEqual({ kind: "busy", path: lock, pid: process.ppid });
+});
+
+test("a lock with a recorded start is judged by it alone, not by when it was written", () => {
+  const { home, lock } = scratch();
+  writeFileSync(lock, `${process.ppid}\n${startOf(process.ppid, "UTC")}\n`);
+  const hourAgo = new Date(Date.now() - 3_600_000);
+  utimesSync(lock, hourAgo, hourAgo);
+  expect(lockHome(home, { sleep: noWait, bootedAt: Date.now() - 600_000 })).toEqual({ kind: "busy", path: lock, pid: process.ppid });
 });

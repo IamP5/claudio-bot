@@ -21,6 +21,8 @@ struct HomeView: View {
         searching ? store.bots(matching: query) : store.homeBots
     }
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         @Bindable var router = router
         List(selection: $router.selection) {
@@ -66,6 +68,7 @@ struct HomeView: View {
             }
         }
         .listStyle(.plain)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: bots.map(\.id))
         .scrollContentBackground(.hidden)
         .background(Theme.background)
         .navigationTitle("")
@@ -226,6 +229,7 @@ struct BotRow: View {
     let bot: Bot
 
     @Environment(AppStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let display = RowDisplay(bot)
@@ -263,11 +267,14 @@ struct BotRow: View {
                     Spacer(minLength: 4)
                     if display.unreadDot {
                         Circle().fill(Theme.unread).frame(width: 9, height: 9)
+                            .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
                     }
                 }
             }
         }
         .padding(.vertical, 14)
+        .animation(.snappy(duration: 0.2), value: display.unreadDot)
+        .animation(.snappy(duration: 0.2), value: display.needsAttention)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityValue(display.unreadDot ? "Unread" : "")

@@ -183,7 +183,11 @@ struct AvatarView: View {
         }
         .frame(width: size, height: size)
         .overlay(alignment: .bottomTrailing) {
-            if needsAttention { AttentionBadge(size: max(12, size * 0.28)).offset(x: size * 0.06, y: size * 0.04) }
+            if needsAttention {
+                AttentionBadge(size: max(12, size * 0.28))
+                    .offset(x: size * 0.06, y: size * 0.04)
+                    .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
+            }
         }
         .accessibilityHidden(true)
     }

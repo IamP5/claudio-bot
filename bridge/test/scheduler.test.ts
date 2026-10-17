@@ -522,3 +522,85 @@ test("failed run-now presses never turn a routine off", () => {
   }
   expect(r.enabled).toBe(true);
 });
+
+test(`a webhook routine has no nextRunAt, never fires on the clock, and counts toward the ${ROUTINES_PER_BOT}-routine cap`, () => {
+  const h = harness(local(19, 8));
+  for (let i = 0; i < ROUTINES_PER_BOT - 1; i++) h.add(`r${i}`, "0 9 * * *");
+  expect(h.scheduler.upsertHook(BOT, { name: "deploys", prompt: "Summarize the deploy." })).toStartWith("Routine deploys: when its webhook is called.");
+  const r = h.routine("deploys");
+  expect(r.trigger).toEqual({ kind: "webhook", tokenHash: null });
+  expect(r.nextRunAt).toBeNull();
+  expect(h.scheduler.upsertHook(BOT, { name: "one more", prompt: "p" })).toContain(`at most ${ROUTINES_PER_BOT} routines`);
+  expect(h.bot.routines).toHaveLength(ROUTINES_PER_BOT);
+
+  h.at(local(19, 8, 30));
+  expect(r.nextRunAt).toBeNull();
+  expect(r.runs).toEqual([]);
+  expect(h.scheduler.nextDeadline()).toBe(local(19, 9).toISOString());
+});
+
+test("updating a webhook routine keeps its token; turning it into a cron routine drops the token", () => {
+  const h = harness(local(19, 8));
+  h.scheduler.upsertHook(BOT, { name: "deploys", prompt: "v1" });
+  const r = h.routine("deploys");
+  expect(h.scheduler.setHookToken(BOT, r.id, "ab".repeat(32))).toBeNull();
+  h.scheduler.upsertHook(BOT, { name: "deploys", prompt: "v2" });
+  expect(h.routine("deploys")).toMatchObject({ id: r.id, prompt: "v2", trigger: { kind: "webhook", tokenHash: "ab".repeat(32) } });
+  h.scheduler.upsert(BOT, { name: "deploys", schedule: "0 9 * * *", prompt: "v3" });
+  expect(h.routine("deploys").trigger).toEqual({ kind: "cron", schedule: "0 9 * * *" });
+  expect(h.scheduler.setHookToken(BOT, r.id, "cd".repeat(32))).toContain("schedule, not a webhook");
+});
+
+test("a token is saved with an urgent persist, and a failed save keeps the old token", () => {
+  const h = harness(local(19, 8));
+  h.scheduler.upsertHook(BOT, { name: "deploys", prompt: "p" });
+  const r = h.routine("deploys");
+  expect(h.scheduler.setHookToken(BOT, r.id, "ab".repeat(32))).toBeNull();
+  h.setFailing("flush");
+  expect(h.scheduler.setHookToken(BOT, r.id, "cd".repeat(32))).toContain("Could not save the token");
+  expect(r.trigger).toEqual({ kind: "webhook", tokenHash: "ab".repeat(32) });
+  expect(h.scheduler.setHookToken(BOT, "r_unknown" as RoutineId, "cd".repeat(32))).toBe("Unknown routine");
+});
+
+test("a hook fires once with the payload, persisted before delivery, and is refused while that run is still going", () => {
+  const h = harness(local(19, 8));
+  h.scheduler.upsertHook(BOT, { name: "deploys", prompt: "Summarize it." });
+  const r = h.routine("deploys");
+  expect(h.scheduler.hook(BOT, r.id, '{"sha":"abc123"}')).toBeNull();
+  expect(h.delivered).toHaveLength(1);
+  const [{ e, flushedBefore }] = h.delivered as [(typeof h.delivered)[number]];
+  expect(e).toMatchObject({ from: "routine", name: "deploys", prompt: "Summarize it.", manual: false, late: false, payload: '{"sha":"abc123"}' });
+  expect(flushedBefore?.find((x) => x.id === r.id)?.runs[0]).toMatchObject({ id: e.run.runId, status: "running", manual: false });
+
+  expect(h.scheduler.hook(BOT, r.id, "again")).toBe("Its previous run is still going.");
+  expect(h.delivered).toHaveLength(1);
+  settle(h, h.lastRef(), "ok");
+  expect(h.scheduler.hook(BOT, r.id, "again")).toBeNull();
+  expect(h.delivered).toHaveLength(2);
+});
+
+test("a hook is refused for a paused routine, a parked bot, a cron routine, or an unknown routine, recording nothing", () => {
+  const h = harness(local(19, 8));
+  h.scheduler.upsertHook(BOT, { name: "deploys", prompt: "p", enabled: false });
+  const r = h.routine("deploys");
+  expect(h.scheduler.hook(BOT, r.id, "x")).toBe("The routine is paused.");
+  expect(h.scheduler.setEnabled(BOT, r.id, true)).toBeNull();
+  expect(r.nextRunAt).toBeNull();
+  h.setLimit("daily_cap");
+  expect(h.scheduler.hook(BOT, r.id, "x")).toContain("Paused by a limit");
+  h.setLimit("none");
+  const cron = h.add("digest", "0 9 * * *");
+  expect(h.scheduler.hook(BOT, cron.id, "x")).toBe("Unknown routine");
+  expect(h.scheduler.hook(BOT, "r_unknown" as RoutineId, "x")).toBe("Unknown routine");
+  expect(r.runs).toEqual([]);
+  expect(h.delivered).toHaveLength(0);
+});
+
+test("run now and cron fires carry no payload", () => {
+  const h = harness(local(19, 8, 59));
+  const r = h.add("digest", "0 9 * * *");
+  expect(h.scheduler.runNow(BOT, r.id)).toBeNull();
+  settle(h, h.lastRef(), "ok");
+  h.at(local(19, 9));
+  expect(h.delivered.map((d) => d.e.payload)).toEqual([null, null]);
+});

@@ -19,6 +19,8 @@ struct Composer: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var takingPhoto = false
     @State private var pickingFiles = false
+    /// Counts sends, so each one taps the haptic engine once.
+    @State private var sends = 0
 
     static let uploadLimit = 10 << 20
 
@@ -119,9 +121,11 @@ struct Composer: View {
                 .frame(width: 36, height: 36)
                 .background(bot.avatar.color.accent, in: Circle())
                 .opacity(canSend ? 1 : 0.45)
+                .animation(.easeOut(duration: 0.15), value: canSend)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
         .disabled(!canSend)
+        .sensoryFeedback(.impact(weight: .light), trigger: sends)
         .padding(.bottom, 5)
         .accessibilityLabel("Send")
     }
@@ -158,6 +162,7 @@ struct Composer: View {
         text = ""
         uploads = []
         problem = nil
+        sends += 1
         onSend()
     }
 

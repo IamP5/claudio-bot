@@ -192,6 +192,6 @@ struct StopButton: View {
                 .padding(.vertical, 7)
                 .background(Theme.raised, in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
     }
 }

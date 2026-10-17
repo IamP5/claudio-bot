@@ -557,17 +557,19 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         return host.sizeThatFits(in: CGSize(width: 390, height: 2000)).height
     }
 
-    @Test func memoryShowsOnlyWhenTheBridgeListsIt() {
+    @Test func memoryShowsWhenTheBridgeListsItAndAnOlderBridgeGetsAShorterUpdateNote() {
         let facts = [Fact(id: FactID("f_1"), text: "Prefers short answers", at: at, by: "Eng")]
+        #expect(height(AppStore()) == 0, "before any hello there is nothing to say")
         let older = AppStore()
         older.apply(hello([]))
         older.apply(.memory(facts))
-        #expect(height(older) == 0)
+        #expect(older.lacks(.memory))
+        #expect(height(older) > 0)
 
         let current = AppStore()
         current.apply(.hello(Hello(features: [.memory], machine: "Mac", userName: "Alex", bots: [])))
         current.apply(.memory(facts))
-        #expect(height(current) > 0)
+        #expect(height(current) > height(older))
     }
 
     @Test func aProposedFactRowIsTallerThanAConfirmedOneBecauseItCarriesConfirmAndForget() {

@@ -286,7 +286,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         ])
         #expect(BotStatus.allCases.map(\.rawValue) == ["idle", "working", "awaiting_approval", "parked", "unavailable"])
         #expect(AgentStatus.allCases.map(\.rawValue) == ["working", "waiting", "failed", "in_cloud", "awaiting_approval", "parked", "unavailable", "capped"])
-        #expect(Feature.allCases.map(\.rawValue) == ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks"])
+        #expect(Feature.allCases.map(\.rawValue) == ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend"])
         #expect(ConnectorStatus.allCases.map(\.rawValue) == ["connected", "pending", "failed", "needs_auth", "unchecked"])
         #expect(RunStatus.allCases.map(\.rawValue) == ["running", "ok", "quiet", "failed", "skipped"])
         #expect(PermissionChoice.allCases.map(\.rawValue) == ["once", "always", "deny", "never"])

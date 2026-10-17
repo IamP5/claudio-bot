@@ -610,6 +610,7 @@ function harness(
     clock?: { t: number };
     dailyLeft?: () => number;
     context?: () => string;
+    brief?: () => string;
   } = {},
 ) {
   const clock = opts.clock ?? { t: NOW.getTime() };
@@ -629,6 +630,7 @@ function harness(
     account,
     options: opts.options ?? (() => ({ cwd: "/bots/b_1", resume: state.id ?? undefined })),
     context: opts.context,
+    brief: opts.brief,
     ledger: {
       add: opts.add ?? ((row) => void usage.push(row as Record<string, unknown>)),
       headroom: (_, i) => (opts.headroom ?? roomy)(i),
@@ -1466,6 +1468,64 @@ describe("session", () => {
     after.q().emit(resultMsg(1));
     await flush();
     expect(after.ends[0]!.pending).toMatchObject({ settles, attempts: 3 });
+  });
+});
+
+describe("what rides on a turn's message survives a restart", () => {
+  async function turn(h: Harness, text: string) {
+    h.push(text);
+    await flush();
+    h.q().emit(resultMsg(0.1));
+    await flush();
+  }
+  const restarted = (h: Harness, over: Parameters<typeof harness>[0] = {}) => {
+    h.session.close();
+    return harness({ state: structuredClone(h.state), ...over });
+  };
+  const CLEARED = "[No facts about the user are on file now. The list sent earlier no longer applies.]";
+
+  test("forgetting the last fact while the bridge was down still sends the cleared notice", async () => {
+    const before = harness({ state: emptySession("s_1"), context: () => "Facts: likes tea" });
+    await turn(before, "[one]");
+    const h = restarted(before, { context: () => "" });
+    await turn(h, "[two]");
+    expect([before.sent(), h.sent()]).toEqual([["Facts: likes tea\n\n[one]"], [`${CLEARED}\n\n[two]`]]);
+  });
+
+  test("facts already sent are not sent again after a restart", async () => {
+    const before = harness({ state: emptySession("s_1"), context: () => "Facts: likes tea" });
+    await turn(before, "[one]");
+    const h = restarted(before, { context: () => "Facts: likes tea" });
+    await turn(h, "[two]");
+    expect(h.sent()).toEqual(["[two]"]);
+  });
+
+  test("a query that starts a new session gets the facts whatever was sent to the old one", async () => {
+    const before = harness({ state: emptySession("s_1"), context: () => "Facts: likes tea" });
+    await turn(before, "[one]");
+    const h = restarted(before, { state: { ...structuredClone(before.state), id: null }, context: () => "Facts: likes tea" });
+    await turn(h, "[two]");
+    expect(h.sent()).toEqual(["Facts: likes tea\n\n[two]"]);
+  });
+
+  test("the standing brief is not sent on a new session's first turn, then rides on the first turn after it changes", async () => {
+    let brief = "[Brief: you are Ana]";
+    const h = harness({ brief: () => brief, context: () => "Facts: likes tea" });
+    await turn(h, "[one]");
+    await turn(h, "[two]");
+    brief = "[Brief: you are Bea]";
+    await turn(h, "[three]");
+    await turn(h, "[four]");
+    expect(h.sent()).toEqual(["Facts: likes tea\n\n[one]", "[two]", "[Brief: you are Bea]\n\n[three]", "[four]"]);
+  });
+
+  test("a resumed session that never got the brief gets it once, and a restart does not repeat it", async () => {
+    const before = harness({ state: emptySession("s_1"), brief: () => "[Brief: you are Ana]" });
+    await turn(before, "[one]");
+    await turn(before, "[two]");
+    const h = restarted(before, { brief: () => "[Brief: you are Ana]" });
+    await turn(h, "[three]");
+    expect([...before.sent(), ...h.sent()]).toEqual(["[Brief: you are Ana]\n\n[one]", "[two]", "[three]"]);
   });
 });
 

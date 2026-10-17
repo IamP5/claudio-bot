@@ -153,7 +153,17 @@ export function holdOf(state: Owned<SessionState>): Hold | null {
 export type Notice = { at: string; text: string };
 
 /** The SDK session of a bot or a mac agent: resume id, durable inbox, lifecycle, pending notices. Writer: session.ts. */
-export type SessionState = { id: string | null; pending: Pending[]; lifecycle: Lifecycle; notices: Notice[] };
+export type SessionState = {
+  id: string | null;
+  pending: Pending[];
+  lifecycle: Lifecycle;
+  notices: Notice[];
+  /**
+   * Hashes of the context and standing brief last put on a turn of session `id`, so a restart neither repeats them nor
+   * misses a change. Absent until the first; ignored by a query that starts a new session.
+   */
+  sent?: { context?: string; brief?: string };
+};
 
 export const emptySession = (id: string | null = null): SessionState => ({ id, pending: [], lifecycle: { kind: "idle" }, notices: [] });
 

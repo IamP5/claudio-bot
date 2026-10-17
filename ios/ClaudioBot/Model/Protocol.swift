@@ -803,14 +803,33 @@ struct Device: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
-/// One fact in USER.md, shared by every bot. by: the bot that remembered it, nil for the user.
+/// One fact in USER.md. by: the bot that remembered it, nil for the user. confirmed: the user added or confirmed it, so
+/// every bot reads it; false is a bot's proposal only that bot reads. A bridge that predates the flag sent confirmed facts.
 struct Fact: Codable, Hashable, Sendable, Identifiable {
     let id: FactID
     var text: String
     var at: Date
     var by: String?
+    var confirmed: Bool
 
-    private enum CodingKeys: String, CodingKey { case id, text, at, by }
+    private enum CodingKeys: String, CodingKey { case id, text, at, by, confirmed }
+
+    init(id: FactID, text: String, at: Date, by: String?, confirmed: Bool = true) {
+        self.id = id
+        self.text = text
+        self.at = at
+        self.by = by
+        self.confirmed = confirmed
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(FactID.self, forKey: .id)
+        text = try c.decode(String.self, forKey: .text)
+        at = try c.decode(Date.self, forKey: .at)
+        by = try c.decodeIfPresent(String.self, forKey: .by)
+        confirmed = try c.decodeIfPresent(Bool.self, forKey: .confirmed) ?? true
+    }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -818,6 +837,7 @@ struct Fact: Codable, Hashable, Sendable, Identifiable {
         try c.encode(text, forKey: .text)
         try c.encode(at, forKey: .at)
         try c.encode(by, forKey: .by)
+        try c.encode(confirmed, forKey: .confirmed)
     }
 }
 
@@ -1203,6 +1223,7 @@ enum ClientMessage: Codable, Hashable, Sendable {
     /// factId nil adds a fact.
     case setFact(factId: FactID?, text: String)
     case forgetFact(factId: FactID)
+    case confirmFact(factId: FactID)
     case connectors(botId: BotID)
     case setConnector(botId: BotID, name: String, enabled: Bool)
     case skills(botId: BotID)
@@ -1248,6 +1269,7 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case "memory": self = .memory
         case "set_fact": self = .setFact(factId: try c.decodeIfPresent(FactID.self, forKey: .factId), text: try c.decode(String.self, forKey: .text))
         case "forget_fact": self = .forgetFact(factId: try c.decode(FactID.self, forKey: .factId))
+        case "confirm_fact": self = .confirmFact(factId: try c.decode(FactID.self, forKey: .factId))
         case "connectors": self = .connectors(botId: try bot())
         case "set_connector":
             self = .setConnector(botId: try bot(), name: try c.decode(String.self, forKey: .name), enabled: try c.decode(Bool.self, forKey: .enabled))
@@ -1335,6 +1357,9 @@ enum ClientMessage: Codable, Hashable, Sendable {
             try c.encode(text, forKey: .text)
         case let .forgetFact(factId):
             try c.encode("forget_fact", forKey: .type)
+            try c.encode(factId, forKey: .factId)
+        case let .confirmFact(factId):
+            try c.encode("confirm_fact", forKey: .type)
             try c.encode(factId, forKey: .factId)
         case let .connectors(botId):
             try c.encode("connectors", forKey: .type)

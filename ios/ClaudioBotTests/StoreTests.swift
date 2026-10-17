@@ -474,4 +474,14 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         current.apply(.memory(facts))
         #expect(height(current) > 0)
     }
+
+    @Test func aProposedFactRowIsTallerThanAConfirmedOneBecauseItCarriesConfirmAndForget() {
+        func rendered(confirmed: Bool) -> AppStore {
+            let store = AppStore()
+            store.apply(.hello(Hello(features: [.memory], machine: "Mac", userName: "Alex", bots: [])))
+            store.apply(.memory([Fact(id: FactID("f_1"), text: "Prefers short answers", at: at, by: "Eng", confirmed: confirmed)]))
+            return store
+        }
+        #expect(height(rendered(confirmed: false)) > height(rendered(confirmed: true)))
+    }
 }

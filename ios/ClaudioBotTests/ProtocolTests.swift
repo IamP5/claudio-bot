@@ -106,6 +106,14 @@ private func unknowns(in message: ServerMessage) -> [String] {
         }
     }
 
+    @Test func aFactWithoutConfirmedReadsAsConfirmedAndAProposalKeepsFalse() throws {
+        let old = try decode(Fact.self, #"{"id":"f_1","text":"Likes jazz","at":"2026-10-16T12:00:00.000Z","by":null}"#)
+        let proposed = try decode(Fact.self, #"{"id":"f_2","text":"Likes tea","at":"2026-10-16T12:00:00.000Z","by":"Eng","confirmed":false}"#)
+        #expect(old.confirmed == true)
+        #expect(proposed.confirmed == false)
+        #expect(proposed.by == "Eng")
+    }
+
     @Test func helloCarriesTheProtocolTheStreamPositionAndTypedBots() throws {
         guard case .hello(let hello) = try Fixture.server()[0].message else { Issue.record("not hello"); return }
         #expect(hello.protocol == 3)

@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// The Memory section in Settings: USER.md's facts, which every bot reads. Shown when the bridge lists .memory.
+/// The Memory section in Settings: USER.md's facts. Facts you added or confirmed reach every bot; a bot's proposal reaches
+/// only that bot until you confirm it here. Shown when the bridge lists .memory.
 struct MemorySection: View {
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
@@ -15,8 +16,16 @@ struct MemorySection: View {
                             .foregroundStyle(Theme.secondary)
                     }
                     ForEach(facts) { fact in
-                        Button { editing = FactDraft(fact) } label: { FactRow(fact: fact) }
-                            .buttonStyle(.plain)
+                        if fact.confirmed {
+                            Button { editing = FactDraft(fact) } label: { FactRow(fact: fact) }
+                                .buttonStyle(.plain)
+                        } else {
+                            ProposedFactRow(
+                                fact: fact,
+                                onConfirm: { client.send(.confirmFact(factId: fact.id)) },
+                                onForget: { client.send(.forgetFact(factId: fact.id)) }
+                            )
+                        }
                     }
                     .onDelete { offsets in
                         for i in offsets { client.send(.forgetFact(factId: facts[i].id)) }
@@ -30,7 +39,7 @@ struct MemorySection: View {
             } header: {
                 Text("Memory")
             } footer: {
-                Text("What every bot knows about you. Bots add facts when you tell them something worth keeping. Swipe to forget one. They live in USER.md on your Mac.")
+                Text("What bots know about you. A fact a bot remembers stays with that bot until you confirm it; then every bot knows it. Tap a fact to edit it, swipe to forget it. They live in USER.md on your Mac.")
             }
             .task(id: store.connection.summary) { client.send(.memory) }
             .sheet(item: $editing) { draft in
@@ -69,6 +78,30 @@ private struct FactRow: View {
                 .foregroundStyle(Theme.secondary)
         }
         .contentShape(Rectangle())
+    }
+}
+
+/// A bot's proposed fact: only that bot reads it until the user confirms it, so the row asks for that decision.
+private struct ProposedFactRow: View {
+    let fact: Fact
+    let onConfirm: () -> Void
+    let onForget: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(fact.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("\(fact.by.map { "Proposed by \($0)" } ?? "Proposed by a bot") · \(TimeLabel.home(fact.at)). Only that bot uses it until you confirm.")
+                .font(.footnote)
+                .foregroundStyle(Theme.secondary)
+            HStack {
+                Button("Confirm", action: onConfirm)
+                    .buttonStyle(.borderedProminent)
+                Button("Forget", role: .destructive, action: onForget)
+                    .buttonStyle(.bordered)
+            }
+            .controlSize(.small)
+        }
     }
 }
 

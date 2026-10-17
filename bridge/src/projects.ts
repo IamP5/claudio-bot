@@ -5,7 +5,7 @@ import { join } from "node:path";
 export type Project = { name: string; path: string; branch: string | null; githubRepo: string | null };
 
 export function projectRoots(env = process.env): string[] {
-  if (env.CLAUDEBOT_ROOTS) return env.CLAUDEBOT_ROOTS.split(":").filter((r) => r !== "");
+  if (env.CLAUDIOBOT_ROOTS) return env.CLAUDIOBOT_ROOTS.split(":").filter((r) => r !== "");
   return ["Dev/projects", "code", "Developer", "Projects"].map((r) => join(homedir(), r));
 }
 

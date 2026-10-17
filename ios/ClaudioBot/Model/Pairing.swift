@@ -32,9 +32,9 @@ struct Pairing: Codable, Equatable, Sendable {
         self.init(url: url, token: token)
     }
 
-    /// Parses `claudebot://pair?url=<ws url>&token=<hex>`, the payload of the bridge's QR code.
+    /// Parses `claudiobot://pair?url=<ws url>&token=<hex>`, the payload of the bridge's QR code.
     init?(link: URL) {
-        guard link.scheme == "claudebot", link.host() == "pair",
+        guard link.scheme == "claudiobot", link.host() == "pair",
               let query = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems,
               let url = query.first(where: { $0.name == "url" })?.value,
               let token = query.first(where: { $0.name == "token" })?.value,
@@ -51,7 +51,7 @@ struct Pairing: Codable, Equatable, Sendable {
 
 /// Keeps the pairing in the Keychain because the token grants control of the Mac.
 enum PairingVault {
-    private static let service = "dev.claudebot.app.pairing"
+    private static let service = "dev.claudiobot.app.pairing"
     private static let account = "bridge"
 
     private static var query: [String: Any] {

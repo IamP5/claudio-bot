@@ -91,7 +91,7 @@ enum Demo {
         bot("news", "tech news", .pentagon, .teal, last: at(1, 7, 58),
             preview: "Morning, Bruno. Here's what's new since yesterday.", unread: 1,
             routines: [routine("r1", "tech-news-digest", "57 7 * * 1-5", "Weekdays at 7:57 AM")]),
-        bot("claude", "Claude Bot", .circle, .white, last: at(2, 15, 9),
+        bot("claude", "Claudio Bot", .circle, .white, last: at(2, 15, 9),
             preview: "Want me to merge any of these now?", question: "Want me to merge any of these now?"),
         bot("lead", "Engineering Lead", .drop, .red, last: at(3, 18, 2),
             preview: "Done. Zocão now has premium in Solta o Som until March.",
@@ -163,7 +163,7 @@ enum Demo {
                 .routine(id: RoutineID("r4"), name: "transcript-healthcheck"),
                 .routine(id: RoutineID("r5"), name: "routine-healthcheck"),
             ]),
-            say("g3", at(13, 23, 34), "I design Claude Bots. What's the one job this one should do every time it wakes?"),
+            say("g3", at(13, 23, 34), "I design Claudio Bots. What's the one job this one should do every time it wakes?"),
             me("g4", at(9, 23, 30), "make a linkedin coach that gets my posts ready"),
             say("g5", at(9, 23, 31), "Reading your last posts now, then I'll build it."),
             .note(id: MessageID("g6"), at: at(9, 23, 38), text: "Created {0}", refs: [

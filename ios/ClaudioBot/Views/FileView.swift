@@ -47,7 +47,7 @@ struct FileView: View {
             ContentUnavailableView(
                 "No preview",
                 systemImage: Self.symbol(for: path),
-                description: Text("ClaudeBot shows text up to 1 MB and images up to 10 MB. This file is in the bot's library folder on your Mac.")
+                description: Text("ClaudioBot shows text up to 1 MB and images up to 10 MB. This file is in the bot's library folder on your Mac.")
             )
         }
     }

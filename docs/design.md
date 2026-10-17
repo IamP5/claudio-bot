@@ -1,4 +1,4 @@
-# ClaudeBot v2 design: bots, not tasks
+# ClaudioBot v2 design: bots, not tasks
 
 `docs/grok-bot-reference.md` is the product. `bridge/src/protocol.ts` is the wire contract and wins any disagreement with this file. `fixtures/protocol.json` pins both sides.
 
@@ -9,7 +9,7 @@ v1 was a phone remote for single Claude Code sessions. The Claude iOS app alread
 The Mac bridge owns every bot. The phone is a view. A bot keeps working, and its routines fire, while the phone is closed. The bridge must be running on the Mac. The app says so when it can't connect.
 
 ```
-~/.claudebot/
+~/.claudiobot/
   token
   state.json            bots, conversations, routines, agents, links (atomic, debounced)
   USER.md               what any bot has learned about the user; every bot may read and append
@@ -27,7 +27,7 @@ One long-lived Claude Agent SDK `query()` per bot, started lazily, with streamin
 - `cwd`: the bot home. `settingSources: ["user", "project"]`, so the user's MCP servers and skills are present and the bot's CLAUDE.md loads.
 - `systemPrompt: { type: "preset", preset: "claude_code", append: PERSONA }`, with PERSONA as given below.
 - `permissionMode: "auto"`. The bot works unattended; the auto-mode classifier is the safety net, and the persona makes the bot ask in chat before outward actions. If the SDK in `node_modules` rejects `"auto"`, fall back to `"acceptEdits"` plus a `canUseTool` that allows Read/Glob/Grep/WebSearch/WebFetch, the bot's own tools and anything whose paths stay under the bot home, and denies the rest with a message telling the bot to delegate to an agent or ask the user. Record which one shipped.
-- `mcpServers: { claudebot: createSdkMcpServer(...) }`, with the tools listed below.
+- `mcpServers: { claudio: createSdkMcpServer(...) }`, with the tools listed below.
 - `model`: the user's default (omit the option).
 
 Everything that reaches a bot is an **envelope**, pushed as one user message whose first line says where it came from:
@@ -46,7 +46,7 @@ Envelopes queue per bot. The input stream already serializes them.
 
 Each assistant **text block** becomes one `bot` message (one bubble). Tool calls never show. `Bot.status` is `working` from the push of an envelope until the turn's `result`.
 
-### Bot tools (in-process MCP server `claudebot`)
+### Bot tools (in-process MCP server `claudio`)
 
 Each tool returns a short string the bot can act on.
 
@@ -63,7 +63,7 @@ Each tool returns a short string the bot can act on.
 ### Persona (append to the system prompt; fill the names)
 
 ```
-You are {name}, a Bot in ClaudeBot. You work for {userName} on their Mac.
+You are {name}, a Bot in ClaudioBot. You work for {userName} on their Mac.
 Your home folder is your computer. Keep notes about your job and what you learn in CLAUDE.md here.
 Facts about {userName} that any bot should know go in {USER.md path}; read it when you start.
 Put documents you make for {userName} in library/. They appear in your Library.
@@ -106,7 +106,7 @@ A tiny 5-field cron (`*`, lists, ranges, `*/n` steps; dow 0-6 with Sunday 0) in 
 
 ## Default bot
 
-On first run, create **Claude Bot** (circle, white), the general assistant, the way Grok ships "Grok Bot". It starts with the `[You were just created by Bruno]` envelope, so it greets the user. `create_bot` from the app makes "New Bot" with a random shape and color and the same envelope plus "Introduce yourself in one short message, then use ask to learn what Bruno wants help with first. Base the options on what USER.md says about them, plus Coding / building an app and Research and staying informed. After they answer, name yourself with update_self."
+On first run, create **Claudio Bot** (circle, white), the general assistant, the way Grok ships "Grok Bot". It starts with the `[You were just created by Bruno]` envelope, so it greets the user. `create_bot` from the app makes "New Bot" with a random shape and color and the same envelope plus "Introduce yourself in one short message, then use ask to learn what Bruno wants help with first. Base the options on what USER.md says about them, plus Coding / building an app and Research and staying informed. After they answer, name yourself with update_self."
 
 ## Library, links, files
 

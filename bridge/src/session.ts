@@ -1,7 +1,7 @@
 import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 export function claudeExecutable(): string | null {
-  return process.env.CLAUDEBOT_CLAUDE ?? Bun.which("claude");
+  return process.env.CLAUDIOBOT_CLAUDE ?? Bun.which("claude");
 }
 
 export type Session = { push(text: string): void; close(): void; readonly working: boolean };
@@ -47,7 +47,7 @@ export function createSession(spec: {
 
   function start() {
     const executable = claudeExecutable();
-    if (!executable) return crash("claude was not found on PATH. Set CLAUDEBOT_CLAUDE.");
+    if (!executable) return crash("claude was not found on PATH. Set CLAUDIOBOT_CLAUDE.");
     const gen = ++generation;
     let stderr = "";
     const q = query({

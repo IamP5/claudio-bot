@@ -2,7 +2,7 @@ import SwiftUI
 import VisionKit
 
 struct PairingView: View {
-    /// A pairing from a claudebot://pair link; it fills the form and connects right away.
+    /// A pairing from a claudiobot://pair link; it fills the form and connects right away.
     var link: Pairing?
 
     @Environment(AppModel.self) private var app
@@ -48,7 +48,7 @@ struct PairingView: View {
             QRScannerSheet { payload in
                 scanning = false
                 guard let url = URL(string: payload), let pairing = Pairing(link: url) else {
-                    failure = "That QR code is not a ClaudeBot pairing code."
+                    failure = "That QR code is not a ClaudioBot pairing code."
                     return
                 }
                 connect(pairing)

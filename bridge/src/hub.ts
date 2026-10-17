@@ -74,7 +74,7 @@ export function createHub(deps: {
         settingSources: ["user", "project"],
         systemPrompt: { type: "preset", preset: "claude_code", append: persona({ name: bot.name, userName, userMd: homes.userMd }) },
         permissionMode: "auto",
-        mcpServers: { claudebot: botToolServer(bot.id, actions) },
+        mcpServers: { claudio: botToolServer(bot.id, actions) },
         // A bot asks with its own ask tool, which posts a card instead of blocking the turn.
         disallowedTools: ["AskUserQuestion"],
         model: deps.model,
@@ -332,7 +332,7 @@ export function createHub(deps: {
       homes.ensureUserMd(userName);
       if (firstRun) {
         makeBot(
-          { name: "Claude Bot", avatar: { shape: "circle", color: "white" }, job: `General assistant. Take real work off ${userName}'s plate.` },
+          { name: "Claudio Bot", avatar: { shape: "circle", color: "white" }, job: `General assistant. Take real work off ${userName}'s plate.` },
           { from: "created", by: "user", brief: null },
         );
       }

@@ -28,7 +28,7 @@ struct SettingsView: View {
                     Toggle("Notifications", isOn: $notificationsEnabled)
                         .tint(AvatarColor.green.color)
                 } footer: {
-                    Text("Alerts for bot messages and questions arrive while ClaudeBot is connected to your Mac. A question alert lets you pick one of its first two answers.")
+                    Text("Alerts for bot messages and questions arrive while ClaudioBot is connected to your Mac. A question alert lets you pick one of its first two answers.")
                 }
 
                 Section {

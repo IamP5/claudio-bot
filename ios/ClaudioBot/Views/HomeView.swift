@@ -204,7 +204,7 @@ struct ConnectionBanner: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             ConnectionBadge(state: state)
-            Text("ClaudeBot needs the bridge running on your Mac. Your bots keep working there while this phone is away.")
+            Text("ClaudioBot needs the bridge running on your Mac. Your bots keep working there while this phone is away.")
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)
         }

@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 @main
-struct ClaudeBotApp: App {
+struct ClaudioBotApp: App {
     @State private var app = AppModel()
     @Environment(\.scenePhase) private var scenePhase
 
@@ -39,7 +39,7 @@ final class Router {
     var showingInspector = false
     /// The ref of a create_bot in flight; the bot it becomes is opened.
     var pendingCreate: String?
-    /// A pairing that arrived through a claudebot://pair link, waiting to be confirmed.
+    /// A pairing that arrived through a claudiobot://pair link, waiting to be confirmed.
     var pairingLink: Pairing?
 
     func open(_ bot: BotID) {

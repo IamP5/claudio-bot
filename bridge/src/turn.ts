@@ -1,7 +1,7 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { MessageId } from "./protocol";
 
-export const ASK_TOOL = "mcp__claudebot__ask";
+export const ASK_TOOL = "mcp__claudio__ask";
 
 const FENCE = /^\s*(`{3,}|~{3,})/;
 const LIST_ITEM = /^\s*([-*+]|\d+[.)])\s/;

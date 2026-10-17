@@ -15,10 +15,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "B0A0AA7A491E979773098DD1"
-               BuildableName = "ClaudeBot.app"
-               BlueprintName = "ClaudeBot"
-               ReferencedContainer = "container:ClaudeBot.xcodeproj">
+               BlueprintIdentifier = "E1BA0138DA7255814C1998E6"
+               BuildableName = "ClaudioBot.app"
+               BlueprintName = "ClaudioBot"
+               ReferencedContainer = "container:ClaudioBot.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
          <BuildActionEntry
@@ -29,10 +29,10 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "6D28D7AA99DAF2647F41D346"
-               BuildableName = "ClaudeBotTests.xctest"
-               BlueprintName = "ClaudeBotTests"
-               ReferencedContainer = "container:ClaudeBot.xcodeproj">
+               BlueprintIdentifier = "6521D839BC934834D19D4797"
+               BuildableName = "ClaudioBotTests.xctest"
+               BlueprintName = "ClaudioBotTests"
+               ReferencedContainer = "container:ClaudioBot.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -46,10 +46,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "B0A0AA7A491E979773098DD1"
-            BuildableName = "ClaudeBot.app"
-            BlueprintName = "ClaudeBot"
-            ReferencedContainer = "container:ClaudeBot.xcodeproj">
+            BlueprintIdentifier = "E1BA0138DA7255814C1998E6"
+            BuildableName = "ClaudioBot.app"
+            BlueprintName = "ClaudioBot"
+            ReferencedContainer = "container:ClaudioBot.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -58,10 +58,10 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "6D28D7AA99DAF2647F41D346"
-               BuildableName = "ClaudeBotTests.xctest"
-               BlueprintName = "ClaudeBotTests"
-               ReferencedContainer = "container:ClaudeBot.xcodeproj">
+               BlueprintIdentifier = "6521D839BC934834D19D4797"
+               BuildableName = "ClaudioBotTests.xctest"
+               BlueprintName = "ClaudioBotTests"
+               ReferencedContainer = "container:ClaudioBot.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -82,10 +82,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "B0A0AA7A491E979773098DD1"
-            BuildableName = "ClaudeBot.app"
-            BlueprintName = "ClaudeBot"
-            ReferencedContainer = "container:ClaudeBot.xcodeproj">
+            BlueprintIdentifier = "E1BA0138DA7255814C1998E6"
+            BuildableName = "ClaudioBot.app"
+            BlueprintName = "ClaudioBot"
+            ReferencedContainer = "container:ClaudioBot.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
@@ -101,10 +101,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "B0A0AA7A491E979773098DD1"
-            BuildableName = "ClaudeBot.app"
-            BlueprintName = "ClaudeBot"
-            ReferencedContainer = "container:ClaudeBot.xcodeproj">
+            BlueprintIdentifier = "E1BA0138DA7255814C1998E6"
+            BuildableName = "ClaudioBot.app"
+            BlueprintName = "ClaudioBot"
+            ReferencedContainer = "container:ClaudioBot.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

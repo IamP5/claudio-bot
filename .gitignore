@@ -3,3 +3,5 @@ build/
 DerivedData/
 *.xcodeproj/xcuserdata/
 reference/
+pair-qr.png
+build-device/

@@ -1,6 +1,6 @@
-name: ClaudeBot
+name: ClaudioBot
 options:
-  bundleIdPrefix: dev.claudebot
+  bundleIdPrefix: dev.claudiobot
   deploymentTarget:
     iOS: "18.0"
   createIntermediateGroups: true
@@ -12,15 +12,15 @@ settings:
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
 targets:
-  ClaudeBot:
+  ClaudioBot:
     type: application
     platform: iOS
     sources:
-      - path: ClaudeBot
+      - path: ClaudioBot
     info:
-      path: ClaudeBot/Info.plist
+      path: ClaudioBot/Info.plist
       properties:
-        CFBundleDisplayName: ClaudeBot
+        CFBundleDisplayName: ClaudioBot
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen:
@@ -34,11 +34,11 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        NSCameraUsageDescription: ClaudeBot uses the camera to scan the pairing QR code from your Mac and to take photos you send to a bot.
-        NSMicrophoneUsageDescription: ClaudeBot listens while you dictate a message to a bot.
-        NSSpeechRecognitionUsageDescription: ClaudeBot turns your dictation into text for the message you are writing.
-        NSPhotoLibraryUsageDescription: ClaudeBot sends the photos you pick to a bot on your Mac.
-        NSLocalNetworkUsageDescription: ClaudeBot connects to the ClaudeBot bridge running on your Mac over your local network or Tailscale.
+        NSCameraUsageDescription: ClaudioBot uses the camera to scan the pairing QR code from your Mac and to take photos you send to a bot.
+        NSMicrophoneUsageDescription: ClaudioBot listens while you dictate a message to a bot.
+        NSSpeechRecognitionUsageDescription: ClaudioBot turns your dictation into text for the message you are writing.
+        NSPhotoLibraryUsageDescription: ClaudioBot sends the photos you pick to a bot on your Mac.
+        NSLocalNetworkUsageDescription: ClaudioBot connects to the ClaudioBot bridge running on your Mac over your local network or Tailscale.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
           NSExceptionDomains:
@@ -46,41 +46,41 @@ targets:
               NSIncludesSubdomains: true
               NSExceptionAllowsInsecureHTTPLoads: true
         CFBundleURLTypes:
-          - CFBundleURLName: dev.claudebot.app
+          - CFBundleURLName: dev.claudiobot.app
             CFBundleURLSchemes:
-              - claudebot
+              - claudiobot
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.claudebot.app
-        PRODUCT_NAME: ClaudeBot
+        PRODUCT_BUNDLE_IDENTIFIER: dev.claudiobot.app
+        PRODUCT_NAME: ClaudioBot
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_STYLE: Automatic
         ENABLE_PREVIEWS: YES
-  ClaudeBotTests:
+  ClaudioBotTests:
     type: bundle.unit-test
     platform: iOS
     sources:
-      - path: ClaudeBotTests
+      - path: ClaudioBotTests
       - path: ../fixtures/protocol.json
         buildPhase: resources
-        group: ClaudeBotTests
+        group: ClaudioBotTests
     dependencies:
-      - target: ClaudeBot
+      - target: ClaudioBot
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: dev.claudebot.app.tests
+        PRODUCT_BUNDLE_IDENTIFIER: dev.claudiobot.app.tests
 schemes:
-  ClaudeBot:
+  ClaudioBot:
     build:
       targets:
-        ClaudeBot: all
-        ClaudeBotTests: [test]
+        ClaudioBot: all
+        ClaudioBotTests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - ClaudeBotTests
+        - ClaudioBotTests

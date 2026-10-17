@@ -19,7 +19,7 @@ async function run(argv: string[]): Promise<string> {
 const machineName = async () => (await run(["scutil", "--get", "ComputerName"])) || hostname().replace(/\.local$/, "");
 
 const firstName = async () =>
-  process.env.CLAUDEBOT_USER_NAME || (await run(["id", "-F"])).split(/\s+/)[0] || process.env.USER || "there";
+  process.env.CLAUDIOBOT_USER_NAME || (await run(["id", "-F"])).split(/\s+/)[0] || process.env.USER || "there";
 
 function lanAddresses(): string[] {
   return Object.values(networkInterfaces())
@@ -28,7 +28,7 @@ function lanAddresses(): string[] {
     .map((a) => a!.address);
 }
 
-const port = Number(process.env.CLAUDEBOT_PORT ?? 7878);
+const port = Number(process.env.CLAUDIOBOT_PORT ?? 7878);
 const token = await loadOrCreateToken();
 const tokenBytes = Buffer.from(token);
 const tokenMatches = (candidate: string | null) => {
@@ -44,7 +44,7 @@ const hub = createHub({
   userName: await firstName(),
   world,
   homes: createHomes(bridgeHome()),
-  model: process.env.CLAUDEBOT_MODEL || undefined,
+  model: process.env.CLAUDIOBOT_MODEL || undefined,
   scan: () => scanProjects(),
   broadcast: (message) => server.publish(TOPIC, JSON.stringify(message)),
   persist: saver.schedule,
@@ -95,9 +95,9 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 const urls = (lanAddresses().length > 0 ? lanAddresses() : ["127.0.0.1"]).map((ip) => `ws://${ip}:${server.port}/ws`);
-const pairLink = `claudebot://pair?url=${encodeURIComponent(urls[0]!)}&token=${token}`;
+const pairLink = `claudiobot://pair?url=${encodeURIComponent(urls[0]!)}&token=${token}`;
 
-console.log(`claudebot bridge on ${machine}`);
+console.log(`claudiobot bridge on ${machine}`);
 for (const url of urls) console.log(`  ${url}`);
 console.log(`token: ${token}`);
 console.log(`pair: ${pairLink}`);

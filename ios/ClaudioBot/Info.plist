@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>ClaudeBot</string>
+	<string>ClaudioBot</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -22,10 +22,10 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>dev.claudebot.app</string>
+			<string>dev.claudiobot.app</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>claudebot</string>
+				<string>claudiobot</string>
 			</array>
 		</dict>
 	</array>
@@ -47,15 +47,15 @@
 		</dict>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>ClaudeBot uses the camera to scan the pairing QR code from your Mac and to take photos you send to a bot.</string>
+	<string>ClaudioBot uses the camera to scan the pairing QR code from your Mac and to take photos you send to a bot.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>ClaudeBot connects to the ClaudeBot bridge running on your Mac over your local network or Tailscale.</string>
+	<string>ClaudioBot connects to the ClaudioBot bridge running on your Mac over your local network or Tailscale.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>ClaudeBot listens while you dictate a message to a bot.</string>
+	<string>ClaudioBot listens while you dictate a message to a bot.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>ClaudeBot sends the photos you pick to a bot on your Mac.</string>
+	<string>ClaudioBot sends the photos you pick to a bot on your Mac.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>ClaudeBot turns your dictation into text for the message you are writing.</string>
+	<string>ClaudioBot turns your dictation into text for the message you are writing.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

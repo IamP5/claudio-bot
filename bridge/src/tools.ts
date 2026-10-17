@@ -27,7 +27,7 @@ const color = z.enum(COLORS).optional();
 
 export function botToolServer(botId: BotId, act: BotActions) {
   return createSdkMcpServer({
-    name: "claudebot",
+    name: "claudio",
     tools: [
       tool(
         "ask",

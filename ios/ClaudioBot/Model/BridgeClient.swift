@@ -30,7 +30,7 @@ final class BridgeClient {
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private var nap: Task<Void, Never>?
     @ObservationIgnored private var outbox: [ClientMessage] = []
-    @ObservationIgnored private let log = Logger(subsystem: "dev.claudebot.app", category: "bridge")
+    @ObservationIgnored private let log = Logger(subsystem: "dev.claudiobot.app", category: "bridge")
 
     init(store: AppStore) {
         self.store = store
@@ -177,7 +177,7 @@ final class BridgeClient {
         var errorDescription: String? {
             switch self {
             case .timeout: "The bridge did not answer. Check the address and that your phone is on the same network or tailnet."
-            case .notABridge: "Something answered, but it is not a ClaudeBot bridge."
+            case .notABridge: "Something answered, but it is not a ClaudioBot bridge."
             case .refused(let reason): "Could not connect: \(reason)"
             }
         }

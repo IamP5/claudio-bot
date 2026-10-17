@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import ClaudeBot
+@testable import ClaudioBot
 
 private let at = Date(timeIntervalSince1970: 1_792_152_000)
 

@@ -38,7 +38,7 @@ const detail = (out: { stdout: string; stderr: string }) => stripAnsi(out.stderr
 
 function executable(): string {
   const claude = claudeExecutable();
-  if (!claude) throw new Error("claude was not found on PATH. Set CLAUDEBOT_CLAUDE.");
+  if (!claude) throw new Error("claude was not found on PATH. Set CLAUDIOBOT_CLAUDE.");
   return claude;
 }
 

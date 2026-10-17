@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createHomes } from "../src/home";
 import type { BotId } from "../src/protocol";
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), "claudebot-homes-")));
+const root = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-homes-")));
 afterAll(() => rmSync(root, { recursive: true }));
 const homes = createHomes(root);
 let n = 0;

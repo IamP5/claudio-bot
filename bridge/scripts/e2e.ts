@@ -12,7 +12,7 @@ function check(ok: unknown, what: string): asserts ok {
   console.log(`ok: ${what}`);
 }
 
-const scratch = realpathSync(mkdtempSync(join(tmpdir(), "claudebot-e2e-")));
+const scratch = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-e2e-")));
 const home = join(scratch, "home");
 const roots = join(scratch, "roots");
 const repo = join(roots, "demo");
@@ -30,11 +30,11 @@ async function startServer(): Promise<string> {
   server = Bun.spawn(["bun", "run", join(import.meta.dir, "../src/main.ts")], {
     env: {
       ...process.env,
-      CLAUDEBOT_PORT: String(port),
-      CLAUDEBOT_ROOTS: roots,
-      CLAUDEBOT_HOME: home,
-      CLAUDEBOT_MODEL: "haiku",
-      CLAUDEBOT_USER_NAME: "Bruno",
+      CLAUDIOBOT_PORT: String(port),
+      CLAUDIOBOT_ROOTS: roots,
+      CLAUDIOBOT_HOME: home,
+      CLAUDIOBOT_MODEL: "haiku",
+      CLAUDIOBOT_USER_NAME: "Bruno",
     },
     stdout: "pipe",
     stderr: "inherit",
@@ -131,15 +131,15 @@ try {
   let client = connect(await startServer());
   await client.opened;
   const hello = await client.waitFor(() => client.received.find((m) => m.type === "hello"), "hello");
-  check(hello.type === "hello" && hello.userName === "Bruno", "hello names the user from CLAUDEBOT_USER_NAME");
-  const claudeBot = [...client.bots.values()].find((b) => b.name === "Claude Bot");
-  check(claudeBot?.avatar.shape === "circle" && claudeBot.avatar.color === "white", "first start creates Claude Bot, a white circle");
-  client.send({ type: "open", botId: claudeBot.id });
-  const greeting = await client.waitFor(() => client.botSays(claudeBot.id, 0)[0], "the default bot's greeting");
+  check(hello.type === "hello" && hello.userName === "Bruno", "hello names the user from CLAUDIOBOT_USER_NAME");
+  const claudioBot = [...client.bots.values()].find((b) => b.name === "Claudio Bot");
+  check(claudioBot?.avatar.shape === "circle" && claudioBot.avatar.color === "white", "first start creates Claudio Bot, a white circle");
+  client.send({ type: "open", botId: claudioBot.id });
+  const greeting = await client.waitFor(() => client.botSays(claudioBot.id, 0)[0], "the default bot's greeting");
   check(greeting.kind === "bot" && greeting.text.length > 0, `(a) the default bot greets on first start: "${greeting.kind === "bot" && greeting.text.split("\n")[0]}"`);
-  await client.waitFor(() => client.idle(claudeBot.id), "the greeting turn to end");
+  await client.waitFor(() => client.idle(claudioBot.id), "the greeting turn to end");
 
-  const ack = await client.ask(claudeBot.id, "Remember the codeword zephyr-42 for later. Reply with just OK.", "the codeword ack");
+  const ack = await client.ask(claudioBot.id, "Remember the codeword zephyr-42 for later. Reply with just OK.", "the codeword ack");
   check(ack.length > 0, "the bot acknowledges the codeword before the restart");
 
   client.send({ type: "create_bot", ref: "c1" });
@@ -165,10 +165,10 @@ try {
   await client.waitFor(() => client.botSays(newBotId, beforeAnswer).length > 0 && client.idle(newBotId), "the reply to the answer");
   check(true, `(b) the bot replies to the answer, and is now named ${client.bots.get(newBotId)?.name}`);
 
-  const beforeAgent = client.messages(claudeBot.id).length;
+  const beforeAgent = client.messages(claudioBot.id).length;
   client.send({
     type: "send",
-    botId: claudeBot.id,
+    botId: claudioBot.id,
     uploads: [],
     text:
       'Call start_agent now with where "mac", project "demo", title "Add hello file", and this prompt: ' +
@@ -176,32 +176,32 @@ try {
       "When the agent reports, tell me in one line whether hello.txt exists.",
   });
   const agentExchange = await client.waitFor(
-    () => client.messages(claudeBot.id).slice(beforeAgent).find((m) => m.kind === "exchange" && m.peer.kind === "agent" && m.received >= 1),
+    () => client.messages(claudioBot.id).slice(beforeAgent).find((m) => m.kind === "exchange" && m.peer.kind === "agent" && m.received >= 1),
     "the agent's report",
     300_000,
   );
-  const sent = client.messages(claudeBot.id).slice(beforeAgent).filter((m) => m.kind === "exchange" && m.peer.kind === "agent");
+  const sent = client.messages(claudioBot.id).slice(beforeAgent).filter((m) => m.kind === "exchange" && m.peer.kind === "agent");
   check(sent.some((m) => m.kind === "exchange" && m.sent >= 1), "(c) starting a mac agent posts an exchange with the agent");
   check(agentExchange.kind === "exchange", "(c) the agent's report comes back as a received exchange message");
   check(log.includes('[Agent "'), "(c) the report reaches the bot as an agent envelope");
-  const exchangeAt = client.messages(claudeBot.id).findIndex((m) => m.id === agentExchange.id);
-  await client.waitFor(() => client.botSays(claudeBot.id, exchangeAt + 1).length > 0 && client.idle(claudeBot.id), "the bot's reply to the report");
-  check(true, `(c) the bot replies after the report: "${client.botSays(claudeBot.id, exchangeAt + 1).map((m) => (m.kind === "bot" ? m.text : "")).join(" ").slice(0, 120)}"`);
+  const exchangeAt = client.messages(claudioBot.id).findIndex((m) => m.id === agentExchange.id);
+  await client.waitFor(() => client.botSays(claudioBot.id, exchangeAt + 1).length > 0 && client.idle(claudioBot.id), "the bot's reply to the report");
+  check(true, `(c) the bot replies after the report: "${client.botSays(claudioBot.id, exchangeAt + 1).map((m) => (m.kind === "bot" ? m.text : "")).join(" ").slice(0, 120)}"`);
   check(existsSync(join(repo, "hello.txt")) && readFileSync(join(repo, "hello.txt"), "utf8").includes("hello from agent"), "(c) the agent created hello.txt in the demo repo");
 
-  client.send({ type: "details", botId: claudeBot.id });
-  const details = await client.waitFor(() => client.received.findLast((m) => m.type === "details" && m.botId === claudeBot.id), "details", 10_000);
+  client.send({ type: "details", botId: claudioBot.id });
+  const details = await client.waitFor(() => client.received.findLast((m) => m.type === "details" && m.botId === claudioBot.id), "details", 10_000);
   check(details.type === "details" && details.agents.some((a) => a.title === "Add hello file" && a.where === "mac" && a.status === "waiting"), "details lists the mac agent as waiting");
   client.send({ type: "agent", agentId: details.type === "details" ? details.agents[0]!.id : ("" as never) });
   const agentView = await client.waitFor(() => client.received.findLast((m) => m.type === "agent" && m.messages.length >= 2), "the agent view", 10_000);
   check(agentView.type === "agent" && agentView.messages[0]?.from === "bot" && agentView.messages.at(-1)?.from === "agent", "the agent view has the bot's prompt and the agent's report");
   const errorsBefore = client.received.filter((m) => m.type === "error").length;
-  client.send({ type: "file", botId: claudeBot.id, path: "../../state.json" });
+  client.send({ type: "file", botId: claudioBot.id, path: "../../state.json" });
   await client.waitFor(() => client.received.filter((m) => m.type === "error").length > errorsBefore, "the path escape refusal", 10_000);
   check(!client.received.some((m) => m.type === "file" && m.path === "../../state.json"), "file refuses a path outside the bot home");
-  client.send({ type: "file", botId: claudeBot.id, path: "CLAUDE.md" });
+  client.send({ type: "file", botId: claudioBot.id, path: "CLAUDE.md" });
   const memory = await client.waitFor(() => client.received.find((m) => m.type === "file" && m.path === "CLAUDE.md"), "CLAUDE.md", 10_000);
-  check(memory.type === "file" && memory.content?.startsWith("# Claude Bot"), "file reads the bot's CLAUDE.md from its home");
+  check(memory.type === "file" && memory.content?.startsWith("# Claudio Bot"), "file reads the bot's CLAUDE.md from its home");
 
   const routineAsked = Date.now();
   const beforeRoutine = client.messages(newBotId).length;
@@ -231,7 +231,7 @@ try {
     .map((m) => (m.kind === "bot" ? m.text : m.kind === "question" ? [m.question, ...m.options].join(" ") : ""))
     .filter((t) => /USER\.md|CLAUDE\.md/.test(t));
   check(leaks.length === 0, `no bot message or card mentions USER.md or CLAUDE.md${leaks.length ? `: ${leaks.join(" | ")}` : ""}`);
-  const countBefore = client.messages(claudeBot.id).length;
+  const countBefore = client.messages(claudioBot.id).length;
   const botsBefore = [...client.bots.keys()].sort();
   client.close();
   await stopServer();
@@ -241,10 +241,10 @@ try {
   await client.waitFor(() => client.received.find((m) => m.type === "hello"), "hello after restart");
   check(JSON.stringify([...client.bots.keys()].sort()) === JSON.stringify(botsBefore), "(e) a restart keeps the bots");
   check(client.bots.get(newBotId)?.routines[0]?.enabled === false, "(e) a restart keeps the paused routine");
-  client.send({ type: "open", botId: claudeBot.id });
-  await client.waitFor(() => client.messages(claudeBot.id).length >= countBefore, "the conversation after restart", 10_000);
-  check(client.messages(claudeBot.id).length === countBefore, "(e) a restart keeps the conversation");
-  const recalled = await client.ask(claudeBot.id, "What codeword did I give you earlier? Reply with only the codeword.", "the recalled codeword");
+  client.send({ type: "open", botId: claudioBot.id });
+  await client.waitFor(() => client.messages(claudioBot.id).length >= countBefore, "the conversation after restart", 10_000);
+  check(client.messages(claudioBot.id).length === countBefore, "(e) a restart keeps the conversation");
+  const recalled = await client.ask(claudioBot.id, "What codeword did I give you earlier? Reply with only the codeword.", "the recalled codeword");
   check(recalled.toLowerCase().includes("zephyr"), `(e) the bot resumes its session and remembers the codeword: "${recalled}"`);
   client.close();
   passed = true;

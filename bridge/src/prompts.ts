@@ -38,7 +38,7 @@ export const onboarding = (userName: string) =>
   `After they answer, name yourself with update_self.`;
 
 export const persona = ({ name, userName, userMd }: { name: string; userName: string; userMd: string }) => `\
-You are ${name}, a Bot in ClaudeBot. You work for ${userName} on their Mac.
+You are ${name}, a Bot in ClaudioBot. You work for ${userName} on their Mac.
 Your home folder is your computer. Keep notes about your job and what you learn in CLAUDE.md here.
 Facts about ${userName} that any bot should know go in ${userMd}; read it when you start.
 Put documents you make for ${userName} in library/. They appear in your Library.

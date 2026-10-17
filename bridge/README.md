@@ -1,6 +1,6 @@
-# claudebot bridge
+# claudiobot bridge
 
-A small daemon for your Mac. It runs your bots. A bot is a persistent assistant with one long conversation, its own home folder, routines and agents. The ClaudeBot iOS app is a view onto the bridge over one WebSocket. Bots keep working, and routines keep firing, while the phone is closed. Every bot runs on your own Claude Code login. The wire format is in `src/protocol.ts`, and `docs/design.md` at the repo root explains the design.
+A small daemon for your Mac. It runs your bots. A bot is a persistent assistant with one long conversation, its own home folder, routines and agents. The ClaudioBot iOS app is a view onto the bridge over one WebSocket. Bots keep working, and routines keep firing, while the phone is closed. Every bot runs on your own Claude Code login. The wire format is in `src/protocol.ts`, and `docs/design.md` at the repo root explains the design.
 
 ## Run it
 
@@ -9,27 +9,27 @@ bun install
 bun run start
 ```
 
-On startup the bridge prints its LAN WebSocket URL, its token, a `claudebot://pair?...` link and a QR code of that link. To pair, scan the QR code from the iOS app. The token is created on the first run and kept in `~/.claudebot/token`. To revoke every paired phone, delete that file.
+On startup the bridge prints its LAN WebSocket URL, its token, a `claudiobot://pair?...` link and a QR code of that link. To pair, scan the QR code from the iOS app. The token is created on the first run and kept in `~/.claudiobot/token`. To revoke every paired phone, delete that file.
 
 `claude` must be on `PATH` and logged in. To check, run `claude -p hi`.
 
-The first run creates **Claude Bot**, a general assistant, and it greets you.
+The first run creates **Claudio Bot**, a general assistant, and it greets you.
 
 ## Environment
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CLAUDEBOT_PORT` | `7878` | Port to listen on, on all interfaces. |
-| `CLAUDEBOT_ROOTS` | `~/Dev/projects:~/code:~/Developer:~/Projects` | Colon-separated folders. Each git repo directly inside one is a project that agents can work in. |
-| `CLAUDEBOT_HOME` | `~/.claudebot` | Holds the token, `state.json`, `USER.md`, the bot homes and the trash. |
-| `CLAUDEBOT_CLAUDE` | `claude` on `PATH` | Path to the Claude Code executable. Useful when the bridge runs under launchd. |
-| `CLAUDEBOT_MODEL` | your Claude Code default | Pins the model for bots and agents. The e2e script sets `haiku`. |
-| `CLAUDEBOT_USER_NAME` | first word of `id -F`, else `$USER` | Your first name, as bots use it. |
+| `CLAUDIOBOT_PORT` | `7878` | Port to listen on, on all interfaces. |
+| `CLAUDIOBOT_ROOTS` | `~/Dev/projects:~/code:~/Developer:~/Projects` | Colon-separated folders. Each git repo directly inside one is a project that agents can work in. |
+| `CLAUDIOBOT_HOME` | `~/.claudiobot` | Holds the token, `state.json`, `USER.md`, the bot homes and the trash. |
+| `CLAUDIOBOT_CLAUDE` | `claude` on `PATH` | Path to the Claude Code executable. Useful when the bridge runs under launchd. |
+| `CLAUDIOBOT_MODEL` | your Claude Code default | Pins the model for bots and agents. The e2e script sets `haiku`. |
+| `CLAUDIOBOT_USER_NAME` | first word of `id -F`, else `$USER` | Your first name, as bots use it. |
 
 ## What is on disk
 
 ```
-~/.claudebot/
+~/.claudiobot/
   token
   state.json          bots, conversations, routines and agents
   USER.md             facts about you that every bot may read and add to
@@ -48,7 +48,7 @@ Each bot has one Claude Code session through the Agent SDK. It starts the first 
 
 Everything that reaches a bot is one message whose first line says where it came from, such as `[Bruno]`, `[Routine digest fired]` or `[Agent "Fix login" (a_...) reports]`. Messages queue, and the bot takes them one turn at a time. While a turn runs, the bot's status is `working`. Each text block the bot writes becomes one chat bubble. Tool calls do not show.
 
-A bot acts through the `claudebot` MCP tools: `ask` posts a question card, `start_agent` and `message_agent` run coding agents, `list_projects` lists the repos, `message_bot` and `create_bot` reach other bots, `update_self` renames the bot, and `set_routine` and `delete_routine` manage its schedule.
+A bot acts through the `claudio` MCP tools: `ask` posts a question card, `start_agent` and `message_agent` run coding agents, `list_projects` lists the repos, `message_bot` and `create_bot` reach other bots, `update_self` renames the bot, and `set_routine` and `delete_routine` manage its schedule.
 
 ## Agents
 

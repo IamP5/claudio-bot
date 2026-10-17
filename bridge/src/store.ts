@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { World, AgentRecord, BotRecord } from "./world";
 
-export const bridgeHome = () => process.env.CLAUDEBOT_HOME ?? join(homedir(), ".claudebot");
+export const bridgeHome = () => process.env.CLAUDIOBOT_HOME ?? join(homedir(), ".claudiobot");
 
 type StateFile = { version: 2; bots: BotRecord[]; agents: AgentRecord[] };
 

@@ -1,5 +1,5 @@
 // Wire protocol between the iOS app and the Mac bridge. JSON over one WebSocket.
-// ios/ClaudeBot/Model/Protocol.swift mirrors this file; fixtures/protocol.json pins both.
+// ios/ClaudioBot/Model/Protocol.swift mirrors this file; fixtures/protocol.json pins both.
 // docs/grok-bot-reference.md describes the product these types model.
 
 export type BotId = string & { readonly __brand: "BotId" };

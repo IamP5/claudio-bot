@@ -17,7 +17,7 @@ final class Dictation {
     func start(onText: @escaping @MainActor (String) -> Void) async {
         failure = nil
         guard await Self.authorize() else {
-            failure = "Allow Microphone and Speech Recognition for ClaudeBot in Settings to dictate."
+            failure = "Allow Microphone and Speech Recognition for ClaudioBot in Settings to dictate."
             return
         }
         guard let recognizer = SFSpeechRecognizer(), recognizer.isAvailable else {

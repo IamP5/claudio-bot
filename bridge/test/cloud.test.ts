@@ -25,7 +25,7 @@ test("follow-up JSON from claude -p --cloud is accepted unless it reports failur
 });
 
 // A stand-in for the claude CLI that prints what the real one printed in a probe, and logs its argv.
-const dir = mkdtempSync(join(tmpdir(), "claudebot-fake-claude-"));
+const dir = mkdtempSync(join(tmpdir(), "claudiobot-fake-claude-"));
 const log = join(dir, "calls.log");
 const fake = join(dir, "claude");
 writeFileSync(
@@ -42,9 +42,9 @@ printf '{"ok":true,"session_id":"%s"}\\n' "$4"
 `,
 );
 chmodSync(fake, 0o755);
-const previous = process.env.CLAUDEBOT_CLAUDE;
-process.env.CLAUDEBOT_CLAUDE = fake;
-afterAll(() => (previous === undefined ? delete process.env.CLAUDEBOT_CLAUDE : (process.env.CLAUDEBOT_CLAUDE = previous)));
+const previous = process.env.CLAUDIOBOT_CLAUDE;
+process.env.CLAUDIOBOT_CLAUDE = fake;
+afterAll(() => (previous === undefined ? delete process.env.CLAUDIOBOT_CLAUDE : (process.env.CLAUDIOBOT_CLAUDE = previous)));
 
 test("creates a cloud session through a terminal, then follows up on it", async () => {
   expect(await createCloudSession(dir, "Summarize the README")).toEqual({

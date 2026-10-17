@@ -2,7 +2,7 @@
 
 Observed on 2026-10-17 in the user's Grok Bot app on macOS and on their iPhone through iPhone Mirroring. Screenshots are in `reference/grok/` (gitignored, local only, they contain personal chats).
 
-ClaudeBot copies this product. It is not a remote control for one Claude Code session. The Claude iOS app already does that.
+ClaudioBot copies this product. It is not a remote control for one Claude Code session. The Claude iOS app already does that.
 
 ## The model
 

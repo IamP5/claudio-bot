@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import ClaudeBot
+@testable import ClaudioBot
 
 private final class BundleToken {}
 
@@ -122,15 +122,15 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
 
 @Suite struct PairingTests {
     @Test func deepLinkParsesUrlAndToken() {
-        let link = URL(string: "claudebot://pair?url=ws%3A%2F%2F192.168.1.20%3A7878%2Fws&token=abc123")!
+        let link = URL(string: "claudiobot://pair?url=ws%3A%2F%2F192.168.1.20%3A7878%2Fws&token=abc123")!
         let pairing = Pairing(link: link)
         #expect(pairing == Pairing(url: URL(string: "ws://192.168.1.20:7878/ws")!, token: "abc123"))
         #expect(pairing?.socketURL.absoluteString == "ws://192.168.1.20:7878/ws?token=abc123")
     }
 
     @Test func linksThatAreNotWebSocketPairingsAreRejected() {
-        #expect(Pairing(link: URL(string: "claudebot://pair?url=http%3A%2F%2Fevil.com&token=x")!) == nil)
-        #expect(Pairing(link: URL(string: "claudebot://pair?url=ws%3A%2F%2Fhost%3A7878%2Fws")!) == nil)
+        #expect(Pairing(link: URL(string: "claudiobot://pair?url=http%3A%2F%2Fevil.com&token=x")!) == nil)
+        #expect(Pairing(link: URL(string: "claudiobot://pair?url=ws%3A%2F%2Fhost%3A7878%2Fws")!) == nil)
         #expect(Pairing(link: URL(string: "https://pair?url=ws%3A%2F%2Fhost%3A7878%2Fws&token=x")!) == nil)
     }
 

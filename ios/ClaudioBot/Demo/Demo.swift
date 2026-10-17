@@ -3,7 +3,8 @@ import Foundation
 
 /// `-demo` fills the store with sample bots through the reducer, without a bridge.
 /// `-demoScreen home|newchat|chat|profile|links|library|file|agent|digest|engineer|factory|pair|settings|routine|approval`
-/// opens a screen directly for screenshots.
+/// opens a screen directly for screenshots. The pairing and connection states have their own:
+/// `pairconfirm|outdated` (unpaired), `confirm|unrecognized|error|oldbridge` (paired).
 @MainActor
 enum Demo {
     private static let arguments = ProcessInfo.processInfo.arguments
@@ -12,10 +13,19 @@ enum Demo {
         arguments.indices.contains(at + 1) ? arguments[at + 1] : nil
     }
 
-    static func load(into store: AppStore, router: Router) {
-        if screen == "pair" { return }
-        store.apply(.hello(Hello(machine: "MacBook Pro", userName: "Alex", bots: bots)))
-        store.apply(.devices(devices))
+    static func load(into app: AppModel) {
+        let store = app.store
+        let router = app.router
+        let invite = PairInvite(url: URL(string: "ws://10.0.0.20:7878/ws")!, code: "K7QD-M2XP")
+        switch screen {
+        case "pair": return
+        case "pairconfirm": return app.propose(invite)
+        case "outdated": return app.showPairingFailure(DeepLink.outdatedBridgeMessage)
+        default: break
+        }
+        let oldBridge = screen == "oldbridge"
+        store.apply(.hello(Hello(protocol: oldBridge ? 2 : Wire.protocolVersion, machine: "MacBook Pro", userName: "Alex", bots: bots)))
+        if !oldBridge { store.apply(.devices(devices)) }
         for (bot, messages) in conversations {
             store.apply(.conversation(botId: BotID(bot), messages: messages))
         }
@@ -49,6 +59,12 @@ enum Demo {
             router.selection = BotID("news")
             router.path = [.routine(BotID("news"), RoutineID("r1"))]
         case "approval": router.selection = BotID("release")
+        case "confirm": app.propose(invite)
+        case "unrecognized": store.setConnection(.unrecognized)
+        case "error":
+            router.selection = BotID("release")
+            store.apply(.error(message: "That card already closed."))
+        case "oldbridge": router.showingSettings = true
         default: break
         }
     }

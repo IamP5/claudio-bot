@@ -7,6 +7,8 @@ enum ConnectionState: Equatable, Sendable {
     /// Set only by the bridge's hello, so "connected" means the token was accepted.
     case connected(machine: String)
     case disconnected(retryAt: Date)
+    /// The bridge answered with 401. It may be another server on this network, so the pairing stays until the user acts.
+    case unrecognized
 }
 
 /// A conversation in arrival order, upserted by message id.
@@ -64,7 +66,7 @@ struct FileKey: Hashable, Sendable {
     let path: String
 }
 
-struct ErrorNotice: Equatable, Sendable {
+struct ErrorNotice: Equatable, Sendable, Identifiable {
     let id = UUID()
     let message: String
 }
@@ -109,6 +111,10 @@ final class AppStore {
     private(set) var created: [String: BotID] = [:]
     private(set) var lastError: ErrorNotice?
     private(set) var protocolMismatch: ProtocolMismatch?
+    /// From the last hello. Nil until this pairing has connected once.
+    private(set) var bridgeProtocol: Int?
+    /// Decisions sent and not yet echoed back by their card, so a second tap cannot send another.
+    private(set) var pendingDecisions: [MessageID: PermissionChoice] = [:]
     /// The phones paired with this Mac, once Settings asked for them.
     private(set) var devices: [Device]?
     /// The newest code for pairing another phone.
@@ -116,6 +122,11 @@ final class AppStore {
 
     var machine: String? {
         if case .connected(let machine) = connection { machine } else { nil }
+    }
+
+    /// Paired devices, pairing codes and Bearer tokens arrived with protocol 3.
+    var bridgeManagesDevices: Bool {
+        (bridgeProtocol ?? 0) >= 3
     }
 
     /// Transport changes from the client. Unpairing forgets everything the Mac sent.
@@ -130,9 +141,25 @@ final class AppStore {
             files = [:]
             created = [:]
             protocolMismatch = nil
+            bridgeProtocol = nil
+            pendingDecisions = [:]
             devices = nil
             pairCode = nil
         }
+    }
+
+    func decisionSent(_ choice: PermissionChoice, for card: MessageID) {
+        pendingDecisions[card] = choice
+    }
+
+    /// The socket refused the frame, so the buttons come back.
+    func decisionFailed(for card: MessageID) {
+        pendingDecisions[card] = nil
+        lastError = ErrorNotice(message: "Your decision did not reach your Mac. Try again.")
+    }
+
+    func dismissError(_ notice: ErrorNotice) {
+        if lastError == notice { lastError = nil }
     }
 
     /// The bridge keeps one live code, so a new request makes the shown one stale until the reply lands.
@@ -148,6 +175,9 @@ final class AppStore {
             connection = .connected(machine: hello.machine)
             userName = hello.userName
             protocolMismatch = ProtocolMismatch(bridge: hello.protocol)
+            bridgeProtocol = hello.protocol
+            // A decision in flight when the socket dropped either landed, and the card says so, or it is lost.
+            pendingDecisions = [:]
             bots = Dictionary(hello.bots.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             conversations = conversations.filter { self.bots[$0.key] != nil }
             details = details.filter { self.bots[$0.key] != nil }
@@ -171,9 +201,11 @@ final class AppStore {
 
         case let .conversation(botId, messages):
             conversations[botId] = Conversation(messages)
+            messages.forEach(settlePending)
             return []
 
         case let .message(botId, message):
+            settlePending(message)
             let previous = conversations[botId]?[message.id]
             guard conversations[botId, default: Conversation()].upsert(message), let bot = bots[botId] else { return [] }
             switch message {
@@ -223,6 +255,10 @@ final class AppStore {
         case .unknown:
             return []
         }
+    }
+
+    private func settlePending(_ message: Message) {
+        if case .permission(let id, _, let card) = message, card.answer != nil { pendingDecisions[id] = nil }
     }
 
     /// The home list: visible bots, pinned first, then newest activity.

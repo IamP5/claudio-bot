@@ -29,7 +29,7 @@ To run on your own iPhone, pick your team under Signing & Capabilities for the C
 
 ### Demo mode and screenshots
 
-Debug builds accept `-demo`. It loads sample bots into the store through the same reducer the bridge feeds, with no bridge running. Add `-demoScreen <name>` to open a screen directly. The names are `home`, `newchat`, `chat`, `profile`, `links`, `library`, `file`, `agent`, `digest`, `engineer`, `factory`, `pair`, `settings`, `routine` and `approval`.
+Debug builds accept `-demo`. It loads sample bots into the store through the same reducer the bridge feeds, with no bridge running. Add `-demoScreen <name>` to open a screen directly. The names are `home`, `newchat`, `chat`, `profile`, `links`, `library`, `file`, `agent`, `digest`, `engineer`, `factory`, `pair`, `settings`, `routine` and `approval`. The pairing and connection states have their own: `pairconfirm` and `outdated` while unpaired, and `confirm`, `unrecognized`, `error` and `oldbridge` while paired.
 
 `scripts/screenshots.sh <udid> <path/to/ClaudioBot.app>` launches each screen and saves PNGs to `screenshots/`.
 
@@ -44,12 +44,18 @@ swift ios/scripts/make-icon.swift ios/ClaudioBot/Assets.xcassets/AppIcon.appicon
 ## Pairing
 
 1. On your Mac, run `bun run start` in the `bridge` folder. It prints a QR code, the bridge address and a one-time pairing code. A phone that is already paired can show a code too, under Settings, Pair another device.
-2. In ClaudioBot, tap Scan QR code, or type the address (for example `ws://10.0.0.20:7878/ws`) and the code.
-3. The app posts the code and the phone's name to `/pair` on the same host and port, and the bridge answers with a token for this phone only. The address and token live in the Keychain on this device. Nothing is saved if the bridge refuses the code.
+2. In ClaudioBot, tap Scan QR code, or type the address (for example `ws://10.0.0.20:7878/ws`) and the code. A bare host and port gets the `/ws` path. Any other path must end in `/ws`.
+3. Confirm the bridge's host and port. When the phone is already paired, the prompt also names the Mac it replaces. Nothing reaches the bridge before you tap **Pair**.
+4. The app posts the code and the phone's name to `/pair` beside the socket path, so `wss://host/prefix/ws` pairs at `https://host/prefix/pair`. The bridge answers with a token for this phone only.
+5. The app opens a socket with the new token and waits for the bridge's hello. Only then does it save the address and token in the Keychain and switch to the new Mac. If the code is refused or no hello arrives, the old pairing stays and the form shows why.
 
-The QR code encodes `claudiobot://pair?url=<urlencoded ws url>&code=<code>`. Opening that link on the phone pairs it the same way.
+The QR code encodes `claudiobot://pair?url=<urlencoded ws url>&code=<code>`. Opening that link shows the same confirmation. A link from a protocol 2 bridge carries `token=` instead of `code=`, and the app asks you to update the bridge.
 
-The socket sends the token as `Authorization: Bearer <token>`. A phone paired before protocol 3 keeps its shared token in the URL for one release. On a reconnect the app passes `epoch` and `after` from the last frame it applied, and the bridge replays what it missed. Settings lists every paired phone. Revoking one disconnects it at once, and that phone returns to the pairing screen.
+The socket sends the token as `Authorization: Bearer <token>`. A phone paired before protocol 3 trades its shared token for its own on the first protocol 3 hello: it asks for a pairing code over its socket, redeems it at its own bridge, saves the new token and reconnects. Until that works it keeps the shared token in the URL and tries again every 10 minutes.
+
+On a reconnect the app passes `epoch` and `after` from the last frame it applied, and the bridge replays what it missed. A broadcast whose `seq` is not the next one, or an undecodable frame that carries a `seq`, means frames were lost. The app then drops the socket and reconnects without `epoch` and `after` for a fresh hello.
+
+Settings lists every paired phone. Revoking one closes its socket with code 4001, and that phone returns to the pairing screen. Only that close code unpairs. A 401 on connect may come from another server on the network the phone is on, so the app keeps the pairing and shows **Not recognized** with **Pair again** and **Retry**. Returning to the app retries too. **Unpair this Mac** revokes this phone on the bridge first when connected, then deletes the pairing and clears the app's notifications.
 
 The phone and the Mac need to reach each other. The same Wi-Fi network works, and so does Tailscale from anywhere. Plain `ws://` is allowed for local addresses and `*.ts.net` names only.
 
@@ -73,7 +79,7 @@ The composer's + menu attaches a photo from the library, a new photo or a file. 
 
 ## Notifications
 
-After pairing, ClaudioBot asks for permission to notify you. It posts a local notification when a bot sends a message, asks a question or needs an approval, unless that chat is on screen. An approval alert only opens the chat, so the decision is made with the exact command in view. `claudiobot://bot/<id>?message=<id>` opens that bot. A question notification offers its first two options as actions. Picking one sends the answer to the bridge.
+After pairing, ClaudioBot asks for permission to notify you. It posts a local notification when a bot sends a message, asks a question or needs an approval, unless that chat is on screen. Messages from one bot share a notification, so a newer one replaces the older. Each question and approval gets its own, so a later message cannot replace a card still waiting on you. An approval alert only opens the chat, so the decision is made with the exact command in view. `claudiobot://bot/<id>?message=<id>` opens that bot. A question notification offers its first two options as actions. Picking one sends the answer to the bridge.
 
 These notifications need the socket to the Mac. When you leave the app, iOS gives ClaudioBot a short grace period, and the app keeps the socket open during it. After that iOS suspends the app, and alerts stop until you open it again. Alerts on a locked phone at any time would need Apple Push Notification service and a relay server. That is out of scope for this version.
 
@@ -93,3 +99,4 @@ These notifications need the socket to the Mac. When you leave the app, iOS give
 | `ClaudioBot/Views/` | Screens, the chat items, the composer and the dark theme |
 | `ClaudioBot/Demo/` | Debug-only sample bots |
 | `ClaudioBotTests/` | Fixture round trips, reducer, permission cards, display rules, pairing, stream cursor, deep links and markdown tests |
+| `ClaudioBotTests/FakeBridge.swift` | A loopback HTTP and WebSocket bridge that `BridgeClientTests` scripts to drive the real socket, pairing and close paths |

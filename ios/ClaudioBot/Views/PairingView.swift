@@ -2,18 +2,13 @@ import SwiftUI
 import VisionKit
 
 struct PairingView: View {
-    /// A pairing code from a claudiobot://pair link; it fills the form and pairs right away.
-    var link: PairInvite?
-
     @Environment(AppModel.self) private var app
     @Environment(BridgeClient.self) private var client
-    @Environment(Router.self) private var router
-    @Environment(\.dismiss) private var dismiss
     @State private var urlText = ""
     @State private var code = ""
-    @State private var connecting = false
-    @State private var failure: String?
     @State private var scanning = false
+
+    private var flow: PairingFlow { app.pairingFlow ?? PairingFlow() }
 
     var body: some View {
         ScrollView {
@@ -30,6 +25,7 @@ struct PairingView: View {
                 .tint(.white)
                 .foregroundStyle(.black)
                 .controlSize(.large)
+                .disabled(flow.isPairing)
 
                 HStack {
                     VStack { Divider() }
@@ -45,18 +41,38 @@ struct PairingView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .background(Theme.background)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { app.cancelPairing() }
+                    .disabled(flow.isPairing)
+            }
+        }
         .sheet(isPresented: $scanning) {
             QRScannerSheet { payload in
                 scanning = false
-                guard let url = URL(string: payload), let invite = PairInvite(link: url) else {
-                    failure = "That QR code is not a ClaudioBot pairing code."
-                    return
+                switch URL(string: payload).flatMap(DeepLink.init(url:)) {
+                case .pair(let invite): app.propose(invite)
+                case .outdatedBridge: app.showPairingFailure(DeepLink.outdatedBridgeMessage)
+                default: app.showPairingFailure("That QR code is not a ClaudioBot pairing code.")
                 }
-                connect(invite)
             }
         }
-        .onAppear { if let pending = link ?? router.pairingLink { connect(pending) } }
-        .onChange(of: router.pairingLink) { _, pending in if let pending { connect(pending) } }
+        // Dismissal goes through the buttons only, so a dismissal can never race the Pair action.
+        .alert(
+            flow.confirming?.confirmation(replacing: client.pairing).title ?? "",
+            isPresented: Binding(get: { flow.confirming != nil }, set: { _ in }),
+            presenting: flow.confirming
+        ) { _ in
+            Button("Pair") { app.confirmPairing() }
+            Button("Cancel", role: .cancel) { app.cancelConfirmation() }
+        } message: { invite in
+            if let detail = invite.confirmation(replacing: client.pairing).detail { Text(detail) }
+        }
+        .onChange(of: flow.confirming, initial: true) { _, invite in
+            guard let invite else { return }
+            urlText = invite.url.absoluteString
+            code = invite.code
+        }
     }
 
     private var header: some View {
@@ -97,45 +113,29 @@ struct PairingView: View {
                     .autocorrectionDisabled()
                     .fieldStyle()
             }
-            if let failure {
+            if let failure = flow.failure {
                 Label(failure, systemImage: "exclamationmark.triangle.fill")
                     .font(.footnote)
                     .foregroundStyle(.red)
             }
             Button {
                 do {
-                    connect(try PairInvite(urlString: urlText, code: code))
+                    app.propose(try PairInvite(urlString: urlText, code: code))
                 } catch {
-                    failure = error.localizedDescription
+                    app.showPairingFailure(error.localizedDescription)
                 }
             } label: {
                 HStack {
-                    if connecting { ProgressView() }
-                    Text(connecting ? "Pairing…" : "Pair")
+                    if flow.isPairing { ProgressView() }
+                    Text(flow.isPairing ? "Pairing…" : "Pair")
                 }
                 .font(.headline)
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
-            .disabled(connecting || urlText.isEmpty || code.isEmpty)
+            .disabled(flow.isPairing || urlText.isEmpty || code.isEmpty)
             .padding(.top, 4)
-        }
-    }
-
-    private func connect(_ invite: PairInvite) {
-        urlText = invite.url.absoluteString
-        code = invite.code
-        failure = nil
-        connecting = true
-        Task {
-            do {
-                try await app.pair(invite)
-                dismiss()
-            } catch {
-                failure = error.localizedDescription
-            }
-            connecting = false
         }
     }
 }

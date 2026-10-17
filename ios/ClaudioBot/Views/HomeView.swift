@@ -18,7 +18,11 @@ struct HomeView: View {
     var body: some View {
         @Bindable var router = router
         List(selection: $router.selection) {
-            if store.machine == nil {
+            if store.connection == .unrecognized {
+                UnrecognizedBanner()
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            } else if store.machine == nil {
                 ConnectionBanner(state: store.connection)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
@@ -213,6 +217,34 @@ struct ConnectionBanner: View {
             Text("ClaudioBot needs the bridge running on your Mac. Your bots keep working there while this phone is away.")
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+/// The bridge answered with 401. The pairing is kept: this may be another network, or the Mac may need a new code.
+struct UnrecognizedBanner: View {
+    @Environment(AppModel.self) private var app
+    @Environment(BridgeClient.self) private var client
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ConnectionBadge(state: .unrecognized)
+            Text("This bridge doesn't recognize this iPhone. Pair again, or retry once you are back on your Mac's network.")
+                .font(.footnote)
+                .foregroundStyle(Theme.secondary)
+            HStack(spacing: 8) {
+                Button("Pair again") { app.beginPairing() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.white)
+                    .foregroundStyle(.black)
+                Button("Retry") { client.retry() }
+                    .buttonStyle(.bordered)
+            }
+            .font(.footnote.weight(.semibold))
+            .controlSize(.small)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)

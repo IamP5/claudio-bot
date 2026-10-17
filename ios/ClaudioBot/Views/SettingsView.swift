@@ -39,7 +39,7 @@ struct SettingsView: View {
                 Section {
                     Button("Unpair this Mac", role: .destructive) { confirmingUnpair = true }
                 } footer: {
-                    Text("Removes the bridge address and this iPhone's token from this iPhone.")
+                    Text("Removes this iPhone from your Mac when it is connected, then deletes the bridge address and token from this iPhone.")
                 }
             }
             .scrollContentBackground(.hidden)
@@ -49,11 +49,13 @@ struct SettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
-            .onAppear { client.send(.devices) }
+            .task(id: store.bridgeManagesDevices) {
+                if store.bridgeManagesDevices { client.send(.devices) }
+            }
             .confirmationDialog("Unpair this Mac?", isPresented: $confirmingUnpair, titleVisibility: .visible) {
                 Button("Unpair", role: .destructive) {
                     dismiss()
-                    client.unpair()
+                    Task { await client.unpair() }
                 }
             } message: {
                 Text("You will need a new pairing code from your Mac.")
@@ -77,15 +79,22 @@ struct SettingsView: View {
 
     private var devices: some View {
         Section {
-            if let devices = store.devices {
+            if !store.bridgeManagesDevices {
+                Text(store.bridgeProtocol == nil
+                     ? "Connect to your Mac to see the devices paired with it."
+                     : "Update the bridge on your Mac to see and revoke paired devices.")
+                    .foregroundStyle(Theme.secondary)
+            } else if let devices = store.devices {
                 ForEach(devices) { device in
                     DeviceRow(device: device) { revoking = device }
                 }
             } else {
                 ProgressView().frame(maxWidth: .infinity)
             }
-            Button("Pair another device") { pairingAnother = true }
-                .disabled(store.machine == nil)
+            if store.bridgeManagesDevices {
+                Button("Pair another device") { pairingAnother = true }
+                    .disabled(store.machine == nil)
+            }
         } header: {
             Text("Paired devices")
         } footer: {

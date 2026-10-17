@@ -296,6 +296,38 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(secure.url?.absoluteString == "https://mac.tail1.ts.net/pair")
     }
 
+    @Test func pairingHappensBesideTheSocketPathBehindAPrefix() throws {
+        let invite = try PairInvite(urlString: "wss://example.com/claudio/ws", code: "x")
+        #expect(invite.request(deviceName: "p").url?.absoluteString == "https://example.com/claudio/pair")
+    }
+
+    @Test(arguments: [
+        ("ws://10.0.0.20:7878", "ws://10.0.0.20:7878/ws"),
+        ("ws://10.0.0.20:7878/", "ws://10.0.0.20:7878/ws"),
+        (" WS://10.0.0.20:7878/ws ", "ws://10.0.0.20:7878/ws"),
+        ("wss://mac.tail1.ts.net/ws/", "wss://mac.tail1.ts.net/ws"),
+        ("wss://example.com/claudio/ws?token=abc#x", "wss://example.com/claudio/ws"),
+    ])
+    func aTypedAddressGetsTheSocketPath(typed: String, normalized: String) throws {
+        #expect(try PairInvite(urlString: typed, code: "k7qd").url.absoluteString == normalized)
+    }
+
+    @Test func aTypedAddressWithAnotherPathOrSchemeIsRefused() {
+        #expect(throws: PairInvite.Invalid.path) { try PairInvite(urlString: "ws://10.0.0.20:7878/socket", code: "X") }
+        #expect(throws: PairInvite.Invalid.url) { try PairInvite(urlString: "http://10.0.0.20:7878/ws", code: "X") }
+        #expect(throws: PairInvite.Invalid.url) { try PairInvite(urlString: "10.0.0.20:7878", code: "X") }
+        #expect(throws: PairInvite.Invalid.code) { try PairInvite(urlString: "ws://10.0.0.20:7878/ws", code: "  ") }
+    }
+
+    @Test func theConfirmationNamesTheBridgeAndThePairingItReplaces() {
+        let invite = PairInvite(url: socket, code: "K7QD-M2XP")
+        #expect(invite.confirmation(replacing: nil) == PairingConfirmation(title: "Pair with 10.0.0.20:7878?", detail: nil))
+        let home = Pairing(url: URL(string: "wss://mac.tail1.ts.net/ws")!, credential: .device(DeviceID("d1"), token: "abc"))
+        #expect(invite.confirmation(replacing: home).detail == "This replaces your pairing with mac.tail1.ts.net.")
+        let v6 = PairInvite(url: URL(string: "ws://[fd7a::1]:7878/ws")!, code: "X")
+        #expect(v6.confirmation(replacing: nil).title == "Pair with [fd7a::1]:7878?")
+    }
+
     @Test func theBridgesAnswerBecomesADevicePairingOrItsRefusal() throws {
         let invite = PairInvite(url: socket, code: "K7QD-M2XP")
         let paired = try Pairing.pairing(for: invite, status: 200, body: Data(#"{"deviceId":"d1","token":"abc"}"#.utf8))
@@ -328,8 +360,8 @@ private func unknowns(in message: ServerMessage) -> [String] {
 
     @Test func aReconnectAsksToResumeAfterTheLastSeqSeen() throws {
         var cursor = StreamCursor()
-        cursor.observe(ServerFrame(message: .hello(Hello(machine: "Mac", userName: "A", bots: [], position: StreamPosition(epoch: "e1", seq: 41, resumed: false)))))
-        cursor.observe(ServerFrame(seq: 42, message: .botRemoved(BotID("b2"))))
+        _ = cursor.observe(ServerFrame(message: .hello(Hello(machine: "Mac", userName: "A", bots: [], position: StreamPosition(epoch: "e1", seq: 41, resumed: false)))))
+        _ = cursor.observe(ServerFrame(seq: 42, message: .botRemoved(BotID("b2"))))
         let request = Pairing(url: socket, credential: .device(DeviceID("d1"), token: "abc")).socketRequest(resumingFrom: cursor)
         #expect(request.url?.absoluteString == "ws://10.0.0.20:7878/ws?protocol=3&epoch=e1&after=42")
     }
@@ -341,11 +373,12 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(try JSONDecoder().decode(Pairing.self, from: JSONEncoder().encode(device)) == device)
     }
 
-    @Test func revocationIsTheRevokedCloseOrA401Upgrade() {
-        #expect(BridgeClient.wasRevoked(closeCode: 4001, upgradeStatus: nil))
-        #expect(BridgeClient.wasRevoked(closeCode: 0, upgradeStatus: 401))
-        #expect(!BridgeClient.wasRevoked(closeCode: 1006, upgradeStatus: nil))
-        #expect(!BridgeClient.wasRevoked(closeCode: 0, upgradeStatus: 503))
+    @Test func onlyTheRevokedCloseUnpairsAndA401OnlyAsksTheUser() {
+        #expect(BridgeClient.ending(greeted: true, closeCode: 4001, upgradeStatus: 101) == .revoked)
+        #expect(BridgeClient.ending(greeted: false, closeCode: 0, upgradeStatus: 401) == .unrecognized)
+        #expect(BridgeClient.ending(greeted: true, closeCode: 1006, upgradeStatus: 101) == .greeted)
+        #expect(BridgeClient.ending(greeted: false, closeCode: 0, upgradeStatus: 503) == .failed)
+        #expect(BridgeClient.ending(greeted: false, closeCode: 0, upgradeStatus: nil) == .failed)
     }
 
     @Test func backoffDoublesAndCapsAtThirtySeconds() {
@@ -358,39 +391,85 @@ private func unknowns(in message: ServerMessage) -> [String] {
         ServerFrame(message: .hello(Hello(machine: "Mac", userName: "A", bots: [], position: StreamPosition(epoch: epoch, seq: seq, resumed: resumed))))
     }
 
-    @Test func aFreshHelloStartsTheCursorAtItsPosition() {
+    private func broadcast(_ seq: Int) -> ServerFrame {
+        ServerFrame(seq: seq, message: .botRemoved(BotID("b1")))
+    }
+
+    private func cursor(at seq: Int) -> StreamCursor {
         var cursor = StreamCursor()
-        cursor.observe(hello(epoch: "e1", seq: 41, resumed: false))
+        _ = cursor.observe(hello(epoch: "e1", seq: seq, resumed: false))
+        return cursor
+    }
+
+    @Test func aFreshHelloStartsTheCursorAtItsPosition() {
+        let cursor = cursor(at: 41)
         #expect(cursor.resumeQuery == [URLQueryItem(name: "epoch", value: "e1"), URLQueryItem(name: "after", value: "41")])
     }
 
+    @Test func eachNextSeqAdvancesTheCursor() {
+        var cursor = cursor(at: 41)
+        #expect(cursor.observe(broadcast(42)) == .inOrder)
+        #expect(cursor.observe(broadcast(43)) == .inOrder)
+        #expect(cursor.resumeQuery.last == URLQueryItem(name: "after", value: "43"))
+    }
+
+    /// After 42: a skip, a repeat, and a step back.
+    @Test(arguments: [44, 42, 40])
+    func aSkippedOrRepeatedSeqBreaksTheStreamAndDropsTheResume(seq: Int) {
+        var cursor = cursor(at: 41)
+        #expect(cursor.observe(broadcast(42)) == .inOrder)
+        #expect(cursor.observe(broadcast(seq)) == .broken)
+        #expect(cursor.resumeQuery.isEmpty)
+    }
+
     @Test func repliesWithoutASeqLeaveTheCursorAlone() {
-        var cursor = StreamCursor()
-        cursor.observe(hello(epoch: "e1", seq: 41, resumed: false))
-        cursor.observe(ServerFrame(message: .error(message: "Unknown bot")))
+        var cursor = cursor(at: 41)
+        #expect(cursor.observe(ServerFrame(message: .error(message: "Unknown bot"))) == .inOrder)
         #expect(cursor.seq == 41)
     }
 
     @Test func aResumedHelloKeepsOurSeqUntilTheReplayAdvancesIt() {
-        var cursor = StreamCursor()
-        cursor.observe(hello(epoch: "e1", seq: 41, resumed: false))
-        cursor.observe(hello(epoch: "e1", seq: 50, resumed: true))
+        var cursor = cursor(at: 41)
+        #expect(cursor.observe(hello(epoch: "e1", seq: 50, resumed: true)) == .inOrder)
         #expect(cursor.seq == 41)
-        cursor.observe(ServerFrame(seq: 42, message: .botRemoved(BotID("b1"))))
+        #expect(cursor.observe(broadcast(42)) == .inOrder)
         #expect(cursor.seq == 42)
     }
 
-    @Test func aNewEpochStartsOver() {
-        var cursor = StreamCursor()
-        cursor.observe(hello(epoch: "e1", seq: 41, resumed: false))
-        cursor.observe(hello(epoch: "e2", seq: 3, resumed: false))
-        #expect(cursor.epoch == "e2")
-        #expect(cursor.seq == 3)
+    @Test func aReplayThatStartsPastOurSeqIsAGap() {
+        var cursor = cursor(at: 41)
+        _ = cursor.observe(hello(epoch: "e1", seq: 50, resumed: true))
+        #expect(cursor.observe(broadcast(43)) == .broken)
+        #expect(cursor.resumeQuery.isEmpty)
     }
 
-    @Test func aBridgeWithoutAReplayRingIsNeverAskedToResume() {
+    @Test func aNewEpochStartsOver() {
+        var cursor = cursor(at: 41)
+        _ = cursor.observe(hello(epoch: "e2", seq: 3, resumed: false))
+        #expect(cursor.epoch == "e2")
+        #expect(cursor.seq == 3)
+        #expect(cursor.observe(broadcast(4)) == .inOrder)
+    }
+
+    @Test func anUndecodableFrameWithASeqIsAGap() {
+        var cursor = cursor(at: 41)
+        #expect(cursor.skipped(seq: nil) == .inOrder)
+        #expect(cursor.resumeQuery.isEmpty == false)
+        #expect(cursor.skipped(seq: 42) == .broken)
+        #expect(cursor.resumeQuery.isEmpty)
+    }
+
+    @Test func theSeqOfAnUndecodableFrameIsReadFromItsJSON() {
+        #expect(BridgeClient.seq(in: Data(#"{"type":"message","seq":42,"botId":"b1","message":{"kind":"bot"}}"#.utf8)) == 42)
+        #expect(BridgeClient.seq(in: Data(#"{"type":"error","message":7}"#.utf8)) == nil)
+        #expect(BridgeClient.seq(in: Data("not json".utf8)) == nil)
+    }
+
+    @Test func aBridgeWithoutAReplayRingIsNeverAskedToResumeOrHeldToSeqs() {
         var cursor = StreamCursor()
-        cursor.observe(hello(epoch: "", seq: 0, resumed: false))
+        _ = cursor.observe(hello(epoch: "", seq: 0, resumed: false))
+        #expect(cursor.observe(broadcast(7)) == .inOrder)
+        #expect(cursor.skipped(seq: 8) == .inOrder)
         #expect(cursor.resumeQuery.isEmpty)
     }
 }
@@ -406,9 +485,79 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(DeepLink(url: url) == .pair(PairInvite(url: URL(string: "ws://10.0.0.20:7878/ws")!, code: "K7QD-M2XP")))
     }
 
+    @Test func aProtocol2LinkAsksForABridgeUpdateInsteadOfPairing() {
+        let url = URL(string: "claudiobot://pair?url=ws%3A%2F%2F10.0.0.20%3A7878%2Fws&token=0123abcd")!
+        #expect(DeepLink(url: url) == .outdatedBridge)
+        #expect(DeepLink(url: URL(string: "claudiobot://pair?url=ws%3A%2F%2F10.0.0.20%3A7878%2Fws")!) == nil)
+    }
+
     @Test func otherLinksAreIgnored() {
         #expect(DeepLink(url: URL(string: "claudiobot://bot/")!) == nil)
         #expect(DeepLink(url: URL(string: "claudiobot://settings")!) == nil)
         #expect(DeepLink(url: URL(string: "https://bot/b1")!) == nil)
+    }
+}
+
+@Suite struct PairingFlowTests {
+    private let invite = PairInvite(url: URL(string: "ws://10.0.0.20:7878/ws")!, code: "K7QD-M2XP")
+    private let other = PairInvite(url: URL(string: "ws://10.0.0.99:7878/ws")!, code: "AAAA-BBBB")
+
+    @Test func nothingIsRedeemedWithoutConfirmation() {
+        var flow = PairingFlow()
+        #expect(flow.confirm() == nil)
+        flow.propose(invite)
+        #expect(flow.confirming == invite)
+        #expect(flow.isPairing == false)
+        #expect(flow.confirm() == invite)
+        #expect(flow.isPairing)
+        #expect(flow.confirm() == nil)
+    }
+
+    @Test func cancellingTheConfirmationRedeemsNothing() {
+        var flow = PairingFlow()
+        flow.propose(invite)
+        flow.cancelConfirmation()
+        #expect(flow.confirming == nil)
+        #expect(flow.confirm() == nil)
+    }
+
+    @Test func aLinkArrivingMidPairingDoesNotReplaceIt() {
+        var flow = PairingFlow()
+        flow.propose(invite)
+        _ = flow.confirm()
+        flow.propose(other)
+        #expect(flow.step == .pairing(invite))
+    }
+
+    @Test func aFailureReturnsToTheFormWithItsReasonUntilTheNextProposal() {
+        var flow = PairingFlow()
+        flow.propose(invite)
+        _ = flow.confirm()
+        flow.fail("The bridge took the pairing code but did not connect.")
+        #expect(flow.step == .entering)
+        #expect(flow.failure == "The bridge took the pairing code but did not connect.")
+        flow.propose(other)
+        #expect(flow.failure == nil)
+        #expect(flow.confirming == other)
+    }
+}
+
+@MainActor
+@Suite struct NotifierTests {
+    private let bot = Bot(
+        id: BotID("b1"), name: "bot", title: nil, avatar: .standard, pinned: false, hidden: false, status: .idle,
+        unread: 0, question: nil, preview: "", lastAt: .now, createdAt: .now, routines: []
+    )
+
+    @Test func eachCardKeepsItsOwnNotificationWhileMessagesShareOnePerBot() {
+        let ids = [
+            Alert(bot: bot, reason: .message("one")),
+            Alert(bot: bot, reason: .message("two")),
+            Alert(bot: bot, reason: .permission(id: MessageID("p1"), label: "Push")),
+            Alert(bot: bot, reason: .permission(id: MessageID("p2"), label: "Push")),
+            Alert(bot: bot, reason: .question(id: MessageID("q1"), question: "Merge?", options: ["Yes"])),
+        ].map(Notifier.identifier(for:))
+        #expect(ids[0] == ids[1])
+        #expect(Set(ids[1...]).count == 4)
     }
 }

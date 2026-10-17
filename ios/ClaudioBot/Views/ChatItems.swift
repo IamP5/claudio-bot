@@ -173,9 +173,10 @@ private struct PermissionCardBody: View {
     let card: PermissionCard
     let answer: PermissionAnswer?
 
+    @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
-    /// The choice sent and not yet echoed back, so a second tap cannot send another.
-    @State private var sent: PermissionChoice?
+
+    private var sent: PermissionChoice? { store.pendingDecisions[messageId] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -254,7 +255,6 @@ private struct PermissionCardBody: View {
 
     private func choiceButton(_ choice: PermissionChoice) -> some View {
         Button {
-            sent = choice
             client.send(.decide(botId: botId, messageId: messageId, choice: choice))
         } label: {
             HStack(spacing: 6) {

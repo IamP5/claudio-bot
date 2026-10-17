@@ -228,6 +228,55 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(store.protocolMismatch == nil)
     }
 
+    @Test func aDecisionStaysPendingUntilItsCardIsAnswered() {
+        let store = store()
+        store.apply(.message(botId: BotID("b1"), message: permission("p1")))
+        store.apply(.message(botId: BotID("b1"), message: permission("p2")))
+        store.decisionSent(.once, for: MessageID("p1"))
+        store.decisionSent(.deny, for: MessageID("p2"))
+        store.apply(.message(botId: BotID("b1"), message: permission("p1")))
+        #expect(store.pendingDecisions[MessageID("p1")] == .once)
+        store.apply(.message(botId: BotID("b1"), message: permission("p1", answer: .chose(.once))))
+        #expect(store.pendingDecisions[MessageID("p1")] == nil)
+        #expect(store.pendingDecisions[MessageID("p2")] == .deny)
+        store.apply(.conversation(botId: BotID("b1"), messages: [permission("p2", answer: .expired)]))
+        #expect(store.pendingDecisions.isEmpty)
+    }
+
+    @Test func aReconnectOrASendFailureReleasesTheButtons() {
+        let store = store()
+        store.decisionSent(.once, for: MessageID("p1"))
+        store.apply(hello([bot("b1")]))
+        #expect(store.pendingDecisions.isEmpty)
+        store.decisionSent(.always, for: MessageID("p1"))
+        store.decisionFailed(for: MessageID("p1"))
+        #expect(store.pendingDecisions.isEmpty)
+        #expect(store.lastError?.message == "Your decision did not reach your Mac. Try again.")
+    }
+
+    @Test func anErrorIsDismissedOnlyByItsOwnNotice() throws {
+        let store = store()
+        store.apply(.error(message: "Unknown bot"))
+        let first = try #require(store.lastError)
+        store.apply(.error(message: "Unknown bot"))
+        let second = try #require(store.lastError)
+        store.dismissError(first)
+        #expect(store.lastError == second)
+        store.dismissError(second)
+        #expect(store.lastError == nil)
+    }
+
+    @Test func deviceControlsWaitForAProtocol3Hello() {
+        let store = AppStore()
+        #expect(!store.bridgeManagesDevices)
+        store.apply(hello([], protocol: 2))
+        #expect(!store.bridgeManagesDevices)
+        store.apply(hello([], protocol: 3))
+        #expect(store.bridgeManagesDevices)
+        store.setConnection(.unpaired)
+        #expect(store.bridgeProtocol == nil)
+    }
+
     @Test func devicesAndPairCodesAreKeptForSettings() {
         let store = store()
         let device = Device(id: DeviceID("d1"), name: "iPhone", createdAt: at, lastSeenAt: nil, legacy: false, current: true)

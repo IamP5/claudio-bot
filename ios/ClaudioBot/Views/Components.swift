@@ -44,6 +44,9 @@ struct ConnectionBadge: View {
             case .unpaired:
                 StatusDot(color: .gray)
                 Text("Not paired")
+            case .unrecognized:
+                StatusDot(color: .red)
+                Text("Not recognized")
             }
         }
         .font(.footnote.weight(.medium))
@@ -59,6 +62,32 @@ extension ConnectionState {
         case .connecting: "Connecting"
         case .connected: "Connected"
         case .disconnected: "Reconnecting"
+        case .unrecognized: "Not recognized"
+        }
+    }
+}
+
+/// The latest error, shown over whatever is on screen until it times out or is tapped away.
+struct ErrorToast: View {
+    @Environment(AppStore.self) private var store
+
+    var body: some View {
+        if let notice = store.lastError {
+            Label(notice.message, systemImage: "exclamationmark.triangle.fill")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Theme.raised, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .onTapGesture { store.dismissError(notice) }
+                .task(id: notice.id) {
+                    try? await Task.sleep(for: .seconds(5))
+                    store.dismissError(notice)
+                }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Dismisses the error")
         }
     }
 }

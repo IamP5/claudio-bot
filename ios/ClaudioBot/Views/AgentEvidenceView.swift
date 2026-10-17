@@ -24,14 +24,61 @@ struct AgentEvidenceSummary: Equatable {
     }
 }
 
+/// The agent's own worktree, and whether the phone may ask to remove it now. The bridge refuses a dirty one itself.
+struct AgentWorktreeRow: Equatable {
+    var branch: String
+    var removable: Bool
+
+    static func of(_ agent: Agent, features: Set<Feature>) -> AgentWorktreeRow? {
+        guard features.contains(.worktrees), let w = agent.worktree else { return nil }
+        let busy: Set<AgentStatus> = [.working, .awaitingApproval, .parked]
+        return AgentWorktreeRow(branch: w.branch, removable: !busy.contains(agent.status))
+    }
+}
+
 /// What the bridge read from git after the agent's turn, and its worktree with a remove button. Shown when the bridge lists .worktrees.
 struct AgentEvidenceSection: View {
     let agent: Agent
 
     @Environment(AppStore.self) private var store
+    @Environment(BridgeClient.self) private var client
     @Environment(\.openURL) private var openURL
+    @State private var confirming = false
 
     var body: some View {
+        VStack(spacing: 10) {
+            evidence
+            worktree
+        }
+    }
+
+    @ViewBuilder private var worktree: some View {
+        if let row = AgentWorktreeRow.of(agent, features: store.features) {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Own worktree on \(row.branch)", systemImage: "square.on.square.dashed")
+                    .foregroundStyle(.white)
+                Text("In ~/.claudiobot-worktrees, so your checkout stays as you left it.")
+                    .foregroundStyle(Theme.secondary)
+                Button(role: .destructive) { confirming = true } label: {
+                    Label("Remove worktree", systemImage: "trash")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(row.removable ? Theme.danger : Theme.tertiary)
+                .disabled(!row.removable)
+                .confirmationDialog("Remove this worktree?", isPresented: $confirming, titleVisibility: .visible) {
+                    Button("Remove", role: .destructive) { client.send(.removeWorktree(agentId: agent.id)) }
+                } message: {
+                    Text("The folder goes away. The branch \(row.branch) keeps every commit. The agent cannot continue after this.")
+                }
+            }
+            .font(.system(size: 14))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(Theme.bubble, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+    }
+
+    @ViewBuilder private var evidence: some View {
         if let summary = AgentEvidenceSummary.of(agent, features: store.features) {
             VStack(alignment: .leading, spacing: 6) {
                 Label(summary.place, systemImage: "arrow.triangle.branch")

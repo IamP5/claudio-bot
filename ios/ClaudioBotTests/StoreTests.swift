@@ -484,3 +484,27 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(summary?.work.hasPrefix("1 commit ahead") == true)
     }
 }
+
+@Suite struct AgentWorktreeTests {
+    private func agent(_ status: AgentStatus, worktree: Worktree?) -> Agent {
+        Agent(
+            id: AgentID("a1"), botId: BotID("b1"), title: "Fix login", where: .mac, projectName: "app",
+            status: status, url: nil, createdAt: at, updatedAt: at, evidence: nil, worktree: worktree
+        )
+    }
+
+    private let worktree = Worktree(path: "/Users/alex/.claudiobot-worktrees/app/a1", branch: "claudio/ab12cd34")
+
+    @Test func theRemoveButtonShowsOnlyWithWorktreesAndAWorktree() {
+        #expect(AgentWorktreeRow.of(agent(.waiting, worktree: worktree), features: []) == nil)
+        #expect(AgentWorktreeRow.of(agent(.waiting, worktree: nil), features: [.worktrees]) == nil)
+        #expect(AgentWorktreeRow.of(agent(.waiting, worktree: worktree), features: [.worktrees]) == AgentWorktreeRow(branch: "claudio/ab12cd34", removable: true))
+    }
+
+    @Test func removingWaitsWhileTheAgentWorks() {
+        for status: AgentStatus in [.working, .awaitingApproval, .parked] {
+            #expect(AgentWorktreeRow.of(agent(status, worktree: worktree), features: [.worktrees])?.removable == false)
+        }
+        #expect(AgentWorktreeRow.of(agent(.failed, worktree: worktree), features: [.worktrees])?.removable == true)
+    }
+}

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Options, query, SandboxSettings, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -77,7 +77,7 @@ afterEach(() => {
   else process.env.CLAUDIOBOT_CLAUDE = configuredClaude;
 });
 
-function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; project?: Project; sandbox?: () => SandboxSettings } = {}) {
+function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; project?: Project; sandbox?: () => SandboxSettings; worktrees?: string } = {}) {
   const world = opts.world ?? emptyWorld();
   const queries: FakeQuery[] = [];
   const reports: { agentId: AgentId; text: string; by: Initiator }[] = [];
@@ -122,6 +122,7 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; p
     },
     reported: (rec, text, by) => reports.push({ agentId: rec.agent.id, text, by }),
     note: (rec, text) => notes.push({ agentId: rec.agent.id, text }),
+    worktrees: opts.worktrees,
   });
   const start = (where: "mac" | "cloud" = "mac", initiator: Initiator = user, botId: BotId = B1) =>
     agents.start(botId, { title: "Fix tests", prompt: "Make the suite green.", project: where === "cloud" ? cloudProject : (opts.project ?? project), where, isolate: "auto", botName: "Ana", initiator, budgetUsd: null });
@@ -555,3 +556,94 @@ test("an agent outside a git repo reports its words alone and has no evidence", 
   await flush();
   expect([h.reports.map((r) => r.text), rec.agent.evidence]).toEqual([["Done."], null]);
 });
+
+function tempDir() {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-agents-wt-")));
+  roots.push(dir);
+  return dir;
+}
+
+function worktreeHarness(opts: { world?: World } = {}) {
+  const dir = tempRepo();
+  const worktrees = tempDir();
+  const shop: Project = { name: "shop", path: dir, branch: "main", githubRepo: null };
+  const h = harness({ ...opts, project: shop, worktrees });
+  const startIn = (isolate: "auto" | "none" | "worktree", where: "mac" | "cloud" = "mac") =>
+    h.agents.start(B1, { title: "Fix tests", prompt: "Make the suite green.", project: shop, where, isolate, botName: "Ana", initiator: user, budgetUsd: null });
+  return { ...h, dir, worktrees, startIn };
+}
+
+test("isolate worktree starts the agent in its own worktree, with the repo's config kept out and the trust card on the main checkout", async () => {
+  const h = worktreeHarness();
+  mkdirSync(join(h.dir, ".claude"));
+  writeFileSync(join(h.dir, ".claude", "settings.json"), "{}");
+  const rec = await h.startIn("worktree");
+  await flush();
+  const path = join(h.worktrees, "shop", rec.agent.id);
+
+  expect([rec.cwd, rec.agent.worktree, h.q().options.cwd, h.q().options.projectConfigRoot]).toEqual([
+    path,
+    { path, branch: `claudio/${rec.agent.id.slice(2, 10)}` },
+    path,
+    `/bridge/agent-config/${rec.agent.id}`,
+  ]);
+  expect(h.trustCards.map((c) => c.root)).toEqual([h.dir]);
+  expect(gitIn(h.dir, "symbolic-ref", "--short", "HEAD")).toBe("main");
+}, 30_000);
+
+test("once the main checkout is trusted, an agent in its worktree reopens and loads the config from the main checkout", async () => {
+  const h = worktreeHarness();
+  const rec = await h.startIn("worktree");
+  await flush();
+  h.q().emit(result("Done."));
+  await until(() => h.reports.length === 1);
+  own<GateState>(h.world.gate).repos.push({ root: h.dir, agentId: null, trusted: true, cardId: "m_card" as never, at: AT });
+  h.agents.trusted(h.dir);
+  await h.agents.message(rec, "Now add a test.", user);
+  await flush();
+  expect(h.queries.map((q) => [q.closed, q.options.cwd, q.options.projectConfigRoot])).toEqual([
+    [true, rec.cwd, `/bridge/agent-config/${rec.agent.id}`],
+    [false, rec.cwd, h.dir],
+  ]);
+}, 30_000);
+
+test("a second agent in a folder a live agent works in gets a worktree under auto; cloud agents ignore isolate", async () => {
+  const h = worktreeHarness();
+  const first = await h.startIn("auto");
+  const second = await h.startIn("auto");
+  fakeCloudClaude(true);
+  const cloud = await h.startIn("worktree", "cloud");
+  expect([first.cwd, first.agent.worktree, second.agent.worktree?.path.startsWith(h.worktrees), cloud.cwd, cloud.agent.worktree]).toEqual([h.dir, null, true, h.dir, null]);
+}, 30_000);
+
+test("removing a worktree is refused while the agent works, then removes it, keeps its commits, and the agent cannot continue", async () => {
+  const h = worktreeHarness();
+  const rec = await h.startIn("worktree");
+  await flush();
+  writeFileSync(join(rec.cwd, "fix.ts"), "x\n");
+  gitIn(rec.cwd, "add", ".");
+  gitIn(rec.cwd, "commit", "-q", "-m", "fix");
+  const branch = rec.agent.worktree!.branch;
+
+  expect(await h.agents.removeWorktree(rec)).toEqual({ ok: false, error: "The agent is still working. Stop it or wait for its report first." });
+  h.q().emit(result("Committed the fix."));
+  await until(() => h.reports.length === 1);
+  expect(h.reports[0]!.text).toStartWith(`[Git, read by the bridge after this turn: branch ${branch}`);
+  const broadcasts = h.evidence.length;
+
+  expect(await h.agents.removeWorktree(rec)).toEqual({ ok: true });
+  expect([existsSync(rec.cwd), rec.agent.worktree, h.evidence.length, gitIn(h.dir, "log", "-1", "--format=%s", branch)]).toEqual([false, null, broadcasts + 1, "fix"]);
+  expect(await h.agents.removeWorktree(rec)).toEqual({ ok: false, error: "This agent works in the project folder, not a worktree." });
+  expect(await h.agents.message(rec, "One more thing.", user)).toBe("Fix tests worked in a worktree that was removed, so it cannot continue. Start a new agent.");
+}, 30_000);
+
+test("removing a worktree with uncommitted work is refused and leaves it in place", async () => {
+  const h = worktreeHarness();
+  const rec = await h.startIn("worktree");
+  await flush();
+  h.q().emit(result("Done."));
+  await until(() => h.reports.length === 1);
+  writeFileSync(join(rec.cwd, "draft.ts"), "x\n");
+  expect(await h.agents.removeWorktree(rec)).toMatchObject({ ok: false, error: expect.stringContaining("uncommitted changes") });
+  expect([existsSync(join(rec.cwd, "draft.ts")), rec.agent.worktree?.path]).toEqual([true, rec.cwd]);
+}, 30_000);

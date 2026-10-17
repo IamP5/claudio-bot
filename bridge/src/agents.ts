@@ -1,7 +1,8 @@
 import type { HookCallbackMatcher, HookEvent, Options, SandboxSettings, SDKMessage, Settings } from "@anthropic-ai/claude-agent-sdk";
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { join, sep } from "node:path";
 import { createCloudSession, followUpCloudSession } from "./cloud";
+import { evidenceLine, readEvidence } from "./evidence";
 import type { Ledger } from "./ledger";
 import type { AgentId, AgentStatus, BotId } from "./protocol";
 import { agentPrompt, type SessionInput } from "./prompts";
@@ -10,9 +11,9 @@ import { createSession, usedBudget, type Session, type SessionSpec, type TurnEnd
 import { refused, type Result } from "./result";
 import { AGENT_GIT_ENV } from "./sandbox";
 import type { Persist } from "./store";
-import { evidenceLine, readEvidence } from "./evidence";
 import { errorText } from "./text";
 import type { Isolate } from "./tools";
+import { mainCheckoutOf, prepareWorkspace, removeWorktree, worktreesRoot } from "./worktree";
 import { emptySession, newMessageId, repoTrust, type Actor, type AgentActor, type AgentRecord, type Initiator, type World } from "./world";
 
 // Agents are actors like bots: mac agents run on the same session module behind the same gate, metered by the same
@@ -89,11 +90,24 @@ export function createAgents(deps: {
   observe: (actor: AgentActor, m: SDKMessage) => void;
   /** A mac agent's turn ended (activity.clear). */
   idle: (actor: AgentActor) => void;
+  /** Where worktrees go; tests pass a temp folder. Default worktree.worktreesRoot(). */
+  worktrees?: string;
 }): Agents {
   const sessions = new Map<AgentId, Session>();
   const cloudQueues = new Map<AgentId, Promise<void>>();
   // A report waits for git, so reports run in turn order per agent.
   const reportQueues = new Map<AgentId, Promise<void>>();
+  const removing = new Set<AgentId>();
+
+  /** The checkout repo trust and project config are keyed on: the main checkout, also for an agent in a worktree. */
+  const repoOf = (rec: AgentRecord) => (rec.agent.worktree ? (mainCheckoutOf(rec.cwd) ?? rec.cwd) : rec.cwd);
+
+  const worktrees = deps.worktrees ?? worktreesRoot();
+  /** Its worktree is being or was removed: the folder its session resumes in no longer exists. */
+  const gone = (rec: AgentRecord) => {
+    const root = existsSync(worktrees) ? realpathSync(worktrees) : worktrees;
+    return removing.has(rec.agent.id) || (rec.cwd.startsWith(root + sep) && !existsSync(rec.cwd));
+  };
 
   /** A mac agent shows what its session is doing, or an open card; once neither holds, what its last report left. */
   function statusOf(rec: AgentRecord, reported: AgentStatus): AgentStatus {
@@ -179,12 +193,13 @@ export function createAgents(deps: {
       // session lowers it to what is left of the daily cap for a query it opens for an unattended turn.
       options: (): Options => {
         const maxBudgetUsd = deps.ledger.budgetLeft(id);
-        const trusted = repoTrust(deps.world.gate, rec.cwd, id) === true;
+        const repo = repoOf(rec);
+        const trusted = repoTrust(deps.world.gate, repo, id) === true;
         return {
           cwd: rec.cwd,
           // Project settings, hooks and .mcp.json come from here instead of the checkout, which the agent and every
-          // branch it checks out can change.
-          ...(trusted ? {} : { projectConfigRoot: deps.configRoot(id) }),
+          // branch it checks out can change. A trusted worktree loads them from its main checkout, the one trusted.
+          ...(!trusted ? { projectConfigRoot: deps.configRoot(id) } : repo !== rec.cwd ? { projectConfigRoot: repo } : {}),
           resume: rec.session.id ?? undefined,
           settingSources: ["user", "project"],
           systemPrompt: { type: "preset", preset: "claude_code" },
@@ -226,10 +241,14 @@ export function createAgents(deps: {
 
   return {
     async start(botId, a) {
+      const id = `a_${crypto.randomUUID()}` as AgentId;
+      // Another live agent in the project folder makes auto isolate. Cloud agents ignore isolate.
+      const busy = [...deps.world.agents.values()].some((r) => r.cwd === a.project.path && sessions.has(r.agent.id));
+      const workspace = a.where === "mac" ? await prepareWorkspace(a.project, id, a.isolate, { busy, root: worktrees }) : { cwd: a.project.path, worktree: null };
       const at = deps.now();
       const rec: AgentRecord = {
         agent: {
-          id: `a_${crypto.randomUUID()}` as AgentId,
+          id,
           botId,
           title: a.title,
           where: a.where,
@@ -239,9 +258,9 @@ export function createAgents(deps: {
           createdAt: at,
           updatedAt: at,
           evidence: null,
-          worktree: null,
+          worktree: workspace.worktree,
         },
-        cwd: a.project.path,
+        cwd: workspace.cwd,
         messages: [{ id: newMessageId(), at, from: "bot", text: a.prompt }],
         session: emptySession(),
         cloudSession: null,
@@ -253,8 +272,8 @@ export function createAgents(deps: {
       const prompt = agentPrompt({ botName: a.botName, userName: deps.userName, prompt: a.prompt });
       if (a.where === "mac") {
         macSession(rec).push(queued(prompt, a.initiator));
-        const found = projectConfigOf(rec.cwd);
-        if (found.length > 0) deps.trustCard({ kind: "agent", botId, agentId: rec.agent.id }, { root: rec.cwd, name: a.project.name, found });
+        const found = projectConfigOf(a.project.path);
+        if (found.length > 0) deps.trustCard({ kind: "agent", botId, agentId: rec.agent.id }, { root: a.project.path, name: a.project.name, found });
         return rec;
       }
       await cloud(rec, async () => {
@@ -271,6 +290,7 @@ export function createAgents(deps: {
     },
 
     async message(rec, text, initiator) {
+      if (gone(rec)) return `${rec.agent.title} worked in a worktree that was removed, so it cannot continue. Start a new agent.`;
       if (rec.agent.where === "mac") {
         // Recorded before the push, which can end the turn at once (a used-up budget) and report after it.
         record(rec, { from: "bot", text });
@@ -294,18 +314,39 @@ export function createAgents(deps: {
     },
 
     deliver(rec, input) {
-      if (rec.agent.where !== "mac") return;
+      if (rec.agent.where !== "mac" || gone(rec)) return;
       macSession(rec).push(input);
       refresh(rec);
     },
 
     notice(rec, text) {
-      if (rec.agent.where !== "mac") return;
+      if (rec.agent.where !== "mac" || gone(rec)) return;
       macSession(rec).notice(text);
       refresh(rec);
     },
 
-    removeWorktree: async () => refused("Worktrees are not available on this bridge yet."),
+    async removeWorktree(rec) {
+      const id = rec.agent.id;
+      const worktree = rec.agent.worktree;
+      if (!worktree) return refused("This agent works in the project folder, not a worktree.");
+      const session = sessions.get(id);
+      const carded = deps.world.gate.open.some((c) => c.actor.kind === "agent" && c.actor.agentId === id);
+      if (session?.working || rec.session.pending.length > 0 || carded) return refused("The agent is still working. Stop it or wait for its report first.");
+      if (removing.has(id)) return refused("The worktree is already being removed.");
+      const main = mainCheckoutOf(rec.cwd);
+      removing.add(id);
+      try {
+        const result = main ? await removeWorktree(main, worktree) : existsSync(rec.cwd) ? refused("git could not find the worktree's repository, so it was left in place.") : ({ ok: true } as const);
+        if (!result.ok) return result;
+      } finally {
+        removing.delete(id);
+      }
+      sessions.get(id)?.close();
+      sessions.delete(id);
+      rec.agent = { ...rec.agent, worktree: null, updatedAt: deps.now() };
+      deps.changed(rec);
+      return { ok: true };
+    },
 
     async stop(rec) {
       const session = sessions.get(rec.agent.id);
@@ -325,7 +366,10 @@ export function createAgents(deps: {
     },
 
     trusted(root) {
-      for (const [id, session] of sessions) if (deps.world.agents.get(id)?.cwd === root) session.reopen();
+      for (const [id, session] of sessions) {
+        const rec = deps.world.agents.get(id);
+        if (rec && repoOf(rec) === root) session.reopen();
+      }
     },
 
     stopFor(botId) {

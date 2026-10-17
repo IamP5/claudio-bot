@@ -22,6 +22,13 @@ const PUSH_READABLE: readonly string[] = [".ssh/config", ".ssh/known_hosts", ".s
 const CACHES: readonly string[] = [".npm", ".bun/install/cache", ".cache", "Library/Caches", "Library/Developer/Xcode/DerivedData"];
 
 /**
+ * Under a bot's home: what Claude Code loads as that bot's instructions, skills, settings and MCP servers. Only the
+ * bridge writes them (the remember and save_skill tools, update_self), from its own unsandboxed process, so no Bash
+ * command of the bot can rewrite what its later turns obey.
+ */
+const BOT_LOADED: readonly string[] = ["CLAUDE.md", "CLAUDE.local.md", ".claude", ".mcp.json"];
+
+/**
  * Under a git dir outside the agent's cwd: what git loads and runs later, outside the sandbox. The sandbox already
  * denies these for the `.git` inside cwd, but not for a worktree's common dir or a parent repo added to allowWrite.
  */
@@ -60,7 +67,8 @@ export const AGENT_GIT_ENV: Readonly<Record<string, string>> = {
 /**
  * The OS-enforced floor (Seatbelt on macOS) for every Bash call of a bot or a mac agent, and every process it starts.
  * It does not cover Read/Write/Edit/Grep/Glob or WebFetch: the gate's floors cover those tool paths.
- * A bot writes its home, USER.md and the sandbox's own TMPDIR, and reads nothing else of the bridge home. A mac agent
+ * A bot writes its home but not the files in BOT_LOADED, and the sandbox's own TMPDIR; it reads its home and USER.md and
+ * nothing else of the bridge home. USER.md changes only through the bridge (remember, the phone's Memory). A mac agent
  * writes its cwd (project or worktree), the git dirs a commit there needs, the per-user temp and cache dirs and build
  * caches, and reads nothing of the bridge home. `gitDirs` comes from `gitDirsOf(cwd)` and is ignored for a bot.
  * CLAUDIOBOT_SANDBOX_GH=1 lets a mac agent run gh, which needs its config and the trustd service for TLS.
@@ -82,8 +90,17 @@ export function sandboxFor(actor: Actor, scope: Scope, env: SandboxEnv, gitDirs:
     ...(env.CLAUDIOBOT_SANDBOX_STRICT_NETWORK === "1" ? { strictAllowlist: true } : {}),
   };
   if (actor.kind === "bot") {
-    const own = [scope.own, ...(scope.userMd === null ? [] : [scope.userMd])];
-    return { ...common, filesystem: { allowWrite: own, denyRead, allowRead: own }, network: domains };
+    const userMd = scope.userMd === null ? [] : [scope.userMd];
+    return {
+      ...common,
+      filesystem: {
+        allowWrite: [scope.own],
+        denyWrite: [...BOT_LOADED.map((f) => join(scope.own, f)), ...userMd],
+        denyRead,
+        allowRead: [scope.own, ...userMd],
+      },
+      network: domains,
+    };
   }
   const gh = env.CLAUDIOBOT_SANDBOX_GH === "1";
   return {

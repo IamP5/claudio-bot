@@ -73,10 +73,15 @@ describe("a bot", () => {
     });
   });
 
-  test("writes only its own home and USER.md", () => {
+  test("writes only its own home, and never USER.md or the files Claude Code loads as its instructions and config", () => {
     expect(
       writesOf(s, [
         "/Users/u/.claudiobot/bots/b_alpha/library/n.md",
+        "/Users/u/.claudiobot/bots/b_alpha/CLAUDE.md",
+        "/Users/u/.claudiobot/bots/b_alpha/CLAUDE.local.md",
+        "/Users/u/.claudiobot/bots/b_alpha/.claude/skills/x/SKILL.md",
+        "/Users/u/.claudiobot/bots/b_alpha/.claude/settings.json",
+        "/Users/u/.claudiobot/bots/b_alpha/.mcp.json",
         "/Users/u/.claudiobot/USER.md",
         "/Users/u/.claudiobot/bots/b_beta/x",
         "/Users/u/.claudiobot/state.json",
@@ -86,7 +91,12 @@ describe("a bot", () => {
       ]),
     ).toEqual({
       "/Users/u/.claudiobot/bots/b_alpha/library/n.md": true,
-      "/Users/u/.claudiobot/USER.md": true,
+      "/Users/u/.claudiobot/bots/b_alpha/CLAUDE.md": false,
+      "/Users/u/.claudiobot/bots/b_alpha/CLAUDE.local.md": false,
+      "/Users/u/.claudiobot/bots/b_alpha/.claude/skills/x/SKILL.md": false,
+      "/Users/u/.claudiobot/bots/b_alpha/.claude/settings.json": false,
+      "/Users/u/.claudiobot/bots/b_alpha/.mcp.json": false,
+      "/Users/u/.claudiobot/USER.md": false,
       "/Users/u/.claudiobot/bots/b_beta/x": false,
       "/Users/u/.claudiobot/state.json": false,
       "/Users/u/Dev/app/x": false,

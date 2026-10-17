@@ -379,10 +379,10 @@ final class AppStore {
         facts?.filter { !$0.confirmed } ?? []
     }
 
-    /// The proposals this bot made. Fact.by is the bot's name when it remembered the fact, so a proposal from before a
-    /// rename shows only in Settings.
+    /// The proposals this bot made. A bridge that predates proposerBotId names the proposer only by Fact.by, the bot's
+    /// name when it remembered the fact, so there a proposal from before a rename shows only in Settings.
     func proposedFacts(by bot: Bot) -> [Fact] {
-        proposedFacts.filter { $0.by == bot.name }
+        proposedFacts.filter { $0.proposerBotId.map { $0 == bot.id } ?? ($0.by == bot.name) }
     }
 
     /// The open question card, newest first, if any.

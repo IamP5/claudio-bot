@@ -308,8 +308,8 @@ private func scratchVault() -> PairingVault {
         client.stop()
     }
 
-    @Test func failedConnectsCountUpAndAnotherAddressOfTheSameMacReplacesThePairingOnHello() async throws {
-        let bridge = try FakeBridge(onOpen: { $0.send(hello()) })
+    @Test func failedConnectsCountUpAndAnotherAddressOfTheSameMacReplacesThePairingOnceItProvesItself() async throws {
+        let bridge = try FakeBridge(onOpen: { $0.send(hello()) }, onHealth: FakeBridge.proving("t1"))
         let vault = scratchVault()
         defer { vault.clear() }
         let good = try await bridge.start()
@@ -325,6 +325,105 @@ private func scratchVault() -> PairingVault {
         try await eventually("the hello at the new address") { client.store.machine == "Mac" }
         #expect(client.failures == 0)
         #expect(bridge.upgrades.allSatisfy { $0.authorization == "Bearer t1" })
+        let check = try #require(bridge.healthChecks.first)
+        #expect(check["device"] == "d1")
+        #expect(check["nonce"]?.count == 64 && check["nonce"]?.allSatisfy(\.isHexDigit) == true)
         client.stop()
+    }
+
+    @Test(arguments: [
+        #"{"ok":true}"#,
+        #"{"ok":true,"proof":"6d94ad91bd2ce00b22986b88b0dd02d65039a108e2e89cb3f11641ff4a426130"}"#,
+        #"{"ok":true,"proof":"not hex"}"#,
+        "<html>",
+    ])
+    func anAddressThatCannotProveItIsTheSameMacNeverReceivesTheToken(health: String) async throws {
+        let home = try FakeBridge(onOpen: { $0.send(hello()) })
+        let impostor = try FakeBridge(onOpen: { $0.send(hello()) }, onHealth: { _ in (200, health) })
+        let vault = scratchVault()
+        defer { vault.clear() }
+        let old = Pairing(url: try await home.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let impostorURL = try await impostor.start()
+        try vault.save(old)
+        let client = BridgeClient(store: AppStore(), vault: vault, timing: quick)
+        client.start(old)
+        try await eventually("the home bridge's hello") { client.store.machine != nil }
+
+        await #expect(throws: Pairing.AddressChange.unproven(impostorURL)) { try await client.changeAddress(to: impostorURL) }
+
+        #expect(impostor.healthChecks.count == 1)
+        #expect(impostor.upgrades.isEmpty, "no socket, so no Authorization header, reached the unproven address")
+        #expect(vault.load() == old)
+        #expect(client.pairing == old)
+        client.stop()
+    }
+
+    @Test func anAddressThatDoesNotAnswerKeepsThePairing() async throws {
+        let vault = scratchVault()
+        defer { vault.clear() }
+        let old = Pairing(url: URL(string: "ws://127.0.0.1:9/ws")!, credential: .device(DeviceID("d1"), token: "t1"))
+        try vault.save(old)
+        let client = BridgeClient(store: AppStore(), vault: vault, timing: quick)
+        client.start(old)
+        let dead = URL(string: "ws://127.0.0.1:7/ws")!
+
+        await #expect(throws: Pairing.AddressChange.unreachable(dead)) { try await client.changeAddress(to: dead) }
+
+        #expect(vault.load() == old)
+        #expect(client.pairing == old)
+        client.stop()
+    }
+
+    @Test func aLegacyPairingCannotChangeItsAddress() async throws {
+        let bridge = try FakeBridge(onOpen: { $0.send(hello()) }, onHealth: FakeBridge.proving("shared"))
+        let legacy = Pairing(url: URL(string: "ws://127.0.0.1:9/ws")!, credential: .legacy(token: "shared"))
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        client.start(legacy)
+        let url = try await bridge.start()
+
+        await #expect(throws: Pairing.AddressChange.legacy) { try await client.changeAddress(to: url) }
+
+        #expect(bridge.healthChecks.isEmpty)
+        #expect(bridge.upgrades.isEmpty)
+        #expect(client.pairing == legacy)
+        client.stop()
+    }
+
+    @Test func pairingTriesTheNextAddressOnlyWhenTheLastOneDidNotAnswer() async throws {
+        let bridge = try FakeBridge(
+            onOpen: { $0.send(hello()) },
+            onPair: { _ in (200, #"{"deviceId":"d2","token":"t2"}"#) }
+        )
+        let vault = scratchVault()
+        defer { vault.clear() }
+        let good = try await bridge.start()
+        let dead = URL(string: "ws://127.0.0.1:9/ws")!
+        let client = BridgeClient(store: AppStore(), vault: vault, timing: quick)
+
+        try await client.pair(PairInvite(url: dead, code: "K7QD-M2XP", fallbacks: [good]))
+
+        let paired = Pairing(url: good, credential: .device(DeviceID("d2"), token: "t2"))
+        #expect(vault.load() == paired)
+        #expect(client.pairing == paired)
+        client.stop()
+    }
+
+    @Test func aBridgeThatRefusesTheCodeEndsPairingWithoutTryingTheOtherAddresses() async throws {
+        let refusing = try FakeBridge(onPair: { _ in (401, #"{"error":"That code expired."}"#) })
+        let other = try FakeBridge(
+            onOpen: { $0.send(hello()) },
+            onPair: { _ in (200, #"{"deviceId":"d2","token":"t2"}"#) }
+        )
+        let refusingURL = try await refusing.start()
+        let otherURL = try await other.start()
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+
+        await #expect(throws: Pairing.Failure.self) {
+            try await client.pair(PairInvite(url: refusingURL, code: "K7QD-M2XP", fallbacks: [otherURL]))
+        }
+
+        #expect(refusing.pairBodies.count == 1)
+        #expect(other.pairBodies.isEmpty)
+        #expect(client.pairing == nil)
     }
 }

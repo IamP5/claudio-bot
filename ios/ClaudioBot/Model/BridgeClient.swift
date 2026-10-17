@@ -59,6 +59,7 @@ final class BridgeClient {
     /// How long the client waits on the bridge. Tests shorten them.
     struct Timing: Sendable {
         var greeting: Duration = .seconds(10)
+        var health: TimeInterval = 10
         var reply: Duration = .seconds(10)
         var legacyRetry: Duration = .seconds(600)
         /// A Stop queued offline for longer than this is dropped: by the time it arrives it would stop a later turn.
@@ -153,12 +154,18 @@ final class BridgeClient {
         start(candidate)
     }
 
-    /// Points this pairing at another address of the same Mac, such as its Tailscale name. The token decides: only the
-    /// bridge that issued it says hello, so the new address is saved only once that hello arrives.
+    /// Points this pairing at another address of the same Mac, such as its Tailscale name. The token goes to the new
+    /// address only after whatever answers there proves it is the bridge that issued it, and the address is saved
+    /// only once that bridge says hello.
     func changeAddress(to url: URL) async throws {
         guard let current = pairing, url != current.url else { return }
+        try await current.proveBridge(at: url, timeout: timing.health)
         let moved = Pairing(url: url, credential: current.credential)
-        try await moved.greet(within: timing.greeting)
+        do {
+            try await moved.greet(within: timing.greeting)
+        } catch {
+            throw Pairing.AddressChange.unreachable(url)
+        }
         try vault.save(moved)
         // Set first, so start() sees the same bridge and keeps what the store holds.
         pairing = moved

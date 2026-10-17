@@ -727,6 +727,20 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(store.proposedFacts(by: store.bots[BotID("b1")]!).map(\.id.rawValue) == ["f_2"])
     }
 
+    @Test func aProposalFollowsItsBotByIdAcrossARenameAndFallsBackToTheNameWithoutOne() {
+        let store = AppStore()
+        var renamed = bot("b1")
+        renamed.name = "engineer"
+        store.apply(hello([renamed, bot("b2")]))
+        store.apply(.memory([
+            Fact(id: FactID("f_1"), text: "Works on acme/web", at: at, by: "bot b1", confirmed: false, proposerBotId: BotID("b1")),
+            Fact(id: FactID("f_2"), text: "Lives in Lisbon", at: at, by: "engineer", confirmed: false, proposerBotId: BotID("b2")),
+            Fact(id: FactID("f_3"), text: "Uses vim", at: at, by: "engineer", confirmed: false),
+        ]))
+        #expect(store.proposedFacts(by: store.bots[BotID("b1")]!).map(\.id.rawValue) == ["f_1", "f_3"])
+        #expect(store.proposedFacts(by: store.bots[BotID("b2")]!).map(\.id.rawValue) == ["f_2"])
+    }
+
     @Test func aMissingFeatureReadsAsLackingOnlyOnceTheBridgeSaidHello() {
         let fresh = AppStore()
         #expect(!fresh.lacks(.spend), "no hello yet: nothing to tell the user")
@@ -765,6 +779,19 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(Money.parse("ten") == nil)
     }
 
+    @Test(arguments: [
+        ("12", 12.0), ("$12.50", 12.5), ("12,5", 12.5), ("1,234", 1234), ("1,234.50", 1234.5), ("$1,234,567", 1_234_567),
+        ("1.234,50", 1234.5), ("1.234.567", 1_234_567), (" 0.75 ", 0.75),
+    ])
+    func aTypedCapReadsGroupingSeparators(typed: String, dollars: Double) {
+        #expect(Money.parse(typed) == dollars)
+    }
+
+    @Test(arguments: ["", "$", "1,23,4", "12,34,5", "1.2.3", "1,234.5.6", "1e3", "1 234", "-1,000"])
+    func aTypedCapThatIsNotAnAmountIsRefused(typed: String) {
+        #expect(Money.parse(typed) == nil)
+    }
+
     @Test func anAgentShowsItsSpendAgainstItsBudgetAndACloudAgentShowsNone() {
         var agent = Agent(
             id: AgentID("a1"), botId: BotID("b1"), title: "Fix", where: .mac, projectName: "web", status: .waiting,
@@ -784,6 +811,28 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(!HomeView.deleteMessage(b, worktrees: []).contains("can't be undone"))
         #expect(HomeView.deleteMessage(b, worktrees: [Worktree(path: "/w/a", branch: "claudio/fix")]).contains("worktree on claudio/fix stays"))
         #expect(HomeView.deleteMessage(b, worktrees: [Worktree(path: "/w/a", branch: "x"), Worktree(path: "/w/b", branch: "y")]).contains("2 worktrees stay"))
+    }
+
+    @Test func theDeleteDialogWaitsForDetailsAndForcesOnlyWhenWorktreesStayBehind() {
+        let b = bot("b1")
+        var agent = Agent(
+            id: AgentID("a1"), botId: BotID("b1"), title: "Fix", where: .mac, projectName: "web", status: .waiting,
+            url: nil, createdAt: at, updatedAt: at
+        )
+        #expect(HomeView.Deletion(b, details: nil, detailsLate: false) == nil, "no details yet: still checking")
+
+        let plain = HomeView.Deletion(b, details: BotDetails(library: [], links: [], agents: [agent], routines: []), detailsLate: false)
+        #expect(plain?.request == .deleteBot(botId: BotID("b1"), force: false))
+        #expect(plain?.message == HomeView.deleteMessage(b, worktrees: []))
+
+        agent.worktree = Worktree(path: "/w/a", branch: "claudio/fix")
+        let held = HomeView.Deletion(b, details: BotDetails(library: [], links: [], agents: [agent], routines: []), detailsLate: false)
+        #expect(held?.request == .deleteBot(botId: BotID("b1"), force: true))
+        #expect(held?.message.contains("worktree on claudio/fix stays") == true)
+
+        let late = HomeView.Deletion(b, details: nil, detailsLate: true)
+        #expect(late?.request == .deleteBot(botId: BotID("b1"), force: false))
+        #expect(late?.message == HomeView.deleteMessage(b, worktrees: []))
     }
 
     @Test func theConnectionBannerOffersHelpAfterThreeFailedConnects() {

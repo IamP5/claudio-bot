@@ -823,21 +823,24 @@ struct Device: Codable, Hashable, Sendable, Identifiable {
 
 /// One fact in USER.md. by: the bot that remembered it, nil for the user. confirmed: the user added or confirmed it, so
 /// every bot reads it; false is a bot's proposal only that bot reads. A bridge that predates the flag sent confirmed facts.
+/// proposerBotId: the bot whose proposal this is, nil once confirmed and from a bridge that predates it.
 struct Fact: Codable, Hashable, Sendable, Identifiable {
     let id: FactID
     var text: String
     var at: Date
     var by: String?
     var confirmed: Bool
+    var proposerBotId: BotID?
 
-    private enum CodingKeys: String, CodingKey { case id, text, at, by, confirmed }
+    private enum CodingKeys: String, CodingKey { case id, text, at, by, confirmed, proposerBotId }
 
-    init(id: FactID, text: String, at: Date, by: String?, confirmed: Bool = true) {
+    init(id: FactID, text: String, at: Date, by: String?, confirmed: Bool = true, proposerBotId: BotID? = nil) {
         self.id = id
         self.text = text
         self.at = at
         self.by = by
         self.confirmed = confirmed
+        self.proposerBotId = proposerBotId
     }
 
     init(from decoder: Decoder) throws {
@@ -847,6 +850,7 @@ struct Fact: Codable, Hashable, Sendable, Identifiable {
         at = try c.decode(Date.self, forKey: .at)
         by = try c.decodeIfPresent(String.self, forKey: .by)
         confirmed = try c.decodeIfPresent(Bool.self, forKey: .confirmed) ?? true
+        proposerBotId = try c.decodeIfPresent(BotID.self, forKey: .proposerBotId)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -855,6 +859,7 @@ struct Fact: Codable, Hashable, Sendable, Identifiable {
         try c.encode(text, forKey: .text)
         try c.encode(at, forKey: .at)
         try c.encode(by, forKey: .by)
+        try c.encode(proposerBotId, forKey: .proposerBotId)
         try c.encode(confirmed, forKey: .confirmed)
     }
 }
@@ -1231,7 +1236,8 @@ enum ClientMessage: Codable, Hashable, Sendable {
     case stopAgent(agentId: AgentID)
     case updateBot(botId: BotID, patch: BotPatch)
     case markUnread(botId: BotID)
-    case deleteBot(botId: BotID)
+    /// force deletes a bot whose agents still hold worktrees, which the bridge otherwise refuses. The worktrees stay.
+    case deleteBot(botId: BotID, force: Bool = false)
     case setRoutine(botId: BotID, routineId: RoutineID, enabled: Bool)
     case runRoutine(botId: BotID, routineId: RoutineID)
     case details(botId: BotID)
@@ -1254,7 +1260,7 @@ enum ClientMessage: Codable, Hashable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case type, ref, botId, text, uploads, messageId, option, choice, patch, routineId, enabled, agentId, path, deviceId
-        case clientId, factId, name
+        case clientId, factId, name, force
     }
 
     init(from decoder: Decoder) throws {
@@ -1277,7 +1283,7 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case "stop_agent": self = .stopAgent(agentId: try c.decode(AgentID.self, forKey: .agentId))
         case "update_bot": self = .updateBot(botId: try bot(), patch: try c.decode(BotPatch.self, forKey: .patch))
         case "mark_unread": self = .markUnread(botId: try bot())
-        case "delete_bot": self = .deleteBot(botId: try bot())
+        case "delete_bot": self = .deleteBot(botId: try bot(), force: try c.decodeIfPresent(Bool.self, forKey: .force) ?? false)
         case "set_routine":
             self = .setRoutine(botId: try bot(), routineId: try c.decode(RoutineID.self, forKey: .routineId), enabled: try c.decode(Bool.self, forKey: .enabled))
         case "run_routine": self = .runRoutine(botId: try bot(), routineId: try c.decode(RoutineID.self, forKey: .routineId))
@@ -1345,9 +1351,10 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case let .markUnread(botId):
             try c.encode("mark_unread", forKey: .type)
             try c.encode(botId, forKey: .botId)
-        case let .deleteBot(botId):
+        case let .deleteBot(botId, force):
             try c.encode("delete_bot", forKey: .type)
             try c.encode(botId, forKey: .botId)
+            if force { try c.encode(true, forKey: .force) }
         case let .setRoutine(botId, routineId, enabled):
             try c.encode("set_routine", forKey: .type)
             try c.encode(botId, forKey: .botId)

@@ -330,6 +330,19 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(try Fixture.bots().map(\.muted) == [false, false, false, false, false, true])
     }
 
+    @Test func aFactFromABridgeWithoutProposerBotIdHasNone() throws {
+        let old = try decode(Fact.self, #"{"id":"f_2","text":"Likes tea","at":"2026-10-16T12:00:00.000Z","by":"Eng","confirmed":false}"#)
+        #expect(old.proposerBotId == nil)
+        let proposed = try decode(Fact.self, #"{"id":"f_2","text":"Likes tea","at":"2026-10-16T12:00:00.000Z","by":"Eng","confirmed":false,"proposerBotId":"b1"}"#)
+        #expect(proposed.proposerBotId == BotID("b1"))
+    }
+
+    @Test func aDeleteWithoutForceLeavesTheKeyOut() throws {
+        let plain = try jsonObject(Wire.encoder().encode(ClientMessage.deleteBot(botId: BotID("b1"))))
+        #expect(plain == ["type": "delete_bot", "botId": "b1"] as NSDictionary)
+        #expect(try decode(ClientMessage.self, #"{"type":"delete_bot","botId":"b1"}"#) == .deleteBot(botId: BotID("b1"), force: false))
+    }
+
     @Test func aSendWithoutAClientIdLeavesTheKeyOut() throws {
         let send = try jsonObject(Wire.encoder().encode(ClientMessage.send(botId: BotID("b1"), text: "hi", uploads: [])))
         #expect(send == ["type": "send", "botId": "b1", "text": "hi", "uploads": []] as NSDictionary)
@@ -369,6 +382,47 @@ private func unknowns(in message: ServerMessage) -> [String] {
     @Test func theInviteLinkRoundTrips() {
         let invite = PairInvite(url: socket, code: "K7QD-M2XP")
         #expect(PairInvite(link: invite.link) == invite)
+        let several = PairInvite(url: URL(string: "ws://mac.tail1.ts.net:7878/ws")!, code: "K7QD-M2XP", fallbacks: [socket])
+        #expect(PairInvite(link: several.link) == several)
+    }
+
+    @Test func aLinkWithSeveralAddressesKeepsThemBestFirstAndSkipsTheUnusableOnes() {
+        let link = URL(string: "claudiobot://pair?url=ws%3A%2F%2Fmac.tail1.ts.net%3A7878%2Fws&url=http%3A%2F%2Fevil.com&url=ws%3A%2F%2Fmac.local%3A7878%2Fws&url=ws%3A%2F%2F10.0.0.20%3A7878%2Fws&code=k7qd-m2xp")!
+        let invite = PairInvite(link: link)
+        #expect(invite?.url == URL(string: "ws://mac.tail1.ts.net:7878/ws")!)
+        #expect(invite?.fallbacks == [URL(string: "ws://mac.local:7878/ws")!, socket])
+        #expect(invite?.code == "K7QD-M2XP")
+        let unusableFirst = URL(string: "claudiobot://pair?url=ws%3A%2F%2Fhost%3A7878%2Fsocket&url=ws%3A%2F%2F10.0.0.20%3A7878%2Fws&code=X")!
+        #expect(PairInvite(link: unusableFirst) == PairInvite(url: socket, code: "X"))
+        let noneUsable = URL(string: "claudiobot://pair?url=http%3A%2F%2Fevil.com&url=ws%3A%2F%2Fhost%3A7878%2Fsocket&code=X")!
+        #expect(PairInvite(link: noneUsable) == nil)
+    }
+
+    @Test func theConfirmationListsTheOtherAddressesItWillTry() {
+        let tailnet = URL(string: "ws://mac.tail1.ts.net:7878/ws")!
+        let local = URL(string: "ws://mac.local:7878/ws")!
+        let one = PairInvite(url: tailnet, code: "X", fallbacks: [socket]).confirmation(replacing: nil)
+        #expect(one.title == "Pair with mac.tail1.ts.net:7878?")
+        #expect(one.detail == "If it does not answer, ClaudioBot tries 10.0.0.20:7878.")
+        let home = Pairing(url: socket, credential: .device(DeviceID("d1"), token: "abc"))
+        let two = PairInvite(url: tailnet, code: "X", fallbacks: [local, socket]).confirmation(replacing: home)
+        #expect(two.detail == "If it does not answer, ClaudioBot tries mac.local:7878 and 10.0.0.20:7878, in that order. This replaces your pairing with 10.0.0.20:7878.")
+    }
+
+    @Test func theProofMatchesTheBridgesHmacAndRejectsAnyOther() throws {
+        let nonce = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+        let proof = try #require(Data(hex: "6d94ad91bd2ce00b22986b88b0dd02d65039a108e2e89cb3f11641ff4a426130"))
+        #expect(Pairing.proves(proof, nonce: nonce, token: "t1"))
+        #expect(!Pairing.proves(proof, nonce: nonce, token: "t2"))
+        #expect(!Pairing.proves(proof, nonce: "ff" + nonce.dropFirst(2), token: "t1"))
+        #expect(!Pairing.proves(proof.dropLast(), nonce: nonce, token: "t1"))
+        #expect(Data(hex: "zz") == nil)
+        #expect(Data(hex: "abc") == nil)
+    }
+
+    @Test func theHealthCheckHappensBesideTheSocketPath() {
+        #expect(URL(string: "wss://example.com/claudio/ws")!.besideSocket("health").absoluteString == "https://example.com/claudio/health")
+        #expect(socket.besideSocket("health").absoluteString == "http://10.0.0.20:7878/health")
     }
 
     @Test func redeemingPostsTheCodeAndNameToThePairEndpoint() throws {

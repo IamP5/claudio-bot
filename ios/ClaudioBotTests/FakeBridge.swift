@@ -52,6 +52,7 @@ final class FakeBridge: @unchecked Sendable {
         var upgrades: [Upgrade] = []
         var texts: [String] = []
         var pairBodies: [String] = []
+        var healthChecks: [[String: String]] = []
         var sockets: [Socket] = []
     }
 
@@ -59,6 +60,7 @@ final class FakeBridge: @unchecked Sendable {
     private let onOpen: @Sendable (Socket) -> Void
     private let onText: @Sendable (Socket, String) -> Void
     private let onPair: @Sendable (String) -> (status: Int, body: String)
+    private let onHealth: @Sendable ([String: String]) -> (status: Int, body: String)
     private let queue = DispatchQueue(label: "fake-bridge")
     private let record = OSAllocatedUnfairLock(uncheckedState: Record())
     private let listener: NWListener
@@ -67,12 +69,14 @@ final class FakeBridge: @unchecked Sendable {
         onUpgrade: @escaping @Sendable (Upgrade) -> Answer = { _ in .accept },
         onOpen: @escaping @Sendable (Socket) -> Void = { _ in },
         onText: @escaping @Sendable (Socket, String) -> Void = { _, _ in },
-        onPair: @escaping @Sendable (String) -> (status: Int, body: String) = { _ in (404, "") }
+        onPair: @escaping @Sendable (String) -> (status: Int, body: String) = { _ in (404, "") },
+        onHealth: @escaping @Sendable ([String: String]) -> (status: Int, body: String) = { _ in (200, #"{"ok":true}"#) }
     ) throws {
         self.onUpgrade = onUpgrade
         self.onOpen = onOpen
         self.onText = onText
         self.onPair = onPair
+        self.onHealth = onHealth
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         listener = try NWListener(using: parameters)
@@ -85,6 +89,8 @@ final class FakeBridge: @unchecked Sendable {
     var upgrades: [Upgrade] { record.withLockUnchecked { $0.upgrades } }
     var texts: [String] { record.withLockUnchecked { $0.texts } }
     var pairBodies: [String] { record.withLockUnchecked { $0.pairBodies } }
+    /// The query of every GET /health.
+    var healthChecks: [[String: String]] { record.withLockUnchecked { $0.healthChecks } }
     var sockets: [Socket] { record.withLockUnchecked { $0.sockets } }
 
     /// Starts listening and returns the socket address, like ws://127.0.0.1:53211/ws.
@@ -148,9 +154,19 @@ final class FakeBridge: @unchecked Sendable {
     }
 
     private func respond(_ connection: NWConnection, target: String, body: String) {
-        let isPair = URLComponents(string: target)?.path.hasSuffix("/pair") == true
-        if isPair { record.withLockUnchecked { $0.pairBodies.append(body) } }
-        let (status, json) = isPair ? onPair(body) : (404, "")
+        let components = URLComponents(string: target)
+        let path = components?.path ?? ""
+        let (status, json): (Int, String)
+        if path.hasSuffix("/pair") {
+            record.withLockUnchecked { $0.pairBodies.append(body) }
+            (status, json) = onPair(body)
+        } else if path.hasSuffix("/health") {
+            let query = Dictionary((components?.queryItems ?? []).map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { _, new in new })
+            record.withLockUnchecked { $0.healthChecks.append(query) }
+            (status, json) = onHealth(query)
+        } else {
+            (status, json) = (404, "")
+        }
         let response = "HTTP/1.1 \(status) Answer\r\nContent-Type: application/json\r\nContent-Length: \(json.utf8.count)\r\nConnection: close\r\n\r\n\(json)"
         connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
     }
@@ -238,5 +254,17 @@ final class FakeBridge: @unchecked Sendable {
         }
         out.append(payload)
         return out
+    }
+}
+
+extension FakeBridge {
+    /// What the real bridge answers on /health for a paired device whose token is `token`.
+    static func proving(_ token: String) -> @Sendable ([String: String]) -> (status: Int, body: String) {
+        { query in
+            let key = SymmetricKey(data: SHA256.hash(data: Data(token.utf8)))
+            let proof = HMAC<SHA256>.authenticationCode(for: Data((query["nonce"] ?? "").utf8), using: key)
+            let hex = proof.map { String(format: "%02x", $0) }.joined()
+            return (200, #"{"ok":true,"proof":"\#(hex)"}"#)
+        }
     }
 }

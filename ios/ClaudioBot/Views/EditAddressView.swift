@@ -1,13 +1,18 @@
 import SwiftUI
 
-/// Another address for the paired Mac, such as its Tailscale name when away from home. The token stays the same, so
-/// only the same bridge can answer; the address is saved once it says hello.
+/// Another address for the paired Mac, such as its Tailscale name when away from home. The bridge there proves it is
+/// the same Mac before the token is sent, and the address is saved once it says hello.
 struct EditAddressView: View {
     @Environment(BridgeClient.self) private var client
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
     @State private var failure: String?
     @State private var trying = false
+
+    /// A pairing from before protocol 3 has no device the bridge can prove itself to.
+    private var isLegacy: Bool {
+        if case .legacy? = client.pairing?.credential { true } else { false }
+    }
 
     var body: some View {
         NavigationStack {
@@ -19,8 +24,8 @@ struct EditAddressView: View {
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
                 } footer: {
-                    Text(failure ?? "Your Mac prints its addresses when the bridge starts, and claudiobot doctor shows its Tailscale address. A *.ts.net name works from anywhere your phone runs Tailscale.")
-                        .foregroundStyle(failure == nil ? Theme.secondary : Theme.danger)
+                    Text(failure ?? (isLegacy ? Pairing.AddressChange.legacy.localizedDescription : nil) ?? "Your Mac prints its addresses when the bridge starts, and claudiobot doctor shows its Tailscale address. A *.ts.net name works from anywhere your phone runs Tailscale.")
+                        .foregroundStyle(failure == nil && !isLegacy ? Theme.secondary : Theme.danger)
                 }
             }
             .scrollContentBackground(.hidden)
@@ -33,7 +38,7 @@ struct EditAddressView: View {
                     if trying {
                         ProgressView()
                     } else {
-                        Button("Connect", action: connect)
+                        Button("Connect", action: connect).disabled(isLegacy)
                     }
                 }
             }
@@ -58,7 +63,7 @@ struct EditAddressView: View {
                 try await client.changeAddress(to: url)
                 dismiss()
             } catch {
-                failure = "Your Mac did not answer at \(url.bridgeAddress). The old address is kept."
+                failure = error.localizedDescription
             }
             trying = false
         }

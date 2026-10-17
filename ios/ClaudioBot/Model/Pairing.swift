@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 
@@ -6,6 +7,8 @@ struct PairInvite: Equatable, Sendable {
     /// The bridge's socket address, like ws://10.0.0.20:7878/ws. Its path always ends in /ws.
     let url: URL
     let code: String
+    /// More addresses of the same bridge from its link, best first, tried in turn when `url` does not answer.
+    let fallbacks: [URL]
 
     enum Invalid: LocalizedError {
         case url, path, code
@@ -19,17 +22,15 @@ struct PairInvite: Equatable, Sendable {
         }
     }
 
-    init(url: URL, code: String) {
+    init(url: URL, code: String, fallbacks: [URL] = []) {
         self.url = url
         self.code = code
+        self.fallbacks = fallbacks
     }
 
     /// Parses what a person types or pastes. A bare host and port gets the /ws path; any other path must end in /ws.
     init(urlString: String, code: String) throws(Invalid) {
-        let url = try Self.bridgeURL(urlString)
-        let code = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        guard !code.isEmpty else { throw .code }
-        self.init(url: url, code: code)
+        self.init(url: try Self.bridgeURL(urlString), code: try Self.pairingCode(code))
     }
 
     /// A typed bridge address as a socket URL: ws or wss, a host, and a path ending in /ws (added when there is none).
@@ -51,15 +52,34 @@ struct PairInvite: Equatable, Sendable {
         return url
     }
 
-    /// Parses `claudiobot://pair?url=<ws url>&code=<code>`, the payload of the bridge's QR code.
+    private static func pairingCode(_ code: String) throws(Invalid) -> String {
+        let code = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !code.isEmpty else { throw .code }
+        return code
+    }
+
+    /// Parses `claudiobot://pair?url=<ws url>&url=<ws url>&code=<code>`, the payload of the bridge's QR code. The bridge
+    /// lists its addresses best first; one this app cannot use is skipped, and at least one must be usable.
     init?(link: URL) {
         guard link.scheme == "claudiobot", link.host() == "pair",
               let query = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems,
-              let url = query.first(where: { $0.name == "url" })?.value,
-              let code = query.first(where: { $0.name == "code" })?.value,
-              let invite = try? PairInvite(urlString: url, code: code)
+              let code = try? Self.pairingCode(query.first(where: { $0.name == "code" })?.value ?? "")
         else { return nil }
-        self = invite
+        var seen = Set<URL>()
+        let addresses = query
+            .filter { $0.name == "url" }
+            .compactMap { try? Self.bridgeURL($0.value ?? "") }
+            .filter { seen.insert($0).inserted }
+        guard let first = addresses.first else { return nil }
+        self.init(url: first, code: code, fallbacks: Array(addresses.dropFirst()))
+    }
+
+    /// Every address of the bridge, in the order redeeming tries them.
+    var addresses: [URL] { [url] + fallbacks }
+
+    /// The same code at one of its addresses.
+    func at(_ address: URL) -> PairInvite {
+        PairInvite(url: address, code: code)
     }
 
     /// The link another phone scans to pair with the same bridge.
@@ -67,17 +87,13 @@ struct PairInvite: Equatable, Sendable {
         var components = URLComponents()
         components.scheme = "claudiobot"
         components.host = "pair"
-        components.queryItems = [URLQueryItem(name: "url", value: url.absoluteString), URLQueryItem(name: "code", value: code)]
+        components.queryItems = addresses.map { URLQueryItem(name: "url", value: $0.absoluteString) } + [URLQueryItem(name: "code", value: code)]
         return components.url!
     }
 
-    /// POST /pair beside the socket path (wss://host/prefix/ws pairs at https://host/prefix/pair), over HTTP(S) to match ws(s).
+    /// POST /pair beside the socket path (wss://host/prefix/ws pairs at https://host/prefix/pair).
     func request(deviceName: String) -> URLRequest {
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        components.scheme = url.scheme?.lowercased() == "wss" ? "https" : "http"
-        components.path = components.path.hasSuffix("/ws") ? String(components.path.dropLast(2)) + "pair" : "/pair"
-        components.query = nil
-        var request = URLRequest(url: components.url!)
+        var request = URLRequest(url: url.besideSocket("pair"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONEncoder().encode(PairRequest(code: code, name: deviceName))
@@ -87,9 +103,17 @@ struct PairInvite: Equatable, Sendable {
 
     /// What the user confirms before anything is sent to the bridge.
     func confirmation(replacing current: Pairing?) -> PairingConfirmation {
-        PairingConfirmation(
+        let others = fallbacks.map(\.bridgeAddress)
+        let fallback: String? = switch others.count {
+        case 0: nil
+        case 1: "If it does not answer, ClaudioBot tries \(others[0])."
+        default: "If it does not answer, ClaudioBot tries \(others.dropLast().joined(separator: ", ")) and \(others.last!), in that order."
+        }
+        let replacing = current.map { "This replaces your pairing with \($0.url.bridgeAddress)." }
+        let detail = [fallback, replacing].compactMap { $0 }
+        return PairingConfirmation(
             title: "Pair with \(url.bridgeAddress)?",
-            detail: current.map { "This replaces your pairing with \($0.url.bridgeAddress)." }
+            detail: detail.isEmpty ? nil : detail.joined(separator: " ")
         )
     }
 }
@@ -149,6 +173,15 @@ struct PairingFlow: Equatable, Sendable {
 }
 
 extension URL {
+    /// An HTTP endpoint beside a socket address: wss://host/prefix/ws becomes https://host/prefix/<name>, ws gives http.
+    func besideSocket(_ name: String) -> URL {
+        var components = URLComponents(url: self, resolvingAgainstBaseURL: false)!
+        components.scheme = scheme?.lowercased() == "wss" ? "https" : "http"
+        components.path = components.path.hasSuffix("/ws") ? String(components.path.dropLast(2)) + name : "/" + name
+        components.query = nil
+        return components.url!
+    }
+
     /// host:port, the part of the address a person recognizes their Mac by.
     var bridgeAddress: String {
         let host = host(percentEncoded: false) ?? absoluteString
@@ -181,8 +214,22 @@ struct Pairing: Equatable, Sendable {
         }
     }
 
-    /// Trades a one-time code for this phone's own token.
+    /// Trades a one-time code for this phone's own token at the first of the invite's addresses that answers. A bridge
+    /// that answered and refused ends it there: its other addresses are the same bridge and would refuse too.
     static func redeem(_ invite: PairInvite, deviceName: String, session: URLSession = .shared) async throws(Failure) -> Pairing {
+        var failure = Failure.unreachable("")
+        for address in invite.addresses {
+            do throws(Failure) {
+                return try await redeem(at: invite.at(address), deviceName: deviceName, session: session)
+            } catch {
+                guard case .unreachable = error else { throw error }
+                failure = error
+            }
+        }
+        throw failure
+    }
+
+    private static func redeem(at invite: PairInvite, deviceName: String, session: URLSession) async throws(Failure) -> Pairing {
         let data: Data
         let response: URLResponse
         do {
@@ -203,6 +250,52 @@ struct Pairing: Equatable, Sendable {
             throw .rejected(refusal.error)
         }
         throw .notABridge
+    }
+
+    /// Why this pairing could not move to another address. Each keeps the old address.
+    enum AddressChange: LocalizedError, Equatable {
+        case legacy
+        case unreachable(URL)
+        /// Something answered, but not with proof that it holds this phone's token, so the token was not sent there.
+        case unproven(URL)
+
+        var errorDescription: String? {
+            switch self {
+            case .legacy: "Pair again with a code to change the address."
+            case .unreachable(let url): "Your Mac did not answer at \(url.bridgeAddress). The old address is kept."
+            case .unproven(let url): "Something answered at \(url.bridgeAddress), but it could not prove it is your Mac. The old address is kept, and your pairing was not sent there."
+            }
+        }
+    }
+
+    /// Asks whatever answers at `address` to prove it is the bridge that issued this phone's token, without sending
+    /// the token: GET /health with a fresh nonce, answered with the HMAC-SHA256 of the nonce keyed by the token's
+    /// SHA-256. A legacy pairing has no device the bridge can prove itself to.
+    func proveBridge(at address: URL, timeout: TimeInterval = 10, session: URLSession = .shared) async throws(AddressChange) {
+        guard case let .device(id, token) = credential else { throw .legacy }
+        let nonce = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }.hex
+        var components = URLComponents(url: address.besideSocket("health"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "device", value: id.rawValue), URLQueryItem(name: "nonce", value: nonce)]
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = timeout
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw .unreachable(address)
+        }
+        struct Health: Decodable { let proof: String? }
+        guard (response as? HTTPURLResponse)?.statusCode == 200,
+              let proof = (try? JSONDecoder().decode(Health.self, from: data))?.proof.flatMap(Data.init(hex:)),
+              Self.proves(proof, nonce: nonce, token: token)
+        else { throw .unproven(address) }
+    }
+
+    /// Constant-time, so a wrong answer reveals nothing about the right one.
+    static func proves(_ proof: Data, nonce: String, token: String) -> Bool {
+        let key = SymmetricKey(data: SHA256.hash(data: Data(token.utf8)))
+        return HMAC<SHA256>.isValidAuthenticationCode(proof, authenticating: Data(nonce.utf8), using: key)
     }
 
     /// Opens one socket and waits for the bridge's hello, so a new pairing replaces the old one only once it works.
@@ -316,5 +409,25 @@ struct PairingVault: Sendable {
 
     func clear() {
         SecItemDelete(query as CFDictionary)
+    }
+}
+
+extension Data {
+    /// Lowercase hex.
+    var hex: String { map { String(format: "%02x", $0) }.joined() }
+
+    /// Nil unless every character is a hex digit and they pair up into bytes.
+    init?(hex: String) {
+        guard hex.count.isMultiple(of: 2), hex.allSatisfy(\.isHexDigit) else { return nil }
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(hex.count / 2)
+        var index = hex.startIndex
+        while index < hex.endIndex {
+            let next = hex.index(index, offsetBy: 2)
+            guard let byte = UInt8(hex[index..<next], radix: 16) else { return nil }
+            bytes.append(byte)
+            index = next
+        }
+        self.init(bytes)
     }
 }

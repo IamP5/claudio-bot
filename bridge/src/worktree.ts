@@ -41,15 +41,14 @@ export async function prepareWorkspace(
     const status = await git(["status", "--porcelain", "--ignore-submodules=dirty"]);
     if (status === "") return folder;
   }
-  const base = await defaultBranch(git);
-  const start = base.local ?? base.remote;
-  if (start === null) throw new Error(`${project.name} has no main or master branch to start a worktree from.`);
+  const branches = await defaultBranch(git);
+  const base = branches.local ?? branches.remote;
+  if (base === null) throw new Error(`${project.name} has no main or master branch to start a worktree from.`);
   const parent = join(opts.root ?? worktreesRoot(), folderName(project.name));
   mkdirSync(parent, { recursive: true, mode: 0o700 });
   const path = join(parent, agentId);
   const branch = branchOf(agentId);
-  // --no-track: a branch made from origin/main would otherwise push to main.
-  if ((await git(["worktree", "add", "--no-track", "-b", branch, path, start])) === null) {
+  if ((await git(["worktree", "add", "-b", branch, "--end-of-options", path, base])) === null) {
     throw new Error(`git could not make a worktree for ${project.name} on ${branch}.`);
   }
   const real = realpathSync(path);
@@ -80,6 +79,6 @@ export async function removeWorktree(main: string, worktree: Worktree): Promise<
   const status = await (await hardenedGit(worktree.path))(["status", "--porcelain", "--ignore-submodules=dirty"]);
   if (status === null) return refused("git could not read the worktree, so it was left in place.");
   if (status !== "") return refused(`The worktree has uncommitted changes. Its branch ${worktree.branch} keeps every commit; commit or discard the rest first.`);
-  if ((await git(["worktree", "remove", worktree.path])) === null) return refused("git refused to remove the worktree, so it was left in place.");
+  if ((await git(["worktree", "remove", "--end-of-options", worktree.path])) === null) return refused("git refused to remove the worktree, so it was left in place.");
   return { ok: true };
 }

@@ -9,25 +9,42 @@ import type { AgentEvidence } from "./protocol";
 
 const GIT_TIMEOUT_MS = 10_000;
 
-const HARDENED = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=never", "-c", "core.pager=cat"];
+type Overrides = readonly (readonly [key: string, value: string])[];
 
-/** The agent can write the repo's .git/config, so the bridge's own git calls never take GIT_* from its environment. */
-function gitEnv(): Record<string, string> {
+const HARDENED: Overrides = [
+  ["core.fsmonitor", "false"],
+  ["core.hooksPath", "/dev/null"],
+  ["protocol.file.allow", "never"],
+  ["core.pager", "cat"],
+];
+
+/**
+ * The agent can write the repo's .git/config, so the bridge's own git calls never take GIT_* from its environment.
+ * Overrides go in as GIT_CONFIG_KEY_n/VALUE_n rather than -c, which splits at the first = and so cannot name a
+ * filter called a=b.
+ */
+function gitEnv(overrides: Overrides): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith("GIT_")) env[k] = v;
-  return { ...env, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" };
+  overrides.forEach(([key, value], i) => {
+    env[`GIT_CONFIG_KEY_${i}`] = key;
+    env[`GIT_CONFIG_VALUE_${i}`] = value;
+  });
+  return { ...env, GIT_CONFIG_COUNT: String(overrides.length), GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" };
 }
 
 /** stdout without its trailing newline, or null when git failed, timed out or could not start. Never throws. */
-async function spawnGit(cwd: string, args: readonly string[]): Promise<string | null> {
+async function spawnGit(cwd: string, args: readonly string[], overrides: Overrides): Promise<string | null> {
+  let timer: Timer | undefined;
   try {
-    const proc = Bun.spawn(["git", ...args], { cwd, env: gitEnv(), stdin: "ignore", stdout: "pipe", stderr: "ignore" });
-    const timer = setTimeout(() => proc.kill(), GIT_TIMEOUT_MS);
+    const proc = Bun.spawn(["git", ...args], { cwd, env: gitEnv(overrides), stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+    timer = setTimeout(() => proc.kill(), GIT_TIMEOUT_MS);
     const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-    clearTimeout(timer);
     return code === 0 ? out.replace(/\n$/, "") : null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -35,29 +52,36 @@ export type Git = (args: readonly string[]) => Promise<string | null>;
 
 /**
  * The one way the bridge runs git in a repo. Repo config can name programs git runs for us: hooks and fsmonitor are
- * switched off by name, and every filter driver the config defines is blanked so checkout and status pass content
- * through instead of running it. Diff callers add --no-ext-diff and --no-textconv.
+ * switched off by name, and every filter driver the config defines is blanked and made optional, so checkout and
+ * status pass content through instead of running it or failing on it (git-lfs). Diff callers add --no-ext-diff and
+ * --no-textconv. A ref or path the repo could name goes after --end-of-options.
  */
 export async function hardenedGit(cwd: string): Promise<Git> {
-  const listed = await spawnGit(cwd, [...HARDENED, "config", "--name-only", "--get-regexp", "^filter\\."]);
-  const drivers = new Set((listed ?? "").split("\n").flatMap((k) => k.match(/^filter\.(.+)\.[^.]+$/)?.[1] ?? []));
-  const blanked = [...drivers].flatMap((d) => ["clean", "smudge", "process"].flatMap((key) => ["-c", `filter.${d}.${key}=`]));
-  return (args) => spawnGit(cwd, [...HARDENED, ...blanked, ...args]);
+  const listed = await spawnGit(cwd, ["config", "-z", "--name-only", "--get-regexp", "^filter\\."], HARDENED);
+  const drivers = new Set((listed ?? "").split("\0").flatMap((k) => k.match(/^filter\.(.+)\.[^.]+$/s)?.[1] ?? []));
+  const blanked = [...drivers].flatMap((d): [string, string][] => [
+    [`filter.${d}.clean`, ""],
+    [`filter.${d}.smudge`, ""],
+    [`filter.${d}.process`, ""],
+    [`filter.${d}.required`, "false"],
+  ]);
+  const overrides = [...HARDENED, ...blanked];
+  return (args) => spawnGit(cwd, args, overrides);
 }
 
+/** The default branch's commit as full SHAs, so no name the repo chose ever reaches git as an argument. */
 export type DefaultBranch = { local: string | null; remote: string | null };
 
-/** The default branch as origin names it (origin/HEAD), else main or master: its local branch and its remote ref. */
+const commitOf = (git: Git, ref: string) => git(["rev-parse", "--verify", "-q", "--end-of-options", `${ref}^{commit}`]);
+
+/** The branch origin names (origin/HEAD), else main or master: the commit of its local branch and of origin's copy. */
 export async function defaultBranch(git: Git): Promise<DefaultBranch> {
-  const originHead = await git(["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"]);
-  const named = originHead?.startsWith("origin/") ? originHead.slice("origin/".length) : null;
+  const originHead = await git(["symbolic-ref", "-q", "refs/remotes/origin/HEAD"]);
+  const named = originHead?.startsWith("refs/remotes/origin/") ? originHead.slice("refs/remotes/origin/".length) : null;
   for (const name of [named, "main", "master"]) {
-    if (name === null) continue;
-    const [local, remote] = await Promise.all([
-      git(["rev-parse", "--verify", "-q", `refs/heads/${name}`]),
-      git(["rev-parse", "--verify", "-q", `refs/remotes/origin/${name}`]),
-    ]);
-    if (local !== null || remote !== null) return { local: local === null ? null : name, remote: remote === null ? null : `origin/${name}` };
+    if (name === null || name.startsWith("-")) continue;
+    const [local, remote] = await Promise.all([commitOf(git, `refs/heads/${name}`), commitOf(git, `refs/remotes/origin/${name}`)]);
+    if (local !== null || remote !== null) return { local, remote };
   }
   return { local: null, remote: null };
 }
@@ -85,18 +109,20 @@ export async function readEvidence(cwd: string, finalText: string, now: Date): P
     if (!existsSync(cwd) || !inRepo(cwd)) return null;
     const git = await hardenedGit(cwd);
     if ((await git(["rev-parse", "--is-inside-work-tree"])) !== "true") return null;
-    const [branch, head, status, base] = await Promise.all([
+    const [branch, head, status, against] = await Promise.all([
       git(["symbolic-ref", "--short", "-q", "HEAD"]),
       git(["rev-parse", "--short", "-q", "--verify", "HEAD"]),
       git(["status", "--porcelain", "--ignore-submodules=dirty"]),
-      defaultBranch(git),
+      // Against what origin has when there is a remote, so commits made straight on the default branch still count.
+      defaultBranch(git).then((b) => b.remote ?? b.local),
     ]);
     if (status === null) return null;
-    // Against what origin has when there is a remote, so commits made straight on the default branch still count.
-    const against = base.remote ?? base.local;
     const [ahead, stat] =
       against !== null && head !== null
-        ? await Promise.all([git(["rev-list", "--count", `${against}..HEAD`]), git(["diff", "--no-ext-diff", "--no-textconv", "--shortstat", `${against}...HEAD`])])
+        ? await Promise.all([
+            git(["rev-list", "--count", "--end-of-options", `${against}..HEAD`]),
+            git(["diff", "--no-ext-diff", "--no-textconv", "--shortstat", "--end-of-options", `${against}...HEAD`]),
+          ])
         : [null, null];
     return {
       at: now.toISOString(),
@@ -124,3 +150,4 @@ export function evidenceLine(e: AgentEvidence): string {
   ];
   return `[Git, read by the bridge after this turn: ${parts.join("; ")}.]`;
 }
+

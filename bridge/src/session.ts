@@ -85,7 +85,7 @@ const forgottenNote = (name: string) =>
 const FORGOTTEN_NOTICE =
   "[Your earlier conversation history is gone: Claude Code deleted it. Your notes and the facts about the user are kept; ask if you need something from before.]";
 /** What Claude Code says when --resume names a transcript it has deleted (after cleanupPeriodDays, or by hand). */
-const forgotten = (text: string) => /No conversation found with session ID/.test(text);
+const forgotten = (text: string, id: string) => text.includes(`No conversation found with session ID: ${id}`);
 const restartedNotice = (envelopeText: string) =>
   `[The bridge restarted during your turn on: ${envelopeText.split("\n")[0]} It may be partly done; check before redoing it.]`;
 
@@ -586,6 +586,10 @@ type Live = {
   stale: boolean;
   /** A tool result said the sandbox could not start, and the owner was told once for this query. */
   sandboxNoted: boolean;
+  /** The session id the query resumed, null for a fresh one. */
+  resumed: string | null;
+  /** A turn on this query has ended, so a later "No conversation found" is not about its resume. */
+  answered: boolean;
   send(m: SDKUserMessage): void;
   release(): void;
   stderr(): string;
@@ -623,6 +627,9 @@ export function createSession(spec: SessionSpec): Session {
   let heardAt = 0;
   let stallNoted = false;
 
+  /** What the turn in flight carries, recorded as sent once the model answers it, so a turn that never ran sends it again. */
+  let carried: SessionState["sent"] | null = null;
+
   /** The turn's text with the brief and the context on top when they changed since session `id` last got them. */
   function withContext(text: string, fresh: boolean): string {
     const was = fresh ? {} : (spec.state.sent ?? {});
@@ -640,11 +647,15 @@ export function createSession(spec: SessionSpec): Session {
       top.push(context === "" ? noticeText.contextCleared : context);
       sent.context = digest(context);
     }
-    if (JSON.stringify(sent) !== JSON.stringify(spec.state.sent ?? {})) {
-      own<SessionState>(spec.state).sent = sent;
-      guard("persist", () => spec.persist());
-    }
+    carried = JSON.stringify(sent) !== JSON.stringify(spec.state.sent ?? {}) ? sent : null;
     return [...top, text].join("\n\n");
+  }
+
+  function accepted() {
+    if (carried === null) return;
+    own<SessionState>(spec.state).sent = carried;
+    carried = null;
+    guard("persist", () => spec.persist());
   }
 
   const guard = (what: string, f: () => void) => {
@@ -802,6 +813,8 @@ export function createSession(spec: SessionSpec): Session {
       gen,
       q,
       fresh: !options.resume,
+      resumed: options.resume ?? null,
+      answered: false,
       capped: cap !== null,
       stale: false,
       sandboxNoted: false,
@@ -841,7 +854,7 @@ export function createSession(spec: SessionSpec): Session {
     const tail = l.stderr();
     const text = tail ? `${error}\n${tail}` : error;
     if (!current()) return;
-    if (!l.fresh && forgot(text)) return;
+    if (forgot(text, l)) return;
     if (!startedSandbox(text)) dispatch({ kind: "end", outcome: { kind: "transient", error: maskSecrets(text) } });
   }
 
@@ -858,8 +871,8 @@ export function createSession(spec: SessionSpec): Session {
   }
 
   /** A resumed query found its session gone before any output: the session id is cleared and the turn starts over. */
-  function forgot(text: string): boolean {
-    if (!forgotten(text) || turnOf(spec.state.lifecycle as Lifecycle)?.output !== false) return false;
+  function forgot(text: string, l: Live): boolean {
+    if (l.resumed === null || l.answered || !forgotten(text, l.resumed) || turnOf(spec.state.lifecycle as Lifecycle)?.output !== false) return false;
     closeLive();
     dispatch({ kind: "forgotten" });
     guard("note", () => spec.note(forgottenNote(spec.name?.() ?? "Claude Code")));
@@ -873,7 +886,10 @@ export function createSession(spec: SessionSpec): Session {
       guard("persist", () => spec.persist());
     }
     if (m.type === "assistant" && m.error) signals.apiError = m.error;
-    else if (m.type === "assistant" && turnOf(spec.state.lifecycle as Lifecycle)?.output === false) dispatch({ kind: "output" });
+    else if (m.type === "assistant" && turnOf(spec.state.lifecycle as Lifecycle)?.output === false) {
+      accepted();
+      dispatch({ kind: "output" });
+    }
     const down = sandboxDownIn(m);
     if (down !== null && !l.sandboxNoted) {
       // Every Bash call fails while the sandbox is down; a new query tries to start it again. Not a gate denial.
@@ -901,8 +917,10 @@ export function createSession(spec: SessionSpec): Session {
     if (!turn) return;
     const failed = m.subtype !== "success" || m.is_error;
     const said = m.subtype === "success" ? m.result : m.errors.join("\n");
-    if (failed && !fresh && forgot(said)) return;
+    if (failed && forgot(said, l)) return;
+    l.answered = true;
     if (failed && startedSandbox(said)) return;
+    if (!failed) accepted();
     dispatch({ kind: "end", outcome });
     if (l.stale && live === l && turnOf(spec.state.lifecycle as Lifecycle) === null) closeLive();
   }

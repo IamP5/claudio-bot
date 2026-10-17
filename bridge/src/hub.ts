@@ -360,7 +360,6 @@ export function createHub(deps: HubDeps): Hub {
     return { ...NO_AUTO_MEMORY, ...KEEP_TRANSCRIPTS, ...connectorSettings(world.bots.get(botId)?.connectorsOff ?? []) };
   }
 
-  /** The bot's and its agents' live queries close at their next chance, so the next ones open with fresh options. */
   const claudeMdOf = (botId: BotId) => join(homes.homeOf(botId), "CLAUDE.md");
 
   /** A rename reaches CLAUDE.md's heading, which a new session reads as the bot's instructions. */
@@ -368,7 +367,7 @@ export function createHub(deps: HubDeps): Hub {
     const path = claudeMdOf(botId);
     const doc = readOwn(path);
     if (doc === null) return;
-    const next = doc.replace(/^# .*$/m, `# ${name}`);
+    const next = doc.replace(/^# .*$/m, () => `# ${name}`);
     if (next === doc) return;
     try {
       writeAtomic(path, next);
@@ -390,6 +389,7 @@ export function createHub(deps: HubDeps): Hub {
     ].join("\n");
   }
 
+  /** The bot's and its agents' live queries close at their next chance, so the next ones open with fresh options. */
   function reopenAll(botId: BotId) {
     brains.get(botId)?.reopen();
     for (const rec of world.agents.values()) if (rec.agent.botId === botId) agents.session(rec.agent.id)?.reopen();

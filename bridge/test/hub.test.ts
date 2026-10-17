@@ -1200,3 +1200,13 @@ test("the user's answer to a routine's question keeps the routine's initiator, s
   const plain = await use("remember", { about: "self", text: "The digest repo is acme/web" });
   expect(plain.isError).toBeFalsy();
 });
+
+test("a name holding $& or $1 reaches CLAUDE.md's heading as written", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n\n## Job\n\nShip.\n");
+  await h.hub.handle({ type: "update_bot", botId: b.id, patch: { name: "Cash $& $1" } });
+  expect(readFileSync(join(h.homes.homeOf(b.id), "CLAUDE.md"), "utf8")).toStartWith("# Cash $& $1\n");
+});

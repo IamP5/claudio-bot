@@ -726,6 +726,29 @@ describe("session", () => {
     ]);
   });
 
+  test("the context and brief count as sent only once a turn carrying them produced output, so a retry carries them again", async () => {
+    let context = "";
+    let brief = "[Standing brief] v1";
+    const h = harness({ state: { ...emptySession(), id: "s_1" }, context: () => context, brief: () => brief });
+    h.push("[Alex]\none");
+    await flush();
+    h.q().emit(said("hi"), resultMsg(0.1));
+    await flush();
+    context = "Facts: likes tea";
+    brief = "[Standing brief] v2";
+    h.push("[Alex]\ntwo");
+    await flush();
+    h.q().emit(apiErrorMessage("overloaded"), apiErrorResult(0));
+    await flush();
+    await h.advance(1_000);
+    expect(h.sent().at(-1)).toBe("[Standing brief] v2\n\nFacts: likes tea\n\n[Alex]\ntwo");
+    h.q().emit(said("ok"), resultMsg(0.2));
+    await flush();
+    h.push("[Alex]\nthree");
+    await flush();
+    expect(h.sent().at(-1)).toBe("[Alex]\nthree");
+  });
+
   test("an envelope is on disk, counted as started, before the SDK sees it", async () => {
     const { h, id } = await started("[Alex]\nhello");
     expect(h.q().received).toHaveLength(1);
@@ -1565,6 +1588,23 @@ describe("a conversation Claude Code no longer has", () => {
     await flush();
     expect(h.queries).toHaveLength(1);
     expect(h.finals(id)).toMatchObject([{ end: { kind: "done" } }]);
+  });
+
+  test("only the first turn on the resumed query, naming the resumed id, counts as a lost conversation", async () => {
+    const h = harness({ state: emptySession("s_old") });
+    const a = h.push("[a]");
+    await flush();
+    h.q().emit(gone("s_other"));
+    await flush();
+    expect([h.queries.length, h.state.id]).toEqual([1, "s_other"]);
+    expect(h.finals(a)).toMatchObject([{ end: { kind: "done" } }]);
+    const b = h.push("[b]");
+    await flush();
+    h.q().emit(gone("s_old"));
+    await flush();
+    expect(h.queries).toHaveLength(1);
+    expect(h.finals(b)).toMatchObject([{ end: { kind: "done" } }]);
+    expect(h.notes).toEqual([]);
   });
 
   test("the context is sent again on the fresh session", async () => {

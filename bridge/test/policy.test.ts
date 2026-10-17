@@ -948,6 +948,33 @@ describe("pass 3 rows: memory, skills, the claudio registry and connector toggle
   });
 });
 
+describe("gap 3: an interpreter's write to a config or USER.md is seen by the floor and the rows", () => {
+  test.each([
+    [`python3 -c "open('.claude/settings.json','w').write('{}')"`, "deny:floor.selfescalate"],
+    [`python3 -c "open('${OWN}/.claude/settings.local.json','w').write('{}')"`, "deny:floor.selfescalate"],
+    [`python3 -c "open('.mcp.json','w').write('{}')"`, "deny:floor.selfescalate"],
+    [`bun -e "Bun.write('.claude/settings.json','{}')"`, "deny:floor.selfescalate"],
+    [`echo '{}' | python3 -c "import sys;open('.claude/settings.json','w').write(sys.stdin.read())"`, "deny:floor.selfescalate"],
+    [`python3 - <<'EOF'\nopen('.claude/settings.json','w').write('{}')\nEOF`, "deny:floor.selfescalate"],
+    [`python3 -c "open('../../USER.md','a').write('x')"`, "ask:memory.user"],
+    [`node -e "require('fs').appendFileSync('${BRIDGE}/USER.md','x')"`, "ask:memory.user"],
+    [`ruby -e "File.write('$HOME/.claudiobot/USER.md', 'x')"`, "ask:memory.user"],
+    [`python3 -c "open('CLAUDE.md','a').write('x')"`, "ask:self.escalate"],
+    [`python3 -c "import os;os.makedirs('.claude/skills/s');open('.claude/skills/s/SKILL.md','w').write('x')"`, "ask:self.escalate"],
+  ])("%s → %s, in a user's turn and a routine's", (command, expected) => {
+    expect(verdict(sh(command), { initiator: user })).toBe(expected);
+    expect(verdict(sh(command), { initiator: routine })).toBe(expected);
+  });
+  test("an agent's interpreter writing its project's Claude settings is the floor too", () => {
+    expect(verdict(sh(`python3 -c "open('.claude/settings.json','w').write('{}')"`, { cwd: PROJECT }), { actor: agent, scope: agentScope })).toBe("deny:floor.selfescalate");
+  });
+  test("an interpreter that names none of these files still passes", () => {
+    expect(verdict(sh(`python3 -c "print(open('data/x.csv').read())"`))).toBe("pass");
+    expect(verdict(sh("python3 scripts/build.py --out library/report.md"))).toBe("pass");
+    expect(verdict(sh(`echo "see CLAUDE.md" > library/notes.md`))).toBe("pass");
+  });
+});
+
 describe("gap 3: a connector call passes unattended only when every verb in its name is a read", () => {
   const conn = (tool: string) => call(tool, { q: "x" });
   test.each([

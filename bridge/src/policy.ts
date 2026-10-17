@@ -501,12 +501,36 @@ function hostsOf(call: ToolCall): string[] {
   return Array.isArray(hosts) ? hosts.filter((h): h is string => typeof h === "string" && h.trim() !== "").map((h) => h.trim()).sort() : [];
 }
 
+/** Programs that run code given on the line or on stdin, which can write any file the code names. */
+const INTERPRETER = /^(python[0-9.]*|pypy[0-9.]*|node|nodejs|bun|deno|tsx|ts-node|ruby|perl|php|lua|luajit|osascript|rscript|swift|tclsh|pwsh|awk|gawk|nawk|mawk)$/;
+/** A file the bridge or every bot loads as instructions or config, spelled anywhere in a token of code. */
+const LOADED_FILE = /[^\s'"`(),;<>|&]*(?:CLAUDE\.md|USER\.md|\.mcp\.json|\.claude\/)[^\s'"`(),;<>|&]*/g;
+
+/**
+ * Code an interpreter runs (python -c, node -e, a heredoc fed to python -) may write any file it names. Each literal
+ * spelling of CLAUDE.md, USER.md, .mcp.json or a .claude/ path in the line becomes a write touch of the interpreter's
+ * part, so the self-escalation floor and the memory.user and self.escalate rows see it. Reading one this way is held too.
+ */
+function interpreterWrites(parts: Part[], raw: string, ctx: PolicyContext): void {
+  const runs = parts.filter((p): p is Extract<Part, { kind: "bash" }> => p.kind === "bash" && INTERPRETER.test(p.verb));
+  if (runs.length === 0) return;
+  const names = [...new Set(raw.match(LOADED_FILE) ?? [])];
+  for (const p of runs)
+    for (const name of names)
+      for (const dir of p.cwds) {
+        const t = candidateTouch(name, dir, ctx, {}, false, true);
+        if (t) p.touches.push(t);
+      }
+}
+
 function viewOf(call: ToolCall, ctx: PolicyContext): View {
   if (call.tool === "Bash") {
     const raw = String(call.input.command);
     // The hosts are a part of their own, so the table can hold them however harmless the command is.
     const hosts: Part[] = hostsOf(call).length > 0 ? [{ kind: "call", call, touches: [] }] : [];
-    return { parts: [...bashParts(raw, call.cwd, ctx), ...hosts], raw };
+    const parts = bashParts(raw, call.cwd, ctx);
+    interpreterWrites(parts, raw, ctx);
+    return { parts: [...parts, ...hosts], raw };
   }
   const found: string[] = [];
   inputPaths(call.input, null, found);

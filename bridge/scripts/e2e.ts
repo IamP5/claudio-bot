@@ -1,6 +1,7 @@
 // End to end against the real bridge and real Claude Code, through the WebSocket like the app, in a temp home.
 // Run: bun run e2e. It spends real usage (about a dollar or two), never starts a cloud agent, and never touches
 // ~/.claudebot or ~/.claudiobot: CLAUDIOBOT_HOME points into a temp folder, which skips migration.
+// E2E_MODEL overrides the model; E2E_BRIDGE_LOG names a file for the bridge's own log.
 import type { Subprocess } from "bun";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -372,6 +373,7 @@ try {
   console.log("\n== results");
   for (const x of results) console.log(`${x.ok ? "PASS" : "FAIL"} ${x.scenario}: ${x.evidence}`);
   console.log(`model ${MODEL}; cost charged by the ledger $${total.toFixed(4)}`);
+  if (process.env.E2E_BRIDGE_LOG) writeFileSync(process.env.E2E_BRIDGE_LOG, log);
   if (passed) rmSync(scratch, { recursive: true });
   else console.log(`scratch kept for debugging: ${scratch}`);
 }

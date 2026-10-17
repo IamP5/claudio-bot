@@ -59,6 +59,7 @@ const fired: RunRef = { routineId: "r_1" as RoutineId, runId: "run_1" as RunId }
 
 const env = (id: string, initiator: Initiator = user, attempts = 0): Pending => ({
   id: id as EnvelopeId,
+  kind: "envelope",
   at: NOW.toISOString(),
   text: `[${id}]`,
   initiator,
@@ -81,14 +82,14 @@ const ok = (cost = 1): Outcome => ({ kind: "result", result: { type: "result", s
 
 describe("step", () => {
   test("an idle session starts a pushed envelope: one attempt counted, its text sent", () => {
-    const t = run(core({ kind: "idle" }, []), { kind: "push", pending: env("a"), ahead: false });
+    const t = run(core({ kind: "idle" }, []), { kind: "push", pending: env("a") });
     expect(t.core.session.lifecycle).toEqual({ kind: "working", turn: turn("a") });
     expect(t.core.session.pending).toEqual([env("a", user, 1)]);
     expect(t.effects).toEqual([{ kind: "send", pending: env("a", user, 1), text: "[a]" }]);
   });
 
   test("an approval continuation goes right behind the turn in flight, before everything queued", () => {
-    const t = run(core({ kind: "working", turn: turn("a") }, [env("a", user, 1), env("b")]), { kind: "push", pending: env("c", routine), ahead: true });
+    const t = run(core({ kind: "working", turn: turn("a") }, [env("a", user, 1), env("b")]), { kind: "push", pending: { ...env("c", routine), kind: "continuation" } });
     expect(t.core.session.pending.map((p) => p.id as string)).toEqual(["a", "c", "b"]);
     expect(t.effects).toEqual([]);
   });
@@ -292,7 +293,7 @@ describe("step", () => {
     const until = later(12 * 3_600_000);
     let capped = true;
     const headroom = (i: Initiator): Headroom => (!capped || attendedNow(i) ? roomy() : { ok: false, reason: "daily_cap", until });
-    const parked = run(core({ kind: "idle" }, []), { kind: "push", pending: env("r", routine), ahead: false }, headroom);
+    const parked = run(core({ kind: "idle" }, []), { kind: "push", pending: env("r", routine) }, headroom);
     expect(endsOf(parked.effects)).toEqual([["r", "deferred"]]);
     const still = run(parked.core, { kind: "tick" }, headroom, new Date(later(60_000)));
     expect([still.core.session, still.effects]).toEqual([parked.core.session, []]);
@@ -304,7 +305,7 @@ describe("step", () => {
   test("a park whose deadline keeps moving is told once", () => {
     let at = NOW.getTime();
     const headroom = (): Headroom => ({ ok: false, reason: "daily_cap", until: new Date(at + 60_000).toISOString() });
-    let c = run(core({ kind: "idle" }, []), { kind: "push", pending: env("r", routine), ahead: false }, headroom).core;
+    let c = run(core({ kind: "idle" }, []), { kind: "push", pending: env("r", routine) }, headroom).core;
     const told: string[][] = [];
     for (let i = 0; i < 3; i++) {
       at += 60_000;
@@ -329,7 +330,7 @@ describe("step", () => {
 
   test("repeated start failures wait longer each time up to a cap, never use up the envelope, and leave one note", () => {
     let at = NOW.getTime();
-    let c = run(core({ kind: "idle" }, []), { kind: "push", pending: env("a"), ahead: false }).core;
+    let c = run(core({ kind: "idle" }, []), { kind: "push", pending: env("a") }).core;
     const waits: number[] = [];
     const notes: string[] = [];
     for (let i = 0; i < 6; i++) {
@@ -346,7 +347,7 @@ describe("step", () => {
     expect(notes).toHaveLength(1);
     expect(notes[0]).toContain("gate not ready");
     const opened = run(c, { kind: "end", outcome: ok() }, roomy, new Date(at)).core;
-    const again = run(run(opened, { kind: "push", pending: env("b"), ahead: false }, roomy, new Date(at)).core, { kind: "unstarted", error: "x" }, roomy, new Date(at));
+    const again = run(run(opened, { kind: "push", pending: env("b") }, roomy, new Date(at)).core, { kind: "unstarted", error: "x" }, roomy, new Date(at));
     expect(again.core.session.lifecycle).toMatchObject({ until: new Date(at + START_RETRY_MS[0]).toISOString() });
   });
 
@@ -373,10 +374,10 @@ describe("step", () => {
 
   test("while the account is parked nothing starts, and the park is told once", () => {
     const until = later(60_000);
-    const first = run(core({ kind: "idle" }, [], { parkedUntil: until }), { kind: "push", pending: env("a"), ahead: false });
+    const first = run(core({ kind: "idle" }, [], { parkedUntil: until }), { kind: "push", pending: env("a") });
     expect(first.core.session.lifecycle).toEqual({ kind: "parked", reason: "usage_limit", until });
     expect(endsOf(first.effects)).toEqual([["a", "deferred"]]);
-    expect(run(first.core, { kind: "push", pending: env("b"), ahead: false }).effects).toEqual([]);
+    expect(run(first.core, { kind: "push", pending: env("b") }).effects).toEqual([]);
   });
 
   test("the daily cap parks an unattended head while an attended envelope behind it runs, noting the cap once", () => {
@@ -393,18 +394,18 @@ describe("step", () => {
     const after = run(t.core, { kind: "end", outcome: ok() }, headroom);
     expect(after.core.session.lifecycle).toEqual({ kind: "parked", reason: "daily_cap", until });
     expect(endsOf(after.effects)).toEqual([["u", "done"]]);
-    const again = run(after.core, { kind: "push", pending: env("u2"), ahead: false }, headroom);
+    const again = run(after.core, { kind: "push", pending: env("u2") }, headroom);
     expect(kinds(again.effects)).toEqual(["send"]);
   });
 
   test("an exhausted agent budget fails the envelope without starting it", () => {
-    const t = run(core({ kind: "idle" }, []), { kind: "push", pending: env("a", botMail), ahead: false }, () => ({ ok: false, reason: "agent_budget" }));
+    const t = run(core({ kind: "idle" }, []), { kind: "push", pending: env("a", botMail) }, () => ({ ok: false, reason: "agent_budget" }));
     expect(endsOf(t.effects)).toEqual([["a", "failed"]]);
     expect(t.core.session).toMatchObject({ pending: [], lifecycle: { kind: "idle" } });
   });
 
   test("a budget that ran out, before the turn or during it, reads as used up; other ends do not", () => {
-    const outOfBudget = run(core({ kind: "idle" }, []), { kind: "push", pending: env("a", botMail), ahead: false }, () => ({ ok: false, reason: "agent_budget" }));
+    const outOfBudget = run(core({ kind: "idle" }, []), { kind: "push", pending: env("a", botMail) }, () => ({ ok: false, reason: "agent_budget" }));
     const outOfAttempts = run(core({ kind: "idle" }, [env("a", user, 4)]), { kind: "pump" });
     const endOf = (fx: Effect[]) => fx.flatMap((e) => (e.kind === "end" ? [e.end] : []))[0]!;
     const result = (subtype: string) => ({ type: "result", subtype, is_error: subtype !== "success", errors: [], total_cost_usd: 1 }) as unknown as SDKResultMessage;
@@ -428,7 +429,7 @@ describe("step", () => {
   test("notices ride on the next envelope, are kept for a retry, and are dropped once the turn has output", () => {
     const c = core({ kind: "idle" }, []);
     c.session.notices = [{ at: NOW.toISOString(), text: "[Your question expired.]" }];
-    const started = run(c, { kind: "push", pending: env("a"), ahead: false });
+    const started = run(c, { kind: "push", pending: env("a") });
     expect(started.effects).toEqual([{ kind: "send", pending: env("a", user, 1), text: "[Your question expired.]\n[a]" }]);
     const retried = run(started.core, { kind: "end", outcome: { kind: "transient", error: "overloaded" } });
     expect(retried.core.session.notices).toHaveLength(1);
@@ -670,7 +671,7 @@ function harness(
     sent: () => queries.flatMap((q) => q.received.map((r) => r.text)),
     finals: (id: string) => ends.filter((e) => e.id === id && e.end.kind !== "deferred"),
     push(text: string, initiator: Initiator = user, ahead = false, settles: RunRef | null = null) {
-      const input: SessionInput = { text, initiator, settles, ahead };
+      const input: SessionInput = { kind: ahead ? "continuation" : "envelope", text, initiator, settles };
       session.push(input);
       return state.pending.find((p) => p.text === text)?.id ?? ends.findLast((e) => e.text === text)!.id;
     },

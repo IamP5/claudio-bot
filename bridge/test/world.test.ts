@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { Agent, AgentId, BotId, Message, MessageId, Peer, RoutineId, RunId } from "../src/protocol";
-import { envelope, initiatorOf, inputOf, notices, runsAhead, withNotices, type Envelope } from "../src/prompts";
+import { envelope, initiatorOf, inputOf, notices, withNotices, type Envelope } from "../src/prompts";
 import {
   attended,
   botStatus,
@@ -137,7 +137,7 @@ test("status: a running turn shows working, then a held queue head shows parked,
   expect(botStatus({ working: false, held: false, awaitingApproval: false })).toBe("idle");
 });
 
-const pending = (n: number): Pending => ({ id: `e${n}` as EnvelopeId, at: at(n), text: "[Alex]\nhi", initiator: { kind: "routine", run: { routineId: "r1" as RoutineId, runId: "run1" as RunId }, manual: false }, settles: null, attempts: 0 });
+const pending = (n: number): Pending => ({ id: `e${n}` as EnvelopeId, kind: "envelope", at: at(n), text: "[Alex]\nhi", initiator: { kind: "routine", run: { routineId: "r1" as RoutineId, runId: "run1" as RunId }, manual: false }, settles: null, attempts: 0 });
 
 test.each([
   ["a park with work queued holds the head", { ...emptySession(), pending: [pending(1)], lifecycle: { kind: "parked", reason: "daily_cap", until: at(59) } }, { reason: "daily_cap", until: at(59) }],
@@ -305,19 +305,13 @@ test("the hop count carries through an agent hop instead of starting over", () =
   expect(hopsAfter(null)).toBe(1);
 });
 
-test.each<[string, Envelope, Initiator, boolean]>([
-  ["a routine's own fire settles its run", { from: "routine", name: "d", prompt: "p", run, manual: false, late: false }, routine, true],
-  ["Run now settles its run", { from: "routine", name: "d", prompt: "p", run, manual: true, late: false }, { kind: "routine", run, manual: true }, true],
-  ["an approval continuation of a routine's call settles nothing", { from: "decision", choice: "once", tool: "Bash", detail: "x", initiator: routine }, routine, false],
-  ["a user message settles nothing", { from: "user", text: "hi", attachments: [] }, { kind: "user" }, false],
-])("queued input: %s", (_, e, initiator, settles) => {
-  const input = inputOf(e, "Alex");
-  expect(input).toEqual({ text: envelope(e, "Alex"), initiator, settles: settles ? run : null, ahead: runsAhead(e) });
-});
-
-test("only an approval continuation runs ahead of queued work", () => {
-  expect(runsAhead({ from: "decision", choice: "once", tool: "Bash", detail: "x", initiator: { kind: "user" } })).toBe(true);
-  expect(runsAhead({ from: "user", text: "hi", attachments: [] })).toBe(false);
+test.each<[string, Envelope, Initiator, boolean, Pending["kind"]]>([
+  ["a routine's own fire settles its run", { from: "routine", name: "d", prompt: "p", run, manual: false, late: false }, routine, true, "envelope"],
+  ["Run now settles its run", { from: "routine", name: "d", prompt: "p", run, manual: true, late: false }, { kind: "routine", run, manual: true }, true, "envelope"],
+  ["an approval continuation of a routine's call settles nothing", { from: "decision", choice: "once", tool: "Bash", detail: "x", initiator: routine }, routine, false, "continuation"],
+  ["a user message settles nothing", { from: "user", text: "hi", attachments: [] }, { kind: "user" }, false, "envelope"],
+])("queued input: %s", (_, e, initiator, settles, kind) => {
+  expect(inputOf(e, "Alex")).toEqual({ kind, text: envelope(e, "Alex"), initiator, settles: settles ? run : null });
 });
 
 test("notices go on top of the next envelope, and an expiry is never a no", () => {

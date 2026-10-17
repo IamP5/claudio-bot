@@ -85,6 +85,11 @@ export type EnvelopeId = string & { readonly __brand: "EnvelopeId" };
 export type Pending = {
   /** Stable across replays. */
   id: EnvelopeId;
+  /**
+   * continuation: the decision envelope after a permission card was answered. It runs ahead of other queued work,
+   * Stop keeps it, and its turn's start arms the grant's short window (gate.beginTurn).
+   */
+  kind: "envelope" | "continuation";
   at: string;
   /** The rendered envelope. Notices are prepended when it starts, not stored here. */
   text: string;

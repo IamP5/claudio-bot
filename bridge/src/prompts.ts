@@ -1,5 +1,5 @@
 import type { AgentId, Attachment, Avatar, BotId, PermissionChoice } from "./protocol";
-import type { Initiator, Notice, Origin, RunRef } from "./world";
+import type { Initiator, Notice, Origin, Pending, RunRef } from "./world";
 
 // Everything that reaches a bot or an agent is one envelope. Its initiator is a pure function of the envelope.
 export type Envelope =
@@ -37,19 +37,19 @@ export function initiatorOf(e: Envelope): Initiator {
 }
 
 /** An approval continuation runs before anything else queued, so the grant it relies on is still fresh. */
-export const runsAhead = (e: Envelope): boolean => e.from === "decision";
+export const kindOf = (e: Envelope): Pending["kind"] => (e.from === "decision" ? "continuation" : "envelope");
 
 /** Only a routine's own fire settles its run. A continuation keeps the routine's initiator but settles nothing. */
 const settlesOf = (e: Envelope): RunRef | null => (e.from === "routine" ? e.run : null);
 
-/** What a session queues for one envelope. Session.push takes this, and Pending keeps all of it but `ahead`. */
-export type SessionInput = { text: string; initiator: Initiator; settles: RunRef | null; ahead: boolean };
+/** What a session queues for one envelope. Session.push takes this, and Pending keeps all of it. */
+export type SessionInput = Pick<Pending, "kind" | "text" | "initiator" | "settles">;
 
 export const inputOf = (e: Envelope, userName: string): SessionInput => ({
+  kind: kindOf(e),
   text: envelope(e, userName),
   initiator: initiatorOf(e),
   settles: settlesOf(e),
-  ahead: runsAhead(e),
 });
 
 const lines = (...xs: (string | null)[]) => xs.filter((x) => x !== null && x !== "").join("\n");

@@ -7,6 +7,7 @@ import { errorText } from "./text";
 import {
   emptySession,
   emptyWorld,
+  own,
   type AccountState,
   type AgentRecord,
   type BotRecord,
@@ -14,6 +15,7 @@ import {
   type GateState,
   type Owned,
   type PushState,
+  type SessionState,
   type World,
 } from "./world";
 
@@ -93,7 +95,16 @@ const V2_FILE = z.looseObject({
 const initiator = z.looseObject({ kind: z.enum(["user", "routine", "bot", "agent", "system"]) });
 const session = z.looseObject({
   id: maybeText,
-  pending: z.array(z.looseObject({ id: text, text, initiator, settles: z.looseObject({ routineId: text, runId: text }).nullable(), attempts: z.number() })),
+  pending: z.array(
+    z.looseObject({
+      id: text,
+      kind: z.enum(["envelope", "continuation"]).optional(),
+      text,
+      initiator,
+      settles: z.looseObject({ routineId: text, runId: text }).nullable(),
+      attempts: z.number(),
+    }),
+  ),
   lifecycle: z.looseObject({ kind: z.enum(["idle", "working", "stopping", "backoff", "parked"]) }),
   notices: z.array(z.looseObject({ text })),
 });
@@ -272,6 +283,9 @@ export function checkStateFile(parsed: unknown): StateCheck {
 }
 
 function fromV3(file: StateFileV3): World {
+  // A file written before Pending.kind marked an approval continuation by the c_ prefix of its id.
+  for (const rec of [...file.bots, ...file.agents])
+    for (const p of own<SessionState>(rec.session).pending) p.kind ??= p.id.startsWith("c_") ? "continuation" : "envelope";
   return {
     bots: new Map(file.bots.map((b) => [b.id, b])),
     agents: new Map(file.agents.map((a) => [a.agent.id, a])),

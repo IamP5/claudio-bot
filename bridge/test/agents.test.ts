@@ -83,6 +83,7 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom } 
   const reports: { agentId: AgentId; text: string; by: Initiator }[] = [];
   const notes: { agentId: AgentId; text: string }[] = [];
   const statuses: AgentStatus[] = [];
+  const begun: string[] = [];
   const ledger: Ledger = {
     add: () => {},
     headroom: (_, i) => (opts.headroom ? opts.headroom(i) : { ok: true, capReached: false }),
@@ -104,6 +105,7 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom } 
       executable: () => "/fake/claude",
     },
     hooks: (actor) => ({ PreToolUse: [{ matcher: actor.kind === "agent" ? actor.agentId : "bot", hooks: [] }] }),
+    beginTurn: (actor) => begun.push(actor.kind === "agent" ? actor.agentId : actor.botId),
     persist: () => {},
     now: () => AT,
     changed: (rec) => statuses.push(rec.agent.status),
@@ -112,7 +114,7 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom } 
   });
   const start = (where: "mac" | "cloud" = "mac", initiator: Initiator = user, botId: BotId = B1) =>
     agents.start(botId, { title: "Fix tests", prompt: "Make the suite green.", project: where === "cloud" ? cloudProject : project, where, botName: "Ana", initiator, budgetUsd: null });
-  return { world, agents, queries, reports, notes, statuses, start, q: () => queries.at(-1)! };
+  return { world, agents, queries, reports, notes, statuses, begun, start, q: () => queries.at(-1)! };
 }
 
 const AGENT_PROMPT =
@@ -258,10 +260,11 @@ test("a decision envelope is queued for the agent and is not recorded in its thr
   await flush();
   h.q().emit(result("Waiting on approval."));
   await flush();
-  h.agents.deliver(rec, { text: "[Alex allowed Bash `bun test` once]", initiator: user, settles: null, ahead: true });
+  h.agents.deliver(rec, { text: "[Alex allowed Bash `bun test` once]", initiator: user, settles: null, kind: "continuation" });
   await flush();
   expect(h.q().received.at(-1)).toBe("[Alex allowed Bash `bun test` once]");
   expect(rec.messages.map((m) => m.text)).toEqual(["Make the suite green.", "Waiting on approval."]);
+  expect(h.begun).toEqual([rec.agent.id]);
 });
 
 test("an agent shows working while the continuation after Allow once runs, and waiting once it reports", async () => {
@@ -271,7 +274,7 @@ test("an agent shows working while the continuation after Allow once runs, and w
   h.q().emit(result("Waiting on approval."));
   await flush();
   expect(rec.agent.status).toBe("waiting");
-  h.agents.deliver(rec, { text: "[Alex allowed Bash `bun test` once]", initiator: user, settles: null, ahead: true });
+  h.agents.deliver(rec, { text: "[Alex allowed Bash `bun test` once]", initiator: user, settles: null, kind: "continuation" });
   expect([rec.agent.status, h.statuses.at(-1)]).toEqual(["working", "working"]);
   await flush();
   h.q().emit(result("Tests pass."));
@@ -339,7 +342,7 @@ test("resume starts mac agents with queued work and tells bots about agents a re
   const world = emptyWorld();
   const record = (id: string, status: AgentStatus, where: "mac" | "cloud", queued: boolean): AgentRecord => {
     const session = emptySession("s_old");
-    if (queued) session.pending.push({ id: `e_${id}` as never, at: AT, text: `[queued for ${id}]`, initiator: user, settles: null, attempts: 0 });
+    if (queued) session.pending.push({ id: `e_${id}` as never, kind: "envelope", at: AT, text: `[queued for ${id}]`, initiator: user, settles: null, attempts: 0 });
     return {
       agent: { id: id as AgentId, botId: B1, title: id, where, projectName: "shop", status, url: null, createdAt: AT, updatedAt: AT },
       cwd: "/code/shop",
@@ -411,7 +414,7 @@ test("a cloud agent is created through claude --cloud and shows its session link
   const rec = await h.start("cloud");
   expect(rec.agent).toMatchObject({ where: "cloud", status: "in_cloud", url: "https://claude.ai/code/session_abc123" });
   expect(rec.cloudSession).toBe("session_abc123");
-  h.agents.deliver(rec, { text: "x", initiator: user, settles: null, ahead: true });
+  h.agents.deliver(rec, { text: "x", initiator: user, settles: null, kind: "continuation" });
   h.agents.notice(rec, "y");
   expect([h.queries, h.agents.session(rec.agent.id)]).toEqual([[], null]);
 });

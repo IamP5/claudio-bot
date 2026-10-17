@@ -31,7 +31,7 @@ export type Agents = {
   stopFor(botId: BotId): void;
 };
 
-const queued = (text: string, initiator: Initiator): SessionInput => ({ text, initiator, settles: null, ahead: false });
+const queued = (text: string, initiator: Initiator): SessionInput => ({ kind: "envelope", text, initiator, settles: null });
 
 /** Statuses that hold only while the session or an open card says so. */
 const LIVE: ReadonlySet<AgentStatus> = new Set(["working", "parked", "awaiting_approval"]);
@@ -45,6 +45,8 @@ export function createAgents(deps: {
   /** Tests pass a fake SDK. */
   claude?: Pick<SessionSpec, "query" | "executable">;
   hooks: (actor: Actor) => Partial<Record<HookEvent, HookCallbackMatcher[]>>;
+  /** An approval continuation's turn starts (gate.beginTurn). */
+  beginTurn: (actor: Actor) => void;
   persist: Persist;
   now: () => string;
   /** The record or something its status derives from changed, including its session's lifecycle and deadlines. */
@@ -120,6 +122,7 @@ export function createAgents(deps: {
       persist: deps.persist,
       userName: deps.userName,
       name: () => "The agent",
+      continuing: () => deps.beginTurn(actor),
       log: deps.log,
       ...deps.claude,
       // Called as a query opens, after the headroom check let the queue head start, so it is above 0. The SDK counts

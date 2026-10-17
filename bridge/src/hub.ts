@@ -25,7 +25,7 @@ import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, onboarding, persona, ty
 import { cardReply } from "./protocol2";
 import type { Push } from "./push";
 import { createScheduler, type RunOutcome } from "./scheduler";
-import { BREAKER_NOTE, createSession, type Session, type SessionSpec, type TurnEnd } from "./session";
+import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { appendArchive, type Persist } from "./store";
 import { errorText } from "./text";
 import { botToolServer, type BotActions } from "./tools";
@@ -271,6 +271,8 @@ export function createHub(deps: HubDeps): Hub {
 
   /** quiet: the turn called routine_no_update and asked nothing. */
   function outcomeOf(end: Exclude<TurnEnd, { kind: "deferred" }>, quiet: boolean): RunOutcome {
+    // A run the daily cap cut short is held by a limit, not broken, so it does not count toward turning the routine off.
+    if (usedBudget(end)) return { status: "skipped", note: "Stopped at the daily cap" };
     switch (end.kind) {
       case "done":
         if (end.result.subtype !== "success") return { status: "failed", note: end.result.errors.join("; ") || end.result.subtype };
@@ -290,7 +292,8 @@ export function createHub(deps: HubDeps): Hub {
   function endTurn(bot: BotRecord, turn: Pending, end: TurnEnd, quiet: boolean) {
     switch (end.kind) {
       case "done":
-        if (end.result.subtype !== "success") note(bot, `${bot.name} stopped with an error: ${end.result.errors.join("; ") || end.result.subtype}`);
+        if (usedBudget(end)) note(bot, `${bot.name} used today's budget; routines and other background work wait until tomorrow.`);
+        else if (end.result.subtype !== "success") note(bot, `${bot.name} stopped with an error: ${end.result.errors.join("; ") || end.result.subtype}`);
         break;
       case "failed":
         note(bot, `${bot.name} crashed: ${end.error}`);
@@ -320,6 +323,8 @@ export function createHub(deps: HubDeps): Hub {
       persist: deps.persist,
       userName,
       log: deps.log,
+      name: () => bot.name,
+      continuing: () => gate.beginTurn(actor),
       ...deps.claude,
       options: () => ({
         cwd: homes.homeOf(bot.id),
@@ -438,6 +443,7 @@ export function createHub(deps: HubDeps): Hub {
     log: deps.log,
     claude: deps.claude,
     hooks: (actor) => gate.hooks(actor),
+    beginTurn: (actor) => gate.beginTurn(actor),
     persist: deps.persist,
     now,
     changed(rec) {

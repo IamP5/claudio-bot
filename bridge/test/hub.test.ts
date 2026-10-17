@@ -186,7 +186,7 @@ test("a bot shows parked only while its queue head is held, not because another 
   const held = bot("held", {
     session: {
       ...emptySession(),
-      pending: [{ id: "e1" as EnvelopeId, at, text: "[Routine digest fired]", initiator: { kind: "routine", run: { routineId: "r1" as RoutineId, runId: "run1" as RunId }, manual: false }, settles: null, attempts: 0 }],
+      pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "[Routine digest fired]", initiator: { kind: "routine", run: { routineId: "r1" as RoutineId, runId: "run1" as RunId }, manual: false }, settles: null, attempts: 0 }],
       lifecycle: { kind: "parked", reason: "usage_limit", until: inAnHour() },
     },
   });
@@ -460,7 +460,7 @@ test("raising a bot's daily cap starts its held routine at once instead of at th
   const run = { routineId: "r_digest" as RoutineId, runId: "run_1" as RunId };
   const b = bot("eng", {
     dailyCapUsd: 0,
-    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, at, text: "[Routine digest fired]", initiator: { kind: "routine", run, manual: false }, settles: run, attempts: 0 }], lifecycle: { kind: "idle" }, notices: [] },
+    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "[Routine digest fired]", initiator: { kind: "routine", run, manual: false }, settles: run, attempts: 0 }], lifecycle: { kind: "idle" }, notices: [] },
   });
   world.bots.set(b.id, b);
   const h = hubOver(world);
@@ -539,7 +539,7 @@ test("a hold whose time has passed does not skip a fire in the tick that clears 
   const run = { routineId: "r_old" as RoutineId, runId: "run_old" as RunId };
   const lapsed = new Date(Date.now() - 60_000).toISOString();
   const h = await fired({
-    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, at, text: "[Routine old fired]", initiator: { kind: "routine", run, manual: false }, settles: run, attempts: 0 }], lifecycle: { kind: "parked", reason: "daily_cap", until: lapsed }, notices: [] },
+    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "[Routine old fired]", initiator: { kind: "routine", run, manual: false }, settles: run, attempts: 0 }], lifecycle: { kind: "parked", reason: "daily_cap", until: lapsed }, notices: [] },
   });
 
   expect(h.routine.runs.map((r) => r.status)).toEqual(["running"]);
@@ -564,6 +564,54 @@ test("a protocol 2 app answering Allow once on a held call grants it once for th
   expect(b.messages.find((m) => m.id === card.id)).toMatchObject({ answer: "once" });
   expect(world.gate.grants.map((g) => g.appliesTo)).toEqual(["attended"]);
   expect(h.q().received.at(-1)).toStartWith("[Alex allowed once: Bash `git push origin main`.");
+});
+
+test("Allow once's ten minutes start when the continuation's turn starts, not at the tap", async () => {
+  setSystemTime(new Date(at));
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "push it", uploads: [] });
+  await flush();
+  await runBash(h.q(), "git push origin main");
+  const card = b.messages.find((m) => m.kind === "permission")!;
+
+  await h.hub.handle({ type: "decide", botId: b.id, messageId: card.id, choice: "once" });
+  const atTap = world.gate.grants.map((g) => g.expiresAt);
+  later(5 * 60_000);
+  h.q().emit(result());
+  await flush();
+
+  expect(h.q().received.at(-1)).toStartWith("[Alex allowed once: Bash `git push origin main`.");
+  expect([atTap, world.gate.grants.map((g) => g.expiresAt)]).toEqual([["2026-10-18T12:00:00.000Z"], ["2026-10-17T12:15:00.000Z"]]);
+});
+
+test("a routine run the daily cap cuts short is skipped and says why, not failed", async () => {
+  const h = await fired();
+  h.q().emit(assistant(text("Half way.")), result(0.5, { subtype: "error_max_budget_usd", is_error: true, errors: ["Reached maximum budget ($0.5)"] }));
+  await flush();
+
+  expect(h.routine.runs.map((r) => [r.status, r.note])).toEqual([["skipped", "Stopped at the daily cap"]]);
+  expect(h.routine.failStreak).toBe(0);
+  expect(h.bot.messages.filter((m) => m.kind === "note").map((m) => m.kind === "note" && m.text)).toEqual([
+    "eng used today's budget; routines and other background work wait until tomorrow.",
+  ]);
+});
+
+test("the stall note names the bot", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "think hard", uploads: [] });
+  await flush();
+  later(31 * 60_000);
+  h.hub.tick(new Date());
+
+  expect(b.messages.filter((m) => m.kind === "note").map((m) => m.kind === "note" && m.text)).toEqual(["eng has been silent for 30 minutes; you can press Stop."]);
 });
 
 test("at the daily cap a scheduled fire is skipped, and Run now from the phone still runs", async () => {
@@ -708,7 +756,7 @@ test("a permission card an agent opens shows its bot as awaiting approval in the
     agent: { id: "a_1" as AgentId, botId: b.id, title: "Ship it", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at },
     cwd,
     messages: [],
-    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, at, text: "Push the fix.", initiator: { kind: "user" }, settles: null, attempts: 0 }] },
+    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "Push the fix.", initiator: { kind: "user" }, settles: null, attempts: 0 }] },
     cloudSession: null,
     budgetUsd: null,
     startedBy: { kind: "user" },

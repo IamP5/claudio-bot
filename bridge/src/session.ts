@@ -82,15 +82,12 @@ const startFailedNote = (error: string) =>
 const restartedNotice = (envelopeText: string) =>
   `[The bridge restarted during your turn on: ${envelopeText.split("\n")[0]} It may be partly done; check before redoing it.]`;
 
-/** Pending has no field for an approval continuation, so its id carries it. Only push() mints ids. */
-const CONTINUATION = "c_";
-
 /**
  * Stop drops a routine's scheduled fire and a message from another bot: nobody waits on either. An agent's report and an
  * approval continuation stay, whatever their initiator, because the bot needs the report and the user just answered.
  */
 const droppedByStop = (p: Pending): boolean =>
-  (p.settles !== null && !attended(p.initiator)) || (p.initiator.kind === "bot" && !p.id.startsWith(CONTINUATION));
+  (p.settles !== null && !attended(p.initiator)) || (p.initiator.kind === "bot" && p.kind !== "continuation");
 
 const DROPS_NAMED = 3;
 /** One notice per Stop, however much it dropped, so the notices on the next envelope stay short. */
@@ -138,7 +135,7 @@ export type Outcome =
   | { kind: "terminal"; error: string };
 
 export type Event =
-  | { kind: "push"; pending: Pending; ahead: boolean }
+  | { kind: "push"; pending: Pending }
   | { kind: "notice"; notice: Notice }
   /** Start the next admissible envelope, if any. Every transition that frees the session also pumps. */
   | { kind: "pump" }
@@ -185,7 +182,7 @@ const turnOf = (life: Lifecycle): ActiveTurn | null => (life.kind === "working" 
 
 /**
  * The lifecycle, total over (Lifecycle x Event) and pure. Invariants it keeps:
- * - The envelope in flight is pending[0]; an `ahead` push goes right behind it.
+ * - The envelope in flight is pending[0]; a continuation goes right behind it.
  * - Only idle (or an expired backoff/park, or a daily_cap park for an attended envelope) starts a turn, so nothing
  *   is sent while stopping.
  * - Every envelope removed from pending gets exactly one non-deferred end.
@@ -345,7 +342,7 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
   switch (ev.kind) {
     case "push": {
       const busy = turnOf(s.lifecycle) !== null;
-      if (ev.ahead) s.pending.splice(busy ? 1 : 0, 0, ev.pending);
+      if (ev.pending.kind === "continuation") s.pending.splice(busy ? 1 : 0, 0, ev.pending);
       else s.pending.push(ev.pending);
       pump();
       break;
@@ -479,7 +476,7 @@ export function classify(r: SDKResultMessage, s: Signals, now: Date): Outcome {
 }
 
 export type Session = Tickable & {
-  /** Queues one envelope; persisted before the SDK sees it. ahead puts it before everything queued (an approval continuation). */
+  /** Queues one envelope; persisted before the SDK sees it. A continuation goes before everything queued. */
   push(input: SessionInput): void;
   /** Adds a line to the top of the next envelope this actor runs. Spends no turn. */
   notice(text: string): void;
@@ -529,6 +526,8 @@ export type SessionSpec = {
   userName?: string;
   /** Who the stall note names, read when it is left so a rename shows. Default "Claude Code". */
   name?: () => string;
+  /** An approval continuation's turn is being sent on an open query, so the gate starts its grant's short window now. */
+  continuing?: () => void;
   /**
    * Nothing runs, nothing is queued and no query is open. Asked at every tick while so. An owner of many sessions may
    * close and forget this one: a new session over the same state resumes it.
@@ -664,6 +663,7 @@ export function createSession(spec: SessionSpec): Session {
     signals = noSignals();
     heardAt = clock().getTime();
     stallNoted = false;
+    if (p.kind === "continuation") guard("continuing", () => spec.continuing?.());
     l.send({ type: "user", message: { role: "user", content: text }, parent_tool_use_id: null });
   }
 
@@ -803,9 +803,8 @@ export function createSession(spec: SessionSpec): Session {
   return {
     push(input) {
       if (closed) return;
-      const id = `${input.ahead ? CONTINUATION : "e_"}${crypto.randomUUID()}` as EnvelopeId;
-      const pending: Pending = { id, at: clock().toISOString(), text: input.text, initiator: input.initiator, settles: input.settles, attempts: 0 };
-      dispatch({ kind: "push", pending, ahead: input.ahead });
+      const pending: Pending = { id: `e_${crypto.randomUUID()}` as EnvelopeId, at: clock().toISOString(), ...input, attempts: 0 };
+      dispatch({ kind: "push", pending });
     },
     notice(text) {
       dispatch({ kind: "notice", notice: { at: clock().toISOString(), text } });

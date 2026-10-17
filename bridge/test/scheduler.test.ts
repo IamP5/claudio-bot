@@ -27,7 +27,7 @@ function harness(start: Date) {
       if (e.from !== "routine") throw new Error(`unexpected ${e.from}`);
       if (failing === "deliver") throw new Error("inbox write failed");
       delivered.push({ e, flushedBefore: flushed });
-      (b.session.pending as unknown as Pending[]).push({ id: e.run.runId as string as EnvelopeId, at: now.toISOString(), text: "", initiator: { kind: "routine", run: e.run, manual: e.manual }, settles: e.run, attempts: 0 });
+      (b.session.pending as unknown as Pending[]).push({ id: e.run.runId as string as EnvelopeId, kind: "envelope", at: now.toISOString(), text: "", initiator: { kind: "routine", run: e.run, manual: e.manual }, settles: e.run, attempts: 0 });
     },
     note: (_bot, text, refs: Peer[] = []) => notes.push(text.replace(/\{(\d+)\}/g, (_, i) => refs[Number(i)]?.kind === "routine" ? (refs[Number(i)] as { name: string }).name : "?")),
     changed: (b, urgency) => {
@@ -337,7 +337,7 @@ test("the first tick settles a run a crash left running unless its envelope is s
   r.runs = [run("run_queued"), run("run_orphan")];
   const pending = h.bot.session.pending as unknown as Pending[];
   const queued = { routineId: r.id, runId: "run_queued" as RunId };
-  pending.push({ id: "e1" as EnvelopeId, at: local(19, 8).toISOString(), text: "", initiator: { kind: "routine", run: queued, manual: false }, settles: queued, attempts: 0 });
+  pending.push({ id: "e1" as EnvelopeId, kind: "envelope", at: local(19, 8).toISOString(), text: "", initiator: { kind: "routine", run: queued, manual: false }, settles: queued, attempts: 0 });
 
   h.at(local(19, 8, 31));
   expect(r.runs.map((x) => [x.id as string, x.status as string])).toEqual([
@@ -351,7 +351,7 @@ test("an approval continuation carrying the routine's initiator does not keep a 
   const r = h.add("digest", "0 9 * * *") as RoutineRecord;
   r.runs = [{ id: "run_orphan" as RunId, at: local(19, 8).toISOString(), status: "running", late: false, manual: false, note: null }];
   const initiator = { kind: "routine" as const, run: { routineId: r.id, runId: "run_orphan" as RunId }, manual: false };
-  (h.bot.session.pending as unknown as Pending[]).push({ id: "e1" as EnvelopeId, at: local(19, 8).toISOString(), text: "[Alex allowed once]", initiator, settles: null, attempts: 0 });
+  (h.bot.session.pending as unknown as Pending[]).push({ id: "e1" as EnvelopeId, kind: "envelope", at: local(19, 8).toISOString(), text: "[Alex allowed once]", initiator, settles: null, attempts: 0 });
 
   h.at(local(19, 8, 31));
   expect(r.runs.map((x) => [x.id as string, x.status as string, x.note])).toEqual([["run_orphan", "skipped", "Interrupted by a restart"]]);

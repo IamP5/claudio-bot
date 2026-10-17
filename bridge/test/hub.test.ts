@@ -6,7 +6,7 @@ import type { Options, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/c
 import { createHomes } from "../src/home";
 import { createHub, tickEach } from "../src/hub";
 import type { AgentId, BotId, Message, MessageId, RoutineId, RunId, ServerMessage, StreamPosition } from "../src/protocol";
-import type { PushReason } from "../src/push";
+import { createPush, type Push, type PushReason } from "../src/push";
 import { BREAKER_NOTE } from "../src/session";
 import { emptySession, emptyWorld, newBot, type BotRecord, type EnvelopeId, type Fingerprint, type RoutineRecord, type Signature, type World } from "../src/world";
 
@@ -69,13 +69,17 @@ const toolUse = (name: string) => ({ type: "tool_use", id: `t${++uuid}`, name, i
 const result = (cost = 0.25, over: object = {}) =>
   ({ type: "result", subtype: "success", is_error: false, result: "ok", errors: [], session_id: "s_1", total_cost_usd: cost, ...over }) as unknown as SDKMessage;
 
-function hubOver(world: World, opts: { persist?: (urgency?: "now") => void } = {}) {
+type PushCall = { botId: BotId; reason: PushReason; messageId: MessageId };
+
+/** sends: whether the fake push goes out (default: always). push: a real push instead of the fake. */
+function hubOver(world: World, opts: { persist?: (urgency?: "now") => void; sends?: (call: PushCall, n: number) => boolean; push?: Push } = {}) {
   const root = mkdtempSync(join(tmpdir(), "claudiobot-hub-"));
   roots.push(root);
   const homes = createHomes(root);
   const events: string[] = [];
   const frames: ServerMessage[] = [];
-  const pushes: { botId: BotId; reason: PushReason; messageId: MessageId }[] = [];
+  const pushes: PushCall[] = [];
+  const attempts: PushCall[] = [];
   const queries: FakeQuery[] = [];
   const hub = createHub({
     machine: "Mac",
@@ -96,7 +100,17 @@ function hubOver(world: World, opts: { persist?: (urgency?: "now") => void } = {
       events.push(`persist ${urgency ?? "later"} with ${[...world.bots.keys()].join(",") || "no bots"}`);
     },
     log: () => {},
-    push: { notify: (bot, reason, messageId) => pushes.push({ botId: bot.id, reason, messageId }) },
+    push: opts.push ?? {
+      notify(bot, reason, messageId) {
+        const call = { botId: bot.id, reason, messageId };
+        attempts.push(call);
+        const sent = opts.sends?.(call, attempts.length) ?? true;
+        if (sent) pushes.push(call);
+        return sent;
+      },
+      tick() {},
+      nextDeadline: () => null,
+    },
     claude: {
       query: (({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => {
         const q = new FakeQuery(prompt, options);
@@ -106,7 +120,7 @@ function hubOver(world: World, opts: { persist?: (urgency?: "now") => void } = {
       executable: () => "/fake/claude",
     },
   });
-  return { hub, homes, root, events, frames, pushes, queries, q: () => queries.at(-1)! };
+  return { hub, homes, root, events, frames, pushes, attempts, queries, q: () => queries.at(-1)! };
 }
 
 /** The bridge's real gate, called the way Claude Code calls the PreToolUse hook the session was given. */
@@ -254,6 +268,47 @@ test("a user's turn posts each bubble as it arrives and pushes once", async () =
 
   expect(bubbles(b)).toEqual(["Looking.", "All green."]);
   expect(h.pushes).toHaveLength(1);
+});
+
+test("a turn whose first bubble was not pushed tries again with the next one", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world, { sends: (_, n) => n > 1 });
+  await h.hub.handle({ type: "send", botId: b.id, text: "status?", uploads: [] });
+  await flush();
+
+  h.q().emit(assistant(text("Looking.")));
+  await flush();
+  h.q().emit(assistant(text("All green.")));
+  await flush();
+
+  const [looking, green] = b.messages.filter((m) => m.kind === "bot").map((m) => m.id);
+  expect(h.attempts).toEqual([
+    { botId: b.id, reason: "message", messageId: looking! },
+    { botId: b.id, reason: "message", messageId: green! },
+  ]);
+});
+
+test("a card held back while the phone was live is pushed by the hub's clock once the phone has gone quiet", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const sent: string[] = [];
+  const quietAt = new Date(Date.now() + 45_000);
+  const push = createPush({ world, persist: () => {}, sender: async (n) => void sent.push(n.text), liveUntil: () => quietAt, now: () => new Date(), log: () => {} });
+  const h = hubOver(world, { push });
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "push it", uploads: [] });
+  await flush();
+  await runBash(h.q(), "git push origin main");
+  await flush();
+  expect(sent).toEqual([]);
+
+  h.hub.tick(new Date(quietAt.getTime() + 1_000));
+  await flush();
+
+  expect(sent).toEqual(["eng needs you"]);
 });
 
 test("output that arrives between turns still reaches the chat", async () => {

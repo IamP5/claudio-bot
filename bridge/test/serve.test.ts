@@ -69,6 +69,7 @@ function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m
     http: `http://127.0.0.1:${transport.port}`,
     savesFail: (fail = true) => (saving = !fail),
     advance: (ms: number) => (now = new Date(now.getTime() + ms)),
+    now: () => now,
     stop,
   };
 }
@@ -173,6 +174,27 @@ test("revoking a phone closes its sockets and its token opens no new one", async
   await until(() => b.transport.live() === 1, "one live socket");
   const retry = await fetch(`${b.http}/ws`, { headers: { authorization: `Bearer ${drop.token}` } });
   expect(retry.status).toBe(401);
+});
+
+test("a socket is live only while the app was heard from within the window; its pings and messages renew it", async () => {
+  const b = boot(tempHome());
+  const phone = await pairPhone(b);
+  const client = connect(b, { bearer: phone.token, query: "?protocol=3" });
+  await client.next("hello");
+  expect(b.transport.live()).toBe(1);
+  expect(b.transport.liveUntil()).toEqual(new Date(b.now().getTime() + 45_000));
+
+  b.advance(45_000);
+  expect(b.transport.live()).toBe(0);
+  expect(b.transport.liveUntil()).toBeNull();
+
+  client.raw.ping();
+  await until(() => b.transport.live() === 1, "a ping to renew the socket");
+  expect(b.transport.liveUntil()).toEqual(new Date(b.now().getTime() + 45_000));
+
+  b.advance(45_000);
+  client.send({ type: "open", botId: "b_1" });
+  await until(() => b.transport.live() === 1, "a message to renew the socket");
 });
 
 test("a socket whose device is gone by the time it opens is closed before any hello", async () => {

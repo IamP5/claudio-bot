@@ -31,6 +31,6 @@ test("SIGTERM still exits when the last save fails, and says the state was not s
   if (code === "still running") bridge.kill("SIGKILL");
 
   expect(code).toBe(1);
-  expect(await out).toContain("state.json was not saved at shutdown");
+  expect(await out).toContain("shutdown: state.json was not saved");
   expect(await err).not.toContain("error:");
 }, 20_000);

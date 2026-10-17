@@ -111,7 +111,7 @@ function shutdown() {
     saver.flush();
   } catch (e) {
     saved = false;
-    log(`shutdown: state.json was not saved at shutdown: ${(e as Error).message}`);
+    log(`shutdown: state.json was not saved: ${(e as Error).message}`);
   }
   process.exit(saved ? 0 : 1);
 }

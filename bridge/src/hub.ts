@@ -860,7 +860,12 @@ export function createHub(deps: HubDeps): Hub {
     tick: (at) => tickEach(tickers, at, deps.log),
 
     boot(firstRun) {
-      homes.ensureUserMd(userName);
+      // Without USER.md the bots still run; remember about the user fails until the folder is writable again.
+      try {
+        homes.ensureUserMd(userName);
+      } catch (e) {
+        deps.log(`USER.md could not be created at ${homes.userMd}: ${errorText(e)}`);
+      }
       if (firstRun) {
         makeBot(
           { name: DEFAULT_BOT.name, avatar: { ...DEFAULT_BOT.avatar }, job: defaultBotJob(userName) },

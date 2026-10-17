@@ -1227,3 +1227,28 @@ test("at local midnight every phone gets each bot again, so today's spend starts
   h.hub.tick(new Date(tomorrow.getTime() + 60_000));
   expect(frames()).toBe(before + 1);
 });
+
+test("boot carries on when USER.md cannot be created, and says why in the log", () => {
+  const world = emptyWorld();
+  const root = mkdtempSync(join(tmpdir(), "claudiobot-hub-"));
+  roots.push(root);
+  const homes = createHomes(root);
+  const logs: string[] = [];
+  const hub = createHub({
+    machine: "Mac",
+    userName: "Alex",
+    world,
+    homes: { ...homes, ensureUserMd: () => { throw new Error("EACCES: permission denied"); } },
+    model: undefined,
+    scan: async () => [],
+    broadcast: () => {},
+    signal: () => {},
+    webhookPort: null,
+    persist: () => {},
+    log: (line) => logs.push(line),
+    push: { notify: () => true, tick() {}, nextDeadline: () => null },
+    claude: { query: (() => { throw new Error("no queries here"); }) as never, executable: () => null },
+  });
+  expect(() => hub.boot(false)).not.toThrow();
+  expect(logs).toEqual([expect.stringContaining("EACCES: permission denied")]);
+});

@@ -1,0 +1,78 @@
+name: ClaudeBot
+options:
+  bundleIdPrefix: dev.claudebot
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  ClaudeBot:
+    type: application
+    platform: iOS
+    sources:
+      - path: ClaudeBot
+    info:
+      path: ClaudeBot/Info.plist
+      properties:
+        CFBundleDisplayName: ClaudeBot
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen:
+          UIColorName: ""
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSCameraUsageDescription: ClaudeBot uses the camera to scan the pairing QR code shown by the bridge on your Mac.
+        NSLocalNetworkUsageDescription: ClaudeBot connects to the ClaudeBot bridge running on your Mac over your local network or Tailscale.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            ts.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.claudebot.app
+            CFBundleURLSchemes:
+              - claudebot
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.claudebot.app
+        PRODUCT_NAME: ClaudeBot
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_PREVIEWS: YES
+  ClaudeBotTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ClaudeBotTests
+      - path: ../fixtures/protocol.json
+        buildPhase: resources
+        group: ClaudeBotTests
+    dependencies:
+      - target: ClaudeBot
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.claudebot.app.tests
+schemes:
+  ClaudeBot:
+    build:
+      targets:
+        ClaudeBot: all
+        ClaudeBotTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - ClaudeBotTests

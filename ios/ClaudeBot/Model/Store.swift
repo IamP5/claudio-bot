@@ -150,8 +150,13 @@ final class AppStore {
 
         case let .agent(agent, messages):
             agents[agent.id] = AgentThread(agent: agent, messages: messages)
-            if var current = details[agent.botId], let at = current.agents.firstIndex(where: { $0.id == agent.id }) {
-                current.agents[at] = agent
+            // The bridge pushes every agent change, including agents the cached details have not seen yet.
+            if var current = details[agent.botId] {
+                if let at = current.agents.firstIndex(where: { $0.id == agent.id }) {
+                    current.agents[at] = agent
+                } else {
+                    current.agents.append(agent)
+                }
                 details[agent.botId] = current
             }
             return []

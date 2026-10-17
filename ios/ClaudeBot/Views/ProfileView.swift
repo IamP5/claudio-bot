@@ -9,6 +9,7 @@ struct ProfileView: View {
 
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var tab: Tab
     @State private var name = ""
     @State private var label = ""
@@ -38,6 +39,8 @@ struct ProfileView: View {
             .background(Theme.background)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // On iPad the profile sits beside the chat, whose own menu already fills this slot.
+                if sizeClass == .compact {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button {
@@ -54,6 +57,7 @@ struct ProfileView: View {
                         Image(systemName: "ellipsis")
                     }
                     .accessibilityLabel("More")
+                }
                 }
             }
             .onAppear {
@@ -330,7 +334,7 @@ private struct LibraryTab: View {
                                             .font(.system(size: 18))
                                             .foregroundStyle(Theme.secondary)
                                             .frame(width: 24)
-                                        Text(file.path).font(.system(size: 16)).foregroundStyle(.white).lineLimit(1)
+                                        Text((file.path as NSString).lastPathComponent).font(.system(size: 16)).foregroundStyle(.white).lineLimit(1)
                                         Spacer()
                                         Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.tertiary)
                                     }

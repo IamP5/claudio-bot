@@ -2,7 +2,7 @@
 import Foundation
 
 /// `-demo` fills the store with sample bots through the reducer, without a bridge.
-/// `-demoScreen home|newchat|chat|profile|links|library|agent|digest|engineer|factory|pair|settings`
+/// `-demoScreen home|newchat|chat|profile|links|library|file|agent|digest|engineer|factory|pair|settings`
 /// opens a screen directly for screenshots.
 @MainActor
 enum Demo {
@@ -21,12 +21,14 @@ enum Demo {
         store.apply(.details(botId: BotID("claude"), library: library, links: links, agents: []))
         store.apply(.details(botId: BotID("engineer"), library: [], links: [], agents: agents))
         store.apply(.agent(agents[0], messages: agentMessages))
-        store.apply(.file(botId: BotID("claude"), path: "comment-prune-plan.md", file: BotFile(mime: "text/markdown", content: plan, data: nil)))
+        store.apply(.file(botId: BotID("claude"), path: "library/comment-prune-plan.md", file: BotFile(mime: "text/markdown", content: plan, data: nil)))
 
         switch screen {
         case "newchat": router.showingNewChat = true
         case "settings": router.showingSettings = true
-        case "chat": router.selection = BotID("claude")
+        case "chat":
+            router.selection = BotID("claude")
+            router.showingInspector = true
         case "digest": router.selection = BotID("news")
         case "engineer": router.selection = BotID("engineer")
         case "factory": router.selection = BotID("eggbot")
@@ -36,6 +38,9 @@ enum Demo {
         case "links", "library":
             router.selection = BotID("claude")
             router.path = [.profile(BotID("claude"), tab: screen == "links" ? .links : .library)]
+        case "file":
+            router.selection = BotID("claude")
+            router.path = [.profile(BotID("claude"), tab: .library), .file(BotID("claude"), path: "library/comment-prune-plan.md")]
         case "agent":
             router.selection = BotID("engineer")
             router.path = [.exchange(AgentID("a1"))]
@@ -179,8 +184,8 @@ enum Demo {
     ]
 
     static let library: [LibraryFile] = [
-        LibraryFile(path: "comment-prune-plan.md", size: 2048, modifiedAt: at(2, 9, 0)),
-        LibraryFile(path: "release-checklist.md", size: 1200, modifiedAt: at(20, 9, 0)),
+        LibraryFile(path: "library/comment-prune-plan.md", size: 2048, modifiedAt: at(2, 9, 0)),
+        LibraryFile(path: "library/release-checklist.md", size: 1200, modifiedAt: at(20, 9, 0)),
     ]
 
     static let links: [BotLink] = [20, 19, 18, 27].map { number in

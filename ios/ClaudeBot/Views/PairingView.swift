@@ -43,6 +43,7 @@ struct PairingView: View {
             .frame(maxWidth: .infinity)
         }
         .scrollDismissesKeyboard(.interactively)
+        .background(Theme.background)
         .sheet(isPresented: $scanning) {
             QRScannerSheet { payload in
                 scanning = false

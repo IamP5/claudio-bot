@@ -9,7 +9,7 @@ mkdir -p "$out"
 xcrun simctl bootstatus "$udid" -b >/dev/null
 xcrun simctl status_bar "$udid" override --time 9:41 --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3
 xcrun simctl install "$udid" "$app"
-for screen in ${SCREENS:-home newchat chat profile links library agent digest engineer factory pair settings}; do
+for screen in ${SCREENS:-home newchat chat profile links library file agent digest engineer factory pair settings}; do
   xcrun simctl terminate "$udid" dev.claudebot.app 2>/dev/null || true
   xcrun simctl launch "$udid" dev.claudebot.app -demo -demoScreen "$screen" >/dev/null
   sleep "${SETTLE:-3}"

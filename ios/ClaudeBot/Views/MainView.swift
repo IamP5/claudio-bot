@@ -5,14 +5,11 @@ struct MainView: View {
     @Environment(AppStore.self) private var store
     @Environment(Router.self) private var router
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @State private var visibility: NavigationSplitViewVisibility = .all
+    @State private var visibility: NavigationSplitViewVisibility = .automatic
 
-    /// iPad only. On iPhone the profile is pushed instead, and an inspector would turn into a sheet.
-    private var inspectorShown: Binding<Bool> {
-        Binding(
-            get: { sizeClass == .regular && router.showingInspector && router.selection != nil },
-            set: { router.showingInspector = $0 }
-        )
+    /// iPad only. On iPhone the profile is pushed instead.
+    private var inspectorShown: Bool {
+        sizeClass == .regular && router.showingInspector && router.selection != nil
     }
 
     var body: some View {
@@ -21,33 +18,39 @@ struct MainView: View {
             HomeView()
                 .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 400)
         } detail: {
-            NavigationStack(path: $router.path) {
-                Group {
-                    if let id = router.selection, store.bots[id] != nil {
-                        ChatView(botId: id)
-                            .id(id)
-                    } else {
-                        ContentUnavailableView("No chat selected", systemImage: "bubble.left.and.bubble.right", description: Text("Pick a bot, or tap + to start a chat."))
+            // A plain column rather than .inspector: on iPad portrait the inspector covers and dims the chat.
+            HStack(spacing: 0) {
+                NavigationStack(path: $router.path) {
+                    Group {
+                        if let id = router.selection, store.bots[id] != nil {
+                            ChatView(botId: id)
+                                .id(id)
+                        } else {
+                            ContentUnavailableView(
+                                "No chat selected", systemImage: "bubble.left.and.bubble.right",
+                                description: Text("Pick a bot, or tap + to start a chat.")
+                            )
                             .foregroundStyle(Theme.secondary)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .background(Theme.background)
+                        }
+                    }
+                    .navigationDestination(for: Route.self) { route in
+                        switch route {
+                        case .profile(let bot, let tab): ProfileView(botId: bot, tab: tab)
+                        case .exchange(let agent): ExchangeView(agentId: agent)
+                        case .file(let bot, let path): FileView(botId: bot, path: path)
+                        }
                     }
                 }
-                .navigationDestination(for: Route.self) { route in
-                    switch route {
-                    case let .profile(bot, tab): ProfileView(botId: bot, tab: tab)
-                    case .exchange(let agent): ExchangeView(agentId: agent)
-                    case let .file(bot, path): FileView(botId: bot, path: path)
-                    }
+                if inspectorShown, let id = router.selection {
+                    Rectangle().fill(Theme.hairline).frame(width: 1).ignoresSafeArea()
+                    NavigationStack { ProfileView(botId: id) }
+                        .frame(width: 380)
+                        .transition(.move(edge: .trailing))
                 }
             }
-            .inspector(isPresented: inspectorShown) {
-                // Only built while shown, so its toolbar items never leak into the chat's toolbar.
-                if inspectorShown.wrappedValue, let id = router.selection {
-                    ProfileView(botId: id)
-                        .inspectorColumnWidth(min: 320, ideal: 380, max: 460)
-                }
-            }
+            .animation(.snappy, value: inspectorShown)
         }
         .sheet(isPresented: $router.showingNewChat) { NewChatView() }
         .sheet(isPresented: $router.showingSettings) { SettingsView() }

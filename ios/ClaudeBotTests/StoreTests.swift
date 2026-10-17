@@ -126,6 +126,18 @@ private func question(_ id: String, answer: Answer? = nil) -> Message {
         #expect(store.agents[AgentID("a1")]?.agent.status == .waiting)
     }
 
+    @Test func aPushedNewAgentJoinsTheCachedDetails() {
+        let store = store()
+        store.apply(.details(botId: BotID("b1"), library: [], links: [], agents: []))
+        let agent = Agent(
+            id: AgentID("a2"), botId: BotID("b1"), title: "Fix tests", where: .cloud, projectName: "app",
+            status: .inCloud, url: URL(string: "https://claude.ai/code/s"), createdAt: at, updatedAt: at
+        )
+        store.apply(.agent(agent, messages: []))
+        store.apply(.agent(agent, messages: []))
+        #expect(store.details[BotID("b1")]?.agents.map(\.id) == [AgentID("a2")])
+    }
+
     @Test func unpairingForgetsTheMac() {
         let store = store()
         store.setConnection(.unpaired)

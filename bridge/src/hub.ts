@@ -388,9 +388,10 @@ export function createHub(deps: HubDeps): Hub {
       }),
       onMessage(m, pending) {
         if (!world.bots.has(bot.id)) return;
-        activity.observe(actor, m);
-        // Output between turns, such as a background task finishing, has no turn to wait for.
+        // Output between turns, such as a background task finishing, has no turn to wait for, and no turn end would
+        // clear an activity line it set.
         if (pending === null) return postBubbles(bot, { pushed: null, last: null }, readTurn(freshTurn, m).bubbles);
+        activity.observe(actor, m);
         let r = readings.get(bot.id);
         if (r?.id !== pending.id) {
           r = { id: pending.id, turn: freshTurn, held: holdsBubbles(pending) ? [] : null, pushed: null, last: null, carded: false };
@@ -405,7 +406,8 @@ export function createHub(deps: HubDeps): Hub {
       },
       onTurnEnd(pending, end) {
         if (!world.bots.has(bot.id)) return;
-        if (end.kind !== "deferred") activity.clear(actor);
+        // A deferred turn waits (a retry, a limit) with nothing running, so its line clears too.
+        activity.clear(actor);
         const r = readings.get(bot.id);
         let quiet = false;
         if (end.kind !== "deferred" && r?.id === pending.id) {
@@ -706,6 +708,8 @@ export function createHub(deps: HubDeps): Hub {
         // Before the agents go: the gate finds the agents' grants through them.
         gate.forgetBot(bot.id);
         const doomed = [...world.agents.values()].filter((rec) => rec.agent.botId === bot.id).map((rec) => rec.agent.id);
+        activity.clear(botActor(bot.id));
+        for (const id of doomed) activity.clear({ kind: "agent", botId: bot.id, agentId: id });
         for (const id of doomed) world.agents.delete(id);
         world.bots.delete(bot.id);
         // A crash between these two leaves an orphan home rather than a bot whose home is gone.

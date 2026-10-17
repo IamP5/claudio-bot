@@ -29,6 +29,18 @@ function host(u: string | null): string | null {
   }
 }
 
+/**
+ * A model-written description with every URL cut to its host and every command-line option dropped with its value,
+ * so a query string or a "--password x" never reaches the phone. redact then masks what still looks like a secret.
+ */
+function scrub(line: string): string {
+  return line
+    .replace(/\bhttps?:\/\/[^\s"'<>]+/gi, (u) => host(u) ?? "a web address")
+    .replace(/(^|\s)--?[A-Za-z][\w-]*(?:=\S*|\s+(?!-)\S+)?/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 const file = (verb: string, input: Input, key = "file_path") => `${verb} ${basename(str(input, key)) ?? "a file"}`;
 
 /** The program a command runs, never its arguments: env assignments skipped, a path cut to its last part. */
@@ -85,7 +97,7 @@ export function activityOf(m: SDKMessage): string | null {
     line = lineOf(block.name, input) ?? line;
   }
   if (line === null) return null;
-  const shown = displayName(String(redact(line)), LINE_MAX);
+  const shown = displayName(String(redact(scrub(line))), LINE_MAX);
   return shown === "" ? null : shown;
 }
 
@@ -129,7 +141,8 @@ export function createActivity(deps: { signal: (s: Signal) => void; now: () => D
           return;
         }
         if (text === line.shown) return;
-        const wait = line.sentAt + ACTIVITY_THROTTLE_MS - deps.now().getTime();
+        // Clamped, so a clock set back cannot hold a line for longer than one window.
+        const wait = Math.min(line.sentAt + ACTIVITY_THROTTLE_MS - deps.now().getTime(), ACTIVITY_THROTTLE_MS);
         if (wait <= 0) return send(actor, line, text);
         line.waiting = text;
         const held = line;
@@ -138,6 +151,7 @@ export function createActivity(deps: { signal: (s: Signal) => void; now: () => D
             flush(actor, held);
           } catch {}
         }, wait);
+        line.timer.unref?.();
       } catch {}
     },
     clear(actor) {

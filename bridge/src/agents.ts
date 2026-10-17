@@ -235,9 +235,10 @@ export function createAgents(deps: {
           maxBudgetUsd,
         };
       },
-      onMessage: (m) => deps.observe(actor, m),
+      // Output between turns has no turn end to clear the line it would set.
+      onMessage: (m, pending) => pending !== null && deps.observe(actor, m),
       onTurnEnd(pending, end) {
-        if (end.kind !== "deferred") deps.idle(actor);
+        deps.idle(actor);
         turnEnded(rec, pending.initiator, end);
       },
       onChange: () => refresh(rec),

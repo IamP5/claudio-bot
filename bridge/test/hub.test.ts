@@ -8,7 +8,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHomes } from "../src/home";
 import { createHub, tickEach } from "../src/hub";
 import type { Project } from "../src/projects";
-import type { AgentId, BotId, ClientMessage, Message, MessageId, RoutineId, RunId, ServerMessage, StreamPosition } from "../src/protocol";
+import type { AgentId, BotId, ClientMessage, Message, MessageId, RoutineId, RunId, ServerMessage, Signal, StreamPosition } from "../src/protocol";
 import { createPush, type Push, type PushReason } from "../src/push";
 import { BREAKER_NOTE } from "../src/session";
 import { CLAUDIO_TOOLS } from "../src/tools";
@@ -97,6 +97,7 @@ function hubOver(
   const homes = createHomes(root);
   const events: string[] = [];
   const frames: ServerMessage[] = [];
+  const signals: Signal[] = [];
   const pushes: PushCall[] = [];
   const attempts: PushCall[] = [];
   const queries: FakeQuery[] = [];
@@ -114,7 +115,7 @@ function hubOver(
     model: undefined,
     scan: opts.scan ?? (async () => []),
     broadcast: (m) => frames.push(m),
-    signal: () => {},
+    signal: (s) => signals.push(s),
     webhookPort: null,
     persist: (urgency) => {
       opts.persist?.(urgency);
@@ -141,7 +142,7 @@ function hubOver(
       executable: () => (opts.executable === undefined ? "/fake/claude" : opts.executable),
     },
   });
-  return { hub, homes, root, events, frames, pushes, attempts, queries, q: () => queries.at(-1)! };
+  return { hub, homes, root, events, frames, signals, pushes, attempts, queries, q: () => queries.at(-1)! };
 }
 
 /** The bridge's real gate, called the way Claude Code calls the PreToolUse hook the session was given. */
@@ -1065,4 +1066,29 @@ test("saving and deleting a skill sends every phone the bot's new list", async (
   expect(await h.hub.handle({ type: "delete_skill", botId: b.id, name: "greet" })).toEqual([]);
   expect(h.frames.filter((f) => f.type === "skills").at(-1)).toEqual({ type: "skills", botId: b.id, skills: [] });
   expect(await h.hub.handle({ type: "delete_skill", botId: b.id, name: "greet" })).toEqual([{ type: "error", message: "This bot has no skill named greet." }]);
+});
+
+test("a tool call between turns sets no activity line, and deleting a working bot clears its line first", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "hi", uploads: [] });
+  await flush();
+  h.q().emit(assistant(toolUse("Read")), result());
+  await flush();
+  expect(h.signals.map((s) => s.text)).toEqual(["Reading a file", null]);
+
+  h.q().emit(assistant(toolUse("Grep")));
+  await flush();
+  expect(h.signals.map((s) => s.text)).toEqual(["Reading a file", null]);
+
+  await h.hub.handle({ type: "send", botId: b.id, text: "again", uploads: [] });
+  await flush();
+  h.q().emit(assistant(toolUse("Glob")));
+  await flush();
+  expect(h.signals.at(-1)?.text).toBe("Finding files");
+  await h.hub.handle({ type: "delete_bot", botId: b.id });
+  expect(h.signals.at(-1)).toMatchObject({ botId: b.id, agentId: null, text: null });
 });

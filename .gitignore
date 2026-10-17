@@ -1,5 +1,4 @@
 node_modules/
-decisions.tsv
 build/
 DerivedData/
 *.xcodeproj/xcuserdata/

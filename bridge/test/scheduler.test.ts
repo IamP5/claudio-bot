@@ -604,3 +604,14 @@ test("run now and cron fires carry no payload", () => {
   h.at(local(19, 9));
   expect(h.delivered.map((d) => d.e.payload)).toEqual([null, null]);
 });
+
+test("a nextRunAt the clock pushed ahead (a wrong jump forward, then corrected back) heals to the next real time", () => {
+  const h = harness(local(19, 8));
+  const r = h.add("daily", "0 9 * * *");
+  h.at(new Date(2027, 9, 19, 8, 0));
+  expect(r.nextRunAt).toBe(new Date(2027, 9, 19, 9, 0).toISOString());
+  h.at(local(20, 8));
+  expect(r.nextRunAt).toBe(local(20, 9).toISOString());
+  h.at(local(20, 9, 0, 30));
+  expect(h.delivered).toHaveLength(1);
+});

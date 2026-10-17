@@ -819,7 +819,7 @@ test("a bot's commands run sandboxed to its home, never writing USER.md or its C
   ]);
   expect(botOptions.sandbox?.filesystem?.denyWrite).toEqual(expect.arrayContaining([join(home, "bots", b.id, "CLAUDE.md"), join(home, "USER.md")]));
   expect(botOptions.sandbox?.filesystem?.denyRead?.[0]).toBe(home);
-  expect([botOptions.settings, agentOptions.settings]).toEqual([{ autoMemoryEnabled: false }, { autoMemoryEnabled: false }]);
+  expect([botOptions.settings, agentOptions.settings]).toEqual([{ autoMemoryEnabled: false, cleanupPeriodDays: 3650 }, { autoMemoryEnabled: false, cleanupPeriodDays: 3650 }]);
   expect([agentOptions.sandbox?.filesystem?.allowWrite?.[0], agentOptions.env?.GIT_CONFIG_VALUE_1, botOptions.env]).toEqual([cwd, "ssh://git@github.com/", undefined]);
 });
 
@@ -988,7 +988,7 @@ test("turning a connector off answers with the new list, toggles the live query,
   await flush();
   const agentAfter = h.queries.findLast((q) => q.options.cwd === cwd)!;
 
-  const denied = { autoMemoryEnabled: false, deniedMcpServers: [{ serverName: "chrome-devtools" }] };
+  const denied = { autoMemoryEnabled: false, cleanupPeriodDays: 3650, deniedMcpServers: [{ serverName: "chrome-devtools" }] };
   expect([botAfter === botBefore, agentAfter === agentBefore]).toEqual([false, false]);
   expect([botAfter.received.length, botAfter.received[0], agentAfter.received.length, agentAfter.received[0]]).toEqual([
     1,
@@ -996,7 +996,7 @@ test("turning a connector off answers with the new list, toggles the live query,
     1,
     expect.stringContaining("And the docs."),
   ]);
-  expect([botBefore.options.settings, agentBefore.options.settings]).toEqual([{ autoMemoryEnabled: false }, { autoMemoryEnabled: false }]);
+  expect([botBefore.options.settings, agentBefore.options.settings]).toEqual([{ autoMemoryEnabled: false, cleanupPeriodDays: 3650 }, { autoMemoryEnabled: false, cleanupPeriodDays: 3650 }]);
   expect([botAfter.options.settings, agentAfter.options.settings]).toEqual([denied, denied]);
 });
 
@@ -1093,4 +1093,62 @@ test("a tool call between turns sets no activity line, and deleting a working bo
   expect(h.signals.at(-1)?.text).toBe("Finding files");
   await h.hub.handle({ type: "delete_bot", botId: b.id });
   expect(h.signals.at(-1)).toMatchObject({ botId: b.id, agentId: null, text: null });
+});
+
+test("a rename from the phone rewrites the bot's CLAUDE.md heading and reaches its resumed session once, as a standing brief", async () => {
+  const world = emptyWorld();
+  const b = bot("New Bot", { session: emptySession("s_1") });
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# New Bot\n\n## Job\n\nNot decided yet.\n\n## Notes\n");
+  h.hub.boot(false);
+  const turn = async (text: string) => {
+    await h.hub.handle({ type: "send", botId: b.id, text, uploads: [] });
+    await flush();
+    h.q().emit(result());
+    await flush();
+  };
+  await turn("hi");
+  expect(await h.hub.handle({ type: "update_bot", botId: b.id, patch: { name: "  Juno " } })).toEqual([]);
+  await turn("again");
+  await turn("and again");
+  const claudeMd = readFileSync(join(h.homes.homeOf(b.id), "CLAUDE.md"), "utf8");
+  const [first, second, third] = h.q().received;
+
+  expect([b.name, claudeMd]).toEqual(["Juno", "# Juno\n\n## Job\n\nNot decided yet.\n\n## Notes\n"]);
+  expect(first).toStartWith("[Standing brief: this replaces what you were told before where they differ.]\nYou are New Bot, a Bot in ClaudioBot. You work for Alex");
+  expect(first).toContain("\nYour job: Not decided yet.\n\n");
+  expect(first).toEndWith("[Alex]\nhi");
+  expect(second).toStartWith("[Standing brief: this replaces what you were told before where they differ.]\nYou are Juno, a Bot in ClaudioBot.");
+  expect(third).toBe("[Alex]\nand again");
+});
+
+test("update_self with a name rewrites the bot's CLAUDE.md heading", async () => {
+  const world = emptyWorld();
+  const b = bot("New Bot");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# New Bot\n\n## Job\n\nHelp.\n");
+  h.hub.boot(false);
+  await h.hub.handle({ type: "send", botId: b.id, text: "hi", uploads: [] });
+  await flush();
+  await callTool(h.q(), "update_self", { name: "Juno" });
+  expect([b.name, readFileSync(join(h.homes.homeOf(b.id), "CLAUDE.md"), "utf8")]).toEqual(["Juno", "# Juno\n\n## Job\n\nHelp.\n"]);
+});
+
+test.each([
+  ["blank", "   "],
+  ["too long", "a".repeat(41)],
+  ["with a hidden character", "Ju‮no"],
+  ["with a line break", "Ju\nno"],
+])("a phone rename %s is refused and changes nothing", async (_, name) => {
+  const world = emptyWorld();
+  const b = bot("Eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# Eng\n");
+  expect(await h.hub.handle({ type: "update_bot", botId: b.id, patch: { name, muted: true } })).toEqual([
+    { type: "error", message: "A bot name is 1 to 40 characters, with no control or invisible characters." },
+  ]);
+  expect([b.name, b.muted, readFileSync(join(h.homes.homeOf(b.id), "CLAUDE.md"), "utf8")]).toEqual(["Eng", false, "# Eng\n"]);
 });

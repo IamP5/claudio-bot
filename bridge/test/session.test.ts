@@ -1,15 +1,22 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Options, query, SDKMessage, SDKResultMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Headroom, Ledger } from "../src/ledger";
 import type { AgentId, BotId, RoutineId, RunId } from "../src/protocol";
 import {
   BREAKER_NOTE,
   CAP_NOTE,
+  HEADROOM_RETRY_MS,
   RESTARTED_ERROR,
+  START_RETRY_MS,
   STOP_DEADLINE_MS,
   USAGE_PARK_FALLBACK_MS,
+  USAGE_PARK_MAX_MS,
   USAGE_PARK_SLACK_MS,
   classify,
+  claudeExecutable,
   createSession,
   freshMemo,
   noSignals,
@@ -20,7 +27,19 @@ import {
   type Outcome,
   type TurnEnd,
 } from "../src/session";
-import { emptySession, type AccountState, type ActiveTurn, type EnvelopeId, type Initiator, type Lifecycle, type Pending, type SessionState } from "../src/world";
+import type { SessionInput } from "../src/prompts";
+import {
+  attended,
+  emptySession,
+  type AccountState,
+  type ActiveTurn,
+  type EnvelopeId,
+  type Initiator,
+  type Lifecycle,
+  type Pending,
+  type RunRef,
+  type SessionState,
+} from "../src/world";
 
 const NOW = new Date("2026-10-17T12:00:00.000Z");
 const later = (ms: number) => new Date(NOW.getTime() + ms).toISOString();
@@ -28,9 +47,9 @@ const later = (ms: number) => new Date(NOW.getTime() + ms).toISOString();
 const user: Initiator = { kind: "user" };
 const routine: Initiator = { kind: "routine", run: { routineId: "r_1" as RoutineId, runId: "run_1" as RunId }, manual: false };
 const manualRun: Initiator = { kind: "routine", run: { routineId: "r_1" as RoutineId, runId: "run_2" as RunId }, manual: true };
-const botMail: Initiator = { kind: "bot", botId: "b_2" as BotId, hops: 1 };
-const agentMail: Initiator = { kind: "agent", agentId: "a_1" as AgentId };
-const attendedNow = (i: Initiator) => i.kind === "user" || (i.kind === "routine" && i.manual);
+const botMail: Initiator = { kind: "bot", botId: "b_2" as BotId, hops: 1, origin: { kind: "user" } };
+const agentMail: Initiator = { kind: "agent", agentId: "a_1" as AgentId, hops: 0, origin: { kind: "user" } };
+const attendedNow = attended;
 
 const roomy = (): Headroom => ({ ok: true, capReached: false });
 
@@ -41,6 +60,7 @@ const env = (id: string, initiator: Initiator = user, attempts = 0): Pending => 
   at: NOW.toISOString(),
   text: `[${id}]`,
   initiator,
+  settles: null,
   attempts,
 });
 const turn = (id: string, over: Partial<ActiveTurn> = {}): ActiveTurn => ({ pending: id as EnvelopeId, startedAt: NOW.toISOString(), output: false, denials: 0, ...over });
@@ -113,7 +133,7 @@ describe("step", () => {
 
   test("a usage limit with no output parks the account and the session, keeps the envelope and gives its attempt back", () => {
     const until = later(3_600_000);
-    const t = run(core({ kind: "working", turn: turn("a") }, [env("a", routine, 1)]), { kind: "end", outcome: { kind: "usage_limit", error: "limit", until } });
+    const t = run(core({ kind: "working", turn: turn("a") }, [env("a", routine, 1)]), { kind: "end", outcome: { kind: "usage_limit", error: "limit", until, scope: "account" } });
     expect(t.core.parkedUntil).toBe(until);
     expect(t.core.session.lifecycle).toEqual({ kind: "parked", reason: "usage_limit", until });
     expect(t.core.session.pending).toEqual([env("a", routine, 0)]);
@@ -122,7 +142,7 @@ describe("step", () => {
 
   test("a usage limit after output fails the turn but still parks the account for what is queued", () => {
     const until = later(3_600_000);
-    const t = run(core({ kind: "working", turn: turn("a", { output: true }) }, [env("a", user, 1), env("b")]), { kind: "end", outcome: { kind: "usage_limit", error: "limit", until } });
+    const t = run(core({ kind: "working", turn: turn("a", { output: true }) }, [env("a", user, 1), env("b")]), { kind: "end", outcome: { kind: "usage_limit", error: "limit", until, scope: "account" } });
     expect(endsOf(t.effects)).toEqual([
       ["a", "failed"],
       ["b", "deferred"],
@@ -130,10 +150,44 @@ describe("step", () => {
     expect(t.core.session.lifecycle).toEqual({ kind: "parked", reason: "usage_limit", until });
   });
 
-  test.each([ok(), { kind: "transient", error: "x" }, { kind: "terminal", error: "x" }] as Outcome[])("any end while stopping is stopped, never retried (%#)", (outcome) => {
+  test("a usage limit on one model parks only this session: the account stays open and the envelope keeps its attempt", () => {
+    const until = later(3_600_000);
+    const t = run(core({ kind: "working", turn: turn("a") }, [env("a", routine, 1), env("b")]), { kind: "end", outcome: { kind: "usage_limit", error: "limit", until, scope: "session" } });
+    expect(t.core.parkedUntil).toBeNull();
+    expect(t.core.session.lifecycle).toEqual({ kind: "parked", reason: "usage_limit", until });
+    expect(t.core.session.pending).toEqual([env("a", routine, 0), env("b")]);
+    expect(endsOf(t.effects)).toEqual([["a", "deferred"]]);
+    const after = run(t.core, { kind: "tick" }, roomy, new Date(until));
+    expect(after.core.session.lifecycle).toEqual({ kind: "working", turn: turn("a", { startedAt: until }) });
+  });
+
+  test("a usage limit on one model after output fails the turn and still parks this session for what is queued", () => {
+    const until = later(3_600_000);
+    const t = run(core({ kind: "working", turn: turn("a", { output: true }) }, [env("a", user, 1), env("b")]), { kind: "end", outcome: { kind: "usage_limit", error: "limit", until, scope: "session" } });
+    expect(endsOf(t.effects)).toEqual([
+      ["a", "failed"],
+      ["b", "deferred"],
+    ]);
+    expect([t.core.parkedUntil, t.core.session.lifecycle]).toEqual([null, { kind: "parked", reason: "usage_limit", until }]);
+  });
+
+  const interrupted: Outcome = { kind: "result", result: { type: "result", subtype: "error_during_execution", is_error: true, errors: [] } as unknown as SDKResultMessage };
+  test.each([
+    ["the interrupt's error_during_execution", interrupted],
+    ["a transient error", { kind: "transient", error: "x" }],
+    ["a terminal error", { kind: "terminal", error: "x" }],
+  ] as [string, Outcome][])("%s while stopping ends the turn as stopped, never retried", (_, outcome) => {
     const stopping: Lifecycle = { kind: "stopping", turn: turn("a"), deadline: later(STOP_DEADLINE_MS) };
     const t = run(core(stopping, [env("a", user, 1)]), { kind: "end", outcome });
     expect(t.effects).toEqual([{ kind: "end", pending: env("a", user, 1), end: { kind: "stopped", by: "user" } }]);
+    expect(t.core.session).toMatchObject({ pending: [], lifecycle: { kind: "idle" } });
+  });
+
+  test("a real success that lands while stopping is done, so the turn's final report is kept", () => {
+    const outcome = ok();
+    const stopping: Lifecycle = { kind: "stopping", turn: turn("a", { denials: 3 }), deadline: later(STOP_DEADLINE_MS) };
+    const t = run(core(stopping, [env("a", user, 1)]), { kind: "end", outcome });
+    expect(endsOf(t.effects)).toEqual([["a", "done"]]);
     expect(t.core.session).toMatchObject({ pending: [], lifecycle: { kind: "idle" } });
   });
 
@@ -148,11 +202,16 @@ describe("step", () => {
       ["b", "dropped"],
       ["g", "dropped"],
     ]);
-    expect(t.core.session.notices.map((n) => n.text)).toEqual([
-      "[Alex pressed Stop, so this never ran: [r]]",
-      "[Alex pressed Stop, so this never ran: [b]]",
-      "[Alex pressed Stop, so this never ran: [g]]",
-    ]);
+    expect(t.core.session.notices.map((n) => n.text)).toEqual(["[Alex pressed Stop, so 3 queued messages never ran: [r]; [b]; [g]]"]);
+  });
+
+  test.each([
+    [1, ["[Alex pressed Stop, so this never ran: [r1]]"]],
+    [5, ["[Alex pressed Stop, so 5 queued messages never ran: [r1]; [r2]; [r3]; and 2 more]"]],
+  ] as const)("Stop dropping %i envelopes leaves one notice", (n, notices) => {
+    const queued = Array.from({ length: n }, (_, i) => env(`r${i + 1}`, routine));
+    const t = run(core({ kind: "working", turn: turn("a") }, [env("a", user, 1), ...queued]), { kind: "stop" });
+    expect(t.core.session.notices.map((x) => x.text)).toEqual([...notices]);
   });
 
   test("Stop on a head waiting in backoff ends it as stopped and runs the user's queued message", () => {
@@ -162,14 +221,40 @@ describe("step", () => {
   });
 
   test.each([
-    { kind: "idle" },
-    { kind: "parked", reason: "daily_cap", until: later(60_000) },
-    { kind: "stopping", turn: turn("a"), deadline: later(STOP_DEADLINE_MS) },
-  ] as Lifecycle[])("Stop changes nothing in $kind", (lifecycle) => {
-    const c = core(lifecycle, lifecycle.kind === "idle" ? [] : [env("a", routine, 1), env("r", routine)]);
+    ["an idle session with nothing queued", core({ kind: "idle" }, [])],
+    ["a turn already stopping", core({ kind: "stopping", turn: turn("a"), deadline: later(STOP_DEADLINE_MS) }, [env("a", routine, 1), env("u")])],
+  ] as const)("Stop changes nothing for %s", (_, c) => {
     const t = run(c, { kind: "stop" });
     expect(t.core).toEqual(c);
     expect(t.effects).toEqual([]);
+  });
+
+  test("Stop while parked for the usage limit drops queued unattended work and keeps the user's message parked", () => {
+    const until = later(60_000);
+    const parked: Lifecycle = { kind: "parked", reason: "usage_limit", until };
+    const t = run(core(parked, [env("u"), env("r", routine), env("b", botMail)], { parkedUntil: until }), { kind: "stop" });
+    expect(t.core.session.pending.map((p) => p.id as string)).toEqual(["u"]);
+    expect(t.core.session.lifecycle).toEqual(parked);
+    expect(endsOf(t.effects)).toEqual([
+      ["r", "dropped"],
+      ["b", "dropped"],
+    ]);
+    expect(t.core.session.notices.map((n) => n.text)).toEqual(["[Alex pressed Stop, so 2 queued messages never ran: [r]; [b]]"]);
+  });
+
+  test("Stop while parked at the daily cap with only unattended work empties the queue", () => {
+    const t = run(core({ kind: "parked", reason: "daily_cap", until: later(60_000) }, [env("r1", routine), env("r2", routine)]), { kind: "stop" });
+    expect(t.core.session).toMatchObject({ pending: [], lifecycle: { kind: "idle" } });
+    expect(endsOf(t.effects)).toEqual([
+      ["r1", "dropped"],
+      ["r2", "dropped"],
+    ]);
+  });
+
+  test("Stop on an idle session with a queue drops unattended mail and starts the user's message", () => {
+    const t = run(core({ kind: "idle" }, [env("b", botMail), env("u")]), { kind: "stop" });
+    expect(endsOf(t.effects)).toEqual([["b", "dropped"]]);
+    expect(t.core.session.lifecycle).toEqual({ kind: "working", turn: turn("u") });
   });
 
   test("the stop deadline kills the query and ends the turn as stopped", () => {
@@ -184,13 +269,85 @@ describe("step", () => {
   test.each([
     { kind: "backoff", until: later(1_000), attempt: 1 },
     { kind: "parked", reason: "usage_limit", until: later(1_000) },
-    { kind: "parked", reason: "daily_cap", until: later(1_000) },
   ] as Lifecycle[])("$kind holds the head until its deadline, then starts it", (lifecycle) => {
     const c = core(lifecycle, [env("a", routine, 1)]);
     expect(run(c, { kind: "tick" }, roomy, new Date(later(999))).core.session.lifecycle).toEqual(lifecycle);
     const t = run(c, { kind: "tick" }, roomy, new Date(later(1_000)));
     expect(t.core.session.lifecycle).toEqual({ kind: "working", turn: turn("a", { startedAt: later(1_000) }) });
     expect(t.core.session.pending[0]!.attempts).toBe(2);
+  });
+
+  test("a daily-cap park re-checks headroom on every tick, tells the park once, and starts the head once it may run", () => {
+    const until = later(12 * 3_600_000);
+    let capped = true;
+    const headroom = (i: Initiator): Headroom => (!capped || attendedNow(i) ? roomy() : { ok: false, reason: "daily_cap", until });
+    const parked = run(core({ kind: "idle" }, []), { kind: "push", pending: env("r", routine), ahead: false }, headroom);
+    expect(endsOf(parked.effects)).toEqual([["r", "deferred"]]);
+    const still = run(parked.core, { kind: "tick" }, headroom, new Date(later(60_000)));
+    expect([still.core.session, still.effects]).toEqual([parked.core.session, []]);
+    capped = false;
+    const t = run(still.core, { kind: "tick" }, headroom, new Date(later(120_000)));
+    expect(t.core.session.lifecycle).toEqual({ kind: "working", turn: turn("r", { startedAt: later(120_000) }) });
+  });
+
+  test("a park whose deadline keeps moving is told once", () => {
+    let at = NOW.getTime();
+    const headroom = (): Headroom => ({ ok: false, reason: "daily_cap", until: new Date(at + 60_000).toISOString() });
+    let c = run(core({ kind: "idle" }, []), { kind: "push", pending: env("r", routine), ahead: false }, headroom).core;
+    const told: string[][] = [];
+    for (let i = 0; i < 3; i++) {
+      at += 60_000;
+      const t = run(c, { kind: "tick" }, headroom, new Date(at));
+      told.push(...endsOf(t.effects));
+      c = t.core;
+    }
+    expect(told).toEqual([]);
+    expect(c.session.lifecycle).toMatchObject({ kind: "parked", reason: "daily_cap" });
+  });
+
+  test("a query that could not open gives the attempt back, waits 30 s, and touches nothing else queued", () => {
+    const t = run(core({ kind: "working", turn: turn("a") }, [env("a", user, 1), env("b", routine)]), { kind: "unstarted", error: "claude was not found" });
+    const until = later(START_RETRY_MS[0]);
+    expect(t.core.session.pending).toEqual([env("a", user, 0), env("b", routine)]);
+    expect(t.core.session.lifecycle).toEqual({ kind: "backoff", until, attempt: 0 });
+    expect(t.effects).toEqual([{ kind: "end", pending: env("a", user, 0), end: { kind: "deferred", until, why: "retry" } }]);
+  });
+
+  test("repeated start failures wait longer each time up to a cap, never use up the envelope, and leave one note", () => {
+    let at = NOW.getTime();
+    let c = run(core({ kind: "idle" }, []), { kind: "push", pending: env("a"), ahead: false }).core;
+    const waits: number[] = [];
+    const notes: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const t = run(c, { kind: "unstarted", error: "gate not ready" }, roomy, new Date(at));
+      const life = t.core.session.lifecycle;
+      if (life.kind !== "backoff") throw new Error(`expected backoff, got ${life.kind}`);
+      waits.push(Date.parse(life.until) - at);
+      notes.push(...t.effects.flatMap((e) => (e.kind === "note" ? [e.text] : [])));
+      at = Date.parse(life.until);
+      c = run(t.core, { kind: "tick" }, roomy, new Date(at)).core;
+      expect(c.session.pending).toEqual([{ ...env("a", user, 1) }]);
+    }
+    expect(waits).toEqual([30_000, 60_000, 120_000, 300_000, 300_000, 300_000]);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain("gate not ready");
+    const opened = run(c, { kind: "end", outcome: ok() }, roomy, new Date(at)).core;
+    const again = run(run(opened, { kind: "push", pending: env("b"), ahead: false }, roomy, new Date(at)).core, { kind: "unstarted", error: "x" }, roomy, new Date(at));
+    expect(again.core.session.lifecycle).toMatchObject({ until: new Date(at + START_RETRY_MS[0]).toISOString() });
+  });
+
+  test.each([
+    ["a terminal error before output", { kind: "working", turn: turn("a") }, { kind: "terminal", error: "x" }, 1, ["[n]"]],
+    ["the last transient retry before output", { kind: "working", turn: turn("a") }, { kind: "transient", error: "x" }, 4, ["[n]"]],
+    ["Stop's interrupt before output", { kind: "stopping", turn: turn("a"), deadline: later(STOP_DEADLINE_MS) }, interrupted, 1, ["[n]"]],
+    ["a result", { kind: "working", turn: turn("a") }, ok(), 1, []],
+  ] as [string, Lifecycle, Outcome, number, string[]][])("the notices a turn carried are kept after %s only if the model never saw them", (_, lifecycle, outcome, attempts, left) => {
+    const c = core(lifecycle, [env("a", user, attempts)]);
+    c.session.notices = [{ at: NOW.toISOString(), text: "[n]" }];
+    c.memo.carried = 1;
+    const t = run(c, { kind: "end", outcome });
+    expect(t.core.session.pending).toEqual([]);
+    expect(t.core.session.notices.map((n) => n.text)).toEqual(left);
   });
 
   test("a tick at the same moment twice changes nothing the second time", () => {
@@ -282,15 +439,49 @@ describe("classify", () => {
     ["a 5xx status", apiFailure({ api_error_status: 529 }), signals(), "transient"],
     ["authentication_failed", apiFailure(), signals({ apiError: "authentication_failed" }), "terminal"],
     ["a rejected rate limit", apiFailure(), signals({ rejected: true, resetsAt }), "usage_limit"],
-    ["a rate_limit error", apiFailure(), signals({ apiError: "rate_limit" }), "usage_limit"],
     ["an error subtype after a rejected rate limit", interruptResult, signals({ rejected: true, resetsAt }), "usage_limit"],
+    ["a 429 after a rejected rate limit", apiFailure({ api_error_status: 429 }), signals({ apiError: "rate_limit", rejected: true, resetsAt }), "usage_limit"],
+    ["a 429 with no reset info", apiFailure({ api_error_status: 429 }), signals(), "transient"],
+    ["a rate_limit error with no reset info", apiFailure(), signals({ apiError: "rate_limit" }), "transient"],
   ] as const)("%s → %s", (_, result, s, kind) => {
     expect(classify(result, s, NOW).kind).toBe(kind);
   });
 
-  test("the usage park ends 30 s after resetsAt (epoch seconds), or after the fallback when no reset is known", () => {
-    expect(classify(apiFailure(), signals({ rejected: true, resetsAt }), NOW)).toMatchObject({ until: new Date(resetsAt * 1000 + USAGE_PARK_SLACK_MS).toISOString() });
-    expect(classify(apiFailure(), signals({ apiError: "rate_limit" }), NOW)).toMatchObject({ until: later(USAGE_PARK_FALLBACK_MS + USAGE_PARK_SLACK_MS) });
+  const untilOf = (s: object) => {
+    const o = classify(apiFailure(), signals({ rejected: true, ...s }), NOW);
+    if (o.kind !== "usage_limit") throw new Error(`expected usage_limit, got ${o.kind}`);
+    return o.until;
+  };
+
+  test("the usage park ends 30 s after resetsAt, read as epoch seconds or, above 1e12, as milliseconds", () => {
+    const expected = new Date(resetsAt * 1000 + USAGE_PARK_SLACK_MS).toISOString();
+    expect(untilOf({ resetsAt })).toBe(expected);
+    expect(untilOf({ resetsAt: resetsAt * 1000 })).toBe(expected);
+  });
+
+  test.each([null, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])("a rejection whose resetsAt is %p parks for the fallback", (value) => {
+    expect(untilOf({ resetsAt: value })).toBe(later(USAGE_PARK_FALLBACK_MS + USAGE_PARK_SLACK_MS));
+  });
+
+  test.each([resetsAt + 30 * 86_400, 1e15, 1e300])("a reset as far off as %p parks at most 8 days", (value) => {
+    expect(USAGE_PARK_MAX_MS).toBe(8 * 86_400_000);
+    expect(untilOf({ resetsAt: value })).toBe(later(USAGE_PARK_MAX_MS));
+  });
+
+  test("a reset already past parks for the slack only", () => {
+    expect(untilOf({ resetsAt: resetsAt - 7_200 })).toBe(later(USAGE_PARK_SLACK_MS));
+  });
+
+  test.each([
+    [null, "account"],
+    ["five_hour", "account"],
+    ["seven_day", "account"],
+    ["overage", "account"],
+    ["seven_day_opus", "session"],
+    ["seven_day_sonnet", "session"],
+    ["seven_day_overage_included", "session"],
+  ] as const)("a rejection of limit type %p parks the %s", (limitType, scope) => {
+    expect(classify(apiFailure(), signals({ rejected: true, resetsAt, limitType }), NOW)).toMatchObject({ kind: "usage_limit", scope });
   });
 });
 
@@ -351,6 +542,12 @@ class FakeQuery {
   }
 }
 
+const configuredClaude = process.env.CLAUDIOBOT_CLAUDE;
+afterEach(() => {
+  if (configuredClaude === undefined) delete process.env.CLAUDIOBOT_CLAUDE;
+  else process.env.CLAUDIOBOT_CLAUDE = configuredClaude;
+});
+
 let uuid = 0;
 const said = (t: string) =>
   ({ type: "assistant", uuid: `u${++uuid}`, session_id: "s_1", parent_tool_use_id: null, message: { content: [{ type: "text", text: t }] } }) as unknown as SDKMessage;
@@ -361,7 +558,8 @@ const resultMsg = (cost: number, over: object = {}) =>
 const apiErrorResult = (cost: number) => resultMsg(cost, { is_error: true, result: "API Error: overloaded" });
 const interruptedResult = (cost: number) =>
   resultMsg(cost, { subtype: "error_during_execution", is_error: true, errors: ["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use"] });
-const rejected = (resetsAt: number) => ({ type: "rate_limit_event", uuid: "rl", session_id: "s_1", rate_limit_info: { status: "rejected", resetsAt } }) as unknown as SDKMessage;
+const rejected = (resetsAt: unknown, info: object = {}) =>
+  ({ type: "rate_limit_event", uuid: "rl", session_id: "s_1", rate_limit_info: { status: "rejected", resetsAt, ...info } }) as unknown as SDKMessage;
 
 type Harness = ReturnType<typeof harness>;
 
@@ -374,6 +572,7 @@ function harness(
     add?: Ledger["add"];
     persist?: (urgency?: "now") => void;
     executable?: string | null;
+    defaultExecutable?: boolean;
     clock?: { t: number };
   } = {},
 ) {
@@ -392,11 +591,12 @@ function harness(
     actor: { kind: "bot", botId: "b_1" as BotId },
     state,
     account,
-    options: opts.options ?? (() => ({ cwd: "/bots/b_1" })),
+    options: opts.options ?? (() => ({ cwd: "/bots/b_1", resume: state.id ?? undefined })),
     ledger: {
       add: opts.add ?? ((row) => void usage.push(row as Record<string, unknown>)),
       headroom: (_, i) => (opts.headroom ?? roomy)(i),
-      budgetLeft: () => null,
+      budgetLeft: () => 5,
+      dailyLeft: () => 10,
     },
     onMessage: (m, t) => messages.push({ m, turn: t }),
     onTurnEnd: (p, end) => ends.push({ id: p.id, text: p.text, pending: p, end }),
@@ -414,7 +614,7 @@ function harness(
       queries.push(q);
       return q;
     }) as unknown as typeof query,
-    executable: () => (opts.executable === undefined ? "/fake/claude" : opts.executable),
+    ...(!opts.defaultExecutable && { executable: () => (opts.executable === undefined ? "/fake/claude" : opts.executable) }),
     now: () => new Date(clock.t),
   });
   return {
@@ -437,8 +637,9 @@ function harness(
     q: () => queries.at(-1)!,
     sent: () => queries.flatMap((q) => q.received.map((r) => r.text)),
     finals: (id: string) => ends.filter((e) => e.id === id && e.end.kind !== "deferred"),
-    push(text: string, initiator: Initiator = user, ahead = false) {
-      session.push({ text, initiator, ahead });
+    push(text: string, initiator: Initiator = user, ahead = false, settles: RunRef | null = null) {
+      const input: SessionInput = { text, initiator, settles, ahead };
+      session.push(input);
       return state.pending.find((p) => p.text === text)?.id ?? ends.findLast((e) => e.text === text)!.id;
     },
     async advance(ms: number) {
@@ -461,7 +662,7 @@ describe("session", () => {
     const { h, id } = await started("[Alex]\nhello");
     expect(h.q().received).toHaveLength(1);
     const { disk } = h.q().received[0]!;
-    expect(disk.pending).toMatchObject([{ id, text: "[Alex]\nhello", attempts: 1 }]);
+    expect(disk.pending).toMatchObject([{ id, text: "[Alex]\nhello", settles: null, attempts: 1 }]);
     expect(disk.lifecycle).toMatchObject({ kind: "working", turn: { pending: id, output: false } });
   });
 
@@ -496,6 +697,15 @@ describe("session", () => {
       { actor: { kind: "bot", botId: "b_1" }, sessionId: "s_1", initiator: user, cumulativeUsd: 0.5, fresh: true },
       { actor: { kind: "bot", botId: "b_1" }, sessionId: "s_1", initiator: routine, cumulativeUsd: 1.25, fresh: false },
     ]);
+  });
+
+  test("a query started with a resume id is not fresh, whatever the saved id says", async () => {
+    const h = harness({ options: () => ({ cwd: "/bots/b_1", resume: "s_0" }) });
+    h.push("[a]");
+    await flush();
+    h.q().emit(resultMsg(9));
+    await flush();
+    expect(h.usage[0]).toMatchObject({ cumulativeUsd: 9, fresh: false });
   });
 
   test("a query that resumes a saved session id is not fresh", async () => {
@@ -680,7 +890,7 @@ describe("session", () => {
     expect(h.finals(u)).toEqual([]);
     expect(h.sent()).toEqual([
       "[a]",
-      "[Alex pressed Stop, so this never ran: [Routine Digest fired]]\n[Alex pressed Stop, so this never ran: [Message from bot Scout]]\n[Alex]\nactually, wait",
+      "[Alex pressed Stop, so 2 queued messages never ran: [Routine Digest fired]; [Message from bot Scout]]\n[Alex]\nactually, wait",
     ]);
     expect(h.queries).toHaveLength(1);
   });
@@ -767,24 +977,182 @@ describe("session", () => {
     expect(h.sent()).toEqual(["[Your request to run Bash `rm -rf build` expired unanswered.]\n[Alex]\nhi"]);
   });
 
-  test("options() throwing fails the envelope cleanly instead of throwing out of push", async () => {
+  test("options() throwing holds the queue for a retry without failing or using up anything queued", async () => {
+    let broken = true;
     const h = harness({
       options: () => {
-        throw new Error("gate not ready");
+        if (broken) throw new Error("gate not ready");
+        return { cwd: "/bots/b_1" };
       },
     });
     const a = h.push("[a]");
-    const b = h.push("[b]");
+    const b = h.push("[b]", routine);
     await flush();
-    expect([h.finals(a), h.finals(b)]).toMatchObject([[{ end: { kind: "failed", error: "gate not ready" } }], [{ end: { kind: "failed" } }]]);
-    expect(h.queries).toHaveLength(0);
-    expect(h.state).toMatchObject({ pending: [], lifecycle: { kind: "idle" } });
+    expect([h.finals(a), h.finals(b), h.queries.length]).toEqual([[], [], 0]);
+    expect(h.state.pending).toMatchObject([{ id: a, attempts: 0 }, { id: b, attempts: 0 }]);
+    expect(h.disk.pending).toMatchObject([{ id: a, attempts: 0 }, { id: b, attempts: 0 }]);
+    expect(h.session.nextDeadline()).toBe(later(30_000));
+    await h.advance(30_000);
+    await h.advance(60_000);
+    expect(h.notes).toHaveLength(1);
+    expect(h.notes[0]).toContain("gate not ready");
+    await h.advance(120_000);
+    await h.advance(300_000);
+    expect(h.notes).toHaveLength(1);
+    broken = false;
+    await h.advance(300_000);
+    expect(h.sent()).toEqual(["[a]"]);
+    h.q().emit(resultMsg(1));
+    await flush();
+    h.q().emit(resultMsg(2));
+    await flush();
+    expect([h.finals(a), h.finals(b)]).toMatchObject([[{ end: { kind: "done" }, pending: { attempts: 1 } }], [{ end: { kind: "done" }, pending: { attempts: 1 } }]]);
   });
 
-  test("a missing claude executable fails the envelope", async () => {
+  test("a missing claude executable is a start failure, not a failed turn", async () => {
     const h = harness({ executable: null });
     const a = h.push("[a]");
-    expect(h.finals(a)).toMatchObject([{ end: { kind: "failed", error: "claude was not found on PATH. Set CLAUDIOBOT_CLAUDE." } }]);
+    await flush();
+    expect(h.finals(a)).toEqual([]);
+    expect(h.state.pending).toMatchObject([{ id: a, attempts: 0 }]);
+    expect(h.state.lifecycle).toEqual({ kind: "backoff", until: later(30_000), attempt: 0 });
+  });
+
+  test("a CLAUDIOBOT_CLAUDE that names no executable is a start failure before any query is made", async () => {
+    process.env.CLAUDIOBOT_CLAUDE = "/nonexistent/claude";
+    const h = harness({ defaultExecutable: true });
+    const a = h.push("[a]");
+    await flush();
+    expect([h.queries.length, h.finals(a)]).toEqual([0, []]);
+    expect(h.state.lifecycle).toMatchObject({ kind: "backoff" });
+  });
+
+  test("Stop while the queue waits for the usage limit drops unattended work and resolves true", async () => {
+    const until = later(60_000);
+    const h = harness({ account: { parkedUntil: until } });
+    const u = h.push("[u]");
+    const r = h.push("[r]", routine);
+    await flush();
+    expect(h.session.parkedFor).toBe("usage_limit");
+    expect(await h.session.interrupt()).toBe(true);
+    expect([h.finals(u), h.finals(r)]).toMatchObject([[], [{ end: { kind: "dropped" } }]]);
+    expect(h.state.pending.map((p) => p.id as string)).toEqual([u]);
+  });
+
+  test("headroom that throws lets the user's turns run and holds unattended ones briefly, telling the hold once", async () => {
+    let broken = true;
+    const h = harness({
+      headroom: () => {
+        if (broken) throw new Error("index corrupt");
+        return roomy();
+      },
+    });
+    const r = h.push("[r]", routine);
+    await flush();
+    expect([h.sent(), h.session.parkedFor, h.session.nextDeadline()]).toEqual([[], "daily_cap", later(HEADROOM_RETRY_MS)]);
+    h.push("[u]");
+    await flush();
+    expect(h.sent()).toEqual(["[u]"]);
+    h.q().emit(resultMsg(1));
+    await flush();
+    await h.advance(HEADROOM_RETRY_MS);
+    expect(h.sent()).toEqual(["[u]"]);
+    expect(h.ends.filter((e) => e.id === r)).toHaveLength(1);
+    expect(h.logs.some((l) => l.includes("index corrupt"))).toBe(true);
+    broken = false;
+    await h.advance(1_000);
+    expect(h.sent()).toEqual(["[u]", "[r]"]);
+  });
+
+  test("recheck() starts work the daily cap held as soon as the cap is raised", async () => {
+    let cap = 1;
+    const until = later(12 * 3_600_000);
+    const h = harness({ headroom: (i) => (attendedNow(i) || cap > 1 ? roomy() : { ok: false, reason: "daily_cap", until }) });
+    h.push("[r]", routine);
+    await flush();
+    expect(h.session.parkedFor).toBe("daily_cap");
+    const changes = h.changes;
+    cap = 5;
+    h.session.recheck();
+    await flush();
+    expect(h.sent()).toEqual(["[r]"]);
+    expect([h.session.parkedFor, h.session.working]).toEqual([null, true]);
+    expect(h.changes).toBeGreaterThan(changes);
+  });
+
+  test("a usage limit on one model parks only that session; the account and other sessions keep running", async () => {
+    const clock = { t: NOW.getTime() };
+    const account: AccountState = { parkedUntil: null };
+    const one = harness({ clock, account });
+    const two = harness({ clock, account });
+    const a = one.push("[a]", routine);
+    await flush();
+    const resetsAt = Math.floor(NOW.getTime() / 1000) + 3_600;
+    one.q().emit(rejected(resetsAt, { rateLimitType: "seven_day_opus" }), apiErrorMessage("rate_limit"), apiErrorResult(0.1));
+    await flush();
+    expect(account.parkedUntil).toBeNull();
+    expect(one.session.parkedFor).toBe("usage_limit");
+    expect(one.state.pending).toMatchObject([{ id: a, attempts: 0 }]);
+    two.push("[b]");
+    await flush();
+    expect(two.sent()).toEqual(["[b]"]);
+  });
+
+  test("a rejection while extra usage covers the turn is not a usage limit", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(rejected(Math.floor(NOW.getTime() / 1000) + 3_600, { isUsingOverage: true }), apiErrorMessage("overloaded"), apiErrorResult(0));
+    await flush();
+    expect(h.account.parkedUntil).toBeNull();
+    expect(h.state.lifecycle).toMatchObject({ kind: "backoff" });
+  });
+
+  test("a rejection whose resetsAt is not a number still parks for the fallback, and the turn still ends", async () => {
+    const { h, id } = await started("[a]");
+    h.q().emit(rejected("soon"), apiErrorMessage("rate_limit"), apiErrorResult(0));
+    await flush();
+    const until = later(USAGE_PARK_FALLBACK_MS + USAGE_PARK_SLACK_MS);
+    expect(h.account.parkedUntil).toBe(until);
+    expect(h.ends).toMatchObject([{ id, end: { kind: "deferred", why: "usage_limit", until } }]);
+  });
+
+  test("a secret in Claude Code's stderr is redacted before the error reaches the chat", async () => {
+    const { h, id } = await started("[a]");
+    const secret = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+    h.q().options.stderr?.(`auth failed for key ${secret}\nAuthorization: Bearer abcdefghijklmnop1234\n`);
+    h.q().emit(said("Working."));
+    await flush();
+    h.q().exit();
+    await flush();
+    const [end] = h.finals(id);
+    const error = end?.end.kind === "failed" ? end.end.error : "";
+    expect(error).toContain("auth failed for key");
+    expect(error).not.toContain(secret);
+    expect(error).not.toContain("abcdefghijklmnop1234");
+  });
+
+  test("a session closed before its recovery runs still delivers the recovered turn ends", async () => {
+    const before = harness();
+    const a = before.push("[Routine Digest fired]", routine);
+    await flush();
+    before.q().emit(said("Working on it."));
+    await flush();
+    before.session.close();
+    const h = harness({ state: structuredClone(before.disk) });
+    h.session.close();
+    expect(h.finals(a)).toMatchObject([{ end: { kind: "failed", error: RESTARTED_ERROR } }]);
+    await flush();
+    expect(h.finals(a)).toHaveLength(1);
+  });
+
+  test("recovery reports the status it changed through onChange", async () => {
+    const before = harness();
+    before.push("[a]");
+    await flush();
+    await before.session.interrupt();
+    before.session.close();
+    const h = harness({ state: structuredClone(before.disk) });
+    await flush();
+    expect([h.session.working, h.changes]).toEqual([false, 1]);
   });
 
   test("a throwing ledger or persist is logged, not taken for a Claude crash", async () => {
@@ -818,10 +1186,10 @@ describe("session", () => {
     expect(h.messages.at(-1)).toEqual({ m: late, turn: null });
   });
 
-  test("Pending fields beyond the session's own are carried through a retry and a replay untouched", async () => {
-    const settles = { routineId: "r_1", runId: "run_1" };
+  test("the run a routine's fire settles is carried through a retry and a replay untouched", async () => {
+    const settles: RunRef = { routineId: "r_1" as RoutineId, runId: "run_1" as RunId };
     const h = harness();
-    h.session.push({ text: "[r]", initiator: routine, ahead: false, settles } as unknown as Parameters<typeof h.session.push>[0]);
+    h.push("[r]", routine, false, settles);
     await flush();
     h.q().emit(apiErrorMessage("overloaded"), apiErrorResult(0));
     await flush();
@@ -833,6 +1201,25 @@ describe("session", () => {
     after.q().emit(resultMsg(1));
     await flush();
     expect(after.ends[0]!.pending).toMatchObject({ settles, attempts: 3 });
+  });
+});
+
+describe("claudeExecutable", () => {
+  const dir = mkdtempSync(join(tmpdir(), "claudio-exe-"));
+  const runnable = join(dir, "claude");
+  const plain = join(dir, "notes.txt");
+  writeFileSync(runnable, "#!/bin/sh\n");
+  chmodSync(runnable, 0o755);
+  writeFileSync(plain, "");
+
+  test.each([
+    ["an executable file", runnable, runnable],
+    ["a missing file", join(dir, "missing"), null],
+    ["a file that is not executable", plain, null],
+    ["a directory", dir, null],
+  ])("CLAUDIOBOT_CLAUDE naming %s", (_, value, expected) => {
+    process.env.CLAUDIOBOT_CLAUDE = value;
+    expect(claudeExecutable()).toBe(expected);
   });
 });
 
@@ -856,7 +1243,18 @@ function prng(seed: number) {
 test.each([1, 2, 3, 4, 5, 6, 7, 8])("exactly one TurnEnd per envelope that leaves the queue, and none for one still queued (seed %i)", async (seed) => {
   const random = prng(seed);
   const pick = <T>(xs: readonly T[]) => xs[Math.floor(random() * xs.length)]!;
-  const h = harness({ headroom: (i) => (attendedNow(i) || random() < 0.9 ? roomy() : { ok: false, reason: "daily_cap", until: new Date(h.clock.t + 60_000).toISOString() }) });
+  let openFails = false;
+  const h = harness({
+    headroom: (i) => {
+      const roll = random();
+      if (roll < 0.03) throw new Error("ledger down");
+      return attendedNow(i) || roll < 0.9 ? roomy() : { ok: false, reason: "daily_cap", until: new Date(h.clock.t + 60_000).toISOString() };
+    },
+    options: () => {
+      if (openFails) throw new Error("gate not ready");
+      return { cwd: "/bots/b_1" };
+    },
+  });
   const pushed = new Set<string>();
   let n = 0;
   const live = () => h.queries.findLast((q) => !q.closed);
@@ -872,7 +1270,10 @@ test.each([1, 2, 3, 4, 5, 6, 7, 8])("exactly one TurnEnd per envelope that leave
     () => h.session.interrupt(),
     () => h.session.denied(),
     () => h.session.notice("[n]"),
-    () => h.advance(pick([500, 1_000, 3_000, 8_000, 15_000, 120_000])),
+    () => h.session.recheck(),
+    () => void (openFails = random() < 0.3),
+    () => live()?.emit(rejected(Math.floor(h.clock.t / 1000) + 600, { rateLimitType: "seven_day_opus" }), apiErrorResult(random())),
+    () => h.advance(pick([500, 1_000, 3_000, 8_000, 15_000, 30_000, 120_000, 300_000])),
   ];
   for (let i = 0; i < 300; i++) {
     await pick(ops)();

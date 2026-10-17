@@ -142,7 +142,7 @@ export function botToolServer(botId: BotId, act: BotActions) {
     ),
     remember: tool(
       "remember",
-      "Remember one short fact for later turns. about user: a fact about the user that every bot should know (shown to the user in Memory). about self: a note about your own job. Never store secrets, passwords or tokens.",
+      "Remember one short fact for later turns. about user: a fact about the user. You see it from your next turn; it is a proposal the user sees in Settings, Memory, and it reaches every bot once they confirm it. about self: a note about your own job. Never store secrets, passwords or tokens.",
       { text: z.string().min(1), about: z.enum(["user", "self"]) },
       (a) => reply(() => act.remember(botId, a)),
       always,

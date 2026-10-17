@@ -43,9 +43,24 @@ const INSTRUCTION = [
   /\b(?:system prompt|previous instructions)\b/i,
 ];
 
-/** Secrets maskSecrets does not know by shape: a password, PIN or SSN with its value, and a card number's 13 to 19 digits. */
+/**
+ * Secrets maskSecrets does not know by shape: a password, PIN or SSN with its value, and a card number, which is 13 to
+ * 19 digits that pass the Luhn check (so most long phone numbers do not count).
+ */
 const SECRET_VALUE = /\b(?:pass(?:word|code)|pin|card number|ssn)\b(?:\s+(?:is|was)\s+|\s*[=:]\s*|\s+(?=\S*\d))\S/i;
-const CARD_DIGITS = /(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)/;
+const CARD_DIGITS = /(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)/g;
+
+function luhn(digits: string): boolean {
+  let sum = 0;
+  for (let i = 0; i < digits.length; i++) {
+    let d = Number(digits[digits.length - 1 - i]);
+    if (i % 2 === 1) d = d * 2 > 9 ? d * 2 - 9 : d * 2;
+    sum += d;
+  }
+  return sum % 10 === 0;
+}
+
+const hasCardNumber = (text: string) => [...text.matchAll(CARD_DIGITS)].some((m) => luhn(m[0].replace(/\D/g, "")));
 
 export type Memory = {
   /**
@@ -154,7 +169,7 @@ const sameText = (a: string, b: string) => {
 function unsafe(text: string): string | null {
   if (hasHiddenCharacters(text)) return "That text has hidden characters.";
   if (text.includes("<!--") || text.includes("-->")) return "A fact cannot contain an HTML comment.";
-  if (maskSecrets(text) !== text || SECRET_VALUE.test(text) || CARD_DIGITS.test(text)) {
+  if (maskSecrets(text) !== text || SECRET_VALUE.test(text) || hasCardNumber(text)) {
     return "That looks like a secret (a password, PIN, card number, token or key). Secrets are never remembered.";
   }
   return null;

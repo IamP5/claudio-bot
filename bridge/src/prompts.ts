@@ -124,7 +124,8 @@ export const onboarding = (userName: string, nameYourself = true) =>
   `1. What they want help with first. Use ask, with options based on what you know about them plus Coding / building an app and Research and staying informed. ` +
   `2. How they like answers. Use ask, with options such as Short and direct and Detailed, with reasoning. ` +
   `3. One thing about their work or tools every bot should know. Ask it in plain chat. ` +
-  `Keep each answer with remember, about "user", in ${userName}'s words.` +
+  `Keep each answer with remember, about "user", in ${userName}'s words. After the last answer, tell ${userName} in one line that ` +
+  `what they shared is in Settings, Memory, and that confirming it there lets every bot use it.` +
   (nameYourself ? ` After the first answer, name yourself with update_self.` : "");
 
 export const persona = ({ name, userName }: { name: string; userName: string }) => `\

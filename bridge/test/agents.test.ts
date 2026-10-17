@@ -323,6 +323,37 @@ test("resume starts mac agents with queued work and tells bots about agents a re
   expect(h.agents.sessions()).toHaveLength(1);
 });
 
+test("a finished agent's session is let go once its idle query closes; the record stays and a follow-up resumes it", async () => {
+  const h = harness();
+  const rec = await h.start();
+  await flush();
+  h.q().emit(result("Done."));
+  await flush();
+  const tick = (min: number) => h.agents.sessions().forEach((s) => s.tick(new Date(Date.now() + min * 60_000)));
+  tick(14);
+  expect([h.q().closed, h.agents.sessions().length]).toEqual([false, 1]);
+  tick(15);
+  expect([h.q().closed, h.agents.session(rec.agent.id), h.world.agents.get(rec.agent.id)?.agent.status]).toEqual([true, null, "waiting"]);
+  await h.agents.message(rec, "Also fix the lint.", user);
+  await flush();
+  expect(h.queries.map((q) => [q.options.resume, q.received.at(-1)])).toEqual([
+    [undefined, AGENT_PROMPT],
+    ["s_a", "Also fix the lint."],
+  ]);
+});
+
+test("a crashed agent's session is let go at the next tick", async () => {
+  const h = harness();
+  const rec = await h.start();
+  await flush();
+  h.q().emit(said("Running the tests."));
+  await flush();
+  h.q().crash(new Error("Claude Code exited with code 1"));
+  await flush();
+  h.agents.sessions().forEach((s) => s.tick(new Date()));
+  expect([h.agents.session(rec.agent.id), rec.agent.status]).toEqual([null, "failed"]);
+});
+
 test("stopFor closes the sessions of that bot's agents only", async () => {
   const h = harness();
   const mine = await h.start("mac", user, B1);

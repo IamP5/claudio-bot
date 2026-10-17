@@ -49,6 +49,12 @@ export const START_RETRY_MS = [30_000, 60_000, 120_000, 300_000] as const;
 export const DENIALS_PER_TURN = 3;
 /** A turn with no SDK message for this long is noted in the owning bot's chat, once per turn. It keeps running. */
 export const STALL_MS = 30 * 60_000;
+/**
+ * A query with no turn in flight and no message for this long is closed, so its claude process exits; the next turn
+ * resumes the session on a new one. It counts from the last message, so output after a turn keeps the process. It is
+ * well inside the prompt cache's hour, so a resume reads the cache like the closed query would have.
+ */
+export const IDLE_MS = 15 * 60_000;
 /** When the ledger cannot answer, an unattended start waits this long; an attended one runs. */
 export const HEADROOM_RETRY_MS = 60_000;
 export const USAGE_PARK_SLACK_MS = 30_000;
@@ -537,6 +543,11 @@ export type SessionSpec = {
   userName?: string;
   /** Who the stall note names, read when it is left so a rename shows. Default "Claude Code". */
   name?: () => string;
+  /**
+   * Nothing runs, nothing is queued and no query is open. Asked at every tick while so. An owner of many sessions may
+   * close and forget this one: a new session over the same state resumes it.
+   */
+  onDormant?: () => void;
   log?: (line: string) => void;
   query?: typeof query;
   executable?: () => string | null;
@@ -664,16 +675,25 @@ export function createSession(spec: SessionSpec): Session {
     l.send({ type: "user", message: { role: "user", content: text }, parent_tool_use_id: null });
   }
 
+  /** The stall note while a turn runs; closing the query while none does. */
   function watchDeadline(): number | null {
-    if (!live) return null;
-    return spec.state.lifecycle.kind === "working" && !stallNoted ? heardAt + STALL_MS : null;
+    const kind = spec.state.lifecycle.kind;
+    if (!live || kind === "stopping") return null;
+    if (kind === "working") return stallNoted ? null : heardAt + STALL_MS;
+    return heardAt + IDLE_MS;
   }
 
   function watch(now: Date) {
+    if (closed) return;
     const due = watchDeadline();
-    if (closed || due === null || now.getTime() < due) return;
-    stallNoted = true;
-    guard("note", () => spec.note(stallNote(spec.name?.() ?? "Claude Code")));
+    if (due !== null && now.getTime() >= due) {
+      if (spec.state.lifecycle.kind !== "working") closeLive();
+      else {
+        stallNoted = true;
+        guard("note", () => spec.note(stallNote(spec.name?.() ?? "Claude Code")));
+      }
+    }
+    if (!live && spec.state.lifecycle.kind === "idle" && spec.state.pending.length === 0) guard("onDormant", () => spec.onDormant?.());
   }
 
   function open(): Live {

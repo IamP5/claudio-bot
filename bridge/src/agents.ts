@@ -121,6 +121,11 @@ export function createAgents(deps: {
       onTurnEnd: (pending, end) => turnEnded(rec, pending.initiator, end),
       onChange: () => deps.changed(rec),
       note: (text) => deps.note(rec, text),
+      // Its record keeps everything; a follow-up or decision makes a new session that resumes it.
+      onDormant() {
+        sessions.delete(id);
+        session.close();
+      },
     });
     sessions.set(id, session);
     return session;

@@ -900,7 +900,7 @@ describe("session", () => {
     await flush();
     expect(h.ends).toMatchObject([{ id, end: { kind: "stopped", by: "user" } }]);
     expect(h.usage).toMatchObject([{ cumulativeUsd: 0.3 }]);
-    expect([h.session.nextDeadline(), h.session.working, h.sent().length]).toEqual([null, false, 1]);
+    expect([h.session.nextDeadline(), h.session.working, h.sent().length]).toEqual([later(15 * 60_000), false, 1]);
     expect(await h.session.interrupt()).toBe(false);
   });
 
@@ -935,6 +935,63 @@ describe("session", () => {
     expect(h.finals(b)).toMatchObject([{ end: { kind: "dropped" } }]);
     expect(h.state.pending.map((p) => p.text)).toEqual(["[a]", "[Alex allowed Bash `make` once]", "[Agent Fix tests reports]\ndone"]);
     expect([h.finals(c), h.finals(g)]).toEqual([[], []]);
+  });
+
+  test("a query that serves no turn for 15 minutes is closed, and the next push resumes the session on a new one", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(said("hi"), resultMsg(0.5));
+    await flush();
+    expect(h.session.nextDeadline()).toBe(new Date(h.clock.t + 15 * 60_000).toISOString());
+    await h.advance(15 * 60_000 - 1);
+    expect(h.q().closed).toBe(false);
+    await h.advance(1);
+    expect([h.q().closed, h.session.nextDeadline()]).toEqual([true, null]);
+    h.push("[b]");
+    await flush();
+    expect(h.queries.map((q) => [q.options.resume, q.received.map((r) => r.text)])).toEqual([
+      [undefined, ["[a]"]],
+      ["s_1", ["[b]"]],
+    ]);
+    h.q().emit(resultMsg(0.75));
+    await flush();
+    expect(h.usage.map((u) => [u.cumulativeUsd, u.fresh])).toEqual([
+      [0.5, true],
+      [0.75, false],
+    ]);
+  });
+
+  test("output after the turn ended keeps the query open: the 15 minutes count from its last message", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(resultMsg(0.5));
+    await flush();
+    await h.advance(10 * 60_000);
+    h.q().emit(said("The background build finished."));
+    await flush();
+    await h.advance(10 * 60_000);
+    expect(h.q().closed).toBe(false);
+    await h.advance(5 * 60_000);
+    expect(h.q().closed).toBe(true);
+  });
+
+  test("a query whose queue waits on the daily cap is closed after 15 minutes too, and the work runs once the cap lifts", async () => {
+    let capped = true;
+    const h = harness({ headroom: (i) => (!capped || attendedNow(i) ? roomy() : { ok: false, reason: "daily_cap", until: later(12 * 3_600_000) }) });
+    h.push("[a]");
+    await flush();
+    h.q().emit(resultMsg(0.5));
+    await flush();
+    h.push("[r]", routine, false, fired);
+    await flush();
+    expect(h.session.parkedFor).toBe("daily_cap");
+    await h.advance(15 * 60_000);
+    expect(h.q().closed).toBe(true);
+    capped = false;
+    h.session.recheck();
+    await flush();
+    expect(h.queries.map((q) => [q.options.resume, q.received.map((r) => r.text)])).toEqual([
+      [undefined, ["[a]"]],
+      ["s_1", ["[r]"]],
+    ]);
   });
 
   test("a turn silent for 30 minutes leaves one note naming the bot, and keeps running", async () => {

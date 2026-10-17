@@ -9,9 +9,9 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Tickable } from "./clock";
-import { sandboxFailure } from "./sandbox";
 import type { Headroom, Ledger } from "./ledger";
 import { notices as noticeText, withNotices, type SessionInput } from "./prompts";
+import { sandboxFailure } from "./sandbox";
 import type { Persist } from "./store";
 import { errorText, maskSecrets } from "./text";
 import {

@@ -103,7 +103,7 @@ export type Gate = Tickable & {
   forgetBot(botId: BotId): void;
   /**
    * The agent's repo carries Claude Code config of its own (`found`, relative paths) and nobody has answered for it:
-   * posts "Trust <name>'s Claude settings?" in the bot's chat, one open card per repo. Allow once trusts it for this
+   * posts "Trust <name>'s Claude settings" in the bot's chat, one open card per repo. Allow once trusts it for this
    * agent, Always for every agent in the repo, Deny keeps this agent on the bridge's empty config, Never every agent.
    * An unanswered card expires and decides nothing.
    */

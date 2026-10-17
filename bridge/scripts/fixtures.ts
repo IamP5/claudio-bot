@@ -155,6 +155,7 @@ type Covered<All, Seen> = [Exclude<All, Seen>] extends [never] ? true : Exclude<
 const everyServerType: Covered<ServerMessage["type"], (typeof server)[number]["type"]> = true;
 const everyClientType: Covered<ClientMessage["type"], (typeof client)[number]["type"]> = true;
 const everyMessageKind: Covered<Message["kind"], Kinds<(typeof server)[number]>> = true;
+void [everyServerType, everyClientType, everyMessageKind];
 
 export const fixturesJson = () => JSON.stringify({ server, client }, null, 2) + "\n";
 export const fixturesPath = new URL("../../fixtures/protocol.json", import.meta.url);

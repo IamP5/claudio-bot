@@ -361,6 +361,8 @@ function cardAnswersFollowTheMessageTypes() {
   const crossed: CardAnswer = { kind: "question", answer: "once" };
   return [answers, open, crossed];
 }
+void ownedSlicesAreReadonly;
+void cardAnswersFollowTheMessageTypes;
 
 test("a webhook routine shows no schedule, says when it fires, and never has a next run", () => {
   const r: RoutineRecord = {

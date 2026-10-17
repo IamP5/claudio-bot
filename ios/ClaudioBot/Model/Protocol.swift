@@ -157,10 +157,10 @@ enum TriggerKind: OpenEnum {
 
 /// What a bridge can do beyond protocol 3's base (hello.features). Screens for a feature the bridge does not list stay hidden.
 enum Feature: OpenEnum {
-    case memory, activity, mute, worktrees, connectors, skills, webhooks
+    case memory, activity, mute, worktrees, connectors, skills, webhooks, spend
     case unknown(String)
 
-    static let allCases: [Feature] = [.memory, .activity, .mute, .worktrees, .connectors, .skills, .webhooks]
+    static let allCases: [Feature] = [.memory, .activity, .mute, .worktrees, .connectors, .skills, .webhooks, .spend]
     init?(rawValue: String) { self.init(wire: rawValue) }
 
     var rawValue: String {
@@ -172,6 +172,7 @@ enum Feature: OpenEnum {
         case .connectors: "connectors"
         case .skills: "skills"
         case .webhooks: "webhooks"
+        case .spend: "spend"
         case .unknown(let raw): raw
         }
     }
@@ -300,15 +301,19 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
     var dailyCapUsd: Double?
     /// No message pushes for this bot; cards still push. False from a bridge without the mute feature.
     var muted: Bool
+    /// What the bot and its agents spent today, and the cap in force. Nil from a bridge without the spend feature.
+    var spentTodayUsd: Double?
+    var capUsd: Double?
 
     private enum CodingKeys: String, CodingKey {
         case id, name, title, avatar, pinned, hidden, status, unread, question, preview, lastAt, createdAt, routines, dailyCapUsd, muted
+        case spentTodayUsd, capUsd
     }
 
     init(
         id: BotID, name: String, title: String?, avatar: Avatar, pinned: Bool, hidden: Bool, status: BotStatus,
         unread: Int, question: String?, preview: String, lastAt: Date, createdAt: Date, routines: [Routine],
-        dailyCapUsd: Double? = nil, muted: Bool = false
+        dailyCapUsd: Double? = nil, muted: Bool = false, spentTodayUsd: Double? = nil, capUsd: Double? = nil
     ) {
         self.id = id
         self.name = name
@@ -325,6 +330,8 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
         self.routines = routines
         self.dailyCapUsd = dailyCapUsd
         self.muted = muted
+        self.spentTodayUsd = spentTodayUsd
+        self.capUsd = capUsd
     }
 
     init(from decoder: Decoder) throws {
@@ -344,6 +351,8 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
         routines = try c.decode([Routine].self, forKey: .routines)
         dailyCapUsd = try c.decodeIfPresent(Double.self, forKey: .dailyCapUsd)
         muted = try c.decodeIfPresent(Bool.self, forKey: .muted) ?? false
+        spentTodayUsd = try c.decodeIfPresent(Double.self, forKey: .spentTodayUsd)
+        capUsd = try c.decodeIfPresent(Double.self, forKey: .capUsd)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -363,6 +372,8 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
         try c.encode(routines, forKey: .routines)
         try c.encode(dailyCapUsd, forKey: .dailyCapUsd)
         try c.encode(muted, forKey: .muted)
+        try c.encodeIfPresent(spentTodayUsd, forKey: .spentTodayUsd)
+        try c.encodeIfPresent(capUsd, forKey: .capUsd)
     }
 }
 
@@ -718,8 +729,13 @@ struct Agent: Codable, Hashable, Sendable, Identifiable {
     var updatedAt: Date
     var evidence: AgentEvidence? = nil
     var worktree: Worktree? = nil
+    /// Lifetime spend and the budget in force. Nil for cloud agents, and from a bridge without the spend feature.
+    var spentUsd: Double? = nil
+    var budgetUsd: Double? = nil
 
-    private enum CodingKeys: String, CodingKey { case id, botId, title, `where`, projectName, status, url, createdAt, updatedAt, evidence, worktree }
+    private enum CodingKeys: String, CodingKey {
+        case id, botId, title, `where`, projectName, status, url, createdAt, updatedAt, evidence, worktree, spentUsd, budgetUsd
+    }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -734,6 +750,8 @@ struct Agent: Codable, Hashable, Sendable, Identifiable {
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(evidence, forKey: .evidence)
         try c.encode(worktree, forKey: .worktree)
+        try c.encode(spentUsd, forKey: .spentUsd)
+        try c.encode(budgetUsd, forKey: .budgetUsd)
     }
 }
 

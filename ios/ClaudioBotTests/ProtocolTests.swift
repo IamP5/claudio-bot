@@ -125,6 +125,23 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(bot.title == nil)
         #expect(bot.dailyCapUsd == nil)
         #expect(bot.lastAt == at)
+        #expect(bot.spend == Spend(spentUsd: 8.4, limitUsd: 10))
+        #expect(hello.features.contains(.spend))
+    }
+
+    @Test func aBotFromABridgeWithoutSpendHasNoSpendAndEncodesNone() throws {
+        let json = #"{"id":"b1","name":"e","title":null,"avatar":{"shape":"circle","color":"white"},"pinned":false,"hidden":false,"status":"idle","unread":0,"question":null,"preview":"","lastAt":"2026-10-16T12:00:00.000Z","createdAt":"2026-10-16T12:00:00.000Z","routines":[]}"#
+        let bot = try decode(Bot.self, json)
+        #expect(bot.spend == nil)
+        #expect(try jsonObject(Wire.encoder().encode(bot))["spentTodayUsd"] == nil)
+    }
+
+    @Test func agentFramesCarryAMacAgentsSpendAndNullForACloudAgent() throws {
+        let details = try Fixture.server().compactMap { frame -> [Agent]? in
+            if case .details(_, _, _, let agents, _) = frame.message { agents } else { nil }
+        }.first ?? []
+        #expect(details.first { $0.where == .mac }?.spend == Spend(spentUsd: 1.2, limitUsd: 5))
+        #expect(details.first { $0.where == .cloud }?.spend == nil)
     }
 
     @Test func aProtocol2HelloReadsAsProtocol2WithNoReplayRing() throws {

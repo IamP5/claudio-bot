@@ -23,6 +23,15 @@ async function reply(run: () => string | Promise<string>) {
   }
 }
 const always = { alwaysLoad: true };
+/** Push titles and every phone's bot list show the name, so a long one or one with control or bidi characters is refused. */
+export const BOT_NAME_MAX = 40;
+const UNSAFE_NAME = /[\p{Cc}\u202A-\u202E\u2066-\u2069]/u;
+export const botName = z
+  .string()
+  .refine(
+    (s) => s.trim() !== "" && Array.from(s.trim()).length <= BOT_NAME_MAX && !UNSAFE_NAME.test(s),
+    `A bot name is 1 to ${BOT_NAME_MAX} characters, with no control characters.`,
+  );
 const shape = z.enum(SHAPES).optional();
 const color = z.enum(COLORS).optional();
 
@@ -62,14 +71,14 @@ export function botToolServer(botId: BotId, act: BotActions) {
       tool(
         "create_bot",
         `Create a new bot with one job. It starts at once with the job as its brief. Shapes: ${SHAPES.join(", ")}. Colors: ${COLORS.join(", ")}.`,
-        { name: z.string().min(1), job: z.string().min(1), shape, color },
+        { name: botName, job: z.string().min(1), shape, color },
         (a) => reply(() => act.createBot(botId, a)),
         always,
       ),
       tool(
         "update_self",
         `Change your own name, label (title), shape or color. Shapes: ${SHAPES.join(", ")}. Colors: ${COLORS.join(", ")}.`,
-        { name: z.string().min(1).optional(), title: z.string().optional(), shape, color },
+        { name: botName.optional(), title: z.string().optional(), shape, color },
         (a) => reply(() => act.updateSelf(botId, a)),
         always,
       ),

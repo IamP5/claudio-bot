@@ -71,7 +71,7 @@ if (migration.kind === "linked" || migration.kind === "moved_aside") holdLock(ho
 const port = Number(process.env.CLAUDIOBOT_PORT ?? 7878);
 const machine = await machineName();
 const { world, firstRun } = loadWorld(home);
-const saver = createSaver(world, home);
+const saver = createSaver(world, home, 250, log);
 const devices = createDevices({ world, persist: saver.schedule, now, announce });
 const legacy = legacyToken(home);
 legacy.reconcile(devices);

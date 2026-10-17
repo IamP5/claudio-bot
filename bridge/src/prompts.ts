@@ -1,4 +1,4 @@
-import type { AgentId, Attachment, BotId, PermissionChoice } from "./protocol";
+import type { AgentId, Attachment, Avatar, BotId, PermissionChoice } from "./protocol";
 import type { Initiator, Notice, Origin, RunRef } from "./world";
 
 // Everything that reaches a bot or an agent is one envelope. Its initiator is a pure function of the envelope.
@@ -136,3 +136,7 @@ export const agentPrompt = ({ botName, userName, prompt }: { botName: string; us
   `Your final message each turn is reported to the bot.\n\n${prompt}`;
 
 export const botMemory = ({ name, job }: { name: string; job: string }) => `# ${name}\n\n## Job\n\n${job}\n\n## Notes\n`;
+
+/** The bot a first run creates. migrate.ts recognizes an untouched one by these and the job. */
+export const DEFAULT_BOT = { name: "Claudio Bot", avatar: { shape: "circle", color: "white" } } as const satisfies { name: string; avatar: Avatar };
+export const defaultBotJob = (userName: string) => `General assistant. Take real work off ${userName}'s plate.`;

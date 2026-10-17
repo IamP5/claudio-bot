@@ -46,8 +46,6 @@ export const MAX_STARTS = RETRY_BACKOFF_MS.length + 1;
  * reached Claude, so no attempt is used and nothing else queued is touched. The last wait repeats until a query opens.
  */
 export const START_RETRY_MS = [30_000, 60_000, 120_000, 300_000] as const;
-/** Start failures in a row before the owning bot's chat is told, once per streak. */
-export const START_FAILURES_BEFORE_NOTE = 3;
 export const DENIALS_PER_TURN = 3;
 /** When the ledger cannot answer, an unattended start waits this long; an attended one runs. */
 export const HEADROOM_RETRY_MS = 60_000;
@@ -378,7 +376,8 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
         s.lifecycle = { kind: "backoff", until, attempt: held.attempts };
         end(held, { kind: "deferred", until, why: "retry" });
       }
-      if (failures === START_FAILURES_BEFORE_NOTE) fx.push({ kind: "note", text: startFailedNote(ev.error) });
+      // Told at the first failure of a streak: a missing claude does not fix itself.
+      if (failures === 1) fx.push({ kind: "note", text: startFailedNote(ev.error) });
       pump();
       break;
     }
@@ -490,6 +489,8 @@ export type Session = Tickable & {
   readonly working: boolean;
   /** Why queued work is held while nothing runs; null when something runs or nothing waits. */
   readonly parkedFor: ParkReason | null;
+  /** Claude Code could not be started on the last try and the session waits to try again. working stays true meanwhile. */
+  readonly unavailable: boolean;
   /** The envelope in flight. The gate reads its initiator. */
   readonly current: Pending | null;
   readonly lifecycle: Owned<Lifecycle>;
@@ -510,7 +511,7 @@ export type SessionSpec = {
   onTurnEnd: (turn: Pending, end: TurnEnd) => void;
   /** Something the actor's status derives from changed (working, lifecycle, park). */
   onChange: () => void;
-  /** A line for the owning bot's chat: the daily cap is reached, a turn was stopped after 3 held calls, or Claude Code keeps failing to start. */
+  /** A line for the owning bot's chat: the daily cap is reached, a turn was stopped after 3 held calls, or Claude Code could not start. */
   note: (text: string) => void;
   persist: Persist;
   /** Named in the notice an envelope dropped by Stop leaves. */
@@ -780,6 +781,9 @@ export function createSession(spec: SessionSpec): Session {
     },
     get parkedFor() {
       return parkedFor();
+    },
+    get unavailable() {
+      return memo.startFailures > 0 && spec.state.lifecycle.kind === "backoff";
     },
     get current() {
       return current();

@@ -305,12 +305,15 @@ describe("step", () => {
     expect(c.session.lifecycle).toMatchObject({ kind: "parked", reason: "daily_cap" });
   });
 
-  test("a query that could not open gives the attempt back, waits 30 s, and touches nothing else queued", () => {
+  test("a query that could not open gives the attempt back, waits 30 s, touches nothing else queued, and says so at once", () => {
     const t = run(core({ kind: "working", turn: turn("a") }, [env("a", user, 1), env("b", routine)]), { kind: "unstarted", error: "claude was not found" });
     const until = later(START_RETRY_MS[0]);
     expect(t.core.session.pending).toEqual([env("a", user, 0), env("b", routine)]);
     expect(t.core.session.lifecycle).toEqual({ kind: "backoff", until, attempt: 0 });
-    expect(t.effects).toEqual([{ kind: "end", pending: env("a", user, 0), end: { kind: "deferred", until, why: "retry" } }]);
+    expect(t.effects).toEqual([
+      { kind: "end", pending: env("a", user, 0), end: { kind: "deferred", until, why: "retry" } },
+      { kind: "note", text: "Claude Code could not start: claude was not found. Queued messages are kept, and it keeps trying." },
+    ]);
   });
 
   test("repeated start failures wait longer each time up to a cap, never use up the envelope, and leave one note", () => {
@@ -1007,6 +1010,20 @@ describe("session", () => {
     h.q().emit(resultMsg(2));
     await flush();
     expect([h.finals(a), h.finals(b)]).toMatchObject([[{ end: { kind: "done" }, pending: { attempts: 1 } }], [{ end: { kind: "done" }, pending: { attempts: 1 } }]]);
+  });
+
+  test("a session that cannot start Claude Code is unavailable while it waits to retry, and stops being so once a query opens", async () => {
+    const o: { executable: string | null | undefined } = { executable: null };
+    const h = harness(o);
+    h.push("[a]");
+    await flush();
+    expect(h.session.unavailable).toBe(true);
+    expect(h.notes).toEqual([
+      "Claude Code could not start: claude was not found on PATH, or CLAUDIOBOT_CLAUDE does not name an executable. Queued messages are kept, and it keeps trying.",
+    ]);
+    o.executable = undefined;
+    await h.advance(START_RETRY_MS[0]);
+    expect([h.sent(), h.session.unavailable, h.notes.length]).toEqual([["[a]"], false, 1]);
   });
 
   test("a missing claude executable is a start failure, not a failed turn", async () => {

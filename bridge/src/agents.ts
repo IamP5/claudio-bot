@@ -24,7 +24,7 @@ export type Agents = {
     botId: BotId,
     a: { title: string; prompt: string; project: Project; where: "mac" | "cloud"; isolate: Isolate; botName: string; initiator: Initiator; budgetUsd: number | null },
   ): Promise<AgentRecord>;
-  /** The phone's remove_worktree. Refused while the agent runs or its worktree holds uncommitted work. */
+  /** The phone's remove_worktree. Refused while the agent works, or while its worktree holds uncommitted work or ignored files other than build folders. */
   removeWorktree(rec: AgentRecord): Promise<Result>;
   /** Bot → agent follow-up: recorded in the agent's thread, queued with the bot turn's initiator. */
   message(rec: AgentRecord, text: string, initiator: Initiator): Promise<string>;

@@ -58,12 +58,17 @@ Everything runs on **your Mac, with your own Claude Code login**. There is no ho
 | **Question cards** | A bot asks with lettered options (A, B, C). Tap one, dismiss it, or type something else. Cards don't block the bot, survive restarts, and expire after a day. |
 | **Approvals** | A held tool call shows as a permission card: the rule that asked, the exact command, and what Always would cover. Allow once, Always, Deny or Never. Nothing you type in the chat approves a call. |
 | **Coding agents** | `mac` agents run Claude Code in your repo and report back. `cloud` agents start a Claude Code cloud session and give you the link. The chat shows "Messaged ⚙ Fix login" and "Message from ⚙ Fix login", and tapping either opens the full thread. |
-| **Routines** | Cron schedules in local time, shown as "Weekdays at 9:00 AM", with an on/off switch, Run now and the last 20 runs in the bot's profile. A routine with nothing to report posts nothing. |
+| **Checked reports** | After each Mac agent turn the bridge reads git: branch, commits ahead, files changed, uncommitted work, and a PR URL the agent named. The bot reads that line before the agent's words, and the agent's screen shows it. |
+| **Worktrees** | A Mac agent can work in its own git worktree on a `claudio/…` branch, so two agents or your own edits don't collide. Only you remove a worktree, and the bridge refuses while it holds uncommitted work or files such as an `.env`. |
+| **Routines** | Cron schedules in local time, shown as "Weekdays at 9:00 AM", with an on/off switch, Run now and the last 20 runs in the bot's profile. A routine with nothing to report posts nothing. A webhook routine fires when a program on your Mac calls it ("When called"). |
+| **Memory** | A bot keeps what it learns about you as a proposal. You see it in Settings, Memory, and once you confirm it every bot knows it. You can add, edit and forget facts there too. |
+| **Skills and connectors** | A bot can save a skill for a task you repeat. Its profile lists its skills and its MCP connectors, with a switch for each connector. |
+| **Live activity** | While a bot or agent works, the chat shows what it is doing, such as "Reading hub.ts". |
 | **Spend caps** | Each bot has a daily cap that its agents share, and each Mac agent has a budget. At the cap, routines and other background work wait until midnight. Your own messages still run. |
 | **Library and links** | Files a bot writes to `library/` show up in its Library tab, with a viewer for markdown, text and images. Every link a bot shares is collected under Links. |
 | **Bots talking to bots** | A bot can message another bot or create a new one with a brief. |
-| **Phone niceties** | Unread dots, an attention badge when a bot is waiting on you, notifications with answer buttons, an optional push through [ntfy](https://ntfy.sh) when the app is closed, dictation, photo and file uploads, and pin, rename, hide and delete. |
-| **Your data stays home** | State lives in `~/.claudiobot`. Deleting a bot moves its folder to `trash/`. Nothing is deleted for real. |
+| **Phone niceties** | Unread dots, an attention badge when a bot is waiting on you, notifications with answer buttons, an optional push through [ntfy](https://ntfy.sh) when the app is closed, mute, dictation, photo and file uploads, and pin, rename, hide and delete. A message sent during a dropped connection is sent again, and never posted twice. |
+| **Your data stays home** | State lives in `~/.claudiobot`. Deleting a bot moves its folder to `trash/`. Only its agents' empty config folders are deleted for real. |
 
 <p align="center">
   <img src="ios/screenshots/profile.png" width="200" alt="Bot profile with routines and avatar picker">
@@ -155,6 +160,8 @@ The project used to be called claudebot, with its home in `~/.claudebot`. On its
 | `CLAUDIOBOT_DAILY_USD` | `10` | Each bot's daily spend cap in US dollars, its agents included. A bot's own cap, set from its profile, wins. |
 | `CLAUDIOBOT_AGENT_USD` | `5` | Each Mac agent's lifetime budget in US dollars. |
 | `CLAUDIOBOT_PUSH_URL` | off | An [ntfy](https://ntfy.sh) topic URL for pushes while the app is closed. |
+| `CLAUDIOBOT_WEBHOOK_PORT` | `7879` | Port of the webhook listener, on 127.0.0.1 only. `0` picks a free port. |
+| `CLAUDIOBOT_WORKTREES` | `~/.claudiobot-worktrees` | The folder Mac agents' worktrees go in. |
 | `CLAUDIOBOT_ALLOWED_DOMAINS` | | Comma-separated hosts that sandboxed commands may reach without review, on top of GitHub, npm, Yarn, PyPI and crates.io. |
 | `CLAUDIOBOT_SANDBOX_STRICT_NETWORK` | off | `1` makes that list the whole allowlist: a command can no longer ask for another host. |
 | `CLAUDIOBOT_SANDBOX_GH` | off | `1` lets Mac agents run `gh`. It needs its config and macOS's TLS trust service, which loosens the agents' network isolation. Bots never get `gh`. |
@@ -168,7 +175,7 @@ The app only gets notifications while it has a socket open. iOS suspends it a sh
 CLAUDIOBOT_PUSH_URL=https://ntfy.sh/claudiobot-<long random string> bun run start
 ```
 
-The bridge pushes only while no phone is connected: when a card opens, when it reminds you, and when a turn posts its first message. A push says only the bot's name and "needs you", "is still waiting for you" or "has an update for you". No message content leaves your Mac. Tapping it opens ClaudioBot at that message. Each card and message is pushed at most once, and messages at most once per bot every 10 minutes. There is no cap across bots. A failed send is logged and never retried, and that includes ntfy's 429 when a topic gets too much traffic. Anyone who knows the topic name can read the bot names, so use a private ntfy server or a name nobody can guess.
+The bridge pushes only while no phone is connected: when a card opens, when it reminds you, and when a turn posts its first message. A push says only the bot's name and "needs you", "is still waiting for you" or "has an update for you". No message content leaves your Mac. Tapping it opens ClaudioBot at that message. Each card and message is pushed at most once, and messages at most once per bot every 10 minutes. Mute a bot in its profile to stop its message pushes; its cards still push. After a restart the bridge waits 60 s before it pushes a card that was already open, because the phone usually reconnects first. There is no cap across bots. A failed send is logged and never retried, and that includes ntfy's 429 when a topic gets too much traffic. Anyone who knows the topic name can read the bot names, so use a private ntfy server or a name nobody can guess.
 
 ## Safety model
 
@@ -189,7 +196,11 @@ ClaudioBot runs agents unattended on your machine, so read this before you use i
   - Commands reach GitHub, npm, Yarn, PyPI and crates.io without review, plus `CLAUDIOBOT_ALLOWED_DOMAINS`. For any other host Claude Code re-runs the command with that host added; its classifier reviews that, and on unattended turns the gate also holds it for your tap, showing the hosts. `CLAUDIOBOT_SANDBOX_STRICT_NETWORK=1` removes that way out.
   - If the sandbox cannot start, commands are off. The bot's chat says so, a query that cannot start at all waits and retries every few minutes with the bot shown as **Unavailable**, and nothing runs unsandboxed.
 - **A repo's own Claude Code config waits for your trust.** A Mac agent starts with an empty configuration folder that only the bridge writes, so the `.claude` settings and hooks, `.mcp.json` servers, commands, agents and skills that a repo or any branch commits do not load. They run as you, outside the gate and the sandbox, so a repo that has them gets a card in its bot's chat: **Trust <repo>'s Claude settings**. Allow once trusts the repo for that agent, Always for every agent in it from then on, and Deny or Never keep its config off. An agent picks the change up at its next turn.
-- **Spend caps.** Each bot has a daily cap that its agents share (`CLAUDIOBOT_DAILY_USD`, default $10). At the cap, routines and other background work wait until midnight. A message you type still runs, and the bot's chat says the cap is reached. An unattended turn's query is also capped at what is left of the day, so Claude Code stops a runaway routine at the cap instead of at its end. Each Mac agent has a lifetime budget (`CLAUDIOBOT_AGENT_USD`, default $5), and Claude Code stops the agent's turn when it runs out.
+- **Memory.** A fact a bot remembers about you reaches only that bot until you confirm it in Settings, Memory, so a page or message that talks one bot into "remembering" a rule cannot spread it to the others. The bridge refuses facts that look like secrets, hold hidden characters, or read as instructions to bots, and any direct edit of `USER.md`, a bot's `CLAUDE.md` or its skills opens a card. A bot remembering or saving a skill on a turn you did not start also waits for your tap.
+- **Connectors you turn off stay off.** The switch in a bot's profile keeps the server out of the bot's and its agents' queries, and the gate refuses any call to it.
+- **Webhooks answer only this Mac.** The listener binds 127.0.0.1. A call needs the routine's token, which the bridge stores only as a hash. Requests with a browser `Origin` header or a foreign `Host` are refused, bodies are capped at 16 KB, a routine fires at most once a minute, and the payload reaches the bot as data, not as your words.
+- **Worktrees are yours to remove.** Nothing deletes a worktree on its own. Removal is refused while the agent works, while the worktree has uncommitted files, or while it holds ignored files other than build folders, and it never uses `--force`. The bridge's own git reads run with the repo's hooks, fsmonitor and filters off.
+- **Spend caps.** Each bot has a daily cap that its agents share (`CLAUDIOBOT_DAILY_USD`, default $10). At the cap, routines and other background work wait until midnight. A message you type still runs, and the bot's chat says the cap is reached. An unattended turn's query is also capped at what is left of the day, so Claude Code stops a runaway routine at the cap instead of at its end. Each Mac agent has a lifetime budget (`CLAUDIOBOT_AGENT_USD`, default $5), and Claude Code stops the agent's turn when it runs out. An agent the daily cap stops shows **Capped** and resumes when you message it the next day or raise the cap.
 - **Audit.** Every checked tool call is appended to `audit/YYYY-MM.jsonl` in the bridge home, with secrets and file contents redacted. Every turn's cost is appended to `usage/YYYY-MM.jsonl`. Both files are readable only by you.
 - **State.** `state.json` is written atomically. A file the bridge cannot read stops the bridge instead of being overwritten. Only one bridge runs per home: a lock file sits beside the home's real path (`~/.claudiobot.lock`, or `~/.claudebot.lock` once the home is a link to `~/.claudebot`; the bridge holds both then), and a second bridge refuses to start.
 - **Files.** File reads from the app are confined to the bot's home. Uploads land in the bot's `inbox/`, at most 10 MB each, inside socket frames of at most 32 MB.
@@ -201,6 +212,8 @@ ClaudioBot runs agents unattended on your machine, so read this before you use i
 - **A Mac agent's commands can fetch your GitHub token.** Claude Code's sandbox breaks git over ssh (it points ssh at a proxy that refuses it), so the bridge rewrites `git@github.com:` and `ssh://git@github.com/` remotes to https for agents, and git's Keychain helper supplies the token. Any agent command can ask that helper too. It can send the token only to an allowed host or one the classifier approved, and GitHub is allowed.
 - **Signed commits need your SSH agent.** Private key files stay unreadable inside the sandbox, so an agent can sign a commit with an SSH key only through the SSH agent (the bridge lets the sandbox reach `SSH_AUTH_SOCK` when its environment has one). GPG signing fails, because `~/.gnupg` is private. With signing on and no agent, an agent's commit fails with "No private key found"; turn signing off for the repos agents commit in (`git config commit.gpgsign false`) or give the bridge an agent.
 - **Secrets in project files are not floored.** A `.env` file is an ordinary file. On a turn of yours, an agent with `gh` turned on could post it (`gh gist create .env` passes to the classifier).
+- **A webhook token is a key.** Any program on your Mac that has it can fire the routine. Make a new token in the routine's screen to cut the old one off.
+- **Agent reports are checked, not tests.** The bridge reads git's facts after a turn. It does not run the project's tests, so "tests pass" in a report is still the agent's word.
 - **Unlisted calls go to Claude Code.** A call that no rule mentions passes to Claude Code's auto permission mode, whose classifier decides. That judgment is Claude Code's, not the bridge's.
 - **Cloud agents are not gated or metered.** They run on claude.ai under your account, outside the bridge.
 - **"Ask before outward actions" is a prompt.** Every bot is told never to merge, deploy, post, message people, set secrets, spend money or delete data without your yes. The gate holds the commands it knows. For everything else, that instruction is a prompt, not a guarantee.
@@ -235,6 +248,13 @@ bridge/                 Bun + TypeScript server
   src/migrate.ts        the move from ~/.claudebot
   src/tools.ts          the in-process "claudio" MCP tools bots call
   src/agents.ts         mac and cloud agents
+  src/evidence.ts       hardened git reads after an agent's turn
+  src/worktree.ts       agent worktrees
+  src/memory.ts         facts in USER.md, proposals, notes
+  src/skills.ts         skills a bot saves
+  src/connectors.ts     connector status and switches
+  src/activity.ts       the live activity line
+  src/webhook.ts        the loopback webhook listener
   src/cli.ts            claudiobot install, status, doctor, logs, pair, update
   scripts/e2e.ts        end-to-end test against real Claude Code
   scripts/fixtures.ts   the protocol fixtures, checked against the types

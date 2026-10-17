@@ -2,7 +2,7 @@
 
 `docs/grok-bot-reference.md` describes the product. `bridge/src/protocol.ts` is the wire contract, and it wins any disagreement with this file. `fixtures/protocol.json` pins both sides. `bridge/V3-CONTRACT.md` lists each module's interface and owner. `docs/arena-synthesis.md` explains how this design was chosen over two others.
 
-v2 made the product a set of long-lived bots instead of one-off tasks. v3 keeps that product and makes it safe to leave running. Risky tool calls wait for a tap on the phone, and every shell command runs in the OS sandbox. Routines report honestly and stay quiet when there is nothing to say. Spend has a daily cap. Each phone pairs with its own token. A push reaches you when the app is closed. The bridge runs as a LaunchAgent.
+v2 made the product a set of long-lived bots instead of one-off tasks. v3 keeps that product and makes it safe to leave running. Risky tool calls wait for a tap on the phone, and every shell command runs in the OS sandbox. Routines report honestly and stay quiet when there is nothing to say. Spend has a daily cap. Each phone pairs with its own token. A push reaches you when the app is closed. The bridge runs as a LaunchAgent. Bots remember what you confirm, save skills, and can be fired by a local webhook. Mac agents report with git's facts and can work in their own worktree.
 
 ## Where things run
 
@@ -14,16 +14,18 @@ The Mac bridge owns every bot. The phone is a view. A bot keeps working, and its
   state.v2.json.bak       the exact v2 file, kept by the upgrade
   token                   protocol 2's shared token, accepted for one release as the "legacy" device
   token.revoked           written when that phone is revoked, so the token is never imported again
-  USER.md                 what any bot has learned about you; every bot may read and add to it
+  USER.md                 facts about you; a bot's own facts are proposals until you confirm them
   usage/YYYY-MM.jsonl     one row per turn result: the ledger (0600, append-only)
   audit/YYYY-MM.jsonl     one row per gated tool call (0600, append-only, secrets redacted)
   bots/<botId>/           a bot's home and the cwd of its Claude Code session
-    CLAUDE.md             the bot's job and its own notes
+    CLAUDE.md             the bot's job and its own notes (## Notes)
+    .claude/skills/       skills the bot saved with save_skill
     library/              files it makes for you
     inbox/                files you send from the phone
     .history/             messages moved out of state.json past 1,100: bot.jsonl, <agentId>.jsonl
-  agent-config/<agentId>/ the empty projectConfigRoot of an agent whose repo is not trusted (0700)
+  agent-config/<agentId>/ the empty projectConfigRoot of an agent whose repo is not trusted (0700), removed with its bot
   trash/<botId>-<ms>/     a deleted bot's home, moved here, never deleted
+~/.claudiobot-worktrees/  mac agents' worktrees, <project>/<agentId> (CLAUDIOBOT_WORKTREES moves it)
 ~/.claudiobot.lock        one bridge per home, beside the home's real path so migration can move it
                           (~/.claudebot.lock once the home links there; the bridge then holds both)
 ```
@@ -45,6 +47,12 @@ Each module is the only writer of its slice of `state.json`. `world.ts` declares
 | `migrate.ts`, `lock.ts` | the move from `~/.claudebot`, one bridge per home | the home links |
 | `cli.ts`, `service.ts`, `doctor.ts` | the `claudiobot` command: LaunchAgent install, status, doctor, logs, pair, update | the plist and the log |
 | `text.ts` | the one rule set for names, errors and secrets that leave the bridge | nothing |
+| `memory.ts` | facts, proposals and notes, and the facts a query opens with | `USER.md`, a bot's `CLAUDE.md` |
+| `skills.ts` | a bot's saved skills | `bots/<id>/.claude/skills/` |
+| `connectors.ts` | which MCP servers a bot and its agents load | `BotRecord.connectorsOff` |
+| `activity.ts` | the activity line | nothing |
+| `webhook.ts` | the loopback listener that fires webhook routines | nothing (the token hash is the scheduler's) |
+| `evidence.ts`, `worktree.ts` | hardened git reads after an agent's turn, agent worktrees | worktrees under `~/.claudiobot-worktrees` |
 
 `store.ts` loads and saves the file. Loading fails closed: an unknown version, unreadable JSON or a malformed record stops the bridge with a message and writes nothing. A v2 file is upgraded in memory, its exact bytes go to `state.v2.json.bak`, and then v3 is written. `persist("now")` writes synchronously (temp file, `fsync`, rename, directory `fsync`) before an effect that depends on it. Everything else is debounced by 250 ms.
 
@@ -57,8 +65,8 @@ Everything that reaches a bot is an **envelope**: one user message whose first l
 | you typed | `[Alex]`, then the text and `Attached: inbox/<file>` lines |
 | you answered or dismissed a card | `[Alex answered "<question>": <option>]`, `[Alex dismissed "<question>" without answering]` |
 | you decided a permission card | `[Alex allowed once: Bash \`git push origin main\`. Run exactly that call again now.]` and the Always, Deny and Never forms |
-| a routine fired | `[Routine <name> fired]`, its prompt, then either "reply even if nothing changed" (Run now) or "if there is nothing worth telling Alex, call routine_no_update" |
-| an agent reported | `[Agent "<title>" (<agentId>) reports]`, then its final text |
+| a routine fired | `[Routine <name> fired]`, its prompt, a webhook call's payload fenced as data, then either "reply even if nothing changed" (Run now) or "if there is nothing worth telling Alex, call routine_no_update" |
+| an agent reported | `[Agent "<title>" (<agentId>) reports]`, the bridge's `[Git, read by the bridge after this turn: …]` line, then its final text |
 | another bot | `[Message from bot <name>]`, then the text |
 | the bot was created | `[You were just created by Alex]` or `[You were just created by bot <name>. Brief:]` |
 
@@ -68,7 +76,7 @@ Each envelope has an **initiator**, a pure function of the envelope: `user`, `ro
 2. The session's lifecycle is one value, `idle | working | stopping | backoff | parked`, and `step()` is a pure function over it. Only an idle session starts a turn. It checks the ledger's headroom first. An unattended turn at the daily cap parks until midnight, and a mac agent with no budget left fails the turn.
 3. Notices (an expired card, work Stop dropped, a restart mid-turn) go on top of the envelope, so they reach the bot without spending a turn.
 4. Every tool call passes the gate (below). Three held or denied calls in one turn stop it, with a note.
-5. Each text block becomes chat bubbles, one per paragraph. Text after an `ask` card in the same turn is dropped.
+5. Each text block becomes chat bubbles, one per paragraph. Text after an `ask` card in the same turn is dropped. Each tool call sets the actor's activity line (below).
 6. The result goes to the ledger as a delta of the SDK's running total. Then the session tells the hub how the envelope ended: `done`, `stopped` (by you or by the breaker), `dropped`, `failed`, or `deferred` (a retry or a park, not an ending). Each envelope that leaves the inbox gets exactly one ending.
 
 A turn with output is never replayed after a crash, because it may have had effects. The bot is told it was cut off instead. A transient API error with no output retries after 1, 3 and 8 seconds. A start counts toward the limit of 4 attempts. A usage-limit rejection parks every session until 30 s after the reset. A model's own weekly limit parks only the session that hit it. A query that cannot open at all (no `claude`, options that throw, a sandbox that cannot start) uses no attempt: the envelope keeps its place, the session retries after 30 s, 1, 2 and then every 5 minutes, and the bot or agent shows `unavailable` meanwhile.
@@ -83,10 +91,11 @@ Every bot and mac agent query has one `PreToolUse` hook on every tool. Its body 
 
 1. **Floors**, always denied: the bridge home except the bot's own folder and `USER.md`, writes to config files the bridge itself loads, SSH, GPG and cloud keys, the Keychain, browser profiles and cookies, stored credentials and tokens (the Claude login among them), and password, payment or 2FA entry (handed back to you). Bash is parsed by a real shell tokenizer, and paths are resolved through symlinks and their ancestors before they are matched.
 2. **Initiator bans**: no routine changes in a routine-started chain, and no `message_bot` or `create_bot` at 2 or more bot hops.
-3. **Limits**: budget or daily cap, and per-bot daily caps on `create_bot` (5) and `start_agent` (20).
-4. **Never** rules, then a one-shot **grant** for this exact call, then **Always** rules (an Always given in an attended turn covers attended turns only).
-5. **The table** of risky commands by attended or unattended: pushing to the default branch, force-pushing, merging a PR, publishing, deploying, setting secrets, sending data to a web service, deleting outside the bot's folder, changing a config file that controls how it runs, running a command built at runtime, and others. Unattended turns also hold pushes to any branch, writes outside the bot's folder, connector writes, `create_bot`, `start_agent` and routine changes.
-6. **Pass**: no opinion, so Claude Code's auto classifier decides as it would without the bridge.
+3. **Refusals**: a `claudio` tool the bridge does not serve, and a call to a connector the user turned off for the bot.
+4. **Limits**: budget or daily cap, and per-bot daily caps on `create_bot` (5) and `start_agent` (20).
+5. **Never** rules, then a one-shot **grant** for this exact call, then **Always** rules (an Always given in an attended turn covers attended turns only).
+6. **The table** of risky commands by attended or unattended: pushing to the default branch, force-pushing, merging a PR, publishing, deploying, setting secrets, sending data to a web service, deleting outside the bot's folder, changing a config file that controls how it runs (the bot's own `CLAUDE.md` and `.claude/skills` included), editing `USER.md` directly, running a command built at runtime, and others. Unattended turns also hold pushes to any branch, writes outside the bot's folder, connector writes, `create_bot`, `start_agent`, `remember`, `save_skill` and routine changes.
+7. **Pass**: no opinion, so Claude Code's auto classifier decides as it would without the bridge.
 
 A Bash call that adds hosts to the sandbox's network allowlist (the tool's `allowed_domains`) carries them as a part of its own, so on unattended turns the table holds it with the hosts on the card, and the hosts are part of the call's fingerprint.
 
@@ -110,21 +119,24 @@ A routine is a prompt on a five-field cron in the Mac's local time. A routine ma
 - A scheduled run holds its bubbles until the turn ends. If the bot called `routine_no_update` and asked nothing, the bubbles are dropped, nothing is pushed, and the run settles **quiet**. Otherwise the bubbles post together with one push. Bubbles written before a card the turn opens, or before the breaker's note, go out at once, ahead of it, and a run that opened a permission card is never quiet.
 - Run now is attended, never quiet, runs at the daily cap, and its failures never count toward fatigue. Ten failed runs in a row turn a routine off with a note.
 - A v2 routine that runs more often than every 15 minutes is turned off with a note at the first tick after the upgrade. Editing its schedule turns it back on.
+- A **webhook** routine has no schedule (`schedule` "", shown as "When called"). `webhook.ts` listens on 127.0.0.1 only (`CLAUDIOBOT_WEBHOOK_PORT`, default 7879, `0` for a free port). A call is `POST /hook/<routineId>` with `Authorization: Bearer whk_…`. The phone mints the token (`webhook_token`) and sees it once; the bridge stores only its sha256, a new token invalidates the old, and none is minted while the listener could not bind. A request with an `Origin` header or another `Host` gets 403, a wrong token 401, a body over 16 KB 413, a call within 60 s of the last fire 429 (a last fire in the future, from a clock set back, counts as elapsed), a paused, running or parked routine 409, and a run that could not start 500. The token is checked again after the body is read. The body reaches the bot fenced as data, never as the user's words. A loopback listener and a bearer token keep a web page and other machines out; the cooldown keeps a looping script from spending the day's cap.
 
 ## Usage
 
-The ledger appends one row per turn result to `usage/YYYY-MM.jsonl`. A row holds the SDK's cumulative cost, the delta charged against that session's previous row, the initiator and the local day. Each bot has a daily cap (`CLAUDIOBOT_DAILY_USD`, default $10, or the bot's own `dailyCapUsd` from the phone) that counts its agents too. Each mac agent has a lifetime budget (`CLAUDIOBOT_AGENT_USD`, default $5). A mac agent's query gets what is left of that budget as `maxBudgetUsd`, and a query opened for an unattended turn gets at most what is left of the day, so the SDK stops a runaway turn mid-way. Attended turns are never held by the daily cap; it is checked before each unattended turn. A routine run the cap cuts short settles `skipped`, not `failed`, and the bot says it used today's budget. Raising a bot's cap from the phone lifts a cap park at once.
+The ledger appends one row per turn result to `usage/YYYY-MM.jsonl`. A row holds the SDK's cumulative cost, the delta charged against that session's previous row, the initiator and the local day. Each bot has a daily cap (`CLAUDIOBOT_DAILY_USD`, default $10, or the bot's own `dailyCapUsd` from the phone) that counts its agents too. Each mac agent has a lifetime budget (`CLAUDIOBOT_AGENT_USD`, default $5). A mac agent's query gets what is left of that budget as `maxBudgetUsd`, and a query opened for an unattended turn gets at most what is left of the day, so the SDK stops a runaway turn mid-way. Attended turns are never held by the daily cap; it is checked before each unattended turn. A routine run the cap cuts short settles `skipped`, not `failed`, and the bot says it used today's budget. A mac agent the daily cap stops shows `capped`, not `failed`, and resumes on a message tomorrow or a raised cap; an agent whose own budget ran out fails. Raising a bot's cap from the phone lifts a cap park at once.
 
 ## Transport
 
 - **Pairing.** The bridge prints a one-time code (`XXXX-XXXX`, valid for 10 minutes, 5 tries) and a QR code of `claudiobot://pair?url=…&code=…`. The app posts `{code, name}` to `/pair` and gets its own token, which the bridge stores only as a sha256. The socket then authenticates with `Authorization: Bearer <token>`. A paired phone can show a code for another phone. After 10 failed pairings from one address in 10 minutes, `/pair` answers 429.
 - **Revoking** a phone closes its sockets with code 4001. Protocol 2's shared token is imported once as the "legacy" device. Revoking it writes `token.revoked`, so it never comes back.
 - **The stream.** Every broadcast carries a `seq`, and each bridge start has a new `epoch`. A reconnecting app passes both, and the bridge replays what it missed from a bounded ring. When the ring no longer holds the missed frames, the app gets a fresh hello instead. Frames may be up to 32 MB, because uploads ride inline.
+- **Repeated sends.** A send carries a `clientId`. The app keeps sends the bridge has not echoed and resends them after a hello, so a send lost in a reconnect still arrives. A resend whose `clientId` the bot already has gets that message back and queues nothing. The app gives a send up once three sockets took it without an echo.
+- **Signals.** The activity line is a frame with no `seq`: it goes to connected protocol 3 sockets and is never stored, replayed or pushed. `hello.features` names the screens this bridge backs.
 - **Protocol 2 apps.** The app announces `?protocol=3`. A socket that does not gets every permission card as a question card with the options "Allow once" and "Deny", and its answer is read as that decision, so an old build can still approve a call once.
 
 ## Push
 
-When no socket is live, `push.ts` posts to `CLAUDIOBOT_PUSH_URL` (an ntfy topic) when a card opens or reminds, or when a turn posts its first bubble. The text is the bot's name and a fixed phrase. No message content leaves the Mac. The click link is `claudiobot://bot/<id>?message=<id>`. Each push key (`<messageId>|<reason>`) is recorded and saved before the send, so a crash never sends twice. A failed send, a 429 included, is logged and never retried. Message pushes are throttled to one per bot per 10 minutes.
+When no socket is live, `push.ts` posts to `CLAUDIOBOT_PUSH_URL` (an ntfy topic) when a card opens or reminds, or when a turn posts its first bubble. The text is the bot's name and a fixed phrase. No message content leaves the Mac. The click link is `claudiobot://bot/<id>?message=<id>`. Each push key (`<messageId>|<reason>`) is recorded and saved before the send, so a crash never sends twice. A failed send, a 429 included, is logged and never retried. Message pushes are throttled to one per bot per 10 minutes. A muted bot sends no message push; a card still pushes, because a held call waits on you. At start no phone has reconnected yet, so a push for a card already open waits 60 s and goes out only if no phone came back.
 
 ## Migration
 
@@ -132,11 +144,32 @@ The project was renamed from claudebot to claudiobot. At start, before anything 
 
 ## Bot tools
 
-The in-process MCP server `claudio` gives each bot `ask`, `start_agent`, `message_agent`, `list_projects`, `message_bot`, `create_bot`, `update_self`, `set_routine`, `delete_routine` and `routine_no_update`. Bot names are 1 to 40 characters with no control, format or bidi characters (`text.ts`, which also cleans device names and push titles the same way). The gate covers these tools too, so a routine cannot change routines, and a bot-to-bot chain stops at two hops.
+The in-process MCP server `claudio` gives each bot `ask`, `start_agent`, `message_agent`, `list_projects`, `message_bot`, `create_bot`, `update_self`, `set_routine`, `delete_routine`, `list_routines`, `routine_no_update`, `remember` and `save_skill`. Bot names are 1 to 40 characters with no control, format or bidi characters (`text.ts`, which also cleans device names and push titles the same way). The gate covers these tools too, so a routine cannot change routines, and a bot-to-bot chain stops at two hops.
+
+## Memory
+
+A bot remembers through `remember`, never by editing a file: the gate cards any direct write to `USER.md`, to the bot's own `CLAUDE.md` or to its `.claude/skills` in every turn. `remember` about `self` adds a line to the bot's `CLAUDE.md` `## Notes`. `remember` about `user` adds a fact to `USER.md`'s `## Facts` as that bot's **proposal**. The proposal reaches only that bot's queries, marked unconfirmed, until you confirm it in Settings, Memory (`confirm_fact`). Facts you add or confirm reach every bot. The reason is reach: a web page or a webhook payload that talks one bot into remembering a rule must not spread it to every bot unseen. Filtering text that reads as an instruction is only a speed bump, since any rule can be phrased as a fact.
+
+Each fact line keeps its id, time and proposer in an HTML comment, so a hand edit of `USER.md` survives and the phone's ids stay valid. A bot's query opens with `memory.context(botId)` appended to its system prompt: the confirmed facts and its own proposals, fenced as data, at most 3 KB. The bridge refuses a fact that is empty, over 300 characters, carries hidden characters or an HTML comment, or looks like a secret (a known token shape, a password, PIN or SSN with its value, or 13 to 19 digits that pass the Luhn check, so most phone numbers are kept), and any fact once 50 are kept. A bot's fact is also refused when it reads as an instruction to bots. `remember` passes in an attended turn and asks in an unattended one, with no Always. A change reopens the affected queries, so the next turn sees it.
+
+The first-run brief asks three questions and keeps the answers with `remember`. They stay proposals, and the bot ends by pointing you to Settings, Memory. The model paraphrases an answer into a fact, and the bridge cannot tell an answer from the rest of the turn without exact matching, which would strip the facts of their context.
+
+## Skills and connectors
+
+`save_skill` writes `bots/<id>/.claude/skills/<name>/SKILL.md` (frontmatter `name` and a JSON-quoted `description`, then the body), which Claude Code loads as a project skill. The file is 0600 in 0700 folders and written atomically, and the bridge never writes through a symlink or replaces a SKILL.md that is not a plain file. A name matches `^[a-z0-9]+(-[a-z0-9]+)*$` up to 64 characters, the description is one line up to 200, the body at most 20 KB, a bot keeps at most 30, and secrets and hidden characters are refused. A save or delete reopens the bot's query and sends every phone the new list.
+
+A **connector** is an MCP server a bot's queries load. The phone sees each one's name, status and switch, never its configuration. `BotRecord.connectorsOff` is saved and covers the bot's agents. It reaches every query at open as the `deniedMcpServers` flag setting and the live query at once through `toggleMcpServer`, and the gate denies any call to an off server (`connector.off`), so an agent that kept its query through a toggle is still held to it.
+
+## The activity line
+
+While a turn runs, the app shows one line per bot or mac agent, such as "Reading hub.ts" or "Running tests". `activity.ts` reads it from `tool_use` blocks only, cuts URLs to their host, drops command-line options with their values, then masks secrets with `text.redact`. It sends at most one line per actor every 1.5 s, sends the trailing line when the window closes, and never sends the same text twice. Every turn end clears it, a deferred one included, and `delete_bot` clears it before `bot_removed`. Tool use between turns sets none. The line is a signal: never stored, replayed or pushed.
 
 ## Agents
 
 - **mac.** A Claude Code session in the project folder, on the same session module and behind the same gate and sandbox as a bot, with its cards in its bot's chat. It loads its repo's own Claude Code config only once the repo is trusted (above). Each turn's final message goes back to the bot as an agent envelope.
+- **Evidence.** After each `done` turn the bridge reads git in the agent's folder: branch, head, commits ahead of the default branch (or of the commit its worktree started from), files changed, uncommitted work, and a GitHub PR URL the agent named. Its line goes above the agent's words in the report, and an agent line that imitates it is marked as the agent's. The same facts ride on `Agent.evidence`. The bridge runs git hardened: hooks, fsmonitor, filter drivers, pagers, the system config and prompts off, `protocol.file.allow=never`, no inherited `GIT_*` variable, refs after `--end-of-options`, and a 10 s timeout. It never runs a test command from the model or the repo.
+- **Worktrees.** `start_agent` takes `isolate`: `none`, `worktree` or `auto` (the default: a worktree when the checkout has uncommitted work or another live mac agent works there). A worktree goes in `~/.claudiobot-worktrees/<project>/<agentId>` on branch `claudio/<short id>`, outside every bot home, from the default branch. Repo trust and project config key on the main checkout. Only the user removes one (`remove_worktree`), and never with `--force`: removal is refused while the agent works, when the worktree is dirty, or when it holds ignored files other than build folders, such as an `.env`. The branch stays, and nothing deletes a worktree on its own.
+- **Capped.** An agent the daily cap stopped shows `capped` and resumes on a message tomorrow or a raised cap.
 - **cloud.** `claude --cloud <prompt>` run in the project folder under `script(1)`, because it refuses to run without a terminal, with a 90 second limit; a follow-up is `claude -p <text> --cloud <session> --output-format json`. The project needs a GitHub remote. The bridge neither gates nor meters it, and it does not report back. The bot gives you the link.
 
 ## What stays from v2

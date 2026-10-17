@@ -306,7 +306,7 @@ export type ClientMessage =
   | { type: "delete_skill"; botId: BotId; name: string }
   // Makes a new token for a webhook routine and invalidates the old one.
   | { type: "webhook_token"; botId: BotId; routineId: RoutineId }
-  // Removes the agent's worktree. Refused while the agent runs or the worktree holds uncommitted or unpushed work.
+  // Removes the agent's worktree. Refused while the agent works, or while the worktree holds uncommitted work or ignored files other than build folders.
   | { type: "remove_worktree"; agentId: AgentId }
   // Transport messages: the socket layer answers these, because they need the socket's own device.
   | { type: "devices" }

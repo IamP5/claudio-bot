@@ -1043,10 +1043,12 @@ describe("gap 3: persistence paths a shell, git or direnv loads are self-escalat
     `${HOME}/.local/bin/ls`,
     `${HOME}/Library/Preferences/com.apple.Terminal.plist`,
     `${HOME}/code/other/.cursor/mcp.json`,
-    `${HOME}/.cursor/mcp.json`,
   ])("Write %s asks in a user's turn, with no Always", (path) => {
     expect(verdict(w(path), { initiator: user })).toBe("ask:self.escalate");
     expect(decide(w(path), ctx())).toMatchObject({ offerAlways: false });
+  });
+  test("the user's own Cursor MCP config is a stored credential, refused", () => {
+    expect(verdict(w(`${HOME}/.cursor/mcp.json`), { initiator: user })).toBe("deny:floor.creds");
   });
   test("an agent writing its project's .envrc or .cursor/mcp.json asks", () => {
     expect(verdict(w(`${PROJECT}/.envrc`), { actor: agent, scope: agentScope })).toBe("ask:self.escalate");
@@ -1077,11 +1079,11 @@ describe("gap 3: decide stays bounded on a large command", () => {
   test("the same path named many times is resolved once", () => {
     let calls = 0;
     const realpath = (p: string) => {
-      calls++;
+      if (p.endsWith("notes.md")) calls++;
       return p;
     };
     expect(decide(sh("cat " + "notes.md ".repeat(2000)), ctx({ realpath }))).toEqual({ kind: "pass" });
-    expect(calls).toBeLessThan(50);
+    expect(calls).toBe(1);
   });
 });
 

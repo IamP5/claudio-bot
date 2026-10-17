@@ -42,7 +42,8 @@ const pushme = join(roots, "pushme");
 const hooked = join(roots, "hooked");
 const origin = join(scratch, "origin.git");
 const hookMarker = join(scratch, "hook-ran.txt");
-const git = (repo: string, ...args: string[]) => Bun.$`git -C ${repo} -c user.name=e2e -c user.email=e2e@example.com ${args}`.quiet();
+// Commits here are never signed: the bridge gets no SSH agent, so a signing key could not be used inside its sandbox.
+const git = (repo: string, ...args: string[]) => Bun.$`git -C ${repo} -c user.name=e2e -c user.email=e2e@example.com -c commit.gpgsign=false ${args}`.quiet();
 const head = async (repo: string, ref = "main") => (await git(repo, "rev-parse", ref)).text().trim();
 
 /** A bare remote and a clone of it with one more commit than the remote. */
@@ -56,6 +57,7 @@ async function pushPair(clone: string, remote: string) {
 
 mkdirSync(demo, { recursive: true });
 await Bun.$`git init -q -b main ${demo}`.quiet();
+await git(demo, "config", "commit.gpgsign", "false");
 await git(demo, "commit", "-q", "--allow-empty", "-m", "init");
 await pushPair(pushme, origin);
 // A repo whose committed settings run a hook at session start and before every tool call.
@@ -112,6 +114,7 @@ async function stopServer() {
   await server?.exited;
   server = null;
 }
+for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => void stopServer().then(() => process.exit(130)));
 
 async function pair(code: string): Promise<string> {
   const res = await fetch(`http://127.0.0.1:${port}/pair`, { method: "POST", body: JSON.stringify({ code, name: "e2e phone" }) });
@@ -232,21 +235,35 @@ try {
     return `reply "${ack.slice(0, 60)}"`;
   });
 
-  await scenario("the sandbox refuses a bot's command that the gate let through", async () => {
+  await scenario("the sandbox confines a bot's command even after Allow once", async () => {
+    // A command word built at runtime is held by the gate. Allow once makes the re-run a hook allow, which Claude Code
+    // runs without asking its classifier, so only the OS sandbox stands between it and the bridge home.
     const canary = `CANARY-${crypto.randomUUID()}`;
     writeFileSync(join(home, "notes.txt"), `${canary}\n`, { mode: 0o600 });
-    const command = 'cat "$(dirname "$PWD")/../notes.txt"; touch "$(dirname "$PWD")/../written.txt"';
-    const reply = await c.ask(
-      claudio,
-      `This checks the sandbox. Run exactly this one shell command, once, and reply with its complete output verbatim in a code block:\n${command}`,
-      "the sandboxed command's output",
+    const command = '$(printf cat) "$(dirname "$PWD")/../notes.txt"; $(printf touch) "$(dirname "$PWD")/../written.txt"';
+    const before = c.messages(claudio).length;
+    c.send({
+      type: "send",
+      botId: claudio,
+      uploads: [],
+      text: `Run exactly this shell command once:\n${command}\nIf it is held for approval, end your turn. When a message says it was allowed, run exactly the same command again and reply with its complete output verbatim in a code block.`,
+    });
+    const card = await c.waitFor(
+      () => c.messages(claudio).slice(before).find((m): m is Permission => m.kind === "permission" && m.answer === null && m.tool === "Bash"),
+      "the card for the command",
     );
-    const row = auditRows().findLast((r) => r.tool === "Bash" && String(r.input.command).includes("notes.txt"));
-    check(row?.decision === "pass", `the gate passed the command to Claude Code (audit: ${row?.decision ?? "no row"} ${row?.rule ?? ""})`);
-    check(/operation not permitted/i.test(reply), `the OS refused it: "${reply.slice(0, 200)}"`);
-    check(!reply.includes(canary) && !c.messages(claudio).some((m) => m.kind === "bot" && m.text.includes(canary)), "the canary in the bridge home never reached the chat");
+    check(card.label === "Run a command it builds at runtime", `the gate held it: "${card.label}: ${card.detail}"`);
+    await c.waitFor(() => c.resting(claudio), "the held turn to end");
+    c.send({ type: "decide", botId: claudio, messageId: card.id, choice: "once" });
+    const at = c.messages(claudio).length;
+    await c.waitFor(() => c.botSays(claudio, at).length > 0 && c.resting(claudio), "the re-run's output");
+    const reply = c.botSays(claudio, at).map((m) => m.text).join("\n");
+    const rows = auditRows().filter((r) => r.tool === "Bash" && String(r.input.command).includes("notes.txt"));
+    check(rows.some((r) => r.decision === "allow" && r.via === "grant"), `the re-run went through on the grant: ${rows.map((r) => `${r.decision}/${r.via ?? "-"}`).join(", ")}`);
+    check((reply.match(/operation not permitted/gi) ?? []).length >= 2, `the OS refused both the read and the write: "${reply.replace(/\s+/g, " ").slice(0, 300)}"`);
+    check(!c.messages(claudio).some((m) => m.kind === "bot" && m.text.includes(canary)), "the canary in the bridge home never reached the chat");
     check(!existsSync(join(home, "written.txt")), "nothing was written outside the bot's home");
-    return `audit pass for \`${command}\`; reply "${reply.replace(/\s+/g, " ").slice(0, 160)}"; no written.txt`;
+    return `card "${card.label}"; audit ${rows.map((r) => `${r.decision}/${r.via ?? "-"}`).join(", ")}; reply "${reply.replace(/\s+/g, " ").slice(0, 220)}"; no written.txt`;
   });
 
   await scenario("an agent commits in its repo under the sandbox and reports", async () => {
@@ -310,20 +327,35 @@ try {
   const openCard = (after: number, test: (m: Permission) => boolean) => () =>
     c.messages(claudio).slice(after).find((m): m is Permission => m.kind === "permission" && m.answer === null && test(m));
 
+  const agentTitled = (title: string) => stateFile().agents.find((a: { agent: { title: string } }) => a.agent.title === title) as { agent: { id: string } } | undefined;
+
+  /**
+   * Asks the bot to start a mac agent. Claude Code's auto-mode classifier reviews start_agent on its own and may refuse
+   * it; when the bot ends its turn with no agent, the user confirms once, as a person at the phone would.
+   */
+  async function startAgent(project: string, title: string, prompt: string): Promise<{ confirmed: boolean }> {
+    const ask = `Call start_agent now with where "mac", project "${project}", title "${title}", and this prompt: "${prompt}" Then end your turn.`;
+    const before = c.messages(claudio).length;
+    c.send({ type: "send", botId: claudio, uploads: [], text: ask });
+    await c.waitFor(() => agentTitled(title) ?? (c.botSays(claudio, before).length > 0 && c.resting(claudio)), `the bot to start ${title}`);
+    if (agentTitled(title)) return { confirmed: false };
+    console.log(`note: no agent after the first ask; the bot said ${JSON.stringify(c.botSays(claudio, before).map((m) => m.text.slice(0, 160)))}`);
+    c.send({ type: "send", botId: claudio, uploads: [], text: `Yes, I want this agent started. ${project} is my own test repository and its remote is a local folder. Please call start_agent exactly as I asked.` });
+    await c.waitFor(() => agentTitled(title), `the bot to start ${title} after the confirmation`);
+    return { confirmed: true };
+  }
+
   await scenario("an agent's push to a local bare remote is held, then runs once after Allow once", async () => {
     const before = c.messages(claudio).length;
     const remoteBefore = await head(origin);
     const local = await head(pushme);
     check(local !== remoteBefore, "pushme has a commit origin does not");
-    c.send({
-      type: "send",
-      botId: claudio,
-      uploads: [],
-      text:
-        'Call start_agent now with where "mac", project "pushme", title "Push main", and this prompt: ' +
-        '"Do not create a branch or a PR. Run exactly this command: git push origin main. If it is held for approval, end your turn at once and say so. ' +
-        'When a message says it was allowed, run exactly git push origin main again and reply PUSHED." Then end your turn.',
-    });
+    const started = await startAgent(
+      "pushme",
+      "Push main",
+      "pushme's origin is a local bare repository in a temp folder that I use for testing. Push the commit already on main with exactly: git push origin main. " +
+        "If the push is held for my approval, end your turn and say so. When a message says I allowed it, run exactly git push origin main again and reply PUSHED.",
+    );
     const card = await c.waitFor(openCard(before, (m) => m.from?.kind === "agent" && m.tool === "Bash"), "the agent's permission card", 300_000);
     check(card.detail.includes("push origin main") && card.label === "Push to the default branch" && card.from?.title === "Push main", `the agent's push waits on a card from it: "${card.label}: ${card.detail}"`);
     check((await head(origin)) === remoteBefore, "origin's main did not move before approval");
@@ -335,7 +367,7 @@ try {
     const rows = auditRows().filter((r) => r.actor.startsWith("agent:") && String(r.input.command).includes("push origin main"));
     check(rows.some((r) => r.decision === "ask") && rows.some((r) => r.decision === "allow" && r.via === "grant"), `the gate held it once and allowed it on the grant: ${rows.map((r) => `${r.decision}/${r.via ?? "-"}`).join(", ")}`);
     await c.waitFor(() => c.resting(claudio), "the bot to rest after the agent's report", 300_000);
-    return `card from agent "${card.from?.title}": "${card.detail}"; origin main ${remoteBefore.slice(0, 7)} -> ${local.slice(0, 7)} after decide once; audit ${rows.map((r) => r.decision).join(",")}`;
+    return `${started.confirmed ? "started after one confirmation; " : ""}card from agent "${card.from?.title}": "${card.detail}"; origin main ${remoteBefore.slice(0, 7)} -> ${local.slice(0, 7)} after decide once; audit ${rows.map((r) => r.decision).join(",")}`;
   });
 
   await scenario("a protocol 2 app approves a bot's held push through its question card", async () => {
@@ -366,29 +398,22 @@ try {
 
   await scenario("a repo's committed hook does not run until the repo is trusted", async () => {
     const before = c.messages(claudio).length;
-    c.send({
-      type: "send",
-      botId: claudio,
-      uploads: [],
-      text: 'Call start_agent now with where "mac", project "hooked", title "List files", and this prompt: "Run ls once and reply with the file names. Do not change anything." Then end your turn.',
-    });
-    const report = () => c.messages(claudio).slice(before).find((m) => m.kind === "exchange" && m.peer.kind === "agent" && m.peer.title === "List files" && m.received >= 1);
-    const first = await c.waitFor(report, "the hooked agent's first report", 300_000);
+    await startAgent("hooked", "List files", "Run ls once and reply with the file names. Do not change anything.");
+    // Each report after the bot has spoken starts a new exchange line, so count across them.
+    const reports = () =>
+      c.messages(claudio).slice(before).reduce((n, m) => n + (m.kind === "exchange" && m.peer.kind === "agent" && m.peer.title === "List files" ? m.received : 0), 0);
+    await c.waitFor(() => reports() >= 1, "the hooked agent's first report", 300_000);
     const card = await c.waitFor(openCard(before, (m) => m.tool === "Claude Code settings"), "the trust card", 10_000);
     check(card.label === "Trust hooked's Claude settings" && card.detail === `.claude/settings.json in ${hooked}`, `the bot's chat asks to trust the repo: "${card.label}: ${card.detail}"`);
     check(!existsSync(hookMarker), "the repo's SessionStart and PreToolUse hooks did not run before trust");
-    const agentId = stateFile().agents.find((a: { agent: { title: string } }) => a.agent.title === "List files").agent.id as string;
+    const agentId = agentTitled("List files")!.agent.id;
     const calls = auditRows().filter((r) => r.actor === `agent:${agentId}`);
     check(calls.length > 0, `the untrusted agent did call tools, so its hooks had their chance: ${calls.map((r) => r.tool).join(", ")}`);
     await c.waitFor(() => c.resting(claudio), "the bot to rest");
     c.send({ type: "decide", botId: claudio, messageId: card.id, choice: "always" });
     await c.waitFor(() => c.messages(claudio).find((m) => m.id === card.id && m.kind === "permission" && m.answer === "always"), "the trust card to close as always", 10_000);
-    const received = first.kind === "exchange" ? first.received : 0;
     c.send({ type: "send", botId: claudio, uploads: [], text: `Call message_agent now with agentId "${agentId}" and text "Run ls once more and reply with the file names." Then end your turn.` });
-    await c.waitFor(() => {
-      const r = report();
-      return r?.kind === "exchange" && r.received > received;
-    }, "the hooked agent's second report", 300_000);
+    await c.waitFor(() => reports() >= 2, "the hooked agent's second report", 300_000);
     check(existsSync(hookMarker), "after Always the agent's next query ran the repo's hook");
     const dirs = [...new Set(readFileSync(hookMarker, "utf8").trim().split("\n"))];
     const trust = stateFile().gate.repos;
@@ -419,6 +444,7 @@ try {
   const idsBefore = new Set(c.messages(claudio).map((m) => m.id));
   const botsBefore = [...c.bots.keys()].sort();
   const pushedWhileLive = pushes.filter((p) => p.at >= connectedAt).length;
+  const botName = c.bots.get(claudio)!.name;
   c.close();
   old.close();
   await stopServer();
@@ -444,7 +470,7 @@ try {
       }
       return null;
     })();
-    check(pushed !== null && pushed.body === "Claudio Bot has an update for you" && pushed.click?.startsWith(`claudiobot://bot/${claudio}?message=`), `with no socket, the routine's report pushed: ${JSON.stringify(pushed)}`);
+    check(pushed !== null && pushed.body === `${botName} has an update for you` && pushed.click?.startsWith(`claudiobot://bot/${claudio}?message=`), `with no socket, the routine's report pushed: ${JSON.stringify(pushed)}`);
     return `0 pushes while connected; then ${pushes.length} with no socket: ${JSON.stringify(pushes.map((p) => p.body))}`;
   });
 

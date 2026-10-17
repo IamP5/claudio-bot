@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import qrcode from "qrcode-terminal";
+import { accessLine, accessOf } from "./access";
 import { bridgeUrls, lanAddresses, pairLink, readNames } from "./address";
 import { createDevices, type PairCode } from "./devices";
 import { createHomes } from "./home";
@@ -131,6 +132,7 @@ const urls = bridgeUrls(await readNames(run), lanAddresses(), transport.port);
 
 console.log(`claudiobot bridge on ${machine}`);
 for (const url of urls) console.log(`  ${url}`);
+console.log(accessLine(accessOf(process.env)));
 
 function announce({ code, expiresAt }: PairCode) {
   const link = pairLink(urls, code);

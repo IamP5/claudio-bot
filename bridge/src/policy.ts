@@ -42,6 +42,8 @@ export type Scope = {
   homedir: string;
   /** Known username → home directory, so `~name` resolves. The boundary fills at least the current user and root. */
   users?: Readonly<Record<string, string>>;
+  /** CLAUDIOBOT_ACCESS=full (access.ts): only FULL_FLOORS refuse, and only FULL_HELD rows wait for a tap. */
+  full?: boolean;
 };
 
 export type PolicyContext = {
@@ -655,6 +657,30 @@ const ESCALATE = {
     return false;
   },
 };
+
+/** The floors full access keeps: the bridge's own state and the config it loads, which no bot may rewrite. */
+const FULL_FLOORS: ReadonlySet<string> = new Set(["floor.bridge", "floor.selfescalate"]);
+
+/**
+ * The rows full access still holds: what leaves the Mac for good or reaches every bot. The claudio tools keep their
+ * unattended asks, so a routine or a bot's message still cannot make bots, agents or routines on its own.
+ */
+const FULL_HELD: ReadonlySet<string> = new Set([
+  "memory.user",
+  "git.rewrite",
+  "git.push.remote",
+  "git.push.default",
+  "gh.admin",
+  "gh.api.danger",
+  "gh.post",
+  "secrets",
+  "publish",
+  "deploy",
+  "rm.outside",
+]);
+
+const floorsFor = (ctx: PolicyContext) => (ctx.scope.full ? FLOORS.filter((f) => FULL_FLOORS.has(f.id)) : FLOORS);
+const heldIn = (row: Row, ctx: PolicyContext) => !ctx.scope.full || FULL_HELD.has(row.id) || row.id.startsWith("claudio.");
 
 /** Always denied, checked first, never liftable: no card is ever posted for these, so no rule or grant can name them. */
 const FLOORS: readonly Floor[] = [
@@ -1376,7 +1402,7 @@ function boundedRealpath(realpath: (path: string) => string): (path: string) => 
 function rawFloorDeny(call: ToolCall, ctx: PolicyContext): Decision | null {
   if (call.tool !== "Bash") return null;
   const raw = String(call.input.command);
-  for (const floor of FLOORS) {
+  for (const floor of floorsFor(ctx)) {
     if (!floor.rawScan) continue;
     const roots = floor.roots(ctx);
     if (rawScanHit(raw, roots, roots.map(ctx.realpath), ctx)) return deny("floor", floor.id, floorReason(floor), floor.handOff ?? false);
@@ -1392,7 +1418,7 @@ export function decide(call: ToolCall, outer: PolicyContext): Decision {
   const at: { via: DenyVia; rule: string } = { via: "floor", rule: "floor.paths" };
   try {
     const view = viewOf(call, ctx);
-    for (const floor of FLOORS) {
+    for (const floor of floorsFor(ctx)) {
       at.rule = floor.id;
       if (floorHit(floor, call, view, ctx)) return deny("floor", floor.id, floorReason(floor), floor.handOff ?? false);
     }
@@ -1422,7 +1448,7 @@ export function decide(call: ToolCall, outer: PolicyContext): Decision {
           const target = row.target?.(part) ?? null;
           const subject = part.kind === "call" && isConnector(part.call) ? `${row.label}: ${mcpName(part.call.tool)}` : target !== null ? `${row.label}: ${target}` : row.label;
           const toolName = part.kind === "bash" ? "Bash" : part.call.tool;
-          const cellOf = isAttended ? row.attended : row.unattended;
+          const cellOf = !heldIn(row, ctx) ? "pass" : isAttended ? row.attended : row.unattended;
           const signature = `${toolName}:${row.id}${target === null ? "" : `:${target}`}` as Signature;
           return { row, cell: typeof cellOf === "function" ? cellOf(part, ctx) : cellOf, signature, label: subject };
         }

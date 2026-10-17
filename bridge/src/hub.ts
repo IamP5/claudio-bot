@@ -6,6 +6,7 @@ import { createActivity } from "./activity";
 import { createAgents } from "./agents";
 import { createClock, type Tickable } from "./clock";
 import { connectorSettings, createConnectors } from "./connectors";
+import { accessOf } from "./access";
 import { createGate } from "./gate";
 import type { Homes } from "./home";
 import { createLedger, localDay } from "./ledger";
@@ -288,10 +289,11 @@ export function createHub(deps: HubDeps): Hub {
     const home = realpathSync(homedir());
     // So ~name in a command resolves for the user and for root.
     const users = { [userInfo().username]: home, root: process.platform === "darwin" ? "/var/root" : "/root" };
-    if (actor.kind === "bot") return { bridgeHome, own: realpathSync(homes.homeOf(actor.botId)), userMd: join(bridgeHome, "USER.md"), homedir: home, users };
+    const { full } = accessOf(process.env);
+    if (actor.kind === "bot") return { bridgeHome, own: realpathSync(homes.homeOf(actor.botId)), userMd: join(bridgeHome, "USER.md"), homedir: home, users, full };
     const rec = world.agents.get(actor.agentId);
     if (!rec) throw new Error(`Unknown agent ${actor.agentId}`);
-    return { bridgeHome, own: realpathSync(rec.cwd), userMd: null, homedir: home, users };
+    return { bridgeHome, own: realpathSync(rec.cwd), userMd: null, homedir: home, users, full };
   }
 
   function deliver(actor: Actor, e: Envelope) {

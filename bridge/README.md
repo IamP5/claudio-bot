@@ -49,6 +49,8 @@ The phone paired with the old shared token keeps working until 1 January 2027 (`
 | `CLAUDIOBOT_PUSH_URL` | off | An ntfy topic URL. When set, the bridge pushes while no phone is connected. |
 | `CLAUDIOBOT_WEBHOOK_PORT` | `7879` | Port of the webhook listener, on 127.0.0.1 only. `0` picks a free port. |
 | `CLAUDIOBOT_WORKTREES` | `~/.claudiobot-worktrees` | The folder Mac agents' worktrees go in. |
+| `CLAUDIOBOT_ACCESS` | `guarded` | `full`: only the bridge-home floors stay, only what leaves the Mac for good is held (`FULL_HELD` in `policy.ts`), the sandbox defaults to off and every repo's Claude Code config loads. See `src/access.ts`. |
+| `CLAUDIOBOT_SANDBOX` | `on` (`off` under full) | `off`: Bash runs outside Seatbelt. `on` under full access keeps the writes and denies reads of the bridge home only. |
 | `CLAUDIOBOT_ALLOWED_DOMAINS` | | Comma-separated hosts sandboxed commands reach without review, on top of `github.com`, `*.github.com`, `*.githubusercontent.com`, the npm and Yarn registries, PyPI and crates.io. |
 | `CLAUDIOBOT_SANDBOX_STRICT_NETWORK` | off | `1`: that list is the whole allowlist, and a command cannot ask for another host with `allowed_domains`. |
 | `CLAUDIOBOT_SANDBOX_GH` | off | `1`: Mac agents may run `gh` (its config becomes readable and the sandbox allows the TLS trust service). Bots never get it. |

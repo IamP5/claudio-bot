@@ -1,5 +1,6 @@
 import type * as nodeFs from "node:fs";
 import { join } from "node:path";
+import { accessLine, accessOf, type Access } from "./access";
 import { bridgeUrls, tailnetName } from "./address";
 import { lockPathOf, pidIn } from "./lock";
 import { projectRoots } from "./projects";
@@ -44,6 +45,8 @@ export type Facts = {
   mainExists: boolean | null;
   /** The environment the service runs with: the plist's when installed, else this shell's. */
   envFrom: "plist" | "shell";
+  /** CLAUDIOBOT_ACCESS and CLAUDIOBOT_SANDBOX as the service reads them. */
+  access: Access;
   bun: { path: string | null; version: string | null };
   claude: { asked: string; path: string | null; version: string | null };
   home: { path: string; mode: number | null };
@@ -196,6 +199,7 @@ export async function gather(deps: DoctorDeps, target: ServiceTarget): Promise<F
     roots: { explicit: explicitRoots, list: roots },
     tailscale: await tailscaleOf(exec, tailscalePath, view.port),
     lan: deps.lan(),
+    access: accessOf(view.env),
     legacy: {
       homeSet: view.env.CLAUDIOBOT_HOME !== undefined,
       oldEnvSet: view.env.CLAUDEBOT_HOME !== undefined,
@@ -297,6 +301,13 @@ const CHECKS: Check[] = [
     if (!f.tailscale.url) return pass("tailscale", `${f.tailscale.ip}; turn on MagicDNS for a *.ts.net name the app can use`);
     return pass("tailscale", `${f.tailscale.url} (${f.tailscale.ip}): use it in Edit address to reach the bridge away from home`);
   },
+
+  (f) =>
+    f.access.full
+      ? warn("access", `${accessLine(f.access)}: bots and agents reach your keys, credentials, ~/.claude and every repo's config, as you do`)
+      : f.access.sandbox
+        ? pass("access", accessLine(f.access))
+        : warn("access", `${accessLine(f.access)}: commands run unsandboxed under the gate's rules`),
 
   (f) => (f.lan.length === 0 ? warn("lan", "no LAN address: a phone on the same Wi-Fi cannot reach the bridge") : pass("lan", f.lan.join(", "))),
 

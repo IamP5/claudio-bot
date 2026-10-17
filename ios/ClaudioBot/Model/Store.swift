@@ -136,8 +136,9 @@ final class AppStore {
     private(set) var skills: [BotID: [Skill]] = [:]
     /// The newest webhook token, shown once and then dismissed.
     private(set) var webhookToken: WebhookToken?
-    /// Sends the bridge has not echoed back yet, oldest first, each with the hellos it was resent after.
-    private(set) var unechoedSends: [(message: ClientMessage, resends: Int)] = []
+    /// Sends the bridge has not echoed back yet, oldest first, each with how many times a socket took it. In memory
+    /// only: quitting the app forgets them.
+    private(set) var unechoedSends: [(message: ClientMessage, transmitted: Int)] = []
 
     func has(_ feature: Feature) -> Bool {
         features.contains(feature)
@@ -188,17 +189,24 @@ final class AppStore {
         unechoedSends.append((msg, 0))
     }
 
-    /// What to send again on the socket that just said hello, with the same clientIds. A send still unechoed after
-    /// three resends is given up, so one the bridge refuses is not repeated forever.
+    /// A socket took the frame. Only these count toward giving up, so a send made offline survives any number of
+    /// reconnects that drop before it goes out.
+    func sendTransmitted(_ msg: ClientMessage) {
+        guard let i = unechoedSends.firstIndex(where: { $0.message == msg }) else { return }
+        unechoedSends[i].transmitted += 1
+    }
+
+    /// What to send again on the socket that just said hello, with the same clientIds. A send three sockets took
+    /// without an echo is given up, so one the bridge refuses is not repeated forever.
     func resendsAfterHello() -> [ClientMessage] {
         // The bridge drops a repeated clientId from the same release that added mute; an older one would post it twice.
         guard has(.mute) else {
             unechoedSends = []
             return []
         }
-        unechoedSends = unechoedSends.compactMap { pending in
-            guard case .send(let botId, _, _, _) = pending.message, bots[botId] != nil, pending.resends < 3 else { return nil }
-            return (pending.message, pending.resends + 1)
+        unechoedSends.removeAll { pending in
+            guard case .send(let botId, _, _, _) = pending.message, bots[botId] != nil else { return true }
+            return pending.transmitted >= 3
         }
         return unechoedSends.map(\.message)
     }

@@ -45,7 +45,9 @@ test("a first start makes the home private before anything is written into it", 
   const bin = join(root, "bin");
   const seen = join(root, "home-mode");
   mkdirSync(bin);
-  writeFileSync(join(bin, "scutil"), `#!/bin/sh\n/usr/bin/stat -f %Lp "$CLAUDIOBOT_HOME" > "${seen}" 2>/dev/null || echo missing > "${seen}"\necho Mac\n`, { mode: 0o755 });
+  // GNU stat first: BSD stat has no -c, while GNU stat -f means something else and succeeds.
+  const mode = `stat -c %a "$CLAUDIOBOT_HOME" 2>/dev/null || stat -f %Lp "$CLAUDIOBOT_HOME" 2>/dev/null || echo missing`;
+  writeFileSync(join(bin, "scutil"), `#!/bin/sh\n{ ${mode}; } > "${seen}"\necho Mac\n`, { mode: 0o755 });
   const bridge = Bun.spawn(["bun", join(import.meta.dir, "../src/main.ts")], {
     env: { PATH: `${bin}:${process.env.PATH}`, HOME: root, CLAUDIOBOT_HOME: home, CLAUDIOBOT_PORT: "0", CLAUDIOBOT_WEBHOOK_PORT: "0", CLAUDIOBOT_USER_NAME: "Alex", CLAUDIOBOT_CLAUDE: join(root, "no-claude") },
     stdout: "ignore",

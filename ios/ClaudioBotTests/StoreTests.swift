@@ -673,13 +673,23 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(store.resendsAfterHello().isEmpty)
     }
 
-    @Test func aSendIsGivenUpAfterThreeResendsOrWhenItsBotIsGone() {
+    @Test func aSendIsGivenUpOnceThreeSocketsTookItOrWhenItsBotIsGone() {
         let store = store(bots: ["b1", "b2"])
         store.sendStarted(send("stuck", id: "c1"))
         store.sendStarted(send("orphan", to: "b2", id: "c2"))
         store.apply(.botRemoved(BotID("b2")))
-        for _ in 0..<3 { #expect(store.resendsAfterHello() == [send("stuck", id: "c1")]) }
+        store.sendTransmitted(send("stuck", id: "c1"))
+        for _ in 0..<2 {
+            #expect(store.resendsAfterHello() == [send("stuck", id: "c1")])
+            store.sendTransmitted(send("stuck", id: "c1"))
+        }
         #expect(store.resendsAfterHello().isEmpty)
+    }
+
+    @Test func aSendMadeOfflineSurvivesReconnectsThatDropBeforeItGoesOut() {
+        let store = store()
+        store.sendStarted(send("offline", id: "c1"))
+        for _ in 0..<10 { #expect(store.resendsAfterHello() == [send("offline", id: "c1")]) }
     }
 
     @Test func aBridgeThatCannotDropRepeatsGetsNoResend() {

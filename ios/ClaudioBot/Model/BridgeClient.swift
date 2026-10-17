@@ -174,7 +174,7 @@ final class BridgeClient {
         if Demo.isEnabled { return Demo.respond(to: msg, store: store) }
         #endif
         if let socket, store.machine != nil {
-            transmit(msg, on: socket)
+            transmitCounted(msg, on: socket)
         } else {
             outbox.append(msg)
         }
@@ -193,6 +193,15 @@ final class BridgeClient {
 
     private func transmitIfConnected(_ msg: ClientMessage) {
         if let socket, store.machine != nil { transmit(msg, on: socket) }
+    }
+
+    /// A send's frame counts toward giving up its resends only once a socket took it.
+    private func transmitCounted(_ msg: ClientMessage, on socket: URLSessionWebSocketTask) {
+        guard case .send = msg else { return transmit(msg, on: socket) }
+        let store = store
+        transmit(msg, on: socket) { ok in
+            if ok { Task { @MainActor in store.sendTransmitted(msg) } }
+        }
     }
 
     private func transmit(_ msg: ClientMessage, on socket: URLSessionWebSocketTask, sent: @escaping @Sendable (Bool) -> Void = { _ in }) {
@@ -302,7 +311,7 @@ final class BridgeClient {
                 greeted = true
                 if let openBot { transmit(.open(botId: openBot), on: ws) }
                 let resent = store.resendsAfterHello()
-                resent.forEach { transmit($0, on: ws) }
+                resent.forEach { transmitCounted($0, on: ws) }
                 let pending = outbox
                 outbox.removeAll()
                 pending.filter { !resent.contains($0) }.forEach { send($0) }

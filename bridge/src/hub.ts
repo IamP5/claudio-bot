@@ -670,8 +670,10 @@ export function createHub(deps: HubDeps): Hub {
         changed(bot);
         return [{ type: "conversation", botId: bot.id, messages: bot.messages }];
       case "send": {
-        // A phone resends what it never saw echoed after a reconnect; the first copy may have arrived.
-        if (message.clientId !== undefined && bot.messages.some((m) => m.kind === "user" && m.clientId === message.clientId)) return [];
+        // A phone resends what it never saw echoed after a reconnect; the first copy may have arrived. The echo goes back
+        // to the sender so its pending send settles.
+        const sent = message.clientId === undefined ? undefined : bot.messages.find((m) => m.kind === "user" && m.clientId === message.clientId);
+        if (sent) return [{ type: "message", botId: bot.id, message: sent }];
         const attachments = homes.saveUploads(bot.id, message.uploads);
         if ("error" in attachments) return error(attachments.error);
         say(bot, { kind: "user", id: newMessageId(), at: now(), text: message.text, attachments, ...(message.clientId !== undefined && { clientId: message.clientId }) });

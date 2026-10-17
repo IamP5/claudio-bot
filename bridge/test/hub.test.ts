@@ -1007,7 +1007,8 @@ test("a send repeated with the same clientId posts one user message and delivers
   h.homes.create(b.id, "# eng\n");
   const send: ClientMessage = { type: "send", botId: b.id, text: "status?", uploads: [], clientId: "c-1" };
   expect(await h.hub.handle(send)).toEqual([]);
-  expect(await h.hub.handle(send)).toEqual([]);
+  const echo = b.messages.find((m) => m.kind === "user");
+  expect(await h.hub.handle(send)).toEqual([{ type: "message", botId: b.id, message: echo! }]);
   await flush();
   h.q().emit(assistant(text("All green.")), result());
   await flush();

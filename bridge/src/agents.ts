@@ -175,7 +175,11 @@ export function createAgents(deps: {
   }
 
   function turnEnded(rec: AgentRecord, by: Initiator, end: TurnEnd) {
-    if (usedBudget(end)) return deps.ledger.budgetLeft(rec.agent.id) > 0 ? report(rec, "capped", CAPPED, by) : report(rec, "failed", "The agent used its budget.", by);
+    if (usedBudget(end)) {
+      // The ledger caps each query at the smaller of the bot's daily room and the agent's own budget.
+      if (deps.ledger.budgetLeft(rec.agent.id) > 0) return report(rec, "capped", CAPPED, by);
+      return report(rec, "failed", "The agent used its budget.", by);
+    }
     switch (end.kind) {
       case "done": {
         const m = end.result;

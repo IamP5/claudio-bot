@@ -82,9 +82,9 @@ const SDK_INTERNAL = new Set(["Agent", "SubagentHandback"]);
 
 const PASS: Decision = { kind: "pass" };
 
-/** One simple command of a Bash line, wrappers stripped, with the directory it runs in and the paths it touches. */
+/** One simple command of a Bash line, wrappers stripped, with the dirs it may run in and the paths it touches. */
 type Part =
-  | { kind: "bash"; words: string[]; verb: string; text: string; cwd: string; dynamicCmd: boolean; touches: Touch[] }
+  | { kind: "bash"; words: string[]; verb: string; text: string; cwds: string[]; dynamicCmd: boolean; recursive: boolean; emptyDynamicRm: boolean; pushUntrusted: boolean; shellStdin: boolean; touches: Touch[] }
   | { kind: "call"; call: ToolCall; touches: Touch[] };
 
 /** A path a call touches, as written (resolved against cwd and ~) and as it really is (symlinks resolved). */
@@ -147,10 +147,14 @@ const absRaw = (p: string, dir: string) => (isAbsolute(p) ? p : `${dir}${sep}${p
 /** Keys whose string values are paths, in any tool's input (built-in file tools and MCP filesystem servers alike). */
 const PATH_KEY = /path|file|dir|folder|uri|url|location|^(cwd|src|source|dest|destination|target)$/i;
 const looksPath = (v: string) => /^[~/]/.test(v) || v.startsWith("file://") || /\$\{?HOME\b/.test(v) || v.includes("/");
+/** A file's new contents, never a path; scanning it as paths is slow and pointless (perf, SHOULD 10). */
+const BODY_KEYS = new Set(["content", "old_string", "new_string", "new_source"]);
 
 /** Every string in a tool's input that could name a path: keyed as a path, or shaped like one anywhere it appears. */
 function inputPaths(value: unknown, key: string | null, out: string[]) {
   if (typeof value === "string") {
+    if (key !== null && BODY_KEYS.has(key)) return; // a file body, not a path
+    if (value.length > MAX_PATH_LEN) return; // no real path is this long, and scanning it is quadratic
     if (value !== "" && ((key !== null && PATH_KEY.test(key)) || looksPath(value))) out.push(value);
   } else if (Array.isArray(value)) {
     for (const v of value) inputPaths(v, key, out);
@@ -159,25 +163,34 @@ function inputPaths(value: unknown, key: string | null, out: string[]) {
   }
 }
 
-/** Prefix words that run the command after them. Each lists its options that take a value. */
+/**
+ * Prefix words that run the command after them. Each lists the options that take a separate-word value, so the value is
+ * not mistaken for the wrapped command. Long and short spellings both appear, since a long option's value is a word too
+ * (`timeout --signal KILL`, `nice --adjustment 5`). zsh precommand modifiers (noglob, nocorrect) and coproc are here too.
+ */
 const WRAPPERS: Record<string, readonly string[]> = {
-  env: ["-u", "-C", "-S"],
+  env: ["-u", "--unset", "-C", "--chdir", "-S", "--split-string"],
   command: [],
   builtin: [],
   exec: ["-a"],
   nohup: [],
   time: [],
-  nice: ["-n"],
-  arch: [],
-  stdbuf: [],
+  nice: ["-n", "--adjustment"],
+  arch: ["-arch"],
+  xcrun: ["--sdk", "--toolchain"],
+  stdbuf: ["-i", "-o", "-e"],
   setsid: [],
+  ionice: ["-c", "-n"],
+  noglob: [],
+  nocorrect: [],
+  coproc: [],
   npx: ["-p", "--package", "-c"],
   bunx: [],
   watch: ["-n", "--interval"],
-  sudo: ["-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U", "-T"],
+  sudo: ["-u", "--user", "-g", "--group", "-h", "-p", "--prompt", "-C", "-D", "--chdir", "-r", "--role", "-t", "--type", "-U", "--other-user", "-T", "--command-timeout"],
   doas: ["-u", "-C"],
-  xargs: ["-I", "-n", "-P", "-L", "-d", "-E", "-s", "-a"],
-  timeout: ["-s", "-k"],
+  xargs: ["-I", "-n", "--max-args", "-P", "--max-procs", "-L", "-d", "-E", "-s", "-a"],
+  timeout: ["-s", "--signal", "-k", "--kill-after"],
   caffeinate: ["-t", "-w"],
   if: [],
   then: [],
@@ -192,17 +205,40 @@ const WRAPPERS: Record<string, readonly string[]> = {
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish"]);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
-/** The command a segment really runs, or a script it hands to a shell (bash -c, eval). Operates on de-quoted words. */
-function unwrap(raw: string[]): { words: string[] } | { script: string } {
+/** The executable's name for matching rows: a leading zsh `=` stripped, the basename taken, lower-cased (MUST 3). */
+const verbOf = (word: string) => basename(word.startsWith("=") ? word.slice(1) : word).toLowerCase();
+
+/** What a wrapped segment really runs: a command, or a script handed to a shell. `chdir` is set by env -C/--chdir. */
+type Unwrapped = ({ words: string[] } | { script: string }) & { chdir?: string };
+
+/** The command a segment really runs, or a script it hands to a shell (bash -c, eval, env -S). Operates on de-quoted words. */
+function unwrap(raw: string[]): Unwrapped {
   let words = raw;
+  let chdir: string | undefined;
   for (;;) {
     while (words.length > 0 && ASSIGNMENT.test(words[0]!)) words = words.slice(1);
-    const head = words[0] === undefined ? "" : basename(words[0]);
+    const head = words[0] === undefined ? "" : verbOf(words[0]);
+    if (head === "function") {
+      // `function name { body; }`: drop the keyword and the name, leaving `{ body` for the `{` wrapper to strip.
+      words = words.slice(1);
+      if (words.length > 0 && !META.test(words[0]!) && words[0] !== "{") words = words.slice(1);
+      continue;
+    }
     const valued = WRAPPERS[head];
     if (valued !== undefined) {
       let i = 1;
-      while (i < words.length && (words[i]!.startsWith("-") || ASSIGNMENT.test(words[i]!))) i += valued.includes(words[i]!) ? 2 : 1;
+      for (; i < words.length && (words[i]!.startsWith("-") || ASSIGNMENT.test(words[i]!)); i += valued.includes(words[i]!) ? 2 : 1) {
+        // env -S / --split-string takes a whole script as its value; re-parse it rather than skip it.
+        if (head === "env" && (words[i] === "-S" || words[i] === "--split-string") && words[i + 1] !== undefined) return { script: words[i + 1]!, chdir };
+        const inline = words[i]!.match(/^-S(.+)$|^--split-string=(.*)$/s);
+        if (head === "env" && inline) return { script: inline[1] ?? inline[2]!, chdir };
+        if (head === "env" && (words[i] === "-C" || words[i] === "--chdir") && words[i + 1] !== undefined) chdir = words[i + 1];
+        const c = words[i]!.match(/^(?:-C|--chdir)=(.*)$/s);
+        if (head === "env" && c) chdir = c[1];
+      }
       if (head === "timeout" && i < words.length) i++;
+      // A bare `env` / `env -i` / `env A=1` with no command is an environment dump, not a wrapper; surface it (SHOULD 14).
+      if (head === "env" && i >= words.length) return { words: ["env"], chdir };
       words = words.slice(i);
       continue;
     }
@@ -219,22 +255,26 @@ function unwrap(raw: string[]): { words: string[] } | { script: string } {
       if (flag !== -1) {
         let j = flag + 1;
         while (words[j] === "--") j++;
-        if (words[j] !== undefined) return { script: words[j]! };
+        if (words[j] !== undefined) return { script: words[j]!, chdir };
       }
     }
-    if (head === "eval") return { script: words.slice(1).join(" ") };
-    return { words: head === "" ? [] : [head, ...words.slice(1)] };
+    if (head === "eval") return { script: words.slice(1).join(" "), chdir };
+    return { words: words.length === 0 ? [] : [verbOf(words[0]!), ...words.slice(1)], chdir };
   }
 }
 
 const hasFlag = (words: string[], re: RegExp) => words.some((w) => w.startsWith("-") && re.test(w));
-const RECURSIVE = (verb: string, words: string[]) =>
-  verb === "find" || verb === "rg" || verb === "ln" || verb === "ditto" || verb === "tar" ||
-  (verb === "grep" && (hasFlag(words, /^-[A-Za-z]*[rR]/) || words.includes("--recursive"))) ||
-  (verb === "cp" && (hasFlag(words, /^-[A-Za-z]*[aRr]/) || words.some((w) => w === "--recursive" || w === "--archive"))) ||
-  (verb === "zip" && hasFlag(words, /^-[A-Za-z]*r/)) ||
-  (verb === "rsync" && hasFlag(words, /^-[A-Za-z]*[ar]/)) ||
-  (verb === "du" && false);
+const RECURSIVE = (verb: string, words: Word[]) => {
+  const texts = words.map((w) => w.text);
+  // A brace-built flag (`rm {-r,-f}`, `rm -{r,f}`) hides the -r from a plain scan, so a brace word counts as possibly recursive.
+  const braceFlag = words.some((w) => w.brace && /r/i.test(w.text) && /^-|,-|\{-/.test(w.text));
+  return verb === "find" || verb === "rg" || verb === "ln" || verb === "ditto" || verb === "tar" ||
+    (verb === "rm" && (braceFlag || hasFlag(texts, /^-[A-Za-z]*[rR]/) || texts.some((a) => /^--rec/.test(a)))) ||
+    (verb === "grep" && (hasFlag(texts, /^-[A-Za-z]*[rR]/) || texts.includes("--recursive"))) ||
+    (verb === "cp" && (hasFlag(texts, /^-[A-Za-z]*[aRr]/) || texts.some((w) => w === "--recursive" || w === "--archive"))) ||
+    (verb === "zip" && hasFlag(texts, /^-[A-Za-z]*r/)) ||
+    (verb === "rsync" && hasFlag(texts, /^-[A-Za-z]*[ar]/));
+};
 const WRITING = (verb: string, words: string[]) =>
   verb === "tee" || verb === "cp" || verb === "mv" || verb === "ln" || verb === "install" || verb === "ditto" || verb === "rsync" || verb === "dd" ||
   (verb === "sed" && hasFlag(words, /^-[A-Za-z]*i/)) || (verb === "perl" && hasFlag(words, /^-[A-Za-z]*i/));
@@ -242,87 +282,204 @@ const WRITING = (verb: string, words: string[]) =>
 /** A command word is a $PATH lookup, not a cwd-relative file, unless it is spelled as a path. */
 const commandIsPath = (text: string) => text.startsWith("/") || text.startsWith("~") || text.startsWith("./") || text.startsWith("../");
 const META = /[$`*?[{]/;
+/** A path longer than any real filesystem path is a file body or a huge literal, not a path to resolve (perf, SHOULD 10). */
+const MAX_PATH_LEN = 4096;
+/** A Bash command past this is held rather than parsed, so the synchronous hook cannot freeze the bridge (perf, SHOULD 10). */
+const MAX_BASH_LEN = 256 * 1024;
+
+/** Replace $name / ${name} with a tracked literal assignment's value (SHOULD 8), so `d=.ssh; cat ~/$d/id_rsa` resolves. */
+function substVars(text: string, vars: Record<string, string>): string {
+  if (Object.keys(vars).length === 0 || !text.includes("$")) return text;
+  return text.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (m, a: string, b: string) => vars[a ?? b] ?? m);
+}
 
 /**
- * One path a word names: `~`, `~name`, `~+` and `$HOME` are expanded first, then the path is cut at the first metachar
- * that is still unresolved ($VAR, a backtick, a glob). A word with a leftover metachar only knows its literal prefix,
- * so it matches a root as an ancestor (its glob could expand into the root). Empty prefixes resolve to nothing.
+ * One path a word names: tracked vars and `~`, `~name`, `~+`, `$HOME` are expanded first, then the path is cut at the
+ * first metacharacter still unresolved ($VAR, a backtick, a glob). A word with a leftover metachar only knows the
+ * directory above the metachar (cut back to the last `/`, MUST 4), which matches a protected root as an ancestor: the
+ * glob could expand into the root. Empty prefixes resolve to nothing.
  */
-function candidateTouch(raw: string, dir: string, ctx: PolicyContext, ancestorAnyway: boolean, write: boolean): Touch | null {
-  const expanded = expandHome(stripScheme(raw), ctx, dir);
+function candidateTouch(raw: string, dir: string, ctx: PolicyContext, vars: Record<string, string>, ancestorAnyway: boolean, write: boolean): Touch | null {
+  if (raw.length > MAX_PATH_LEN) return null;
+  const expanded = expandHome(substVars(stripScheme(raw), vars), ctx, dir);
   const m = expanded.search(META);
-  const cut = m === -1 ? expanded : expanded.slice(0, m);
+  let cut = m === -1 ? expanded : expanded.slice(0, m);
+  if (m !== -1) {
+    // The metachar is unresolved, so only the directory above it is a known path; back up to the last `/` (MUST 4).
+    const slash = cut.lastIndexOf("/");
+    if (slash >= 0) cut = cut.slice(0, slash + 1);
+  }
   if (cut === "" || isDigits(cut)) return null;
   const lexical = normalize(resolve(dir, cut));
   const real = normalize(ctx.realpath(absRaw(cut, dir)));
   return { lexical, real, ancestorToo: ancestorAnyway || m !== -1, write };
 }
 
-/** The path touches of one simple command's words, resolved against its working dir. */
-function touchesOf(words: Word[], verb: string, dir: string, ctx: PolicyContext): Touch[] {
-  const texts = words.map((w) => w.text);
-  const recursive = RECURSIVE(verb, texts);
-  const writing = WRITING(verb, texts);
+/** True when a recursive `rm` operand is a runtime command/variable expansion with no literal prefix: a `$(…)`, a
+ *  backtick, or an unresolved `$var` (not a glob, which stays inside the working dir). We cannot tell what it deletes. */
+const emptyDynamic = (w: Word, vars: Record<string, string>) => {
+  if (!w.dynamic) return false;
+  const t = substVars(w.text, vars);
+  return t.startsWith("$") || t.startsWith("`");
+};
+
+/** The path touches of one simple command's words, resolved against every possible working dir. */
+function touchesOf(words: Word[], verb: string, dirs: string[], ctx: PolicyContext, vars: Record<string, string>): Touch[] {
+  const recursive = RECURSIVE(verb, words);
+  const writing = WRITING(verb, words.map((w) => w.text));
+  // grep/rg take a search pattern as their first operand; it is data, not a path to resolve.
+  const patternAt = verb === "grep" || verb === "rg" ? words.findIndex((w, i) => i > 0 && !w.redirect && !w.text.startsWith("-")) : -1;
   const touches: Touch[] = [];
   const seen = new Set<string>();
+  const add = (raw: string, write: boolean) => {
+    for (const dir of dirs) {
+      const key = `${write ? 1 : 0}|${dir}|${raw}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const t = candidateTouch(raw, dir, ctx, vars, recursive, write);
+      if (t) touches.push(t);
+    }
+  };
+  let sawOperand = false;
   for (let n = 0; n < words.length; n++) {
     const w = words[n]!;
     if (n === 0 && !w.redirect && !commandIsPath(w.text)) continue;
+    if (n === patternAt && !w.redirect) continue;
     const option = w.text.startsWith("-") && !w.redirect;
     const eq = w.text.indexOf("=");
     const candidates = option ? [] : [w.text];
     if (eq > 0) candidates.push(w.text.slice(eq + 1));
     for (const raw of candidates) {
-      // A repeated argument (a huge `curl a a a …`) resolves to the same touch, so collapse it before realpath.
-      const key = `${w.redirectOut ? 1 : 0}${raw}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const t = candidateTouch(raw, dir, ctx, recursive, w.redirectOut || writing);
-      if (t) touches.push(t);
+      if (!option && n > 0) sawOperand = true;
+      add(raw, w.redirectOut || writing);
     }
   }
+  // A recursive verb with no path operand (grep -r x, find, rg foo) recurses from the working dir itself.
+  if (recursive && !sawOperand) for (const dir of dirs) touches.push({ lexical: dir, real: dir, ancestorToo: true, write: writing });
   return touches;
 }
 
-/** The simple commands of a Bash line in order, each with its working directory as `cd` leaves it, and its touches. */
+/** The possible working dirs across a Bash line, as `cd`/`pushd`/`popd`/subshells/`env -C` move them, and the commands. */
 function bashParts(command: string, cwd: string, ctx: PolicyContext): Part[] {
   const parts: Part[] = [];
-  let dir = ctx.realpath(cwd);
   const home = ctx.scope.homedir;
-  const emit = (words: Word[], depth: number): void => {
+  const start = ctx.realpath(cwd);
+  const commands = shellCommands(command);
+  const vars = collectVars(commands, ctx, start);
+  if (!("TMPDIR" in vars)) vars.TMPDIR = process.env.TMPDIR ?? "/tmp"; // a known scratch root, so $TMPDIR/x resolves (FP trim)
+  const addedRemotes = new Set<string>();
+
+  // A set of possible cwds, over-approximated: `cd` keeps the old dirs as well as the new, so a conditional or failed cd
+  // is still covered, and a dynamic or bare cd adds HOME. A subshell's cd is undone when it closes (restored by depth).
+  let dirs = [start];
+  let uncertain = false;
+  let prev = [start];
+  const pushdStack: string[][] = [];
+  const saved: { depth: number; dirs: string[]; uncertain: boolean; prev: string[]; stack: string[][] }[] = [];
+  let curDepth = 0;
+  const cap = (xs: string[]) => (xs.length > 16 ? xs.slice(0, 16) : xs);
+  const union = (a: string[], b: string[]) => cap([...new Set([...a, ...b])]);
+  const resolveDir = (target: string, from: string) => ctx.realpath(absRaw(expandHome(substVars(target, vars), ctx, from), from));
+
+  const emit = (words: Word[], depth: number, subshell: number): void => {
     const u = unwrap(words.map((w) => w.text));
     if ("script" in u) {
       if (depth >= 4) throw new Error("shell scripts nested too deep to read");
-      for (const c of shellCommands(u.script)) emit(c.words, depth + 1);
+      for (const c of shellCommands(u.script)) emit(c.words, depth + 1, subshell);
       return;
     }
     if (u.words.length === 0) return;
-    const at = dir;
-    // Keep the Word objects for the unwrapped command (drop the stripped wrapper/assignment prefix).
     const effective = words.slice(words.length - u.words.length);
-    const verb = basename(u.words[0]!);
-    parts.push({ kind: "bash", words: u.words, verb, text: u.words.join(" "), cwd: at, dynamicCmd: effective[0]?.dynamic ?? false, touches: touchesOf(effective, verb, at, ctx) });
+    const verb = verbOf(substVars(effective[0]?.text ?? u.words[0]!, vars));
+    // A verb built at runtime (an unresolved $, substitution or glob anywhere in the first word) is a dynamic command;
+    // `[` and `[[` are the test builtins, and a tracked assignment that resolves the whole verb is not dynamic.
+    const dynamicCmd = verb !== "[" && verb !== "[[" && (effective[0]?.dynamic ?? false) && META.test(substVars(effective[0]!.text, vars));
+    // env -C/--chdir runs just this command elsewhere; otherwise it runs in one of the possible cwds (plus HOME if uncertain).
+    const here = u.chdir !== undefined ? dirs.map((d) => resolveDir(u.chdir!, d)) : uncertain ? union(dirs, [home]) : dirs;
+    const nWords: string[] = [verb, ...u.words.slice(1).map((w) => substVars(w, vars))];
+    // A push to a remote that is a URL, or one added or re-pointed on this same line, can exfiltrate the repo (SHOULD 12).
+    let pushUntrusted = false;
+    if (verb === "git") {
+      const g = gitArgs(nWords);
+      if (g?.sub === "remote" && (g.args[0] === "add" || g.args[0] === "set-url")) {
+        const name = g.args.slice(1).find((a) => !a.startsWith("-"));
+        if (name !== undefined) addedRemotes.add(name);
+      }
+      if (g?.sub === "push") {
+        const remote = g.args.find((a) => !a.startsWith("-") && !a.startsWith("+"));
+        pushUntrusted = remote !== undefined && (isGitUrl(remote) || addedRemotes.has(remote));
+      }
+    }
+    // A surviving shell (sh/bash/zsh with its -c script already unwrapped away) runs piped or here-string/stdin input.
+    const shellStdin = SHELLS.has(verb) && (effective.slice(1).some((w) => w.text === "-s") || !effective.slice(1).some((w) => !w.redirect && !w.text.startsWith("-")));
+    parts.push({ kind: "bash", words: nWords, verb, text: nWords.join(" "), cwds: here, dynamicCmd, recursive: RECURSIVE(verb, effective), emptyDynamicRm: verb === "rm" && effective.some((w) => emptyDynamic(w, vars)), pushUntrusted, shellStdin, touches: touchesOf(effective, verb, here, ctx, vars) });
     if (verb === "find") {
       const i = effective.findIndex((w) => w.text === "-exec" || w.text === "-execdir");
       if (i !== -1) {
         const end = effective.findIndex((w, j) => j > i && (w.text === ";" || w.text === "+"));
         const sub = effective.slice(i + 1, end === -1 ? undefined : end).filter((w) => w.text !== "{}");
-        if (sub.length > 0) emit(sub, depth + 1);
+        if (sub.length > 0) emit(sub, depth + 1, subshell);
       }
     }
     if (verb === "osascript" && depth < 4) {
       // `osascript -e 'do shell script "…"'` runs a shell command; read it too.
       const m = effective.map((w) => w.text).join(" ").match(/do shell script\s+["']([^"']*)["']/i);
-      if (m) for (const c of shellCommands(m[1]!)) emit(c.words, depth + 1);
-    }
-    if (u.words[0] === "cd" || u.words[0] === "pushd") {
-      const target = u.words[1];
-      if (target === undefined) dir = home;
-      else if (target !== "-") dir = ctx.realpath(absRaw(expandHome(target, ctx, dir), dir));
+      if (m) for (const c of shellCommands(m[1]!)) emit(c.words, depth + 1, subshell);
     }
   };
-  for (const c of shellCommands(command)) emit(c.words, 0);
+
+  for (const c of commands) {
+    // Entering a subshell saves the outer cwds; leaving it restores them, so a subshell's cd cannot leak outward.
+    while (curDepth < c.subshell) {
+      saved.push({ depth: curDepth, dirs, uncertain, prev, stack: pushdStack.slice() });
+      curDepth++;
+    }
+    while (curDepth > c.subshell && saved.length > 0) {
+      const s = saved.pop()!;
+      ({ dirs, uncertain, prev } = s);
+      pushdStack.length = 0;
+      pushdStack.push(...s.stack);
+      curDepth = s.depth;
+    }
+    emit(c.words, 0, c.subshell);
+    const verb = verbOf(c.words[0]?.text ?? "");
+    if (verb === "cd" || verb === "pushd" || verb === "popd") updateCwd(c, verb);
+  }
+
+  function updateCwd(c: { words: Word[]; cond: boolean }, verb: string) {
+    const from = dirs[0] ?? home;
+    const operand = c.words.find((w, i) => i > 0 && !w.text.startsWith("-"));
+    const before = dirs;
+    if (verb === "popd") {
+      dirs = union(dirs, pushdStack.pop() ?? [home]);
+    } else if (operand === undefined) {
+      dirs = union(dirs, [home]); // bare `cd` / `pushd` goes to HOME
+    } else if (operand.text === "-") {
+      dirs = union(dirs, prev); // `cd -` returns to OLDPWD
+    } else if (emptyDynamic(operand, vars)) {
+      dirs = union(dirs, [home]); // a dynamic target could be anywhere; HOME is the common landing (SHOULD "ask on such cd")
+      uncertain = true;
+    } else {
+      dirs = union(dirs, dirs.map((d) => resolveDir(operand.text, d)));
+    }
+    if (verb === "pushd") pushdStack.push(before);
+    prev = before;
+  }
+
   return parts;
+}
+
+/** Literal same-line assignments (`d=.ssh`, `h=$HOME`), expanded to an absolute value where one is known (SHOULD 8). */
+function collectVars(commands: { words: Word[] }[], ctx: PolicyContext, dir: string): Record<string, string> {
+  const vars: Record<string, string> = {};
+  for (const c of commands)
+    for (const w of c.words) {
+      const m = w.text.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s);
+      if (!m) break; // assignments only lead a command
+      const value = expandHome(m[2]!, ctx, dir);
+      if (!META.test(value)) vars[m[1]!] = value;
+    }
+  return vars;
 }
 
 function viewOf(call: ToolCall, ctx: PolicyContext): View {
@@ -337,7 +494,7 @@ function viewOf(call: ToolCall, ctx: PolicyContext): View {
   if (found.length === 0 && !recursive) return { parts: [{ kind: "call", call, touches: [] }], raw: "" };
   const write = FILE_WRITES.has(call.tool);
   const dir = normalize(ctx.realpath(call.cwd));
-  const touches = found.flatMap((raw) => candidateTouch(raw, dir, ctx, recursive, write) ?? []);
+  const touches = found.flatMap((raw) => candidateTouch(raw, dir, ctx, {}, recursive, write) ?? []);
   // Grep and Glob recurse from the working directory, so the directory itself is an ancestor touch they reach into.
   if (recursive) touches.push({ lexical: dir, real: dir, ancestorToo: true, write: false });
   return { parts: [{ kind: "call", call, touches }], raw: "" };
@@ -362,28 +519,36 @@ type Floor = {
   write?: (path: string, ctx: PolicyContext) => boolean;
   /** Scan the raw command text for the root spelled literally, to catch it inside an interpreter or a heredoc. */
   rawScan?: boolean;
+  /** A forbidden command recognised from the raw Bash text (an env dump, a sensitive variable printed). */
+  raw?: (parts: Extract<Part, { kind: "bash" }>[], ctx: PolicyContext) => boolean;
   handOff?: boolean;
 };
 
 const inHome = (...rels: string[]) => (ctx: PolicyContext) => rels.map((r) => resolve(ctx.scope.homedir, r));
 
-const HANDOFF_WORDS = new Set(["pay", "payment", "payments", "purchase", "checkout", "password", "passwords", "passcode", "otp", "totp", "2fa", "mfa", "cvv", "cvc"]);
+/** Entering any of these is the user's job (handed off), read or write, by the tool name or an input field. */
+const CREDENTIAL_WORDS = new Set(["password", "passwords", "passcode", "otp", "totp", "2fa", "mfa", "cvv", "cvc", "cardnumber"]);
+/** A payment action is handed off only when it is a write (checkout, pay), never a read (get_purchase_quote, SHOULD 14). */
+const PAYMENT_WORDS = new Set(["pay", "payment", "payments", "purchase", "checkout"]);
 
 function keyWords(value: unknown, out: Set<string>) {
   if (Array.isArray(value)) for (const v of value) keyWords(v, out);
   else if (isRecord(value))
     for (const [k, v] of Object.entries(value)) {
       for (const w of wordsOf(k)) out.add(w);
-      if (/card_?number|credit_?card/i.test(k)) out.add("payment");
+      if (/card_?number|credit_?card/i.test(k)) out.add("cardnumber");
       keyWords(v, out);
     }
 }
 
-/** A connector tool that pays, buys, or takes a password or a one-time code, by its name or its input's field names. */
+/** A connector tool that takes a credential (always), or carries out a payment (an action, not a read query). */
 function handsOff(call: ToolCall): boolean {
-  const words = new Set(wordsOf(call.tool.split("__").slice(2).join("_")));
-  keyWords(call.input, words);
-  return [...words].some((w) => HANDOFF_WORDS.has(w));
+  const name = new Set(wordsOf(call.tool.split("__").slice(2).join("_")));
+  const fields = new Set<string>();
+  keyWords(call.input, fields);
+  if ([...CREDENTIAL_WORDS].some((w) => name.has(w) || fields.has(w))) return true;
+  const read = [...name].some((w) => READ_VERBS.has(w));
+  return !read && [...name].some((w) => PAYMENT_WORDS.has(w));
 }
 
 /** The names browsers and apps give cookie, login and key stores, matched by basename anywhere they are found. */
@@ -403,6 +568,11 @@ const ESCALATE = {
     if (/(^|\/)\.(zshrc|zprofile|bashrc|bash_profile|profile)$/.test(path)) return true;
     if (under(path, resolve(ctx.scope.homedir, "Library/LaunchAgents"))) return true;
     for (const d of ["hooks", "commands", "agents", "skills", "plugins"]) if (under(path, resolve(ctx.scope.homedir, ".claude", d))) return true;
+    // Persistence vectors a committed repo or the home dir can carry (SHOULD 13): agent instructions and hook scripts.
+    if (/(^|\/)(\.claude\/)?CLAUDE\.md$/.test(path)) return true;
+    if (/(^|\/)\.claude\/(commands|agents|skills|hooks)\//.test(path)) return true;
+    if (/(^|\/)\.(githooks|husky)(\/|$)/.test(path)) return true;
+    if (/(^|\/)\.vscode\/tasks\.json$/.test(path)) return true;
     return false;
   },
 };
@@ -461,17 +631,39 @@ const FLOORS: readonly Floor[] = [
   {
     id: "floor.creds",
     label: "a stored credential or token",
-    roots: inHome(".netrc", ".config/gh/hosts.yml", ".npmrc", ".docker/config.json", ".kube/config", ".git-credentials", ".pypirc", ".claude/.credentials.json", ".claude.json", ".claude/history.jsonl", ".claude/projects", "Library/Application Support/1Password"),
+    roots: inHome(".netrc", ".config/gh/hosts.yml", ".config/gh/config.yml", ".npmrc", ".docker/config.json", ".kube/config", ".git-credentials", ".pypirc", ".claude/.credentials.json", ".claude.json", ".claude/history.jsonl", ".claude/projects", "Library/Application Support/1Password"),
     bash: (p) =>
-      (p.verb === "gh" && p.words[1] === "auth" && (["token", "refresh"].includes(p.words[2] ?? "") || (p.words[2] === "status" && p.words.includes("-t")))) ||
-      (p.verb === "git" && (p.words[1] ?? "").startsWith("credential")),
+      (p.verb === "gh" && p.words[1] === "auth" && (["token", "refresh"].includes(p.words[2] ?? "") || (p.words[2] === "status" && (p.words.includes("-t") || p.words.includes("--show-token"))))) ||
+      (p.verb === "git" && (p.words[1] ?? "").startsWith("credential")) ||
+      // Password managers and secret CLIs: reading an item prints the secret.
+      p.verb === "op" || p.verb === "bw" || (p.verb === "pass" && (p.words.length === 1 || p.words.some((w, i) => i > 0 && !w.startsWith("-")))),
+    rawScan: true,
+  },
+  {
+    id: "floor.personal",
+    label: "Messages, Mail, Contacts or Calendars",
+    roots: inHome("Library/Messages", "Library/Mail", "Library/Application Support/AddressBook", "Library/Calendars"),
+    rawScan: true,
+  },
+  {
+    id: "floor.env",
+    label: "the bridge's own environment variables",
+    roots: () => [],
+    // A full env dump, or expanding a token/key variable, would leak the bridge's inherited secrets (CLAUDIOBOT_*, *_TOKEN).
+    raw: (parts) => parts.some((p) => dumpsEnv(p) || p.text.match(SENSITIVE_ENV) !== null),
   },
   { id: "floor.payment", label: "a password, a payment or a 2FA code", roots: () => [], connector: handsOff, handOff: true },
 ];
 
+/** A command that prints the whole environment (`env`, `printenv`) or one variable (`printenv VAR`), leaking the bridge's secrets. */
+const dumpsEnv = (p: Extract<Part, { kind: "bash" }>) => p.verb === "env" || p.verb === "printenv";
+/** Expansion of a variable whose name marks it a secret: the bridge's own CLAUDIOBOT_*, or any *_TOKEN / *_KEY / *_SECRET. */
+const SENSITIVE_ENV = /\$\{?(CLAUDIOBOT_[A-Za-z0-9_]+|[A-Za-z][A-Za-z0-9]*_(TOKEN|KEY|SECRET|PASSWORD|CREDENTIALS?)|GITHUB_TOKEN|GH_TOKEN|ANTHROPIC_API_KEY|[A-Z0-9]*TOKEN)\}?/;
+
 function floorHit(floor: Floor, call: ToolCall, view: View, ctx: PolicyContext): boolean {
   if (floor.connector && isConnector(call) && floor.connector(call)) return true;
   if (floor.bash && view.parts.some((p) => p.kind === "bash" && floor.bash!(p))) return true;
+  if (floor.raw && floor.raw(view.parts.filter((p): p is Extract<Part, { kind: "bash" }> => p.kind === "bash"), ctx)) return true;
   if (floor.write) {
     for (const p of view.parts) for (const t of p.touches) if (t.write && (floor.write(t.real, ctx) || floor.write(t.lexical, ctx))) return true;
   }
@@ -485,10 +677,48 @@ function floorHit(floor: Floor, call: ToolCall, view: View, ctx: PolicyContext):
     for (const p of view.parts)
       for (const t of p.touches)
         if (roots.some((r, i) => hits(t, r, realRoots[i]!)) && !except.some((e) => under(t.real, e))) return true;
-    if (floor.rawScan && view.raw !== "" && rawScanHit(view.raw, roots, realRoots, ctx)) return true;
+    if (floor.rawScan && view.raw !== "" && rawScanHit(scannable(view), roots, realRoots, ctx)) return true;
   }
   return false;
 }
+
+/** A flag and the value it carries, inline (`--body=x`) or as the next word (`--body x`), dropped from a command's args. */
+function dropValues(args: string[], flags: ReadonlySet<string>): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    const name = a.split("=")[0]!;
+    if (flags.has(name)) {
+      if (!a.includes("=")) i++; // skip the separate-word value too
+      continue;
+    }
+    out.push(a);
+  }
+  return out;
+}
+const COMMIT_MSG_FLAGS = new Set(["-m", "--message", "-F", "--file"]);
+const GH_BODY_FLAGS = new Set(["-b", "--body", "-F", "--body-file", "-t", "--title"]);
+
+/** The text a floor's raw scan should see: data arguments (an echo string, a commit message, a PR body, a grep pattern)
+ *  are dropped, because a protected path named only there is not read (FP trim); a path a command actually reads stays. */
+function scanTextOf(verb: string, words: string[]): string {
+  if (verb === "echo" || verb === "printf") return "";
+  if (verb === "git") {
+    const g = gitArgs(words);
+    if (g?.sub === "commit") return dropValues(g.args, COMMIT_MSG_FLAGS).join(" ");
+  }
+  if (verb === "gh") {
+    const g = ghArgs(words);
+    if (g && (g.sub === "pr" || g.sub === "issue") && ["create", "comment", "edit"].includes(g.args[0] ?? "")) return dropValues(g.args, GH_BODY_FLAGS).join(" ");
+  }
+  if (verb === "grep" || verb === "rg") {
+    // The first non-flag argument is the search pattern, data not a path; the file operands after it stay.
+    const pattern = words.findIndex((w, i) => i > 0 && !w.startsWith("-"));
+    return (pattern === -1 ? words : [...words.slice(0, pattern), ...words.slice(pattern + 1)]).join(" ");
+  }
+  return words.join(" ");
+}
+const scannable = (view: View) => (view.raw === "" ? "" : view.parts.filter((p) => p.kind === "bash").map((p) => scanTextOf((p as Extract<Part, { kind: "bash" }>).verb, (p as Extract<Part, { kind: "bash" }>).words)).join("\n"));
 
 /** The raw command spelled a protected root literally (inside python -c, node -e, a heredoc): deny it anyway. */
 function rawScanHit(raw: string, rootsLex: string[], rootsReal: string[], ctx: PolicyContext): boolean {
@@ -574,6 +804,32 @@ function ghArgs(words: string[]): { sub: string; args: string[] } | null {
   return subcommand(words, 1, ["-R", "--repo", "--hostname"]);
 }
 
+/** A git remote that is a URL (`https://…`, `git@host:…`, `ssh://…`), not a named remote configured in the repo. */
+const isGitUrl = (remote: string) => /:\/\//.test(remote) || /^[^/\s]+@[^/\s]+:/.test(remote) || remote.startsWith("file://");
+
+/** A push forces history over the remote: -f, a short cluster that contains f (-fu, -uf, -vf), a --force* abbreviation, or a + refspec. */
+const pushForce = (args: string[]) =>
+  args.some((a) => a.startsWith("-") && !a.startsWith("--") && /f/.test(a)) ||
+  args.some((a) => /^--forc?e?(-with-lease|-if-includes)?(=.*)?$/.test(a)) ||
+  args.some((a) => a.startsWith("+") && a.length > 1 && !a.includes(":/"));
+
+/** A branch command that drops commits: -D, a short cluster that contains D (-fD, -Df), or --delete with --force. */
+const branchForce = (args: string[]) => args.some((a) => /^-[A-Za-z]*D/.test(a)) || (args.includes("--delete") && args.includes("--force"));
+
+/** A push targets the default branch when a refspec's destination resolves to main/master, is a wildcard, or is dynamic. */
+const pushesDefault = (args: string[]): boolean => {
+  const flags = args.filter((a) => a.startsWith("-"));
+  if (flags.some((f) => /^--(all|mirror|tags|follow-tags)$/.test(f))) return true;
+  const nonFlags = args.filter((a) => !a.startsWith("-") && !a.startsWith("+"));
+  const refspecs = nonFlags.slice(1); // the first non-flag is the remote; the rest are refspecs
+  if (refspecs.length === 0) return true; // bare `git push` / remote-only pushes the current branch, which may be default
+  // A bare `HEAD` pushes the current branch under its own name (a feature branch); only an explicit main/master target counts.
+  return refspecs.some((r) => {
+    const dst = r.split(":").pop() ?? "";
+    return /^(refs\/heads\/)?(main|master)$/.test(dst) || dst.includes("*") || dst.includes("$");
+  });
+};
+
 /** The HTTP method a curl/gh request sets, from -X/--method/--request in any spelling, or null. */
 function httpMethod(args: string[]): string | null {
   for (let k = 0; k < args.length; k++) {
@@ -611,6 +867,22 @@ function wgetSends(args: string[]): boolean {
 }
 
 const inScope = (real: string, ctx: PolicyContext) => under(real, ctx.scope.own) || (ctx.scope.userMd !== null && real === ctx.scope.userMd);
+/** Throwaway roots a recursive delete may reach without asking: build caches and temp dirs the bot never relies on. */
+const SCRATCH_ROOTS = (ctx: PolicyContext) => [
+  process.env.TMPDIR ?? "/tmp",
+  "/tmp",
+  "/private/tmp",
+  "/private/var/folders",
+  "/var/folders",
+  ...["" + ".cache", ".npm/_cacache", ".bun/install/cache", "Library/Caches", "Library/Developer/Xcode/DerivedData"].map((r) => resolve(ctx.scope.homedir, r)),
+];
+const inScratch = (real: string, ctx: PolicyContext) => SCRATCH_ROOTS(ctx).some((r) => under(real, ctx.realpath(r)) || under(real, r));
+/** A recursive-delete operand that is outside the bot's own scope and not a throwaway cache/temp dir. */
+const deletesOutside = (path: string, cwd: string, ctx: PolicyContext) => {
+  const p = path.replace(/\$\{?TMPDIR\}?/g, process.env.TMPDIR ?? "/tmp"); // $TMPDIR is a scratch root (FP trim)
+  const real = ctx.realpath(absRaw(expandHome(p, ctx, cwd), cwd));
+  return !inScope(real, ctx) && !inScratch(real, ctx);
+};
 const outside = (path: string, cwd: string, ctx: PolicyContext) => !inScope(ctx.realpath(absRaw(expandHome(path, ctx, cwd), cwd)), ctx);
 
 const FILE_WRITES = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
@@ -659,23 +931,25 @@ const TABLE: readonly Row[] = [
     match: bash((words) => {
       const g = gitArgs(words);
       if (g === null) return false;
-      if (g.sub === "push") return g.args.some((a) => a === "-f" || a.startsWith("--force") || (a.startsWith("+") && a.length > 1));
+      if (g.sub === "push") return pushForce(g.args);
       if (g.sub === "reset") return g.args.includes("--hard") && g.args.some((a) => a.includes("/"));
-      return g.sub === "branch" && g.args.includes("-D");
+      return g.sub === "branch" && branchForce(g.args);
     }),
     attended: "ask",
     unattended: "ask",
   },
   {
+    id: "git.push.remote",
+    label: "Push to a URL or a just-added remote",
+    match: (p) => p.kind === "bash" && p.pushUntrusted,
+    attended: "ask",
+    unattended: "ask",
+    offerAlways: false,
+  },
+  {
     id: "git.push.default",
     label: "Push to the default branch",
-    match: git("push", (args) => {
-      const refs = args.filter((a) => !a.startsWith("-"));
-      const flags = args.filter((a) => a.startsWith("-"));
-      if (flags.some((f) => f === "--all" || f === "--mirror" || f === "--tags")) return true;
-      if (refs.length <= 1) return true; // bare `git push` (only a remote, or nothing) targets the current branch
-      return refs.some((a) => /^(?:[^:]*:)?(?:refs\/heads\/)?(?:main|master)$/.test(a) || a === "HEAD" || a.includes("$"));
-    }),
+    match: git("push", pushesDefault),
     attended: "ask",
     unattended: "ask",
   },
@@ -724,6 +998,7 @@ const TABLE: readonly Row[] = [
     id: "publish",
     label: "Publish a package or a release",
     match: bash((words) => {
+      if (words.includes("--dry-run")) return false; // a dry run uploads nothing (FP trim)
       const d = deploySub(words);
       if (d && (d.tool === "npm" || d.tool === "pnpm" || d.tool === "yarn" || d.tool === "bun") && ["publish", "unpublish", "dist-tag", "deprecate"].includes(d.sub)) return true;
       const g = ghArgs(words);
@@ -737,6 +1012,7 @@ const TABLE: readonly Row[] = [
     id: "deploy",
     label: "Deploy or change infrastructure",
     match: bash((words, text) => {
+      if (words.includes("--dry-run")) return false; // a dry run changes nothing (FP trim)
       const v = basename(words[0] ?? "");
       // vercel/netlify take the prod flag with or without a `deploy` subcommand, and promote/rollback also change prod.
       if (v === "vercel" || v === "netlify") return words.some((a) => a.startsWith("--prod") || a === "--target=production") || ["promote", "rollback"].includes(words[1] ?? "");
@@ -760,13 +1036,44 @@ const TABLE: readonly Row[] = [
   },
   { id: "secrets", label: "Set a secret", match: re(/^gh secret set\b|^vercel env add\b|^security add-/), attended: "ask", unattended: "ask", offerAlways: false },
   {
+    id: "persist.command",
+    label: "Install something that keeps running outside the gate",
+    match: bash((words, _, part) => {
+      const v = part.verb;
+      if (v === "crontab") return words.includes("-") || words.includes("-e"); // install a crontab from stdin or the editor
+      if (v === "launchctl") return ["submit", "load", "bootstrap"].includes(words[1] ?? "");
+      if (v === "defaults") return words[1] === "write";
+      if (v === "git") {
+        // `git -c core.pager=…` / `-c alias.x=!…` runs a command through config; set the same keys with `git config`.
+        if (words.some((a, i) => a === "-c" && /^(core\.(pager|sshcommand|fsmonitor)=|alias\.[^=]*=!)/i.test(words[i + 1] ?? ""))) return true;
+        const g = gitArgs(words);
+        if (g?.sub === "config") {
+          const key = g.args.find((a) => !a.startsWith("-")) ?? "";
+          return /^core\.(hookspath|fsmonitor)$/i.test(key) || (/^alias\./i.test(key) && g.args.some((a) => a.startsWith("!") || a.includes("=!")));
+        }
+      }
+      return false;
+    }),
+    attended: "ask",
+    unattended: "ask",
+    offerAlways: false,
+  },
+  {
+    id: "run.shell",
+    label: "Run shell input from a pipe, a trap or stdin",
+    match: (p) => p.kind === "bash" && (p.verb === "trap" || p.shellStdin),
+    attended: "ask",
+    unattended: "ask",
+    offerAlways: false,
+  },
+  {
     id: "http.send",
     label: "Send data to a web service",
-    match: bash((words) => {
-      const v = basename(words[0] ?? "");
-      if (v === "curl") return curlSends(words.slice(1));
-      if (v === "wget") return wgetSends(words.slice(1));
-      return false;
+    match: bash((words, _, part) => {
+      if (part.verb !== "curl" && part.verb !== "wget") return false;
+      // Posting to the loopback host is a local dev server, not exfiltration (FP trim).
+      if (words.some((a) => /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(a) || /\.localhost(:|\/|$)/.test(a))) return false;
+      return part.verb === "curl" ? curlSends(words.slice(1)) : wgetSends(words.slice(1));
     }),
     attended: "ask",
     unattended: "ask",
@@ -775,10 +1082,11 @@ const TABLE: readonly Row[] = [
     id: "rm.outside",
     label: "Delete files outside its folder",
     match: bash((words, _, part, ctx) => {
-      if (basename(words[0] ?? "") !== "rm") return false;
-      const flags = words.slice(1).filter((w) => w.startsWith("-") && w !== "--");
-      if (!flags.some((f) => f === "--recursive" || /^-[a-zA-Z]*[rR]/.test(f))) return false;
-      return words.slice(1).some((w) => !w.startsWith("-") && outside(w, part.cwd, ctx));
+      if (part.verb !== "rm" || !part.recursive) return false;
+      // A recursive delete with a runtime-built operand could be anywhere, so ask; otherwise ask only for a real
+      // operand that lands outside the bot's own folder and is not a throwaway cache/temp dir.
+      if (part.emptyDynamicRm) return true;
+      return words.slice(1).some((w) => !w.startsWith("-") && part.cwds.some((cwd) => deletesOutside(w, cwd, ctx)));
     }),
     attended: "ask",
     unattended: "ask",
@@ -839,6 +1147,9 @@ const deny = (via: DenyVia, rule: string, reason: string, handOff = false): Deci
  */
 export function decide(call: ToolCall, ctx: PolicyContext): Decision {
   if (SDK_INTERNAL.has(call.tool)) return PASS;
+  // A command too long to scan in bounded time is held rather than parsed, so the hook never freezes the bridge (SHOULD 10).
+  if (call.tool === "Bash" && typeof call.input.command === "string" && call.input.command.length > MAX_BASH_LEN)
+    return { kind: "ask", rule: "bash.toolong", label: "Run a very long shell command", signature: "Bash:bash.toolong" as Signature, always: "", offerAlways: false };
   const at: { via: DenyVia; rule: string } = { via: "floor", rule: "floor.paths" };
   try {
     const view = viewOf(call, ctx);
@@ -968,7 +1279,6 @@ export function detailOf(call: ToolCall): string {
   }
 }
 
-const BODY_KEYS = new Set(["content", "old_string", "new_string", "new_source"]);
 /** A key whose value is a secret by its name alone, however short the value. */
 const SECRET_KEY = /secret|token|password|passwd|passcode|api.?key|access.?key|authorization|cookie|credential|otp|totp|cvv|cvc|card.?number|private.?key|client.?secret/i;
 

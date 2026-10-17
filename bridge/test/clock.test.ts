@@ -31,8 +31,9 @@ function fakeTimers() {
 
 function ticker(deadline: () => string | null) {
   const ticks: Date[] = [];
-  const t: Tickable = { tick: (at) => void ticks.push(at), nextDeadline: deadline };
-  return { t, ticks };
+  const wakes: number[] = [];
+  const t: Tickable = { tick: (at) => void ticks.push(at), nextDeadline: deadline, wake: (gap) => void wakes.push(gap) };
+  return { t, ticks, wakes };
 }
 
 function setup(tickers: Tickable[], log: string[] = []) {
@@ -87,6 +88,36 @@ test("a timer that fires hours late after a sleep ticks everything once with the
   fake.fire();
   expect(a.ticks).toEqual([T0, wake]);
   expect(b.ticks).toEqual([T0, wake]);
+});
+
+test("a look more than 2x the max sleep late reports the gap to every ticker before ticking", () => {
+  const a = ticker(() => plus(10_000).toISOString()); // deadline 10 s out, so the armed delay is 10 s
+  const { clock, fake, setNow } = setup([a.t]);
+  clock.start();
+  const slept = 8 * 3_600_000;
+  setNow(plus(slept));
+  fake.fire();
+  // gap is the oversleep beyond the armed delay, reported before the tick.
+  expect(a.wakes).toEqual([slept - 10_000]);
+  expect(a.ticks).toEqual([T0, plus(slept)]);
+});
+
+test("a normal on-time look reports no wake gap", () => {
+  const a = ticker(() => plus(10_000).toISOString());
+  const { clock, fake, setNow } = setup([a.t]);
+  clock.start();
+  setNow(plus(10_000));
+  fake.fire();
+  expect(a.wakes).toEqual([]);
+});
+
+test("a look under 2x the max sleep is not treated as a wake", () => {
+  const far = ticker(() => plus(3_600_000).toISOString()); // armed at the 60 s cap
+  const { clock, fake, setNow } = setup([far.t]);
+  clock.start();
+  setNow(plus(90_000)); // 90 s < 2 x 60 s
+  fake.fire();
+  expect(far.wakes).toEqual([]);
 });
 
 test("poke re-arms for a deadline that moved earlier, replacing the armed timer", () => {

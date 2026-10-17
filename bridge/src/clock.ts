@@ -10,6 +10,12 @@ export type Tickable = {
   tick(now: Date): void;
   /** The earliest stored deadline still ahead, as an ISO string, or null when there is none. */
   nextDeadline(): string | null;
+  /**
+   * The machine slept: `gapMs` of wall-clock time passed unobserved, between two looks more than 2x the max sleep apart.
+   * Called before `tick`, so a module can push deadlines it should not count against the sleep (an unseen card) forward
+   * by the gap, and they survive the tick that follows.
+   */
+  wake?(gapMs: number): void;
 };
 
 export type Clock = {
@@ -45,6 +51,8 @@ export function createClock(deps: {
   const log = deps.log ?? ((line) => console.error(line));
   let running = false;
   let timer: unknown = null;
+  let lastLookMs: number | null = null;
+  let lastDelay = 0;
 
   function guarded<T>(fn: () => T): T | null {
     try {
@@ -71,15 +79,24 @@ export function createClock(deps: {
 
   function arm(ms: number) {
     if (timer !== null) timers.clear(timer);
+    lastDelay = ms;
     timer = timers.set(look, ms);
   }
 
-  // A fire that comes hours late because the Mac slept takes this same path: one tick sees everything overdue.
+  // A fire that comes hours late because the Mac slept takes this same path: one tick sees everything overdue. When the
+  // look is more than 2x the max sleep later than the one before it, the gap is reported to the tickers before the tick,
+  // so a module can carry deadlines it should not count against the sleep (an unseen card) forward and keep them alive.
   function look() {
     timer = null;
     if (!running) return;
     try {
       const at = now();
+      const atMs = at.getTime();
+      if (lastLookMs !== null && atMs - lastLookMs > 2 * MAX_SLEEP_MS) {
+        const gap = atMs - lastLookMs - lastDelay;
+        if (gap > 0) for (const t of deps.tickers) guarded(() => t.wake?.(gap));
+      }
+      lastLookMs = atMs;
       for (const t of deps.tickers) guarded(() => t.tick(at));
     } finally {
       if (running) arm(delayToNext());

@@ -81,3 +81,78 @@ describe("nesting past the cap throws (fail closed)", () => {
     expect(() => shellCommands(`echo ${"$(".repeat(200)}x${")".repeat(200)}`)).toThrow();
   });
 });
+
+describe("heredocs: the body is stdin, not commands (MUST 1)", () => {
+  const verbs = (src: string) => shellCommands(src).map((c) => c.words[0]!.text);
+  test("an apostrophe in a quoted heredoc inside $(…) no longer hides the next command", () => {
+    const src = `git commit -m "$(cat <<'EOF'\nFix the user's bug\nEOF\n)" && gh pr merge 1`;
+    expect(words(src)).toEqual([["cat"], ["git", "commit", "-m", "$(cat \n)"], ["gh", "pr", "merge", "1"]]);
+  });
+  test("a quoted delimiter skips the whole body, even a substitution in it", () => {
+    expect(verbs(`cat <<'EOF'\n$(npm publish)\nEOF\nls`)).toEqual(["cat", "ls"]);
+    expect(verbs(`cat <<"EOF"\n$(npm publish)\nEOF\nls`)).toEqual(["cat", "ls"]);
+    expect(verbs(`cat <<\\EOF\n$(npm publish)\nEOF\nls`)).toEqual(["cat", "ls"]);
+  });
+  test("an unquoted delimiter expands the body, so its substitutions are parsed", () => {
+    expect(verbs(`cat <<EOF\nhello $(npm publish) \`gh pr merge 1\`\nEOF`)).toEqual(["cat", "npm", "gh"]);
+  });
+  test("plain body text with quotes and operators is not parsed", () => {
+    expect(verbs(`cat > notes.md <<EOF\nit's "half; done | ok\nEOF\nnpm publish`)).toEqual(["cat", "npm"]);
+  });
+  test("<<- strips leading tabs from the body and the delimiter line", () => {
+    expect(verbs(`cat <<-EOF\n\tx\n\tEOF\nnpm publish`)).toEqual(["cat", "npm"]);
+  });
+  test("a space after << and two heredocs on one line", () => {
+    expect(verbs(`cat << EOF\nx\nEOF\nnpm publish`)).toEqual(["cat", "npm"]);
+    expect(verbs(`cat <<A <<B\nx\nA\ny\nB\nnpm publish`)).toEqual(["cat", "npm"]);
+  });
+  test("a redirect after the heredoc operator is still a redirect", () => {
+    expect(redirects(`cat <<EOF >out.txt\nx\nEOF`)).toEqual([">out.txt"]);
+  });
+  test("an unterminated heredoc reads to the end", () => {
+    expect(verbs(`cat <<EOF\nnpm publish`)).toEqual(["cat"]);
+  });
+  test("a here-string and an arithmetic shift are not heredocs", () => {
+    expect(words("cat <<< hi && npm publish")).toEqual([["cat", "hi"], ["npm", "publish"]]);
+    expect(verbs("echo $((1<<2))\nnpm publish")).toContain("npm");
+  });
+});
+
+describe("ANSI-C quoting decodes every escape (MUST 5)", () => {
+  const first = (src: string) => shellCommands(src)[0]!.words.map((w) => w.text);
+  test("hex, octal, unicode and control escapes", () => {
+    expect(first(`$'\\x6e\\x70\\x6d' publish`)).toEqual(["npm", "publish"]);
+    expect(first(`$'\\156pm' publish`)).toEqual(["npm", "publish"]);
+    expect(first(`$'\\u006epm' publish`)).toEqual(["npm", "publish"]);
+    expect(first(`echo $'a\\cAb'`)).toEqual(["echo", "a\x01b"]);
+  });
+  test("a decoded piece glues onto a bare one", () => {
+    expect(first(`n$'\\x70'm publish`)).toEqual(["npm", "publish"]);
+  });
+});
+
+describe("backticks honour backslash escapes (MUST 5)", () => {
+  test("an escaped inner backtick nests a second substitution instead of closing the first", () => {
+    expect(words("echo `echo \\`npm publish\\``")).toEqual([["npm", "publish"], ["echo", "`npm publish`"], ["echo", "`echo \\`npm publish\\``"]]);
+  });
+});
+
+describe("brace expansion is marked on the word (MUST 5)", () => {
+  const ws = (src: string) => shellCommands(src)[0]!.words;
+  test("brace-built flags and paths carry brace, plain words do not", () => {
+    expect(ws("rm {-r,-f} dir").map((w) => w.brace)).toEqual([false, true, false]);
+    expect(ws("rm -{r,f} dir")[1]).toMatchObject({ brace: true, dynamic: true });
+    expect(ws(`rm "{a,b}"`)[1]).toMatchObject({ brace: false });
+  });
+});
+
+describe("commands know their subshell depth and whether they ran conditionally (MUST 6)", () => {
+  const shape = (src: string) => shellCommands(src).map((c) => [c.words[0]!.text, c.subshell, c.cond]);
+  test("&& || and | make the next command conditional; ; and newline do not", () => {
+    expect(shape("a && b || c | d ; e\nf")).toEqual([["a", 0, false], ["b", 0, true], ["c", 0, true], ["d", 0, true], ["e", 0, false], ["f", 0, false]]);
+  });
+  test("a parenthesised group and a substitution are subshells", () => {
+    expect(shape("a; (cd x; b); c")).toEqual([["a", 0, false], ["cd", 1, false], ["b", 1, false], ["c", 0, false]]);
+    expect(shape("echo $(cd x)")[0]).toEqual(["cd", 1, false]);
+  });
+});

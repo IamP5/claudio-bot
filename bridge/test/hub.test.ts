@@ -1,5 +1,5 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Options, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -8,7 +8,7 @@ import { createHub, tickEach } from "../src/hub";
 import type { AgentId, BotId, Message, MessageId, RoutineId, RunId, ServerMessage, StreamPosition } from "../src/protocol";
 import { createPush, type Push, type PushReason } from "../src/push";
 import { BREAKER_NOTE } from "../src/session";
-import { emptySession, emptyWorld, newBot, type BotRecord, type EnvelopeId, type Fingerprint, type RoutineRecord, type Signature, type World } from "../src/world";
+import { emptySession, emptyWorld, newBot, type AgentRecord, type BotRecord, type EnvelopeId, type Fingerprint, type GateState, type RoutineRecord, type Signature, type World } from "../src/world";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -586,6 +586,63 @@ test("an answer to a permission card from today's app is a decision; an option i
   const h = hubOver(world);
 
   expect(await h.hub.handle({ type: "answer", botId: b.id, messageId: card.id, option: 2 })).toEqual([{ type: "error", message: "Unknown option" }]);
+});
+
+const notes = (n: number): Message[] => Array.from({ length: n }, (_, i) => ({ kind: "note", id: `m_${i}` as MessageId, at, text: `note ${i}`, refs: [] }));
+const archived = (path: string) => readFileSync(path, "utf8").trim().split("\n").map((l) => JSON.parse(l).id);
+
+test("a bot keeps its newest 1000 messages and any open card; older ones go to its archive, and open sends what is kept", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  const history = notes(1100);
+  history[3] = { kind: "question", id: "m_card" as MessageId, at, question: "Ship it?", options: ["Yes", "No"], answer: null, expiresAt: inAnHour() };
+  b.messages.push(...history);
+  (world.gate as GateState).open.push({ kind: "question", cardId: "m_card" as MessageId, actor: { kind: "bot", botId: b.id }, remindAt: null, expiresAt: inAnHour() });
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+
+  await h.hub.handle({ type: "send", botId: b.id, text: "hi", uploads: [] });
+  const [conversation] = await h.hub.handle({ type: "open", botId: b.id });
+
+  const file = join(h.homes.homeOf(b.id), ".history", "bot.jsonl");
+  const sent = conversation?.type === "conversation" ? conversation.messages : [];
+  expect(sent).toHaveLength(1001);
+  expect(sent[0]?.id).toBe("m_card" as MessageId);
+  expect(sent.slice(1, 3).map((m) => m.id)).toEqual(["m_101", "m_102"] as MessageId[]);
+  expect(sent.at(-1)).toMatchObject({ kind: "user", text: "hi" });
+  expect(archived(file)).toEqual(history.slice(0, 101).filter((m) => m.id !== "m_card").map((m) => m.id));
+  expect(statSync(file).mode & 0o777).toBe(0o600);
+});
+
+test("an agent thread keeps its newest 1000 messages; older ones go to its own archive in its bot's home", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const cwd = mkdtempSync(join(tmpdir(), "claudiobot-agent-"));
+  roots.push(cwd);
+  const thread = Array.from({ length: 1100 }, (_, i) => ({ id: `m_${i}` as MessageId, at, from: "agent" as const, text: `step ${i}` }));
+  const rec: AgentRecord = {
+    agent: { id: "a_1" as AgentId, botId: b.id, title: "Fix login", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at },
+    cwd,
+    messages: [...thread],
+    session: emptySession(),
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: { kind: "user" },
+  };
+  world.agents.set(rec.agent.id, rec);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+
+  h.hub.boot(false);
+  const [reply] = await h.hub.handle({ type: "agent", agentId: rec.agent.id });
+
+  const kept = reply?.type === "agent" ? reply.messages : [];
+  expect(kept).toHaveLength(1000);
+  expect(kept[0]?.id).toBe("m_101" as MessageId);
+  expect(kept.at(-1)?.text).toContain("bridge restarted");
+  expect(archived(join(h.homes.homeOf(b.id), ".history", "a_1.jsonl"))).toEqual(thread.slice(0, 101).map((m) => m.id));
 });
 
 test("one ticker throwing is logged, and the tickers after it still run", () => {

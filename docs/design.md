@@ -206,6 +206,12 @@ While a turn runs, the app shows one line per bot or mac agent, such as "Reading
 - **Capped.** An agent the daily cap stopped shows `capped` and resumes on a message tomorrow or a raised cap.
 - **cloud.** `claude --cloud <prompt>` run in the project folder under `script(1)`, because it refuses to run without a terminal, with a 90 second limit; a follow-up is `claude -p <text> --cloud <session> --output-format json`. The project needs a GitHub remote. The bridge neither gates nor meters it, and it does not report back. The bot gives you the link.
 
+## Recorded transcripts
+
+`bridge/test/transcripts/*.ndjson` are real Claude Code sessions, so tests see the fields hand-built fakes leave out (`user_message_uuids`, `origin`, `background_tasks_changed`, what `canUseTool` is really given). Each file starts with a meta line (scenario, SDK and Claude Code versions, cost), then every user message sent (`out`), SDK message received (`in`) and `canUseTool` call (`prompt`), in order. `test/transcript.ts` reads one back and plays it to a session on hub-kit's `FakeQuery`, swapping the recorded uuids for the ones the session sent; a test fails if anything recorded was never played. Tests only read the files and never run `claude`.
+
+To re-record after a Claude Code or SDK upgrade, run `bun scripts/record-transcript.ts <scenario>...` in `bridge/` (scenarios are listed in the script), check the diff, and commit. Each scenario runs haiku in a fresh temp folder with no settings files and no saved session, and costs about a cent. The run stops past $1. Paths, the home folder, session ids, emails, signatures and secret-shaped strings are scrubbed, and the long tool, command and plugin lists are emptied.
+
 ## What stays from v2
 
 The persona, the exchange and note lines, the library and links views, file reads confined to the bot's home, uploads to `inbox/`, the home-list rules (unread, pinned first, hidden bots kept in search) and the default bot **Claudio Bot** (circle, white) are unchanged. `git log` for this file has the v2 text.

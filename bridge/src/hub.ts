@@ -9,6 +9,7 @@ import { commandOf, createCommands, probeCommands, slashName } from "./commands"
 import { connectorSettings, createConnectors } from "./connectors";
 import { accessOf } from "./access";
 import { createGate } from "./gate";
+import { GROUP_SIZE, mentionedIn, membersError, newGroup, targetsOf, transcript, typingLine } from "./groups";
 import type { Homes } from "./home";
 import { createLedger, localDay } from "./ledger";
 import { createMemory, writeAtomic } from "./memory";
@@ -22,6 +23,7 @@ import {
   type Avatar,
   type Bot,
   type BotId,
+  type BotPatch,
   type ClientMessage,
   type Feature,
   type Mention,
@@ -53,6 +55,7 @@ import {
   exchangeBetween,
   findBot,
   forgetExchanges,
+  HOP_LIMIT,
   holdOf,
   hopsAfter,
   hopsOf,
@@ -71,8 +74,11 @@ import {
   sortBots,
   splitHistory,
   toBot,
+  toGroup,
   type Actor,
   type BotRecord,
+  type ChatRecord,
+  type GroupRecord,
   type EnvelopeId,
   type Initiator,
   type Pending,
@@ -121,13 +127,34 @@ const holdsBubbles = (p: Pending) => p.settles !== null && p.initiator.kind === 
  * What the hub has read of one turn's output. held is null once its bubbles go out as they arrive. pushed: the bubble
  * whose push went out, and when; until one does, each new bubble tries again. last: the newest bubble posted. carded:
  * the turn opened a permission card of its own, so the run has something to tell even if it then calls
- * routine_no_update.
+ * routine_no_update. group: the group a group turn answers in (Pending.group), and said: what it posted there so far.
+ * A group turn never settles a run, so its held is always null.
  */
-type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; carded: boolean } & Pushes;
+type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; carded: boolean; group: BotId | null; said: Bubble[] } & Pushes;
 type Pushes = { pushed: { id: MessageId; at: number } | null; last: MessageId | null };
 
 /** What hello advertises: the FEATURES this bridge serves. Each new one joins when the hub implements it. */
-const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges"];
+const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups"];
+
+/** A client request about one chat: a bot's, or a group's. */
+type ChatRequest = Extract<ClientMessage, { botId: BotId }>;
+type GroupRequest = "open" | "send" | "stop" | "update_bot" | "mark_unread" | "delete_bot" | "details";
+/** What a group has none of, by the request that would reach it. Its members have their own. */
+const NOT_IN_GROUPS: Record<Exclude<ChatRequest["type"], GroupRequest>, string> = {
+  answer: "cards",
+  dismiss: "cards",
+  decide: "cards",
+  set_routine: "routines",
+  run_routine: "routines",
+  webhook_token: "routines",
+  file: "files",
+  connectors: "connectors",
+  set_connector: "connectors",
+  skills: "skills",
+  delete_skill: "skills",
+  commands: "commands",
+  exchange: "exchanges",
+};
 
 const BAD_NAME = `A bot name is 1 to ${BOT_NAME_MAX} characters, with no control or invisible characters.`;
 /** The same rule as the bot tools' name: a name a phone would show cut short or other than it reads is refused. */
@@ -212,6 +239,28 @@ export function createHub(deps: HubDeps): Hub {
     return { ...toBot(bot, status), ...ledger.botSpend(bot.id) };
   }
 
+  const membersOf = (group: GroupRecord): BotRecord[] => group.members.flatMap((id) => world.bots.get(id) ?? []);
+  /** The members running a turn for this group right now. A member busy in its own chat is not one. */
+  const typists = (group: GroupRecord): BotRecord[] => membersOf(group).filter((b) => brains.get(b.id)?.current?.group === group.id);
+
+  /** A group works only through its members' turns for it. Its spend is none: the ledger has no row for its id. */
+  const groupView = (group: GroupRecord): Bot => ({ ...toGroup(group, typists(group).length > 0 ? "working" : "idle"), ...ledger.botSpend(group.id) });
+
+  /** The typing line each group last sent, so a member's change re-sends only the groups whose line it changes. */
+  const typing = new Map<BotId, string | null>();
+
+  /** The group's status and its activity line ("engineer is typing…") follow the members' turns for it. */
+  function retype(group: GroupRecord) {
+    const line = typingLine(typists(group).map((b) => b.name));
+    if ((typing.get(group.id) ?? null) === line) return;
+    typing.set(group.id, line);
+    deps.broadcast({ type: "bot", bot: groupView(group) });
+    deps.signal({ type: "activity", botId: group.id, agentId: null, text: line, at: now() });
+  }
+  const retypeFor = (botId: BotId) => {
+    for (const group of world.groups.values()) if (group.members.includes(botId)) retype(group);
+  };
+
   const agentView = (agent: Agent): AgentView =>
     agent.where === "mac" ? { ...agent, ...ledger.agentSpend(agent.id) } : { ...agent, spentUsd: null, budgetUsd: null };
 
@@ -248,17 +297,29 @@ export function createHub(deps: HubDeps): Hub {
       if (r) r.carded = true;
       release(bot);
     }
+    const opened = isOpenCard(message) && (message.kind === "question" || message.from === null) && !bot.messages.some((m) => m.id === message.id);
     deps.broadcast({ type: "message", botId: bot.id, message: post(bot, message) });
     trim(bot.messages, archiveOf(bot.id, "bot"), isOpenCard);
     changed(bot);
+    // The user answers a card in the bot's own chat, so a group turn that opens one points there.
+    const group = opened ? groupFor(brains.get(bot.id)?.current?.group, bot) : null;
+    if (group) noteInGroup(group, "{0} needs you in its own chat.", [botPeer(bot)]);
   }
 
-  // The message is in bot.messages before the push, because the push's throttle reads it.
-  function postBubbles(bot: BotRecord, r: Pushes, bubbles: readonly Bubble[]) {
+  /** The group a turn answers in (Pending.group), while the bot is still one of its members. */
+  function groupFor(id: BotId | null | undefined, bot: BotRecord): GroupRecord | null {
+    const group = id == null ? undefined : world.groups.get(id);
+    return group?.members.includes(bot.id) ? group : null;
+  }
+
+  // The message is in the chat's messages before the push, because the push's throttle reads it. A group turn's
+  // bubbles post to the group as the bot.
+  function postBubbles(bot: BotRecord, r: Pushes, bubbles: readonly Bubble[], group: GroupRecord | null = null) {
     for (const { id, text } of bubbles) {
-      say(bot, { kind: "bot", id, at: now(), text });
+      if (group) sayInGroup(group, { kind: "bot", id, at: now(), text, from: bot.id });
+      else say(bot, { kind: "bot", id, at: now(), text });
       r.last = id;
-      if (r.pushed === null && deps.push.notify(bot, "message", id)) r.pushed = { id, at: clockNow().getTime() };
+      if (r.pushed === null && deps.push.notify(group ?? bot, "message", id)) r.pushed = { id, at: clockNow().getTime() };
     }
   }
 
@@ -266,10 +327,53 @@ export function createHub(deps: HubDeps): Hub {
    * The end of a turn with something to tell. Its last bubble pushes when no push for the turn went out yet (a live
    * phone held them back, and may since have gone), or when the push that did went out 20 s or more ago.
    */
-  function pushEnd(bot: BotRecord, r: Pushes) {
+  function pushEnd(chat: ChatRecord, r: Pushes) {
     if (r.last === null || r.last === r.pushed?.id) return;
-    if (r.pushed === null) deps.push.notify(bot, "message", r.last);
-    else if (clockNow().getTime() - r.pushed.at >= LONG_TURN_MS) deps.push.notify(bot, "result", r.last);
+    if (r.pushed === null) deps.push.notify(chat, "message", r.last);
+    else if (clockNow().getTime() - r.pushed.at >= LONG_TURN_MS) deps.push.notify(chat, "result", r.last);
+  }
+
+  const groupArchive = (id: BotId) => join(root, "groups", `${id}.jsonl`);
+
+  function groupChanged(group: GroupRecord) {
+    deps.persist();
+    deps.broadcast({ type: "bot", bot: groupView(group) });
+  }
+
+  function sayInGroup(group: GroupRecord, message: Message) {
+    deps.broadcast({ type: "message", botId: group.id, message: post(group, message) });
+    trim(group.messages, groupArchive(group.id), () => false);
+    groupChanged(group);
+  }
+
+  const noteInGroup = (group: GroupRecord, text: string, refs: Peer[] = []) => sayInGroup(group, { kind: "note", id: newMessageId(), at: now(), text, refs });
+
+  /** One member's turn on a message in the group. skip: the message itself, which the envelope carries apart. */
+  function handTo(group: GroupRecord, member: BotRecord, message: { text: string; addressed: boolean; skip: ReadonlySet<MessageId> }, by: Extract<Envelope, { from: "group" }>["by"]) {
+    const nameOf = (id: BotId) => world.bots.get(id)?.name ?? "a former member";
+    deliver(botActor(member.id), {
+      from: "group",
+      group: { id: group.id, name: group.name },
+      members: membersOf(group).map((b) => ({ name: b.name, you: b.id === member.id })),
+      transcript: transcript(group, nameOf, userName, message.skip),
+      text: message.text,
+      addressed: message.addressed,
+      by,
+    });
+  }
+
+  /**
+   * A member's reply that @mentions other members hands each of them a turn, one hop further down the chain the reply
+   * was part of. A turn at HOP_LIMIT hands nothing on, as message_bot would be refused there, so mentions never loop.
+   */
+  function relay(from: BotRecord, turn: Pending, said: readonly Bubble[]) {
+    const group = groupFor(turn.group, from);
+    if (!group || said.length === 0 || hopsOf(turn.initiator) >= HOP_LIMIT) return;
+    const text = said.map((b) => b.text).join("\n\n");
+    const others = membersOf(group).filter((b) => b.id !== from.id);
+    const by = { kind: "bot" as const, name: from.name, botId: from.id, hops: hopsAfter(turn.initiator), origin: rootOf(turn.initiator) };
+    const skip = new Set(said.map((b) => b.id));
+    for (const id of mentionedIn(text, others)) handTo(group, world.bots.get(id)!, { text, addressed: true, skip }, by);
   }
 
   /** The turn's held bubbles go out now, ahead of a card or note it caused; the rest of the turn posts as it arrives. */
@@ -341,20 +445,23 @@ export function createHub(deps: HubDeps): Hub {
     `Paused until ${new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} (${why === "usage_limit" ? "usage limit" : "daily cap"})`;
 
   function endTurn(bot: BotRecord, turn: Pending, end: TurnEnd, quiet: boolean) {
+    // A group turn's end is told where its reply would have been.
+    const group = groupFor(turn.group, bot);
+    const tell = (text: string) => (group ? noteInGroup(group, text) : note(bot, text));
     switch (end.kind) {
       case "done":
-        if (usedBudget(end)) note(bot, `${bot.name} used today's budget; routines and other background work wait until tomorrow.`);
-        else if (end.result.subtype !== "success") note(bot, `${bot.name} stopped with an error: ${end.result.errors.join("; ") || end.result.subtype}`);
+        if (usedBudget(end)) tell(`${bot.name} used today's budget; routines and other background work wait until tomorrow.`);
+        else if (end.result.subtype !== "success") tell(`${bot.name} stopped with an error: ${end.result.errors.join("; ") || end.result.subtype}`);
         break;
       case "failed":
-        note(bot, `${bot.name} crashed: ${end.error}`);
+        tell(`${bot.name} crashed: ${end.error}`);
         break;
       case "stopped":
         // The breaker already left its own note.
-        if (end.by === "user") note(bot, `Stopped by ${userName}`);
+        if (end.by === "user") tell(group ? `${bot.name} was stopped by ${userName}` : `Stopped by ${userName}`);
         break;
       case "deferred":
-        if (end.why !== "retry") note(bot, pausedNote(end.until, end.why));
+        if (end.why !== "retry") tell(pausedNote(end.until, end.why));
         return;
       case "dropped":
         break;
@@ -498,11 +605,22 @@ export function createHub(deps: HubDeps): Hub {
         activity.observe(actor, m);
         let r = readings.get(bot.id);
         if (r?.id !== pending.id) {
-          r = { id: pending.id, turn: freshTurn, held: holdsBubbles(pending) ? [] : null, pushed: null, last: null, carded: false };
+          const group = pending.group ?? null;
+          r = { id: pending.id, turn: freshTurn, held: holdsBubbles(pending) ? [] : null, pushed: null, last: null, carded: false, group, said: [] };
           readings.set(bot.id, r);
+          // A turn that follows the last without a pause changes no session status, so its first output tells.
+          retypeFor(bot.id);
         }
         const read = readTurn(r.turn, m);
         r.turn = read.turn;
+        if (r.group !== null) {
+          // The group went, or the bot left it, mid-turn: what it says there goes nowhere.
+          const group = groupFor(r.group, bot);
+          if (!group) return;
+          postBubbles(bot, r, read.bubbles, group);
+          r.said.push(...read.bubbles);
+          return;
+        }
         if (r.held === null) return postBubbles(bot, r, read.bubbles);
         r.held.push(...read.bubbles);
         // A question card is the last thing a turn shows, so what led up to it goes out before the card does.
@@ -518,15 +636,20 @@ export function createHub(deps: HubDeps): Hub {
           readings.delete(bot.id);
           quiet = r.turn.quiet && !r.turn.asked && !r.carded;
           if (r.held !== null && !quiet) postBubbles(bot, r, r.held);
-          if (!quiet) pushEnd(bot, r);
+          const chat = r.group === null ? bot : groupFor(r.group, bot);
+          if (chat && !quiet) pushEnd(chat, r);
+          if (end.kind === "done") relay(bot, pending, r.said);
         }
         endTurn(bot, pending, end, quiet);
+        retypeFor(bot.id);
         // The session saved the turn's end before calling here, so a held run's report and its settled run would
         // otherwise wait for the debounced save.
         if (end.kind !== "deferred" && holdsBubbles(pending)) deps.persist("now");
       },
       onChange() {
-        if (world.bots.has(bot.id)) changed(bot);
+        if (!world.bots.has(bot.id)) return;
+        changed(bot);
+        retypeFor(bot.id);
       },
       note(text) {
         if (!world.bots.has(bot.id)) return;
@@ -800,6 +923,87 @@ export function createHub(deps: HubDeps): Hub {
   const replyTo = (r: Result): ServerMessage[] => (r.ok ? [] : error(r.error));
   const done = (failure: string | null): ServerMessage[] => (failure === null ? [] : error(failure));
 
+  /** A deleted bot leaves every group it was in. A group left with too few stays, and says so. */
+  function leave(group: GroupRecord, bot: BotRecord) {
+    group.members = group.members.filter((id) => id !== bot.id);
+    const few = group.members.length < GROUP_SIZE.min ? ` A group needs ${GROUP_SIZE.min} bots to talk among themselves: add one in its profile.` : "";
+    noteInGroup(group, `${bot.name} was deleted, so it left the group.${few}`);
+    retype(group);
+  }
+
+  /**
+   * The user's message in a group goes to the members it mentions, or to every member when it mentions none. Each gets
+   * a turn of its own whose text posts back to the group. A group has no folder, so it takes no uploads.
+   */
+  function sendInGroup(group: GroupRecord, m: Extract<ClientMessage, { type: "send" }>): ServerMessage[] {
+    const sent = m.clientId === undefined ? undefined : group.messages.find((x) => x.kind === "user" && x.clientId === m.clientId);
+    if (sent) return [{ type: "message", botId: group.id, message: sent }];
+    if (m.uploads.length > 0) return error("A group has no folder for files. Send them to one of its bots.");
+    const mentions = resolveMentions(world, m.mentions ?? [], new Set());
+    const message: Message = {
+      kind: "user",
+      id: newMessageId(),
+      at: now(),
+      text: m.text,
+      attachments: [],
+      ...(m.clientId !== undefined && { clientId: m.clientId }),
+      ...(mentions.length > 0 && { mentions }),
+    };
+    sayInGroup(group, message);
+    const targets = targetsOf(group, mentions);
+    const addressed = targets.length < group.members.length;
+    for (const member of membersOf(group).filter((b) => targets.includes(b.id)))
+      handTo(group, member, { text: m.text, addressed, skip: new Set([message.id]) }, { kind: "user" });
+    return [];
+  }
+
+  function updateGroup(group: GroupRecord, patch: BotPatch): ServerMessage[] {
+    const { members, dailyCapUsd, ...rest } = patch;
+    if (dailyCapUsd !== undefined) return error("A group has no spending of its own: its bots do.");
+    if (rest.name !== undefined && !nameOk(rest.name)) return error(BAD_NAME);
+    const why = members === undefined ? null : membersError(world, members);
+    if (why !== null) return error(why);
+    Object.assign(group, rest, rest.name !== undefined && { name: rest.name.trim() }, members !== undefined && { members: [...members] });
+    groupChanged(group);
+    retype(group);
+    return [];
+  }
+
+  /** A group answers what a chat of messages can: the rest reaches a bot's session, home or cards, which it has none of. */
+  async function handleGroup(group: GroupRecord, message: ChatRequest): Promise<ServerMessage[]> {
+    switch (message.type) {
+      case "open":
+        group.unread = 0;
+        groupChanged(group);
+        return [{ type: "conversation", botId: group.id, messages: group.messages }];
+      case "send":
+        return sendInGroup(group, message);
+      case "stop": {
+        const running = typists(group);
+        if (running.length === 0) return error("Nothing is running.");
+        await Promise.all(running.map((b) => brains.get(b.id)?.interrupt()));
+        return [];
+      }
+      case "update_bot":
+        return updateGroup(group, message.patch);
+      case "mark_unread":
+        group.unread = Math.max(1, group.unread);
+        groupChanged(group);
+        return [];
+      case "delete_bot":
+        // Its members and their own chats stay. A member's turn still running for it posts nowhere.
+        world.groups.delete(group.id);
+        typing.delete(group.id);
+        deps.persist("now");
+        deps.broadcast({ type: "bot_removed", botId: group.id });
+        return [];
+      case "details":
+        return [{ type: "details", botId: group.id, library: [], links: linksOf(group, []), agents: [], routines: [] }];
+      default:
+        return error(`A group has no ${NOT_IN_GROUPS[message.type]}: its bots have their own.`);
+    }
+  }
+
   async function handle(message: ClientMessage): Promise<ServerMessage[]> {
     switch (message.type) {
       case "create_bot": {
@@ -834,10 +1038,20 @@ export function createHub(deps: HubDeps): Hub {
       case "revoke_device":
       case "pair_code":
         return error("This bridge cannot manage devices yet.");
-      case "create_group":
-        return error("This bridge cannot make groups yet.");
+      case "create_group": {
+        if (!nameOk(message.name)) return error(BAD_NAME);
+        const why = membersError(world, message.members);
+        if (why !== null) return error(why);
+        const first = world.bots.get(message.members[0]!)!;
+        const group = newGroup({ id: `g_${crypto.randomUUID()}` as BotId, name: message.name.trim(), members: [...message.members], avatar: { ...first.avatar }, at: now() });
+        world.groups.set(group.id, group);
+        groupChanged(group);
+        return [{ type: "created", ref: message.ref, botId: group.id }];
+      }
     }
 
+    const group = world.groups.get(message.botId);
+    if (group) return handleGroup(group, message);
     const bot = world.bots.get(message.botId);
     if (!bot) return error("Unknown bot");
 
@@ -858,7 +1072,7 @@ export function createHub(deps: HubDeps): Hub {
       case "stop":
         return (await brains.get(bot.id)?.interrupt()) ? [] : error("Nothing is running.");
       case "update_bot":
-        if (message.patch.members !== undefined) return error("This bridge cannot change group members yet.");
+        if (message.patch.members !== undefined) return error("Only a group has members.");
         if (message.patch.name !== undefined && !nameOk(message.patch.name)) return error(BAD_NAME);
         Object.assign(bot, message.patch, message.patch.name !== undefined && { name: message.patch.name.trim() });
         if (message.patch.name !== undefined) retitle(bot.id, bot.name);
@@ -892,6 +1106,7 @@ export function createHub(deps: HubDeps): Hub {
         for (const id of doomed) world.agents.delete(id);
         world.bots.delete(bot.id);
         forgetExchanges(world, bot.id);
+        for (const group of world.groups.values()) if (group.members.includes(bot.id)) leave(group, bot);
         // A crash between these two leaves an orphan home rather than a bot whose home is gone.
         deps.persist("now");
         homes.trash(bot.id, new Date());
@@ -950,7 +1165,7 @@ export function createHub(deps: HubDeps): Hub {
       ...position,
       machine: deps.machine,
       userName,
-      bots: sortBots([...world.bots.values()].map(view)),
+      bots: sortBots([...[...world.bots.values()].map(view), ...[...world.groups.values()].map(groupView)]),
     }),
     handle,
     tick: (at) => tickEach(tickers, at, deps.log),

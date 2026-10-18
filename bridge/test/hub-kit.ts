@@ -36,6 +36,7 @@ export const COMMANDS: SlashCommand[] = [
 
 /** A live SDK query the test drives: what the session sent it, and what it answers. */
 export class FakeQuery {
+  /** Each message's content: a string, or the blocks of a /command sent after context. */
   readonly received: string[] = [];
   readonly toggles: string[] = [];
   interrupts = 0;

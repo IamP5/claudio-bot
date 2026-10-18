@@ -97,8 +97,8 @@ export type Pending = {
   /**
    * continuation: the decision envelope after a permission card was answered. It runs ahead of other queued work,
    * Stop keeps it, and its turn's start arms the grant's short window (gate.beginTurn).
-   * command: a /command or skill, text being exactly "/name args". Claude Code runs it only from the bare text, so it
-   * is sent as is: the notices, standing brief and context an envelope would carry wait for the next envelope.
+   * command: a /command or skill, text being exactly "/name args". Claude Code runs it from the bare text or from the
+   * last text block, so the notices, standing brief and context an envelope carries go in blocks above it.
    */
   kind: "envelope" | "continuation" | "command";
   at: string;
@@ -180,6 +180,11 @@ export type SessionState = {
    * misses a change. Absent until the first; ignored by a query that starts a new session.
    */
   sent?: { context?: string; brief?: string };
+  /**
+   * The live query's background tasks, absent when it has none. close() leaves them on disk, so the next start can say
+   * a restart stopped them.
+   */
+  background?: { id: string; description?: string }[];
 };
 
 export const emptySession = (id: string | null = null): SessionState => ({ id, pending: [], lifecycle: { kind: "idle" }, notices: [] });

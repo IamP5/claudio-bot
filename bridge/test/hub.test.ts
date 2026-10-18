@@ -1130,7 +1130,7 @@ test("once the query a list came from has closed, the commands frame reads what 
   expect([live.closed, await names(), h.queries.length]).toEqual([true, ["greet", "compact"], 2]);
 });
 
-test("a /command from the menu reaches the bot as the bare text, shows as typed, and the brief and notices wait for the next turn", async () => {
+test("a /command from the menu reaches the bot as the last text block, shows as typed, and carries the brief and notices before it", async () => {
   const h = resumedBot();
 
   await h.hub.handle({ type: "send", botId: h.bot.id, text: "  /greet Ana ", uploads: [] });
@@ -1141,10 +1141,12 @@ test("a /command from the menu reaches the bot as the bare text, shows as typed,
   await flush();
 
   const [command, next] = h.q().received;
-  expect(command).toBe("/greet Ana");
+  expect(command as unknown).toEqual([
+    { type: "text", text: expect.stringMatching(/^\[Standing brief: this replaces what you were told before where they differ\.\][\s\S]*\n\n\[Your question expired unanswered\.\]$/) },
+    { type: "text", text: "/greet Ana" },
+  ]);
   expect(h.bot.messages.find((m) => m.kind === "user")).toMatchObject({ text: "  /greet Ana " });
-  expect(next).toStartWith("[Standing brief: this replaces what you were told before where they differ.]");
-  expect(next).toEndWith("[Your question expired unanswered.]\n[Alex]\nthanks");
+  expect(next).toBe("[Alex]\nthanks");
 });
 
 test.each([

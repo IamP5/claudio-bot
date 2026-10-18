@@ -683,12 +683,7 @@ type Live = {
 };
 
 /** A background task of the live query, by what a note would name it. */
-type Background = { id: string; description?: string };
-/**
- * SessionState with the live query's background tasks, absent when it has none. close() leaves them on disk, so the
- * next start can say a restart stopped them. The field belongs on world.ts's SessionState.
- */
-type Persisted = SessionState & { background?: Background[] };
+type Background = NonNullable<SessionState["background"]>[number];
 
 const SYSTEM: Initiator = { kind: "system" };
 
@@ -981,7 +976,7 @@ export function createSession(spec: SessionSpec): Session {
   }
 
   function remember(tasks: Background[]) {
-    const state = own<Persisted>(spec.state);
+    const state = own<SessionState>(spec.state);
     if (JSON.stringify(state.background ?? []) === JSON.stringify(tasks)) return;
     if (tasks.length > 0) state.background = tasks;
     else delete state.background;
@@ -1118,7 +1113,7 @@ export function createSession(spec: SessionSpec): Session {
 
   const bootStatus = status();
   let recovered: Effect[] | null = transition({ kind: "recover" }, clock());
-  const lost = (spec.state as Persisted).background ?? [];
+  const lost = spec.state.background ?? [];
   if (lost.length > 0) {
     recovered.push({ kind: "note", text: restartStoppedNote(spec.name?.() ?? "Claude Code", lost) });
     remember([]);

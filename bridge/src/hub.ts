@@ -15,7 +15,7 @@ import type { Homes } from "./home";
 import { createLedger, localDay } from "./ledger";
 import { createMemory, writeAtomic } from "./memory";
 import type { Scope } from "./policy";
-import type { Project } from "./projects";
+import { findProject, type Project } from "./projects";
 import {
   PROTOCOL,
   isSessionRequest,
@@ -827,11 +827,6 @@ export function createHub(deps: HubDeps): Hub {
     const bot = world.bots.get(botId);
     if (!bot) throw new Error("This bot no longer exists.");
     return bot;
-  }
-
-  function findProject(projects: Project[], ref: string): Project | undefined {
-    const key = ref.trim().toLowerCase();
-    return projects.find((p) => p.path === ref.trim()) ?? projects.find((p) => p.name.toLowerCase() === key);
   }
 
   const actions: BotActions = {

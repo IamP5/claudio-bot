@@ -899,7 +899,7 @@ test("one ticker throwing is logged, and the tickers after it still run", () => 
 
 test("hello lists every feature this bridge has", () => {
   const hello = hubOver(emptyWorld()).hub.hello(NO_RING);
-  expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "exchanges"]);
+  expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "exchanges"]);
 });
 
 test("a send's clientId comes back on the user's message, and a send without one adds none", async () => {
@@ -1274,6 +1274,43 @@ test("message_bot keeps the text of each message both ways, and the exchange fra
   expect(answer).toMatchObject({ type: "exchange", botId: h.ana.id, peer: h.bo.id, messages: fromBo });
   const [mirror] = await h.hub.handle({ type: "exchange", botId: h.bo.id, peer: h.ana.id });
   expect(mirror).toMatchObject({ type: "exchange", botId: h.bo.id, peer: h.ana.id, messages: fromBo });
+});
+
+test("mentions are kept on the user's message as resolved, and the bot's turn says what each asks of it", async () => {
+  const h = await pair();
+  h.anaQuery.emit(result());
+  await flush();
+  const mentions = [
+    { kind: "bot", id: h.bo.id, name: "Bo (old name)" },
+    { kind: "bot", id: "b_gone" as BotId, name: "gone" },
+    { kind: "bot", id: h.ana.id, name: "ana" },
+    { kind: "connector", name: "chrome-devtools" },
+    { kind: "connector", name: "slack" },
+  ] as const;
+
+  await h.hub.handle({ type: "send", botId: h.ana.id, text: "@bo cut the release, check @chrome-devtools", uploads: [], mentions: [...mentions] });
+  await flush();
+
+  expect(h.ana.messages.findLast((m) => m.kind === "user")).toMatchObject({
+    mentions: [{ kind: "bot", id: h.bo.id, name: "bo" }, { kind: "bot", id: h.ana.id, name: "ana" }, { kind: "connector", name: "chrome-devtools" }],
+  });
+  expect(h.anaQuery.received.at(-1)).toEndWith(
+    "[Alex]\n@bo cut the release, check @chrome-devtools\n" +
+      `[Alex mentioned the bot bo. message_bot with bot "${h.bo.id}" reaches them: hand bo the part of this request that is theirs, or loop them in.]\n` +
+      "[Alex pointed at the connector chrome-devtools: use its tools for this.]",
+  );
+});
+
+test("a send with no mentions stores none and its turn names nobody", async () => {
+  const h = await pair();
+  expect(h.ana.messages.find((m) => m.kind === "user")).not.toHaveProperty("mentions");
+  expect(h.anaQuery.received[0]).toEndWith("[Alex]\nShip it.");
+});
+
+test("the bot a user mentioned hears from the bot handing it work as a hop of the user's own chain", async () => {
+  const h = await pair();
+  await callTool(h.anaQuery, "message_bot", { bot: "bo", text: "Alex wants the release cut." });
+  expect(h.bo.session.pending.map((p) => p.initiator)).toEqual([{ kind: "bot", botId: h.ana.id, hops: 1, origin: { kind: "user" } }]);
 });
 
 test("message_bot reaches a bot by its title, and a miss lists names with titles", async () => {

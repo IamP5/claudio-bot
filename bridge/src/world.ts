@@ -15,6 +15,7 @@ import {
   type DeviceId,
   type ExchangeMessage,
   type Link,
+  type Mention,
   type Message,
   type MessageId,
   type Peer,
@@ -553,6 +554,23 @@ export function toBot(bot: BotRecord, status: BotStatus): Omit<Bot, keyof BotSpe
 
 export const sortBots = <B extends Pick<Bot, "pinned" | "lastAt">>(bots: B[]): B[] =>
   [...bots].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastAt.localeCompare(a.lastAt));
+
+/**
+ * The user's mentions as the bridge keeps them: bots that exist, under their current names, and connectors among
+ * `connectors` (the bot's, turned on). Anything else is dropped, and so is a repeat.
+ */
+export function resolveMentions(world: World, mentions: readonly Mention[], connectors: ReadonlySet<string>): Mention[] {
+  const kept = new Map<string, Mention>();
+  for (const m of mentions) {
+    if (m.kind === "connector") {
+      if (connectors.has(m.name)) kept.set(`connector:${m.name}`, m);
+      continue;
+    }
+    const bot = world.bots.get(m.id);
+    if (bot) kept.set(`bot:${bot.id}`, { kind: "bot", id: bot.id, name: bot.name });
+  }
+  return [...kept.values()];
+}
 
 /** By id, then by name, then by title, ignoring case: a bot is often called by its role ("the engineer"). */
 export function findBot(world: World, ref: string): BotRecord | undefined {

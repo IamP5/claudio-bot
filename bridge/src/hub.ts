@@ -23,6 +23,7 @@ import {
   type BotId,
   type ClientMessage,
   type Feature,
+  type Mention,
   type Message,
   type MessageId,
   type Peer,
@@ -56,6 +57,7 @@ import {
   hopsOf,
   isOpenCard,
   linksOf,
+  resolveMentions,
   logExchange,
   newBot,
   newMessageId,
@@ -124,7 +126,7 @@ type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; carded: bool
 type Pushes = { pushed: { id: MessageId; at: number } | null; last: MessageId | null };
 
 /** What hello advertises: the FEATURES this bridge serves. Each new one joins when the hub implements it. */
-const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "exchanges"];
+const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "exchanges"];
 
 const BAD_NAME = `A bot name is 1 to ${BOT_NAME_MAX} characters, with no control or invisible characters.`;
 /** The same rule as the bot tools' name: a name a phone would show cut short or other than it reads is refused. */
@@ -728,6 +730,47 @@ export function createHub(deps: HubDeps): Hub {
     saveSkill: (botId, a) => skills.save(botId, a),
   };
 
+  // A send can wait (on the bot's connectors), so each bot's sends are handled one after another: a later one never
+  // overtakes it into the chat or the bot's queue.
+  const sending = new Map<BotId, Promise<unknown>>();
+  function inOrder<T>(botId: BotId, op: () => Promise<T>): Promise<T> {
+    const next = (sending.get(botId) ?? Promise.resolve()).then(op);
+    sending.set(botId, next.catch(() => {}));
+    return next;
+  }
+
+  /** The connectors a mention may point at: the bot's, turned on. Asked only when the user pointed at one. */
+  async function connectorsOn(botId: BotId, mentions: readonly Mention[]): Promise<Set<string>> {
+    if (!mentions.some((m) => m.kind === "connector")) return new Set();
+    return new Set((await connectors.list(botId)).filter((c) => c.enabled).map((c) => c.name));
+  }
+
+  async function send(m: Extract<ClientMessage, { type: "send" }>): Promise<ServerMessage[]> {
+    const bot = world.bots.get(m.botId);
+    if (!bot) return error("Unknown bot");
+    // A phone resends what it never saw echoed after a reconnect; the first copy may have arrived. The echo goes back
+    // to the sender so its pending send settles.
+    const sent = m.clientId === undefined ? undefined : bot.messages.find((x) => x.kind === "user" && x.clientId === m.clientId);
+    if (sent) return [{ type: "message", botId: bot.id, message: sent }];
+    const on = await connectorsOn(bot.id, m.mentions ?? []);
+    if (!world.bots.has(bot.id)) return error("Unknown bot");
+    const mentions = resolveMentions(world, m.mentions ?? [], on);
+    const attachments = homes.saveUploads(bot.id, m.uploads);
+    if ("error" in attachments) return error(attachments.error);
+    say(bot, {
+      kind: "user",
+      id: newMessageId(),
+      at: now(),
+      text: m.text,
+      attachments,
+      ...(m.clientId !== undefined && { clientId: m.clientId }),
+      ...(mentions.length > 0 && { mentions }),
+    });
+    const others = mentions.filter((x) => x.kind !== "bot" || x.id !== bot.id);
+    deliver(botActor(bot.id), { from: "user", text: m.text, attachments, mentions: others });
+    return [];
+  }
+
   const error = (message: string): ServerMessage[] => [{ type: "error", message }];
   const replyTo = (r: Result): ServerMessage[] => (r.ok ? [] : error(r.error));
   const done = (failure: string | null): ServerMessage[] => (failure === null ? [] : error(failure));
@@ -778,17 +821,8 @@ export function createHub(deps: HubDeps): Hub {
         bot.unread = 0;
         changed(bot);
         return [{ type: "conversation", botId: bot.id, messages: bot.messages }];
-      case "send": {
-        // A phone resends what it never saw echoed after a reconnect; the first copy may have arrived. The echo goes back
-        // to the sender so its pending send settles.
-        const sent = message.clientId === undefined ? undefined : bot.messages.find((m) => m.kind === "user" && m.clientId === message.clientId);
-        if (sent) return [{ type: "message", botId: bot.id, message: sent }];
-        const attachments = homes.saveUploads(bot.id, message.uploads);
-        if ("error" in attachments) return error(attachments.error);
-        say(bot, { kind: "user", id: newMessageId(), at: now(), text: message.text, attachments, ...(message.clientId !== undefined && { clientId: message.clientId }) });
-        deliver(botActor(bot.id), { from: "user", text: message.text, attachments });
-        return [];
-      }
+      case "send":
+        return inOrder(bot.id, () => send(message));
       case "answer":
       case "dismiss": {
         const reply = cardReply(bot.messages.find((m) => m.id === message.messageId), message);
@@ -822,6 +856,7 @@ export function createHub(deps: HubDeps): Hub {
         brains.get(bot.id)?.close();
         brains.delete(bot.id);
         readings.delete(bot.id);
+        sending.delete(bot.id);
         agents.stopFor(bot.id);
         // Before the agents go: the gate finds the agents' grants through them.
         gate.forgetBot(bot.id);

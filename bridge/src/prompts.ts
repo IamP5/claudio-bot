@@ -1,9 +1,10 @@
-import type { AgentId, Attachment, Avatar, BotId, PermissionChoice } from "./protocol";
+import type { AgentId, Attachment, Avatar, BotId, Mention, PermissionChoice } from "./protocol";
 import type { Initiator, Notice, Origin, Pending, RunRef } from "./world";
 
 // Everything that reaches a bot or an agent is one envelope. Its initiator is a pure function of the envelope.
 export type Envelope =
-  | { from: "user"; text: string; attachments: Attachment[] }
+  // mentions: resolved by the hub (world.resolveMentions), without the receiving bot itself.
+  | { from: "user"; text: string; attachments: Attachment[]; mentions?: Mention[] }
   // An answer carries the initiator of the turn that asked: a tap on a routine's question does not make it the user's work.
   | { from: "answer"; question: string; option: string; initiator: Initiator }
   | { from: "dismiss"; question: string; initiator: Initiator }
@@ -58,6 +59,15 @@ const lines = (...xs: (string | null)[]) => xs.filter((x) => x !== null && x !==
 
 const call = (tool: string, detail: string) => `${tool} \`${detail}\``;
 
+/** What an @mention in the user's message asks of the bot. */
+function mentionLine(m: Mention, userName: string): string {
+  if (m.kind === "connector") return `[${userName} pointed at the connector ${m.name}: use its tools for this.]`;
+  return (
+    `[${userName} mentioned the bot ${m.name}. message_bot with bot "${m.id}" reaches them: ` +
+    `hand ${m.name} the part of this request that is theirs, or loop them in.]`
+  );
+}
+
 /** Text in a fence its own backticks cannot close, so data never reads as the envelope's own words. */
 export function fence(text: string): string {
   const longest = Math.max(2, ...[...text.matchAll(/`+/g)].map((m) => m[0].length));
@@ -68,7 +78,7 @@ export function fence(text: string): string {
 export function envelope(e: Envelope, userName: string): string {
   switch (e.from) {
     case "user":
-      return lines(`[${userName}]`, e.text, ...e.attachments.map((a) => `Attached: ${a.path}`));
+      return lines(`[${userName}]`, e.text, ...(e.mentions ?? []).map((m) => mentionLine(m, userName)), ...e.attachments.map((a) => `Attached: ${a.path}`));
     case "answer":
       return `[${userName} answered "${e.question}": ${e.option}]`;
     case "dismiss":

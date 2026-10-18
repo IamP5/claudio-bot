@@ -554,6 +554,8 @@ function limitWarning(info: SDKRateLimitInfo): string | null {
 
 /** Claude Code process groups still alive. The bridge's shutdown exits before the SDK's close grace runs out. */
 const groups = new Set<number>();
+/** The pids of the Claude Code processes this bridge runs, so the live-process registry can tell them from others. */
+export const ownPids = (): ReadonlySet<number> => groups;
 process.once("exit", () => {
   for (const pid of groups) killGroup(pid);
 });

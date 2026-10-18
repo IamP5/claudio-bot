@@ -130,7 +130,8 @@ struct HomeView: View {
         let request: ClientMessage
 
         init?(_ bot: Bot, details: BotDetails?, detailsLate: Bool) {
-            guard details != nil || detailsLate else { return nil }
+            // A group has no agents, so there are no worktrees to wait for.
+            guard details != nil || detailsLate || bot.isGroup else { return nil }
             let worktrees = details?.agents.compactMap(\.worktree) ?? []
             botId = bot.id
             message = HomeView.deleteMessage(bot, worktrees: worktrees)
@@ -141,6 +142,7 @@ struct HomeView: View {
 
     /// The bridge moves the bot's home to its trash folder and keeps every agent worktree until the user removes it.
     nonisolated static func deleteMessage(_ bot: Bot, worktrees: [Worktree]) -> String {
+        if bot.isGroup { return "Deletes the group \(bot.name) and its chat. Its bots and their own chats stay." }
         let base = "Deletes \(bot.name) and its chat. Its folder, with its files and memory, moves to the bridge's trash folder on your Mac, where you can recover it."
         switch worktrees.count {
         case 0: return base
@@ -206,7 +208,7 @@ struct HomeView: View {
             newName = bot.name
             renaming = bot
         } label: {
-            Label("Rename Bot", systemImage: "pencil")
+            Label(bot.isGroup ? "Rename Group" : "Rename Bot", systemImage: "pencil")
         }
         Divider()
         Button {
@@ -235,7 +237,7 @@ struct BotRow: View {
         let display = RowDisplay(bot)
         let activity = bot.status == .working ? ActivityLine.text(in: store, botId: bot.id) : nil
         HStack(spacing: 14) {
-            AvatarView(avatar: bot.avatar, size: 46, needsAttention: display.needsAttention)
+            BotAvatar(bot: bot, size: 46, needsAttention: display.needsAttention)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(bot.name)

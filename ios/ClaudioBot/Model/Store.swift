@@ -68,6 +68,12 @@ struct ActivityKey: Hashable, Sendable {
     let agentId: AgentID?
 }
 
+/// The messages between a bot and another bot, behind the exchange lines in the bot's chat.
+struct ExchangeKey: Hashable, Sendable {
+    let botId: BotID
+    let peer: BotID
+}
+
 struct FileKey: Hashable, Sendable {
     let botId: BotID
     let path: String
@@ -134,6 +140,10 @@ final class AppStore {
     private(set) var facts: [Fact]?
     private(set) var connectors: [BotID: [Connector]] = [:]
     private(set) var skills: [BotID: [Skill]] = [:]
+    /// Each bot's "/" menu, once its chat asked for it.
+    private(set) var commands: [BotID: [Command]] = [:]
+    /// What two bots said to each other, once an exchange line was opened.
+    private(set) var exchanges: [ExchangeKey: [ExchangeMessage]] = [:]
     /// The newest webhook token, shown once and then dismissed.
     private(set) var webhookToken: WebhookToken?
     /// Sends the bridge has not echoed back yet, oldest first, each with how many times a socket took it. In memory
@@ -183,6 +193,8 @@ final class AppStore {
             facts = nil
             connectors = [:]
             skills = [:]
+            commands = [:]
+            exchanges = [:]
             webhookToken = nil
             unechoedSends = []
         }
@@ -257,6 +269,8 @@ final class AppStore {
             details = details.filter { self.bots[$0.key] != nil }
             connectors = connectors.filter { self.bots[$0.key] != nil }
             skills = skills.filter { self.bots[$0.key] != nil }
+            commands = commands.filter { self.bots[$0.key] != nil }
+            exchanges = exchanges.filter { self.bots[$0.key.botId] != nil && self.bots[$0.key.peer] != nil }
             return []
 
         case let .bot(bot):
@@ -272,6 +286,8 @@ final class AppStore {
             activity = activity.filter { $0.key.botId != id }
             connectors[id] = nil
             skills[id] = nil
+            commands[id] = nil
+            exchanges = exchanges.filter { $0.key.botId != id && $0.key.peer != id }
             return []
 
         case let .created(ref, botId):
@@ -351,7 +367,15 @@ final class AppStore {
             lastError = ErrorNotice(message: message)
             return []
 
-        case .commands, .exchange, .unknown:
+        case let .commands(botId, commands):
+            self.commands[botId] = commands
+            return []
+
+        case let .exchange(botId, peer, messages):
+            exchanges[ExchangeKey(botId: botId, peer: peer)] = messages
+            return []
+
+        case .unknown:
             return []
         }
     }
@@ -372,6 +396,11 @@ final class AppStore {
         return bots.values
             .filter { needle.isEmpty || [$0.name, $0.title ?? "", $0.preview].contains { $0.localizedCaseInsensitiveContains(needle) } }
             .sorted(by: Bot.homeOrder)
+    }
+
+    /// A group's members that still exist, in the order the user picked them.
+    func members(of bot: Bot) -> [Bot] {
+        bot.members.compactMap { bots[$0] }
     }
 
     /// Facts bots proposed that wait for the user's Confirm or Forget.

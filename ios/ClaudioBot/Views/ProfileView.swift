@@ -24,11 +24,15 @@ struct ProfileView: View {
         if let bot = store.bots[botId] {
             ScrollView {
                 VStack(spacing: 20) {
-                    AvatarView(avatar: bot.avatar, size: 96, needsAttention: bot.question != nil, animated: bot.status == .working)
+                    BotAvatar(bot: bot, size: 96, needsAttention: bot.question != nil, animated: bot.status == .working)
                         .padding(.top, 8)
                     nameCard(bot)
-                    tabBar
-                    content(bot)
+                    if bot.isGroup {
+                        GroupDetails(group: bot)
+                    } else {
+                        tabBar
+                        content(bot)
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 32)
@@ -63,7 +67,7 @@ struct ProfileView: View {
             .onAppear {
                 name = bot.name
                 label = bot.title ?? ""
-                client.send(.details(botId: botId))
+                if !bot.isGroup { client.send(.details(botId: botId)) }
             }
             .onChange(of: bot.name) { _, new in if !editing { name = new } }
             .onChange(of: bot.title) { _, new in if !editing { label = new ?? "" } }

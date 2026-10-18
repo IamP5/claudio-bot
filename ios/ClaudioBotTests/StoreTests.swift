@@ -96,6 +96,50 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(store.facts != nil)
     }
 
+    @Test func eachBotKeepsItsOwnCommandsUntilTheBridgeSendsNewOnesOrTheBotGoes() {
+        let store = store(with: [bot("b1"), bot("b2")])
+        let review = Command(name: "review", description: "Review the PR", argumentHint: "", source: .skill)
+        let compact = Command(name: "compact", description: "Compact", argumentHint: "[instructions]", source: .builtin)
+        store.apply(.commands(botId: BotID("b1"), commands: [review, compact]))
+        store.apply(.commands(botId: BotID("b2"), commands: [review]))
+        #expect(store.commands[BotID("b1")] == [review, compact])
+        store.apply(.commands(botId: BotID("b1"), commands: [compact]))
+        #expect(store.commands[BotID("b1")] == [compact])
+        #expect(store.commands[BotID("b2")] == [review])
+
+        store.apply(.botRemoved(BotID("b2")))
+        #expect(store.commands[BotID("b2")] == nil)
+        store.apply(hello([bot("b3")]))
+        #expect(store.commands.isEmpty)
+    }
+
+    @Test func anExchangeIsKeptPerPairOfBotsAndGoesWithEitherOne() {
+        let store = store(with: [bot("b1"), bot("b2"), bot("b3")])
+        let messages = [
+            ExchangeMessage(id: MessageID("x1"), at: at, from: BotID("b1"), text: "Write the notes"),
+            ExchangeMessage(id: MessageID("x2"), at: at + 60, from: BotID("b2"), text: "On it"),
+        ]
+        store.apply(.exchange(botId: BotID("b1"), peer: BotID("b2"), messages: messages))
+        store.apply(.exchange(botId: BotID("b1"), peer: BotID("b3"), messages: [messages[0]]))
+        #expect(store.exchanges[ExchangeKey(botId: BotID("b1"), peer: BotID("b2"))] == messages)
+        #expect(store.exchanges[ExchangeKey(botId: BotID("b2"), peer: BotID("b1"))] == nil)
+        #expect(Timeline.rows(messages.map(\.asMessage)).map(\.id) == ["sep-\(at.timeIntervalSince1970)", "x1", "x2"])
+
+        store.apply(.botRemoved(BotID("b2")))
+        #expect(store.exchanges[ExchangeKey(botId: BotID("b1"), peer: BotID("b2"))] == nil)
+        #expect(store.exchanges[ExchangeKey(botId: BotID("b1"), peer: BotID("b3"))] != nil)
+    }
+
+    @Test func aGroupListsItsMembersThatStillExistInTheirOrder() {
+        let group = Bot(
+            id: BotID("g1"), name: "crew", title: nil, avatar: .standard, pinned: false, hidden: false, status: .idle,
+            unread: 0, question: nil, preview: "", lastAt: at, createdAt: at, routines: [],
+            kind: .group, members: [BotID("b2"), BotID("gone"), BotID("b1")]
+        )
+        let store = store(with: [bot("b1"), bot("b2"), group])
+        #expect(store.members(of: group).map(\.id) == [BotID("b2"), BotID("b1")])
+    }
+
     @Test func theWebhookTokenSectionShowsOnlyForWebhookRoutinesOnABridgeWithWebhooks() {
         let hook = Routine(
             id: RoutineID("r2"), name: "deploys", schedule: "", describe: "When its webhook is called",

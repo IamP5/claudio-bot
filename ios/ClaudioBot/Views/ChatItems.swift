@@ -4,6 +4,13 @@ struct ChatRowView: View {
     let row: ChatRow
     let bot: Bot
     let onPeer: (Peer) -> Void
+    /// An exchange line: with a bot, it opens what the two said once the bridge serves exchanges.
+    var onExchange: ((Peer) -> Void)?
+    /// In a group, this message starts a run from one member, so it shows the member's avatar and name.
+    var opensRun = false
+
+    @Environment(AppStore.self) private var store
+    @Environment(Router.self) private var router
 
     var body: some View {
         switch row {
@@ -14,16 +21,18 @@ struct ChatRowView: View {
                 .frame(maxWidth: .infinity)
         case .message(let message):
             switch message {
-            case let .user(_, _, text, attachments, _, _):
-                UserBubble(text: text, attachments: attachments, color: bot.avatar.color)
-            case let .bot(_, _, text, _):
+            case let .user(_, _, text, attachments, _, mentions):
+                UserBubble(text: text, attachments: attachments, color: bot.avatar.color, mentions: mentions)
+            case let .bot(_, _, text, from?):
+                MemberBubble(sender: store.bots[from], text: text, opensRun: opensRun) { router.open($0) }
+            case let .bot(_, _, text, nil):
                 BotBubble(text: text)
             case let .question(id, _, card):
                 QuestionCardView(botId: bot.id, messageId: id, card: card, color: bot.avatar.color)
             case let .permission(id, _, card):
                 PermissionCardView(botId: bot.id, messageId: id, card: card)
             case let .exchange(_, _, peer, sent, received):
-                EventLineView(segments: EventLine.exchange(peer: peer, sent: sent, received: received), onPeer: onPeer)
+                EventLineView(segments: EventLine.exchange(peer: peer, sent: sent, received: received), onPeer: onExchange ?? onPeer)
             case let .note(_, _, text, refs):
                 EventLineView(segments: EventLine.note(text, refs: refs), onPeer: onPeer)
             case .unknown:
@@ -54,6 +63,33 @@ struct UserBubble: View {
     let text: String
     let attachments: [Attachment]
     let color: AvatarColor
+    var mentions: [Mention] = []
+
+    @Environment(AppStore.self) private var store
+    @Environment(Router.self) private var router
+
+    /// Each "@name" bold in its bot's color, read from the bot as it is now. A tap on a bot's opens its chat.
+    private var attributed: AttributedString {
+        var out = AttributedString()
+        for segment in MentionText.segments(text, mentions: mentions) {
+            switch segment {
+            case .text(let s):
+                out += MarkdownText.inline(s)
+            case let .mention(mention, label):
+                var run = AttributedString(label)
+                run.inlinePresentationIntent = .stronglyEmphasized
+                if case .bot(let id, _) = mention {
+                    run.foregroundColor = store.bots[id]?.avatar.color.accent ?? color.onAccent
+                    run.link = URL(string: "claudiobot://bot/\(id.rawValue)")
+                } else {
+                    run.foregroundColor = Theme.link
+                }
+                run.backgroundColor = Theme.background.opacity(0.55)
+                out += run
+            }
+        }
+        return out
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -65,7 +101,7 @@ struct UserBubble: View {
                         .lineLimit(1)
                 }
                 if !text.isEmpty {
-                    Text(MarkdownText.inline(text))
+                    Text(attributed)
                         .font(.system(size: 17))
                         .tint(color.onAccent)
                 }
@@ -75,6 +111,11 @@ struct UserBubble: View {
             .padding(.vertical, 10)
             .background(color.accent, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
+        .environment(\.openURL, OpenURLAction { url in
+            guard case .bot(let id, _)? = DeepLink(url: url) else { return .systemAction }
+            if store.bots[id] != nil { router.open(id) }
+            return .handled
+        })
     }
 }
 

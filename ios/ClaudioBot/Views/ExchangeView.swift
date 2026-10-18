@@ -1,15 +1,120 @@
 import SwiftUI
 
-/// What a bot and one of its agents said to each other, opened from an exchange line or the Agents tab.
+/// What a bot said with one of its agents, or with another bot, opened from an exchange line or the Agents tab.
 struct ExchangeView: View {
-    let agentId: AgentID
+    enum Subject: Hashable {
+        case agent(AgentID)
+        case bots(BotID, peer: BotID)
+    }
+
+    let subject: Subject
+
+    init(agentId: AgentID) {
+        subject = .agent(agentId)
+    }
+
+    init(botId: BotID, peer: BotID) {
+        subject = .bots(botId, peer: peer)
+    }
 
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
+    @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
     var body: some View {
+        Group {
+            switch subject {
+            case .agent(let agentId): agentThread(agentId)
+            case let .bots(botId, peer): botThread(botId, peer: peer)
+            }
+        }
+        .background(Theme.background)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) { breadcrumb }
+        }
+        .onAppear {
+            switch subject {
+            case .agent(let agentId): client.send(.agent(agentId: agentId))
+            case let .bots(botId, peer): client.send(.exchange(botId: botId, peer: peer))
+            }
+        }
+    }
+
+    /// "engineer ⇄ Add checkout smoke tests", or "bot maker ⇄ standup notes". A bot's name opens its chat.
+    private var breadcrumb: some View {
+        HStack(spacing: 6) {
+            switch subject {
+            case .agent(let agentId):
+                let thread = store.agents[agentId]
+                if let bot = thread.flatMap({ store.bots[$0.agent.botId] }) { botCrumb(bot) }
+                Image(systemName: "arrow.left.arrow.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.secondary)
+                Image(systemName: "gearshape.fill").font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                Text(thread?.agent.title ?? "Agent").lineLimit(1).truncationMode(.tail)
+            case let .bots(botId, peer):
+                if let bot = store.bots[botId] { botCrumb(bot) }
+                Image(systemName: "arrow.left.arrow.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.secondary)
+                if let other = store.bots[peer] { botCrumb(other) }
+            }
+        }
+        .font(.system(size: 15))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: 300)
+    }
+
+    private func botCrumb(_ bot: Bot) -> some View {
+        Button { router.open(bot.id) } label: {
+            HStack(spacing: 6) {
+                AvatarView(avatar: bot.avatar, size: 20)
+                Text(bot.name).fontWeight(.semibold).lineLimit(1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open \(bot.name)")
+    }
+
+    @ViewBuilder
+    private func botThread(_ botId: BotID, peer: BotID) -> some View {
+        if let messages = store.exchanges[ExchangeKey(botId: botId, peer: peer)] {
+            let rows = Timeline.rows(messages.map(\.asMessage))
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if rows.isEmpty { Placeholder(text: "Nothing between them yet.") }
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                        let opensRun = Timeline.opensRun(rows, at: index)
+                        Group {
+                            switch row {
+                            case .separator(let date):
+                                Text(TimeLabel.separator(date))
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Theme.tertiary)
+                                    .frame(maxWidth: .infinity)
+                            case let .message(.bot(_, _, text, from)):
+                                MemberBubble(sender: from.flatMap { store.bots[$0] }, text: text, opensRun: opensRun) { router.open($0) }
+                            case .message:
+                                EmptyView()
+                            }
+                        }
+                        .padding(.top, index == 0 ? 8 : opensRun ? 14 : row.isSeparator ? 22 : 4)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
+            }
+            .defaultScrollAnchor(.bottom)
+            .safeAreaInset(edge: .bottom) { closeBar { EmptyView() } }
+        } else {
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private func agentThread(_ agentId: AgentID) -> some View {
         let thread = store.agents[agentId]
         let bot = thread.flatMap { store.bots[$0.agent.botId] }
         Group {
@@ -34,26 +139,6 @@ struct ExchangeView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .background(Theme.background)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                HStack(spacing: 6) {
-                    if let bot {
-                        AvatarView(avatar: bot.avatar, size: 20)
-                        Text(bot.name).fontWeight(.semibold)
-                    }
-                    Image(systemName: "arrow.left.arrow.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.secondary)
-                    Image(systemName: "gearshape.fill").font(.system(size: 12)).foregroundStyle(Theme.secondary)
-                    Text(thread?.agent.title ?? "Agent").lineLimit(1).truncationMode(.tail)
-                }
-                .font(.system(size: 15))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .frame(maxWidth: 280)
-            }
-        }
-        .onAppear { client.send(.agent(agentId: agentId)) }
     }
 
     private func bubble(_ message: AgentMessage, color: AvatarColor) -> some View {
@@ -101,7 +186,7 @@ struct ExchangeView: View {
     }
 
     private func actions(_ agent: Agent) -> some View {
-        HStack(spacing: 12) {
+        closeBar {
             if agent.status == .working {
                 Button { client.send(.stopAgent(agentId: agent.id)) } label: {
                     Label("Stop", systemImage: "stop.fill")
@@ -121,8 +206,15 @@ struct ExchangeView: View {
                         .foregroundStyle(.black)
                 }
             }
+        }
+    }
+
+    /// The buttons under a thread, ending with Close Chat.
+    private func closeBar<Leading: View>(@ViewBuilder _ leading: () -> Leading) -> some View {
+        HStack(spacing: 12) {
+            leading()
             Button { dismiss() } label: {
-                Text("Close")
+                Text("Close Chat")
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
                     .glass(in: Capsule())

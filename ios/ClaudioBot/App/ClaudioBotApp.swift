@@ -23,6 +23,8 @@ struct ClaudioBotApp: App {
 enum Route: Hashable {
     case profile(BotID, tab: ProfileView.Tab = .info)
     case exchange(AgentID)
+    /// What the chat's bot and another bot said to each other.
+    case botExchange(BotID, peer: BotID)
     case file(BotID, path: String)
     case routine(BotID, RoutineID)
 }

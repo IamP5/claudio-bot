@@ -1,5 +1,6 @@
 import { renameSession, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import type { Agents } from "./agents";
 import { createCatalog, type Driven } from "./catalog";
@@ -58,6 +59,8 @@ export type SessionsDeps = SessionsEnv & {
   userName: string;
   /** The bridge home: a session whose cwd is under it is a bot's, shown in the Bots view instead. */
   bridgeHome: string;
+  /** The project roots, by realpath: a session under a temp folder lists only when it is under one of these. */
+  roots: string[];
   agents: Pick<Agents, "session" | "direct" | "stop" | "message">;
   /** The gate's answer to one of its cards: an agent's permission card, decided from the agent's thread. */
   decideGate(botId: string, cardId: MessageId, choice: PermissionChoice): Result;
@@ -142,13 +145,20 @@ function settingsMode(configDir: string): PhoneMode | null {
   }
 }
 
+const TEMP_DIRS = [...new Set([realpathSync(tmpdir()), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"])];
+
 const HELD_BY: Record<string, string> = { "claude-desktop": "Working in the Claude app.", cli: "Working in a terminal." };
 
 export function createSessions(deps: SessionsDeps): Sessions {
   const sdk = deps.sdk ?? sdkReaders;
   const indexFile = join(deps.cacheDir, INDEX_FILE);
-  const botHome = (cwd: string) => cwd === deps.bridgeHome || cwd.startsWith(deps.bridgeHome + sep);
-  const heads = createHeads({ projectsDir: deps.projectsDir, sdk, seed: readIndex(indexFile), exclude: botHome });
+  const under = (dir: string) => (cwd: string) => cwd === dir || cwd.startsWith(dir + sep);
+  const botHome = under(deps.bridgeHome);
+  const temp = TEMP_DIRS.map(under);
+  const inRoots = deps.roots.map(under);
+  /** Bots' sessions, and the leftovers of scripts and test runs in temp folders, outside the user's projects. */
+  const excluded = (cwd: string) => botHome(cwd) || (temp.some((t) => t(cwd)) && !inRoots.some((r) => r(cwd)));
+  const heads = createHeads({ projectsDir: deps.projectsDir, sdk, seed: readIndex(indexFile), exclude: excluded });
   const projects = createProjects({ file: join(deps.cacheDir, "projects.json") });
   let savedAt = 0;
   let polledAt = 0;

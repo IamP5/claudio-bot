@@ -298,7 +298,7 @@ type Cached = { head: Head; facts: Facts & { size: number } };
 export function createHeads(opts: { projectsDir: string; sdk?: SdkReaders; seed?: readonly Head[]; exclude?: (cwd: string) => boolean }) {
   const sdk = opts.sdk ?? sdkReaders;
   const cache = new Map<string, Cached>();
-  for (const head of opts.seed ?? []) cache.set(head.file, { head, facts: { ...head, cwd: head.cwd, size: head.size } });
+  for (const head of opts.seed ?? []) if (!opts.exclude?.(head.cwd)) cache.set(head.file, { head, facts: { ...head, cwd: head.cwd, size: head.size } });
 
   const fresh = (c: Cached | undefined, f: TranscriptFile) => c !== undefined && c.head.size === f.size && c.head.mtimeMs === f.mtimeMs;
 

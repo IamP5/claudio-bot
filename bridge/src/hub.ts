@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import type { SDKMessage, Settings } from "@anthropic-ai/claude-agent-sdk";
@@ -15,7 +15,7 @@ import type { Homes } from "./home";
 import { createLedger, localDay } from "./ledger";
 import { createMemory, writeAtomic } from "./memory";
 import type { Scope } from "./policy";
-import { findProject, projectFolders, type Project } from "./projects";
+import { findProject, projectFolders, projectRoots, type Project } from "./projects";
 import {
   PROTOCOL,
   isSessionRequest,
@@ -827,6 +827,7 @@ export function createHub(deps: HubDeps): Hub {
         world,
         userName,
         bridgeHome: realpathSync(root),
+        roots: projectRoots().filter(existsSync).map((r) => realpathSync(r)),
         agents,
         decideGate: (botId, cardId, choice) => gate.answer(botId as BotId, cardId, { kind: "permission", choice }),
         ledger,

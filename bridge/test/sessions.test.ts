@@ -60,7 +60,7 @@ async function until<T>(get: () => T | undefined | false, what: string): Promise
   throw new Error(`timed out waiting for ${what}`);
 }
 
-function start() {
+function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
   sessions = createSessions({
     epoch: "e1",
     projectsDir: join(base, "projects"),
@@ -74,6 +74,7 @@ function start() {
     world,
     userName: "Alex",
     bridgeHome: join(base, "home"),
+    roots: [base],
     agents: { session: () => null, direct: () => "no agents here", stop: async () => false, message: async () => "" },
     decideGate: () => ({ ok: false, error: "Unknown card" }),
     ledger: { add() {}, headroom: () => ({ ok: true, capReached: false }), budgetLeft: () => null, dailyLeft: () => null },
@@ -83,6 +84,7 @@ function start() {
     persist: () => {},
     now: () => new Date(),
     log: () => {},
+    ...over,
   });
   return sessions.start().then(() => void list.splice(0));
 }
@@ -247,6 +249,24 @@ test("a bot's own sessions, under the bridge home, are not listed", async () => 
   expect((await rowsOf()).map((r) => r.id).sort()).toEqual([PERMISSION, ASK].sort());
 });
 
+
+test("sessions left in temp folders outside the project roots are not listed; the roots' own are", async () => {
+  const leftover = join(realpathSync(tmpdir()), `leftover-${crypto.randomUUID()}`);
+  const leftoverFolder = join(base, "projects", leftover.replace(/[^a-zA-Z0-9]/g, "-"));
+  mkdirSync(leftoverFolder, { recursive: true });
+  writeFileSync(join(leftoverFolder, "33333333-3333-4333-8333-333333333333.jsonl"), readFileSync(join(FIXTURES, "own-plan.jsonl"), "utf8").replaceAll("<cwd>", leftover));
+  const tmp = "/private/tmp/scratch";
+  const tmpFolder = join(base, "projects", tmp.replace(/[^a-zA-Z0-9]/g, "-"));
+  mkdirSync(tmpFolder, { recursive: true });
+  writeFileSync(join(tmpFolder, "44444444-4444-4444-8444-444444444444.jsonl"), readFileSync(join(FIXTURES, "own-plan.jsonl"), "utf8").replaceAll("<cwd>", tmp));
+  await start({ roots: [realpathSync(tmpdir())] });
+  expect((await rowsOf()).map((r) => r.id)).toContain("33333333-3333-4333-8333-333333333333" as SessionId);
+  sessions.stop();
+
+  await start();
+  expect(repo.startsWith(realpathSync(tmpdir()))).toBe(true);
+  expect((await rowsOf()).map((r) => r.id).sort(), "a leftover the last start cached is dropped too").toEqual([PERMISSION, ASK].sort());
+});
 
 function agentOn(id: SessionId, over: Partial<AgentRecord["agent"]> = {}): AgentRecord {
   const rec: AgentRecord = {

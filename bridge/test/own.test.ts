@@ -61,6 +61,7 @@ function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
     world,
     userName: "Alex",
     bridgeHome: join(base, "home"),
+    roots: [base],
     agents: {
       session: () => null,
       direct: (rec, text, clientId) => (directs.push({ agentId: rec.agent.id, text, clientId }), null),

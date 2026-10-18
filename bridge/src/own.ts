@@ -226,7 +226,7 @@ export function createOwn(deps: OwnDeps): Own {
           tool,
           label: o.title?.trim() || o.displayName?.trim() || tool,
           detail: detailOf({ tool, input, cwd: driveOf(rec).cwd, toolUseId: o.toolUseID, subagent: null, mcpServer: o.mcpServer ?? null }),
-          always: suggestions.length > 0 && o.suppressAlwaysAllowRule !== true ? "Allow this for the rest of this session" : "",
+          always: suggestions.length > 0 && o.suppressAlwaysAllowRule !== true ? alwaysText(suggestions) : "",
           answer: null,
           expiresAt: expiresAt(),
         };
@@ -528,3 +528,10 @@ export const newDrive = (fields: { cwd: string; created: boolean; at: string; mo
   session: emptySession(fields.id),
   cards: [],
 });
+
+/** What Always allows, completing the card's "Always allows …": the rules Claude Code suggests, for this session. */
+function alwaysText(suggestions: readonly PermissionUpdate[]): string {
+  const rules = suggestions.flatMap((s) => (s.type === "addRules" && s.behavior === "allow" ? s.rules : []));
+  const named = rules.map((r) => r.ruleContent?.trim() || r.toolName);
+  return `${named.length > 0 ? [...new Set(named)].join(", ") : "this"}, for this session`;
+}

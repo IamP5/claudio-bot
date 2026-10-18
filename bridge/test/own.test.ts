@@ -267,7 +267,7 @@ describe("what Claude Code asks", () => {
     const answer = call(queries[0]!, "Bash", { command: "rm -rf build" }, { suggestions, title: "Claude wants to run rm -rf build" });
     await flush();
     const item = (await openCard("permission")) as Extract<SessionItem, { kind: "permission" }>;
-    expect(item.card).toMatchObject({ tool: "Bash", label: "Claude wants to run rm -rf build", detail: "rm -rf build", answer: null, from: null });
+    expect(item.card).toMatchObject({ tool: "Bash", label: "Claude wants to run rm -rf build", detail: "rm -rf build", always: "rm -rf build, for this session", answer: null, from: null });
     expect((await rowOf(ASK)).status).toBe("awaiting_approval");
     expect(await handle({ type: "session_decide", sessionId: ASK, cardId: item.card.id, choice: "always" })).toEqual([]);
     expect(await answer).toEqual({ behavior: "allow", updatedInput: { command: "rm -rf build" }, updatedPermissions: [{ ...suggestions[0]!, destination: "session" }] });

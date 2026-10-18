@@ -289,6 +289,8 @@ export function createAgents(deps: {
           settings: deps.settings(actor),
           // The SDK replaces the environment rather than adding to it.
           env: { ...process.env, ...agentGitEnv(process.env) },
+          // Its text streams into the agent's thread on the phone as it is written.
+          includePartialMessages: true,
           ...(budgetLeft !== null && { maxBudgetUsd: budgetLeft }),
         };
       },

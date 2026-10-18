@@ -33,6 +33,7 @@ import {
   type MessageId,
   type Peer,
   type ServerMessage,
+  type SessionId,
   type Signal,
   type StreamPosition,
 } from "./protocol";
@@ -784,6 +785,8 @@ export function createHub(deps: HubDeps): Hub {
     observe(actor, m) {
       metered(m);
       activity.observe(actor, m);
+      const id = world.agents.get(actor.agentId)?.session.id;
+      if (id) sessions?.stream(id as SessionId, m);
     },
     idle: (actor) => activity.clear(actor),
     persist: deps.persist,

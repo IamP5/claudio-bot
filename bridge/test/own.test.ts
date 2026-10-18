@@ -10,7 +10,7 @@ import { GONE_ERROR } from "../src/session";
 import { createSessions, type Sessions } from "../src/sessions";
 import { emptySession, emptyWorld, type AgentRecord, type World } from "../src/world";
 import { FakeQuery, result } from "./hub-kit";
-import { replay } from "./transcript";
+import { player, replay } from "./transcript";
 
 // The phone driving Claude Code sessions: through the Sessions facade, over a fake Claude Code whose canUseTool and
 // PreToolUse hook the tests call the way Claude Code does, with transcripts recorded by scripts/record-transcript.ts.
@@ -346,5 +346,34 @@ describe("an agent's session", () => {
     world.sessions.set(ASK, { id: ASK, hidden: false, visitedAt: null, own: { cwd: repo, created: false, at: "2026-10-18T12:00:00.000Z", model: null, mode: null, session: emptySession(ASK), cards: [] } });
     await start();
     expect(world.sessions.get(ASK)?.own).toBeUndefined();
+  });
+});
+
+describe("streaming", () => {
+  test("a recorded turn's text streams under the id its transcript item gets, so the upsert replaces the live text", async () => {
+    const recording = replay("own-permission");
+    const PERMISSION = "11111111-1111-4111-8111-111111111111" as SessionId;
+    install("own-permission", PERMISSION);
+    // The transcript as Claude Code had flushed it while the last text block streamed: everything before that block.
+    const lines = readFileSync(fileOf(PERMISSION), "utf8").trim().split("\n");
+    const last = lines.findLastIndex((l) => l.includes('"type":"assistant"') && l.includes('"type":"text"'));
+    writeFileSync(fileOf(PERMISSION), `${lines.slice(0, last).join("\n")}\n`);
+    const play = player(recording);
+    await start({ claude: { query: play.query, executable: () => "/fake/claude" } });
+    await handle({ type: "watch_session", sessionId: PERMISSION, after: null });
+    const text = recording.outbound[0]!.message.content as string;
+    await handle({ type: "session_send", sessionId: PERMISSION, text, clientId: "c_rec", interrupt: false });
+    await Bun.sleep(150);
+    const deltas = thread.filter((t) => t.frame.type === "session_delta").map((t) => t.frame as Extract<ThreadChannelFrame, { type: "session_delta" }>);
+    expect(deltas.map((d) => [d.offset, d.text])).toEqual([[0, "DONE"]]);
+    expect(((await snapshot(PERMISSION)).live)).toEqual({ itemId: deltas[0]!.itemId, text: "DONE" });
+
+    appendFileSync(fileOf(PERMISSION), `${lines.slice(last).join("\n")}\n`);
+    await sessions.sync();
+    const upsert = thread.findLast((t) => t.frame.type === "session_items")!.frame as Extract<ThreadChannelFrame, { type: "session_items" }>;
+    expect(upsert.items.find((i) => i.id === deltas[0]!.itemId)).toMatchObject({ kind: "assistant", text: "DONE" });
+    expect((await snapshot(PERMISSION)).live).toBeNull();
+    expect(queries).toHaveLength(0);
+    expect(play.q()!.options.includePartialMessages).toBe(true);
   });
 });

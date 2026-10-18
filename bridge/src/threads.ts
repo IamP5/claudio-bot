@@ -1,3 +1,4 @@
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Cursor, ItemId, ServerMessage, SessionControls, SessionId, SessionItem, ThreadChannelFrame, ThreadLive, ThreadPosition } from "./protocol";
 import { emptyTail, extend, follow, pageOf, project, readThread, sdkReaders, statOf, toolOutput, type Chain, type Head, type ProjectContext, type ProjectionTail, type SdkReaders } from "./transcript";
 
@@ -34,8 +35,11 @@ export type Threads = {
   poll(): Promise<void>;
   /** The transcript is gone: watchers get session_removed and the thread is dropped. */
   removed(id: SessionId, movedTo: SessionId | null): void;
-  /** Text streaming into an item not yet in the transcript (the bridge's own query). */
-  live(id: SessionId, live: ThreadLive | null): void;
+  /**
+   * A message of the bridge's own query on the session. Text deltas stream into the item they will be once the
+   * transcript has it (message.id:block index), as session_delta frames at most every 60 ms.
+   */
+  stream(id: SessionId, m: SDKMessage): void;
   /** A socket left: a thread nobody watches is kept only among the newest `keep`. */
   release(id: SessionId): void;
   open(id: SessionId): boolean;
@@ -43,6 +47,8 @@ export type Threads = {
 };
 
 const RING_ITEMS = 256;
+/** Deltas of one item go out at most this often, each carrying what arrived meanwhile. */
+export const DELTA_COALESCE_MS = 60;
 const RING_BYTES = 1 << 20;
 const KEEP = 4;
 
@@ -72,10 +78,28 @@ type State = {
 
 let generation = 0;
 
+/** The text block a query is streaming now, and how much of it went out. */
+type Streaming = { message: string | null; index: number; itemId: ItemId | null; text: string; sent: number; timer: ReturnType<typeof setTimeout> | null };
+
 export function createThreads(deps: ThreadsDeps): Threads {
   const sdk = deps.sdk ?? sdkReaders;
   const states = new Map<SessionId, State>();
   const loading = new Map<SessionId, Promise<State>>();
+  const streams = new Map<SessionId, Streaming>();
+
+  /** What streamed since the last delta goes out; the open thread's live text is what went out, so a snapshot and the next delta agree. */
+  function flushDelta(id: SessionId, st: Streaming) {
+    if (st.timer) clearTimeout(st.timer);
+    st.timer = null;
+    const itemId = st.itemId;
+    if (itemId === null || st.sent >= st.text.length) return;
+    const s = states.get(id);
+    if (s?.index.has(itemId)) return;
+    const offset = st.sent;
+    st.sent = st.text.length;
+    if (s) s.live = { itemId, text: st.text };
+    deps.publish(id, { type: "session_delta", sessionId: id, itemId, offset, text: st.text.slice(offset) });
+  }
 
   const indexOf = (items: readonly SessionItem[]) => new Map(items.map((item, i) => [item.id, i] as const));
 
@@ -108,6 +132,9 @@ export function createThreads(deps: ThreadsDeps): Threads {
           usedAt: Date.now(),
         };
         absorbOverlay(s);
+        // A thread opened mid-block starts from what already went out, so the next delta's offset fits.
+        const st = streams.get(id);
+        if (st?.itemId && st.sent > 0 && !s.index.has(st.itemId)) s.live = { itemId: st.itemId, text: st.text.slice(0, st.sent) };
         states.set(id, s);
         return s;
       })
@@ -329,9 +356,36 @@ export function createThreads(deps: ThreadsDeps): Threads {
 
     removed,
 
-    live(id, live) {
-      const s = states.get(id);
-      if (s) s.live = live;
+    stream(id, m) {
+      if (m.type !== "stream_event" || m.parent_tool_use_id !== null) return;
+      let st = streams.get(id);
+      if (!st) streams.set(id, (st = { message: null, index: -1, itemId: null, text: "", sent: 0, timer: null }));
+      const ev = m.event;
+      switch (ev.type) {
+        case "message_start":
+          st.message = ev.message.id;
+          break;
+        case "content_block_start":
+          flushDelta(id, st);
+          st.itemId = ev.content_block.type === "text" && st.message !== null ? (`${st.message}:${ev.index}` as ItemId) : null;
+          st.index = ev.index;
+          st.text = "";
+          st.sent = 0;
+          break;
+        case "content_block_delta":
+          if (st.itemId === null || ev.index !== st.index || ev.delta.type !== "text_delta") break;
+          st.text += ev.delta.text;
+          if (st.timer === null) {
+            const held = st;
+            st.timer = setTimeout(() => flushDelta(id, held), DELTA_COALESCE_MS);
+          }
+          break;
+        case "content_block_stop":
+          if (ev.index !== st.index) break;
+          flushDelta(id, st);
+          st.itemId = null;
+          break;
+      }
     },
 
     release(id) {
@@ -343,6 +397,8 @@ export function createThreads(deps: ThreadsDeps): Threads {
     open: (id) => states.has(id),
 
     stop() {
+      for (const st of streams.values()) if (st.timer) clearTimeout(st.timer);
+      streams.clear();
       states.clear();
     },
   };

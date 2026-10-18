@@ -1,4 +1,4 @@
-import { renameSession } from "@anthropic-ai/claude-agent-sdk";
+import { renameSession, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import type { Agents } from "./agents";
@@ -84,6 +84,8 @@ export type Sessions = Tickable & {
   agentTurnDone(rec: AgentRecord): void;
   /** At start: open cards of the phone's sessions expire, and those with queued input start. */
   resume(): void;
+  /** A message of an agent's live query on the session: its text streams into the thread. */
+  stream(id: SessionId, m: SDKMessage): void;
   stop(): void;
 };
 
@@ -264,6 +266,8 @@ export function createSessions(deps: SessionsDeps): Sessions {
       if (deps.world.sessions.get(id)?.own?.created) due(id);
     },
     ...(deps.notify && { notify: deps.notify }),
+    observe: (id, m) => threads.stream(id, m),
+    options: { includePartialMessages: true },
     now: deps.now,
     log: deps.log,
   };
@@ -522,6 +526,8 @@ export function createSessions(deps: SessionsDeps): Sessions {
       if (was && id && was !== id) threads.removed(was, id);
       if (id) threads.refresh(id);
     },
+
+    stream: (id, m) => threads.stream(id, m),
 
     agentTurnDone(rec) {
       if (rec.session.id) due(rec.session.id as SessionId);

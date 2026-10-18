@@ -60,7 +60,7 @@ The phone paired with the old shared token keeps working until 1 January 2027 (`
 
 ```
 ~/.claudiobot/          (a link to ~/.claudebot after migration)
-  state.json            version 3: bots, conversations, sessions, routines, cards, devices, pushes
+  state.json            version 3: bots, groups, conversations, sessions, routines, cards, devices, pushes
   state.v2.json.bak     the v2 file as it was before the upgrade
   token                 the protocol 2 shared token, accepted until 1 January 2027
   token.revoked         present once the legacy phone was revoked
@@ -76,6 +76,7 @@ The phone paired with the old shared token keeps working until 1 January 2027 (`
     .history/           older messages moved out of state.json: bot.jsonl and <agentId>.jsonl
   agent-config/<agentId>/  the empty folder an agent loads project config from until its repo is trusted (0700)
   trash/<botId>-<ms>/   the home of a deleted bot
+  groups/<groupId>.jsonl  a group's older messages, moved out of state.json; kept after the group is deleted
 ~/.claudiobot-worktrees/<project>/<agentId>/  a Mac agent's worktree, on branch claudio/<short id>
 ```
 
@@ -106,6 +107,18 @@ A send that is `/name args` for a name on the menu, with no uploads, runs that c
 A send's `@` mentions are stored on your message: a mentioned bot must exist and takes its current name, and a mentioned connector must be one the bot has turned on. Anything else is dropped. The bot's turn then names, after your text, the bots to hand their part to with `message_bot` and the connectors to use. A mentioned bot's work arrives through `message_bot`, as a hop of your chain, like any other bot message. `message_bot` finds a bot by id, then name, then title.
 
 `state.json` keeps the text of every `message_bot` message per pair of bots, the newest 200, with secrets masked. The `exchange` frame returns it, oldest first, behind the chat's "Messaged X" line. Deleting a bot drops its pairs.
+
+## Groups
+
+A group is a chat of you and 2 to 8 bots. It is a `Bot` on the wire with `kind: "group"` and `members`, but it has no Claude Code session, home folder, routines, agents, skills, connectors, cards or spend: its members answer in it from their own sessions. The bridge keeps groups in their own list in `state.json` (`groups`, absent in files from before groups), apart from the bots, so nothing that runs a session, fires a routine, opens a card or lists connectors ever sees one. A request that would reach one (`commands`, `connectors`, `skills`, `file`, `run_routine`, `answer`, a `dailyCapUsd` patch and the like) is refused with "A group has no …". `details` answers empty lists, plus the links in the group's messages.
+
+- **Making one.** `create_group` takes a name (1 to 40 characters) and 2 to 8 distinct bot ids. Each must be a plain bot of this bridge, not a group. The group takes the first member's avatar and is answered with `created`. `update_bot` changes its name, title, avatar, pin, hidden and mute like a bot's, and its `members` by the same rules; a plain bot refuses `members`.
+- **Sending.** Your message goes to the members it @mentions (`mentions` of kind bot that are members), or to every member when it mentions none. Each gets a turn of its own. Its envelope names the group and its members, carries the group's newest 20 messages as `name: text` (you by your name, secrets masked, each line cut to 800 characters, 6000 in all) and your message, and tells the bot that its reply text is posted to the group as it, that it should reply only when addressed or useful and otherwise end with no text, and that it hands a task on by @mentioning a member by name. A group takes no uploads.
+- **Replies.** A group turn's text posts to the group as `kind: "bot"` with `from` set to that member, never to the member's own chat. An empty reply posts nothing. A crash, an error or Stop of a group turn is told in the group, not the member's chat. Unread, preview and the list time follow the group's posts, and a push for them goes out as the group, held by the group's own mute.
+- **Mentions between members.** A posted reply that @mentions another member (its exact name, ignoring case, at the start of a word, the longest name first) hands that member a turn when the reply's turn ends, one hop further down the same chain, with the chain's origin kept. A member mentioning itself is ignored. A turn already at 2 hops hands nothing on, the same limit at which `message_bot` is refused, so two bots that keep mentioning each other stop. A message to every member can still fan out: each of n members may hand a turn to the others twice, so the worst case is n + n(n−1) + n(n−1)² turns.
+- **Cards.** A question or a permission card a member opens during a group turn opens in that member's own chat, where you answer it, and the group gets the line "{member} needs you in its own chat."
+- **Status.** A group is `working` only while one of its members runs a turn for it, and while that lasts the group gets an `activity` frame naming who types ("engineer is typing…", text null once none does). A member busy in its own chat does not make a group work. Stop in a group stops each member's turn for it, which, as Stop in a bot's chat, also drops that bot's queued routine fires and messages from other bots.
+- **Deleting.** Deleting a group removes only it and its chat; its members and their chats stay, and a member's turn still running for it posts nowhere. Deleting a bot takes it out of every group it was in, with a note in each; a group left with fewer than 2 members stays and says it needs another bot.
 
 ## Memory and skills
 
@@ -163,7 +176,7 @@ It answers 202 "Fired.", 401 for a wrong or missing token, 403 for a request wit
 
 ## Push
 
-With `CLAUDIOBOT_PUSH_URL` set to an ntfy topic, the bridge posts when no phone is connected and a card opens, a card reminds, or a turn posts its first message. The text is the bot's name and a fixed phrase. No message content leaves the Mac. The click link opens `claudiobot://bot/<id>?message=<id>`. Each push is recorded before it is sent, so a crash never sends one twice. A failed send, an HTTP 429 included, is logged and not retried. Message pushes are limited to one per bot every 10 minutes, with no cap across bots. A muted bot (its profile's switch) sends no message push, but its cards and reminders still do. After the bridge starts, a push for a card that was already open waits 60 s, and a phone that connects in that time gets none.
+With `CLAUDIOBOT_PUSH_URL` set to an ntfy topic, the bridge posts when no phone is connected and a card opens, a card reminds, or a turn posts its first message. The text is the bot's name and a fixed phrase. No message content leaves the Mac. The click link opens `claudiobot://bot/<id>?message=<id>`. Each push is recorded before it is sent, so a crash never sends one twice. A failed send, an HTTP 429 included, is logged and not retried. Message pushes are limited to one per bot every 10 minutes, with no cap across bots. A muted bot (its profile's switch) sends no message push, but its cards and reminders still do. A group's posts push as the group, with its name, and its own mute holds them. After the bridge starts, a push for a card that was already open waits 60 s, and a phone that connects in that time gets none.
 
 ## Tests
 

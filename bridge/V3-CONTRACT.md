@@ -13,6 +13,7 @@ This file maps the v3 bridge: each module's interface, the state it writes, and 
 | `BotRecord.messages`, `.unread` | `Message[]` | `hub.ts` (`say` → `post`) | the gate and scheduler call the hub's `say` and `note`; past 1,100 messages the oldest move to `<bot home>/.history/bot.jsonl` (an agent's to `.history/<agentId>.jsonl`), open cards stay |
 | `BotRecord.session`, `AgentRecord.session` | `SessionState` (`Pending`, `ActiveTurn`, `Lifecycle`, `Notice`) | `session.ts` | resume id, durable inbox, lifecycle with deadlines, notices, and `sent` (digests of the standing brief and the memory context the session last delivered). `Pending.kind` is `continuation` for a decision envelope, `envelope` otherwise; `Pending.settles` names the routine run a turn end settles |
 | `World.account` | `AccountState` | `session.ts` | account-wide usage-limit park |
+| `World.groups` | `GroupRecord` (a `ChatRecord` with `members`) | `hub.ts` | `create_group`, `update_bot`, `delete_bot`, posts by `sayInGroup`; `state.json` key `groups`, absent before groups. No session, routines, rules or connectors, so nothing that walks `World.bots` reaches one. `Pending.group` names the group a member's turn answers in; past 1,100 messages a group's oldest move to `groups/<groupId>.jsonl` |
 | `BotRecord.routines` | `RoutineRecord[]` | `scheduler.ts` | `nextRunAt`, newest 20 runs, `failStreak`; `Trigger` is `cron` or `webhook` (with `tokenHash`, no `nextRunAt`) |
 | `BotRecord.rules` | `StandingRule[]` | `gate.ts` | Always/Never, keyed by `Signature`, allow rules carry `appliesTo` |
 | `World.gate` | `GateState` (`OpenCard`, `Grant`, `DailyCount`, `RepoTrust`) | `gate.ts` | card deadlines (question, permission and trust cards), permission match keys, one-shot grants with the attendance of the card that made them, daily tool counts, trust answers per repo, and `aliveAt`, the last minute the bridge ran with a card open |
@@ -44,6 +45,7 @@ README, upgrading: "Once the new bridge has started, do not run an older bridge 
 | `clock.ts` | `Clock` (`start`, `poke`, `stop`), `Tickable` |
 | `devices.ts`, `stream.ts`, `serve.ts`, `legacy.ts`, `lock.ts`, `main.ts` | `Devices` (with `prove`), `rejectsOrigin`, `Stream`, `serve` (`publish`, and `signal` for unsequenced frames), `Legacy`, `lockHome`, `lockPathOf`, `pidIn` |
 | `push.ts` | `Push.notify(bot, reason, messageId)`, `senderFromEnv`, `START_GRACE_MS` |
+| `groups.ts` | pure group rules: `GROUP_SIZE`, `membersError`, `newGroup`, `targetsOf`, `mentionedIn`, `transcript`, `typingLine` |
 | `migrate.ts` | `migrateHome(deps): Migration`; reads the default bot from `prompts.ts` |
 | `text.ts` | `displayName`, `hasHiddenCharacters`, `BOT_NAME_MAX`, `maskSecrets`, `redact`, `errorText`: the one rule set for text that leaves the bridge |
 | `cli.ts`, `service.ts`, `doctor.ts` | the `claudiobot` command (`install`, `uninstall`, `status`, `doctor`, `logs`, `pair`, `update`), `capturedEnv`, `plistXml`, `check` |

@@ -67,6 +67,7 @@ Everything runs on **your Mac, with your own Claude Code login**. There is no ho
 | **Spend caps** | Each bot has a daily cap that its agents share, set in its profile under **Spending**, and each Mac agent has a budget. The profile shows today's spend against the cap, an agent's thread shows its spend against its budget, and the chat warns at 80%. At the cap, routines and other background work wait until midnight. Your own messages still run. |
 | **Library and links** | Files a bot writes to `library/` show up in its Library tab, with a viewer for markdown, text and images. Every link a bot shares is collected under Links. |
 | **Bots talking to bots** | A bot can message another bot or create a new one with a brief. |
+| **Group chats** | Put 2 to 8 bots in one chat. A message goes to the bots it @mentions, or to all of them, and each answers in the group or stays quiet. A bot can @mention another to hand it a task, at most two hops down from your message. |
 | **Phone niceties** | Unread dots, an attention badge when a bot is waiting on you, notifications with answer buttons, an optional push through [ntfy](https://ntfy.sh) when the app is closed, mute, dictation, photo and file uploads, and pin, rename, hide and delete. A message sent during a dropped connection is sent again, and never posted twice. |
 | **Your data stays home** | State lives in `~/.claudiobot`. Deleting a bot moves its folder (files, memory, older history) to `trash/`, where you can recover it; its chat in `state.json` goes. Only its agents' empty config folders are deleted for real. Its agents' worktrees stay, and the delete dialog names them so you can remove them from each agent first. |
 
@@ -313,7 +314,7 @@ The bridge and the app share one contract. If you change `bridge/src/protocol.ts
 
 - **Cloud agents don't report back.** `claude --cloud` gives no completion signal to another program, so cloud agents are fire-and-follow with a link. A backend that streams cloud runs is the top roadmap item.
 - **Push goes through ntfy, not APNs.** With `CLAUDIOBOT_PUSH_URL` set, the ntfy app shows the push and opens ClaudioBot when tapped. Native push needs APNs and a relay server.
-- **No voice mode, no group chats, no sidebar sections yet.**
+- **No voice mode and no sidebar sections yet.**
 - **macOS only.** The bridge has only been run on macOS. Linux should be close.
 - **No Mac app.** The iPad layout runs on Apple silicon Macs as "Designed for iPad". A native Mac app is not built yet.
 

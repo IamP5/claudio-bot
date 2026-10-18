@@ -16,7 +16,8 @@
         "commands",
         "exchanges",
         "groups",
-        "usage"
+        "usage",
+        "sessions"
       ],
       "epoch": "e_7f3a",
       "seq": 41,
@@ -1188,6 +1189,451 @@
         "reason": "api_key",
         "fetchedAt": "2026-10-16T14:00:00.000Z"
       }
+    },
+    {
+      "type": "sessions",
+      "projects": [
+        {
+          "id": "3f9a1c7e2b4d6a80",
+          "name": "solta-o-som",
+          "path": "/Users/alex/Dev/projects/br-soundless",
+          "githubRepo": "IamP5/solta-o-som",
+          "lastAt": "2026-10-16T14:00:00.000Z",
+          "canCloud": false
+        },
+        {
+          "id": "9c2e5b7a1d3f4e60",
+          "name": "claudio-bot",
+          "path": "/Users/alex/Dev/projects/claudio-bot",
+          "githubRepo": "alex/claudio-bot",
+          "lastAt": "2026-10-16T12:00:00.000Z",
+          "canCloud": false
+        }
+      ],
+      "rows": [
+        {
+          "id": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+          "projectId": "3f9a1c7e2b4d6a80",
+          "parentId": null,
+          "title": "Smooth the audio fade on iOS Safari",
+          "origin": "agent",
+          "agent": {
+            "botId": "b1",
+            "agentId": "a3"
+          },
+          "status": "working",
+          "holder": "claudio",
+          "unread": false,
+          "branch": "claudio/6b1f3c2a",
+          "worktree": true,
+          "pr": null,
+          "mirror": "pending",
+          "hidden": false,
+          "url": null,
+          "createdAt": "2026-10-16T12:00:00.000Z",
+          "lastAt": "2026-10-16T14:00:00.000Z"
+        },
+        {
+          "id": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
+          "projectId": "3f9a1c7e2b4d6a80",
+          "parentId": null,
+          "title": "Add a volume slider to the player",
+          "origin": "desktop",
+          "agent": null,
+          "status": "idle",
+          "holder": "desktop",
+          "unread": true,
+          "branch": "feat/volume-slider",
+          "worktree": false,
+          "pr": {
+            "number": 87,
+            "url": "https://github.com/IamP5/solta-o-som/pull/87",
+            "state": "open"
+          },
+          "mirror": "imported",
+          "hidden": false,
+          "url": null,
+          "createdAt": "2026-10-15T09:30:00.000Z",
+          "lastAt": "2026-10-16T12:00:00.000Z"
+        },
+        {
+          "id": "session_01Hq7vXk3mRt9wYpL2nB5cDe",
+          "projectId": "9c2e5b7a1d3f4e60",
+          "parentId": null,
+          "title": "Add a changelog",
+          "origin": "cloud",
+          "agent": {
+            "botId": "b1",
+            "agentId": "a2"
+          },
+          "status": "idle",
+          "holder": "none",
+          "unread": false,
+          "branch": "claude/add-changelog",
+          "worktree": false,
+          "pr": {
+            "number": 12,
+            "url": "https://github.com/alex/claudio-bot/pull/12",
+            "state": "merged"
+          },
+          "mirror": "none",
+          "hidden": false,
+          "url": "https://claude.ai/code/session_01Hq7vXk3mRt9wYpL2nB5cDe",
+          "createdAt": "2026-10-14T18:00:00.000Z",
+          "lastAt": "2026-10-16T12:00:00.000Z"
+        }
+      ],
+      "mirror": "auto"
+    },
+    {
+      "type": "session_rows",
+      "rows": [
+        {
+          "id": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+          "projectId": "3f9a1c7e2b4d6a80",
+          "parentId": null,
+          "title": "Smooth the audio fade on iOS Safari",
+          "origin": "agent",
+          "agent": {
+            "botId": "b1",
+            "agentId": "a3"
+          },
+          "status": "awaiting_approval",
+          "holder": "claudio",
+          "unread": false,
+          "branch": "claudio/6b1f3c2a",
+          "worktree": true,
+          "pr": null,
+          "mirror": "imported",
+          "hidden": false,
+          "url": null,
+          "createdAt": "2026-10-16T12:00:00.000Z",
+          "lastAt": "2026-10-16T14:00:00.000Z"
+        },
+        {
+          "id": "d4e8a1b6-3c2f-4b9e-8a7d-1f6c5e3b2a90",
+          "projectId": "3f9a1c7e2b4d6a80",
+          "parentId": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
+          "title": "Check the slider on iPad",
+          "origin": "terminal",
+          "agent": null,
+          "status": "awaiting_input",
+          "holder": "terminal",
+          "unread": false,
+          "branch": "feat/volume-slider",
+          "worktree": false,
+          "pr": null,
+          "mirror": "none",
+          "hidden": false,
+          "url": null,
+          "createdAt": "2026-10-16T12:00:00.000Z",
+          "lastAt": "2026-10-16T14:00:00.000Z"
+        }
+      ],
+      "removed": [
+        "0d4e7b2a-9f1c-4e3b-b8a6-5c2d1e7f9a04"
+      ],
+      "projects": [
+        {
+          "id": "3f9a1c7e2b4d6a80",
+          "name": "solta-o-som",
+          "path": "/Users/alex/Dev/projects/br-soundless",
+          "githubRepo": "IamP5/solta-o-som",
+          "lastAt": "2026-10-16T14:00:00.000Z",
+          "canCloud": false
+        }
+      ]
+    },
+    {
+      "type": "session",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "epoch": "e_7f3a",
+      "rev": 42,
+      "items": [
+        {
+          "kind": "user",
+          "id": "4a7e2c91-5b3d-4e8f-a1c6-9d2b7e5f3a18",
+          "at": "2026-10-16T12:00:00.000Z",
+          "text": "Make the fade on iOS Safari smooth, then open a PR.",
+          "from": "bot",
+          "queued": false
+        },
+        {
+          "kind": "thinking",
+          "id": "msg_01XyZ7Lq:0",
+          "at": "2026-10-16T12:00:00.000Z",
+          "text": "The fade calls linearRampToValueAtTime down to 0, which Safari renders as a click near the end.",
+          "ms": 2400
+        },
+        {
+          "kind": "assistant",
+          "id": "msg_01XyZ7Lq:1",
+          "at": "2026-10-16T12:00:00.000Z",
+          "text": "The fade is **linear**, so it sounds abrupt near zero. I'll make it exponential."
+        },
+        {
+          "kind": "work",
+          "id": "toolu_01Ab3",
+          "at": "2026-10-16T12:00:00.000Z",
+          "steps": [
+            {
+              "id": "toolu_01Ab3",
+              "tool": "Read",
+              "label": "Read src/audio/fade.ts",
+              "state": "ok",
+              "diff": null,
+              "output": null
+            },
+            {
+              "id": "toolu_01Ab4",
+              "tool": "Edit",
+              "label": "Edit src/audio/fade.ts",
+              "state": "ok",
+              "diff": {
+                "path": "src/audio/fade.ts",
+                "added": 12,
+                "removed": 4
+              },
+              "output": null
+            },
+            {
+              "id": "toolu_01Ab5",
+              "tool": "Bash",
+              "label": "Run bun test",
+              "state": "error",
+              "diff": null,
+              "output": " 13 pass\n 1 fail\n"
+            }
+          ]
+        },
+        {
+          "kind": "todo",
+          "id": "toolu_01Ab6",
+          "at": "2026-10-16T14:00:00.000Z",
+          "todos": [
+            {
+              "text": "Replace the linear ramp",
+              "state": "done"
+            },
+            {
+              "text": "Fix the failing fade test",
+              "state": "in_progress"
+            },
+            {
+              "text": "Open a PR",
+              "state": "pending"
+            }
+          ]
+        }
+      ],
+      "before": "8812331:2b7c9e41",
+      "controls": {
+        "canSend": true,
+        "reason": null,
+        "working": true,
+        "queued": 1,
+        "model": null,
+        "models": [
+          {
+            "id": "default",
+            "label": "Default (recommended)"
+          },
+          {
+            "id": "opus",
+            "label": "Opus"
+          },
+          {
+            "id": "sonnet",
+            "label": "Sonnet"
+          }
+        ],
+        "mode": "acceptEdits",
+        "modes": [
+          "default",
+          "acceptEdits",
+          "plan"
+        ]
+      },
+      "live": {
+        "itemId": "msg_01XyZ7Lq:2",
+        "text": "Now I'll update"
+      }
+    },
+    {
+      "type": "session_delta",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "itemId": "msg_01XyZ7Lq:2",
+      "offset": 15,
+      "text": " the fade test."
+    },
+    {
+      "type": "session_items",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "rev": 43,
+      "items": [
+        {
+          "kind": "permission",
+          "id": "toolu_01Ab7",
+          "at": "2026-10-16T14:00:00.000Z",
+          "card": {
+            "kind": "permission",
+            "id": "m20",
+            "at": "2026-10-16T14:00:00.000Z",
+            "from": null,
+            "tool": "Bash",
+            "label": "Bash",
+            "detail": "rm -rf node_modules && bun install",
+            "always": "rm -rf node_modules in solta-o-som, for this session",
+            "answer": null,
+            "expiresAt": "2026-10-16T16:00:00.000Z"
+          }
+        }
+      ],
+      "removed": [],
+      "controls": {
+        "canSend": true,
+        "reason": null,
+        "working": false,
+        "queued": 1,
+        "model": null,
+        "models": [
+          {
+            "id": "default",
+            "label": "Default (recommended)"
+          },
+          {
+            "id": "opus",
+            "label": "Opus"
+          },
+          {
+            "id": "sonnet",
+            "label": "Sonnet"
+          }
+        ],
+        "mode": "acceptEdits",
+        "modes": [
+          "default",
+          "acceptEdits",
+          "plan"
+        ]
+      }
+    },
+    {
+      "type": "session_items",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "rev": 45,
+      "removed": [
+        "c_4d2a"
+      ],
+      "controls": null,
+      "items": [
+        {
+          "kind": "ask",
+          "id": "toolu_01Ab8",
+          "at": "2026-10-16T14:00:00.000Z",
+          "cardId": "m21",
+          "answers": null,
+          "questions": [
+            {
+              "question": "Which audio library should the fade use?",
+              "header": "Library",
+              "multiSelect": false,
+              "options": [
+                {
+                  "label": "Web Audio API",
+                  "description": "Native, no new dependency"
+                },
+                {
+                  "label": "Howler.js",
+                  "description": "Handles the Safari quirks for us"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "plan",
+          "id": "toolu_01Ab9",
+          "at": "2026-10-16T14:00:00.000Z",
+          "cardId": "m22",
+          "state": "proposed",
+          "text": "## Plan\n1. Swap the linear ramp for setTargetAtTime\n2. Test on iOS Safari 18 and Firefox"
+        }
+      ]
+    },
+    {
+      "type": "session_page",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "before": null,
+      "items": [
+        {
+          "kind": "notice",
+          "id": "n_1",
+          "at": "2026-10-16T11:00:00.000Z",
+          "text": "Claude Code could not start: the sandbox is unavailable.",
+          "tone": "error"
+        },
+        {
+          "kind": "compaction",
+          "id": "c4f1a2e7-3b9d-4c8e-a6f2-1d7b5e9c3a20",
+          "at": "2026-10-16T11:30:00.000Z"
+        },
+        {
+          "kind": "ask",
+          "id": "toolu_01Aa2",
+          "at": "2026-10-16T11:40:00.000Z",
+          "cardId": null,
+          "answers": {
+            "Which audio library should the fade use?": "Web Audio API"
+          },
+          "questions": [
+            {
+              "question": "Which audio library should the fade use?",
+              "header": "Library",
+              "multiSelect": false,
+              "options": [
+                {
+                  "label": "Web Audio API",
+                  "description": "Native, no new dependency"
+                },
+                {
+                  "label": "Howler.js",
+                  "description": "Handles the Safari quirks for us"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "plan",
+          "id": "toolu_01Aa3",
+          "at": "2026-10-16T11:45:00.000Z",
+          "cardId": null,
+          "state": "approved",
+          "text": "## Plan\n1. Read the fade code"
+        }
+      ]
+    },
+    {
+      "type": "session_created",
+      "ref": "s1",
+      "sessionId": "e3a9c5d1-7b2f-4a6e-9c8d-2f1b4e7a5c63"
+    },
+    {
+      "type": "session_tool_output",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "toolUseId": "toolu_01Ab5",
+      "output": "bun test v1.3.0\n\nsrc/audio/fade.test.ts:\n(fail) fades to silence in 40 ms\n\n 13 pass\n 1 fail\n"
+    },
+    {
+      "type": "session_removed",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "movedTo": "f2c8b4a6-1e3d-4f9b-a7c5-6d2e8b1f4a37"
+    },
+    {
+      "type": "session_removed",
+      "sessionId": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
+      "movedTo": null
     }
   ],
   "client": [
@@ -1411,6 +1857,119 @@
     },
     {
       "type": "refresh_usage"
+    },
+    {
+      "type": "watch_sessions"
+    },
+    {
+      "type": "unwatch_sessions"
+    },
+    {
+      "type": "watch_session",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "after": null
+    },
+    {
+      "type": "watch_session",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "after": {
+        "epoch": "e_7f3a",
+        "rev": 42
+      }
+    },
+    {
+      "type": "unwatch_session",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31"
+    },
+    {
+      "type": "session_page",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "before": "8812331:2b7c9e41"
+    },
+    {
+      "type": "session_send",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "text": "Also check it on Firefox",
+      "clientId": "c_4d2a",
+      "interrupt": false
+    },
+    {
+      "type": "session_send",
+      "sessionId": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
+      "text": "Stop, use the Web Audio API instead",
+      "clientId": "c_4d2b",
+      "interrupt": true
+    },
+    {
+      "type": "session_stop",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31"
+    },
+    {
+      "type": "session_decide",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "cardId": "m20",
+      "choice": "once"
+    },
+    {
+      "type": "session_answer",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "cardId": "m21",
+      "answers": {
+        "Which audio library should the fade use?": "Howler.js"
+      }
+    },
+    {
+      "type": "session_answer",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "cardId": "m21",
+      "answers": null
+    },
+    {
+      "type": "session_create",
+      "ref": "s1",
+      "projectId": "3f9a1c7e2b4d6a80",
+      "text": "Add a mute button to the player",
+      "model": null,
+      "mode": "plan",
+      "isolate": "worktree"
+    },
+    {
+      "type": "session_create",
+      "ref": "s2",
+      "projectId": "9c2e5b7a1d3f4e60",
+      "text": "Why does the bridge log a gap?",
+      "model": "opus",
+      "mode": null,
+      "isolate": "none"
+    },
+    {
+      "type": "session_set",
+      "sessionId": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
+      "patch": {
+        "title": "Volume slider",
+        "hidden": true
+      }
+    },
+    {
+      "type": "session_set",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "patch": {
+        "model": null,
+        "mode": "acceptEdits"
+      }
+    },
+    {
+      "type": "session_open_desktop",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31"
+    },
+    {
+      "type": "session_tool",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "toolUseId": "toolu_01Ab5"
+    },
+    {
+      "type": "session_prefs",
+      "mirror": "tap"
     }
   ]
 }

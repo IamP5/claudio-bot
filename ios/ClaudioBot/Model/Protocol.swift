@@ -158,12 +158,12 @@ enum TriggerKind: OpenEnum {
 /// What a bridge can do beyond protocol 3's base (hello.features). Screens for a feature the bridge does not list stay hidden.
 enum Feature: OpenEnum {
     case memory, activity, mute, worktrees, connectors, skills, webhooks, spend
-    case mentions, commands, exchanges, groups, usage
+    case mentions, commands, exchanges, groups, usage, sessions
     case unknown(String)
 
     static let allCases: [Feature] = [
         .memory, .activity, .mute, .worktrees, .connectors, .skills, .webhooks, .spend,
-        .mentions, .commands, .exchanges, .groups, .usage,
+        .mentions, .commands, .exchanges, .groups, .usage, .sessions,
     ]
     init?(rawValue: String) { self.init(wire: rawValue) }
 
@@ -182,6 +182,7 @@ enum Feature: OpenEnum {
         case .exchanges: "exchanges"
         case .groups: "groups"
         case .usage: "usage"
+        case .sessions: "sessions"
         case .unknown(let raw): raw
         }
     }
@@ -1199,6 +1200,677 @@ enum PlanUsage: Codable, Hashable, Sendable {
     }
 }
 
+// MARK: Sessions (feature sessions)
+
+// The Claude Code sessions on the Mac, grouped by project, and one thread at a time. Session frames carry no seq and
+// are never replayed: each is a reply, or comes on the list channel (after watchSessions) or a thread's channel
+// (after watchSession). bridge/src/protocol.ts documents each frame's delivery and invariants.
+
+enum SessionTag {}
+enum ProjectTag {}
+enum ItemTag {}
+enum CursorTag {}
+typealias SessionID = Identifier<SessionTag>
+typealias ProjectID = Identifier<ProjectTag>
+typealias ItemID = Identifier<ItemTag>
+/// Opaque: where the next older page starts. Sent back as it came.
+typealias Cursor = Identifier<CursorTag>
+
+/// Who started the session.
+enum SessionOrigin: OpenEnum {
+    case phone, agent, desktop, terminal, sdk, cloud
+    case unknown(String)
+
+    static let allCases: [SessionOrigin] = [.phone, .agent, .desktop, .terminal, .sdk, .cloud]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .phone: "phone"
+        case .agent: "agent"
+        case .desktop: "desktop"
+        case .terminal: "terminal"
+        case .sdk: "sdk"
+        case .cloud: "cloud"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// awaitingApproval: a permission or plan card is open. awaitingInput: an ask card is open. parked: queued input waits
+/// on a hold. unavailable: Claude Code could not start.
+enum SessionStatus: OpenEnum {
+    case idle, working, awaitingApproval, awaitingInput, failed, parked, unavailable
+    case unknown(String)
+
+    static let allCases: [SessionStatus] = [.idle, .working, .awaitingApproval, .awaitingInput, .failed, .parked, .unavailable]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .idle: "idle"
+        case .working: "working"
+        case .awaitingApproval: "awaiting_approval"
+        case .awaitingInput: "awaiting_input"
+        case .failed: "failed"
+        case .parked: "parked"
+        case .unavailable: "unavailable"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// Which live process holds the session. nobody is the wire's "none"; claudio is this bridge.
+enum SessionHolder: OpenEnum {
+    case nobody, claudio, desktop, terminal, other
+    case unknown(String)
+
+    static let allCases: [SessionHolder] = [.nobody, .claudio, .desktop, .terminal, .other]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .nobody: "none"
+        case .claudio: "claudio"
+        case .desktop: "desktop"
+        case .terminal: "terminal"
+        case .other: "other"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// Whether the Claude app lists the session. pending: an automatic import waits. failed: an import did not show up,
+/// so automatic retries stopped. notMirrored is the wire's "none".
+enum SessionMirror: OpenEnum {
+    case imported, pending, failed, notMirrored
+    case unknown(String)
+
+    static let allCases: [SessionMirror] = [.imported, .pending, .failed, .notMirrored]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .imported: "imported"
+        case .pending: "pending"
+        case .failed: "failed"
+        case .notMirrored: "none"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// Settings, "Show agent sessions in the Claude app": Automatically, When I tap, Never.
+enum MirrorPref: OpenEnum {
+    case auto, tap, never
+    case unknown(String)
+
+    static let allCases: [MirrorPref] = [.auto, .tap, .never]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .auto: "auto"
+        case .tap: "tap"
+        case .never: "never"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// Claude Code's permission modes. The phone never offers bypassPermissions, and the bridge refuses it.
+enum PermissionMode: OpenEnum {
+    case `default`, acceptEdits, bypassPermissions, plan, dontAsk, auto
+    case unknown(String)
+
+    static let allCases: [PermissionMode] = [.default, .acceptEdits, .bypassPermissions, .plan, .dontAsk, .auto]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .default: "default"
+        case .acceptEdits: "acceptEdits"
+        case .bypassPermissions: "bypassPermissions"
+        case .plan: "plan"
+        case .dontAsk: "dontAsk"
+        case .auto: "auto"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// Where a new session works: the project folder itself (the wire's "none"), or a new worktree.
+enum SessionIsolation: String, Codable, Hashable, Sendable, CaseIterable {
+    case inPlace = "none"
+    case worktree
+}
+
+/// A git repository's main checkout. name: the GitHub repo name, else the folder name. lastAt: nil when it has no sessions.
+struct SessionProject: Codable, Hashable, Sendable, Identifiable {
+    let id: ProjectID
+    var name: String
+    var path: String
+    var githubRepo: String?
+    var lastAt: Date?
+    /// Reserved for phone-started cloud sessions; false for now.
+    var canCloud: Bool
+
+    private enum CodingKeys: String, CodingKey { case id, name, path, githubRepo, lastAt, canCloud }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(path, forKey: .path)
+        try c.encode(githubRepo, forKey: .githubRepo)
+        try c.encode(lastAt, forKey: .lastAt)
+        try c.encode(canCloud, forKey: .canCloud)
+    }
+}
+
+enum PullRequestState: OpenEnum {
+    case open, merged, closed
+    case unknown(String)
+
+    static let allCases: [PullRequestState] = [.open, .merged, .closed]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .open: "open"
+        case .merged: "merged"
+        case .closed: "closed"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// state nil: the transcript names the PR without its state.
+struct SessionPullRequest: Codable, Hashable, Sendable {
+    var number: Int
+    var url: URL
+    var state: PullRequestState?
+
+    private enum CodingKeys: String, CodingKey { case number, url, state }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(number, forKey: .number)
+        try c.encode(url, forKey: .url)
+        try c.encode(state, forKey: .state)
+    }
+}
+
+/// The bot's agent that owns a session.
+struct SessionAgentLink: Codable, Hashable, Sendable {
+    let botId: BotID
+    let agentId: AgentID
+}
+
+/// One session in the list. parentId: the session it was spawned from. url: claude.ai for a cloud row.
+struct SessionRow: Codable, Hashable, Sendable, Identifiable {
+    let id: SessionID
+    var projectId: ProjectID
+    var parentId: SessionID?
+    var title: String
+    var origin: SessionOrigin
+    var agent: SessionAgentLink?
+    var status: SessionStatus
+    var holder: SessionHolder
+    var unread: Bool
+    var branch: String?
+    /// The cwd is a git worktree, not the main checkout.
+    var worktree: Bool
+    var pr: SessionPullRequest?
+    var mirror: SessionMirror
+    var hidden: Bool
+    var url: URL?
+    var createdAt: Date
+    var lastAt: Date
+
+    private enum CodingKeys: String, CodingKey {
+        case id, projectId, parentId, title, origin, agent, status, holder, unread, branch, worktree, pr, mirror, hidden, url, createdAt, lastAt
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(projectId, forKey: .projectId)
+        try c.encode(parentId, forKey: .parentId)
+        try c.encode(title, forKey: .title)
+        try c.encode(origin, forKey: .origin)
+        try c.encode(agent, forKey: .agent)
+        try c.encode(status, forKey: .status)
+        try c.encode(holder, forKey: .holder)
+        try c.encode(unread, forKey: .unread)
+        try c.encode(branch, forKey: .branch)
+        try c.encode(worktree, forKey: .worktree)
+        try c.encode(pr, forKey: .pr)
+        try c.encode(mirror, forKey: .mirror)
+        try c.encode(hidden, forKey: .hidden)
+        try c.encode(url, forKey: .url)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(lastAt, forKey: .lastAt)
+    }
+}
+
+enum ToolStepState: OpenEnum {
+    case running, ok, error, denied
+    case unknown(String)
+
+    static let allCases: [ToolStepState] = [.running, .ok, .error, .denied]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .running: "running"
+        case .ok: "ok"
+        case .error: "error"
+        case .denied: "denied"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// The line counts of an Edit, Write or MultiEdit.
+struct ToolDiff: Codable, Hashable, Sendable {
+    var path: String
+    var added: Int
+    var removed: Int
+}
+
+/// One tool call in a work item. id: its tool_use id, which sessionTool names. output: the last 2 KB of its result.
+struct ToolStep: Codable, Hashable, Sendable, Identifiable {
+    let id: String
+    var tool: String
+    /// The call in words: "Edit src/app.ts", "Run bun test".
+    var label: String
+    var state: ToolStepState
+    var diff: ToolDiff?
+    var output: String?
+
+    private enum CodingKeys: String, CodingKey { case id, tool, label, state, diff, output }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(tool, forKey: .tool)
+        try c.encode(label, forKey: .label)
+        try c.encode(state, forKey: .state)
+        try c.encode(diff, forKey: .diff)
+        try c.encode(output, forKey: .output)
+    }
+}
+
+enum TodoState: OpenEnum {
+    case pending, inProgress, done
+    case unknown(String)
+
+    static let allCases: [TodoState] = [.pending, .inProgress, .done]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .pending: "pending"
+        case .inProgress: "in_progress"
+        case .done: "done"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+struct SessionTodo: Codable, Hashable, Sendable {
+    var text: String
+    var state: TodoState
+}
+
+enum PlanState: OpenEnum {
+    case proposed, approved, rejected, expired
+    case unknown(String)
+
+    static let allCases: [PlanState] = [.proposed, .approved, .rejected, .expired]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .proposed: "proposed"
+        case .approved: "approved"
+        case .rejected: "rejected"
+        case .expired: "expired"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+enum NoticeTone: OpenEnum {
+    case info, error
+    case unknown(String)
+
+    static let allCases: [NoticeTone] = [.info, .error]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .info: "info"
+        case .error: "error"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// Who wrote a user item: the user, a bot to its agent, or the bridge.
+enum SessionAuthor: OpenEnum {
+    case user, bot, system
+    case unknown(String)
+
+    static let allCases: [SessionAuthor] = [.user, .bot, .system]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .user: "user"
+        case .bot: "bot"
+        case .system: "system"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+struct AskOption: Codable, Hashable, Sendable {
+    var label: String
+    var description: String
+}
+
+/// One AskUserQuestion question. The app offers a free answer besides the options.
+struct AskQuestion: Codable, Hashable, Sendable {
+    var question: String
+    var header: String
+    var options: [AskOption]
+    var multiSelect: Bool
+}
+
+/// How an ask item was closed. nil on the item means it is still open.
+enum AskAnswers: Codable, Hashable, Sendable {
+    /// By question text; a multi-select's labels are comma-separated.
+    case answered([String: String])
+    case dismissed
+    case expired
+    /// A closing state a newer bridge invented.
+    case closed(String)
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let answers = try? c.decode([String: String].self) {
+            self = .answered(answers)
+            return
+        }
+        switch try c.decode(String.self) {
+        case "dismissed": self = .dismissed
+        case "expired": self = .expired
+        case let other: self = .closed(other)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .answered(let answers): try c.encode(answers)
+        case .dismissed: try c.encode("dismissed")
+        case .expired: try c.encode("expired")
+        case .closed(let raw): try c.encode(raw)
+        }
+    }
+}
+
+/// A permission card in a thread, the same card a bot's chat shows. cardId is what sessionDecide sends.
+struct SessionPermission: Hashable, Sendable {
+    let cardId: MessageID
+    let at: Date
+    var card: PermissionCard
+}
+
+/// One row of a thread, upserted by id. See SessionItem in bridge/src/protocol.ts for each kind.
+enum SessionItem: Codable, Hashable, Sendable, Identifiable {
+    /// queued: not sent yet.
+    case user(id: ItemID, at: Date, text: String, from: SessionAuthor, queued: Bool)
+    case assistant(id: ItemID, at: Date, text: String)
+    /// ms: how long it thought, nil when unknown.
+    case thinking(id: ItemID, at: Date, text: String, ms: Int?)
+    /// One run of tool calls.
+    case work(id: ItemID, at: Date, steps: [ToolStep])
+    case todo(id: ItemID, at: Date, todos: [SessionTodo])
+    /// cardId: set while the phone may decide it (sessionDecide: once approves, deny keeps planning).
+    case plan(id: ItemID, at: Date, text: String, state: PlanState, cardId: MessageID?)
+    case permission(id: ItemID, at: Date, permission: SessionPermission)
+    /// answers nil: open. cardId: set while the phone may answer it.
+    case ask(id: ItemID, at: Date, questions: [AskQuestion], answers: AskAnswers?, cardId: MessageID?)
+    case notice(id: ItemID, at: Date, text: String, tone: NoticeTone)
+    case compaction(id: ItemID, at: Date)
+    /// A kind this app does not know. The thread skips it.
+    case unknown(id: ItemID, at: Date, kind: String)
+
+    var id: ItemID {
+        switch self {
+        case .user(let id, _, _, _, _), .assistant(let id, _, _), .thinking(let id, _, _, _), .work(let id, _, _), .todo(let id, _, _),
+             .plan(let id, _, _, _, _), .permission(let id, _, _), .ask(let id, _, _, _, _), .notice(let id, _, _, _),
+             .compaction(let id, _), .unknown(let id, _, _): id
+        }
+    }
+
+    var at: Date {
+        switch self {
+        case .user(_, let at, _, _, _), .assistant(_, let at, _), .thinking(_, let at, _, _), .work(_, let at, _), .todo(_, let at, _),
+             .plan(_, let at, _, _, _), .permission(_, let at, _), .ask(_, let at, _, _, _), .notice(_, let at, _, _),
+             .compaction(_, let at), .unknown(_, let at, _): at
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, id, at, text, from, queued, ms, steps, todos, state, cardId, card, questions, answers, tone
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try c.decode(ItemID.self, forKey: .id)
+        let at = try c.decode(Date.self, forKey: .at)
+        func text() throws -> String { try c.decode(String.self, forKey: .text) }
+        switch try c.decode(String.self, forKey: .kind) {
+        case "user":
+            self = .user(id: id, at: at, text: try text(), from: try c.decode(SessionAuthor.self, forKey: .from), queued: try c.decode(Bool.self, forKey: .queued))
+        case "assistant":
+            self = .assistant(id: id, at: at, text: try text())
+        case "thinking":
+            self = .thinking(id: id, at: at, text: try text(), ms: try c.decodeIfPresent(Int.self, forKey: .ms))
+        case "work":
+            self = .work(id: id, at: at, steps: try c.decode([ToolStep].self, forKey: .steps))
+        case "todo":
+            self = .todo(id: id, at: at, todos: try c.decode([SessionTodo].self, forKey: .todos))
+        case "plan":
+            self = .plan(
+                id: id, at: at, text: try text(), state: try c.decode(PlanState.self, forKey: .state),
+                cardId: try c.decodeIfPresent(MessageID.self, forKey: .cardId)
+            )
+        case "permission":
+            guard case let .permission(cardId, cardAt, card) = try c.decode(Message.self, forKey: .card) else {
+                throw DecodingError.dataCorruptedError(forKey: .card, in: c, debugDescription: "a permission item's card is a permission card")
+            }
+            self = .permission(id: id, at: at, permission: SessionPermission(cardId: cardId, at: cardAt, card: card))
+        case "ask":
+            self = .ask(
+                id: id, at: at, questions: try c.decode([AskQuestion].self, forKey: .questions),
+                answers: try c.decodeIfPresent(AskAnswers.self, forKey: .answers),
+                cardId: try c.decodeIfPresent(MessageID.self, forKey: .cardId)
+            )
+        case "notice":
+            self = .notice(id: id, at: at, text: try text(), tone: try c.decode(NoticeTone.self, forKey: .tone))
+        case "compaction":
+            self = .compaction(id: id, at: at)
+        case let other:
+            self = .unknown(id: id, at: at, kind: other)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(at, forKey: .at)
+        switch self {
+        case let .user(_, _, text, from, queued):
+            try c.encode("user", forKey: .kind)
+            try c.encode(text, forKey: .text)
+            try c.encode(from, forKey: .from)
+            try c.encode(queued, forKey: .queued)
+        case let .assistant(_, _, text):
+            try c.encode("assistant", forKey: .kind)
+            try c.encode(text, forKey: .text)
+        case let .thinking(_, _, text, ms):
+            try c.encode("thinking", forKey: .kind)
+            try c.encode(text, forKey: .text)
+            try c.encode(ms, forKey: .ms)
+        case let .work(_, _, steps):
+            try c.encode("work", forKey: .kind)
+            try c.encode(steps, forKey: .steps)
+        case let .todo(_, _, todos):
+            try c.encode("todo", forKey: .kind)
+            try c.encode(todos, forKey: .todos)
+        case let .plan(_, _, text, state, cardId):
+            try c.encode("plan", forKey: .kind)
+            try c.encode(text, forKey: .text)
+            try c.encode(state, forKey: .state)
+            try c.encode(cardId, forKey: .cardId)
+        case let .permission(_, _, permission):
+            try c.encode("permission", forKey: .kind)
+            try c.encode(Message.permission(id: permission.cardId, at: permission.at, card: permission.card), forKey: .card)
+        case let .ask(_, _, questions, answers, cardId):
+            try c.encode("ask", forKey: .kind)
+            try c.encode(questions, forKey: .questions)
+            try c.encode(answers, forKey: .answers)
+            try c.encode(cardId, forKey: .cardId)
+        case let .notice(_, _, text, tone):
+            try c.encode("notice", forKey: .kind)
+            try c.encode(text, forKey: .text)
+            try c.encode(tone, forKey: .tone)
+        case .compaction:
+            try c.encode("compaction", forKey: .kind)
+        case let .unknown(_, _, kind):
+            try c.encode(kind, forKey: .kind)
+        }
+    }
+}
+
+struct SessionModelOption: Codable, Hashable, Sendable, Identifiable {
+    let id: String
+    var label: String
+}
+
+/// What the composer may do now. canSend false comes with the reason in words. queued: the user's messages waiting.
+/// model nil: the transcript's last model, else the user's default. modes: what the mode menu offers.
+struct SessionControls: Codable, Hashable, Sendable {
+    var canSend: Bool
+    var reason: String?
+    var working: Bool
+    var queued: Int
+    var model: String?
+    var models: [SessionModelOption]
+    var mode: PermissionMode
+    var modes: [PermissionMode]
+
+    private enum CodingKeys: String, CodingKey { case canSend, reason, working, queued, model, models, mode, modes }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(canSend, forKey: .canSend)
+        try c.encode(reason, forKey: .reason)
+        try c.encode(working, forKey: .working)
+        try c.encode(queued, forKey: .queued)
+        try c.encode(model, forKey: .model)
+        try c.encode(models, forKey: .models)
+        try c.encode(mode, forKey: .mode)
+        try c.encode(modes, forKey: .modes)
+    }
+}
+
+/// Where a thread stands: rev counts upserts per session within one bridge epoch. watchSession sends it back.
+struct ThreadPosition: Codable, Hashable, Sendable {
+    var epoch: String
+    var rev: Int
+}
+
+/// Text streaming into an item not yet upserted. Offsets and lengths count UTF-16 code units (String.utf16.count).
+struct ThreadLive: Codable, Hashable, Sendable {
+    var itemId: ItemID
+    var text: String
+}
+
+/// The reply to watchSession when it needs a snapshot. items: the newest page, oldest first. before nil: the start.
+struct SessionSnapshot: Hashable, Sendable {
+    var epoch: String
+    var rev: Int
+    var items: [SessionItem]
+    var before: Cursor?
+    var controls: SessionControls
+    var live: ThreadLive?
+
+    var position: ThreadPosition { ThreadPosition(epoch: epoch, rev: rev) }
+}
+
+/// The list's frames: the reply to watchSessions, which replaces the list, and its channel's diffs.
+enum SessionsFrame: Hashable, Sendable {
+    case list(projects: [SessionProject], rows: [SessionRow], mirror: MirrorPref)
+    /// rows and projects upsert by id; removed rows go.
+    case changed(rows: [SessionRow], removed: [SessionID], projects: [SessionProject])
+}
+
+/// One thread's frames.
+enum ThreadFrame: Hashable, Sendable {
+    case snapshot(SessionSnapshot)
+    /// Upserts by id and removals; rev is the thread's rev after it. controls nil: unchanged. An upsert drops its live text.
+    case items(rev: Int, items: [SessionItem], removed: [ItemID], controls: SessionControls?)
+    /// Applies only when offset equals the live text's UTF-16 length for itemId (0 when none); otherwise dropped.
+    case delta(itemId: ItemID, offset: Int, text: String)
+    /// The page before the cursor, oldest first, to put above the items.
+    case page(items: [SessionItem], before: Cursor?)
+    /// A tool call's full result, its last 64 KB when longer.
+    case toolOutput(toolUseId: String, output: String)
+    /// The session is gone. movedTo: the id an agent's session restarted under, which the app opens instead.
+    case removed(movedTo: SessionID?)
+}
+
+/// The fields that are set go on the wire. `model: .some(nil)` goes back to the transcript's model.
+struct SessionPatch: Codable, Hashable, Sendable {
+    var title: String?
+    var hidden: Bool?
+    var model: String??
+    var mode: PermissionMode?
+
+    private enum CodingKeys: String, CodingKey { case title, hidden, model, mode }
+
+    init(title: String? = nil, hidden: Bool? = nil, model: String?? = nil, mode: PermissionMode? = nil) {
+        self.title = title
+        self.hidden = hidden
+        self.model = model
+        self.mode = mode
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden)
+        if c.contains(.model) {
+            model = .some(try c.decodeNil(forKey: .model) ? nil : try c.decode(String.self, forKey: .model))
+        }
+        mode = try c.decodeIfPresent(PermissionMode.self, forKey: .mode)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(title, forKey: .title)
+        try c.encodeIfPresent(hidden, forKey: .hidden)
+        if let model { try c.encode(model, forKey: .model) }
+        try c.encodeIfPresent(mode, forKey: .mode)
+    }
+}
+
 enum ServerMessage: Codable, Sendable {
     case hello(Hello)
     case bot(Bot)
@@ -1223,6 +1895,12 @@ enum ServerMessage: Codable, Sendable {
     case exchange(botId: BotID, peer: BotID, messages: [ExchangeMessage])
     /// The plan's usage limits. Sent after each hello and when they change. Never sequenced or replayed.
     case usage(PlanUsage)
+    /// The Sessions list (feature sessions): the reply to watchSessions and the list channel's diffs.
+    case sessions(SessionsFrame)
+    /// One thread's frames (feature sessions): replies to watchSession, sessionPage and sessionTool, and its channel.
+    case thread(sessionId: SessionID, ThreadFrame)
+    /// Answers sessionCreate with its ref. The session exists before Claude Code starts.
+    case sessionCreated(ref: String, sessionId: SessionID)
     case error(message: String)
     case unknown(type: String)
 
@@ -1231,10 +1909,13 @@ enum ServerMessage: Codable, Sendable {
         case path, mime, content, data, devices, code, expiresAt
         case `protocol`, epoch, seq, resumed, features
         case agentId, text, at, facts, connectors, skills, routineId, url, token, commands, peer, usage
+        case projects, rows, mirror, removed, sessionId, rev, items, before, controls, live, itemId, offset, toolUseId, output, movedTo
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        func session() throws -> SessionID { try c.decode(SessionID.self, forKey: .sessionId) }
+        func items() throws -> [SessionItem] { try c.decode([SessionItem].self, forKey: .items) }
         switch try c.decode(String.self, forKey: .type) {
         case "hello":
             self = .hello(Hello(
@@ -1312,6 +1993,51 @@ enum ServerMessage: Codable, Sendable {
             )
         case "usage":
             self = .usage(try c.decode(PlanUsage.self, forKey: .usage))
+        case "sessions":
+            self = .sessions(.list(
+                projects: try c.decode([SessionProject].self, forKey: .projects),
+                rows: try c.decode([SessionRow].self, forKey: .rows),
+                mirror: try c.decode(MirrorPref.self, forKey: .mirror)
+            ))
+        case "session_rows":
+            self = .sessions(.changed(
+                rows: try c.decode([SessionRow].self, forKey: .rows),
+                removed: try c.decode([SessionID].self, forKey: .removed),
+                projects: try c.decode([SessionProject].self, forKey: .projects)
+            ))
+        case "session":
+            self = .thread(sessionId: try session(), .snapshot(SessionSnapshot(
+                epoch: try c.decode(String.self, forKey: .epoch),
+                rev: try c.decode(Int.self, forKey: .rev),
+                items: try items(),
+                before: try c.decodeIfPresent(Cursor.self, forKey: .before),
+                controls: try c.decode(SessionControls.self, forKey: .controls),
+                live: try c.decodeIfPresent(ThreadLive.self, forKey: .live)
+            )))
+        case "session_items":
+            self = .thread(sessionId: try session(), .items(
+                rev: try c.decode(Int.self, forKey: .rev),
+                items: try items(),
+                removed: try c.decode([ItemID].self, forKey: .removed),
+                controls: try c.decodeIfPresent(SessionControls.self, forKey: .controls)
+            ))
+        case "session_delta":
+            self = .thread(sessionId: try session(), .delta(
+                itemId: try c.decode(ItemID.self, forKey: .itemId),
+                offset: try c.decode(Int.self, forKey: .offset),
+                text: try c.decode(String.self, forKey: .text)
+            ))
+        case "session_page":
+            self = .thread(sessionId: try session(), .page(items: try items(), before: try c.decodeIfPresent(Cursor.self, forKey: .before)))
+        case "session_tool_output":
+            self = .thread(sessionId: try session(), .toolOutput(
+                toolUseId: try c.decode(String.self, forKey: .toolUseId),
+                output: try c.decode(String.self, forKey: .output)
+            ))
+        case "session_removed":
+            self = .thread(sessionId: try session(), .removed(movedTo: try c.decodeIfPresent(SessionID.self, forKey: .movedTo)))
+        case "session_created":
+            self = .sessionCreated(ref: try c.decode(String.self, forKey: .ref), sessionId: try session())
         case "error":
             self = .error(message: try c.decode(String.self, forKey: .message))
         case let other:
@@ -1410,6 +2136,54 @@ enum ServerMessage: Codable, Sendable {
         case let .usage(usage):
             try c.encode("usage", forKey: .type)
             try c.encode(usage, forKey: .usage)
+        case let .sessions(.list(projects, rows, mirror)):
+            try c.encode("sessions", forKey: .type)
+            try c.encode(projects, forKey: .projects)
+            try c.encode(rows, forKey: .rows)
+            try c.encode(mirror, forKey: .mirror)
+        case let .sessions(.changed(rows, removed, projects)):
+            try c.encode("session_rows", forKey: .type)
+            try c.encode(rows, forKey: .rows)
+            try c.encode(removed, forKey: .removed)
+            try c.encode(projects, forKey: .projects)
+        case let .thread(sessionId, frame):
+            try c.encode(sessionId, forKey: .sessionId)
+            switch frame {
+            case let .snapshot(snapshot):
+                try c.encode("session", forKey: .type)
+                try c.encode(snapshot.epoch, forKey: .epoch)
+                try c.encode(snapshot.rev, forKey: .rev)
+                try c.encode(snapshot.items, forKey: .items)
+                try c.encode(snapshot.before, forKey: .before)
+                try c.encode(snapshot.controls, forKey: .controls)
+                try c.encode(snapshot.live, forKey: .live)
+            case let .items(rev, items, removed, controls):
+                try c.encode("session_items", forKey: .type)
+                try c.encode(rev, forKey: .rev)
+                try c.encode(items, forKey: .items)
+                try c.encode(removed, forKey: .removed)
+                try c.encode(controls, forKey: .controls)
+            case let .delta(itemId, offset, text):
+                try c.encode("session_delta", forKey: .type)
+                try c.encode(itemId, forKey: .itemId)
+                try c.encode(offset, forKey: .offset)
+                try c.encode(text, forKey: .text)
+            case let .page(items, before):
+                try c.encode("session_page", forKey: .type)
+                try c.encode(items, forKey: .items)
+                try c.encode(before, forKey: .before)
+            case let .toolOutput(toolUseId, output):
+                try c.encode("session_tool_output", forKey: .type)
+                try c.encode(toolUseId, forKey: .toolUseId)
+                try c.encode(output, forKey: .output)
+            case let .removed(movedTo):
+                try c.encode("session_removed", forKey: .type)
+                try c.encode(movedTo, forKey: .movedTo)
+            }
+        case let .sessionCreated(ref, sessionId):
+            try c.encode("session_created", forKey: .type)
+            try c.encode(ref, forKey: .ref)
+            try c.encode(sessionId, forKey: .sessionId)
         case let .error(message):
             try c.encode("error", forKey: .type)
             try c.encode(message, forKey: .message)
@@ -1554,15 +2328,43 @@ enum ClientMessage: Codable, Hashable, Sendable {
     case pairCode
     /// Reads the plan's usage now. Answered with a usage frame.
     case refreshUsage
+    /// Subscribes to the Sessions list. Answered with a sessions frame; send again after each hello.
+    case watchSessions
+    case unwatchSessions
+    /// Subscribes to one thread. after: the position the app holds, nil for a snapshot. Clear the thread's live text
+    /// when sending it. Send again after each hello.
+    case watchSession(sessionId: SessionID, after: ThreadPosition?)
+    /// Unsubscribes and marks the session visited.
+    case unwatchSession(sessionId: SessionID)
+    case sessionPage(sessionId: SessionID, before: Cursor)
+    /// clientId: the queued user item's id until the transcript's own entry replaces it. interrupt: "Stop and send".
+    case sessionSend(sessionId: SessionID, text: String, clientId: String, interrupt: Bool)
+    case sessionStop(sessionId: SessionID)
+    /// Answers a permission item (its cardId) or a plan item (once approves, deny keeps planning).
+    case sessionDecide(sessionId: SessionID, cardId: MessageID, choice: PermissionChoice)
+    /// Answers an ask item by question text. nil dismisses it.
+    case sessionAnswer(sessionId: SessionID, cardId: MessageID, answers: [String: String]?)
+    /// Answered by sessionCreated with the same ref. model and mode nil: the user's Claude Code defaults.
+    case sessionCreate(ref: String, projectId: ProjectID, text: String, model: String?, mode: PermissionMode?, isolate: SessionIsolation)
+    case sessionSet(sessionId: SessionID, patch: SessionPatch)
+    /// Imports the session into the Claude app when needed, then brings the app forward.
+    case sessionOpenDesktop(sessionId: SessionID)
+    /// Asks for a tool call's full output. Answered with a thread toolOutput frame.
+    case sessionTool(sessionId: SessionID, toolUseId: String)
+    /// Answered with a sessions list frame carrying the new mirror.
+    case sessionPrefs(mirror: MirrorPref)
 
     private enum CodingKeys: String, CodingKey {
         case type, ref, botId, text, uploads, messageId, option, choice, patch, routineId, enabled, agentId, path, deviceId
         case clientId, factId, name, force, mentions, peer, members
+        case sessionId, after, before, interrupt, cardId, answers, projectId, model, mode, isolate, toolUseId, mirror
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         func bot() throws -> BotID { try c.decode(BotID.self, forKey: .botId) }
+        func session() throws -> SessionID { try c.decode(SessionID.self, forKey: .sessionId) }
+        func card() throws -> MessageID { try c.decode(MessageID.self, forKey: .cardId) }
         switch try c.decode(String.self, forKey: .type) {
         case "create_bot": self = .createBot(ref: try c.decode(String.self, forKey: .ref))
         case "open": self = .open(botId: try bot())
@@ -1610,6 +2412,31 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case "revoke_device": self = .revokeDevice(deviceId: try c.decode(DeviceID.self, forKey: .deviceId))
         case "pair_code": self = .pairCode
         case "refresh_usage": self = .refreshUsage
+        case "watch_sessions": self = .watchSessions
+        case "unwatch_sessions": self = .unwatchSessions
+        case "watch_session": self = .watchSession(sessionId: try session(), after: try c.decodeIfPresent(ThreadPosition.self, forKey: .after))
+        case "unwatch_session": self = .unwatchSession(sessionId: try session())
+        case "session_page": self = .sessionPage(sessionId: try session(), before: try c.decode(Cursor.self, forKey: .before))
+        case "session_send":
+            self = .sessionSend(
+                sessionId: try session(), text: try c.decode(String.self, forKey: .text),
+                clientId: try c.decode(String.self, forKey: .clientId), interrupt: try c.decode(Bool.self, forKey: .interrupt)
+            )
+        case "session_stop": self = .sessionStop(sessionId: try session())
+        case "session_decide":
+            self = .sessionDecide(sessionId: try session(), cardId: try card(), choice: try c.decode(PermissionChoice.self, forKey: .choice))
+        case "session_answer":
+            self = .sessionAnswer(sessionId: try session(), cardId: try card(), answers: try c.decodeIfPresent([String: String].self, forKey: .answers))
+        case "session_create":
+            self = .sessionCreate(
+                ref: try c.decode(String.self, forKey: .ref), projectId: try c.decode(ProjectID.self, forKey: .projectId),
+                text: try c.decode(String.self, forKey: .text), model: try c.decodeIfPresent(String.self, forKey: .model),
+                mode: try c.decodeIfPresent(PermissionMode.self, forKey: .mode), isolate: try c.decode(SessionIsolation.self, forKey: .isolate)
+            )
+        case "session_set": self = .sessionSet(sessionId: try session(), patch: try c.decode(SessionPatch.self, forKey: .patch))
+        case "session_open_desktop": self = .sessionOpenDesktop(sessionId: try session())
+        case "session_tool": self = .sessionTool(sessionId: try session(), toolUseId: try c.decode(String.self, forKey: .toolUseId))
+        case "session_prefs": self = .sessionPrefs(mirror: try c.decode(MirrorPref.self, forKey: .mirror))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown client message \(other)")
         }
@@ -1736,6 +2563,62 @@ enum ClientMessage: Codable, Hashable, Sendable {
             try c.encode("pair_code", forKey: .type)
         case .refreshUsage:
             try c.encode("refresh_usage", forKey: .type)
+        case .watchSessions:
+            try c.encode("watch_sessions", forKey: .type)
+        case .unwatchSessions:
+            try c.encode("unwatch_sessions", forKey: .type)
+        case let .watchSession(sessionId, after):
+            try c.encode("watch_session", forKey: .type)
+            try c.encode(sessionId, forKey: .sessionId)
+            try c.encode(after, forKey: .after)
+        case let .unwatchSession(sessionId):
+            try c.encode("unwatch_session", forKey: .type)
+            try c.encode(sessionId, forKey: .sessionId)
+        case let .sessionPage(sessionId, before):
+            try c.encode("session_page", forKey: .type)
+            try c.encode(sessionId, forKey: .sessionId)
+            try c.encode(before, forKey: .before)
+        case let .sessionSend(sessionId, text, clientId, interrupt):
+            try c.encode("session_send", forKey: .type)
+            try c.encode(sessionId, forKey: .sessionId)
+            try c.encode(text, forKey: .text)
+            try c.encode(clientId, forKey: .clientId)
+            try c.encode(interrupt, forKey: .interrupt)
+        case let .sessionStop(sessionId):
+            try c.encode("session_stop", forKey: .type)
+            try c.encode(sessionId, forKey: .sessionId)
+        case let .sessionDecide(sessionId, cardId, choice):
+            try c.encode("session_decide", forKey: .type)
+            try c.encode(sessionId, forKey: .sessionId)
+            try c.encode(cardId, forKey: .cardId)
+            try c.encode(choice, forKey: .choice)
+        case let .sessionAnswer(sessionId, cardId, answers):
+            try c.encode("session_answer", forKey: .type)
+            try c.encode(sessionId, forKey: .sessionId)
+            try c.encode(cardId, forKey: .cardId)
+            try c.encode(answers, forKey: .answers)
+        case let .sessionCreate(ref, projectId, text, model, mode, isolate):
+            try c.encode("session_create", forKey: .type)
+            try c.encode(ref, forKey: .ref)
+            try c.encode(projectId, forKey: .projectId)
+            try c.encode(text, forKey: .text)
+            try c.encode(model, forKey: .model)
+            try c.encode(mode, forKey: .mode)
+            try c.encode(isolate, forKey: .isolate)
+        case let .sessionSet(sessionId, patch):
+            try c.encode("session_set", forKey: .type)
+            try c.encode(sessionId, forKey: .sessionId)
+            try c.encode(patch, forKey: .patch)
+        case let .sessionOpenDesktop(sessionId):
+            try c.encode("session_open_desktop", forKey: .type)
+            try c.encode(sessionId, forKey: .sessionId)
+        case let .sessionTool(sessionId, toolUseId):
+            try c.encode("session_tool", forKey: .type)
+            try c.encode(sessionId, forKey: .sessionId)
+            try c.encode(toolUseId, forKey: .toolUseId)
+        case let .sessionPrefs(mirror):
+            try c.encode("session_prefs", forKey: .type)
+            try c.encode(mirror, forKey: .mirror)
         }
     }
 }

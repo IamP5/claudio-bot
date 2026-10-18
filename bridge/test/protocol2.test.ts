@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import fixtures from "../../fixtures/protocol.json";
 import type { AgentId, BotId, Message, MessageId, ServerMessage } from "../src/protocol";
 import { cardReply, forProtocol2 } from "../src/protocol2";
 
@@ -41,7 +42,7 @@ test("an agent's card names the agent, and a conversation downgrades only its pe
 
   const shown = forProtocol2({ type: "conversation", botId, messages: [note, fromAgent] });
 
-  expect(shown.type === "conversation" && shown.messages.map((m) => (m.kind === "question" ? m.question : m.kind))).toEqual([
+  expect(shown?.type === "conversation" && shown.messages.map((m) => (m.kind === "question" ? m.question : m.kind))).toEqual([
     "note",
     "Fix login: Push to the default branch: git push origin main",
   ]);
@@ -64,4 +65,8 @@ test.each([
   ["a dismissed question", undefined, { type: "dismiss" }, { kind: "dismiss" }],
 ] as const)("card reply: %s", (_, card, tap, reply) => {
   expect(cardReply(card, tap)).toEqual(reply);
+});
+
+test.each(fixtures.server.map((m) => [m.type, m as ServerMessage] as const))("a protocol 2 app gets fixture %s only if it is not a session frame", (type, frame) => {
+  expect(forProtocol2(frame) === null).toBe(type.startsWith("session"));
 });

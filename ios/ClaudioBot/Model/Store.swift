@@ -383,7 +383,7 @@ final class AppStore {
             self.usage = usage
             return []
 
-        case .unknown:
+        case .sessions, .thread, .sessionCreated, .unknown:
             return []
         }
     }

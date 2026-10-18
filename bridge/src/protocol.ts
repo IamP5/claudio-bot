@@ -22,7 +22,7 @@ export type FactId = string & { readonly __brand: "FactId" };
  */
 export const FEATURES = [
   "memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend",
-  "mentions", "commands", "exchanges", "groups", "usage",
+  "mentions", "commands", "exchanges", "groups", "usage", "sessions",
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 
@@ -314,6 +314,239 @@ export type PlanUsage =
   | { state: "ok"; plan: string | null; fetchedAt: string; stale: boolean; windows: UsageWindow[] }
   | { state: "unavailable"; reason: UsageUnavailable; fetchedAt: string };
 
+// Sessions (feature "sessions"): the Claude Code sessions on this Mac, grouped by project, and one thread at a time.
+// docs/sessions-design.md §3 and §8 describe them. Session frames never go through the replay ring and never carry a
+// seq. A frame is a reply to the socket that asked, or goes on a channel: "sessions" reaches the sockets that sent
+// watch_sessions, and `s:<sessionId>` the sockets that sent watch_session for that id. A request with no answer named
+// below is answered by the change it makes, on those channels, or by an error frame. A protocol 2 socket never gets
+// a session frame and may not send a session request. The app treats an unknown origin, status, holder, mirror state
+// or mode as `.unknown`, and an unknown item kind as an `.unknown` item it skips.
+
+/** Claude Code's session uuid; a cloud row uses its session_01… id. */
+export type SessionId = string & { readonly __brand: "SessionId" };
+/** The first 16 hex digits of the sha256 of the project root's realpath. */
+export type ProjectId = string & { readonly __brand: "ProjectId" };
+/** Stable across history and live: `${message.id}:${block}`, a tool_use id, or a user entry's uuid. */
+export type ItemId = string & { readonly __brand: "ItemId" };
+/** Opaque to the app: where the next older page starts. The app sends it back as it got it. */
+export type Cursor = string & { readonly __brand: "Cursor" };
+
+/** Who started the session: the phone, a bot's agent, the Claude app, a terminal, an SDK script, or claude.ai (cloud). */
+export type SessionOrigin = "phone" | "agent" | "desktop" | "terminal" | "sdk" | "cloud";
+/**
+ * awaiting_approval: a permission or plan card is open. awaiting_input: an ask card is open. parked: queued input
+ * waits on a hold (the usage limit, or another process busy on the id). unavailable: Claude Code could not start.
+ */
+export type SessionStatus = "idle" | "working" | "awaiting_approval" | "awaiting_input" | "failed" | "parked" | "unavailable";
+/** Which live process holds the session now: none, this bridge, the Claude app, a terminal, or another program. */
+export type Holder = "none" | "claudio" | "desktop" | "terminal" | "other";
+/**
+ * Whether the Claude app lists the session. imported: its store has the session. pending: an automatic import waits on
+ * its gates (docs/sessions-design.md §8.4). failed: an import did not show up within 10 s, so automatic retries
+ * stopped; "Open in Claude app" still tries. none: not in the app and nothing queued.
+ */
+export type SessionMirror = "imported" | "pending" | "failed" | "none";
+/** Settings, "Show agent sessions in the Claude app": Automatically, When I tap, Never. */
+export const MIRROR_PREFS = ["auto", "tap", "never"] as const;
+export type MirrorPref = (typeof MIRROR_PREFS)[number];
+/** Claude Code's permission modes, as the SDK names them. test/protocol.test.ts pins this list to the SDK's. */
+export const PERMISSION_MODES = ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"] as const;
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
+/** The modes the phone may set. It is never offered bypassPermissions, and the bridge refuses it. */
+export const PHONE_MODES = ["default", "acceptEdits", "plan", "dontAsk", "auto"] as const satisfies readonly PermissionMode[];
+export type PhoneMode = (typeof PHONE_MODES)[number];
+
+/**
+ * A project: a git repository's main checkout, which every worktree of it joins. name: the GitHub repo name when the
+ * remote is on GitHub ("solta-o-som" for ~/Dev/projects/br-soundless), else the folder name. lastAt: the newest
+ * lastAt of its sessions, null when it has none. canCloud: reserved for phone-started cloud sessions, false in v1.
+ */
+export type SessionProject = { id: ProjectId; name: string; path: string; githubRepo: string | null; lastAt: string | null; canCloud: boolean };
+
+/** state null: the transcript names the PR without its state. */
+export type SessionPr = { number: number; url: string; state: "open" | "merged" | "closed" | null };
+
+/**
+ * One session in the list. Status, unread, holder and mirror are computed when the row is built. parentId: the
+ * session it was spawned from, so the app nests it. agent: set when a bot's agent owns the id. worktree: the cwd is a
+ * git worktree, not the main checkout. unread: the bridge drives it or the user opened it before, its lastAt is past
+ * that visit, and its last item is the assistant's. url: claude.ai for a cloud row, else null.
+ */
+export type SessionRow = {
+  id: SessionId;
+  projectId: ProjectId;
+  parentId: SessionId | null;
+  title: string;
+  origin: SessionOrigin;
+  agent: { botId: BotId; agentId: AgentId } | null;
+  status: SessionStatus;
+  holder: Holder;
+  unread: boolean;
+  branch: string | null;
+  worktree: boolean;
+  pr: SessionPr | null;
+  mirror: SessionMirror;
+  hidden: boolean;
+  url: string | null;
+  createdAt: string;
+  lastAt: string;
+};
+
+/**
+ * One tool call in a work item. id: its tool_use id, which session_tool names. label: the call in words ("Edit
+ * src/app.ts", "Run bun test"). diff: the line counts of an Edit, Write or MultiEdit, else null. output: the last
+ * 2 KB of its result, null while it runs or when it returned nothing.
+ */
+export type ToolStep = {
+  id: string;
+  tool: string;
+  label: string;
+  state: "running" | "ok" | "error" | "denied";
+  diff: { path: string; added: number; removed: number } | null;
+  output: string | null;
+};
+
+/** One AskUserQuestion question. The app offers a free answer besides the options, as Claude Code does. */
+export type AskQuestion = { question: string; header: string; options: { label: string; description: string }[]; multiSelect: boolean };
+
+/** A permission card, the same shape a bot's chat shows. Its id is the cardId session_decide sends. */
+export type PermissionMessage = Extract<Message, { kind: "permission" }>;
+
+/**
+ * One row of a thread. The app upserts items by id.
+ * - user: from "bot" when a bot sent it to its agent, "system" for a bridge notice turn. queued: not sent yet.
+ * - assistant: markdown text.
+ * - thinking: at most 400 characters. ms: how long it thought, null when unknown.
+ * - work: one run of tool calls, until a text block or a user prompt closes it. id: its first tool_use id.
+ * - todo: the turn's TodoWrite list, upserted in place.
+ * - plan: an ExitPlanMode plan. cardId: set while the phone may decide it (session_decide: "once" approves, "deny"
+ *   keeps planning), null when it was decided or was proposed elsewhere.
+ * - permission: a card the gate or the session holds. Open while card.answer is null.
+ * - ask: an AskUserQuestion. answers: by question text, a multi-select's labels comma-separated; null while open.
+ *   cardId: set while the phone may answer it (session_answer), null otherwise.
+ * - notice: a line the bridge adds ("This session's transcript is gone").
+ * - compaction: Claude Code compacted the conversation here.
+ */
+export type SessionItem =
+  | { kind: "user"; id: ItemId; at: string; text: string; from: "user" | "bot" | "system"; queued: boolean }
+  | { kind: "assistant"; id: ItemId; at: string; text: string }
+  | { kind: "thinking"; id: ItemId; at: string; text: string; ms: number | null }
+  | { kind: "work"; id: ItemId; at: string; steps: ToolStep[] }
+  | { kind: "todo"; id: ItemId; at: string; todos: { text: string; state: "pending" | "in_progress" | "done" }[] }
+  | { kind: "plan"; id: ItemId; at: string; text: string; state: "proposed" | "approved" | "rejected" | "expired"; cardId: MessageId | null }
+  | { kind: "permission"; id: ItemId; at: string; card: PermissionMessage }
+  | { kind: "ask"; id: ItemId; at: string; questions: AskQuestion[]; answers: Record<string, string> | "dismissed" | "expired" | null; cardId: MessageId | null }
+  | { kind: "notice"; id: ItemId; at: string; text: string; tone: "info" | "error" }
+  | { kind: "compaction"; id: ItemId; at: string };
+
+/**
+ * What the composer may do now. canSend false comes with the reason in words ("Working in the Claude app"). queued:
+ * the user's messages waiting for their turn. model: null for the transcript's last model, else the user's default.
+ * modes: what the mode menu offers.
+ */
+export type SessionControls = {
+  canSend: boolean;
+  reason: string | null;
+  working: boolean;
+  queued: number;
+  model: string | null;
+  models: { id: string; label: string }[];
+  mode: PermissionMode;
+  modes: PhoneMode[];
+};
+
+/** Where a thread stands. rev counts upserts per session within one bridge epoch (the epoch in hello). */
+export type ThreadPosition = { epoch: string; rev: number };
+
+/** Text streaming into an item not yet upserted. Lengths and offsets count UTF-16 code units, as JavaScript strings do. */
+export type ThreadLive = { itemId: ItemId; text: string };
+
+export type SessionServerMessage =
+  // Reply to watch_sessions: every project and row. It replaces what the app had.
+  | { type: "sessions"; projects: SessionProject[]; rows: SessionRow[]; mirror: MirrorPref }
+  // Channel "sessions", coalesced every 500 ms. rows and projects upsert by id; removed rows go.
+  | { type: "session_rows"; rows: SessionRow[]; removed: SessionId[]; projects: SessionProject[] }
+  // Reply to watch_session when it needs a snapshot (after null, another epoch, or a rev the ring no longer holds).
+  // items: the newest page, oldest first; it replaces what the app had. before: null at the start of the transcript.
+  // live: seeds the streaming text.
+  | {
+      type: "session";
+      sessionId: SessionId;
+      epoch: string;
+      rev: number;
+      items: SessionItem[];
+      before: Cursor | null;
+      controls: SessionControls;
+      live: ThreadLive | null;
+    }
+  // Channel s:<id>, and the reply to watch_session when the ring still holds after.rev: then it is one frame with every
+  // upsert and removal since then, and controls set. Items upsert by id, so a replayed one is a no-op. rev: the
+  // thread's rev after this frame. controls: null when they did not change. An upsert of an item drops its live text.
+  | { type: "session_items"; sessionId: SessionId; rev: number; items: SessionItem[]; removed: ItemId[]; controls: SessionControls | null }
+  // Channel s:<id>, unsequenced, coalesced every 60 ms. Applies only when offset equals the length of the app's live
+  // text for itemId (0 when it has none), counted in UTF-16 code units; any other is dropped, and the upsert brings
+  // the text. The app clears a thread's live text when it sends watch_session, so a replay reply ends with a delta at
+  // offset 0 holding the whole live text when an item is streaming.
+  | { type: "session_delta"; sessionId: SessionId; itemId: ItemId; offset: number; text: string }
+  // Reply to session_page: the page before the cursor, oldest first, to put above the app's items.
+  | { type: "session_page"; sessionId: SessionId; items: SessionItem[]; before: Cursor | null }
+  // Reply to session_create with the ref the client sent. The id exists before Claude Code starts.
+  | { type: "session_created"; ref: string; sessionId: SessionId }
+  // Reply to session_tool: the call's full result, its last 64 KB when longer.
+  | { type: "session_tool_output"; sessionId: SessionId; toolUseId: string; output: string }
+  // Channel s:<id>, and the reply to watch_session for a session that is gone. movedTo: the id an agent's session
+  // restarted under, which the app opens instead; null when the transcript is gone.
+  | { type: "session_removed"; sessionId: SessionId; movedTo: SessionId | null };
+
+/** Sent on channel "sessions". */
+export type SessionsChannelFrame = Extract<SessionServerMessage, { type: "session_rows" }>;
+/** Sent on channel `s:<sessionId>`. */
+export type ThreadChannelFrame = Extract<SessionServerMessage, { type: "session_items" | "session_delta" | "session_removed" }>;
+
+/** The fields set are the ones to change. title renames through Claude Code, so the transcript keeps it. */
+export type SessionPatch = { title?: string; hidden?: boolean; model?: string | null; mode?: PhoneMode };
+
+export type SessionClientMessage =
+  // Subscribes this socket to channel "sessions". Answered with a sessions frame. The app sends it again after each hello.
+  | { type: "watch_sessions" }
+  | { type: "unwatch_sessions" }
+  // Subscribes this socket to s:<sessionId>. after: the position the app holds, null for a fresh snapshot. Answered
+  // with session, session_items or session_removed. The app sends it again after each hello.
+  | { type: "watch_session"; sessionId: SessionId; after: ThreadPosition | null }
+  // Unsubscribes and marks the session visited.
+  | { type: "unwatch_session"; sessionId: SessionId }
+  | { type: "session_page"; sessionId: SessionId; before: Cursor }
+  // clientId: the queued user item's id until the transcript's own entry replaces it. interrupt: "Stop and send": stops the turn in flight, then queues.
+  | { type: "session_send"; sessionId: SessionId; text: string; clientId: string; interrupt: boolean }
+  // Stops the turn in flight. The user's queued messages still run.
+  | { type: "session_stop"; sessionId: SessionId }
+  // Answers a permission item (card.id) or a plan item (cardId), whoever holds the card.
+  | { type: "session_decide"; sessionId: SessionId; cardId: MessageId; choice: PermissionChoice }
+  // Answers an ask item by question text. null dismisses it.
+  | { type: "session_answer"; sessionId: SessionId; cardId: MessageId; answers: Record<string, string> | null }
+  // Answered by session_created with the same ref. model and mode null: the user's Claude Code defaults.
+  | { type: "session_create"; ref: string; projectId: ProjectId; text: string; model: string | null; mode: PhoneMode | null; isolate: "none" | "worktree" }
+  | { type: "session_set"; sessionId: SessionId; patch: SessionPatch }
+  // Imports the session into the Claude app when needed, then brings the app forward.
+  | { type: "session_open_desktop"; sessionId: SessionId }
+  // Asks for a tool call's full output. Answered with session_tool_output.
+  | { type: "session_tool"; sessionId: SessionId; toolUseId: string }
+  // Answered with a sessions frame carrying the new mirror.
+  | { type: "session_prefs"; mirror: MirrorPref };
+
+/** Every session frame by type, so a session frame can be told apart at runtime. */
+const SESSION_FRAMES: Record<SessionServerMessage["type"], true> = {
+  sessions: true, session_rows: true, session: true, session_items: true, session_delta: true,
+  session_page: true, session_created: true, session_tool_output: true, session_removed: true,
+};
+const SESSION_REQUESTS: Record<SessionClientMessage["type"], true> = {
+  watch_sessions: true, unwatch_sessions: true, watch_session: true, unwatch_session: true, session_page: true,
+  session_send: true, session_stop: true, session_decide: true, session_answer: true, session_create: true,
+  session_set: true, session_open_desktop: true, session_tool: true, session_prefs: true,
+};
+export const isSessionFrame = (m: ServerMessage): m is SessionServerMessage => Object.hasOwn(SESSION_FRAMES, m.type);
+export const isSessionRequest = (m: ClientMessage): m is SessionClientMessage => Object.hasOwn(SESSION_REQUESTS, m.type);
+
 export type ServerMessage =
   // The app shows "Update the bridge" or "Update the app" when protocol is outside the range it speaks.
   | ({ type: "hello"; protocol: number; features: Feature[]; machine: string; userName: string; bots: Bot[] } & StreamPosition)
@@ -348,6 +581,7 @@ export type ServerMessage =
   // The plan's usage limits (feature "usage"). Live sockets only, like activity: sent after the hello to each socket
   // that connects, and to every live socket when they change. Never sequenced or replayed.
   | { type: "usage"; usage: PlanUsage }
+  | SessionServerMessage
   | { type: "error"; message: string };
 
 /** Sent to live protocol 3 sockets only, without a seq: not kept for replay. */
@@ -404,6 +638,7 @@ export type ClientMessage =
   | { type: "remove_worktree"; agentId: AgentId }
   // Reads the plan's usage now, as pull-to-refresh does. Answered with a usage frame once the read ends.
   | { type: "refresh_usage" }
+  | SessionClientMessage
   // Transport messages: the socket layer answers these, because they need the socket's own device.
   | { type: "devices" }
   | { type: "revoke_device"; deviceId: DeviceId }

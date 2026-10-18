@@ -1,5 +1,7 @@
 import { FEATURES } from "../src/protocol";
-import type { AgentView, Bot, Broadcast, ClientMessage, Message, Peer, Routine, ServerMessage } from "../src/protocol";
+import type {
+  AgentView, Bot, Broadcast, ClientMessage, Message, Peer, Routine, ServerMessage, SessionControls, SessionItem, SessionProject, SessionRow,
+} from "../src/protocol";
 
 // The wire form of T: branded ids are plain strings, so fixtures type-check without casts.
 type Wire<T> = T extends string & { readonly __brand: string } ? string : T extends (infer U)[] ? Wire<U>[] : T extends object ? { [K in keyof T]: Wire<T[K]> } : T;
@@ -43,6 +45,70 @@ const agent: Wire<AgentView> = {
   id: "a1", botId: "b1", title: "Set up verification skill", where: "mac", projectName: "web",
   status: "waiting", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null,
   spentUsd: 1.2, budgetUsd: 5,
+};
+
+// Sessions: solta-o-som (the GitHub name of ~/Dev/projects/br-soundless) holds an agent's session and one from the
+// Claude app; claudio-bot holds a cloud agent's.
+const solta: Wire<SessionProject> = {
+  id: "3f9a1c7e2b4d6a80", name: "solta-o-som", path: "/Users/alex/Dev/projects/br-soundless", githubRepo: "IamP5/solta-o-som", lastAt: later, canCloud: false,
+};
+const claudio: Wire<SessionProject> = {
+  id: "9c2e5b7a1d3f4e60", name: "claudio-bot", path: "/Users/alex/Dev/projects/claudio-bot", githubRepo: "alex/claudio-bot", lastAt: at, canCloud: false,
+};
+const agentSession = "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31";
+const agentRow: Wire<SessionRow> = {
+  id: agentSession, projectId: solta.id, parentId: null, title: "Smooth the audio fade on iOS Safari", origin: "agent",
+  agent: { botId: "b1", agentId: "a3" }, status: "working", holder: "claudio", unread: false,
+  branch: "claudio/6b1f3c2a", worktree: true, pr: null, mirror: "pending", hidden: false, url: null, createdAt: at, lastAt: later,
+};
+const desktopRow: Wire<SessionRow> = {
+  id: "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40", projectId: solta.id, parentId: null, title: "Add a volume slider to the player", origin: "desktop",
+  agent: null, status: "idle", holder: "desktop", unread: true,
+  branch: "feat/volume-slider", worktree: false, pr: { number: 87, url: "https://github.com/IamP5/solta-o-som/pull/87", state: "open" },
+  mirror: "imported", hidden: false, url: null, createdAt: "2026-10-15T09:30:00.000Z", lastAt: at,
+};
+const cloudRow: Wire<SessionRow> = {
+  id: "session_01Hq7vXk3mRt9wYpL2nB5cDe", projectId: claudio.id, parentId: null, title: "Add a changelog", origin: "cloud",
+  agent: { botId: "b1", agentId: "a2" }, status: "idle", holder: "none", unread: false,
+  branch: "claude/add-changelog", worktree: false, pr: { number: 12, url: "https://github.com/alex/claudio-bot/pull/12", state: "merged" },
+  mirror: "none", hidden: false, url: "https://claude.ai/code/session_01Hq7vXk3mRt9wYpL2nB5cDe", createdAt: "2026-10-14T18:00:00.000Z", lastAt: at,
+};
+const childRow: Wire<SessionRow> = {
+  id: "d4e8a1b6-3c2f-4b9e-8a7d-1f6c5e3b2a90", projectId: solta.id, parentId: desktopRow.id, title: "Check the slider on iPad", origin: "terminal",
+  agent: null, status: "awaiting_input", holder: "terminal", unread: false,
+  branch: "feat/volume-slider", worktree: false, pr: null, mirror: "none", hidden: false, url: null, createdAt: at, lastAt: later,
+};
+const controls: Wire<SessionControls> = {
+  canSend: true, reason: null, working: true, queued: 1, model: null,
+  models: [{ id: "default", label: "Default (recommended)" }, { id: "opus", label: "Opus" }, { id: "sonnet", label: "Sonnet" }],
+  mode: "acceptEdits", modes: ["default", "acceptEdits", "plan"],
+};
+const items = [
+  { kind: "user", id: "4a7e2c91-5b3d-4e8f-a1c6-9d2b7e5f3a18", at, text: "Make the fade on iOS Safari smooth, then open a PR.", from: "bot", queued: false },
+  { kind: "thinking", id: "msg_01XyZ7Lq:0", at, text: "The fade calls linearRampToValueAtTime down to 0, which Safari renders as a click near the end.", ms: 2400 },
+  { kind: "assistant", id: "msg_01XyZ7Lq:1", at, text: "The fade is **linear**, so it sounds abrupt near zero. I'll make it exponential." },
+  { kind: "work", id: "toolu_01Ab3", at, steps: [
+    { id: "toolu_01Ab3", tool: "Read", label: "Read src/audio/fade.ts", state: "ok", diff: null, output: null },
+    { id: "toolu_01Ab4", tool: "Edit", label: "Edit src/audio/fade.ts", state: "ok", diff: { path: "src/audio/fade.ts", added: 12, removed: 4 }, output: null },
+    { id: "toolu_01Ab5", tool: "Bash", label: "Run bun test", state: "error", diff: null, output: " 13 pass\n 1 fail\n" },
+  ] },
+  { kind: "todo", id: "toolu_01Ab6", at: later, todos: [
+    { text: "Replace the linear ramp", state: "done" },
+    { text: "Fix the failing fade test", state: "in_progress" },
+    { text: "Open a PR", state: "pending" },
+  ] },
+] satisfies Wire<SessionItem>[];
+const card = {
+  kind: "permission" as const, id: "m20", at: later, from: null, tool: "Bash", label: "Bash",
+  detail: "rm -rf node_modules && bun install", always: "rm -rf node_modules in solta-o-som, for this session", answer: null, expiresAt: "2026-10-16T16:00:00.000Z",
+};
+const asked = "Which audio library should the fade use?";
+const ask = {
+  kind: "ask" as const, id: "toolu_01Ab8", at: later, cardId: "m21", answers: null,
+  questions: [{ question: asked, header: "Library", multiSelect: false, options: [
+    { label: "Web Audio API", description: "Native, no new dependency" },
+    { label: "Howler.js", description: "Handles the Safari quirks for us" },
+  ] }],
 };
 
 export const server = [
@@ -130,6 +196,29 @@ export const server = [
     { id: "weekly:fable", kind: "weekly_model", label: "Weekly · Fable", utilization: 1, resetsAt: null, severity: "critical" },
   ] } },
   { type: "usage", usage: { state: "unavailable", reason: "api_key", fetchedAt: later } },
+  { type: "sessions", projects: [solta, claudio], rows: [agentRow, desktopRow, cloudRow], mirror: "auto" },
+  { type: "session_rows", rows: [{ ...agentRow, status: "awaiting_approval", mirror: "imported" }, childRow], removed: ["0d4e7b2a-9f1c-4e3b-b8a6-5c2d1e7f9a04"], projects: [solta] },
+  { type: "session", sessionId: agentSession, epoch: "e_7f3a", rev: 42, items, before: "8812331:2b7c9e41", controls, live: { itemId: "msg_01XyZ7Lq:2", text: "Now I'll update" } },
+  { type: "session_delta", sessionId: agentSession, itemId: "msg_01XyZ7Lq:2", offset: 15, text: " the fade test." },
+  { type: "session_items", sessionId: agentSession, rev: 43, items: [{ kind: "permission", id: "toolu_01Ab7", at: later, card }], removed: [], controls: { ...controls, working: false } },
+  {
+    type: "session_items", sessionId: agentSession, rev: 45, removed: ["c_4d2a"], controls: null, items: [
+      ask,
+      { kind: "plan", id: "toolu_01Ab9", at: later, cardId: "m22", state: "proposed", text: "## Plan\n1. Swap the linear ramp for setTargetAtTime\n2. Test on iOS Safari 18 and Firefox" },
+    ],
+  },
+  {
+    type: "session_page", sessionId: agentSession, before: null, items: [
+      { kind: "notice", id: "n_1", at: "2026-10-16T11:00:00.000Z", text: "Claude Code could not start: the sandbox is unavailable.", tone: "error" },
+      { kind: "compaction", id: "c4f1a2e7-3b9d-4c8e-a6f2-1d7b5e9c3a20", at: "2026-10-16T11:30:00.000Z" },
+      { ...ask, id: "toolu_01Aa2", at: "2026-10-16T11:40:00.000Z", cardId: null, answers: { [asked]: "Web Audio API" } },
+      { kind: "plan", id: "toolu_01Aa3", at: "2026-10-16T11:45:00.000Z", cardId: null, state: "approved", text: "## Plan\n1. Read the fade code" },
+    ],
+  },
+  { type: "session_created", ref: "s1", sessionId: "e3a9c5d1-7b2f-4a6e-9c8d-2f1b4e7a5c63" },
+  { type: "session_tool_output", sessionId: agentSession, toolUseId: "toolu_01Ab5", output: "bun test v1.3.0\n\nsrc/audio/fade.test.ts:\n(fail) fades to silence in 40 ms\n\n 13 pass\n 1 fail\n" },
+  { type: "session_removed", sessionId: agentSession, movedTo: "f2c8b4a6-1e3d-4f9b-a7c5-6d2e8b1f4a37" },
+  { type: "session_removed", sessionId: desktopRow.id, movedTo: null },
 ] satisfies (Wire<ServerMessage> | Wire<Broadcast>)[];
 
 export const client = [
@@ -172,16 +261,37 @@ export const client = [
   { type: "create_group", ref: "c2", name: "launch crew", members: ["b1", "b2"] },
   { type: "update_bot", botId: "g1", patch: { members: ["b1", "b2", "b3"] } },
   { type: "refresh_usage" },
+  { type: "watch_sessions" },
+  { type: "unwatch_sessions" },
+  { type: "watch_session", sessionId: agentSession, after: null },
+  { type: "watch_session", sessionId: agentSession, after: { epoch: "e_7f3a", rev: 42 } },
+  { type: "unwatch_session", sessionId: agentSession },
+  { type: "session_page", sessionId: agentSession, before: "8812331:2b7c9e41" },
+  { type: "session_send", sessionId: agentSession, text: "Also check it on Firefox", clientId: "c_4d2a", interrupt: false },
+  { type: "session_send", sessionId: desktopRow.id, text: "Stop, use the Web Audio API instead", clientId: "c_4d2b", interrupt: true },
+  { type: "session_stop", sessionId: agentSession },
+  { type: "session_decide", sessionId: agentSession, cardId: "m20", choice: "once" },
+  { type: "session_answer", sessionId: agentSession, cardId: "m21", answers: { [asked]: "Howler.js" } },
+  { type: "session_answer", sessionId: agentSession, cardId: "m21", answers: null },
+  { type: "session_create", ref: "s1", projectId: solta.id, text: "Add a mute button to the player", model: null, mode: "plan", isolate: "worktree" },
+  { type: "session_create", ref: "s2", projectId: claudio.id, text: "Why does the bridge log a gap?", model: "opus", mode: null, isolate: "none" },
+  { type: "session_set", sessionId: desktopRow.id, patch: { title: "Volume slider", hidden: true } },
+  { type: "session_set", sessionId: agentSession, patch: { model: null, mode: "acceptEdits" } },
+  { type: "session_open_desktop", sessionId: agentSession },
+  { type: "session_tool", sessionId: agentSession, toolUseId: "toolu_01Ab5" },
+  { type: "session_prefs", mirror: "tap" },
 ] satisfies Wire<ClientMessage>[];
 
-// Compile-time coverage: every server type, client type and message kind has a fixture, so the Swift mirror is pinned
+// Compile-time coverage: every server type, client type, message kind and session item kind has a fixture, so the Swift mirror is pinned
 // for all of them. A missing one fails tsc with its name.
 type Kinds<F> = F extends { message: { kind: infer K } } ? K : F extends { messages: (infer M)[] } ? (M extends { kind: infer K } ? K : never) : never;
 type Covered<All, Seen> = [Exclude<All, Seen>] extends [never] ? true : Exclude<All, Seen>;
 const everyServerType: Covered<ServerMessage["type"], (typeof server)[number]["type"]> = true;
 const everyClientType: Covered<ClientMessage["type"], (typeof client)[number]["type"]> = true;
 const everyMessageKind: Covered<Message["kind"], Kinds<(typeof server)[number]>> = true;
-void [everyServerType, everyClientType, everyMessageKind];
+type ItemKinds<F> = F extends { items: (infer I)[] } ? (I extends { kind: infer K } ? K : never) : never;
+const everySessionItemKind: Covered<SessionItem["kind"], ItemKinds<(typeof server)[number]>> = true;
+void [everyServerType, everyClientType, everyMessageKind, everySessionItemKind];
 
 export const fixturesJson = () => JSON.stringify({ server, client }, null, 2) + "\n";
 export const fixturesPath = new URL("../../fixtures/protocol.json", import.meta.url);

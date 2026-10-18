@@ -68,6 +68,32 @@ private func unknowns(in message: ServerMessage) -> [String] {
         if case .unknown(let raw) = agent.status { return ["agent status \(raw)"] }
         return []
     }
+    func inRow(_ row: SessionRow) -> [String] {
+        var found: [String] = []
+        if case .unknown(let raw) = row.origin { found.append("origin \(raw)") }
+        if case .unknown(let raw) = row.status { found.append("session status \(raw)") }
+        if case .unknown(let raw) = row.holder { found.append("holder \(raw)") }
+        if case .unknown(let raw) = row.mirror { found.append("mirror \(raw)") }
+        if case .unknown(let raw)? = row.pr?.state { found.append("pr state \(raw)") }
+        return found
+    }
+    func inControls(_ controls: SessionControls?) -> [String] {
+        guard let controls else { return [] }
+        return ([controls.mode] + controls.modes).compactMap { if case .unknown(let raw) = $0 { "mode \(raw)" } else { nil } }
+    }
+    func inItem(_ item: SessionItem) -> [String] {
+        switch item {
+        case .unknown(_, _, let kind): return ["item kind \(kind)"]
+        case .user(_, _, _, let from, _): return if case .unknown(let raw) = from { ["author \(raw)"] } else { [] }
+        case .work(_, _, let steps): return steps.compactMap { if case .unknown(let raw) = $0.state { "step state \(raw)" } else { nil } }
+        case .todo(_, _, let todos): return todos.compactMap { if case .unknown(let raw) = $0.state { "todo state \(raw)" } else { nil } }
+        case .plan(_, _, _, let state, _): return if case .unknown(let raw) = state { ["plan state \(raw)"] } else { [] }
+        case .permission(_, _, let p): return if case .closed(let raw) = p.card.answer { ["permission answer \(raw)"] } else { [] }
+        case .ask(_, _, _, let answers, _): return if case .closed(let raw) = answers { ["ask answers \(raw)"] } else { [] }
+        case .notice(_, _, _, let tone): return if case .unknown(let raw) = tone { ["tone \(raw)"] } else { [] }
+        default: return []
+        }
+    }
     func inMessage(_ message: Message) -> [String] {
         switch message {
         case .unknown(_, _, let kind): ["message kind \(kind)"]
@@ -86,6 +112,13 @@ private func unknowns(in message: ServerMessage) -> [String] {
     case .agent(let a, _): return inAgent(a)
     case .commands(_, let commands): return commands.compactMap { if case .unknown(let raw) = $0.source { "command source \(raw)" } else { nil } }
     case .usage(.unavailable(let reason, _)): return if case .unknown(let raw) = reason { ["usage reason \(raw)"] } else { [] }
+    case .sessions(.list(_, let rows, let mirror)):
+        let pref: [String] = if case .unknown(let raw) = mirror { ["mirror pref \(raw)"] } else { [] }
+        return rows.flatMap(inRow) + pref
+    case .sessions(.changed(let rows, _, _)): return rows.flatMap(inRow)
+    case .thread(_, .snapshot(let snapshot)): return snapshot.items.flatMap(inItem) + inControls(snapshot.controls)
+    case .thread(_, .items(_, let items, _, let controls)): return items.flatMap(inItem) + inControls(controls)
+    case .thread(_, .page(let items, _)): return items.flatMap(inItem)
     case .usage(.ok(_, _, _, let windows)):
         return windows.flatMap { w -> [String] in
             var found: [String] = []
@@ -170,6 +203,115 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(try decode(UsageSeverity.self, #""exceeded""#) == .unknown("exceeded"))
         let future = try decode(PlanUsage.self, #"{"state":"paused","fetchedAt":"2026-10-16T14:00:00.000Z"}"#)
         guard case .unavailable(.failed, _) = future else { Issue.record("an unknown state is not failed: \(future)"); return }
+    }
+
+    @Test func theSessionsListDecodesItsProjectsAndRowsWithNoSeq() throws {
+        let frames = try Fixture.server().compactMap { frame -> SessionsFrame? in
+            if case .sessions(let f) = frame.message { #expect(frame.seq == nil, "session frames are never sequenced"); return f } else { return nil }
+        }
+        guard frames.count == 2, case let .list(projects, rows, mirror) = frames[0], case let .changed(changed, removed, touched) = frames[1] else {
+            Issue.record("not a list then a diff: \(frames)"); return
+        }
+        #expect(projects.map(\.name) == ["solta-o-som", "claudio-bot"])
+        #expect(projects[0].githubRepo == "IamP5/solta-o-som")
+        #expect(mirror == .auto)
+        #expect(rows.map(\.origin) == [.agent, .desktop, .cloud])
+        #expect(rows[0].agent == SessionAgentLink(botId: BotID("b1"), agentId: AgentID("a3")))
+        #expect(rows[0].holder == .claudio && rows[0].mirror == .pending && rows[0].worktree)
+        #expect(rows[1].holder == .desktop && rows[1].unread && rows[1].mirror == .imported)
+        #expect(rows[1].pr?.number == 87 && rows[1].pr?.state == .open)
+        #expect(rows[2].url == URL(string: "https://claude.ai/code/session_01Hq7vXk3mRt9wYpL2nB5cDe"))
+        #expect(rows[2].mirror == .notMirrored && rows[2].holder == .nobody)
+        #expect(changed.map(\.status) == [.awaitingApproval, .awaitingInput])
+        #expect(changed[1].parentId == rows[1].id)
+        #expect(removed == [SessionID("0d4e7b2a-9f1c-4e3b-b8a6-5c2d1e7f9a04")])
+        #expect(touched.map(\.id) == [projects[0].id])
+    }
+
+    @Test func threadFramesDecodeEveryItemKindAndTheLiveText() throws {
+        let frames = try Fixture.server().compactMap { frame -> (SessionID, ThreadFrame)? in
+            if case let .thread(id, f) = frame.message { #expect(frame.seq == nil, "session frames are never sequenced"); return (id, f) } else { return nil }
+        }
+        let thread = frames.map(\.1)
+        guard case .snapshot(let snapshot) = thread.first else { Issue.record("no snapshot first"); return }
+        #expect(snapshot.position == ThreadPosition(epoch: "e_7f3a", rev: 42))
+        #expect(snapshot.before == Cursor("8812331:2b7c9e41"))
+        #expect(snapshot.controls.modes == [.default, .acceptEdits, .plan])
+        guard case let .work(_, _, steps) = snapshot.items[3] else { Issue.record("no work item"); return }
+        #expect(steps.map(\.state) == [.ok, .ok, .error])
+        #expect(steps[1].diff == ToolDiff(path: "src/audio/fade.ts", added: 12, removed: 4))
+        #expect(steps[2].output == " 13 pass\n 1 fail\n")
+
+        let live = try #require(snapshot.live)
+        guard case let .delta(itemId, offset, _) = thread[1] else { Issue.record("no delta after the snapshot"); return }
+        #expect(itemId == live.itemId)
+        #expect(offset == live.text.utf16.count, "a delta applies at the live text's UTF-16 length")
+
+        let all = thread.flatMap { frame -> [SessionItem] in
+            switch frame {
+            case .snapshot(let s): s.items
+            case .items(_, let items, _, _), .page(let items, _): items
+            default: []
+            }
+        }
+        let kinds = Set(all.map { (try? jsonObject(Wire.encoder().encode($0)))?["kind"] as? String ?? "?" })
+        #expect(kinds == ["user", "assistant", "thinking", "work", "todo", "plan", "permission", "ask", "notice", "compaction"])
+        let permission = all.compactMap { if case .permission(_, _, let p) = $0 { p } else { nil } }.first
+        #expect(permission?.cardId == MessageID("m20"))
+        #expect(permission?.card.tool == "Bash" && permission?.card.answer == nil)
+        let asks = all.compactMap { if case let .ask(_, _, questions, answers, cardId) = $0 { (questions, answers, cardId) } else { nil } }
+        #expect(asks.map { $0.2 } == [MessageID("m21"), nil])
+        #expect(asks[0].1 == nil && asks[0].0[0].options.map(\.label) == ["Web Audio API", "Howler.js"])
+        #expect(asks[1].1 == .answered(["Which audio library should the fade use?": "Web Audio API"]))
+        let plans = all.compactMap { if case let .plan(_, _, _, state, cardId) = $0 { "\(state.rawValue):\(cardId?.rawValue ?? "-")" } else { nil } }
+        #expect(plans == ["proposed:m22", "approved:-"])
+
+        let removals: [SessionID?] = thread.compactMap { frame -> SessionID?? in
+            if case .removed(let movedTo) = frame { .some(movedTo) } else { nil }
+        }
+        #expect(removals == [SessionID("f2c8b4a6-1e3d-4f9b-a7c5-6d2e8b1f4a37"), nil])
+        #expect(thread.contains { if case .toolOutput("toolu_01Ab5", _) = $0 { true } else { false } })
+    }
+
+    @Test func unknownSessionValuesDecodeAndKeepTheirWireStrings() throws {
+        let item = try decode(SessionItem.self, #"{"kind":"diagram","id":"i9","at":"2026-10-16T12:00:00.000Z","svg":"<svg/>"}"#)
+        #expect(item == .unknown(id: ItemID("i9"), at: at, kind: "diagram"))
+        #expect(try decode(SessionOrigin.self, #""ide""#) == .unknown("ide"))
+        #expect(try decode(SessionStatus.self, #""compacting""#) == .unknown("compacting"))
+        #expect(try decode(SessionHolder.self, #""none""#) == .nobody)
+        #expect(try decode(SessionMirror.self, #""none""#) == .notMirrored)
+        #expect(try decode(PermissionMode.self, #""yolo""#) == .unknown("yolo"))
+        #expect(try decode(AskAnswers.self, #""withdrawn""#) == .closed("withdrawn"))
+        #expect(try decode(AskAnswers.self, #""expired""#) == .expired)
+        #expect(try Wire.encoder().encode(SessionHolder.nobody) == Data(#""none""#.utf8))
+    }
+
+    @Test func theSessionRequestsTheAppBuildsAreTheFixtureFrames() throws {
+        let fixtures = try Fixture.entries("client").map(jsonObject)
+        let agent = SessionID("6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31")
+        let built: [ClientMessage] = [
+            .watchSessions,
+            .unwatchSessions,
+            .watchSession(sessionId: agent, after: nil),
+            .watchSession(sessionId: agent, after: ThreadPosition(epoch: "e_7f3a", rev: 42)),
+            .unwatchSession(sessionId: agent),
+            .sessionPage(sessionId: agent, before: Cursor("8812331:2b7c9e41")),
+            .sessionSend(sessionId: agent, text: "Also check it on Firefox", clientId: "c_4d2a", interrupt: false),
+            .sessionStop(sessionId: agent),
+            .sessionDecide(sessionId: agent, cardId: MessageID("m20"), choice: .once),
+            .sessionAnswer(sessionId: agent, cardId: MessageID("m21"), answers: ["Which audio library should the fade use?": "Howler.js"]),
+            .sessionAnswer(sessionId: agent, cardId: MessageID("m21"), answers: nil),
+            .sessionCreate(ref: "s1", projectId: ProjectID("3f9a1c7e2b4d6a80"), text: "Add a mute button to the player", model: nil, mode: .plan, isolate: .worktree),
+            .sessionSet(sessionId: SessionID("b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40"), patch: SessionPatch(title: "Volume slider", hidden: true)),
+            .sessionSet(sessionId: agent, patch: SessionPatch(model: .some(nil), mode: .acceptEdits)),
+            .sessionOpenDesktop(sessionId: agent),
+            .sessionTool(sessionId: agent, toolUseId: "toolu_01Ab5"),
+            .sessionPrefs(mirror: .tap),
+        ]
+        for message in built {
+            let json = try jsonObject(Wire.encoder().encode(message))
+            #expect(fixtures.contains(json), "\(json)")
+        }
     }
 
     @Test func aBotWithNoCapDecodesTodaysSpendWithNoLimit() throws {
@@ -325,8 +467,15 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(AgentStatus.allCases.map(\.rawValue) == ["working", "waiting", "failed", "in_cloud", "awaiting_approval", "parked", "unavailable", "capped"])
         #expect(Feature.allCases.map(\.rawValue) == [
             "memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend",
-            "mentions", "commands", "exchanges", "groups", "usage",
+            "mentions", "commands", "exchanges", "groups", "usage", "sessions",
         ])
+        #expect(SessionOrigin.allCases.map(\.rawValue) == ["phone", "agent", "desktop", "terminal", "sdk", "cloud"])
+        #expect(SessionStatus.allCases.map(\.rawValue) == ["idle", "working", "awaiting_approval", "awaiting_input", "failed", "parked", "unavailable"])
+        #expect(SessionHolder.allCases.map(\.rawValue) == ["none", "claudio", "desktop", "terminal", "other"])
+        #expect(SessionMirror.allCases.map(\.rawValue) == ["imported", "pending", "failed", "none"])
+        #expect(MirrorPref.allCases.map(\.rawValue) == ["auto", "tap", "never"])
+        #expect(PermissionMode.allCases.map(\.rawValue) == ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"])
+        #expect(SessionIsolation.allCases.map(\.rawValue) == ["none", "worktree"])
         #expect(UsageWindowKind.allCases.map(\.rawValue) == ["session", "weekly", "weekly_model"])
         #expect(UsageSeverity.allCases.map(\.rawValue) == ["normal", "warning", "critical"])
         #expect(UsageUnavailable.allCases.map(\.rawValue) == ["api_key", "third_party", "logged_out", "no_scope", "failed"])

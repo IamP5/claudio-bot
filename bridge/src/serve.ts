@@ -3,7 +3,7 @@ import { rejectsOrigin, type Devices } from "./devices";
 import type { Hub } from "./hub";
 import type { Legacy } from "./legacy";
 import { parseClientMessage } from "./parse";
-import type { ClientMessage, DeviceId, ServerMessage, Signal, TransportMessage } from "./protocol";
+import { isSessionRequest, type ClientMessage, type DeviceId, type ServerMessage, type Signal, type TransportMessage } from "./protocol";
 import { forProtocol2 } from "./protocol2";
 import type { Stream } from "./stream";
 import { errorText } from "./text";
@@ -57,10 +57,13 @@ export type Transport = {
 const isTransport = (m: ClientMessage): m is TransportMessage => m.type === "devices" || m.type === "revoke_device" || m.type === "pair_code";
 
 /**
- * What a limited socket may not send. The shared token may sit on more than one old phone, and an app from before
- * protocol 3 offers neither of these, so a frame asking for one is not the user at that app.
+ * What a socket may not send. A protocol 2 socket sends no session request: channel frames reach every subscriber
+ * without forProtocol2, so it must never watch one. A limited socket may not do the rest: the shared token may sit on
+ * more than one old phone, and an app from before protocol 3 offers neither, so a frame asking for one is not the
+ * user at that app.
  */
 function refusal(data: SocketData, m: ClientMessage): string | null {
+  if (data.protocol === 2 && isSessionRequest(m)) return "This app has no Sessions view. Update the app to see your Claude Code sessions.";
   if (!data.limited) return null;
   if (m.type === "revoke_device" && m.deviceId !== data.deviceId) {
     return "A phone paired before protocol 3 can only revoke itself. Revoke other phones from a phone paired with a code.";
@@ -98,7 +101,8 @@ export function serve(deps: ServeDeps): Transport {
   const quietAt = () => [...sockets.values()].flatMap((set) => [...set].map((ws) => ws.data.heardAt + LIVE_WINDOW_MS));
 
   const send = (ws: Socket, message: ServerMessage) => {
-    ws.send(JSON.stringify(ws.data.protocol === 3 ? message : forProtocol2(message)));
+    const frame = ws.data.protocol === 3 ? message : forProtocol2(message);
+    if (frame !== null) ws.send(JSON.stringify(frame));
   };
 
   function transport(ws: Socket, message: TransportMessage): ServerMessage[] {
@@ -228,7 +232,7 @@ export function serve(deps: ServeDeps): Transport {
       const frame = stream.append(message);
       server.publish(TOPIC[3], frame);
       const old = forProtocol2(message);
-      server.publish(TOPIC[2], old === message ? frame : JSON.stringify({ ...old, seq: stream.seq }));
+      if (old !== null) server.publish(TOPIC[2], old === message ? frame : JSON.stringify({ ...old, seq: stream.seq }));
     },
     signal: (message) => {
       server.publish(TOPIC[3], JSON.stringify(message));

@@ -2,18 +2,26 @@ import { GROUP_SIZE } from "./groups";
 import { BOT_NAME_MAX } from "./text";
 import {
   COLORS,
+  MIRROR_PREFS,
   PERMISSION_CHOICES,
+  PHONE_MODES,
   SHAPES,
   type AgentId,
   type Avatar,
   type BotId,
   type BotPatch,
   type ClientMessage,
+  type Cursor,
   type DeviceId,
   type FactId,
   type Mention,
   type MessageId,
+  type ProjectId,
   type RoutineId,
+  type SessionClientMessage,
+  type SessionId,
+  type SessionPatch,
+  type ThreadPosition,
   type Upload,
 } from "./protocol";
 
@@ -114,11 +122,76 @@ function uploads(v: unknown): Upload[] {
   });
 }
 
+function nullable<T>(o: Obj, key: string, parse: (o: Obj, key: string) => T): T | null {
+  return o[key] === null ? null : parse(o, key);
+}
+
+/** Text the user typed: kept as sent, but not blank. */
+function prompt(o: Obj, key: string): string {
+  const v = str(o, key);
+  if (v.trim() === "") throw new ParseError(`${key} must not be blank`);
+  return v;
+}
+
+function position(v: unknown): ThreadPosition | null {
+  if (v === null) return null;
+  const o = obj(v, "after");
+  return { epoch: str(o, "epoch"), rev: index(o, "rev") };
+}
+
+const ASK_ANSWERS_MAX = 4;
+
+function answers(v: unknown): Record<string, string> | null {
+  if (v === null) return null;
+  const o = obj(v, "answers");
+  const entries = Object.entries(o);
+  if (entries.length === 0 || entries.length > ASK_ANSWERS_MAX) throw new ParseError(`answers must hold 1 to ${ASK_ANSWERS_MAX} questions`);
+  if (entries.some(([q, a]) => q === "" || typeof a !== "string")) throw new ParseError("answers must map each question to a string");
+  return o as Record<string, string>;
+}
+
+function sessionPatch(v: unknown): SessionPatch {
+  const o = obj(v, "patch");
+  const p: SessionPatch = {};
+  if (o.title !== undefined) p.title = prompt(o, "title");
+  if (o.hidden !== undefined) p.hidden = bool(o, "hidden");
+  if (o.model !== undefined) p.model = nullable(o, "model", str);
+  if (o.mode !== undefined) p.mode = oneOf(o, "mode", PHONE_MODES);
+  return p;
+}
+
 const botId = (o: Obj) => str(o, "botId") as BotId;
 const messageId = (o: Obj) => str(o, "messageId") as MessageId;
 const agentId = (o: Obj) => str(o, "agentId") as AgentId;
 const routineId = (o: Obj) => str(o, "routineId") as RoutineId;
 const factId = (o: Obj) => str(o, "factId") as FactId;
+const sessionId = (o: Obj) => str(o, "sessionId") as SessionId;
+const cardId = (o: Obj) => str(o, "cardId") as MessageId;
+
+const sessionParsers: Record<SessionClientMessage["type"], (o: Obj) => SessionClientMessage> = {
+  watch_sessions: () => ({ type: "watch_sessions" }),
+  unwatch_sessions: () => ({ type: "unwatch_sessions" }),
+  watch_session: (o) => ({ type: "watch_session", sessionId: sessionId(o), after: position(o.after) }),
+  unwatch_session: (o) => ({ type: "unwatch_session", sessionId: sessionId(o) }),
+  session_page: (o) => ({ type: "session_page", sessionId: sessionId(o), before: str(o, "before") as Cursor }),
+  session_send: (o) => ({ type: "session_send", sessionId: sessionId(o), text: prompt(o, "text"), clientId: str(o, "clientId"), interrupt: bool(o, "interrupt") }),
+  session_stop: (o) => ({ type: "session_stop", sessionId: sessionId(o) }),
+  session_decide: (o) => ({ type: "session_decide", sessionId: sessionId(o), cardId: cardId(o), choice: oneOf(o, "choice", PERMISSION_CHOICES) }),
+  session_answer: (o) => ({ type: "session_answer", sessionId: sessionId(o), cardId: cardId(o), answers: answers(o.answers) }),
+  session_create: (o) => ({
+    type: "session_create",
+    ref: str(o, "ref"),
+    projectId: str(o, "projectId") as ProjectId,
+    text: prompt(o, "text"),
+    model: nullable(o, "model", str),
+    mode: nullable(o, "mode", (o, key) => oneOf(o, key, PHONE_MODES)),
+    isolate: oneOf(o, "isolate", ["none", "worktree"] as const),
+  }),
+  session_set: (o) => ({ type: "session_set", sessionId: sessionId(o), patch: sessionPatch(o.patch) }),
+  session_open_desktop: (o) => ({ type: "session_open_desktop", sessionId: sessionId(o) }),
+  session_tool: (o) => ({ type: "session_tool", sessionId: sessionId(o), toolUseId: str(o, "toolUseId") }),
+  session_prefs: (o) => ({ type: "session_prefs", mirror: oneOf(o, "mirror", MIRROR_PREFS) }),
+};
 
 const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
   create_bot: (o) => ({ type: "create_bot", ref: str(o, "ref") }),
@@ -162,6 +235,7 @@ const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
   devices: () => ({ type: "devices" }),
   revoke_device: (o) => ({ type: "revoke_device", deviceId: str(o, "deviceId") as DeviceId }),
   pair_code: () => ({ type: "pair_code" }),
+  ...sessionParsers,
 };
 
 export function parseClientMessage(raw: string): Parsed {

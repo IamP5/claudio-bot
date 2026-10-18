@@ -18,6 +18,7 @@ import type { Scope } from "./policy";
 import type { Project } from "./projects";
 import {
   PROTOCOL,
+  isSessionRequest,
   type Agent,
   type AgentId,
   type AgentView,
@@ -1049,6 +1050,7 @@ export function createHub(deps: HubDeps): Hub {
   }
 
   async function handle(message: ClientMessage): Promise<ServerMessage[]> {
+    if (isSessionRequest(message)) return error("This bridge does not serve sessions yet.");
     switch (message.type) {
       case "create_bot": {
         const bot = makeBot(

@@ -312,6 +312,28 @@ test("a legacy or protocol 2 socket may decide only Allow once or Deny; a paired
   expect(b.handled.map((m) => (m.type === "decide" ? m.choice : m.type)).sort()).toEqual(["always", "deny", "once"]);
 });
 
+test("a protocol 2 app may not watch sessions or send any session request; a protocol 3 app may", async () => {
+  const b = boot(tempHome("shared"));
+  const { token } = await pairPhone(b);
+  const old = connect(b, { query: "?token=shared" });
+  const today = connect(b, { bearer: token });
+  const legacy = connect(b, { query: "?token=shared&protocol=3" });
+  const current = connect(b, { bearer: token, query: "?protocol=3" });
+  for (const c of [old, today, legacy, current]) await c.next("hello");
+
+  for (const c of [old, today]) {
+    c.send({ type: "watch_sessions" });
+    c.send({ type: "session_send", sessionId: "s1", text: "hi", clientId: "c1", interrupt: false });
+    expect(await c.next("error")).toEqual({ type: "error", message: expect.stringContaining("no Sessions view") });
+    expect(await c.next("error")).toEqual({ type: "error", message: expect.stringContaining("no Sessions view") });
+  }
+  legacy.send({ type: "watch_sessions" });
+  current.send({ type: "watch_session", sessionId: "s1", after: null });
+  await until(() => b.handled.length === 2, "the protocol 3 requests to reach the hub");
+
+  expect(b.handled.map((m) => m.type).sort()).toEqual(["watch_session", "watch_sessions"]);
+});
+
 test("uploads up to the frame limit reach the hub; a frame over it closes the socket", async () => {
   expect(MAX_FRAME_BYTES).toBeGreaterThan(Math.ceil((10 * 1024 * 1024 * 4) / 3) + 1024);
   const b = boot(tempHome());

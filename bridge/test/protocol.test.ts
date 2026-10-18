@@ -1,7 +1,9 @@
+import type { PermissionMode as SdkPermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import { expect, test } from "bun:test";
 import fixtures from "../../fixtures/protocol.json";
 import { fixturesJson, fixturesPath } from "../scripts/fixtures";
 import { parseClientMessage } from "../src/parse";
+import { PERMISSION_MODES, type PermissionMode } from "../src/protocol";
 
 test("fixtures/protocol.json is what scripts/fixtures.ts generates, so tsc has checked every server fixture", async () => {
   expect(await Bun.file(fixturesPath).text()).toBe(fixturesJson());
@@ -55,6 +57,32 @@ test.each([
   ["a group name over the bot name limit", { type: "create_group", ref: "c2", name: "x".repeat(41), members: ["b1", "b2"] }],
   ["a group member that is not a string", { type: "create_group", ref: "c2", name: "crew", members: ["b1", 2] }],
   ["a members patch of one bot", { type: "update_bot", botId: "g1", patch: { members: ["b1"] } }],
+  ["a watch_session without a session", { type: "watch_session", after: null }],
+  ["a watch_session that leaves after out", { type: "watch_session", sessionId: "s1" }],
+  ["a watch_session at a negative rev", { type: "watch_session", sessionId: "s1", after: { epoch: "e_1", rev: -1 } }],
+  ["a watch_session with an empty epoch", { type: "watch_session", sessionId: "s1", after: { epoch: "", rev: 3 } }],
+  ["an unwatch_session without a session", { type: "unwatch_session" }],
+  ["a session_page without a cursor", { type: "session_page", sessionId: "s1" }],
+  ["a blank session_send", { type: "session_send", sessionId: "s1", text: " \n ", clientId: "c1", interrupt: false }],
+  ["a session_send without a clientId", { type: "session_send", sessionId: "s1", text: "hi", interrupt: false }],
+  ["a session_send whose interrupt is not a boolean", { type: "session_send", sessionId: "s1", text: "hi", clientId: "c1", interrupt: "yes" }],
+  ["a session_stop without a session", { type: "session_stop" }],
+  ["a session_decide with an unknown choice", { type: "session_decide", sessionId: "s1", cardId: "m1", choice: "approve" }],
+  ["a session_decide without a card", { type: "session_decide", sessionId: "s1", choice: "once" }],
+  ["a session_answer with no answers", { type: "session_answer", sessionId: "s1", cardId: "m1", answers: {} }],
+  ["a session_answer that leaves answers out", { type: "session_answer", sessionId: "s1", cardId: "m1" }],
+  ["a session_answer with a non-string answer", { type: "session_answer", sessionId: "s1", cardId: "m1", answers: { "Which?": 2 } }],
+  ["a session_answer to five questions", { type: "session_answer", sessionId: "s1", cardId: "m1", answers: Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`q${i}?`, "a"])) }],
+  ["a session_create in bypassPermissions", { type: "session_create", ref: "s1", projectId: "p1", text: "hi", model: null, mode: "bypassPermissions", isolate: "none" }],
+  ["a session_create with an unknown isolate", { type: "session_create", ref: "s1", projectId: "p1", text: "hi", model: null, mode: null, isolate: "clone" }],
+  ["a blank session_create", { type: "session_create", ref: "s1", projectId: "p1", text: "", model: null, mode: null, isolate: "none" }],
+  ["a session_create without a project", { type: "session_create", ref: "s1", text: "hi", model: null, mode: null, isolate: "none" }],
+  ["a session_set to bypassPermissions", { type: "session_set", sessionId: "s1", patch: { mode: "bypassPermissions" } }],
+  ["a session_set with a blank title", { type: "session_set", sessionId: "s1", patch: { title: "  " } }],
+  ["a session_set whose hidden is not a boolean", { type: "session_set", sessionId: "s1", patch: { hidden: 1 } }],
+  ["a session_open_desktop without a session", { type: "session_open_desktop" }],
+  ["a session_tool without a tool call", { type: "session_tool", sessionId: "s1" }],
+  ["a session_prefs with a mirror the bridge does not know", { type: "session_prefs", mirror: "ask" }],
 ])("rejects %s", (_, raw) => {
   expect(parseClientMessage(typeof raw === "string" ? raw : JSON.stringify(raw)).ok).toBe(false);
 });
@@ -72,4 +100,11 @@ test("a group name is trimmed", () => {
 test("a daily cap of null goes back to the bridge default", () => {
   const parsed = parseClientMessage(JSON.stringify({ type: "update_bot", botId: "b1", patch: { dailyCapUsd: null } }));
   expect(parsed).toEqual({ ok: true, message: { type: "update_bot", botId: "b1", patch: { dailyCapUsd: null } } } as never);
+});
+
+test("PERMISSION_MODES names exactly the SDK's permission modes", () => {
+  type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+  const same: Same<PermissionMode, SdkPermissionMode> = true;
+  expect(same).toBe(true);
+  expect(new Set(PERMISSION_MODES).size).toBe(PERMISSION_MODES.length);
 });

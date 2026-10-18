@@ -1,9 +1,10 @@
 import type { CardReply } from "./gate";
-import type { Message, PermissionChoice, ServerMessage } from "./protocol";
+import { isSessionFrame, type Message, type PermissionChoice, type ServerMessage } from "./protocol";
 
 // An app that speaks protocol 2 connects without ?protocol=3 and decodes a permission card as nothing, so the
 // transport shows it each permission card as a question with these options, and the hub reads an answer to that
-// question as a decision. It has no Always or Never, and dismissing the card denies the call.
+// question as a decision. It has no Always or Never, and dismissing the card denies the call. It has no Sessions view
+// either, so it gets no session frame.
 
 const PROTOCOL_2_OPTIONS = [
   { label: "Allow once", choice: "once" },
@@ -28,8 +29,12 @@ function asQuestion(p: Permission): Question {
 
 const downgrade = (m: Message): Message => (m.kind === "permission" ? asQuestion(m) : m);
 
-/** The frame a protocol 2 socket gets in place of `message`: the same frame unless it carries a permission card. */
-export function forProtocol2(message: ServerMessage): ServerMessage {
+/**
+ * The frame a protocol 2 socket gets in place of `message`: the same frame unless it carries a permission card, and
+ * null for a session frame, which it never gets.
+ */
+export function forProtocol2(message: ServerMessage): ServerMessage | null {
+  if (isSessionFrame(message)) return null;
   switch (message.type) {
     case "message":
       return message.message.kind === "permission" ? { ...message, message: asQuestion(message.message) } : message;

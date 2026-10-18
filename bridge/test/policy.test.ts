@@ -1260,3 +1260,48 @@ describe("pass 4: a connector that fetches a URL is held like WebFetch", () => {
     expect(verdict(call("mcp__fetch__fetch", { url: "http://127.0.0.1:7878/health" }), { initiator: user })).toBe("deny:floor.localnet");
   });
 });
+
+describe("full access: only the bridge's own state is floored, and only what leaves the Mac is held", () => {
+  const full = (over: Partial<PolicyContext> = {}) => ({ scope: { ...botScope, full: true }, ...over });
+  const fullAgent = (over: Partial<PolicyContext> = {}) => ({ actor: agent, scope: { ...agentScope, full: true }, ...over });
+
+  test.each([
+    ["Claude Code's memory", call("Read", { file_path: `${HOME}/.claude/projects/-x/memory/MEMORY.md` })],
+    ["an SSH key", sh("cat ~/.ssh/id_ed25519")],
+    ["gh's config", sh("gh pr view 34")],
+    ["gh auth status", sh("gh auth status")],
+    ["a browser profile", call("Read", { file_path: `${HOME}/Library/Application Support/Google/Chrome/Local State` })],
+    ["a dev server on localhost", call("WebFetch", { url: "http://localhost:3000/", prompt: "read" })],
+    ["a command built at runtime", sh('for t in node git; do $t --version; done')],
+    ["a write outside its folder", call("Write", { file_path: `${HOME}/notes.md`, content: "x" })],
+    ["a shell rc file", call("Write", { file_path: `${HOME}/.zshrc`, content: "x" })],
+  ])("%s passes", (_, c) => {
+    expect(verdict(c, full())).toBe("pass");
+  });
+
+  test("the same calls stay refused or held when guarded", () => {
+    expect(verdict(call("Read", { file_path: `${HOME}/.claude/projects/-x/memory/MEMORY.md` }))).toBe("deny:floor.creds");
+    expect(verdict(sh("cat ~/.ssh/id_ed25519"))).toBe("deny:floor.keys");
+    expect(verdict(sh('for t in node git; do $t --version; done'))).toBe("ask:dynamic.command");
+  });
+
+  test("the bridge's state and other bots' homes stay refused", () => {
+    expect(verdict(call("Read", { file_path: `${BRIDGE}/state.json` }), full())).toBe("deny:floor.bridge");
+    expect(verdict(call("Read", { file_path: `${BRIDGE}/bots/b_2/CLAUDE.md` }), full())).toBe("deny:floor.bridge");
+    expect(verdict(call("Read", { file_path: `${BRIDGE}/token` }), fullAgent())).toBe("deny:floor.bridge");
+  });
+
+  test("its own home stays readable", () => {
+    expect(verdict(call("Read", { file_path: `${OWN}/CLAUDE.md` }), full())).toBe("pass");
+  });
+
+  test("pushing to the default branch, deleting outside its folder and editing USER.md still ask", () => {
+    expect(verdict(sh("git push origin main", { cwd: PROJECT }), fullAgent())).toBe("ask:git.push.default");
+    expect(verdict(sh(`rm -rf ${HOME}/old`), full())).toBe("ask:rm.outside");
+    expect(verdict(call("Write", { file_path: `${BRIDGE}/USER.md`, content: "x" }), full())).toBe("ask:memory.user");
+  });
+
+  test("a routine still cannot start an agent without a tap", () => {
+    expect(verdict(call("mcp__claudio__start_agent", { title: "t", prompt: "p", where: "mac", project: "app" }), full({ initiator: routine }))).toBe("ask:claudio.start_agent");
+  });
+});

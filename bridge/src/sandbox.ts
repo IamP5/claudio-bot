@@ -1,4 +1,5 @@
 import type { SandboxSettings } from "@anthropic-ai/claude-agent-sdk";
+import { accessOf } from "./access";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import type { Scope } from "./policy";
@@ -66,10 +67,6 @@ const DEFAULT_DOMAINS: readonly string[] = [
   "*.crates.io",
 ];
 
-/**
- * For a mac agent's Claude Code process. The sandbox points git's ssh at a SOCKS proxy without credentials, which the
- * proxy refuses (Claude Code 2.1.301 on macOS), so GitHub ssh remotes go over https and the keychain helper instead.
- */
 export const AGENT_GIT_ENV: Readonly<Record<string, string>> = {
   GIT_CONFIG_COUNT: "2",
   GIT_CONFIG_KEY_0: "url.https://github.com/.insteadOf",
@@ -79,6 +76,14 @@ export const AGENT_GIT_ENV: Readonly<Record<string, string>> = {
 };
 
 /**
+ * For a sandboxed mac agent's Claude Code process (agentGitEnv picks it). The sandbox points git's ssh at a SOCKS
+ * proxy without credentials, which the proxy refuses (Claude Code 2.1.301 on macOS), so GitHub ssh remotes go over
+ * https and the keychain helper instead. Without the sandbox ssh works as it does for the user, and so does signing
+ * with an SSH key file.
+ */
+export const agentGitEnv = (env: SandboxEnv): Readonly<Record<string, string>> => (accessOf(env).sandbox ? AGENT_GIT_ENV : {});
+
+/**
  * The OS-enforced floor (Seatbelt on macOS) for every Bash call of a bot or a mac agent, and every process it starts.
  * It does not cover Read/Write/Edit/Grep/Glob or WebFetch: the gate's floors cover those tool paths.
  * A bot writes the folders in BOT_WRITABLE but not the files in BOT_LOADED, and the sandbox's own TMPDIR; it reads its home and USER.md and
@@ -86,10 +91,14 @@ export const AGENT_GIT_ENV: Readonly<Record<string, string>> = {
  * writes its cwd (project or worktree), the git dirs a commit there needs, the per-user temp and cache dirs and build
  * caches, and reads nothing of the bridge home. `gitDirs` comes from `gitDirsOf(cwd)` and is ignored for a bot.
  * CLAUDIOBOT_SANDBOX_GH=1 lets a mac agent run gh, which needs its config and the trustd service for TLS.
+ * CLAUDIOBOT_SANDBOX=off (the default under CLAUDIOBOT_ACCESS=full, see access.ts) turns it off: commands run as the
+ * user. Under full access with the sandbox on, the writes stay as below but only the bridge home is unreadable.
  */
 export function sandboxFor(actor: Actor, scope: Scope, env: SandboxEnv, gitDirs: readonly string[] = []): SandboxSettings {
+  const access = accessOf(env);
+  if (!access.sandbox) return { enabled: false };
   const home = (rel: string) => join(scope.homedir, rel);
-  const denyRead = [scope.bridgeHome, ...DENIED.map(home)];
+  const denyRead = access.full ? [scope.bridgeHome] : [scope.bridgeHome, ...DENIED.map(home)];
   const bridgeVars = Object.keys(env).filter((k) => /^CLAUD(IO|E)BOT_/.test(k)).sort();
   const common = {
     enabled: true,

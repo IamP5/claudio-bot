@@ -9,7 +9,8 @@ import { agentPrompt, type SessionInput } from "./prompts";
 import type { Project } from "./projects";
 import { createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { refused, type Result } from "./result";
-import { AGENT_GIT_ENV } from "./sandbox";
+import { accessOf } from "./access";
+import { agentGitEnv } from "./sandbox";
 import type { Persist } from "./store";
 import { errorText } from "./text";
 import type { Isolate } from "./tools";
@@ -223,7 +224,8 @@ export function createAgents(deps: {
       options: (): Options => {
         const maxBudgetUsd = deps.ledger.budgetLeft(id);
         const repo = repoOf(rec);
-        const trusted = repoTrust(deps.world.gate, repo, id) === true;
+        // Full access loads every repo's own config, as the user's own Claude Code does.
+        const trusted = accessOf(process.env).full || repoTrust(deps.world.gate, repo, id) === true;
         return {
           cwd: rec.cwd,
           // Project settings, hooks and .mcp.json come from here instead of the checkout, which the agent and every
@@ -240,7 +242,7 @@ export function createAgents(deps: {
           sandbox: deps.sandbox(actor),
           settings: deps.settings(actor),
           // The SDK replaces the environment rather than adding to it.
-          env: { ...process.env, ...AGENT_GIT_ENV },
+          env: { ...process.env, ...agentGitEnv(process.env) },
           maxBudgetUsd,
         };
       },
@@ -315,7 +317,7 @@ export function createAgents(deps: {
       if (a.where === "mac") {
         if (workspace.note) deps.note(rec, workspace.note);
         macSession(rec).push(queued(prompt, a.initiator));
-        const found = projectConfigOf(repo);
+        const found = accessOf(process.env).full ? [] : projectConfigOf(repo);
         if (found.length > 0) deps.trustCard({ kind: "agent", botId, agentId: rec.agent.id }, { root: repo, name: a.project.name, found });
         return rec;
       }

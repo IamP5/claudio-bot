@@ -25,6 +25,7 @@ const healthy: Facts = {
   roots: { explicit: true, list: [{ path: "/Users/me/code", exists: true, repos: 3 }] },
   tailscale: { path: "/usr/local/bin/tailscale", ip: "100.64.0.7", url: "ws://mac.tail-1234.ts.net:7878/ws" },
   lan: ["192.168.1.20"],
+  access: { full: false, sandbox: true },
   legacy: { homeSet: false, oldEnvSet: false, oldHome: "/Users/me/.claudebot", newHome: "/Users/me/.claudiobot", old: { kind: "absent" }, new: { kind: "dir" } },
 };
 
@@ -37,7 +38,7 @@ describe("checks", () => {
     expect(findings.filter((f) => f.level !== "PASS")).toEqual([
       { level: "WARN", check: "mcp env", detail: expect.stringContaining("launchd does not read .zshrc") },
     ]);
-    expect(findings.map((f) => f.check)).toEqual(["macos", "service", "bun", "claude", "home", "secrets", "state", "health", "lock", "roots", "tailscale", "lan", "home link", "mcp env"]);
+    expect(findings.map((f) => f.check)).toEqual(["macos", "service", "bun", "claude", "home", "secrets", "state", "health", "lock", "roots", "tailscale", "access", "lan", "home link", "mcp env"]);
   });
 
   const table: [string, string, Partial<Facts>, string, string][] = [
@@ -70,6 +71,15 @@ describe("checks", () => {
     ["tailscale", "up", {}, "PASS", "ws://mac.tail-1234.ts.net:7878/ws (100.64.0.7): use it in Edit address to reach the bridge away from home"],
     ["tailscale", "up without MagicDNS", { tailscale: { path: "/t", ip: "100.64.0.7", url: null } }, "PASS", "100.64.0.7; turn on MagicDNS for a *.ts.net name the app can use"],
     ["lan", "no address", { lan: [] }, "WARN", "no LAN address: a phone on the same Wi-Fi cannot reach the bridge"],
+    ["access", "guarded", {}, "PASS", "access: guarded, sandbox on"],
+    ["access", "sandbox off", { access: { full: false, sandbox: false } }, "WARN", "access: guarded, sandbox off: commands run unsandboxed under the gate's rules"],
+    [
+      "access",
+      "full",
+      { access: { full: true, sandbox: false } },
+      "WARN",
+      "access: full, sandbox off: bots and agents reach your keys, credentials, ~/.claude and every repo's config, as you do",
+    ],
   ];
 
   test.each(table)("%s: %s", (name, _case, over, level, detail) => {

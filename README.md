@@ -167,6 +167,8 @@ The project used to be called claudebot, with its home in `~/.claudebot`. On its
 | `CLAUDIOBOT_PUSH_URL` | off | An [ntfy](https://ntfy.sh) topic URL for pushes while the app is closed. |
 | `CLAUDIOBOT_WEBHOOK_PORT` | `7879` | Port of the webhook listener, on 127.0.0.1 only. `0` picks a free port. |
 | `CLAUDIOBOT_WORKTREES` | `~/.claudiobot-worktrees` | The folder Mac agents' worktrees go in. |
+| `CLAUDIOBOT_ACCESS` | `guarded` | `full` gives bots and Mac agents the access you have. See [Full access](#full-access). |
+| `CLAUDIOBOT_SANDBOX` | `on`, `off` under full access | `off` runs shell commands outside the OS sandbox. `on` keeps it under full access too. |
 | `CLAUDIOBOT_ALLOWED_DOMAINS` | | Comma-separated hosts that sandboxed commands may reach without review, on top of GitHub, npm, Yarn, PyPI and crates.io. |
 | `CLAUDIOBOT_SANDBOX_STRICT_NETWORK` | off | `1` makes that list the whole allowlist: a command can no longer ask for another host. |
 | `CLAUDIOBOT_SANDBOX_GH` | off | `1` lets Mac agents run `gh`. It needs its config and macOS's TLS trust service, which loosens the agents' network isolation. Bots never get `gh`. |
@@ -209,6 +211,23 @@ ClaudioBot runs agents unattended on your machine, so read this before you use i
 - **Audit.** Every checked tool call is appended to `audit/YYYY-MM.jsonl` in the bridge home, with secrets and file contents redacted. A permission card shows the exact call with nothing masked, so you see what would run, and it is stored that way in `state.json` and, once old, in the bot's `.history/`. A secret on a held command line is on your Mac in those files. Every turn's cost is appended to `usage/YYYY-MM.jsonl`. Both files are readable only by you.
 - **State.** `state.json` is written atomically. A file the bridge cannot read stops the bridge instead of being overwritten. Only one bridge runs per home: a lock file sits beside the home's real path (`~/.claudiobot.lock`, or `~/.claudebot.lock` once the home is a link to `~/.claudebot`; the bridge holds both then), and a second bridge refuses to start. The lock records the holder's start time in UTC, so a lock left by a crash or a reboot is told apart from a running bridge.
 - **Files.** File reads from the app are confined to the bot's home. Uploads land in the bot's `inbox/`, at most 10 MB each, inside socket frames of at most 32 MB.
+
+### Full access
+
+Everything above is the default, `CLAUDIOBOT_ACCESS=guarded`. On a Mac where you want the bots to work as you do, install the service with full access:
+
+```bash
+CLAUDIOBOT_ACCESS=full bun run claudiobot install
+```
+
+Then:
+
+- **The floors are gone except the bridge's own.** Bots and agents read your SSH keys, `gh`, npm and cloud credentials, `~/.claude` (memory, history and transcripts), browser profiles, Messages and Mail, your environment, and `localhost`. The bridge's state, tokens and other bots' homes stay refused, and so do writes to the config the bridge loads.
+- **The sandbox is off.** Commands run as you, so `xcodebuild`, the simulator, `open`, `osascript`, ssh remotes and SSH-signed commits work. `CLAUDIOBOT_SANDBOX=on` keeps the sandbox with only the bridge home unreadable.
+- **Every repo's Claude Code config loads.** A Mac agent reads the repo's `.claude` settings, hooks, skills and `.mcp.json` with no trust card.
+- **Only what leaves your Mac for good still waits for your tap:** pushing to the default branch or a URL, force-pushing or rewriting history, GitHub admin calls and posts on unattended turns, setting secrets, publishing, deploying, deleting files outside the bot's folder and editing `USER.md`. Routines and bot-to-bot messages still need your tap to create bots, start agents or change routines. Spend caps, the hop limit and the audit log stay as they are.
+
+`claudiobot doctor` and the bridge's startup line say which mode is on. A model that a page or a message talks into misbehaving acts with your full rights in this mode, so use it only on a Mac where that is acceptable.
 
 ### What it does not enforce
 

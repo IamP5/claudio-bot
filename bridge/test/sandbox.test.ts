@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decide, type PolicyContext, type Scope, type ToolCall } from "../src/policy";
 import { PRIVATE } from "../src/private";
-import { gitDirsOf, sandboxFor, sandboxFailure } from "../src/sandbox";
+import { AGENT_GIT_ENV, agentGitEnv, gitDirsOf, sandboxFor, sandboxFailure } from "../src/sandbox";
 import type { Actor } from "../src/world";
 
 const HOME = "/Users/u";
@@ -449,4 +449,31 @@ test("shell histories, CLI tokens and the Claude desktop and Cursor logins are p
     (rel) => `${HOME}/${rel}`,
   );
   expect(work.filter((p) => !canRead(boxes[1]!, p))).toEqual([]);
+});
+
+describe("CLAUDIOBOT_ACCESS and CLAUDIOBOT_SANDBOX", () => {
+  test("full access turns the sandbox off for bots and agents", () => {
+    expect(sandboxFor(bot, botScope, { ...ENV, CLAUDIOBOT_ACCESS: "full" })).toEqual({ enabled: false });
+    expect(sandboxFor(agent, agentScope(), { ...ENV, CLAUDIOBOT_ACCESS: "full" })).toEqual({ enabled: false });
+  });
+
+  test("CLAUDIOBOT_SANDBOX=off turns it off while guarded", () => {
+    expect(sandboxFor(agent, agentScope(), { ...ENV, CLAUDIOBOT_SANDBOX: "off" })).toEqual({ enabled: false });
+  });
+
+  test("full access with the sandbox on denies only the bridge home", () => {
+    const s = sandboxFor(agent, agentScope(), { ...ENV, CLAUDIOBOT_ACCESS: "full", CLAUDIOBOT_SANDBOX: "on" });
+    expect(floor(s).enabled).toBe(true);
+    expect(readsOf(s, ["/Users/u/.ssh/id_ed25519", "/Users/u/.claude/projects/x/memory/MEMORY.md", "/Users/u/.claudiobot/state.json"])).toEqual({
+      "/Users/u/.ssh/id_ed25519": true,
+      "/Users/u/.claude/projects/x/memory/MEMORY.md": true,
+      "/Users/u/.claudiobot/state.json": false,
+    });
+    expect(writesOf(s, ["/Users/u/Dev/app/a.ts", "/Users/u/Documents/x"])).toEqual({ "/Users/u/Dev/app/a.ts": true, "/Users/u/Documents/x": false });
+  });
+
+  test("the git ssh rewrite goes only to sandboxed agents", () => {
+    expect(agentGitEnv(ENV)).toEqual(AGENT_GIT_ENV);
+    expect(agentGitEnv({ ...ENV, CLAUDIOBOT_ACCESS: "full" })).toEqual({});
+  });
 });

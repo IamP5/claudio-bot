@@ -69,8 +69,10 @@ export type Own = Tickable & {
   status(rec: SessionRecord): { status: SessionStatus; working: boolean };
   /** The live query of a session that another process now works on closes, so the bridge yields. */
   yieldTo(id: SessionId): void;
-  /** At start: every open card is expired; sessions with queued input start. */
+  /** At start, before any phone connects: every open card is expired. */
   resume(): void;
+  /** Once the index is read: sessions with queued input start. */
+  restart(): void;
   close(): void;
 };
 
@@ -294,6 +296,7 @@ export function createOwn(deps: OwnDeps): Own {
       ...deps.claude,
       forgotten: "fail",
       idleMs: OWN_IDLE_MS,
+      now: deps.now,
       blocked: () => deps.blocked(id),
       options: (): Options => {
         const model = drive.model ?? deps.last(id).model ?? undefined;
@@ -307,7 +310,8 @@ export function createOwn(deps: OwnDeps): Own {
           ...(model !== undefined && { model }),
           canUseTool: canUseTool(rec),
           hooks: { PreToolUse: [floorsHook(rec)] },
-          env: { ...process.env },
+          // The bridge's own settings (its push topic among them) stay out: these sessions run no sandbox to hide them.
+          env: Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^CLAUD(IO|E)BOT_/.test(k))),
           ...deps.options,
         };
       },
@@ -459,8 +463,11 @@ export function createOwn(deps: OwnDeps): Own {
           deps.persist();
           notice(rec.id, "The bridge restarted while Claude Code waited on you, so that question expired.");
         }
-        if (rec.own.session.pending.length > 0) driver(rec);
       }
+    },
+
+    restart() {
+      for (const rec of deps.world.sessions.values()) if (rec.own && rec.own.session.pending.length > 0) driver(rec);
     },
 
     tick(at) {

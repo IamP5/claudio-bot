@@ -2,7 +2,7 @@ import { watch } from "node:fs";
 import { join } from "node:path";
 import type { Tickable } from "./clock";
 import type { ClaudeApps } from "./claudeApps";
-import type { Project, ProjectOf } from "./projects";
+import type { ProjectOf } from "./projects";
 import type { Holder, SessionId, SessionOrigin, SessionProject, SessionRow, SessionsChannelFrame, SessionStatus } from "./protocol";
 import type { Head, Heads } from "./transcript";
 import type { AgentRecord, World } from "./world";
@@ -27,7 +27,7 @@ export type CatalogDeps = {
   /** A socket has the thread open, so nothing in it is unread. */
   watched(id: SessionId): boolean;
   /** The project folders under the roots, so a project with no session yet still lists. */
-  scan(): Promise<Project[]>;
+  folders(): string[];
   publish(frame: SessionsChannelFrame): void;
   /** A transcript changed on disk: the threads module reads its new lines. */
   appended(path: string): void;
@@ -191,7 +191,11 @@ export function createCatalog(deps: CatalogDeps): Catalog {
     for (const head of await deps.heads.scan()) heads.set(head.id, head);
     const listed = new Set(deps.heads.cached().map((h) => h.id));
     for (const id of heads.keys()) if (!listed.has(id)) heads.delete(id);
-    seeds = (await deps.scan().catch(() => [])).map((p) => deps.projects.of(p.path));
+    try {
+      seeds = deps.folders().map((path) => deps.projects.of(path));
+    } catch (e) {
+      deps.log(`sessions: the project roots could not be read: ${e}`);
+    }
     sweepAt = deps.now().getTime() + SWEEP_MS;
   }
 

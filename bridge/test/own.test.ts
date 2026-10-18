@@ -77,7 +77,7 @@ function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
       executable: () => "/fake/claude",
     },
     scope: (cwd) => ({ bridgeHome: join(base, "home"), own: cwd, userMd: null, homedir: base }),
-    scan: async () => [],
+    folders: () => [],
     persist: () => {},
     now: () => new Date(clock),
     log: () => {},
@@ -134,6 +134,32 @@ describe("taking on a session from the phone", () => {
     expect(queries[0]!.received).toEqual(["Also add a test"]);
     expect(world.sessions.get(ASK)?.own).toMatchObject({ cwd: repo, created: false });
     expect(await rowOf(ASK)).toMatchObject({ status: "working", holder: "claudio", origin: "sdk" });
+  });
+
+  test("the bridge's own settings stay out of the session's environment", async () => {
+    process.env.CLAUDIOBOT_PUSH_URL = "https://ntfy.example/secret-topic";
+    try {
+      await start();
+      await send("Hi");
+      expect(Object.keys(queries[0]!.options.env ?? {}).filter((k) => k.startsWith("CLAUDIOBOT_"))).toEqual([]);
+    } finally {
+      delete process.env.CLAUDIOBOT_PUSH_URL;
+    }
+  });
+
+  test("a message queued when the bridge stopped runs once the next start has read the index", async () => {
+    await start();
+    holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "cli", kind: "interactive", cwd: repo, busy: true });
+    await send("Queued before the restart");
+    sessions.stop();
+    holders.clear();
+    queries.length = 0;
+    await start();
+    // It waited on the terminal before the stop, so it starts at that wait's end.
+    clock += 31_000;
+    sessions.tick(new Date(clock));
+    await flush();
+    expect(queries.map((q) => [q.options.model, q.received])).toEqual([["claude-haiku-5-5", ["Queued before the restart"]]]);
   });
 
   test("a queued message shows in the thread until the transcript has it, under the id the phone gave it", async () => {
@@ -301,7 +327,7 @@ describe("what Claude Code asks", () => {
 
 describe("a session the phone starts", () => {
   test("it is created under a chosen id, lists at once under its project from the phone, and opens without a title", async () => {
-    await start({ scan: async () => [{ name: "demo", path: repo, branch: "main", githubRepo: null }] });
+    await start({ folders: () => [repo] });
     const project = ((await handle({ type: "watch_sessions" }))[0] as Extract<ServerMessage, { type: "sessions" }>).projects.find((p) => p.path === repo)!;
     const [created] = await handle({ type: "session_create", ref: "r1", projectId: project.id, text: "Add a mute button", model: null, mode: "acceptEdits", isolate: "none" });
     const id = (created as Extract<ServerMessage, { type: "session_created" }>).sessionId;

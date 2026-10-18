@@ -79,7 +79,7 @@ function start() {
     ledger: { add() {}, headroom: () => ({ ok: true, capReached: false }), budgetLeft: () => null, dailyLeft: () => null },
     claude: { query: (() => { throw new Error("no Claude Code in this test"); }) as never, executable: () => "/fake/claude" },
     scope: (cwd) => ({ bridgeHome: join(base, "home"), own: cwd, userMd: null, homedir: base }),
-    scan: async () => [],
+    folders: () => [],
     persist: () => {},
     now: () => new Date(),
     log: () => {},

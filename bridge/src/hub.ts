@@ -15,7 +15,7 @@ import type { Homes } from "./home";
 import { createLedger, localDay } from "./ledger";
 import { createMemory, writeAtomic } from "./memory";
 import type { Scope } from "./policy";
-import { findProject, type Project } from "./projects";
+import { findProject, projectFolders, type Project } from "./projects";
 import {
   PROTOCOL,
   isSessionRequest,
@@ -833,7 +833,7 @@ export function createHub(deps: HubDeps): Hub {
         claude: deps.claude,
         scope: scopeIn,
         notify: (id, cardId) => void deps.push.notifySession?.(id, cardId),
-        scan: deps.scan,
+        folders: () => projectFolders().map((f) => f.path),
         persist: deps.persist,
         now: clockNow,
         log: deps.log,

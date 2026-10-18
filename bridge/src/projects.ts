@@ -36,7 +36,8 @@ async function describe({ path, name }: { path: string; name: string }): Promise
   };
 }
 
-export async function scanProjects(roots = projectRoots()): Promise<Project[]> {
+/** The git folders directly under the roots, by realpath, without running git. */
+export function projectFolders(roots = projectRoots()): { path: string; name: string }[] {
   const dirs: { path: string; name: string }[] = [];
   for (const root of roots) {
     if (!existsSync(root) || !statSync(root).isDirectory()) continue;
@@ -46,7 +47,11 @@ export async function scanProjects(roots = projectRoots()): Promise<Project[]> {
       if (existsSync(join(path, ".git"))) dirs.push({ path: realpathSync(path), name });
     }
   }
-  const projects = await Promise.all(dirs.map(describe));
+  return dirs;
+}
+
+export async function scanProjects(roots = projectRoots()): Promise<Project[]> {
+  const projects = await Promise.all(projectFolders(roots).map(describe));
   return projects.sort((a, b) => a.name.localeCompare(b.name));
 }
 

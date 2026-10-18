@@ -8,7 +8,7 @@ import type { Tickable } from "./clock";
 import type { Ledger } from "./ledger";
 import { createOwn, newDrive, type OwnDeps } from "./own";
 import type { Scope } from "./policy";
-import { createProjects, type Project } from "./projects";
+import { createProjects } from "./projects";
 import {
   PHONE_MODES,
   type ItemId,
@@ -29,7 +29,7 @@ import type { SessionSpec } from "./session";
 import type { Persist } from "./store";
 import { errorText } from "./text";
 import { createThreads } from "./threads";
-import { createHeads, sdkReaders, transcriptExists, type Head, type SdkReaders } from "./transcript";
+import { createHeads, folderOf, sdkReaders, statOf, transcriptExists, type Head, type SdkReaders } from "./transcript";
 import { prepareWorkspace } from "./worktree";
 import { own, type AgentRecord, type SessionPrefs, type SessionRecord, type World } from "./world";
 
@@ -67,7 +67,8 @@ export type SessionsDeps = SessionsEnv & {
   scope(cwd: string): Scope;
   /** A card in a session the phone drives: a push that says only that a session needs the user. */
   notify?(id: SessionId, cardId: MessageId): void;
-  scan(): Promise<Project[]>;
+  /** The project folders under the roots (no git run), so a project with no session yet lists. */
+  folders(): string[];
   persist: Persist;
   now(): Date;
   log(line: string): void;
@@ -307,7 +308,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
         r.own?.created ? [{ id: r.id, cwd: r.own.cwd, title: (r.own.prompt ?? "New session").split("\n")[0]!.slice(0, 80), at: r.own.at }] : [],
       ),
     watched,
-    scan: deps.scan,
+    folders: deps.folders,
     publish: deps.signal.list,
     appended: (path) => threads.appended(path),
     gone: (ids) => ids.forEach((id) => threads.removed(id, null)),
@@ -478,6 +479,22 @@ export function createSessions(deps: SessionsDeps): Sessions {
     return ok ? [] : error("The Claude app did not list this session. Check that claude:// links open the Claude app, then try again.");
   }
 
+  /**
+   * A session the bridge started (an agent's, the phone's) whose transcript the index has not seen yet: its file is
+   * where Claude Code puts it, so a missed watch event does not hold its row and thread back until the sweep.
+   */
+  function awaited() {
+    const waiting = [
+      ...[...deps.world.agents.values()].flatMap((r) => (r.agent.where === "mac" && r.session.id ? [{ id: r.session.id, cwd: r.cwd }] : [])),
+      ...[...deps.world.sessions.values()].flatMap((r) => (r.own?.created ? [{ id: r.id, cwd: r.own.cwd }] : [])),
+    ];
+    for (const w of waiting) {
+      if (catalog.head(w.id as SessionId)) continue;
+      const path = join(deps.projectsDir, folderOf(w.cwd), `${w.id}.jsonl`);
+      if (statOf(path)) catalog.changed(path);
+    }
+  }
+
   function save() {
     try {
       writeIndex(indexFile, heads.cached());
@@ -489,6 +506,8 @@ export function createSessions(deps: SessionsDeps): Sessions {
   return {
     async start() {
       await catalog.start();
+      // After the index, so a queued turn opens with the transcript's last model and mode.
+      drivers.restart();
       save();
       savedAt = deps.now().getTime();
     },
@@ -575,6 +594,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
       drivers.tick(at);
       if (at.getTime() - polledAt >= THREAD_POLL_MS) {
         polledAt = at.getTime();
+        awaited();
         void threads.poll();
       }
       if (at.getTime() >= mirrorAt && !mirroring) {

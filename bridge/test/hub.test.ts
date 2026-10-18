@@ -932,6 +932,23 @@ test("a send repeated with the same clientId posts one user message and delivers
   expect(b.messages.filter((m) => m.kind === "user")).toHaveLength(2);
 });
 
+test("a /command sent twice at once with the same clientId posts one user message and runs once", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  const send: ClientMessage = { type: "send", botId: b.id, text: "/greet Sam", uploads: [], clientId: "c-1" };
+
+  const replies = await Promise.all([h.hub.handle(send), h.hub.handle(send)]);
+  await flush();
+
+  const users = b.messages.filter((m) => m.kind === "user");
+  expect(users).toHaveLength(1);
+  expect(replies).toEqual([[], [{ type: "message", botId: b.id, message: users[0]! }]]);
+  expect(h.queries.flatMap((q) => q.received)).toEqual(["/greet Sam"]);
+});
+
 test("delete_bot removes the config folders of the bot's agents and keeps other bots'", async () => {
   const world = emptyWorld();
   const doomed = bot("doomed");

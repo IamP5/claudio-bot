@@ -677,6 +677,12 @@ type Live = {
   answered: boolean;
   /** Its live background tasks, as the last background_tasks_changed listed them, ambient ones left out. Closing kills them. */
   background: Background[];
+  /**
+   * Whose turn Claude Code is running, from the init frame each of its turns starts with: true for ours, false for one a
+   * background task woke, null while no init has echoed a uuid on this query (an older CLI). Only a turn's first
+   * assistant message echoes, so the frames after it go by this.
+   */
+  ours: boolean | null;
   send(m: SDKUserMessage): void;
   release(): void;
   stderr(): string;
@@ -950,6 +956,7 @@ export function createSession(spec: SessionSpec): Session {
       stale: false,
       sandboxNoted: false,
       background: [],
+      ours: null,
       send(m) {
         inbox.push(m);
         wake?.();
@@ -1045,7 +1052,7 @@ export function createSession(spec: SessionSpec): Session {
       own<SessionState>(spec.state).id = m.session_id;
       guard("persist", () => spec.persist());
     }
-    const turn = answers(m) ? current() : null;
+    const turn = answers(m, l) ? current() : null;
     if (m.type === "assistant" && m.error) signals.apiError = m.error;
     else if (m.type === "assistant" && turn !== null && turnOf(spec.state.lifecycle as Lifecycle)?.output === false) {
       accepted();
@@ -1087,14 +1094,17 @@ export function createSession(spec: SessionSpec): Session {
 
   /**
    * Whether an assistant message or a result belongs to the turn in flight, not to a turn a background task woke.
-   * Claude Code echoes the uuids of the user messages a turn consumed. With no echo (older CLIs), only a result that
-   * names a task notification as its origin is another turn's.
+   * Claude Code echoes the uuids of the user messages a turn consumed on the turn's init frame, its first assistant
+   * message and its result; a woken turn echoes none. With no echo at all (older CLIs), only a result that names a
+   * task notification as its origin is another turn's.
    */
-  function answers(m: SDKMessage): boolean {
+  function answers(m: SDKMessage, l: Live): boolean {
+    const echo = "user_message_uuids" in m && m.user_message_uuids ? m.user_message_uuids : "user_message_uuid" in m && m.user_message_uuid ? [m.user_message_uuid] : undefined;
+    if (m.type === "system" && m.subtype === "init") l.ours = echo !== undefined ? sentUuid !== null && echo.includes(sentUuid) : l.ours === null ? null : false;
     if (m.type !== "assistant" && m.type !== "result") return true;
     if (sentUuid === null) return false;
-    const echo = m.user_message_uuids ?? (m.user_message_uuid === undefined ? undefined : [m.user_message_uuid]);
     if (echo !== undefined) return echo.includes(sentUuid);
+    if (l.ours !== null) return l.ours;
     return m.type !== "result" || m.origin?.kind !== "task-notification";
   }
 

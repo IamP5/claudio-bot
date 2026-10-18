@@ -127,7 +127,7 @@ describe("a background task's wake turn, recorded", () => {
   // Claude Code stamps only a turn's first assistant message with the uuids it consumed, and stamps none on a wake
   // turn's, so session.answers() binds the wake's text to the user's turn queued behind it. The wake turn's
   // system/init carries no echo while every user turn's does: that is the frame that tells them apart.
-  test.failing("before the prompt: the wake turn's assistant text is not bound to the user's queued turn", async () => {
+  test("before the prompt: the wake turn's assistant text is not bound to the user's queued turn", async () => {
     const t = replay("background-wake-before-prompt");
     const h = await playAll(t);
     const second = t.outbound[1]!.message.content as string;

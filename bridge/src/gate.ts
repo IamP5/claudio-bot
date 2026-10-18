@@ -441,7 +441,7 @@ export function createGate(deps: GateDeps): Gate {
     const never = botOf(actor).rules.find((r) => r.decision === "deny" && r.signature === signature);
     const d: Decision = never
       ? { kind: "deny", via: "never", rule: signature, reason: neverReason(never.label), handOff: false }
-      : { kind: "ask", rule: PROMPTED, label: o.title?.trim() || `Use ${tool}`, signature, always: "", offerAlways: false };
+      : { kind: "ask", rule: PROMPTED, label: o.title?.trim() || `${o.displayName?.trim() || tool}: your Claude Code settings ask first`, signature, always: "", offerAlways: false };
     return toPermission(remember(call.toolUseId, fp, apply(actor, initiator, call, d, deps.now())), input);
   }
 

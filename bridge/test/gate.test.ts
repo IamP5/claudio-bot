@@ -371,7 +371,7 @@ describe("Claude Code's own prompts", () => {
     const options = { ...call!.options, signal: new AbortController().signal } as Parameters<CanUseTool>[2];
     const held = await t.gate.canUseTool(botActor(B1))(call!.tool, call!.input, options);
     const [card] = t.cards();
-    expect(card).toMatchObject({ tool: "Bash", detail: "echo ASKME hello", answer: null });
+    expect(card).toMatchObject({ tool: "Bash", label: "Bash: your Claude Code settings ask first", detail: "echo ASKME hello", answer: null });
     expect(held).toEqual({ behavior: "deny", message: expect.stringContaining(`Held for Alex's approval (card ${card!.id}). It has not run.`) });
     expect(t.notified).toEqual([{ reason: "card", id: card!.id }]);
     expect(t.auditRows().at(-1)).toMatchObject({ tool: "Bash", toolUseId: call!.options.toolUseID, decision: "ask", cardId: card!.id });

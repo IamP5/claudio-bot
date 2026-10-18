@@ -85,6 +85,14 @@ private func unknowns(in message: ServerMessage) -> [String] {
     case .details(_, _, _, let agents, let routines): return agents.flatMap(inAgent) + routines.flatMap(inRoutine)
     case .agent(let a, _): return inAgent(a)
     case .commands(_, let commands): return commands.compactMap { if case .unknown(let raw) = $0.source { "command source \(raw)" } else { nil } }
+    case .usage(.unavailable(let reason, _)): return if case .unknown(let raw) = reason { ["usage reason \(raw)"] } else { [] }
+    case .usage(.ok(_, _, _, let windows)):
+        return windows.flatMap { w -> [String] in
+            var found: [String] = []
+            if case .unknown(let raw) = w.kind { found.append("window kind \(raw)") }
+            if case .unknown(let raw) = w.severity { found.append("severity \(raw)") }
+            return found
+        }
     default: return []
     }
 }
@@ -145,6 +153,23 @@ private func unknowns(in message: ServerMessage) -> [String] {
         }.first ?? []
         #expect(details.first { $0.where == .mac }?.spend == Spend(spentUsd: 1.2, limitUsd: 5))
         #expect(details.first { $0.where == .cloud }?.spend == nil)
+    }
+
+    @Test func usageFramesDecodeTheWindowsOrWhyThereAreNone() throws {
+        let usage = try Fixture.server().compactMap { frame -> PlanUsage? in
+            if case .usage(let u) = frame.message { #expect(frame.seq == nil, "usage is a live signal"); return u } else { return nil }
+        }
+        guard usage.count == 2, case let .ok(plan, _, stale, windows) = usage[0] else { Issue.record("not ok first: \(usage)"); return }
+        #expect(plan == "max" && !stale)
+        #expect(windows.map(\.kind) == [.session, .weekly, .weeklyModel])
+        #expect(windows.map(\.severity) == [.normal, .warning, .critical])
+        #expect(windows[0].utilization == 0.37)
+        #expect(windows[2].resetsAt == nil)
+        #expect(usage[0].session?.label == "Current session")
+        guard case .unavailable(.apiKey, _) = usage[1] else { Issue.record("not api_key: \(usage[1])"); return }
+        #expect(try decode(UsageSeverity.self, #""exceeded""#) == .unknown("exceeded"))
+        let future = try decode(PlanUsage.self, #"{"state":"paused","fetchedAt":"2026-10-16T14:00:00.000Z"}"#)
+        guard case .unavailable(.failed, _) = future else { Issue.record("an unknown state is not failed: \(future)"); return }
     }
 
     @Test func aBotWithNoCapDecodesTodaysSpendWithNoLimit() throws {
@@ -264,9 +289,9 @@ private func unknowns(in message: ServerMessage) -> [String] {
     }
 
     @Test func unknownMessageTypeDecodesInsteadOfThrowing() throws {
-        let msg = try decode(ServerMessage.self, #"{"type":"usage","tokens":12}"#)
+        let msg = try decode(ServerMessage.self, #"{"type":"quota","tokens":12}"#)
         guard case .unknown(let type) = msg else { Issue.record("expected unknown"); return }
-        #expect(type == "usage")
+        #expect(type == "quota")
     }
 
     @Test func unknownMessageKindKeepsItsIdAndTime() throws {
@@ -300,8 +325,11 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(AgentStatus.allCases.map(\.rawValue) == ["working", "waiting", "failed", "in_cloud", "awaiting_approval", "parked", "unavailable", "capped"])
         #expect(Feature.allCases.map(\.rawValue) == [
             "memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend",
-            "mentions", "commands", "exchanges", "groups",
+            "mentions", "commands", "exchanges", "groups", "usage",
         ])
+        #expect(UsageWindowKind.allCases.map(\.rawValue) == ["session", "weekly", "weekly_model"])
+        #expect(UsageSeverity.allCases.map(\.rawValue) == ["normal", "warning", "critical"])
+        #expect(UsageUnavailable.allCases.map(\.rawValue) == ["api_key", "third_party", "logged_out", "no_scope", "failed"])
         #expect(BotKind.allCases.map(\.rawValue) == ["bot", "group"])
         #expect(CommandSource.allCases.map(\.rawValue) == ["skill", "builtin"])
         #expect(ConnectorStatus.allCases.map(\.rawValue) == ["connected", "pending", "failed", "needs_auth", "unchecked"])

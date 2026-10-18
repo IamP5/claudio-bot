@@ -154,6 +154,11 @@ struct HomeView: View {
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         InitialsItem(name: store.userName, proposals: store.proposedFacts.count) { router.showingSettings = true }
+        if store.has(.usage) {
+            ToolbarItem(placement: .principal) {
+                SessionUsageButton(usage: store.usage) { router.showingUsage = true }
+            }
+        }
         ToolbarItem(placement: .topBarTrailing) {
             Button {
                 withAnimation { searching.toggle() }

@@ -39,6 +39,7 @@ final class Router {
     var path: [Route] = []
     var showingNewChat = false
     var showingSettings = false
+    var showingUsage = false
     /// The profile beside the chat, on iPad.
     var showingInspector = false
     /// The ref of a create_bot in flight; the bot it becomes is opened.
@@ -47,6 +48,7 @@ final class Router {
     func open(_ bot: BotID) {
         showingNewChat = false
         showingSettings = false
+        showingUsage = false
         path = []
         selection = bot
     }

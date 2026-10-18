@@ -29,7 +29,7 @@ To run on your own iPhone, pick your team under Signing & Capabilities for the C
 
 ### Demo mode and screenshots
 
-Debug builds accept `-demo`. It loads sample bots into the store through the same reducer the bridge feeds, with no bridge running. Add `-demoScreen <name>` to open a screen directly. The names are `home`, `newchat`, `chat`, `profile`, `links`, `library`, `file`, `agent`, `digest`, `engineer`, `factory`, `pair`, `settings`, `routine` and `approval`. `mention`, `chip` and `command` open a chat with the composer mid-sentence: the "@" menu, two picked tokens, and the "/" menu. `group`, `groupprofile`, `newgroup` and `botexchange` open a group chat, its details, the group picker and an exchange between two bots. The pairing and connection states have their own: `pairconfirm` and `outdated` while unpaired, and `confirm`, `unrecognized`, `error` and `oldbridge` while paired.
+Debug builds accept `-demo`. It loads sample bots into the store through the same reducer the bridge feeds, with no bridge running. Add `-demoScreen <name>` to open a screen directly. The names are `home`, `newchat`, `chat`, `profile`, `links`, `library`, `file`, `agent`, `digest`, `engineer`, `factory`, `pair`, `settings`, `routine` and `approval`. `mention`, `chip` and `command` open a chat with the composer mid-sentence: the "@" menu, two picked tokens, and the "/" menu. `group`, `groupprofile`, `newgroup` and `botexchange` open a group chat, its details, the group picker and an exchange between two bots. `usage` opens the Plan usage sheet, `usagehot` with the session near its limit and `usageoff` with no plan limits to read. The pairing and connection states have their own: `pairconfirm` and `outdated` while unpaired, and `confirm`, `unrecognized`, `error` and `oldbridge` while paired.
 
 `scripts/screenshots.sh <udid> <path/to/ClaudioBot.app>` launches each screen and saves PNGs to `screenshots/`.
 
@@ -95,7 +95,9 @@ A section whose feature the bridge does not list says "Update the bridge on your
 
 On a bridge with exchanges, a line such as "2 messages with standup notes" opens what the two bots said: "bot maker ⇄ standup notes" on top, time separators, and each message in a gray bubble with its sender's avatar and name in the sender's color. A name on top opens that bot's chat. Close Chat goes back. On an older bridge the line opens the other bot's chat.
 
-**Settings.** The Mac with **Change address**, the paired phones with Revoke, Pair another device (a code and its QR code), **Memory** (the facts bots know about you: tap to edit, swipe to forget, Confirm or Forget a bot's proposal), notifications and Unpair.
+**Plan usage.** On a bridge with usage, the top of the bot list shows the current 5-hour session as a ring and a percentage, tinted by how close the server says it is to the limit (teal, amber, red). Tap it for the Plan usage sheet. It has one row per window, such as Current session, Weekly · all models and Weekly · Fable. Each row has the share used, a bar and when it resets: "Resets in 2 h 14 min" under a day, else the weekday and local time. The footer names the plan and when the Mac last read the numbers. When the last reads failed, it says so and dims the old numbers. Pull down, or tap the refresh button, to read again. A Mac whose Claude Code has no plan limits (an API key, another provider, logged out) gets one line on how to fix it. Settings shows the same section.
+
+**Settings.** The Mac with **Change address**, **Plan usage**, the paired phones with Revoke, Pair another device (a code and its QR code), **Memory** (the facts bots know about you: tap to edit, swipe to forget, Confirm or Forget a bot's proposal), notifications and Unpair.
 
 ## Notifications
 
@@ -114,6 +116,7 @@ An app build from before protocol 3 still connects to a new bridge. It does not 
 | `ClaudioBot/Model/Display.swift` | Pure display rules: row badges, event line labels, time separators, time labels, library groups |
 | `ClaudioBot/Model/Mentions.swift` | The composer's draft and its "@name" tokens, the "@" and "/" menus, and mentions split out of a sent message |
 | `ClaudioBot/Model/Groups.swift` | Group rules: member count, suggested name, typing line, sender runs |
+| `ClaudioBot/Model/Usage.swift` | How plan usage reads: share used, reset times, "Updated" lines, VoiceOver labels and the fix for each reason there are no limits |
 | `ClaudioBot/Model/BridgeClient.swift` | The WebSocket, the stream cursor for replay, reconnect backoff, ping, outbox, revocation and reopening the visible bot |
 | `ClaudioBot/Model/Pairing.swift` | Pairing codes, the per-device token, the socket request and Keychain storage |
 | `ClaudioBot/Model/DeepLink.swift` | Every `claudiobot://` link the app opens |

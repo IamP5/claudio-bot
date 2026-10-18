@@ -158,12 +158,12 @@ enum TriggerKind: OpenEnum {
 /// What a bridge can do beyond protocol 3's base (hello.features). Screens for a feature the bridge does not list stay hidden.
 enum Feature: OpenEnum {
     case memory, activity, mute, worktrees, connectors, skills, webhooks, spend
-    case mentions, commands, exchanges, groups
+    case mentions, commands, exchanges, groups, usage
     case unknown(String)
 
     static let allCases: [Feature] = [
         .memory, .activity, .mute, .worktrees, .connectors, .skills, .webhooks, .spend,
-        .mentions, .commands, .exchanges, .groups,
+        .mentions, .commands, .exchanges, .groups, .usage,
     ]
     init?(rawValue: String) { self.init(wire: rawValue) }
 
@@ -181,6 +181,7 @@ enum Feature: OpenEnum {
         case .commands: "commands"
         case .exchanges: "exchanges"
         case .groups: "groups"
+        case .usage: "usage"
         case .unknown(let raw): raw
         }
     }
@@ -1052,6 +1053,152 @@ struct Hello: Hashable, Sendable {
     }
 }
 
+/// Which limit window of the Claude plan a row is. An unknown kind reads as a weekly window.
+enum UsageWindowKind: OpenEnum {
+    case session, weekly, weeklyModel
+    case unknown(String)
+
+    static let allCases: [UsageWindowKind] = [.session, .weekly, .weeklyModel]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .session: "session"
+        case .weekly: "weekly"
+        case .weeklyModel: "weekly_model"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// How close a window is to its limit, as the server rates it. An unknown severity reads as normal.
+enum UsageSeverity: OpenEnum {
+    case normal, warning, critical
+    case unknown(String)
+
+    static let allCases: [UsageSeverity] = [.normal, .warning, .critical]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .normal: "normal"
+        case .warning: "warning"
+        case .critical: "critical"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// Why the bridge shows no plan limits. An unknown reason reads as failed.
+enum UsageUnavailable: OpenEnum {
+    case apiKey, thirdParty, loggedOut, noScope, failed
+    case unknown(String)
+
+    static let allCases: [UsageUnavailable] = [.apiKey, .thirdParty, .loggedOut, .noScope, .failed]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .apiKey: "api_key"
+        case .thirdParty: "third_party"
+        case .loggedOut: "logged_out"
+        case .noScope: "no_scope"
+        case .failed: "failed"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+struct UsageWindow: Codable, Hashable, Sendable, Identifiable {
+    /// The same window keeps its id across reads: "session", "weekly", "weekly:fable".
+    let id: String
+    var kind: UsageWindowKind
+    /// "Current session", "Weekly · all models", "Weekly · Fable".
+    var label: String
+    /// The share used, from 0. At or past 1 the limit is reached.
+    var utilization: Double
+    var resetsAt: Date?
+    var severity: UsageSeverity
+
+    private enum CodingKeys: String, CodingKey { case id, kind, label, utilization, resetsAt, severity }
+
+    init(id: String, kind: UsageWindowKind, label: String, utilization: Double, resetsAt: Date?, severity: UsageSeverity) {
+        self.id = id
+        self.kind = kind
+        self.label = label
+        self.utilization = utilization
+        self.resetsAt = resetsAt
+        self.severity = severity
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        kind = try c.decode(UsageWindowKind.self, forKey: .kind)
+        label = try c.decode(String.self, forKey: .label)
+        utilization = try c.decode(Double.self, forKey: .utilization)
+        resetsAt = try c.decodeIfPresent(Date.self, forKey: .resetsAt)
+        severity = try c.decode(UsageSeverity.self, forKey: .severity)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(label, forKey: .label)
+        try c.encode(utilization, forKey: .utilization)
+        try c.encode(resetsAt, forKey: .resetsAt)
+        try c.encode(severity, forKey: .severity)
+    }
+}
+
+/// The plan's usage limits as the bridge last read them (feature usage). fetchedAt: when these numbers were read.
+/// stale: the reads since failed, so these are the last good ones.
+enum PlanUsage: Codable, Hashable, Sendable {
+    case ok(plan: String?, fetchedAt: Date, stale: Bool, windows: [UsageWindow])
+    case unavailable(reason: UsageUnavailable, fetchedAt: Date)
+
+    private enum CodingKeys: String, CodingKey { case state, plan, fetchedAt, stale, windows, reason }
+
+    var fetchedAt: Date {
+        switch self {
+        case .ok(_, let at, _, _), .unavailable(_, let at): at
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let fetchedAt = try c.decode(Date.self, forKey: .fetchedAt)
+        // A state this app does not know shows as a read that failed.
+        guard try c.decode(String.self, forKey: .state) == "ok" else {
+            self = .unavailable(reason: try c.decodeIfPresent(UsageUnavailable.self, forKey: .reason) ?? .failed, fetchedAt: fetchedAt)
+            return
+        }
+        self = .ok(
+            plan: try c.decodeIfPresent(String.self, forKey: .plan),
+            fetchedAt: fetchedAt,
+            stale: try c.decodeIfPresent(Bool.self, forKey: .stale) ?? false,
+            windows: try c.decode([UsageWindow].self, forKey: .windows)
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .ok(plan, fetchedAt, stale, windows):
+            try c.encode("ok", forKey: .state)
+            try c.encode(plan, forKey: .plan)
+            try c.encode(fetchedAt, forKey: .fetchedAt)
+            try c.encode(stale, forKey: .stale)
+            try c.encode(windows, forKey: .windows)
+        case let .unavailable(reason, fetchedAt):
+            try c.encode("unavailable", forKey: .state)
+            try c.encode(reason, forKey: .reason)
+            try c.encode(fetchedAt, forKey: .fetchedAt)
+        }
+    }
+}
+
 enum ServerMessage: Codable, Sendable {
     case hello(Hello)
     case bot(Bot)
@@ -1074,6 +1221,8 @@ enum ServerMessage: Codable, Sendable {
     case commands(botId: BotID, commands: [Command])
     /// Every message between botId and peer, oldest first.
     case exchange(botId: BotID, peer: BotID, messages: [ExchangeMessage])
+    /// The plan's usage limits. Sent after each hello and when they change. Never sequenced or replayed.
+    case usage(PlanUsage)
     case error(message: String)
     case unknown(type: String)
 
@@ -1081,7 +1230,7 @@ enum ServerMessage: Codable, Sendable {
         case type, machine, userName, bots, bot, botId, ref, messages, message, library, links, agents, routines, agent
         case path, mime, content, data, devices, code, expiresAt
         case `protocol`, epoch, seq, resumed, features
-        case agentId, text, at, facts, connectors, skills, routineId, url, token, commands, peer
+        case agentId, text, at, facts, connectors, skills, routineId, url, token, commands, peer, usage
     }
 
     init(from decoder: Decoder) throws {
@@ -1161,6 +1310,8 @@ enum ServerMessage: Codable, Sendable {
                 peer: try c.decode(BotID.self, forKey: .peer),
                 messages: try c.decode([ExchangeMessage].self, forKey: .messages)
             )
+        case "usage":
+            self = .usage(try c.decode(PlanUsage.self, forKey: .usage))
         case "error":
             self = .error(message: try c.decode(String.self, forKey: .message))
         case let other:
@@ -1256,6 +1407,9 @@ enum ServerMessage: Codable, Sendable {
             try c.encode(botId, forKey: .botId)
             try c.encode(peer, forKey: .peer)
             try c.encode(messages, forKey: .messages)
+        case let .usage(usage):
+            try c.encode("usage", forKey: .type)
+            try c.encode(usage, forKey: .usage)
         case let .error(message):
             try c.encode("error", forKey: .type)
             try c.encode(message, forKey: .message)
@@ -1398,6 +1552,8 @@ enum ClientMessage: Codable, Hashable, Sendable {
     case devices
     case revokeDevice(deviceId: DeviceID)
     case pairCode
+    /// Reads the plan's usage now. Answered with a usage frame.
+    case refreshUsage
 
     private enum CodingKeys: String, CodingKey {
         case type, ref, botId, text, uploads, messageId, option, choice, patch, routineId, enabled, agentId, path, deviceId
@@ -1453,6 +1609,7 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case "devices": self = .devices
         case "revoke_device": self = .revokeDevice(deviceId: try c.decode(DeviceID.self, forKey: .deviceId))
         case "pair_code": self = .pairCode
+        case "refresh_usage": self = .refreshUsage
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown client message \(other)")
         }
@@ -1577,6 +1734,8 @@ enum ClientMessage: Codable, Hashable, Sendable {
             try c.encode(deviceId, forKey: .deviceId)
         case .pairCode:
             try c.encode("pair_code", forKey: .type)
+        case .refreshUsage:
+            try c.encode("refresh_usage", forKey: .type)
         }
     }
 }

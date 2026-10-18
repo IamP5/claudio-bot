@@ -146,6 +146,8 @@ final class AppStore {
     private(set) var exchanges: [ExchangeKey: [ExchangeMessage]] = [:]
     /// The newest webhook token, shown once and then dismissed.
     private(set) var webhookToken: WebhookToken?
+    /// The plan's usage limits as the bridge last read them. Kept while offline: its fetchedAt says how old it is.
+    private(set) var usage: PlanUsage?
     /// Sends the bridge has not echoed back yet, oldest first, each with how many times a socket took it. In memory
     /// only: quitting the app forgets them.
     private(set) var unechoedSends: [(message: ClientMessage, transmitted: Int)] = []
@@ -196,6 +198,7 @@ final class AppStore {
             commands = [:]
             exchanges = [:]
             webhookToken = nil
+            usage = nil
             unechoedSends = []
         }
     }
@@ -262,6 +265,7 @@ final class AppStore {
             bridgeProtocol = hello.protocol
             features = Set(hello.features)
             activity = [:]
+            if !features.contains(.usage) { usage = nil }
             // A decision in flight when the socket dropped either landed, and the card says so, or it is lost.
             pendingDecisions = [:]
             bots = Dictionary(hello.bots.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
@@ -373,6 +377,10 @@ final class AppStore {
 
         case let .exchange(botId, peer, messages):
             exchanges[ExchangeKey(botId: botId, peer: peer)] = messages
+            return []
+
+        case let .usage(usage):
+            self.usage = usage
             return []
 
         case .unknown:

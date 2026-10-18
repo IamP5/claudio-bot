@@ -4,7 +4,8 @@ import Foundation
 /// `-demo` fills the store with sample bots through the reducer, without a bridge.
 /// `-demoScreen home|newchat|chat|profile|links|library|file|agent|digest|engineer|factory|pair|settings|routine|approval`
 /// opens a screen directly for screenshots. `mention|chip|command` open a chat with the composer mid-sentence, and
-/// `group|groupprofile|newgroup|botexchange` the group and bot exchange screens. The pairing and connection states have their own:
+/// `group|groupprofile|newgroup|botexchange` the group and bot exchange screens. `usage` opens Plan usage over the bot list,
+/// `usagehot` with the session near its limit and `usageoff` with no plan limits to read. The pairing and connection states have their own:
 /// `pairconfirm|outdated` (unpaired), `confirm|unrecognized|error|oldbridge` (paired).
 @MainActor
 enum Demo {
@@ -28,9 +29,10 @@ enum Demo {
         let features: [Feature] = switch screen {
         case "live": [.activity]
         case "oldbridge": []
-        default: [.mentions, .commands, .exchanges, .groups, .connectors]
+        default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage]
         }
         store.apply(.hello(Hello(protocol: oldBridge ? 2 : Wire.protocolVersion, features: features, machine: "MacBook Pro", userName: "Alex", bots: bots)))
+        if !oldBridge { store.apply(.usage(usage(screen))) }
         if !oldBridge { store.apply(.devices(devices)) }
         for (bot, messages) in conversations {
             store.apply(.conversation(botId: BotID(bot), messages: messages))
@@ -42,6 +44,7 @@ enum Demo {
 
         switch screen {
         case "newchat": router.showingNewChat = true
+        case "usage", "usagehot", "usageoff": router.showingUsage = true
         case "settings": router.showingSettings = true
         case "chat":
             router.selection = BotID("claude")
@@ -128,6 +131,9 @@ enum Demo {
             return
         case .pairCode:
             store.apply(.pairCode(PairCode(code: "K7QD-M2XP", expiresAt: .now + 600)))
+            return
+        case .refreshUsage:
+            store.apply(.usage(usage(screen, ago: 0)))
             return
         case let .decide(botId, messageId, choice):
             guard case let .permission(id, at, card)? = store.conversations[botId]?[messageId] else { return }
@@ -250,6 +256,21 @@ enum Demo {
         RoutineRun(id: RunID("run2"), at: at(3, 14, 2), status: .ok, late: false, manual: true, note: nil),
         RoutineRun(id: RunID("run1"), at: at(4, 7, 30), status: .failed, late: false, manual: false, note: "The forum timed out twice."),
     ]
+
+    /// The plan's limits as a Max login reports them, read `ago` seconds back.
+    private static func usage(_ screen: String?, ago: TimeInterval = 60) -> PlanUsage {
+        let now = Date.now
+        if screen == "usageoff" { return .unavailable(reason: .loggedOut, fetchedAt: now - ago) }
+        let hot = screen == "usagehot"
+        return .ok(plan: "max", fetchedAt: now - ago, stale: false, windows: [
+            UsageWindow(id: "session", kind: .session, label: "Current session", utilization: hot ? 0.94 : 0.37,
+                        resetsAt: now + 2 * 3600 + 14 * 60, severity: hot ? .critical : .normal),
+            UsageWindow(id: "weekly", kind: .weekly, label: "Weekly · all models", utilization: 0.82,
+                        resetsAt: now + 3 * 86_400 + 5 * 3600, severity: .warning),
+            UsageWindow(id: "weekly:fable", kind: .weeklyModel, label: "Weekly · Fable", utilization: 0.12,
+                        resetsAt: now + 3 * 86_400 + 5 * 3600, severity: .normal),
+        ])
+    }
 
     static let devices: [Device] = [
         Device(id: DeviceID("d1"), name: "Alex's iPhone", createdAt: at(30, 9, 0), lastSeenAt: .now, legacy: false, current: true),

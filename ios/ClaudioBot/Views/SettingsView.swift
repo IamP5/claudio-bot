@@ -29,6 +29,8 @@ struct SettingsView: View {
                     LabeledContent("Bots", value: "\(store.bots.count)")
                 }
 
+                PlanUsageSection()
+
                 devices
 
                 MemorySection()
@@ -48,6 +50,7 @@ struct SettingsView: View {
             }
             .scrollContentBackground(.hidden)
             .background(Theme.background)
+            .refreshable { await PlanUsageSection.refresh(store, client) }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

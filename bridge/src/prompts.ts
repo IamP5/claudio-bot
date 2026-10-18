@@ -228,6 +228,9 @@ export const agentRules = ({ botName, userName }: { botName: string; userName: s
   `You were started by the bot ${botName} for ${userName}. Nobody is at this terminal: your final message each turn is reported to the bot. ` +
   `Work on a new branch, verify your change, and open a PR when done.`;
 
+/** The first line of what the user sends an agent's session from the phone, so the agent and the thread tell it from the bot's words. */
+export const directHeader = (userName: string) => `[${userName} messaged this agent directly]`;
+
 /** A cloud agent's first message: claude.ai takes no system prompt from the bridge. */
 export const agentPrompt = (a: { botName: string; userName: string; prompt: string }) => `${agentRules(a)}\n\n${a.prompt}`;
 

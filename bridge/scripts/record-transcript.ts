@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { query, type CanUseTool, type Options, type PermissionResult, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -9,12 +9,16 @@ import { maskSecrets } from "../src/text";
 // Records a real Claude Code session as a replay fixture: bun scripts/record-transcript.ts <scenario>...
 // Each scenario runs on haiku in a fresh temp folder, with no settings files and no saved session, and is written to
 // test/transcripts/<scenario>.ndjson: a meta line, then every message sent ("out"), received ("in") and every
-// canUseTool call ("prompt"), in order, scrubbed of paths, ids and anything secret-shaped.
+// canUseTool call ("prompt"), in order, scrubbed of paths, ids and anything secret-shaped. A scenario that keeps its
+// transcript also writes Claude Code's own jsonl of the session, scrubbed the same way, to test/transcripts/jsonl/.
 
 const MODEL = "haiku";
 const QUERY_BUDGET_USD = 0.25;
 const RUN_BUDGET_USD = 1;
 const OUT_DIR = join(import.meta.dir, "..", "test", "transcripts");
+const JSONL_DIR = join(OUT_DIR, "jsonl");
+/** Transcript lines that hold whole API requests or file backups: large, and nothing a thread shows. */
+const DROPPED_LINES: ReadonlySet<string> = new Set(["api-request", "api-request-blob", "api-request-shape", "file-history-snapshot", "file-history-delta"]);
 
 export type Prompted = { tool: string; input: Record<string, unknown>; options: Record<string, unknown>; reply: PermissionResult };
 /** `ms`: since the recording started; recordings before it have none. */
@@ -37,10 +41,18 @@ type Io = {
 
 type Scenario = {
   options?: Partial<Options>;
+  /** Also save the session's jsonl transcript (the scenario must persist its session). */
+  keepTranscript?: boolean;
   /** canUseTool's answer; every call is recorded either way. */
   reply: PermissionResult | ((input: Record<string, unknown>) => PermissionResult);
   run(io: Io): Promise<string[]>;
 };
+
+/**
+ * The recorder's environment without the variables of the Claude Code it may itself run inside (the desktop app sets
+ * CLAUDE_CODE_ENTRYPOINT, a session id and a messaging socket), so a recording is of a plain SDK session.
+ */
+const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CLAUDE_|CLAUDECODE$|AI_AGENT$)/.test(k)));
 
 const echoes = (m: SDKMessage): string[] => {
   if (m.type !== "assistant" && m.type !== "result") return [];
@@ -72,7 +84,49 @@ function wakeScenario(seconds: number, ready: (first: string) => (ms: readonly S
   };
 }
 
+/** A phone-driven session: the user's own Claude Code settings regime, every prompt answered by the canUseTool reply. */
+const OWN: Partial<Options> = { persistSession: true, permissionMode: "default", includePartialMessages: true, maxBudgetUsd: 0.15 };
+
+/** AskUserQuestion is answered the way the phone does: allowed, with the answers in updatedInput. */
+const answerAsk = (answer: string): Scenario["reply"] => (input) =>
+  Array.isArray(input.questions)
+    ? { behavior: "allow", updatedInput: { ...input, answers: Object.fromEntries((input.questions as { question: string }[]).map((q) => [q.question, answer])) } }
+    : { behavior: "allow", updatedInput: input };
+
+const oneTurn = (prompt: string): Scenario["run"] => async (io) => {
+  const turn = io.send(prompt);
+  return (await io.until(resultFor(turn), 120_000)) ? [] : ["the turn never got a result"];
+};
+
 const SCENARIOS: Record<string, Scenario> = {
+  // Write, Edit and Bash, each asked through canUseTool and allowed once, with the stream's partial messages.
+  "own-permission": {
+    options: OWN,
+    keepTranscript: true,
+    reply: allowAll,
+    run: oneTurn(
+      "Do exactly these steps with tools, nothing else: 1. Write the file a.txt with the three lines one, two, three. " +
+        "2. Edit a.txt to replace the line two with TWO. 3. Run this Bash command: cat a.txt\nThen reply with the single word DONE.",
+    ),
+  },
+  // TodoWrite, then an AskUserQuestion the phone answers, then a Write using the answer.
+  "own-ask": {
+    options: OWN,
+    keepTranscript: true,
+    reply: answerAsk("Blue"),
+    run: oneTurn(
+      "Do exactly these steps with tools: 1. Call TodoWrite with two todos: Ask for a color, Write color.txt. " +
+        "2. Call AskUserQuestion with one question \"Pick a color\" (header \"Color\") and the options Red and Blue. " +
+        "3. Write the chosen color to color.txt. Then reply with the single word DONE.",
+    ),
+  },
+  // Plan mode: the plan is proposed with ExitPlanMode, the phone approves it, and the work runs.
+  "own-plan": {
+    options: { ...OWN, permissionMode: "plan" },
+    keepTranscript: true,
+    reply: allowAll,
+    run: oneTurn("Plan how to create hello.txt containing the word hi, then call ExitPlanMode with that plan. Once it is approved, create the file and reply DONE."),
+  },
   // Turn 2 is sent 2 s after turn 1's result, while the 8 s command still runs, so it ends before the wake turn starts.
   "background-wake-after-prompt": wakeScenario(8, resultFor, 2_000),
   // Turn 2 is sent the moment the command's task notification arrives, so it lands while the wake turn runs.
@@ -129,6 +183,8 @@ function scrubber(cwd: string) {
 
   function walk(v: unknown, key: string): unknown {
     if (key === "signature" && typeof v === "string") return "<signature>";
+    // A tool input streams in fragments that can split a path, so no fragment is kept.
+    if (key === "partial_json" && typeof v === "string") return "";
     if (typeof v === "string") return text(v, key);
     if (Array.isArray(v)) return v.map((x) => walk(x, key));
     if (v === null || typeof v !== "object") return v;
@@ -142,6 +198,8 @@ function scrubber(cwd: string) {
     see(m: SDKMessage) {
       if (m.session_id && !sessions.has(m.session_id)) sessions.set(m.session_id, `<session-${sessions.size + 1}>`);
     },
+    /** One transcript line, scrubbed like a received message. */
+    json: (v: unknown): unknown => walk(v, ""),
     line(l: Line): Line {
       if ("dir" in l && l.dir === "in" && l.message.type === "system") {
         const system: Record<string, unknown> = { ...l.message };
@@ -199,6 +257,7 @@ async function record(name: string, scenario: Scenario, claude: string, version:
         maxBudgetUsd: QUERY_BUDGET_USD,
         pathToClaudeCodeExecutable: claude,
         canUseTool,
+        env: cleanEnv(),
         ...scenario.options,
         ...(resume !== undefined && { resume }),
         spawnClaudeCodeProcess: (o) => spawnGroup(o, () => {}, exit),
@@ -258,12 +317,24 @@ async function record(name: string, scenario: Scenario, claude: string, version:
   };
 
   let notes: string[];
+  let transcript: string[] = [];
   try {
     notes = await scenario.run(io);
   } finally {
     await stop(current);
+    const id = inbound.findLast((m) => m.session_id)?.session_id;
+    const file = id && join(sessions, `${id}.jsonl`);
+    if (scenario.keepTranscript && file && existsSync(file)) transcript = readFileSync(file, "utf8").split("\n").filter((l) => l.trim() !== "");
     rmSync(cwd, { recursive: true, force: true });
     rmSync(sessions, { recursive: true, force: true });
+  }
+  if (scenario.keepTranscript) {
+    if (transcript.length === 0) notes.push("no transcript was found to keep");
+    mkdirSync(JSONL_DIR, { recursive: true });
+    const kept = transcript.map((l) => JSON.parse(l) as Record<string, unknown>).filter((o) => !DROPPED_LINES.has(String(o.type)));
+    // An attachment stays a link in the chain; what it attached (skill lists, environment) is not test material.
+    const slim = kept.map((o) => (o.type === "attachment" && typeof o.attachment === "object" && o.attachment !== null ? { ...o, attachment: { type: (o.attachment as { type?: unknown }).type } } : o));
+    writeFileSync(join(JSONL_DIR, `${name}.jsonl`), slim.map((o) => JSON.stringify(scrub.json(o))).join("\n") + "\n");
   }
   const cost = Math.max(0, ...inbound.flatMap((m) => (m.type === "result" ? [m.total_cost_usd] : [])));
   const meta = {

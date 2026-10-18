@@ -1,8 +1,8 @@
 import type { Tickable } from "./clock";
-import type { BotId, MessageId } from "./protocol";
+import type { BotId, MessageId, SessionId } from "./protocol";
 import type { Persist } from "./store";
 import { BOT_NAME_MAX, displayName, errorText } from "./text";
-import { chatOf, own, type PushState, type World } from "./world";
+import { chatOf, own, ownCardId, ownCardOpen, type PushState, type World } from "./world";
 
 // "<bot> needs you" when no socket is live: an ntfy-style POST to CLAUDIOBOT_PUSH_URL now, APNs later behind the
 // same Sender. The only writer of World.push.
@@ -19,6 +19,8 @@ import { chatOf, own, type PushState, type World } from "./world";
 // At start no socket is live yet, though a phone that was open usually reconnects within seconds. So a card or reminder
 // push for a card already open at start waits START_GRACE_MS and then goes out only if no phone is live.
 // A muted bot sends no message or result push. Cards and reminders still push: a held call waits on the user.
+// A card in a session the phone drives pushes "A Claude Code session needs you", content-free like the rest, with the
+// link claudiobot://session/<id>.
 
 /** message: a turn's first pushed bubble. result: the last bubble of a turn still running 20 s after that push. */
 export type PushReason = "card" | "reminder" | "message" | "result";
@@ -27,10 +29,12 @@ export type PushReason = "card" | "reminder" | "message" | "result";
 export type Push = Tickable & {
   /** True when the push was recorded and handed to the sender, false when it was held back, a repeat, or not recorded. */
   notify(bot: { id: BotId; name: string }, reason: PushReason, messageId: MessageId): boolean;
+  /** A card opened in a session the phone drives. The same rules as a bot's card push. */
+  notifySession?(sessionId: SessionId, cardId: MessageId): boolean;
 };
 
-/** What a transport receives. `text` and `link` are the whole user-visible payload. */
-type Notification = { botId: BotId; messageId: MessageId; text: string; link: string };
+/** What a transport receives. `text` and `link` are the whole user-visible payload. botId null: a session's card. */
+type Notification = { botId: BotId | null; messageId: MessageId; text: string; link: string };
 
 /** One delivery attempt. Rejects on failure; the caller never retries. ntfy now, APNs later. */
 export type Sender = (n: Notification) => Promise<void>;
@@ -77,6 +81,9 @@ export function senderFromEnv(value: string | undefined, log: (line: string) => 
 }
 
 const idOf = (key: string) => key.slice(0, key.lastIndexOf("|"));
+
+const SESSION_CARD = "A Claude Code session needs you";
+const sessionLink = (id: SessionId) => `claudiobot://session/${encodeURIComponent(id)}`;
 
 
 export function createPush(deps: {
@@ -141,8 +148,33 @@ export function createPush(deps: {
     return true;
   }
 
+  /** Open cards of the phone's sessions whose push has not gone out. */
+  const heldSessionCards = () =>
+    [...world.sessions.values()].flatMap((r) => (r.own?.cards ?? []).filter((c) => ownCardOpen(c) && !pushed(`${ownCardId(c)}|card`)).map((c) => ({ id: r.id, cardId: ownCardId(c) })));
+
+  function notifySession(id: SessionId, cardId: MessageId, now = deps.now().getTime()): boolean {
+    if (sender === null || live(now)) return false;
+    const key = `${cardId}|card`;
+    if (pushed(key)) return false;
+    const state = own<PushState>(world.push);
+    state.sent = state.sent.filter((s) => now - Date.parse(s.at) < RETAIN_MS);
+    state.sent.push({ key, at: new Date(now).toISOString() });
+    try {
+      deps.persist("now");
+    } catch (e) {
+      deps.log(`push: card for session ${id} skipped, could not record it: ${errorText(e)}`);
+      return false;
+    }
+    const n: Notification = { botId: null, messageId: cardId, text: SESSION_CARD, link: sessionLink(id) };
+    Promise.resolve()
+      .then(() => sender(n))
+      .catch((e: unknown) => deps.log(`push: card for session ${id} failed: ${errorText(e)}`));
+    return true;
+  }
+
   return {
     notify: (bot, reason, messageId) => notify(bot, reason, messageId),
+    notifySession: (id, cardId) => notifySession(id, cardId),
     tick(now) {
       if (now.getTime() >= graceEnds) {
         for (const d of deferred.values()) if (world.gate.open.some((c) => c.cardId === d.messageId)) notify(d.bot, d.reason, d.messageId, now.getTime());
@@ -152,10 +184,11 @@ export function createPush(deps: {
         const bot = world.bots.get(card.actor.botId);
         if (bot) notify(bot, "card", card.cardId, now.getTime());
       }
+      for (const card of heldSessionCards()) notifySession(card.id, card.cardId, now.getTime());
     },
     nextDeadline() {
       const until = deps.liveUntil();
-      const held = sender !== null && until !== null && heldCards().length > 0 ? until.getTime() : Infinity;
+      const held = sender !== null && until !== null && heldCards().length + heldSessionCards().length > 0 ? until.getTime() : Infinity;
       const grace = deferred.size > 0 ? graceEnds : Infinity;
       const next = Math.min(held, grace);
       return next === Infinity ? null : new Date(next).toISOString();

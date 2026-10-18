@@ -22,7 +22,7 @@ import { refused } from "./result";
 import { createSession, type Session, type SessionSpec, type TurnEnd } from "./session";
 import type { Persist } from "./store";
 import { errorText } from "./text";
-import { emptySession, newMessageId, type OwnCard, type OwnDrive, type SessionRecord, type World } from "./world";
+import { emptySession, newMessageId, ownCardId, ownCardOpen, type OwnCard, type OwnDrive, type SessionRecord, type World } from "./world";
 
 // The drivers of sessions the user drives from the phone: one session.ts Session per id, opened in the transcript's
 // cwd with the user's own Claude Code settings. What Claude Code asks (a permission, AskUserQuestion, ExitPlanMode)
@@ -107,8 +107,8 @@ const FLOOR_ACTOR = { kind: "agent", botId: "", agentId: "" } as const;
 
 type Reply = { kind: "choice"; choice: PermissionChoice } | { kind: "answers"; answers: Record<string, string> } | { kind: "dismissed" } | { kind: "expired" };
 
-const cardIdOf = (c: OwnCard): MessageId => (c.kind === "permission" ? c.card.id : c.cardId);
-const isOpen = (c: OwnCard) => (c.kind === "permission" ? c.card.answer === null : c.kind === "ask" ? c.answers === null : c.state === "proposed");
+const cardIdOf = ownCardId;
+const isOpen = ownCardOpen;
 
 export function createOwn(deps: OwnDeps): Own {
   const drivers = new Map<SessionId, Session>();

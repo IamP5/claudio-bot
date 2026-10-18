@@ -832,6 +832,7 @@ export function createHub(deps: HubDeps): Hub {
         ledger,
         claude: deps.claude,
         scope: scopeIn,
+        notify: (id, cardId) => void deps.push.notifySession?.(id, cardId),
         scan: deps.scan,
         persist: deps.persist,
         now: clockNow,

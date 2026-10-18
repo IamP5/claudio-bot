@@ -64,7 +64,7 @@ function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
       session: () => null,
       direct: (rec, text, clientId) => (directs.push({ agentId: rec.agent.id, text, clientId }), null),
       stop: async () => true,
-      message: async () => "",
+      message: async (rec, text) => (directs.push({ agentId: rec.agent.id, text, clientId: "cloud" }), "Sent to the cloud session."),
     },
     decideGate: (botId, cardId, choice) => (gateDecisions.push({ botId, cardId, choice }), { ok: true }),
     ledger: { add() {}, headroom: () => ({ ok: true, capReached: false }), budgetLeft: () => null, dailyLeft: () => null },
@@ -375,5 +375,33 @@ describe("streaming", () => {
     expect((await snapshot(PERMISSION)).live).toBeNull();
     expect(queries).toHaveLength(0);
     expect(play.q()!.options.includePartialMessages).toBe(true);
+  });
+});
+
+describe("a cloud agent's session", () => {
+  test("lists under its repo with its claude.ai link, shows what was said to it, and a send follows up through claude", async () => {
+    const rec: AgentRecord = {
+      agent: { id: "a_cloud" as AgentId, botId: "b_1" as BotId, title: "Bump deps", where: "cloud", projectName: "demo", status: "in_cloud", url: "https://claude.ai/code/session_01abc", createdAt: "2026-10-18T12:00:00.000Z", updatedAt: "2026-10-18T12:05:00.000Z", evidence: null, worktree: null },
+      cwd: repo,
+      repo,
+      messages: [
+        { id: "m_1" as MessageId, at: "2026-10-18T12:00:00.000Z", from: "bot", text: "Bump the deps." },
+        { id: "m_2" as MessageId, at: "2026-10-18T12:05:00.000Z", from: "agent", text: "Opened a PR." },
+      ],
+      session: emptySession(),
+      cloudSession: "session_01abc",
+      budgetUsd: null,
+      startedBy: { kind: "user" },
+    };
+    world.agents.set(rec.agent.id, rec);
+    await start();
+    expect(await rowOf("session_01abc" as SessionId)).toMatchObject({ origin: "cloud", url: "https://claude.ai/code/session_01abc", title: "Bump deps", status: "idle", agent: { agentId: "a_cloud" } });
+    expect((await snapshot("session_01abc" as SessionId)).items.map((i) => [i.kind, "text" in i ? i.text : null])).toEqual([
+      ["user", "Bump the deps."],
+      ["assistant", "Opened a PR."],
+    ]);
+    expect(await send("Also bump bun", "c_c", "session_01abc" as SessionId)).toEqual([]);
+    expect(directs).toEqual([{ agentId: "a_cloud", text: "Also bump bun", clientId: "cloud" }]);
+    expect(await handle({ type: "session_stop", sessionId: "session_01abc" as SessionId })).toEqual([{ type: "error", message: expect.stringContaining("claude.ai") }]);
   });
 });

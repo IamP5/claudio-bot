@@ -436,6 +436,11 @@ export type OwnDrive = {
  * - ask: AskUserQuestion, answered by question text.
  * - plan: ExitPlanMode. modeBefore: the mode to go back to once the plan is approved.
  */
+/** A card's id, the cardId the phone answers with. */
+export const ownCardId = (c: OwnCard): MessageId => (c.kind === "permission" ? c.card.id : c.cardId);
+/** Still waiting on the user. */
+export const ownCardOpen = (c: OwnCard): boolean => (c.kind === "permission" ? c.card.answer === null : c.kind === "ask" ? c.answers === null : c.state === "proposed");
+
 export type OwnCard =
   | { kind: "permission"; card: PermissionMessage; toolUseId: string; suggestions: unknown[] }
   | {

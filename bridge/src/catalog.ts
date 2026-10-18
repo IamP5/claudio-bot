@@ -87,11 +87,11 @@ export function createCatalog(deps: CatalogDeps): Catalog {
   let sweeping: Promise<void> | null = null;
   let stopped = false;
 
-  /** Every session the bridge links to an agent, by its id. */
+  /** Every session the bridge links to an agent, by its id: a mac agent's Claude Code session, a cloud agent's claude.ai one. */
   function agentsById(): Map<SessionId, AgentRecord> {
     const out = new Map<SessionId, AgentRecord>();
     for (const rec of deps.world.agents.values()) {
-      const id = (rec.agent.where === "mac" ? rec.session.id : null) as SessionId | null;
+      const id = (rec.agent.where === "mac" ? rec.session.id : rec.cloudSession) as SessionId | null;
       if (id) out.set(id, rec);
     }
     return out;
@@ -110,7 +110,7 @@ export function createCatalog(deps: CatalogDeps): Catalog {
       const head = heads.get(id) ?? null;
       const rec = agents.get(id) ?? null;
       const draft = drafts.get(id);
-      const cwd = head?.cwd ?? rec?.cwd ?? draft?.cwd;
+      const cwd = head?.cwd ?? (rec?.agent.where === "cloud" ? (rec.repo ?? rec.cwd) : rec?.cwd) ?? draft?.cwd;
       if (cwd === undefined) continue;
       const project = deps.projects.of(cwd);
       const overlay = deps.world.sessions.get(id);
@@ -128,7 +128,7 @@ export function createCatalog(deps: CatalogDeps): Catalog {
         projectId: project.id,
         parentId: desktop.get(id)?.parent ?? null,
         title: head?.title ?? rec?.agent.title ?? draft!.title,
-        origin: rec ? "agent" : overlay?.own?.created ? "phone" : originOf(head),
+        origin: rec ? (rec.agent.where === "cloud" ? "cloud" : "agent") : overlay?.own?.created ? "phone" : originOf(head),
         agent: rec ? { botId: rec.agent.botId, agentId: rec.agent.id } : null,
         status,
         holder,
@@ -138,7 +138,7 @@ export function createCatalog(deps: CatalogDeps): Catalog {
         pr: head?.pr ?? null,
         mirror: desktop.has(id) ? "imported" : overlay?.mirror?.failed ? "failed" : overlay?.mirror && deps.world.sessionPrefs.mirror === "auto" ? "pending" : "none",
         hidden: overlay?.hidden ?? false,
-        url: null,
+        url: rec?.agent.where === "cloud" ? rec.agent.url : null,
         createdAt: iso(createdAt),
         lastAt: iso(lastAt),
       });

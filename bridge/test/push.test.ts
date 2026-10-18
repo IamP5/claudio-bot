@@ -2,10 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { BotId, MessageId } from "../src/protocol";
+import type { BotId, MessageId, SessionId } from "../src/protocol";
 import { createPush, MESSAGE_THROTTLE_MS, ntfySender, senderFromEnv, START_GRACE_MS, type PushReason, type Sender } from "../src/push";
 import { createSaver, loadWorld } from "../src/store";
-import { botActor, newBot, post, type GateState, type PushState, type World } from "../src/world";
+import { botActor, emptySession, newBot, post, type GateState, type PushState, type World } from "../src/world";
 
 const homes: string[] = [];
 afterEach(() => {
@@ -431,4 +431,20 @@ test("the grace window never delays a card opened after start", async () => {
   expect(h.push.notify(BOT, "card", "m_new" as MessageId)).toBe(true);
   await settle();
   expect(h.calls.map((c) => c.init.body)).toEqual(["Claudio Bot needs you"]);
+});
+
+test("a card in a session the phone drives pushes once, without its content, to the session, and waits out a live socket", async () => {
+  const h = harness({ liveFor: 45_000 });
+  const id = "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31" as SessionId;
+  const card = { kind: "permission" as const, id: "m_own" as MessageId, at: new Date(T0).toISOString(), from: null, tool: "Bash", label: SECRET_COMMAND, detail: SECRET_COMMAND, always: "", answer: null, expiresAt: new Date(T0 + 3_600_000).toISOString() };
+  h.world.sessions.set(id, { id, hidden: false, visitedAt: null, own: { cwd: "/x", created: false, at: card.at, model: null, mode: null, session: emptySession(id), cards: [{ kind: "permission", card, toolUseId: "toolu_1", suggestions: [] }] } });
+  expect(h.push.notifySession!(id, card.id)).toBe(false);
+  expect(h.push.nextDeadline()).toBe(new Date(T0 + 45_000).toISOString());
+  h.clock.t = T0 + 45_000;
+  h.sockets.until = null;
+  h.push.tick(new Date(h.clock.t));
+  await settle();
+  expect(h.calls.map((c) => [c.init.body, (c.init.headers as Record<string, string>).Click])).toEqual([["A Claude Code session needs you", `claudiobot://session/${id}`]]);
+  expect(h.push.notifySession!(id, card.id)).toBe(false);
+  expect(JSON.stringify(h.calls)).not.toContain(SECRET_COMMAND);
 });

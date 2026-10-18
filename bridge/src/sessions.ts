@@ -95,6 +95,7 @@ export type Sessions = Tickable & {
  */
 type Writer =
   | { kind: "agent"; rec: AgentRecord }
+  | { kind: "cloud"; rec: AgentRecord }
   | { kind: "own"; rec: SessionRecord }
   | { kind: "open"; head: Head }
   | { kind: "none"; reason: string };
@@ -159,9 +160,16 @@ export function createSessions(deps: SessionsDeps): Sessions {
     return null;
   }
 
+  function cloudOf(id: SessionId): AgentRecord | null {
+    for (const rec of deps.world.agents.values()) if (rec.agent.where === "cloud" && rec.cloudSession === id) return rec;
+    return null;
+  }
+
   function driverOf(id: SessionId): Writer {
     const agent = agentOf(id);
     if (agent) return { kind: "agent", rec: agent };
+    const cloud = cloudOf(id);
+    if (cloud) return { kind: "cloud", rec: cloud };
     const rec = deps.world.sessions.get(id);
     if (rec?.own) return { kind: "own", rec };
     const head = catalog.head(id);
@@ -186,6 +194,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   function driven(id: SessionId): Driven | null {
     const w = driverOf(id);
     if (w.kind === "own") return drivers.status(w.rec);
+    if (w.kind === "cloud") return { status: w.rec.agent.status === "failed" ? "failed" : "idle", working: false };
     if (w.kind !== "agent") return null;
     const session = deps.agents.session(w.rec.agent.id);
     const status: SessionStatus = session?.working ? "working" : session?.parkedFor ? "parked" : AGENT_STATUS[w.rec.agent.status];
@@ -197,6 +206,8 @@ export function createSessions(deps: SessionsDeps): Sessions {
     switch (w.kind) {
       case "own":
         return drivers.controls(w.rec);
+      case "cloud":
+        return { canSend: true, reason: null, working: false, queued: 0, model: null, models: [], mode: "default", modes: [] };
       case "agent": {
         const session = deps.agents.session(w.rec.agent.id);
         const pending = w.rec.session.pending.length;
@@ -236,9 +247,14 @@ export function createSessions(deps: SessionsDeps): Sessions {
     return items;
   }
 
+  /** A cloud agent's thread is what the bridge said to it and heard back: the bridge never has its transcript. */
+  const cloudOverlay = (rec: AgentRecord): SessionItem[] =>
+    rec.messages.map((m): SessionItem => (m.from === "bot" ? { kind: "user", id: m.id as string as ItemId, at: m.at, text: m.text, from: "bot", queued: false } : { kind: "assistant", id: m.id as string as ItemId, at: m.at, text: m.text }));
+
   function overlay(id: SessionId): SessionItem[] {
     const w = driverOf(id);
     if (w.kind === "agent") return agentOverlay(w.rec);
+    if (w.kind === "cloud") return cloudOverlay(w.rec);
     if (w.kind === "own") return drivers.overlay(w.rec);
     return [];
   }
@@ -321,7 +337,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   }
 
   const listFrame = (): ServerMessage => ({ type: "sessions", ...catalog.snapshot(), mirror: deps.world.sessionPrefs.mirror });
-  const known = (id: SessionId) => catalog.head(id) !== null || agentOf(id) !== null || deps.world.sessions.get(id)?.own?.created === true;
+  const known = (id: SessionId) => catalog.head(id) !== null || agentOf(id) !== null || cloudOf(id) !== null || deps.world.sessions.get(id)?.own?.created === true;
   const gone = (id: SessionId): ServerMessage[] => [{ type: "session_removed", sessionId: id, movedTo: null }];
   const error = (message: string): ServerMessage[] => [{ type: "error", message }];
 
@@ -358,6 +374,10 @@ export function createSessions(deps: SessionsDeps): Sessions {
         const refusal = deps.agents.direct(w.rec, m.text, m.clientId);
         return refusal === null ? [] : error(refusal);
       }
+      case "cloud": {
+        const said = await deps.agents.message(w.rec, m.text, { kind: "user" });
+        return said.startsWith("Sent") ? [] : error(said);
+      }
       case "own":
         return reply(await drivers.send(w.rec, m.text, m.clientId, m.interrupt));
       case "open":
@@ -369,6 +389,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
 
   async function stopTurn(id: SessionId): Promise<ServerMessage[]> {
     const w = driverOf(id);
+    if (w.kind === "cloud") return error("A cloud session runs on claude.ai; stop it there.");
     const stopped = w.kind === "agent" ? await deps.agents.stop(w.rec) : w.kind === "own" ? await drivers.stop(w.rec) : false;
     return stopped ? [] : error("Nothing is running.");
   }
@@ -407,7 +428,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     const { title, hidden, model, mode } = m.patch;
     if (model !== undefined || mode !== undefined) {
       const w = driverOf(id);
-      if (w.kind === "agent") return error("An agent runs with its bot's model and mode.");
+      if (w.kind === "agent" || w.kind === "cloud") return error("An agent runs with its bot's model and mode.");
       if (w.kind === "none") return error(w.reason);
       const rec = w.kind === "own" ? w.rec : take(id, w.head);
       const r = await drivers.set(rec, { ...(model !== undefined && { model }), ...(mode !== undefined && { mode }) });
@@ -520,7 +541,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
 
     agentChanged(rec) {
       catalog.touch();
-      const id = rec.session.id as SessionId | null;
+      const id = (rec.agent.where === "cloud" ? rec.cloudSession : rec.session.id) as SessionId | null;
       const was = lastIds.get(rec.agent.id);
       if (id) lastIds.set(rec.agent.id, id);
       if (was && id && was !== id) threads.removed(was, id);

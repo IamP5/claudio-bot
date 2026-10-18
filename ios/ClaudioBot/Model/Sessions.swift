@@ -271,13 +271,22 @@ enum SessionText {
     /// One VoiceOver sentence per row: "solta-o-som, Update README, working, by Claudio Bot's agent, PR 87 open, 5 minutes ago".
     static func spoken(_ row: SessionRow, project: String?, botName: String?, now: Date = .now) -> String {
         var parts = [project, row.title].compactMap { $0 }
-        if let mark = SessionMark(row) { parts.append(mark.spoken) }
+        if let mark = SessionMark(row) { parts.append(mark == .parked ? parked(row.holder).lowercased() : mark.spoken) }
         let origin = origin(row.origin, botName: botName)
         if !origin.isEmpty { parts.append(origin) }
         if let pr = row.pr { parts.append("PR \(pr.number)" + (pr.state.map { " \($0.rawValue)" } ?? "")) }
         if row.hidden { parts.append("hidden") }
         parts.append(RelativeDateTimeFormatter().localizedString(for: row.lastAt, relativeTo: now))
         return parts.joined(separator: ", ")
+    }
+
+    /// Why a parked session waits: another Claude Code holds it, and the phone's message runs once it lets go.
+    static func parked(_ holder: SessionHolder) -> String {
+        switch holder {
+        case .desktop: "Waiting for the Claude app to finish"
+        case .terminal: "Waiting for the terminal to finish"
+        default: "Waiting for the other Claude Code to finish"
+        }
     }
 
     static func mode(_ mode: PermissionMode) -> String {

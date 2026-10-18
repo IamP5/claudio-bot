@@ -20,7 +20,9 @@ struct SessionComposer: View {
     private var working: Bool { controls?.working ?? false }
     private var canSend: Bool { controls?.canSend ?? false }
     private var hasText: Bool { !draft.isBlank }
-    private var showsStop: Bool { working && !hasText }
+    /// A cloud session runs on claude.ai: the bridge can follow up on it but not stop it.
+    private var canStop: Bool { store.sessions.rows[sessionId]?.origin != .cloud }
+    private var showsStop: Bool { working && !hasText && canStop }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -80,7 +82,7 @@ struct SessionComposer: View {
             .foregroundStyle(.black)
             .frame(width: Composer.control + 10, height: Composer.control)
             .background(Color.white, in: Capsule())
-        if working && hasText {
+        if working && hasText && canStop {
             Menu {
                 Button {
                     send(interrupt: true)
@@ -226,7 +228,7 @@ struct NewSessionSheet: View {
     @State private var starting = false
 
     private var models: [SessionModelOption] {
-        store.threads.lastControls?.models ?? []
+        store.threads.lastModels
     }
 
     private var canStart: Bool {

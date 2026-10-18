@@ -8,10 +8,13 @@ enum ThreadBanner: Equatable {
     case busyElsewhere(String)
     /// Open but idle in the Claude app: the phone may send.
     case alsoInDesktop
+    /// The phone's message waits for another Claude Code to let go of the session.
+    case waiting(String)
 
     static func of(row: SessionRow?, controls: SessionControls?) -> ThreadBanner? {
         guard let row else { return nil }
         if row.origin == .cloud { return .cloud(row.url) }
+        if row.status == .parked { return .waiting(SessionText.parked(row.holder) + ". Your message runs next.") }
         let readOnly = controls.map { !$0.canSend } ?? false
         switch row.holder {
         case .desktop: return readOnly ? .busyElsewhere("Working in the Claude app. Read only.") : .alsoInDesktop
@@ -277,7 +280,10 @@ struct ThreadHeader: View {
             .font(.caption)
             .foregroundStyle(Theme.tertiary)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 5)
         .frame(maxWidth: 260)
+        .glass(in: Capsule())
         .accessibilityElement(children: .combine)
     }
 }
@@ -299,6 +305,10 @@ struct HolderBanner: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                 }
+            case .waiting(let text):
+                Image(systemName: "pause.circle").foregroundStyle(Theme.secondary)
+                Text(text).foregroundStyle(Theme.secondary)
+                Spacer(minLength: 0)
             case .busyElsewhere(let text):
                 WorkingRing(size: 12)
                 Text(text).foregroundStyle(Theme.secondary)

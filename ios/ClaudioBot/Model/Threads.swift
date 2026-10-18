@@ -330,8 +330,9 @@ final class SessionThreads {
     static let capacity = 4
 
     private(set) var models: [SessionID: ThreadModel] = [:]
-    /// The newest controls any thread reported, for the new-session sheet's model menu.
-    private(set) var lastControls: SessionControls?
+    /// The newest models a thread offered, for the new-session sheet's model menu. Agent and cloud sessions offer
+    /// none, so opening one leaves the menu as it was.
+    private(set) var lastModels: [SessionModelOption] = []
     @ObservationIgnored private var recent: [SessionID] = []
 
     subscript(id: SessionID) -> ThreadModel? { models[id] }
@@ -364,13 +365,13 @@ final class SessionThreads {
             return []
         }
         let settled = model.apply(frame)
-        if let controls = model.controls, controls != lastControls { lastControls = controls }
+        if let models = model.controls?.models, !models.isEmpty, models != lastModels { lastModels = models }
         return settled
     }
 
     func reset() {
         models = [:]
         recent = []
-        lastControls = nil
+        lastModels = []
     }
 }

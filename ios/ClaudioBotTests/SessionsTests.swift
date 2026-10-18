@@ -324,6 +324,15 @@ private func invalidates(_ read: () -> Void, by change: () -> Void) -> Bool {
         #expect(threads[SessionID("f")] != nil, "a snapshot is a reply to a watch, so it opens the thread")
     }
 
+    @Test func theNewSessionModelsComeFromTheLastThreadThatOfferedAny() {
+        let threads = SessionThreads()
+        var phone = controls
+        phone.models = [SessionModelOption(id: "opus", label: "Opus"), SessionModelOption(id: "haiku", label: "Haiku")]
+        _ = threads.apply(SessionID("a"), .snapshot(SessionSnapshot(epoch: "e1.1", rev: 0, items: [], before: nil, controls: phone, live: nil)))
+        _ = threads.apply(SessionID("b"), snapshot([]))
+        #expect(threads.lastModels.map(\.id) == ["opus", "haiku"], "an agent or cloud session offers no models and leaves the menu as it was")
+    }
+
     @Test func aSettledSessionCardClearsItsPendingDecision() {
         let store = AppStore()
         store.apply(.hello(Hello(features: [.sessions], machine: "Mac", userName: "Alex", bots: [])))
@@ -403,6 +412,18 @@ private func invalidates(_ read: () -> Void, by change: () -> Void) -> Bool {
         cloud.url = URL(string: "https://claude.ai/code/session_01")
         #expect(ThreadBanner.of(row: cloud, controls: busy) == .cloud(URL(string: "https://claude.ai/code/session_01")))
         #expect(ThreadBanner.of(row: row("n"), controls: controls) == nil)
+        var parked = row("p", status: .parked)
+        parked.holder = .desktop
+        #expect(ThreadBanner.of(row: parked, controls: busy) == .waiting("Waiting for the Claude app to finish. Your message runs next."))
+    }
+
+    @Test func aParkedRowSaysWhatItWaitsFor() {
+        var parked = row("p", title: "Fix the fade", status: .parked)
+        parked.holder = .desktop
+        #expect(SessionMark(parked) == .parked)
+        #expect(SessionText.spoken(parked, project: "demo", botName: nil, now: at).hasPrefix("demo, Fix the fade, waiting for the claude app to finish, "))
+        parked.holder = .terminal
+        #expect(SessionText.parked(parked.holder) == "Waiting for the terminal to finish")
     }
 
     @Test func theNewestCardThatWaitsOnTheUserIsTheOneAnnounced() {

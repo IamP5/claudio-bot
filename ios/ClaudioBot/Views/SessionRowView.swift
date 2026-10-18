@@ -27,12 +27,20 @@ struct SessionRowView: View, Equatable {
             OriginBadge(origin: row.origin, avatar: avatar, size: badge)
             let line = accessible ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(spacing: 8))
             line {
-                Text(row.title)
-                    .font(.body.weight(emphasized ? .medium : .regular))
-                    .foregroundStyle(emphasized ? Color.white : Color.white.opacity(row.hidden ? 0.5 : 0.86))
-                    .lineLimit(accessible ? 4 : 1)
-                    .frame(maxWidth: accessible ? .infinity : nil, alignment: .leading)
-                    .layoutPriority(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.title)
+                        .font(.body.weight(emphasized ? .medium : .regular))
+                        .foregroundStyle(emphasized ? Color.white : Color.white.opacity(row.hidden ? 0.5 : 0.86))
+                        .lineLimit(accessible ? 4 : 1)
+                    if row.status == .parked {
+                        Text(SessionText.parked(row.holder))
+                            .font(.caption)
+                            .foregroundStyle(Theme.secondary)
+                            .lineLimit(accessible ? 3 : 1)
+                    }
+                }
+                .frame(maxWidth: accessible ? .infinity : nil, alignment: .leading)
+                .layoutPriority(1)
                 if !accessible { Spacer(minLength: 0) }
                 HStack(spacing: 8) {
                     MirrorGlyph(mirror: row.mirror)

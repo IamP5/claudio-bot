@@ -1,4 +1,4 @@
-import type { HookJSONOutput, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, HookJSONOutput, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +8,7 @@ import { flushNow, loadWorld } from "../src/store";
 import type { Agent, AgentId, BotId, Message, MessageId, RoutineId, RunId } from "../src/protocol";
 import type { Envelope } from "../src/prompts";
 import { botActor, emptySession, emptyWorld, newBot, post, repoTrust, type Actor, type AgentActor, type DailyCount, type GateState, type Initiator, type StandingRule } from "../src/world";
+import { replay } from "./transcript";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -362,6 +363,18 @@ describe("Claude Code's own prompts", () => {
     t.turn.stopping = true;
     expect(await t.prompt("make release", "toolu_a")).toMatchObject({ behavior: "deny", message: expect.stringContaining("pressed Stop") });
     expect(t.cards()).toHaveLength(0);
+  });
+
+  test("the prompt Claude Code really sends for a permissions.ask rule in auto mode posts a card and holds the call", async () => {
+    const t = setup();
+    const [call] = replay("ask-rule-prompt").prompts;
+    const options = { ...call!.options, signal: new AbortController().signal } as Parameters<CanUseTool>[2];
+    const held = await t.gate.canUseTool(botActor(B1))(call!.tool, call!.input, options);
+    const [card] = t.cards();
+    expect(card).toMatchObject({ tool: "Bash", detail: "echo ASKME hello", answer: null });
+    expect(held).toEqual({ behavior: "deny", message: expect.stringContaining(`Held for Alex's approval (card ${card!.id}). It has not run.`) });
+    expect(t.notified).toEqual([{ reason: "card", id: card!.id }]);
+    expect(t.auditRows().at(-1)).toMatchObject({ tool: "Bash", toolUseId: call!.options.toolUseID, decision: "ask", cardId: card!.id });
   });
 
   test("an agent's prompt shows in its bot's chat and the decision goes to the agent", async () => {

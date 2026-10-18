@@ -87,6 +87,7 @@ function lineOf(name: string, input: Input): string | null {
 
 /** The line one SDK message shows, or null when it changes nothing. Pure. */
 export function activityOf(m: SDKMessage): string | null {
+  if (m.type === "system" && m.subtype === "status" && m.status === "compacting") return "Compacting the conversation";
   if (m.type !== "assistant") return null;
   const content: unknown = m.message?.content;
   if (!Array.isArray(content)) return null;

@@ -316,7 +316,7 @@ final class ThreadModel {
     }
 }
 
-/// The threads the app keeps: the one on screen and the last few, so going back to one is instant. The bridge
+/// The threads the app keeps: every one on screen and the last few, so going back to one is instant. The bridge
 /// replays what each missed when it is watched again.
 @Observable
 @MainActor
@@ -328,6 +328,8 @@ final class SessionThreads {
     /// none, so opening one leaves the menu as it was.
     private(set) var lastModels: [SessionModelOption] = []
     @ObservationIgnored private var recent: [SessionID] = []
+    /// Threads some window shows, which are never evicted however many there are.
+    @ObservationIgnored private var onScreen: Set<SessionID> = []
 
     subscript(id: SessionID) -> ThreadModel? { models[id] }
 
@@ -337,10 +339,25 @@ final class SessionThreads {
         recent.append(id)
         let model = models[id] ?? ThreadModel(id: id)
         if models[id] == nil { models[id] = model }
-        while recent.count > Self.capacity {
-            models[recent.removeFirst()] = nil
-        }
+        evict()
         return model
+    }
+
+    /// Sets the threads on screen. One that leaves the screen becomes the most recent of the rest.
+    func keep(_ onScreen: Set<SessionID>) {
+        for id in self.onScreen.subtracting(onScreen) where recent.contains(id) {
+            recent.removeAll { $0 == id }
+            recent.append(id)
+        }
+        self.onScreen = onScreen
+        evict()
+    }
+
+    /// Drops the least recent threads off screen until at most `capacity` are kept, or only on-screen ones are left.
+    private func evict() {
+        while recent.count > Self.capacity, let index = recent.firstIndex(where: { !onScreen.contains($0) }) {
+            models[recent.remove(at: index)] = nil
+        }
     }
 
     func willWatch(_ id: SessionID) -> ThreadPosition? {

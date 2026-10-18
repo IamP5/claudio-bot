@@ -7,6 +7,10 @@ import SwiftUI
 final class MacChrome {
     /// The Pair iPhone sheet over the main window.
     var pairingIPhone = false
+    #if DEBUG
+    /// A window `claudiobot://debug/window` asked for, opened by the main window as Open in New Window would.
+    var debugWindow: Selection?
+    #endif
 }
 
 /// What a command reads and drives. Commands hold no state of their own.

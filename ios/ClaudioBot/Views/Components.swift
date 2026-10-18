@@ -241,3 +241,19 @@ struct StatusPill: View {
         .background(color.opacity(0.16), in: Capsule())
     }
 }
+
+/// On the Mac, opens a chat or session in a window of its own. Elsewhere it shows nothing.
+struct OpenInNewWindowButton: View {
+    let selection: Selection
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        #if os(macOS)
+        Button {
+            openWindow(value: selection)
+        } label: {
+            Label("Open in New Window", systemImage: "macwindow.badge.plus")
+        }
+        #endif
+    }
+}

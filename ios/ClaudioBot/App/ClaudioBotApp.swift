@@ -32,7 +32,7 @@ enum Route: Hashable {
     case routine(BotID, RoutineID)
 }
 
-enum Selection: Hashable, Sendable {
+enum Selection: Hashable, Codable, Sendable {
     case bot(BotID)
     case session(SessionID)
 
@@ -55,8 +55,10 @@ final class Router {
     static let sidebarKey = "sidebarMode"
 
     var selection: Selection?
-    var sidebar: SidebarMode = SidebarMode(rawValue: UserDefaults.standard.string(forKey: Router.sidebarKey) ?? "") ?? .bots {
-        didSet { UserDefaults.standard.set(sidebar.rawValue, forKey: Self.sidebarKey) }
+    /// Whether this window has the sidebar. A Mac window opened for one chat or session has none.
+    let hasSidebar: Bool
+    var sidebar: SidebarMode {
+        didSet { if hasSidebar { UserDefaults.standard.set(sidebar.rawValue, forKey: Self.sidebarKey) } }
     }
     /// Screens pushed on top of the chat.
     var path: [Route] = []
@@ -70,9 +72,26 @@ final class Router {
     var pendingCreate: String?
     var pendingSessionCreate: String?
 
+    /// The main window's router, with the sidebar it had last time.
+    init() {
+        hasSidebar = true
+        sidebar = SidebarMode(rawValue: UserDefaults.standard.string(forKey: Router.sidebarKey) ?? "") ?? .bots
+    }
+
+    /// A window for one chat or session, without a sidebar.
+    init(showing selection: Selection) {
+        hasSidebar = false
+        sidebar = selection.session == nil ? .bots : .sessions
+        self.selection = selection
+    }
+
     /// The list is watched while it shows, and while a thread is open: its header reads the row.
     var watchesSessions: Bool {
-        sidebar == .sessions || selection?.session != nil
+        (hasSidebar && sidebar == .sessions) || selection?.session != nil
+    }
+
+    var viewing: Viewing {
+        Viewing(bot: selection?.bot, session: selection?.session, sessionsList: watchesSessions)
     }
 
     func open(_ bot: BotID) {
@@ -113,7 +132,7 @@ final class AppModel {
         self.client = client
         let notifier = notifier
         let router = router
-        client.onAlerts = { notifier.post($0, viewing: client.openBot) }
+        client.onAlerts = { notifier.post($0, viewing: client.onScreen.bots) }
         client.onForget = { notifier.clearAll() }
         notifier.onOpenBot = { router.open($0) }
         notifier.onAnswer = { bot, message, option in
@@ -206,7 +225,7 @@ final class AppModel {
             endBackgroundTask()
             #endif
             client.reconnectNow()
-            if let open = client.openBot { notifier.clear(bot: open) }
+            client.onScreen.bots.forEach { notifier.clear(bot: $0) }
         default:
             break
         }
@@ -241,11 +260,7 @@ struct RootView: View {
         }
         .overlay(alignment: .top) { ErrorToast() }
         .tint(.white)
-        .onChange(of: router.selection, initial: true) { _, selection in
-            client.openBot = selection?.bot
-            client.openSession = selection?.session
-        }
-        .onChange(of: router.watchesSessions, initial: true) { _, watches in client.watchingSessions = watches }
+        .viewing(router)
         .onChange(of: store.created) { _, created in
             if let ref = router.pendingCreate, let bot = created[ref] {
                 router.pendingCreate = nil
@@ -258,5 +273,25 @@ struct RootView: View {
                 router.open(.session(session))
             }
         }
+    }
+}
+
+extension View {
+    /// Holds a viewing lease for this window while it is open, kept to what `router` shows.
+    func viewing(_ router: Router) -> some View {
+        modifier(ViewingLeaseHolder(router: router))
+    }
+}
+
+private struct ViewingLeaseHolder: ViewModifier {
+    let router: Router
+    @State private var lease = ViewingLease()
+    @Environment(BridgeClient.self) private var client
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { client.view(router.viewing, as: lease) }
+            .onChange(of: router.viewing) { _, viewing in client.view(viewing, as: lease) }
+            .onDisappear { client.view(nil, as: lease) }
     }
 }

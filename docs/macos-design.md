@@ -79,18 +79,20 @@ Local folder actions exist only when the place is this Mac and the path exists (
 
 | Area | v1 |
 |---|---|
-| Windows | One main window (default 1180×780, minimum 760×520) and a Settings window. Closing the window keeps the app alive for notifications. |
+| Windows | One main window (default 1180×780, minimum 760×520) and a Settings window. Closing the window keeps the app alive for notifications. Open in New Window (a bot's or a session's context menu) opens that chat or session alone in a window of its own (`WindowGroup(for: Selection.self)`), with its own `Router`. |
+| Viewing | Each window holds a `ViewingLease` in `BridgeClient` and sets what it shows on it. `OnScreen` merges the leases: a bot newly on screen anywhere is opened, every on-screen bot and thread is sent again after each hello, a thread is unwatched only when its last window leaves it, and the session thread LRU never evicts an on-screen thread. iOS holds one lease from `RootView`. |
 | Sidebar | The shared Bots \| Sessions switch. ⌘1 Bots, ⌘2 Sessions. |
 | Detail | Shared ChatView and SessionThreadView with their drill-ins. |
 | Profile | The shared profile beside the chat, toggled with ⌥⌘I. |
 | Settings (⌘,) | **General** is the shared Settings. **Bridge** is Mac-only: place, service state and controls, switch bridge, preferred editor. |
+| Pair iPhone | The shared Pair another device sheet asks for the device list every 2 s while it is up, and closes once a device missing from the first list appears. |
 | Menus | File: New Chat ⌘N, New Session ⌥⌘N, Pair iPhone ⇧⌘P. View: Bots ⌘1, Sessions ⌘2, Profile ⌥⌘I, Plan Usage ⇧⌘U, Refresh ⌘R. Bridge: Start, Stop, Restart, Show Log. |
 | Menu bar extra | Minimal `.menu` style (graft from both other candidates): connection line, waiting-on-you count, Pair iPhone, Open ClaudioBot, Quit. |
 | Dock badge | Open question and permission cards plus sessions awaiting you. Derived. |
 | Notifications | The shared Notifier, skipped for the chat on screen while the app is active. |
 | Deep links | `claudiobot://pair`, `bot/<id>`, `session/<id>`. |
 
-Deferred: multi-window (needs a per-window `Viewing` lease in `BridgeClient`), ⌘K palette, find in chat, a diff panel, a terminal, a session in any folder, the bundled bridge, several bridges at once.
+Deferred: ⌘K palette, find in chat, a diff panel, a terminal, a session in any folder, the bundled bridge, several bridges at once.
 
 ## Build order
 

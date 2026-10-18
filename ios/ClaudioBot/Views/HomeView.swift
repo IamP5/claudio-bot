@@ -198,6 +198,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private func menu(for bot: Bot) -> some View {
+        OpenInNewWindowButton(selection: .bot(bot.id))
         Button {
             client.send(.updateBot(botId: bot.id, patch: BotPatch(pinned: !bot.pinned)))
         } label: {

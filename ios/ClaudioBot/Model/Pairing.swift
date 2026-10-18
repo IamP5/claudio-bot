@@ -394,7 +394,14 @@ struct PairingVault: Sendable {
     let service: String
     private static let account = "bridge"
 
-    static let app = PairingVault(service: "dev.claudiobot.app.pairing")
+    /// A Debug build takes `-pairingVault <service>`, so a check pairs with a throwaway bridge and leaves the
+    /// app's own pairing alone.
+    static let app: PairingVault = {
+        #if DEBUG
+        if let service = UserDefaults.standard.string(forKey: "pairingVault") { return PairingVault(service: service) }
+        #endif
+        return PairingVault(service: "dev.claudiobot.app.pairing")
+    }()
 
     struct SaveFailed: LocalizedError {
         let status: OSStatus
@@ -468,5 +475,20 @@ extension Data {
             index = next
         }
         self.init(bytes)
+    }
+}
+
+/// Notices a device that paired while the pairing code is up: one missing from the first list heard after it went up.
+struct NewDeviceWatch: Sendable {
+    private var baseline: Set<DeviceID>?
+
+    /// Whether `devices` holds a device the first list did not.
+    mutating func heard(_ devices: [Device]) -> Bool {
+        let ids = Set(devices.map(\.id))
+        guard let baseline else {
+            baseline = ids
+            return false
+        }
+        return !ids.isSubset(of: baseline)
     }
 }

@@ -24,6 +24,19 @@ struct ClaudioBotMacApp: App {
         .commands { MacCommands(app: delegate.app, local: delegate.local, chrome: delegate.chrome) }
         .onChange(of: scenePhase) { _, phase in delegate.app.scenePhaseChanged(phase) }
 
+        // Open in New Window: one chat or session per window, each holding its own viewing lease.
+        WindowGroup("ClaudioBot", for: Selection.self) { $selection in
+            if let selection {
+                SelectionWindow(selection: selection)
+                    .shared(delegate)
+                    .frame(minWidth: 480, minHeight: 420)
+            }
+        }
+        .defaultSize(width: 760, height: 780)
+        .windowResizability(.contentMinSize)
+        // Its New Window item would open an empty one.
+        .commandsRemoved()
+
         Settings {
             MacSettings()
                 .shared(delegate)
@@ -57,6 +70,9 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         badgeDock()
+        #if DEBUG
+        DebugURL.openAtLaunch(self)
+        #endif
         let store = app.store
         Task { [local] in
             await local.run { client.pairing?.url.isLoopback == true && store.machine == nil }
@@ -121,7 +137,30 @@ private struct MacRoot: View {
         }
         #if DEBUG
         .modifier(DebugConfirmPairing())
+        .modifier(DebugOpenWindow())
         #endif
+    }
+}
+
+/// A window for one chat or session: the shared detail with its pushed screens, and no sidebar. Its router is its
+/// own, so what it pushes and opens stays in it.
+private struct SelectionWindow: View {
+    @State private var router: Router
+
+    init(selection: Selection) {
+        _router = State(initialValue: Router(showing: selection))
+    }
+
+    var body: some View {
+        @Bindable var router = router
+        DetailStack()
+            .environment(router)
+            .viewing(router)
+            // No column beside the chat, so the profile is pushed over it.
+            .environment(\.horizontalSizeClass, .compact)
+            .textFieldStyle(.plain)
+            .toolbar(removing: .title)
+            .sheet(isPresented: $router.showingUsage) { PlanUsageView() }
     }
 }
 

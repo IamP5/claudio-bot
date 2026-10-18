@@ -150,8 +150,8 @@ private func scratchVault() -> PairingVault {
         )
         let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
         let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
-        client.watchingSessions = true
-        client.openSession = SessionID("s1")
+        let window = ViewingLease()
+        client.view(Viewing(session: SessionID("s1"), sessionsList: true), as: window)
         client.start(pairing)
 
         try await eventually("the second watch of the thread", within: .seconds(8)) {
@@ -163,8 +163,38 @@ private func scratchVault() -> PairingVault {
         #expect(bridge.texts.filter { $0.contains(#""type":"watch_sessions""#) }.count == 2)
         #expect(client.store.threads[SessionID("s1")]?.live.text == "", "watching again drops the live text, as the contract says")
 
-        client.openSession = nil
+        client.view(Viewing(sessionsList: true), as: window)
         try await eventually("the unwatch") { bridge.texts.contains { $0.contains(#""type":"unwatch_session""#) } }
+        client.stop()
+    }
+
+    @Test func twoWindowsKeepTheirBotsAndAThreadTheyShareLiveUntilTheLastLeaves() async throws {
+        let sessionsHello = #"{"type":"hello","protocol":3,"features":["sessions"],"machine":"Mac","userName":"Alex","bots":[],"epoch":"","seq":0,"resumed":false}"#
+        let bridge = try FakeBridge(onOpen: { $0.send(sessionsHello) })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        let main = ViewingLease(), second = ViewingLease()
+        client.view(Viewing(bot: BotID("b1")), as: main)
+        client.view(Viewing(bot: BotID("b2")), as: second)
+        client.start(pairing)
+        try await eventually("both bots opened after the hello") {
+            bridge.texts.contains(#"{"botId":"b1","type":"open"}"#) && bridge.texts.contains(#"{"botId":"b2","type":"open"}"#)
+        }
+
+        client.view(Viewing(session: SessionID("s1"), sessionsList: true), as: main)
+        client.view(Viewing(session: SessionID("s1"), sessionsList: true), as: second)
+        try await eventually("the watch") { bridge.texts.contains { $0.contains(#""type":"watch_session""#) } }
+        #expect(bridge.texts.filter { $0.contains(#""type":"watch_session""#) }.count == 1, "a thread on screen twice is watched once")
+
+        client.view(nil, as: second)
+        client.send(.devices)
+        try await eventually("the window's close to be handled") { bridge.texts.contains(#"{"type":"devices"}"#) }
+        #expect(!bridge.texts.contains { $0.contains("unwatch") }, "the main window still shows the thread and the list")
+
+        client.view(nil, as: main)
+        try await eventually("the unwatches") {
+            bridge.texts.contains { $0.contains(#""type":"unwatch_session""#) } && bridge.texts.contains(#"{"type":"unwatch_sessions"}"#)
+        }
         client.stop()
     }
 

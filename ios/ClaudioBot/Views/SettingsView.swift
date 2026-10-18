@@ -159,10 +159,13 @@ private struct DeviceRow: View {
 }
 
 /// Shows a one-time code, as text and as the QR code another phone scans, with every address the bridge listed.
+/// Closes by itself once a device pairs, which it learns by asking for the device list while it is up.
 struct PairAnotherView: View {
+    static let devicePoll: Duration = .seconds(2)
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
     @Environment(\.dismiss) private var dismiss
+    @State private var watch = NewDeviceWatch()
 
     var body: some View {
         NavigationStack {
@@ -190,6 +193,17 @@ struct PairAnotherView: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
             .onAppear(perform: request)
+            .task {
+                guard store.bridgeManagesDevices else { return }
+                while !Task.isCancelled {
+                    // Offline, a send would queue every poll for the next hello.
+                    if store.machine != nil { client.send(.devices) }
+                    try? await Task.sleep(for: Self.devicePoll)
+                }
+            }
+            .onChange(of: store.devicesHeard) {
+                if let devices = store.devices, watch.heard(devices) { dismiss() }
+            }
         }
     }
 

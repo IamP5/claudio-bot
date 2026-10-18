@@ -82,31 +82,27 @@ final class BridgeClient {
     /// Connects in a row that ended without a hello. A hello resets it.
     private(set) var failures = 0
 
-    /// The bot on screen. It is opened now and again after every reconnect, which also marks it read.
-    var openBot: BotID? {
-        didSet {
-            guard let openBot, openBot != oldValue else { return }
-            transmitIfConnected(.open(botId: openBot))
-        }
-    }
+    /// Every window's bots and threads, merged. A bot newly on screen is opened now and again after every hello,
+    /// which also marks it read; a thread is watched now and again after every hello with the position the app holds,
+    /// and unwatched, which marks it visited, only when the last window showing it leaves. The Sessions list is
+    /// watched while any window wants it.
+    private(set) var onScreen = OnScreen()
 
-    /// Whether the Sessions list is on screen. It is watched now and again after every hello, and unwatched when it goes.
-    var watchingSessions = false {
-        didSet {
-            guard watchingSessions != oldValue, store.has(.sessions) else { return }
-            transmitIfConnected(watchingSessions ? .watchSessions : .unwatchSessions)
+    /// Sets what the window holding `lease` shows; nil returns the lease, as when the window closes.
+    func view(_ viewing: Viewing?, as lease: ViewingLease) {
+        let change = onScreen.set(viewing, for: lease)
+        guard !change.isEmpty else { return }
+        store.threads.keep(onScreen.sessions)
+        change.opened.forEach { transmitIfConnected(.open(botId: $0)) }
+        guard store.has(.sessions) else {
+            change.watched.forEach { store.threads.open($0) }
+            return
         }
-    }
-
-    /// The session thread on screen. Watched now and again after every hello with the position the app holds;
-    /// leaving it unwatches it, which marks it visited.
-    var openSession: SessionID? {
-        didSet {
-            guard openSession != oldValue else { return }
-            if let oldValue, store.has(.sessions) { transmitIfConnected(.unwatchSession(sessionId: oldValue)) }
-            guard let openSession else { return }
-            store.threads.open(openSession)
-            if store.has(.sessions) { watchThreadIfConnected(openSession) }
+        change.unwatched.forEach { transmitIfConnected(.unwatchSession(sessionId: $0)) }
+        if let list = change.sessionsList { transmitIfConnected(list ? .watchSessions : .unwatchSessions) }
+        for id in change.watched {
+            store.threads.open(id)
+            watchThreadIfConnected(id)
         }
     }
 
@@ -399,13 +395,13 @@ final class BridgeClient {
             case .hello:
                 greeted = true
                 if let attended, store.has(.presence) { transmit(.presence(attended: attended), on: ws) }
-                if let openBot { transmit(.open(botId: openBot), on: ws) }
+                onScreen.bots.sorted { $0.rawValue < $1.rawValue }.forEach { transmit(.open(botId: $0), on: ws) }
                 // Facts bots propose show as a badge and in their chats, so the app keeps them live from the start.
                 if store.has(.memory) { transmit(.memory, on: ws) }
                 // Before the outbox, so a send made offline lands after the thread's snapshot, not before it.
                 if store.has(.sessions) {
-                    if watchingSessions { transmit(.watchSessions, on: ws) }
-                    if let openSession { watchThread(openSession, on: ws) }
+                    if onScreen.sessionsList { transmit(.watchSessions, on: ws) }
+                    onScreen.sessions.sorted { $0.rawValue < $1.rawValue }.forEach { watchThread($0, on: ws) }
                 }
                 let resent = store.resendsAfterHello()
                 resent.forEach { transmitCounted($0, on: ws) }
@@ -416,8 +412,8 @@ final class BridgeClient {
                     .filter { !resent.contains($0.message) && Self.stillWanted($0.message, queuedAt: $0.at, now: now, staleStop: timing.staleStop) }
                     .forEach { send($0.message) }
                 upgradeLegacyPairing()
-            case .bot(let bot) where bot.id == openBot && bot.unread > 0:
-                // The bridge counts a message as unread until the next open, so re-open the bot on screen.
+            case .bot(let bot) where onScreen.bots.contains(bot.id) && bot.unread > 0:
+                // The bridge counts a message as unread until the next open, so re-open a bot on screen.
                 transmit(.open(botId: bot.id), on: ws)
             case .pairCode(let code):
                 answerPairCode(code)

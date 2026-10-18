@@ -130,6 +130,8 @@ final class AppStore {
     private(set) var pendingDecisions: [MessageID: PermissionChoice] = [:]
     /// The phones paired with this Mac, once Settings asked for them.
     private(set) var devices: [Device]?
+    /// Device lists heard, so a view sees every reply, even one that repeats the list.
+    private(set) var devicesHeard = 0
     /// The newest code for pairing another phone.
     private(set) var pairCode: PairCode?
     /// From the last hello. Empty for a bridge from before features.
@@ -346,6 +348,7 @@ final class AppStore {
 
         case let .devices(devices):
             self.devices = devices
+            devicesHeard += 1
             return []
 
         case let .pairCode(code):

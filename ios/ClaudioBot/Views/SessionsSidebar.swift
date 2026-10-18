@@ -245,6 +245,7 @@ struct SessionsSidebar: View {
 
     @ViewBuilder
     private func menu(for row: SessionRow) -> some View {
+        OpenInNewWindowButton(selection: .session(row.id))
         Button {
             newTitle = row.title
             renaming = row

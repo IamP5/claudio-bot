@@ -25,10 +25,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
     }
 
-    func post(_ alerts: [Alert], viewing: BotID?) {
+    /// Skips alerts for the chats on screen while the app is active.
+    func post(_ alerts: [Alert], viewing: Set<BotID>) {
         guard enabled else { return }
         let active = AppActivity.isActive
-        for alert in alerts where !(active && alert.bot.id == viewing) {
+        for alert in alerts where !(active && viewing.contains(alert.bot.id)) {
             Task { await post(alert) }
         }
     }

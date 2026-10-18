@@ -280,6 +280,40 @@ export type Command = { name: string; description: string; argumentHint: string;
 /** One message between two bots, the text behind an exchange line. from: the bot that sent it. */
 export type ExchangeMessage = { id: MessageId; at: string; from: BotId; text: string };
 
+/**
+ * One limit window of the user's Claude plan, as Claude Code's /usage reads it. kind: the 5-hour session, the weekly
+ * window over all models, or a weekly window for one model. The app treats an unknown kind as "weekly".
+ */
+export type UsageWindowKind = "session" | "weekly" | "weekly_model";
+/** How close a window is to its limit, as the server rates it. The app treats an unknown severity as "normal". */
+export type UsageSeverity = "normal" | "warning" | "critical";
+export type UsageWindow = {
+  /** The same window keeps its id across reads: "session", "weekly", "weekly:fable". */
+  id: string;
+  kind: UsageWindowKind;
+  /** "Current session", "Weekly · all models", "Weekly · Fable". */
+  label: string;
+  /** The share of the window used, from 0; at or past 1 the limit is reached. */
+  utilization: number;
+  resetsAt: string | null;
+  severity: UsageSeverity;
+};
+
+/**
+ * Why the bridge shows no plan limits. api_key: Claude Code runs on an API key; third_party: on Bedrock, Vertex or
+ * another provider; logged_out: not logged in; no_scope: logged in with a token that may not read usage; failed: no
+ * read has worked since the bridge started. The app treats an unknown reason as "failed".
+ */
+export type UsageUnavailable = "api_key" | "third_party" | "logged_out" | "no_scope" | "failed";
+
+/**
+ * The plan's usage limits. fetchedAt: when these numbers were read. stale: the last reads failed, so these are the last
+ * good ones. plan: the subscription Claude Code reports ("max", "pro"), null when it names none.
+ */
+export type PlanUsage =
+  | { state: "ok"; plan: string | null; fetchedAt: string; stale: boolean; windows: UsageWindow[] }
+  | { state: "unavailable"; reason: UsageUnavailable; fetchedAt: string };
+
 export type ServerMessage =
   // The app shows "Update the bridge" or "Update the app" when protocol is outside the range it speaks.
   | ({ type: "hello"; protocol: number; features: Feature[]; machine: string; userName: string; bots: Bot[] } & StreamPosition)

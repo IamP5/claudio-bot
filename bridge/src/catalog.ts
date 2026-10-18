@@ -11,7 +11,6 @@ import type { AgentRecord, World } from "./world";
 // else holds a session, the Claude app's list and the overlay (hidden, visited). Rows are computed, never stored, and
 // diffs go to the sockets watching the list at most every 500 ms.
 
-/** What the bridge's own writer on an id says, when it has one. */
 export type Driven = { status: SessionStatus; working: boolean };
 
 export type CatalogDeps = {

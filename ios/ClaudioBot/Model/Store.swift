@@ -153,7 +153,6 @@ final class AppStore {
     private(set) var unechoedSends: [(message: ClientMessage, transmitted: Int)] = []
     /// The Sessions list. Its own observable, so a list diff never re-renders a reader of the bots.
     let sessions = SessionIndex()
-    /// The open threads, each its own observable.
     let threads = SessionThreads()
 
     func has(_ feature: Feature) -> Bool {

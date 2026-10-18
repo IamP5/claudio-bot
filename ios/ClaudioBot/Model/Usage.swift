@@ -1,6 +1,5 @@
 import Foundation
 
-/// How the app words the plan's usage limits. Pure, so the tests pin every string.
 enum UsageText {
     /// "37% used". Below the limit it never rounds up to 100%, and at the limit it never reads less.
     static func used(_ utilization: Double) -> String {
@@ -12,8 +11,6 @@ enum UsageText {
         return utilization < 1 ? min(rounded, 99) : max(rounded, 100)
     }
 
-    /// "Resets in 2 h 14 min" under a day, else "Resets Tue 9:00 AM" in the phone's time zone, with the date past six
-    /// days. Nil when the server named no reset.
     static func resets(_ at: Date?, now: Date, locale: Locale = .current, timeZone: TimeZone = .current) -> String? {
         guard let at else { return nil }
         let left = at.timeIntervalSince(now)
@@ -22,7 +19,6 @@ enum UsageText {
         return "Resets \(day(at, left: left, wide: false, locale: locale, timeZone: timeZone))"
     }
 
-    /// What VoiceOver reads for a window: "Current session, 37 percent used, resets in 2 hours 14 minutes".
     static func spoken(_ window: UsageWindow, now: Date, locale: Locale = .current, timeZone: TimeZone = .current) -> String {
         let name = window.label.replacingOccurrences(of: " · ", with: ", ")
         let used = "\(percent(window.utilization)) percent used"
@@ -34,7 +30,6 @@ enum UsageText {
         return "\(name), \(used), \(reset)"
     }
 
-    /// "Updated just now", "Updated 2 min ago", "Updated 3 h ago".
     static func updated(_ at: Date, now: Date) -> String {
         let ago = max(0, now.timeIntervalSince(at))
         if ago < 60 { return "Updated just now" }
@@ -43,19 +38,16 @@ enum UsageText {
         return "Updated \(Int(ago / 86400)) d ago"
     }
 
-    /// The line under the windows: when they were read, and that the last reads failed when they did.
     static func status(_ usage: PlanUsage, now: Date) -> String {
         if case .ok(_, let at, true, _) = usage { return "Couldn't refresh. \(updated(at, now: now))." }
         return updated(usage.fetchedAt, now: now)
     }
 
-    /// "Claude Max" from "max". Nil when the bridge named no plan.
     static func plan(_ raw: String?) -> String? {
         guard let raw = raw?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
         return "Claude \(raw.prefix(1).uppercased())\(raw.dropFirst())"
     }
 
-    /// One line that says what is wrong and how to fix it.
     static func unavailable(_ reason: UsageUnavailable) -> String {
         switch reason {
         case .loggedOut: "Log in to Claude Code on your Mac with your Claude subscription."
@@ -66,7 +58,6 @@ enum UsageText {
         }
     }
 
-    /// "2 h 14 min", or "2 hours 14 minutes" for VoiceOver. Minutes round up, so "1 min" means under a minute and more.
     private static func duration(_ seconds: TimeInterval, spoken: Bool) -> String {
         let minutes = Int((seconds / 60).rounded(.up))
         let (h, m) = (minutes / 60, minutes % 60)

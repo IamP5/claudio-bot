@@ -80,7 +80,6 @@ extension View {
 }
 
 extension View {
-    /// Pins a bar under the navigation bar, blurred over the content on iOS 26 like the composer's.
     @ViewBuilder
     func topBar(@ViewBuilder _ content: () -> some View) -> some View {
         if #available(iOS 26.0, *) {

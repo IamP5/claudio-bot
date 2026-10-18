@@ -10,8 +10,6 @@ extension UsageSeverity {
     }
 }
 
-/// The plan's usage limits as Form rows: one per window, with what is used and when it resets. Settings shows them, and
-/// so does the sheet the bot list opens.
 struct PlanUsageSection: View {
     /// The sheet is titled Plan usage already, so its section says only what the rows are.
     var title = "Plan usage"
@@ -98,7 +96,6 @@ struct PlanUsageSection: View {
     }
 }
 
-/// One window: its name, what is used, a bar tinted by how close the server says it is, and when it resets.
 struct UsageRow: View {
     let window: UsageWindow
     var stale = false
@@ -130,7 +127,6 @@ struct UsageRow: View {
     }
 }
 
-/// The session window in the bot list's toolbar: a ring and the share used, tinted by severity. Opens Plan usage.
 struct SessionUsageButton: View {
     let usage: PlanUsage?
     let action: () -> Void
@@ -177,7 +173,6 @@ struct SessionUsageButton: View {
     }
 }
 
-/// Plan usage on its own, as a sheet over the bot list.
 struct PlanUsageView: View {
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client

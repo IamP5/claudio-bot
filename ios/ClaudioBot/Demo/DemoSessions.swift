@@ -1,8 +1,6 @@
 #if DEBUG
 import Foundation
 
-/// The Sessions half of demo mode: projects, rows from every origin, and threads that show every kind of item. Frames
-/// go through the store's reducer, as the bridge's would. `respondToSession` stands in for the bridge's session verbs.
 @MainActor
 enum DemoSessions {
     static let fade = SessionID("6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31")
@@ -210,7 +208,6 @@ enum DemoSessions {
         ]
     }
 
-    /// A long thread for scrolling: 125 turns of 4 items, the newest 120 items first and the rest a page above.
     static func catalogItems() -> [SessionItem] {
         (0..<125).flatMap { turn -> [SessionItem] in
             let minutes = Double(125 - turn) * 6 + 35
@@ -372,7 +369,6 @@ enum DemoSessions {
         update(store, id) { $0.status = choice.allows ? .working : .idle }
     }
 
-    /// Queues the message, has the transcript take it, streams a short answer and settles.
     private static func reply(to text: String, clientId: String, in id: SessionID, store: AppStore) {
         Task {
             items(store, id, [.user(id: ItemID(clientId), at: .now, text: text, from: .user, queued: true)])

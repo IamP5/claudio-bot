@@ -51,7 +51,6 @@ struct ThreadRowView: View, Equatable {
     }
 }
 
-/// The user's message on the right. A bot's message to its agent says so; a queued one waits in a dashed outline.
 struct SessionUserBubble: View {
     let text: String
     let from: SessionAuthor
@@ -99,7 +98,6 @@ struct SessionUserBubble: View {
     }
 }
 
-/// A finished turn's steps on one line: what the tool runs did and how many replies, tap to open.
 struct FoldRow: View {
     let items: [SessionItem]
     let expanded: Bool
@@ -179,7 +177,6 @@ struct ThinkingRow: View {
     }
 }
 
-/// One run of tool calls: a line that says what it did, opening to each step with its diff and output.
 struct WorkRunRow: View {
     let steps: [ToolStep]
     let onFullOutput: (ToolStep) -> Void
@@ -336,7 +333,6 @@ private struct StepState: View {
     }
 }
 
-/// "+12 −4" in the colors a diff uses.
 struct DiffStat: View {
     let added: Int
     let removed: Int
@@ -404,7 +400,6 @@ struct TodoCard: View {
     }
 }
 
-/// An ExitPlanMode plan: the plan itself, then Approve or Keep planning while the phone may decide it.
 struct PlanCard: View {
     let sessionId: SessionID
     let markdown: RenderedMarkdown
@@ -477,8 +472,6 @@ struct PlanCard: View {
     }
 }
 
-/// An AskUserQuestion: each question with its options and a free answer, sent together. A single question with one
-/// pick sends on the tap.
 struct AskCard: View {
     let sessionId: SessionID
     let questions: [AskQuestion]
@@ -619,7 +612,6 @@ struct AskCard: View {
         }
     }
 
-    /// One question with one pick and nothing typed sends on the tap; anything else waits for Send.
     private var needsSubmit: Bool {
         !(questions.count == 1 && !questions[0].multiSelect && typed[questions[0].question, default: ""].isEmpty)
     }
@@ -706,8 +698,7 @@ struct CompactionDivider: View {
     }
 }
 
-/// The text streaming into the next reply, plain until its item arrives with markdown. The only view that reads the
-/// live text, so a delta redraws this and nothing else. While Claude works with nothing to say yet, a working line.
+/// The only view that reads the live text, so a delta redraws this and nothing else.
 struct StreamingTail: View {
     let live: LiveText
     let working: Bool

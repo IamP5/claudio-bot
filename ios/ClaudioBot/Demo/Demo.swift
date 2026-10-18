@@ -282,7 +282,6 @@ enum Demo {
         RoutineRun(id: RunID("run1"), at: at(4, 7, 30), status: .failed, late: false, manual: false, note: "The forum timed out twice."),
     ]
 
-    /// The plan's limits as a Max login reports them, read `ago` seconds back.
     private static func usage(_ screen: String?, ago: TimeInterval = 60) -> PlanUsage {
         let now = Date.now
         if screen == "usageoff" { return .unavailable(reason: .loggedOut, fetchedAt: now - ago) }

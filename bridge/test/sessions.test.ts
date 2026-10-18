@@ -122,7 +122,6 @@ const one = async (m: Parameters<Sessions["handle"]>[0]) => {
 const rowsOf = async () => ((await one({ type: "watch_sessions" })) as Extract<ServerMessage, { type: "sessions" }>).rows;
 const rowOf = (rows: SessionRow[], id: SessionId) => rows.find((r) => r.id === id)!;
 
-/** Appends a line that continues the transcript's chain from its last entry. */
 function continueWith(id: SessionId, entry: Record<string, unknown>) {
   const lines = readFileSync(fileOf(id), "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
   const leaf = lines.findLast((l) => typeof l.uuid === "string" && ["user", "assistant", "attachment", "system"].includes(String(l.type)))!;

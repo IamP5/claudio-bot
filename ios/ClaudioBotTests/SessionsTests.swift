@@ -7,7 +7,6 @@ private final class BundleToken {}
 
 private let at = Date(timeIntervalSince1970: 1_792_152_000)
 
-/// The fixture's frames for one thread, in the order the bridge would send them.
 private func fixtureThread() throws -> (id: SessionID, frames: [ThreadFrame]) {
     let url = Bundle(for: BundleToken.self).url(forResource: "protocol", withExtension: "json")!
     let root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: [Any]]
@@ -60,7 +59,6 @@ private func snapshot(_ items: [SessionItem], rev: Int = 1, before: Cursor? = ni
     return .snapshot(SessionSnapshot(epoch: "e1", rev: rev, items: items, before: before, controls: c, live: live))
 }
 
-/// Whether reading `read` from an observable registers a change once `change` runs.
 @MainActor
 private func invalidates(_ read: () -> Void, by change: () -> Void) -> Bool {
     final class Flag: @unchecked Sendable { var fired = false }

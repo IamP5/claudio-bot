@@ -133,7 +133,6 @@ export function createAgents(deps: {
   idle: (actor: AgentActor) => void;
   /** Whether Claude Code has a transcript for the session id, so the query resumes it rather than starts it. */
   transcriptExists: (sessionId: string, cwd: string) => boolean;
-  /** A mac agent's turn ended done (the Claude app mirror policy). */
   turnDone?: (agent: AgentRecord) => void;
 }): Agents {
   const sessions = new Map<AgentId, Session>();

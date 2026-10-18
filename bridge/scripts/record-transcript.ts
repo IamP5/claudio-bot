@@ -99,7 +99,6 @@ const oneTurn = (prompt: string): Scenario["run"] => async (io) => {
 };
 
 const SCENARIOS: Record<string, Scenario> = {
-  // Write, Edit and Bash, each asked through canUseTool and allowed once, with the stream's partial messages.
   "own-permission": {
     options: OWN,
     keepTranscript: true,
@@ -109,7 +108,6 @@ const SCENARIOS: Record<string, Scenario> = {
         "2. Edit a.txt to replace the line two with TWO. 3. Run this Bash command: cat a.txt\nThen reply with the single word DONE.",
     ),
   },
-  // TodoWrite, then an AskUserQuestion the phone answers, then a Write using the answer.
   "own-ask": {
     options: OWN,
     keepTranscript: true,
@@ -120,7 +118,6 @@ const SCENARIOS: Record<string, Scenario> = {
         "3. Write the chosen color to color.txt. Then reply with the single word DONE.",
     ),
   },
-  // Plan mode: the plan is proposed with ExitPlanMode, the phone approves it, and the work runs.
   "own-plan": {
     options: { ...OWN, permissionMode: "plan" },
     keepTranscript: true,
@@ -198,7 +195,6 @@ function scrubber(cwd: string) {
     see(m: SDKMessage) {
       if (m.session_id && !sessions.has(m.session_id)) sessions.set(m.session_id, `<session-${sessions.size + 1}>`);
     },
-    /** One transcript line, scrubbed like a received message. */
     json: (v: unknown): unknown => walk(v, ""),
     line(l: Line): Line {
       if ("dir" in l && l.dir === "in" && l.message.type === "system") {

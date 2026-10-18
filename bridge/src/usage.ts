@@ -45,7 +45,6 @@ export type UsageMonitorDeps = {
 type Good = Extract<PlanUsage, { state: "ok" }>;
 type Flight = { startedAt: number };
 
-/** Equal apart from when it was read. */
 const sameAs = (a: PlanUsage, b: PlanUsage) => JSON.stringify({ ...a, fetchedAt: "" }) === JSON.stringify({ ...b, fetchedAt: "" });
 
 /** What the phones see after a read, and the good read kept for a failure after it. */
@@ -58,7 +57,6 @@ function afterRead(good: Good | null, outcome: UsageRead | Error, fetchedAt: str
 
 export function createUsageMonitor(deps: UsageMonitorDeps): UsageMonitor {
   let flight: Flight | null = null;
-  /** When the last read started; null before the first. */
   let attemptedAt: number | null = null;
   let settleAt: number | null = null;
   let retryAt: number | null = null;

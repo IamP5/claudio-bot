@@ -1,12 +1,9 @@
 import SwiftUI
 
-/// One session in the sidebar: where it came from, its title, then its PR, age and the one mark that matters most.
 /// Built from values only, so SwiftUI skips it when the row did not change.
 struct SessionRowView: View, Equatable {
     let row: SessionRow
-    /// The bot's avatar, for a row a bot's agent owns.
     var avatar: Avatar?
-    /// 0 for a root; nested rows indent under a guide.
     var depth = 0
     var isLast = false
     var now: Date = .now
@@ -68,7 +65,6 @@ struct SessionRowView: View, Equatable {
     }
 }
 
-/// Who started the session: the bot's avatar for its agent, else a symbol.
 struct OriginBadge: View {
     let origin: SessionOrigin
     var avatar: Avatar?
@@ -101,7 +97,6 @@ struct OriginBadge: View {
     }
 }
 
-/// The row's most urgent state, each with its own shape so color is never the only cue.
 struct SessionMarkView: View {
     let mark: SessionMark?
     @ScaledMetric(relativeTo: .caption) private var size: CGFloat = 13
@@ -129,7 +124,6 @@ struct SessionMarkView: View {
     }
 }
 
-/// A turning arc while a session works. Under Reduce Motion it holds still.
 struct WorkingRing: View {
     var size: CGFloat = 12
     var color: Color = AvatarColor.orange.color
@@ -147,7 +141,6 @@ struct WorkingRing: View {
     }
 }
 
-/// The PR icon and its number, tinted by its state the way GitHub tints it.
 struct PullRequestChip: View {
     let pr: SessionPullRequest
 
@@ -174,7 +167,6 @@ struct PullRequestChip: View {
     }
 }
 
-/// Only the states worth a glance: an import into the Claude app that waits, or one that failed.
 struct MirrorGlyph: View {
     let mirror: SessionMirror
 
@@ -192,7 +184,6 @@ struct MirrorGlyph: View {
     }
 }
 
-/// The thin line that ties a nested session to its parent, turning toward the last one.
 struct IndentGuide: Shape {
     let isLast: Bool
 

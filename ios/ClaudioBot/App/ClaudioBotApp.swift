@@ -30,7 +30,6 @@ enum Route: Hashable {
     case routine(BotID, RoutineID)
 }
 
-/// What the detail column shows: a bot's chat or a Claude Code session's thread.
 enum Selection: Hashable, Sendable {
     case bot(BotID)
     case session(SessionID)
@@ -44,7 +43,6 @@ enum Selection: Hashable, Sendable {
     }
 }
 
-/// Which list the sidebar shows.
 enum SidebarMode: String, Hashable, Sendable {
     case bots, sessions
 }
@@ -54,9 +52,7 @@ enum SidebarMode: String, Hashable, Sendable {
 final class Router {
     static let sidebarKey = "sidebarMode"
 
-    /// The chat or thread on screen.
     var selection: Selection?
-    /// Remembered across launches, like the tab a user left an app on.
     var sidebar: SidebarMode = SidebarMode(rawValue: UserDefaults.standard.string(forKey: Router.sidebarKey) ?? "") ?? .bots {
         didSet { UserDefaults.standard.set(sidebar.rawValue, forKey: Self.sidebarKey) }
     }
@@ -65,13 +61,11 @@ final class Router {
     var showingNewChat = false
     var showingSettings = false
     var showingUsage = false
-    /// The project a new session starts in, while that sheet is up.
     var newSession: NewSessionRequest?
     /// The profile beside the chat, on iPad.
     var showingInspector = false
     /// The ref of a create_bot in flight; the bot it becomes is opened.
     var pendingCreate: String?
-    /// The ref of a session_create in flight; the session it becomes is opened.
     var pendingSessionCreate: String?
 
     /// The list is watched while it shows, and while a thread is open: its header reads the row.
@@ -94,7 +88,6 @@ final class Router {
     }
 }
 
-/// The new-session sheet, opened from a project's + or the toolbar's.
 struct NewSessionRequest: Identifiable, Hashable, Sendable {
     let id = UUID()
     var projectId: ProjectID?

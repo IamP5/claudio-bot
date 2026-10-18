@@ -10,7 +10,6 @@ struct Spend: Equatable, Sendable {
     /// The share at which the chat warns that background work will soon stop.
     static let warnAt = 0.8
 
-    /// nil without a limit.
     var fraction: Double? {
         limitUsd.map { $0 > 0 ? spentUsd / $0 : 1 }
     }
@@ -18,7 +17,6 @@ struct Spend: Equatable, Sendable {
     var reached: Bool { limitUsd.map { spentUsd >= $0 } ?? false }
     var nearLimit: Bool { (fraction ?? 0) >= Self.warnAt }
 
-    /// "$8.40 of $10.00", or "$8.40" without a limit.
     var text: String { limitUsd.map { "\(Money.text(spentUsd)) of \(Money.text($0))" } ?? Money.text(spentUsd) }
 }
 

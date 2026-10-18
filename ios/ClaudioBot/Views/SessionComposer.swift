@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// The bar under a session's thread: model and mode, what is queued, the plan's usage, and the field with Send or
-/// Stop. While Claude works, Send queues the message; holding it offers Stop and send. When the session cannot take
-/// a message, the field gives way to the reason.
 struct SessionComposer: View {
     let sessionId: SessionID
     let controls: SessionControls?
@@ -210,8 +207,6 @@ struct SessionComposer: View {
     }
 }
 
-/// A new Claude Code session in one of the Mac's projects. The bridge answers with the session's id before Claude
-/// Code starts, and the app opens it.
 struct NewSessionSheet: View {
     let projectId: ProjectID?
 

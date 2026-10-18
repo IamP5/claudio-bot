@@ -1054,7 +1054,6 @@ struct Hello: Hashable, Sendable {
     }
 }
 
-/// Which limit window of the Claude plan a row is. An unknown kind reads as a weekly window.
 enum UsageWindowKind: OpenEnum {
     case session, weekly, weeklyModel
     case unknown(String)
@@ -1072,7 +1071,6 @@ enum UsageWindowKind: OpenEnum {
     }
 }
 
-/// How close a window is to its limit, as the server rates it. An unknown severity reads as normal.
 enum UsageSeverity: OpenEnum {
     case normal, warning, critical
     case unknown(String)
@@ -1114,7 +1112,6 @@ struct UsageWindow: Codable, Hashable, Sendable, Identifiable {
     /// The same window keeps its id across reads: "session", "weekly", "weekly:fable".
     let id: String
     var kind: UsageWindowKind
-    /// "Current session", "Weekly · all models", "Weekly · Fable".
     var label: String
     /// The share used, from 0. At or past 1 the limit is reached.
     var utilization: Double
@@ -1170,7 +1167,6 @@ enum PlanUsage: Codable, Hashable, Sendable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let fetchedAt = try c.decode(Date.self, forKey: .fetchedAt)
-        // A state this app does not know shows as a read that failed.
         guard try c.decode(String.self, forKey: .state) == "ok" else {
             self = .unavailable(reason: try c.decodeIfPresent(UsageUnavailable.self, forKey: .reason) ?? .failed, fetchedAt: fetchedAt)
             return
@@ -1216,7 +1212,6 @@ typealias ItemID = Identifier<ItemTag>
 /// Opaque: where the next older page starts. Sent back as it came.
 typealias Cursor = Identifier<CursorTag>
 
-/// Who started the session.
 enum SessionOrigin: OpenEnum {
     case phone, agent, desktop, terminal, sdk, cloud
     case unknown(String)
@@ -1300,7 +1295,6 @@ enum SessionMirror: OpenEnum {
     }
 }
 
-/// Settings, "Show agent sessions in the Claude app": Automatically, When I tap, Never.
 enum MirrorPref: OpenEnum {
     case auto, tap, never
     case unknown(String)
@@ -1339,7 +1333,6 @@ enum PermissionMode: OpenEnum {
     }
 }
 
-/// Where a new session works: the project folder itself (the wire's "none"), or a new worktree.
 enum SessionIsolation: String, Codable, Hashable, Sendable, CaseIterable {
     case inPlace = "none"
     case worktree
@@ -1401,7 +1394,6 @@ struct SessionPullRequest: Codable, Hashable, Sendable {
     }
 }
 
-/// The bot's agent that owns a session.
 struct SessionAgentLink: Codable, Hashable, Sendable {
     let botId: BotID
     let agentId: AgentID
@@ -1419,7 +1411,6 @@ struct SessionRow: Codable, Hashable, Sendable, Identifiable {
     var holder: SessionHolder
     var unread: Bool
     var branch: String?
-    /// The cwd is a git worktree, not the main checkout.
     var worktree: Bool
     var pr: SessionPullRequest?
     var mirror: SessionMirror
@@ -1581,7 +1572,6 @@ struct AskOption: Codable, Hashable, Sendable {
     var description: String
 }
 
-/// One AskUserQuestion question. The app offers a free answer besides the options.
 struct AskQuestion: Codable, Hashable, Sendable {
     var question: String
     var header: String
@@ -1636,7 +1626,6 @@ enum SessionItem: Codable, Hashable, Sendable, Identifiable {
     case assistant(id: ItemID, at: Date, text: String)
     /// ms: how long it thought, nil when unknown.
     case thinking(id: ItemID, at: Date, text: String, ms: Int?)
-    /// One run of tool calls.
     case work(id: ItemID, at: Date, steps: [ToolStep])
     case todo(id: ItemID, at: Date, todos: [SessionTodo])
     /// cardId: set while the phone may decide it (sessionDecide: once approves, deny keeps planning).
@@ -1821,7 +1810,6 @@ enum SessionsFrame: Hashable, Sendable {
     case changed(rows: [SessionRow], removed: [SessionID], projects: [SessionProject])
 }
 
-/// One thread's frames.
 enum ThreadFrame: Hashable, Sendable {
     case snapshot(SessionSnapshot)
     /// Upserts by id and removals; rev is the thread's rev after it. controls nil: unchanged. An upsert drops its live text.

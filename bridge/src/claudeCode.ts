@@ -142,7 +142,6 @@ function namedWindows(limits: Raw): (UsageWindow | null)[] {
   ];
 }
 
-/** Why a login has no plan limits to read. */
 function unavailable(a: AccountInfo): Exclude<UsageUnavailable, "failed"> {
   if (a.apiProvider && a.apiProvider !== "firstParty") return "third_party";
   if (loginOf(a).kind === "out") return "logged_out";

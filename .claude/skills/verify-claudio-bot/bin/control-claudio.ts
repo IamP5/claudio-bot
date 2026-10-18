@@ -591,7 +591,6 @@ async function thread(run: Run, ref: string) {
   c.close();
 }
 
-/** A socket that keeps every frame with the time it arrived, for session-flow. */
 async function socketOf(run: Run) {
   const c = await connect(run);
   const t0 = Date.now();

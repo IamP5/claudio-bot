@@ -38,7 +38,6 @@ final class LiveText {
     }
 }
 
-/// One row on screen. Items show as they are, except the steps of a finished turn, which fold to one line.
 enum ThreadRow: Equatable, Identifiable, Sendable {
     case item(SessionItem)
     /// A finished turn's thinking, tool runs and in-between text. id: the first folded item's id, prefixed, so it
@@ -101,7 +100,6 @@ enum ThreadLayout {
 }
 
 extension SessionItem {
-    /// Steps a finished turn may fold away.
     var folds: Bool {
         switch self {
         case .thinking, .work, .assistant: true
@@ -114,7 +112,6 @@ extension SessionItem {
     }
 }
 
-/// How a run of tool calls reads in one line: "Edited 3 files, ran 2 commands".
 enum WorkSummary {
     static func text(_ steps: [ToolStep]) -> String {
         var edited = Set<String>()
@@ -142,7 +139,6 @@ enum WorkSummary {
         return parts.joined(separator: ", ")
     }
 
-    /// A fold's line: what its tool runs did, and how many replies and thoughts it holds besides.
     static func fold(_ items: [SessionItem]) -> String {
         let steps = items.flatMap { item -> [ToolStep] in if case .work(_, _, let steps) = item { steps } else { [] } }
         let replies = items.count { if case .assistant = $0 { true } else { false } }
@@ -167,12 +163,10 @@ enum WorkSummary {
     }
 }
 
-/// One open thread: the items the bridge sent, where they stand, and what the screen derives from them.
 @Observable
 @MainActor
 final class ThreadModel {
     enum Phase: Equatable, Sendable {
-        /// Waiting for the first snapshot.
         case loading
         case ready
         /// The session is gone. movedTo: the id an agent's session restarted under.
@@ -349,7 +343,6 @@ final class SessionThreads {
         return model
     }
 
-    /// The position watch_session sends, with the live text dropped as the contract asks.
     func willWatch(_ id: SessionID) -> ThreadPosition? {
         models[id]?.willWatch()
     }

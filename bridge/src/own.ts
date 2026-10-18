@@ -44,7 +44,6 @@ export type OwnDeps = {
   scope(cwd: string): Scope;
   /** Something a row or a thread shows changed: status, cards, queue, controls. */
   changed(id: SessionId): void;
-  /** A turn ended done. */
   done(id: SessionId): void;
   /** A card opened: the push says only that a session needs the user. */
   notify?(id: SessionId, cardId: MessageId): void;
@@ -517,7 +516,6 @@ export function createOwn(deps: OwnDeps): Own {
   };
 }
 
-/** A new drive for a session the phone takes on, or makes. */
 export const newDrive = (fields: { cwd: string; created: boolean; at: string; model: string | null; mode: PhoneMode | null; id: SessionId; prompt?: string }): OwnDrive => ({
   cwd: fields.cwd,
   created: fields.created,

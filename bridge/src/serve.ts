@@ -75,7 +75,6 @@ export type Transport = {
   signal(message: Signal): void;
   signal(message: SessionsChannelFrame, topic: "sessions"): void;
   signal(message: ThreadChannelFrame, topic: ThreadTopic): void;
-  /** Sockets that watch the session's thread now. */
   watchers(sessionId: SessionId): number;
   /** Open authenticated sockets heard from within LIVE_WINDOW_MS. */
   live(): number;

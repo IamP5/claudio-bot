@@ -1,14 +1,9 @@
 import SwiftUI
 
-/// What the bar over a thread says about who else holds the session.
 enum ThreadBanner: Equatable {
-    /// A claude.ai session: read here, continued there.
     case cloud(URL?)
-    /// Another process is working in it, so the phone only watches.
     case busyElsewhere(String)
-    /// Open but idle in the Claude app: the phone may send.
     case alsoInDesktop
-    /// The phone's message waits for another Claude Code to let go of the session.
     case waiting(String)
 
     static func of(row: SessionRow?, controls: SessionControls?) -> ThreadBanner? {
@@ -25,7 +20,6 @@ enum ThreadBanner: Equatable {
     }
 }
 
-/// A Claude Code session's thread: the transcript, cards that wait on the user, and the composer.
 struct SessionThreadView: View {
     let sessionId: SessionID
 
@@ -212,7 +206,6 @@ struct SessionThreadView: View {
         geometry.contentSize.height + geometry.contentInsets.bottom - geometry.visibleRect.maxY
     }
 
-    /// Steps of one turn sit close; a new prompt and cards get air.
     private static func gap(between previous: ThreadRow, and row: ThreadRow) -> CGFloat {
         switch (previous.kind, row.kind) {
         case (_, .prompt): 24
@@ -248,7 +241,6 @@ struct SessionThreadView: View {
 extension ThreadRow {
     enum Kind { case prompt, step, other }
 
-    /// For spacing: a prompt opens a turn; thinking, tool runs and folds are steps.
     var kind: Kind {
         switch self {
         case .fold: .step
@@ -259,7 +251,6 @@ extension ThreadRow {
     }
 }
 
-/// The title and where the session lives, centered in the navigation bar.
 struct ThreadHeader: View {
     let row: SessionRow?
     let project: SessionProject?
@@ -329,7 +320,6 @@ struct HolderBanner: View {
     }
 }
 
-/// At the top of a thread with older items: asks for the page above when it scrolls into view.
 struct LoadEarlierRow: View {
     let loading: Bool
 
@@ -344,7 +334,6 @@ struct LoadEarlierRow: View {
     }
 }
 
-/// A tool call's full result, asked for when the sheet opens.
 struct ToolOutputSheet: View {
     let sessionId: SessionID
     let step: ToolStep
@@ -387,7 +376,6 @@ struct ToolOutputSheet: View {
     }
 }
 
-/// Gray bars where a thread's first messages will be.
 struct ThreadSkeleton: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {

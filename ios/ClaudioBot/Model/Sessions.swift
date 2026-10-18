@@ -1,7 +1,6 @@
 import Foundation
 import Observation
 
-/// The quick filters above the Sessions list.
 enum SessionFilter: String, CaseIterable, Hashable, Sendable {
     case all, working, needsYou, unread
 
@@ -24,7 +23,6 @@ enum SessionFilter: String, CaseIterable, Hashable, Sendable {
     }
 }
 
-/// What the user typed and picked above the list. Narrowed lists show every match flat, without nesting or "Show more".
 struct SessionQuery: Hashable, Sendable {
     var text = ""
     var filter = SessionFilter.all
@@ -49,7 +47,6 @@ struct SessionTree: Equatable, Identifiable, Sendable {
     var id: SessionID { row.id }
 }
 
-/// One project's rows as the list shows them.
 struct ProjectSection: Equatable, Identifiable, Sendable {
     let project: SessionProject
     /// Newest activity first. A root's activity includes its descendants', so a parent with a busy child rises.
@@ -58,7 +55,6 @@ struct ProjectSection: Equatable, Identifiable, Sendable {
 }
 
 extension SessionRow {
-    /// An approval, plan or question waits on the user.
     var needsYou: Bool { status == .awaitingApproval || status == .awaitingInput }
 }
 
@@ -69,11 +65,9 @@ extension SessionRow {
 final class SessionIndex {
     private(set) var projects: [ProjectID: SessionProject] = [:]
     private(set) var rows: [SessionID: SessionRow] = [:]
-    /// The "Show agent sessions in the Claude app" setting, from the last list frame.
     private(set) var mirror: MirrorPref?
     /// When the last list frame arrived. Nil until the first one, so the list can tell loading from empty.
     private(set) var updatedAt: Date?
-    /// The session each `session_create` ref became, so the sheet that asked can open it.
     private(set) var created: [String: SessionID] = [:]
     /// Bumped by every change to rows or projects. The section memo is valid for one revision.
     private(set) var revision = 0
@@ -119,12 +113,10 @@ final class SessionIndex {
         projects[row.projectId]
     }
 
-    /// Every project, newest activity first, for the new-session picker.
     var orderedProjects: [SessionProject] {
         projects.values.sorted(by: Self.projectOrder)
     }
 
-    /// Visible rows per filter, for the chips' counts.
     var counts: [SessionFilter: Int] {
         let visible = rows.values.filter { !$0.hidden }
         return Dictionary(uniqueKeysWithValues: SessionFilter.allCases.map { filter in (filter, visible.count(where: filter.matches)) })
@@ -134,7 +126,6 @@ final class SessionIndex {
         rows.values.count(where: \.hidden)
     }
 
-    /// Computed once per revision and query, so a body that asks twice pays once.
     func sections(_ query: SessionQuery) -> [ProjectSection] {
         if let memo, memo.revision == revision, memo.query == query { return memo.sections }
         let sections = Self.sections(rows: rows, projects: projects, query: query)
@@ -142,7 +133,6 @@ final class SessionIndex {
         return sections
     }
 
-    /// The pure rule behind the list: which rows show, under which project, nested how, in what order.
     nonisolated static func sections(rows: [SessionID: SessionRow], projects: [ProjectID: SessionProject], query: SessionQuery) -> [ProjectSection] {
         let shown = rows.values.filter { row in
             (query.showHidden || !row.hidden) && query.filter.matches(row) && matches(row, query.needle, project: projects[row.projectId])
@@ -233,7 +223,6 @@ enum SessionMark: Equatable, Sendable {
 }
 
 enum SessionText {
-    /// "5m", "3h", "2d", then "Oct 9": short enough to sit beside a title.
     static func age(_ date: Date, now: Date = .now, calendar: Calendar = .current) -> String {
         let seconds = max(0, now.timeIntervalSince(date))
         switch seconds {
@@ -248,7 +237,6 @@ enum SessionText {
         }
     }
 
-    /// "Last updated just now", then "Last updated 3 min ago". A list newer than the clock reads as just now.
     static func updated(_ date: Date, now: Date = .now) -> String {
         guard now.timeIntervalSince(date) >= 60 else { return "Last updated just now" }
         let formatter = RelativeDateTimeFormatter()
@@ -268,7 +256,6 @@ enum SessionText {
         }
     }
 
-    /// One VoiceOver sentence per row: "solta-o-som, Update README, working, by Claudio Bot's agent, PR 87 open, 5 minutes ago".
     static func spoken(_ row: SessionRow, project: String?, botName: String?, now: Date = .now) -> String {
         var parts = [project, row.title].compactMap { $0 }
         if let mark = SessionMark(row) { parts.append(mark == .parked ? parked(row.holder).lowercased() : mark.spoken) }

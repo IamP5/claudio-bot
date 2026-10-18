@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// The sidebar: Bots or Sessions, switched by a segmented control on a bridge that serves sessions.
 struct SidebarRoot: View {
     @Environment(AppStore.self) private var store
     @Environment(Router.self) private var router
@@ -33,7 +32,6 @@ struct SidebarRoot: View {
     }
 }
 
-/// The Claude Code sessions on the Mac, grouped by project like the Claude app's Code sidebar.
 struct SessionsSidebar: View {
     static let pageSize = 5
     static let moreStep = 10
@@ -44,7 +42,6 @@ struct SessionsSidebar: View {
     @State private var query = SessionQuery()
     @State private var searching = false
     @FocusState private var searchFocused: Bool
-    /// How many top-level rows each project shows. "Show more" adds ten.
     @State private var limits: [ProjectID: Int] = [:]
     @State private var renaming: SessionRow?
     @State private var newTitle = ""
@@ -347,7 +344,6 @@ struct SessionsSidebar: View {
         .background(Theme.card, in: Capsule())
     }
 
-    /// Asks for a fresh list and waits for it, at most a few seconds.
     private func refresh() async {
         let before = index.updatedAt
         client.refreshSessions()
@@ -358,7 +354,6 @@ struct SessionsSidebar: View {
     }
 }
 
-/// A project's name in small gray type, its count, and + for a new session there.
 struct ProjectHeader: View {
     let project: SessionProject
     let count: Int
@@ -391,7 +386,6 @@ struct ProjectHeader: View {
     }
 }
 
-/// All · Working · Needs you · Unread, with how many each holds, and Hidden when there are hidden sessions.
 struct FilterChips: View {
     @Binding var query: SessionQuery
     let counts: [SessionFilter: Int]
@@ -437,7 +431,6 @@ struct FilterChips: View {
     }
 }
 
-/// Offline with a list from before: it stays, with how old it is.
 struct StaleListBanner: View {
     let state: ConnectionState
     let updatedAt: Date
@@ -478,7 +471,6 @@ struct UpdateBridgeNote: View {
     }
 }
 
-/// Gray bars in the shape of two projects while the first list is on its way.
 struct SessionsSkeleton: View {
     private static let widths: [[CGFloat]] = [[0.72, 0.55, 0.8, 0.46], [0.6, 0.78, 0.5]]
 
@@ -506,7 +498,6 @@ struct SessionsSkeleton: View {
 }
 
 extension View {
-    /// A list row that is not a session: no separator, no background, edge to edge.
     func plainRow(insets: EdgeInsets = EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16)) -> some View {
         listRowInsets(insets)
             .listRowBackground(Color.clear)

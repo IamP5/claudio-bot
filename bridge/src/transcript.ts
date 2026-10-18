@@ -8,7 +8,7 @@ import { maskSecrets } from "./text";
 // The only reader of Claude Code's transcripts (~/.claude/projects/<folder>/<id>.jsonl). Heads come from the SDK's
 // listSessions plus a small head and tail read; a thread is every line of the file put in the SDK's chain order;
 // appended lines are read as they come. project() turns entries into thread items with ids that history and the live
-// tail agree on. Unknown or malformed lines are skipped and counted, never thrown.
+// tail agree on. Unknown or malformed lines are skipped, never thrown.
 
 /** What a list row needs from one transcript, rebuilt only when its size or mtime changed. */
 export type Head = {
@@ -63,10 +63,6 @@ export const OUTPUT_TAIL = 2048;
 export const FULL_OUTPUT_MAX = 64 * 1024;
 const THINKING_MAX = 400;
 
-let skipped = 0;
-/** Lines that were not JSON since the bridge started, for the doctor. */
-export const skippedLines = () => skipped;
-
 const ENTRY_TYPES: ReadonlySet<string> = new Set(["user", "assistant", "system", "attachment"]);
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
@@ -76,7 +72,6 @@ function parseJson(line: string): Record<string, unknown> | null {
     const v: unknown = JSON.parse(line);
     return isRecord(v) ? v : null;
   } catch {
-    skipped++;
     return null;
   }
 }
@@ -103,7 +98,6 @@ function toEntry(o: Record<string, unknown>): Entry | null {
   };
 }
 
-/** One transcript line as an entry, or null for every other line. */
 export function parseEntry(line: string): Entry | null {
   const o = line.trim() === "" ? null : parseJson(line);
   return o === null ? null : toEntry(o);
@@ -225,7 +219,6 @@ export type TranscriptFile = { id: SessionId; path: string; size: number; mtimeM
 
 const UUID_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
 
-/** Every transcript under the projects folder, by a stat each. */
 export function listFiles(projectsDir: string): TranscriptFile[] {
   const out: TranscriptFile[] = [];
   let folders: string[];
@@ -281,7 +274,6 @@ export function transcriptExists(projectsDir: string, id: string, cwd: string): 
   return folders.some((f) => statOf(join(projectsDir, f, name)) !== null);
 }
 
-/** The SDK's readers, a fake in tests. */
 export type SdkReaders = {
   listSessions: typeof listSessions;
   getSessionInfo: typeof getSessionInfo;
@@ -478,8 +470,6 @@ export function pageOf(items: readonly SessionItem[], before: ItemId | null, lim
   }
   return { items: items.slice(start, end), before: start > 0 ? items[start]!.id : null };
 }
-
-// Projection.
 
 /** What a projection needs about the session: whose words a prompt may carry. */
 export type ProjectContext = { cwd: string; userName: string; agent: boolean };

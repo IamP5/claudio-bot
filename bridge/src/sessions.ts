@@ -39,7 +39,6 @@ import { own, type AgentRecord, type SessionPrefs, type SessionRecord, type Worl
 
 /** What the bridge needs from where it runs: Claude Code's folders, the Claude app, and the sockets' channels. */
 export type SessionsEnv = {
-  /** The bridge's stream epoch, as the hello carries it. */
   epoch: string;
   /** ~/.claude/projects. */
   projectsDir: string;
@@ -345,7 +344,6 @@ export function createSessions(deps: SessionsDeps): Sessions {
     sdk,
   });
 
-  /** The overlay record, made on first need. */
   function recordOf(id: SessionId): SessionRecord {
     let rec = deps.world.sessions.get(id);
     if (!rec) deps.world.sessions.set(id, (rec = { id, hidden: false, visitedAt: null }));

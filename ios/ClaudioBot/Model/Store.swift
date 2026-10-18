@@ -439,6 +439,13 @@ final class AppStore {
         proposedFacts.filter { $0.proposerBotId.map { $0 == bot.id } ?? ($0.by == bot.name) }
     }
 
+    /// What waits on the user, for the Dock badge and the menu bar: each bot's open question and open permission
+    /// card, and each listed session that needs you. Hidden sessions count only once the user looks for them.
+    var waitingOnYou: Int {
+        let cards = bots.values.reduce(0) { $0 + ($1.question != nil ? 1 : 0) + ($1.status == .awaitingApproval ? 1 : 0) }
+        return cards + sessions.rows.values.filter { $0.needsYou && !$0.hidden }.count
+    }
+
     /// The open question card, newest first, if any.
     func openQuestion(in botId: BotID, now: Date = .now) -> (id: MessageID, card: QuestionCard)? {
         for message in conversations[botId]?.messages.reversed() ?? [] {

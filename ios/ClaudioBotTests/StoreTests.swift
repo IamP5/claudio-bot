@@ -45,6 +45,31 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         return store
     }
 
+    @Test func waitingOnYouCountsOpenQuestionsOpenPermissionsAndSessionsThatNeedYou() {
+        var approving = bot("b2")
+        approving.status = .awaitingApproval
+        var both = bot("b3", question: "Which branch?")
+        both.status = .awaitingApproval
+        let store = store(with: [bot("b1"), bot("b4", question: "Ship it?"), approving, both])
+        #expect(store.waitingOnYou == 4)
+
+        func row(_ id: String, _ status: SessionStatus, hidden: Bool = false) -> SessionRow {
+            SessionRow(
+                id: SessionID(id), projectId: ProjectID("p1"), parentId: nil, title: id, origin: .terminal, agent: nil,
+                status: status, holder: .nobody, unread: false, branch: nil, worktree: false, pr: nil, mirror: .notMirrored,
+                hidden: hidden, url: nil, createdAt: at, lastAt: at
+            )
+        }
+        store.apply(.sessions(.list(projects: [], rows: [
+            row("s1", .awaitingApproval), row("s2", .awaitingInput), row("s3", .working), row("s4", .awaitingInput, hidden: true),
+        ], mirror: .auto)))
+        #expect(store.waitingOnYou == 6)
+
+        store.apply(.bot(bot("b4")))
+        store.apply(.sessions(.changed(rows: [row("s1", .working)], removed: [], projects: [])))
+        #expect(store.waitingOnYou == 4)
+    }
+
     @Test func helloSetsTheFeaturesAndClearsLiveActivity() {
         let store = store()
         #expect(!store.has(.memory))

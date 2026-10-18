@@ -99,7 +99,7 @@ export async function probeCommands(claude: Pick<SessionSpec, "query" | "executa
 }
 
 export type Commands = {
-  /** The bot's menu: the list last read, or one read now when there is none. [] when it cannot be read. */
+  /** The bot's menu, read now unless the list last read describes the query open now (or, with none open, the next). [] when it cannot be read. */
   list(botId: BotId): Promise<Command[]>;
   /** Reads the list again: the bot's query opened, or its skills changed. Phones get the menu when it changed. */
   refresh(botId: BotId): void;
@@ -119,15 +119,23 @@ export type CommandsDeps = {
   log: (line: string) => void;
 };
 
+type Live = Pick<Query, "supportedCommands">;
+
+/**
+ * A list and the query it describes: an open query's, or (source null) what the next query would load, from a probe.
+ * A list from a query that has since closed describes nothing that runs, so it is read again.
+ */
+type Read = { rows: readonly SlashCommand[]; source: Live | null };
+
 export function createCommands(deps: CommandsDeps): Commands {
-  const rows = new Map<BotId, readonly SlashCommand[]>();
+  const reads = new Map<BotId, Read>();
   const reading = new Map<BotId, Promise<void>>();
 
-  function keep(botId: BotId, next: readonly SlashCommand[]) {
-    const before = rows.get(botId);
-    rows.set(botId, next);
-    const menu = menuOf(next);
-    if (before === undefined || JSON.stringify(menuOf(before)) !== JSON.stringify(menu)) deps.changed(botId, menu);
+  function keep(botId: BotId, rows: readonly SlashCommand[], source: Live | null) {
+    const before = reads.get(botId);
+    reads.set(botId, { rows, source });
+    const menu = menuOf(rows);
+    if (before === undefined || JSON.stringify(menuOf(before.rows)) !== JSON.stringify(menu)) deps.changed(botId, menu);
   }
 
   function read(botId: BotId): Promise<void> {
@@ -135,7 +143,7 @@ export function createCommands(deps: CommandsDeps): Commands {
     if (running) return running;
     const live = deps.live(botId);
     const next = (live ? live.supportedCommands() : deps.probe(botId))
-      .then((r) => keep(botId, r))
+      .then((rows) => keep(botId, rows, live))
       .catch((e) => deps.log(`commands: could not read ${botId}'s: ${errorText(e)}`))
       .finally(() => reading.delete(botId));
     reading.set(botId, next);
@@ -144,18 +152,18 @@ export function createCommands(deps: CommandsDeps): Commands {
 
   return {
     async list(botId) {
-      if (!rows.has(botId)) await read(botId);
-      return menuOf(rows.get(botId) ?? []);
+      if (reads.get(botId)?.source !== deps.live(botId)) await read(botId);
+      return menuOf(reads.get(botId)?.rows ?? []);
     },
     refresh(botId) {
       void read(botId);
     },
-    seen: keep,
+    seen: (botId, rows) => keep(botId, rows, deps.live(botId)),
     hidden(botId, name) {
-      return (rows.get(botId) ?? []).some((r) => r.builtin && r.name === name && !BUILTINS_SHOWN.has(name));
+      return (reads.get(botId)?.rows ?? []).some((r) => r.builtin && r.name === name && !BUILTINS_SHOWN.has(name));
     },
     forget(botId) {
-      rows.delete(botId);
+      reads.delete(botId);
     },
   };
 }

@@ -1203,6 +1203,23 @@ test("the commands frame answers from the bot's open query, and a list the query
   expect(h.frames.at(-1)).toEqual({ type: "commands", botId: h.bot.id, commands: MENU });
 });
 
+test("once the query a list came from has closed, the commands frame reads what the next query would load", async () => {
+  const h = resumedBot();
+  await h.hub.handle({ type: "send", botId: h.bot.id, text: "hi", uploads: [] });
+  await flush();
+  const live = h.q();
+  live.commands = [COMMANDS[0]!];
+  live.emit(result());
+  await flush();
+  const names = async () => ((await h.hub.handle({ type: "commands", botId: h.bot.id }))[0] as Extract<ServerMessage, { type: "commands" }>).commands.map((c) => c.name);
+  expect(await names()).toEqual(["greet"]);
+
+  later(16 * 60_000);
+  h.hub.tick(new Date());
+
+  expect([live.closed, await names(), h.queries.length]).toEqual([true, ["greet", "compact"], 2]);
+});
+
 test("a /command from the menu reaches the bot as the bare text, shows as typed, and the brief and notices wait for the next turn", async () => {
   const h = resumedBot();
 

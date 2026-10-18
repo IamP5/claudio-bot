@@ -47,35 +47,35 @@ enum Demo {
         case "usage", "usagehot", "usageoff": router.showingUsage = true
         case "settings": router.showingSettings = true
         case "chat":
-            router.selection = BotID("claude")
+            router.selection = .bot(BotID("claude"))
             router.showingInspector = true
-        case "digest": router.selection = BotID("news")
-        case "engineer": router.selection = BotID("engineer")
-        case "factory": router.selection = BotID("maker")
+        case "digest": router.selection = .bot(BotID("news"))
+        case "engineer": router.selection = .bot(BotID("engineer"))
+        case "factory": router.selection = .bot(BotID("maker"))
         case "profile":
-            router.selection = BotID("claude")
+            router.selection = .bot(BotID("claude"))
             router.path = [.profile(BotID("claude"))]
         case "links", "library":
-            router.selection = BotID("claude")
+            router.selection = .bot(BotID("claude"))
             router.path = [.profile(BotID("claude"), tab: screen == "links" ? .links : .library)]
         case "file":
-            router.selection = BotID("claude")
+            router.selection = .bot(BotID("claude"))
             router.path = [.profile(BotID("claude"), tab: .library), .file(BotID("claude"), path: "library/merge-plan.md")]
         case "agent":
-            router.selection = BotID("engineer")
+            router.selection = .bot(BotID("engineer"))
             router.path = [.exchange(AgentID("a1"))]
         case "routine":
-            router.selection = BotID("news")
+            router.selection = .bot(BotID("news"))
             router.path = [.routine(BotID("news"), RoutineID("r1"))]
-        case "approval", "live": router.selection = BotID("release")
-        case "mention", "chip", "command": router.selection = BotID("claude")
-        case "group": router.selection = BotID("crew")
+        case "approval", "live": router.selection = .bot(BotID("release"))
+        case "mention", "chip", "command": router.selection = .bot(BotID("claude"))
+        case "group": router.selection = .bot(BotID("crew"))
         case "groupprofile":
-            router.selection = BotID("crew")
+            router.selection = .bot(BotID("crew"))
             router.path = [.profile(BotID("crew"))]
         case "newgroup": router.showingNewChat = true
         case "botexchange":
-            router.selection = BotID("maker")
+            router.selection = .bot(BotID("maker"))
             router.path = [.botExchange(BotID("maker"), peer: BotID("standup"))]
         case "homelive":
             // A bot further down posts a question, so Home moves it to the top with the dot and badge.
@@ -92,7 +92,7 @@ enum Demo {
         case "confirm": app.propose(invite)
         case "unrecognized": store.setConnection(.unrecognized)
         case "error":
-            router.selection = BotID("release")
+            router.selection = .bot(BotID("release"))
             store.apply(.error(message: "That card already closed."))
         case "oldbridge": router.showingSettings = true
         default: break

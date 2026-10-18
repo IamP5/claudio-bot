@@ -104,13 +104,61 @@ struct MarkdownText: View {
     }
 
     // Inline-only keeps line breaks and list markers as written; full block parsing would merge them.
-    static func inline(_ s: String) -> AttributedString {
+    nonisolated static func inline(_ s: String) -> AttributedString {
         var text = (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(s)
         for run in text.runs where run.link != nil {
             text[run.range].underlineStyle = .single
         }
         return text
+    }
+}
+
+/// Markdown parsed once into the runs MarkdownText draws. A thread keeps one per item, so a row's body only lays out.
+struct RenderedMarkdown: Equatable, Sendable {
+    enum Block: Equatable, Sendable {
+        case prose(AttributedString)
+        case heading(AttributedString)
+        case item(marker: String, AttributedString)
+        case code(language: String?, String)
+    }
+
+    let blocks: [Block]
+
+    init(_ text: String) {
+        blocks = MarkdownBlock.parse(text).map { block in
+            switch block {
+            case .prose(let s): .prose(MarkdownText.inline(s))
+            case .heading(let s): .heading(MarkdownText.inline(s))
+            case let .item(marker, s): .item(marker: marker, MarkdownText.inline(s))
+            case let .code(language, s): .code(language: language, s)
+            }
+        }
+    }
+}
+
+struct RenderedMarkdownView: View, Equatable {
+    let markdown: RenderedMarkdown
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(markdown.blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .prose(let s):
+                    Text(s).textSelection(.enabled)
+                case let .item(marker, s):
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(marker).monospacedDigit().frame(minWidth: 16, alignment: .trailing)
+                        Text(s).textSelection(.enabled)
+                    }
+                case .heading(let s):
+                    Text(s).font(.headline)
+                case .code(let language, let s):
+                    CodeBlock(language: language, code: s)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

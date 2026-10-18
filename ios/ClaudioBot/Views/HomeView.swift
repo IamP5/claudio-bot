@@ -47,12 +47,12 @@ struct HomeView: View {
             }
             ForEach(bots) { bot in
                 BotRow(bot: bot)
-                    .tag(bot.id)
+                    .tag(Selection.bot(bot.id))
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                     .listRowBackground(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(router.selection == bot.id ? Theme.card : .clear)
+                            .fill(router.selection == .bot(bot.id) ? Theme.card : .clear)
                             .padding(.horizontal, 6)
                     )
                     .contextMenu { menu(for: bot) }
@@ -111,7 +111,7 @@ struct HomeView: View {
             presenting: deletion
         ) { deletion in
             Button("Delete", role: .destructive) {
-                if router.selection == deletion.botId { router.selection = nil }
+                if router.selection == .bot(deletion.botId) { router.selection = nil }
                 client.send(deletion.request)
             }
         } message: { deletion in
@@ -204,7 +204,7 @@ struct HomeView: View {
             Label(bot.pinned ? "Unpin" : "Pin", systemImage: bot.pinned ? "pin.slash" : "pin")
         }
         Button {
-            if router.selection == bot.id { router.selection = nil }
+            if router.selection == .bot(bot.id) { router.selection = nil }
             client.send(.markUnread(botId: bot.id))
         } label: {
             Label("Mark as Unread", systemImage: "message.badge")

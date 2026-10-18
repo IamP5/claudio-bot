@@ -30,28 +30,74 @@ enum Route: Hashable {
     case routine(BotID, RoutineID)
 }
 
+/// What the detail column shows: a bot's chat or a Claude Code session's thread.
+enum Selection: Hashable, Sendable {
+    case bot(BotID)
+    case session(SessionID)
+
+    var bot: BotID? {
+        if case .bot(let id) = self { id } else { nil }
+    }
+
+    var session: SessionID? {
+        if case .session(let id) = self { id } else { nil }
+    }
+}
+
+/// Which list the sidebar shows.
+enum SidebarMode: String, Hashable, Sendable {
+    case bots, sessions
+}
+
 @Observable
 @MainActor
 final class Router {
-    /// The bot whose chat is on screen.
-    var selection: BotID?
+    static let sidebarKey = "sidebarMode"
+
+    /// The chat or thread on screen.
+    var selection: Selection?
+    /// Remembered across launches, like the tab a user left an app on.
+    var sidebar: SidebarMode = SidebarMode(rawValue: UserDefaults.standard.string(forKey: Router.sidebarKey) ?? "") ?? .bots {
+        didSet { UserDefaults.standard.set(sidebar.rawValue, forKey: Self.sidebarKey) }
+    }
     /// Screens pushed on top of the chat.
     var path: [Route] = []
     var showingNewChat = false
     var showingSettings = false
     var showingUsage = false
+    /// The project a new session starts in, while that sheet is up.
+    var newSession: NewSessionRequest?
     /// The profile beside the chat, on iPad.
     var showingInspector = false
     /// The ref of a create_bot in flight; the bot it becomes is opened.
     var pendingCreate: String?
+    /// The ref of a session_create in flight; the session it becomes is opened.
+    var pendingSessionCreate: String?
+
+    /// The list is watched while it shows, and while a thread is open: its header reads the row.
+    var watchesSessions: Bool {
+        sidebar == .sessions || selection?.session != nil
+    }
 
     func open(_ bot: BotID) {
+        open(.bot(bot))
+    }
+
+    func open(_ target: Selection) {
         showingNewChat = false
         showingSettings = false
         showingUsage = false
+        newSession = nil
         path = []
-        selection = bot
+        if case .session = target { sidebar = .sessions }
+        selection = target
     }
+}
+
+/// The new-session sheet, opened from a project's + or the toolbar's.
+struct NewSessionRequest: Identifiable, Hashable, Sendable {
+    let id = UUID()
+    var projectId: ProjectID?
 }
 
 @Observable
@@ -136,6 +182,7 @@ final class AppModel {
         case .pair(let invite): propose(invite)
         case .outdatedBridge: showPairingFailure(DeepLink.outdatedBridgeMessage)
         case .bot(let bot, _): router.open(bot)
+        case .session(let session): router.open(.session(session))
         case nil: break
         }
     }
@@ -191,11 +238,21 @@ struct RootView: View {
         }
         .overlay(alignment: .top) { ErrorToast() }
         .tint(.white)
-        .onChange(of: router.selection, initial: true) { _, bot in client.openBot = bot }
+        .onChange(of: router.selection, initial: true) { _, selection in
+            client.openBot = selection?.bot
+            client.openSession = selection?.session
+        }
+        .onChange(of: router.watchesSessions, initial: true) { _, watches in client.watchingSessions = watches }
         .onChange(of: store.created) { _, created in
             if let ref = router.pendingCreate, let bot = created[ref] {
                 router.pendingCreate = nil
                 router.open(bot)
+            }
+        }
+        .onChange(of: store.sessions.created) { _, created in
+            if let ref = router.pendingSessionCreate, let session = created[ref] {
+                router.pendingSessionCreate = nil
+                router.open(.session(session))
             }
         }
     }

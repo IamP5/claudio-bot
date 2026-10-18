@@ -151,6 +151,10 @@ final class AppStore {
     /// Sends the bridge has not echoed back yet, oldest first, each with how many times a socket took it. In memory
     /// only: quitting the app forgets them.
     private(set) var unechoedSends: [(message: ClientMessage, transmitted: Int)] = []
+    /// The Sessions list. Its own observable, so a list diff never re-renders a reader of the bots.
+    let sessions = SessionIndex()
+    /// The open threads, each its own observable.
+    let threads = SessionThreads()
 
     func has(_ feature: Feature) -> Bool {
         features.contains(feature)
@@ -200,6 +204,8 @@ final class AppStore {
             webhookToken = nil
             usage = nil
             unechoedSends = []
+            sessions.reset()
+            threads.reset()
         }
     }
 
@@ -383,7 +389,19 @@ final class AppStore {
             self.usage = usage
             return []
 
-        case .sessions, .thread, .sessionCreated, .unknown:
+        case let .sessions(frame):
+            sessions.apply(frame)
+            return []
+
+        case let .thread(sessionId, frame):
+            for card in threads.apply(sessionId, frame) { pendingDecisions[card] = nil }
+            return []
+
+        case let .sessionCreated(ref, sessionId):
+            sessions.recordCreated(ref: ref, sessionId: sessionId)
+            return []
+
+        case .unknown:
             return []
         }
     }

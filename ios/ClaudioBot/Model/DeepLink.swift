@@ -9,6 +9,8 @@ enum DeepLink: Equatable {
     case outdatedBridge
     /// `claudiobot://bot/<id>?message=<id>`, from a push notification.
     case bot(BotID, message: MessageID?)
+    /// `claudiobot://session/<id>`, from a push about a session's card.
+    case session(SessionID)
 
     static let outdatedBridgeMessage = "This bridge is older than the app. Update the bridge."
 
@@ -28,6 +30,9 @@ enum DeepLink: Equatable {
             let message = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                 .queryItems?.first(where: { $0.name == "message" })?.value
             self = .bot(BotID(id), message: message.map { MessageID($0) })
+        case "session":
+            guard let id = url.pathComponents.dropFirst().first, !id.isEmpty else { return nil }
+            self = .session(SessionID(id))
         default:
             return nil
         }

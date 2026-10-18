@@ -70,7 +70,8 @@ export const BACKGROUND_WAIT_MS = 10 * 60_000;
 /**
  * A task_notification means Claude Code will start a turn of its own to report the task, right after the turn it runs
  * or at once when it runs none. A close waits this long for that turn's init frame, so it does not cut the turn off,
- * and a CLI that never wakes holds a turn no longer than this.
+ * and a CLI that never wakes holds a turn no longer than this. Claude Code starts the turn locally, before any request:
+ * 40 ms after the notification in test/transcripts/background-wake-handoff.ndjson, so this leaves room for a loaded Mac.
  */
 export const WAKE_WAIT_MS = 30_000;
 const DESCRIPTION_MAX = 80;

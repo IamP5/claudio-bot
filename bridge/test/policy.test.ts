@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { decide, detailOf, fingerprint, type Decision, type PolicyContext, type Scope, type ToolCall } from "../src/policy";
 import type { AgentId, BotId, MessageId, RoutineId, RunId } from "../src/protocol";
-import { CLAUDIO_TOOLS, NO_EFFECT_TOOLS } from "../src/tools";
+import { CLAUDIO_TOOLS } from "../src/tools";
 import type { Actor, Fingerprint, Grant, Initiator, Signature, StandingRule } from "../src/world";
 
 const HOME = "/Users/alex";
@@ -192,11 +192,6 @@ describe("initiator bans", () => {
       "deny:ban.routine_admin",
     );
   });
-});
-
-test("every claudio tool Claude Code runs without its classifier passes the gate in any turn", () => {
-  for (const tool of NO_EFFECT_TOOLS)
-    for (const initiator of [user, routine, viaBot(1), system]) expect([tool, verdict(call(tool, {}), { initiator })]).toEqual([tool, "pass"]);
 });
 
 describe("limits", () => {

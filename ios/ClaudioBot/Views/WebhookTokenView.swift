@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 /// A webhook routine's token: make or rotate it, then show it once. Shown when the bridge lists .webhooks.
 struct WebhookTokenSection: View {
@@ -81,7 +80,7 @@ struct WebhookTokenSection: View {
             }
             Spacer(minLength: 0)
             Button {
-                UIPasteboard.general.string = value
+                Clipboard.copy(value)
                 copied = title
             } label: {
                 Label(copied == title ? "Copied" : "Copy", systemImage: copied == title ? "checkmark" : "doc.on.doc")

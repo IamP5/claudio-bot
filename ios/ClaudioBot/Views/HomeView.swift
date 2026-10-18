@@ -320,7 +320,7 @@ struct ConnectionBanner: View {
                 .font(.footnote.weight(.semibold))
                 .controlSize(.small)
             } else {
-                Text("ClaudioBot needs the bridge running on your Mac. Your bots keep working there while this phone is away.")
+                Text("ClaudioBot needs the bridge running on your Mac. Your bots keep working there while this \(ThisDevice.casualNoun) is away.")
                     .font(.footnote)
                     .foregroundStyle(Theme.secondary)
             }
@@ -340,7 +340,7 @@ struct UnrecognizedBanner: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ConnectionBadge(state: .unrecognized)
-            Text("This bridge doesn't recognize this iPhone. Pair again, or retry once you are back on your Mac's network.")
+            Text("This bridge doesn't recognize this \(ThisDevice.noun). Pair again, or retry once you are back on your Mac's network.")
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)
             HStack(spacing: 8) {

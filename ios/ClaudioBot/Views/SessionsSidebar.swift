@@ -268,10 +268,11 @@ struct SessionsSidebar: View {
             Link(destination: pr.url) { Label("Open PR #\(pr.number)", systemImage: "arrow.triangle.pull") }
         }
         Button {
-            UIPasteboard.general.string = row.id.rawValue
+            Clipboard.copy(row.id.rawValue)
         } label: {
             Label("Copy Session ID", systemImage: "doc.on.doc")
         }
+        if let project = index.project(of: row) { LocalPathMenu(path: project.path) }
         Divider()
         Button {
             client.send(.sessionSet(sessionId: row.id, patch: SessionPatch(hidden: !row.hidden)))

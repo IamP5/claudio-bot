@@ -1,5 +1,4 @@
 import Foundation
-import UIKit
 import UserNotifications
 
 /// Turns store alerts into local notifications and routes taps and answer actions back.
@@ -28,7 +27,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     func post(_ alerts: [Alert], viewing: BotID?) {
         guard enabled else { return }
-        let active = UIApplication.shared.applicationState == .active
+        let active = AppActivity.isActive
         for alert in alerts where !(active && alert.bot.id == viewing) {
             Task { await post(alert) }
         }

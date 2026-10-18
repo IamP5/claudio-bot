@@ -455,7 +455,7 @@ enum AvatarSnapshot {
         if let image = cache[avatar] { return image }
         let renderer = ImageRenderer(content: AvatarView(avatar: avatar, size: size))
         renderer.scale = 3
-        let image = renderer.uiImage.map { Image(uiImage: $0) } ?? Image(systemName: "circle.fill")
+        let image = renderer.platformImage ?? Image(systemName: "circle.fill")
         cache[avatar] = image
         return image
     }

@@ -46,7 +46,7 @@ struct SettingsView: View {
                     } header: {
                         Text("Sessions")
                     } footer: {
-                        Text("Sessions your bots' agents and this phone start can appear in the Claude app on your Mac. Automatically adds them while you're away from the Mac; When I tap adds one when you choose Open in Claude app.")
+                        Text("Sessions your bots' agents and this \(ThisDevice.casualNoun) start can appear in the Claude app on your Mac. Automatically adds them while you're away from the Mac; When I tap adds one when you choose Open in Claude app.")
                     }
                 }
 
@@ -64,7 +64,7 @@ struct SettingsView: View {
                 Section {
                     Button("Unpair this Mac", role: .destructive) { confirmingUnpair = true }
                 } footer: {
-                    Text("Removes this iPhone from your Mac when it is connected, then deletes the bridge address and token from this iPhone.")
+                    Text("Removes this \(ThisDevice.noun) from your Mac when it is connected, then deletes the bridge address and token from this \(ThisDevice.noun).")
                 }
             }
             .scrollContentBackground(.hidden)
@@ -152,7 +152,7 @@ private struct DeviceRow: View {
     }
 
     private var caption: String {
-        if device.current { return "This iPhone" }
+        if device.current { return "This \(ThisDevice.noun)" }
         let seen = device.lastSeenAt.map { "Last seen \(TimeLabel.home($0))" } ?? "Never connected"
         return device.legacy ? "\(seen) · paired with the old shared token" : seen
     }
@@ -232,21 +232,18 @@ private struct QRCode: View {
 
     var body: some View {
         if let image = Self.render(text) {
-            Image(uiImage: image)
+            Image(image, scale: 1, label: Text("Pairing QR code"))
                 .interpolation(.none)
                 .resizable()
                 .scaledToFit()
-                .accessibilityLabel("Pairing QR code")
         }
     }
 
-    private static func render(_ text: String) -> UIImage? {
+    private static func render(_ text: String) -> CGImage? {
         let filter = CIFilter.qrCodeGenerator()
         filter.message = Data(text.utf8)
         filter.correctionLevel = "M"
-        guard let output = filter.outputImage,
-              let cgImage = CIContext().createCGImage(output, from: output.extent)
-        else { return nil }
-        return UIImage(cgImage: cgImage)
+        guard let output = filter.outputImage else { return nil }
+        return CIContext().createCGImage(output, from: output.extent)
     }
 }

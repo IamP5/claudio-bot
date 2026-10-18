@@ -15,6 +15,8 @@ struct PromptTextView: View {
     /// Return while a menu is open picks its row. Answering true keeps the newline out.
     var onReturn: () -> Bool = { false }
     var onEscape: () -> Void = {}
+    /// Return sends on the Mac twin. A phone's Return adds a newline, so it is unused here.
+    var onSubmit: (() -> Void)? = nil
 
     var body: some View {
         Representable(

@@ -377,7 +377,7 @@ struct PairingVault: Sendable {
     struct SaveFailed: LocalizedError {
         let status: OSStatus
 
-        var errorDescription: String? { "This iPhone could not save the pairing to its Keychain (error \(status))." }
+        var errorDescription: String? { "This \(ThisDevice.noun) could not save the pairing to its Keychain (error \(status))." }
     }
 
     private var query: [String: Any] {

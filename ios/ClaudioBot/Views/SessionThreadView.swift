@@ -186,9 +186,10 @@ struct SessionThreadView: View {
                         Label(row.hidden ? "Show in Sidebar" : "Hide from Sidebar", systemImage: row.hidden ? "eye" : "eye.slash")
                     }
                 }
-                Button { UIPasteboard.general.string = sessionId.rawValue } label: {
+                Button { Clipboard.copy(sessionId.rawValue) } label: {
                     Label("Copy Session ID", systemImage: "doc.on.doc")
                 }
+                if let project = row.flatMap({ store.sessions.project(of: $0) }) { LocalPathMenu(path: project.path) }
             } label: {
                 Image(systemName: "ellipsis")
             }

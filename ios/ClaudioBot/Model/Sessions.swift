@@ -246,7 +246,7 @@ enum SessionText {
 
     static func origin(_ origin: SessionOrigin, botName: String?) -> String {
         switch origin {
-        case .phone: "started on this phone"
+        case .phone: "started in ClaudioBot"
         case .agent: botName.map { "by \($0)'s agent" } ?? "by a bot's agent"
         case .desktop: "from the Claude app"
         case .terminal: "from a terminal"

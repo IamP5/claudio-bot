@@ -86,7 +86,7 @@ struct Composer: View {
                 HStack(alignment: .bottom, spacing: 6) {
                     PromptTextView(
                         draft: $draft, caret: $caret, placeholder: placeholder, maxLines: 6,
-                        tokenColor: tokenColor, onReturn: pickFirst, onEscape: closeMenu
+                        tokenColor: tokenColor, onReturn: pickFirst, onEscape: closeMenu, onSubmit: send
                     )
                         .padding(.vertical, 8)
                         .frame(minHeight: Self.field)
@@ -113,6 +113,7 @@ struct Composer: View {
             photoItems = []
             Task { await addPhotos(items) }
         }
+        #if os(iOS)
         .fullScreenCover(isPresented: $takingPhoto) {
             CameraPicker { image in
                 if let data = image.jpegData(compressionQuality: 0.85) {
@@ -121,6 +122,7 @@ struct Composer: View {
             }
             .ignoresSafeArea()
         }
+        #endif
         .fileImporter(isPresented: $pickingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             addFiles(result)
         }
@@ -130,8 +132,10 @@ struct Composer: View {
     private var attachMenu: some View {
         Menu {
             Button { pickingPhotos = true } label: { Label("Photo Library", systemImage: "photo.on.rectangle") }
+            #if os(iOS)
             Button { takingPhoto = true } label: { Label("Take Photo", systemImage: "camera") }
                 .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+            #endif
             Button { pickingFiles = true } label: { Label("Choose File", systemImage: "folder") }
         } label: {
             Image(systemName: "plus")
@@ -271,7 +275,7 @@ struct Composer: View {
     private func addPhotos(_ items: [PhotosPickerItem]) async {
         for (index, item) in items.enumerated() {
             guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
-            let jpeg = UIImage(data: data)?.jpegData(compressionQuality: 0.85) ?? data
+            let jpeg = PlatformImage.jpeg(from: data) ?? data
             add(Upload(name: "image-\(index + 1).jpg", mime: "image/jpeg", data: jpeg.base64EncodedString()), size: jpeg.count)
         }
     }
@@ -288,6 +292,7 @@ struct Composer: View {
     }
 }
 
+#if os(iOS)
 private struct CameraPicker: UIViewControllerRepresentable {
     let onImage: (UIImage) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -317,3 +322,4 @@ private struct CameraPicker: UIViewControllerRepresentable {
         }
     }
 }
+#endif

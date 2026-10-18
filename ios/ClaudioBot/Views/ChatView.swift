@@ -100,6 +100,7 @@ struct ChatView: View {
                 }
             }
             .scrollDismissesKeyboard(.immediately)
+            #if os(iOS)
             // Opening the keyboard is starting a reply, so the newest message rides up with it from wherever the
             // list was. Moving a scrolled-up list by the keyboard's height can't be done reliably mid-transition.
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
@@ -110,6 +111,7 @@ struct ChatView: View {
             .simultaneousGesture(TapGesture().onEnded {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             })
+            #endif
             .background(Theme.background)
             .safeAreaInset(edge: .top) {
                 if OfflineBar.shows(store.connection) {

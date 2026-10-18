@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 /// A file from the bot's library: markdown, plain text or an image.
 struct FileView: View {
@@ -25,9 +24,9 @@ struct FileView: View {
 
     @ViewBuilder
     private func content(_ file: BotFile) -> some View {
-        if let data = file.data.flatMap({ Data(base64Encoded: $0) }), let image = UIImage(data: data) {
+        if let data = file.data.flatMap({ Data(base64Encoded: $0) }), let image = PlatformImage.image(from: data) {
             ScrollView([.horizontal, .vertical]) {
-                Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: 900)
+                image.resizable().scaledToFit().frame(maxWidth: 900)
             }
         } else if let text = file.content {
             ScrollView {

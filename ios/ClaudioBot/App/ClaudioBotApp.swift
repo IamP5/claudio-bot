@@ -1,4 +1,5 @@
 import SwiftUI
+#if os(iOS)
 import UIKit
 
 @main
@@ -20,6 +21,7 @@ struct ClaudioBotApp: App {
         .onChange(of: scenePhase) { _, phase in app.scenePhaseChanged(phase) }
     }
 }
+#endif
 
 enum Route: Hashable {
     case profile(BotID, tab: ProfileView.Tab = .info)
@@ -102,10 +104,12 @@ final class AppModel {
     /// The pairing in progress. While paired, a flow shows the pairing sheet; while unpaired the pairing screen is always up.
     private(set) var pairingFlow: PairingFlow?
     @ObservationIgnored let notifier = Notifier()
+    #if os(iOS)
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    #endif
 
     init() {
-        let client = BridgeClient(store: store, deviceName: UIDevice.current.name)
+        let client = BridgeClient(store: store, deviceName: ThisDevice.pairingName)
         self.client = client
         let notifier = notifier
         let router = router
@@ -188,6 +192,7 @@ final class AppModel {
 
     func scenePhaseChanged(_ phase: ScenePhase) {
         switch phase {
+        #if os(iOS)
         case .background:
             // Keeps the socket alive for the short grace period iOS allows, so an answer
             // tapped on a notification still reaches the Mac.
@@ -195,8 +200,11 @@ final class AppModel {
             backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "bridge") { [weak self] in
                 MainActor.assumeIsolated { self?.endBackgroundTask() }
             }
+        #endif
         case .active:
+            #if os(iOS)
             endBackgroundTask()
+            #endif
             client.reconnectNow()
             if let open = client.openBot { notifier.clear(bot: open) }
         default:
@@ -204,11 +212,13 @@ final class AppModel {
         }
     }
 
+    #if os(iOS)
     private func endBackgroundTask() {
         guard backgroundTask != .invalid else { return }
         UIApplication.shared.endBackgroundTask(backgroundTask)
         backgroundTask = .invalid
     }
+    #endif
 }
 
 struct RootView: View {

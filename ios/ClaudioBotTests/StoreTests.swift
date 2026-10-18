@@ -597,7 +597,11 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
 @Suite struct MemorySectionTests {
     private func height(_ store: AppStore) -> CGFloat {
         let client = BridgeClient(store: store, vault: PairingVault(service: "dev.claudiobot.tests.\(UUID().uuidString)"))
+        #if os(iOS)
         let host = UIHostingController(rootView: MemorySection().environment(store).environment(client))
+        #else
+        let host = NSHostingController(rootView: MemorySection().environment(store).environment(client))
+        #endif
         return host.sizeThatFits(in: CGSize(width: 390, height: 2000)).height
     }
 

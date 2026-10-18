@@ -50,7 +50,7 @@ struct SessionComposer: View {
         HStack(alignment: .bottom, spacing: 6) {
             PromptTextView(
                 draft: $draft, caret: $caret, placeholder: working ? "Queue a message" : "Message Claude",
-                maxLines: 6
+                maxLines: 6, onSubmit: { send(interrupt: false) }
             )
             .padding(.vertical, 8)
             .frame(minHeight: Composer.field)

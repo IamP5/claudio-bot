@@ -305,7 +305,7 @@ final class BridgeClient {
             if Task.isCancelled { return }
             switch ending {
             case .revoked:
-                return forget(reason: "This iPhone was removed from your Mac. Pair it again to reconnect.")
+                return forget(reason: "This \(ThisDevice.noun) was removed from your Mac. Pair it again to reconnect.")
             case .unrecognized:
                 return store.setConnection(.unrecognized)
             case .greeted:

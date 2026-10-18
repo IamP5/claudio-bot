@@ -1,5 +1,7 @@
 import SwiftUI
+#if os(iOS)
 import VisionKit
+#endif
 
 struct PairingView: View {
     @Environment(AppModel.self) private var app
@@ -7,6 +9,7 @@ struct PairingView: View {
     @State private var urlText = ""
     @State private var code = ""
     @State private var scanning = false
+    @State private var link = ""
 
     private var flow: PairingFlow { app.pairingFlow ?? PairingFlow() }
 
@@ -14,6 +17,7 @@ struct PairingView: View {
         ScrollView {
             VStack(spacing: 28) {
                 header
+                #if os(iOS)
                 Button {
                     scanning = true
                 } label: {
@@ -26,6 +30,9 @@ struct PairingView: View {
                 .foregroundStyle(.black)
                 .controlSize(.large)
                 .disabled(flow.isPairing)
+                #else
+                linkForm
+                #endif
 
                 HStack {
                     VStack { Divider() }
@@ -47,16 +54,14 @@ struct PairingView: View {
                     .disabled(flow.isPairing)
             }
         }
+        #if os(iOS)
         .sheet(isPresented: $scanning) {
             QRScannerSheet { payload in
                 scanning = false
-                switch URL(string: payload).flatMap(DeepLink.init(url:)) {
-                case .pair(let invite): app.propose(invite)
-                case .outdatedBridge: app.showPairingFailure(DeepLink.outdatedBridgeMessage)
-                default: app.showPairingFailure("That QR code is not a ClaudioBot pairing code.")
-                }
+                propose(payload, notAPairing: "That QR code is not a ClaudioBot pairing code.")
             }
         }
+        #endif
         // Dismissal goes through the buttons only, so a dismissal can never race the Pair action.
         .alert(
             flow.confirming?.confirmation(replacing: client.pairing).title ?? "",
@@ -92,6 +97,38 @@ struct PairingView: View {
                     .multilineTextAlignment(.center)
             }
         }
+    }
+
+    private func propose(_ payload: String, notAPairing: String) {
+        switch URL(string: payload.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap(DeepLink.init(url:)) {
+        case .pair(let invite): app.propose(invite)
+        case .outdatedBridge: app.showPairingFailure(DeepLink.outdatedBridgeMessage)
+        default: app.showPairingFailure(notAPairing)
+        }
+    }
+
+    /// The Mac has no camera to scan with, so the QR's link is pasted instead.
+    private var linkForm: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Pairing link").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                TextField("claudiobot://pair?url=…&code=…", text: $link)
+                    .autocorrectionDisabled()
+                    .fieldStyle()
+                    .onSubmit(openLink)
+                Button("Open", action: openLink)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.white)
+                    .foregroundStyle(.black)
+                    .controlSize(.large)
+                    .disabled(flow.isPairing || link.isEmpty)
+            }
+        }
+    }
+
+    private func openLink() {
+        guard !link.isEmpty else { return }
+        propose(link, notAPairing: "That is not a ClaudioBot pairing link. It starts with claudiobot://pair.")
     }
 
     private var manualForm: some View {
@@ -148,6 +185,7 @@ private extension View {
     }
 }
 
+#if os(iOS)
 struct QRScannerSheet: View {
     let onScan: (String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -220,3 +258,4 @@ private struct QRScanner: UIViewControllerRepresentable {
         }
     }
 }
+#endif

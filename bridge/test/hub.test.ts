@@ -435,6 +435,47 @@ test("a protocol 2 app answering Allow once on a held call grants it once for th
   expect(h.q().received.at(-1)).toStartWith("[Alex allowed once: Bash `git push origin main`.");
 });
 
+test("a prompt from Claude Code in a bot's or an agent's query posts a card in the bot's chat and holds the call", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-agent-")));
+  roots.push(cwd);
+  world.agents.set("a_1" as AgentId, {
+    agent: { id: "a_1" as AgentId, botId: b.id, title: "Ship it", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null },
+    cwd,
+    messages: [],
+    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "Release it.", initiator: { kind: "user" }, settles: null, attempts: 0 }] },
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: { kind: "user" },
+  });
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  h.hub.boot(false);
+  await flush();
+  const agentQuery = h.q();
+  await h.hub.handle({ type: "send", botId: b.id, text: "release", uploads: [] });
+  await flush();
+  const botQuery = h.q();
+  const ask = (q: typeof botQuery, toolUseID: string) =>
+    q.options.canUseTool!("Bash", { command: "make release" }, { signal: new AbortController().signal, toolUseID, requestId: "r1", title: "Claude wants to run make release" });
+
+  const fromBot = await ask(botQuery, "toolu_bot");
+  const fromAgent = await ask(agentQuery, "toolu_agent");
+
+  const cards = b.messages.filter((m) => m.kind === "permission");
+  expect(cards.map((m) => m.kind === "permission" && [m.detail, m.from])).toEqual([
+    ["make release", null],
+    ["make release", { kind: "agent", id: "a_1" as AgentId, title: "Ship it" }],
+  ]);
+  expect([fromBot, fromAgent]).toEqual([
+    { behavior: "deny", message: expect.stringContaining(`card ${cards[0]!.id}`) },
+    { behavior: "deny", message: expect.stringContaining(`card ${cards[1]!.id}`) },
+  ]);
+  expect(h.pushes.map((p) => p.messageId)).toEqual(cards.map((c) => c.id));
+});
+
 test("Allow once's ten minutes start when the continuation's turn starts, not at the tap", async () => {
   setSystemTime(new Date(at));
   const world = emptyWorld();

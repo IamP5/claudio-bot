@@ -1,4 +1,4 @@
-import type { HookCallback, HookCallbackMatcher, HookEvent, PreToolUseHookInput, SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, HookCallback, HookCallbackMatcher, HookEvent, PermissionResult, PreToolUseHookInput, SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import { appendFileSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import type { Tickable } from "./clock";
@@ -29,6 +29,7 @@ import {
   type Initiator,
   type OpenCard,
   type RepoTrust,
+  type Signature,
   type StandingRule,
   type World,
 } from "./world";
@@ -92,6 +93,12 @@ export type Gate = Tickable & {
   resume(now: Date): void;
   /** The SDK adapter for one actor: a PreToolUse matcher on every tool. Bots and mac agents both get it. */
   hooks(actor: Actor): Partial<Record<HookEvent, HookCallbackMatcher[]>>;
+  /**
+   * The SDK's canUseTool for one actor, for what Claude Code asks about on its own: auto mode could not decide, a
+   * permissions.ask rule, a protected path. The call is held on the same permission card as an ask decision, so the
+   * grant lets the retry through the hook. A tool_use_id already decided, by the hook or a prompt, gets that verdict.
+   */
+  canUseTool(actor: Actor): CanUseTool;
   /** The bot's ask tool. Returns the tool's reply. An identical open question gets "Already waiting" instead of a second card. */
   ask(botId: BotId, a: { question: string; options: string[] }): string;
   /**
@@ -223,6 +230,7 @@ const heldReason = (userName: string, cardId: MessageId) =>
 const waitingReason = (userName: string, cardId: MessageId) =>
   `This exact call is already waiting for ${userName}'s approval (card ${cardId}). It has not run. Do not retry it or work around it. ` +
   `End your turn now; a message will tell you to run exactly this call if ${userName} allows it.`;
+const neverReason = (label: string) => `The user said never to this (${label}). It did not run. Do not try it or anything equivalent, now or later.`;
 const stoppingReason = (userName: string) => `${userName} pressed Stop. This call did not run, and nothing more runs this turn. End your turn now.`;
 
 /** pass → {} so the classifier decides; allow → "allow"; ask → "deny" with the held reason naming the card; deny → "deny". */
@@ -239,6 +247,19 @@ export function toHookOutput(decision: Decision, cardId: MessageId | null, userN
       return denyOutput(decision.reason);
   }
 }
+
+/** Only an allow or a deny answers a prompt: {} would leave Claude Code asking nobody. */
+function toPermission(out: SyncHookJSONOutput, input: Record<string, unknown>): PermissionResult {
+  const s = checked(out).hookSpecificOutput;
+  if (s?.hookEventName !== "PreToolUse") throw new Error("A prompt needs a decision");
+  return s.permissionDecision === "allow" ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: s.permissionDecisionReason ?? COULD_NOT_CHECK };
+}
+
+/**
+ * The rule id of a call Claude Code asked about. No policy row covers it, so its signature names the exact call: Never
+ * refuses only that call, and the card offers no Always.
+ */
+const PROMPTED = "claude.ask";
 
 /** realpath of the longest existing prefix, so a file about to be created resolves through any symlinked folder above it. */
 function resolveReal(path: string): string {
@@ -398,6 +419,32 @@ export function createGate(deps: GateDeps): Gate {
     return remember(call.toolUseId, fp, apply(actor, initiator, call, decision, now));
   }
 
+  function onPrompt(actor: Actor, tool: string, input: Record<string, unknown>, o: Parameters<CanUseTool>[2]): PermissionResult {
+    const turn = deps.turnOf(actor);
+    const initiator = turn?.initiator ?? SYSTEM;
+    const call: ToolCall = {
+      tool,
+      input,
+      cwd: deps.scopeOf(actor).own,
+      toolUseId: o.toolUseID,
+      subagent: o.agentID === undefined ? null : { id: o.agentID, type: null },
+      mcpServer: o.mcpServer ?? null,
+    };
+    if (turn?.stopping) {
+      auditCall(actor, initiator, call, { decision: "deny", via: "stopping", rule: null, cardId: null });
+      return toPermission(remember(call.toolUseId, null, denyOutput(stoppingReason(userName))), input);
+    }
+    const fp = fingerprint(call);
+    const seen = verdicts.get(call.toolUseId);
+    if (seen && (seen.fp === null || seen.fp === fp) && Object.keys(seen.out).length > 0) return toPermission(seen.out, input);
+    const signature = `${tool}:${PROMPTED}:${fp}` as Signature;
+    const never = botOf(actor).rules.find((r) => r.decision === "deny" && r.signature === signature);
+    const d: Decision = never
+      ? { kind: "deny", via: "never", rule: signature, reason: neverReason(never.label), handOff: false }
+      : { kind: "ask", rule: PROMPTED, label: o.title?.trim() || `Use ${tool}`, signature, always: "", offerAlways: false };
+    return toPermission(remember(call.toolUseId, fp, apply(actor, initiator, call, d, deps.now())), input);
+  }
+
   function apply(actor: Actor, initiator: Initiator, call: ToolCall, d: Decision, now: Date): SyncHookJSONOutput {
     switch (d.kind) {
       case "pass": {
@@ -547,6 +594,17 @@ export function createGate(deps: GateDeps): Gate {
 
   return {
     hooks: (actor) => ({ PreToolUse: [{ hooks: [failClosed((input) => onCall(actor, input), (input, error) => onError(actor, input, error))], timeout: HOOK_TIMEOUT_S }] }),
+
+    canUseTool: (actor) => async (tool, input, o) => {
+      try {
+        return onPrompt(actor, tool, input, o);
+      } catch (e) {
+        try {
+          onError(actor, { tool_name: tool, tool_use_id: o.toolUseID, tool_input: input }, errorText(e));
+        } catch {}
+        return { behavior: "deny", message: COULD_NOT_CHECK };
+      }
+    },
 
     ask(botId, a) {
       const bot = world.bots.get(botId);

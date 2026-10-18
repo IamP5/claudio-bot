@@ -107,6 +107,7 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; p
       executable: () => "/fake/claude",
     },
     hooks: (actor) => ({ PreToolUse: [{ matcher: actor.kind === "agent" ? actor.agentId : "bot", hooks: [] }] }),
+    canUseTool: (actor) => async () => ({ behavior: "deny", message: `prompted ${actor.kind === "agent" ? actor.agentId : "bot"}` }),
     beginTurn: (actor) => begun.push(actor.kind === "agent" ? actor.agentId : actor.botId),
     sandbox: opts.sandbox ?? ((actor) => ({ enabled: true, filesystem: { allowWrite: [actor.kind === "agent" ? actor.agentId : actor.botId] } })),
     configRoot: (id) => `/bridge/agent-config/${id}`,
@@ -164,6 +165,7 @@ test("a mac agent starts on its project with the agent prompt, its budget, no re
     "claude-sonnet-5-5",
     rec.agent.id,
   ]);
+  expect(await o.canUseTool?.("Bash", {}, { signal: new AbortController().signal, toolUseID: "t1", requestId: "r1" })).toEqual({ behavior: "deny", message: `prompted ${rec.agent.id}` });
   expect(o.sandbox).toEqual({ enabled: true, filesystem: { allowWrite: [rec.agent.id] } });
   expect([o.env?.PATH, o.env?.GIT_CONFIG_KEY_0, o.env?.GIT_CONFIG_VALUE_0]).toEqual([process.env.PATH, "url.https://github.com/.insteadOf", "git@github.com:"]);
   expect(h.world.agents.get(rec.agent.id)).toMatchObject({

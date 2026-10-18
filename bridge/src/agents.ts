@@ -1,4 +1,4 @@
-import type { HookCallbackMatcher, HookEvent, Options, SandboxSettings, SDKMessage, Settings } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, HookCallbackMatcher, HookEvent, Options, SandboxSettings, SDKMessage, Settings } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 import { createCloudSession, followUpCloudSession } from "./cloud";
@@ -98,6 +98,8 @@ export function createAgents(deps: {
   /** Tests pass a fake SDK. */
   claude: Pick<SessionSpec, "query" | "executable">;
   hooks: (actor: Actor) => Partial<Record<HookEvent, HookCallbackMatcher[]>>;
+  /** gate.canUseTool: what Claude Code asks about on its own becomes a card in the bot's chat. */
+  canUseTool: (actor: Actor) => CanUseTool;
   /** An approval continuation's turn starts (gate.beginTurn). */
   beginTurn: (actor: Actor) => void;
   /** The OS sandbox for the agent's Bash calls (sandbox.sandboxFor), read as each query opens. */
@@ -252,6 +254,7 @@ export function createAgents(deps: {
           disallowedTools: ["AskUserQuestion"],
           model: deps.model,
           hooks: deps.hooks(actor),
+          canUseTool: deps.canUseTool(actor),
           sandbox: deps.sandbox(actor),
           settings: deps.settings(actor),
           // The SDK replaces the environment rather than adding to it.

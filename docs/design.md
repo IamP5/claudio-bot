@@ -109,6 +109,8 @@ An "ask" opens a **permission card** and denies the call with a "held for approv
 
 A transition that opens a card, consumes a grant or adds a rule saves synchronously before the audit row is written and before the hook returns. A repeated hook call for the same `tool_use_id` gets the recorded verdict and opens no second card.
 
+Claude Code also asks on its own: auto mode's classifier cannot decide, a `permissions.ask` rule matches, or a protected path is touched. Bots and mac agents pass the gate's `canUseTool`, which holds such a call the same way: a permission card in the bot's chat, an audit row, and a deny with the "held for approval" reason, under the same open-card cap and the same "already waiting" dedupe. Its rule is `claude.ask` and its signature names the exact call, so the card offers no Always and Never refuses only that call. A `tool_use_id` the hook already decided gets that verdict, so a retry the grant let through the hook is allowed when Claude Code asks about it again.
+
 A **trust card** is a permission card on the wire that holds nobody up. A mac agent loads project configuration from an empty folder the bridge owns (`projectConfigRoot`), so a repo's committed `.claude` settings and hooks, `.mcp.json`, commands, agents and skills never run. When the repo has any, the gate posts "Trust <repo>'s Claude settings" once per repo. Allow once records the repo as trusted for that agent, Always for every agent in it (`GateState.repos`), Deny and Never the opposite; the newest answer for a repo wins, and an expired card decides nothing. A trusted repo's live agents reopen their queries, and the next one loads the repo's own config.
 
 ## The sandbox

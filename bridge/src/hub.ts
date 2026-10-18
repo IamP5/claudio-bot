@@ -604,6 +604,7 @@ export function createHub(deps: HubDeps): Hub {
           disallowedTools: ["AskUserQuestion"],
           model: deps.model,
           hooks: gate.hooks(actor),
+          canUseTool: gate.canUseTool(actor),
           sandbox: sandboxFor(actor, scopeOf(actor), process.env),
           settings: settingsFor(bot.id),
         };
@@ -739,6 +740,7 @@ export function createHub(deps: HubDeps): Hub {
     log: deps.log,
     claude: deps.claude,
     hooks: (actor) => gate.hooks(actor),
+    canUseTool: (actor) => gate.canUseTool(actor),
     beginTurn: (actor) => gate.beginTurn(actor),
     sandbox(actor) {
       const scope = scopeOf(actor);

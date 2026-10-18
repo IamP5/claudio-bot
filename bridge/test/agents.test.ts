@@ -79,7 +79,7 @@ afterEach(() => {
 });
 
 function harness(
-  opts: { world?: World; headroom?: (i: Initiator) => Headroom; project?: Project; sandbox?: () => SandboxSettings; worktrees?: string; budgetLeft?: number; persist?: (urgency?: "now") => void } = {},
+  opts: { world?: World; headroom?: (i: Initiator) => Headroom; project?: Project; sandbox?: () => SandboxSettings; worktrees?: string; budgetLeft?: number | null; persist?: (urgency?: "now") => void } = {},
 ) {
   const world = opts.world ?? emptyWorld();
   const queries: FakeQuery[] = [];
@@ -92,7 +92,7 @@ function harness(
   const ledger: Ledger = {
     add: () => {},
     headroom: (_, i) => (opts.headroom ? opts.headroom(i) : { ok: true, capReached: false }),
-    budgetLeft: () => opts.budgetLeft ?? 4.5,
+    budgetLeft: () => (opts.budgetLeft === undefined ? 4.5 : opts.budgetLeft),
     dailyLeft: () => 10,
   };
   const agents = createAgents({
@@ -799,6 +799,16 @@ test("an agent the daily cap stopped mid-turn is capped, not failed, and says ho
   expect(rec.agent.status).toBe("capped");
   expect(h.reports.map((r) => r.text)).toEqual(["Paused at today's spending cap; it resumes when you message it tomorrow or raise the cap."]);
   h.agents.session(rec.agent.id)?.recheck();
+  await flush();
+  expect(rec.agent.status).toBe("capped");
+});
+
+test("an agent with no budget opens its query without maxBudgetUsd, and the daily cap stopping it leaves it capped", async () => {
+  const h = harness({ budgetLeft: null });
+  const rec = await h.start("mac", user);
+  await flush();
+  expect(Object.hasOwn(h.q().options, "maxBudgetUsd")).toBe(false);
+  h.q().emit(said("Running the tests."), result("", { subtype: "error_max_budget_usd", is_error: true, errors: ["Reached maximum budget ($0.4)"] }));
   await flush();
   expect(rec.agent.status).toBe("capped");
 });

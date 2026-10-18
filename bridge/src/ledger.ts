@@ -10,10 +10,9 @@ import type { AgentId, BotId, BotSpend } from "./protocol";
 import { errorText } from "./text";
 import { actorKey, attended, type Actor, type ActorKey, type Initiator } from "./world";
 
-/** Per bot per local day, its agents included. Override: CLAUDIOBOT_DAILY_USD. A bot's own dailyCapUsd wins. */
-export const DEFAULT_DAILY_CAP_USD = 10;
-/** Per mac agent, lifetime. Override: CLAUDIOBOT_AGENT_USD. */
-export const DEFAULT_AGENT_BUDGET_USD = 5;
+// Spend limits are off unless set. CLAUDIOBOT_DAILY_USD sets a daily cap for every bot (per local day, its agents
+// included), and a bot's own dailyCapUsd wins over it. CLAUDIOBOT_AGENT_USD sets a lifetime budget for every mac agent.
+// With neither, spend is still recorded and shown, and the plan's own usage limits are the guard.
 
 /** One row per turn result. Every value is the decided one, so the file sums without replaying any rule. */
 export type UsageRow = {
@@ -60,16 +59,17 @@ export type Ledger = {
   add(result: { actor: Actor; sessionId: string; initiator: Initiator; cumulativeUsd: number; fresh?: boolean }): void;
   headroom(actor: Actor, initiator: Initiator): Headroom;
   /**
-   * What is left of a mac agent's lifetime budget, never below 0. Passed as Options.maxBudgetUsd when its query starts
-   * so the SDK enforces it mid-turn (the SDK counts only spend since that query started). Check headroom first: at 0
-   * the agent is held, and a query must not start with maxBudgetUsd 0.
+   * What is left of a mac agent's lifetime budget, never below 0; null when it has none. Passed as Options.maxBudgetUsd
+   * when its query starts so the SDK enforces it mid-turn (the SDK counts only spend since that query started). Check
+   * headroom first: at 0 the agent is held, and a query must not start with maxBudgetUsd 0.
    */
-  budgetLeft(agentId: AgentId): number;
+  budgetLeft(agentId: AgentId): number | null;
   /**
-   * What is left of a bot's daily cap on the current local day, its agents included, never below 0. An unattended query
-   * passes it (or the smaller of it and budgetLeft, for an agent) as maxBudgetUsd. Check headroom first, as above.
+   * What is left of a bot's daily cap on the current local day, its agents included, never below 0; null when it has
+   * none. An unattended query passes it (or the smaller of it and budgetLeft, for an agent) as maxBudgetUsd. Check
+   * headroom first, as above.
    */
-  dailyLeft(botId: BotId): number;
+  dailyLeft(botId: BotId): number | null;
 };
 
 /** What the phone reads. Apart from Ledger, so a session or agent fake need not implement it. */
@@ -77,7 +77,7 @@ export type SpendView = {
   /** For the bot frame: what the bot and its agents spent on the current local day, and the cap in force. */
   botSpend(botId: BotId): BotSpend;
   /** For the agent frame: a mac agent's lifetime spend and the budget in force. */
-  agentSpend(agentId: AgentId): { spentUsd: number; budgetUsd: number };
+  agentSpend(agentId: AgentId): { spentUsd: number; budgetUsd: number | null };
 };
 
 type Index = {
@@ -138,25 +138,25 @@ function parseRow(line: string): UsageRow | null {
   return ok ? (v as UsageRow) : null;
 }
 
-const usdOr = (usd: number | null, fallback: number) =>
-  usd !== null && Number.isFinite(usd) && usd >= 0 ? usd : fallback;
+/** A limit in US dollars, or null for anything but a finite non-negative number. */
+const usdOrNull = (usd: number | null): number | null => (usd !== null && Number.isFinite(usd) && usd >= 0 ? usd : null);
 
-function usdFromEnv(name: string, fallback: number): number {
+function usdFromEnv(name: string): number | null {
   const raw = process.env[name]?.trim();
-  return usdOr(raw ? Number(raw) : null, fallback);
+  return usdOrNull(raw ? Number(raw) : null);
 }
 
 export function createLedger(deps: {
   dir: string;
-  /** The bot's own cap; null, or anything but a finite non-negative number, means the default. */
+  /** The bot's own cap; null, or anything but a finite non-negative number, means the bridge default (none unless set). */
   capFor: (botId: BotId) => number | null;
-  /** The agent's own budget; null, or anything but a finite non-negative number, means the default. */
+  /** The agent's own budget; null, or anything but a finite non-negative number, means the bridge default, as above. */
   budgetFor: (agentId: AgentId) => number | null;
   now: () => Date;
   log: (line: string) => void;
 }): Ledger & SpendView {
-  const defaultCap = usdFromEnv("CLAUDIOBOT_DAILY_USD", DEFAULT_DAILY_CAP_USD);
-  const defaultBudget = usdFromEnv("CLAUDIOBOT_AGENT_USD", DEFAULT_AGENT_BUDGET_USD);
+  const defaultCap = usdFromEnv("CLAUDIOBOT_DAILY_USD");
+  const defaultBudget = usdFromEnv("CLAUDIOBOT_AGENT_USD");
   const ix: Index = { baseline: new Map(), spend: new Map(), byAgent: new Map() };
   // A file whose last line was torn by a crash; the next append starts on a fresh line so it does not glue onto it.
   const torn = new Set<string>();
@@ -173,11 +173,12 @@ export function createLedger(deps: {
     }
   }
 
-  const cap = (botId: BotId) => usdOr(deps.capFor(botId), defaultCap);
+  const cap = (botId: BotId) => usdOrNull(deps.capFor(botId)) ?? defaultCap;
   const spentOn = (day: string, botId: BotId) => ix.spend.get(day)?.get(botId) ?? 0;
-  const budget = (agentId: AgentId) => usdOr(deps.budgetFor(agentId), defaultBudget);
+  const budget = (agentId: AgentId) => usdOrNull(deps.budgetFor(agentId)) ?? defaultBudget;
   const spentBy = (agentId: AgentId) => ix.byAgent.get(agentId) ?? 0;
-  const budgetLeft = (agentId: AgentId) => Math.max(0, budget(agentId) - spentBy(agentId));
+  const left = (limit: number | null, spent: number) => (limit === null ? null : Math.max(0, limit - spent));
+  const budgetLeft = (agentId: AgentId) => left(budget(agentId), spentBy(agentId));
 
   return {
     add({ actor, sessionId, initiator, cumulativeUsd, fresh }) {
@@ -214,9 +215,9 @@ export function createLedger(deps: {
     },
 
     headroom(actor, initiator) {
-      if (actor.kind === "agent" && budgetLeft(actor.agentId) <= 0) return { ok: false, reason: "agent_budget" };
+      if (actor.kind === "agent" && budgetLeft(actor.agentId) === 0) return { ok: false, reason: "agent_budget" };
       const now = deps.now();
-      const capReached = spentOn(localDay(now), actor.botId) >= cap(actor.botId);
+      const capReached = left(cap(actor.botId), spentOn(localDay(now), actor.botId)) === 0;
       if (capReached && !attended(initiator)) {
         return { ok: false, reason: "daily_cap", until: nextLocalMidnight(now).toISOString() };
       }
@@ -225,7 +226,7 @@ export function createLedger(deps: {
 
     budgetLeft,
 
-    dailyLeft: (botId) => Math.max(0, cap(botId) - spentOn(localDay(deps.now()), botId)),
+    dailyLeft: (botId) => left(cap(botId), spentOn(localDay(deps.now()), botId)),
 
     botSpend: (botId) => ({ spentTodayUsd: spentOn(localDay(deps.now()), botId), capUsd: cap(botId) }),
 

@@ -102,7 +102,7 @@ export type Bot = {
   lastAt: string;
   createdAt: string;
   routines: Routine[];
-  // Spend cap per local day for this bot and its agents. null: the bridge default.
+  // Spend cap per local day for this bot and its agents. null: the bridge default, which is no cap unless the Mac sets one.
   dailyCapUsd: number | null;
   // No message or result pushes for this bot. Cards still push: a held call waits on the user.
   muted: boolean;
@@ -115,8 +115,8 @@ export type Bot = {
 export type BotSpend = {
   // The bot and its agents, on the Mac's current local day.
   spentTodayUsd: number;
-  // The cap in force: dailyCapUsd, or the bridge default when that is null.
-  capUsd: number;
+  // The cap in force: dailyCapUsd, or the bridge default when that is null. null: no cap, so nothing waits on spend.
+  capUsd: number | null;
 };
 
 export type Peer =
@@ -226,7 +226,7 @@ export type Agent = {
 export type AgentView = Agent & {
   // Lifetime, every turn of every session.
   spentUsd: number | null;
-  // The lifetime budget in force.
+  // The lifetime budget in force; null for a cloud agent or when there is none.
   budgetUsd: number | null;
 };
 

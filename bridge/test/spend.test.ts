@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHomes } from "../src/home";
 import { createHub } from "../src/hub";
-import { DEFAULT_AGENT_BUDGET_USD, DEFAULT_DAILY_CAP_USD, type UsageRow } from "../src/ledger";
+import type { UsageRow } from "../src/ledger";
 import type { AgentId, BotId, ServerMessage } from "../src/protocol";
 import { emptySession, emptyWorld, newBot, type AgentRecord } from "../src/world";
 
@@ -69,25 +69,27 @@ function hubWith(rows: UsageRow[]) {
 
 const NO_RING = { epoch: "", seq: 0, resumed: false };
 
-test("the bot frame carries today's spend by the bot and its agents, and the cap in force", () => {
+test("the bot frame carries today's spend by the bot and its agents, and no cap by default", () => {
   const { hub } = hubWith([row(`bot:${B1}`, 1.5), row(`agent:${MAC}`, 2), row(`bot:${B1}`, 4, "2026-01-01")]);
   const hello = hub.hello(NO_RING);
-  expect(hello.type === "hello" && hello.bots[0]).toMatchObject({ dailyCapUsd: null, spentTodayUsd: 3.5, capUsd: DEFAULT_DAILY_CAP_USD });
+  expect(hello.type === "hello" && hello.bots[0]).toMatchObject({ dailyCapUsd: null, spentTodayUsd: 3.5, capUsd: null });
 });
 
-test("setting a daily cap from the phone sends a bot frame with the new cap in force", async () => {
+test("setting a daily cap from the phone sends a bot frame with the new cap in force, and clearing it removes the cap", async () => {
   const { hub, frames } = hubWith([row(`bot:${B1}`, 1.5)]);
   expect(await hub.handle({ type: "update_bot", botId: B1, patch: { dailyCapUsd: 2 } })).toEqual([]);
   expect(frames.findLast((f) => f.type === "bot")).toMatchObject({ bot: { dailyCapUsd: 2, spentTodayUsd: 1.5, capUsd: 2 } });
+  expect(await hub.handle({ type: "update_bot", botId: B1, patch: { dailyCapUsd: null } })).toEqual([]);
+  expect(frames.findLast((f) => f.type === "bot")).toMatchObject({ bot: { dailyCapUsd: null, spentTodayUsd: 1.5, capUsd: null } });
 });
 
-test("agent frames carry a mac agent's lifetime spend and budget, and null for a cloud agent", async () => {
+test("agent frames carry a mac agent's lifetime spend and no budget by default, and null spend for a cloud agent", async () => {
   const { hub } = hubWith([row(`agent:${MAC}`, 0.5, "2026-01-01"), row(`agent:${MAC}`, 0.25)]);
-  expect(await hub.handle({ type: "agent", agentId: MAC })).toMatchObject([{ agent: { spentUsd: 0.75, budgetUsd: DEFAULT_AGENT_BUDGET_USD } }]);
+  expect(await hub.handle({ type: "agent", agentId: MAC })).toMatchObject([{ agent: { spentUsd: 0.75, budgetUsd: null } }]);
   const [details] = await hub.handle({ type: "details", botId: B1 });
   expect(details?.type === "details" && details.agents.map((a) => [a.id, a.spentUsd, a.budgetUsd])).toEqual(
     expect.arrayContaining([
-      [MAC, 0.75, DEFAULT_AGENT_BUDGET_USD],
+      [MAC, 0.75, null],
       [CLOUD, null, null],
     ]),
   );

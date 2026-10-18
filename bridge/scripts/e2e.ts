@@ -748,9 +748,9 @@ try {
     return `refused (${rows.length} call); reply "${reply.slice(0, 80)}"`;
   });
 
-  await scenario("the phone sees today's spend, and the daily cap holds an unattended run until it is raised", async () => {
+  await scenario("the phone sees today's spend with no cap by default, and a cap holds an unattended run until it is lifted", async () => {
     const bot = c.bots.get(claudio)!;
-    check(bot.spentTodayUsd > 0 && bot.capUsd !== null && bot.capUsd > 0, `the bot frame carries spend ${bot.spentTodayUsd} of ${bot.capUsd}`);
+    check(bot.spentTodayUsd > 0 && bot.capUsd === null, `the bot frame carries spend ${bot.spentTodayUsd} and no cap (${bot.capUsd})`);
     const at = c.received.length;
     c.send({ type: "details", botId: claudio });
     const details = await c.waitFor(() => framesOf(c, "details", at).find((f) => f.botId === claudio), "details", 10_000);
@@ -769,7 +769,7 @@ try {
     const fired = await call(token, "{}");
     check(fired.status === 202, `with the cap lifted it fires (${fired.status})`);
     await c.waitFor(() => routineNamed(c, "capped")?.runs[0]?.status === "ok" && c.resting(claudio), "the run once the cap is lifted");
-    return `spend $${bot.spentTodayUsd.toFixed(3)} of $${bot.capUsd}; at $0.01 the webhook got ${refused.status} "${why}"; after lifting it ran ok`;
+    return `spend $${bot.spentTodayUsd.toFixed(3)}, no cap; at $0.01 the webhook got ${refused.status} "${why}"; after lifting it ran ok`;
   });
 
   await scenario("a rename reaches the bot's resumed session", async () => {

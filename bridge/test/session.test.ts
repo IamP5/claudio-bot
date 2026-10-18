@@ -655,7 +655,7 @@ function harness(
     executable?: string | null;
     defaultExecutable?: boolean;
     clock?: { t: number };
-    dailyLeft?: () => number;
+    dailyLeft?: () => number | null;
     context?: () => string;
     brief?: () => string;
   } = {},
@@ -1127,6 +1127,18 @@ describe("session", () => {
       ["s_1", 2.5, true, ["[b]"]],
       ["s_1", undefined, false, ["[u1]", "[u2]"]],
     ]);
+  });
+
+  test("with no daily cap an unattended turn's query carries no maxBudgetUsd, and an agent's keeps its own budget", async () => {
+    const bot = harness({ dailyLeft: () => null });
+    const agent = harness({ dailyLeft: () => null, options: () => ({ cwd: "/code/shop", maxBudgetUsd: 4.5 }) });
+    for (const h of [bot, agent]) {
+      h.push("[r]", routine);
+      await flush();
+      h.q().emit(resultMsg(1));
+      await flush();
+    }
+    expect([Object.hasOwn(bot.q().options, "maxBudgetUsd"), agent.q().options.maxBudgetUsd]).toEqual([false, 4.5]);
   });
 
   test("an unattended agent turn is capped by the smaller of the agent's budget and the daily cap", async () => {

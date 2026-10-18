@@ -22,7 +22,8 @@ import { emptySession, newMessageId, repoTrust, type Actor, type AgentActor, typ
 export type Agents = {
   /**
    * initiator: the bot turn's, so an agent started by a routine runs as routine work; kept as startedBy. budgetUsd null:
-   * the default. slash (mac only): the agent's first turn is the command "/<slash> <prompt>" instead of the agent prompt.
+   * the bridge default, none unless CLAUDIOBOT_AGENT_USD sets one. slash (mac only): the agent's first turn is the
+   * command "/<slash> <prompt>" instead of the agent prompt.
    */
   start(
     botId: BotId,
@@ -206,7 +207,7 @@ export function createAgents(deps: {
   function turnEnded(rec: AgentRecord, by: Initiator, end: TurnEnd) {
     if (usedBudget(end)) {
       // The ledger caps each query at the smaller of the bot's daily room and the agent's own budget.
-      if (deps.ledger.budgetLeft(rec.agent.id) > 0) return report(rec, "capped", CAPPED, by);
+      if (deps.ledger.budgetLeft(rec.agent.id) !== 0) return report(rec, "capped", CAPPED, by);
       return report(rec, "failed", "The agent used its budget.", by);
     }
     switch (end.kind) {
@@ -241,11 +242,11 @@ export function createAgents(deps: {
       continuing: () => deps.beginTurn(actor),
       log: deps.log,
       ...deps.claude,
-      // Called as a query opens, after the headroom check let the queue head start, so it is above 0. The SDK counts
+      // Called as a query opens, after the headroom check let the queue head start, so a budget left is above 0. The SDK counts
       // spend from the query's start, across every turn the live query serves, which matches a lifetime budget. The
       // session lowers it to what is left of the daily cap for a query it opens for an unattended turn.
       options: (): Options => {
-        const maxBudgetUsd = deps.ledger.budgetLeft(id);
+        const budgetLeft = deps.ledger.budgetLeft(id);
         const repo = repoOf(rec);
         // Full access loads every repo's own config, as the user's own Claude Code does.
         const trusted = accessOf(process.env).full || repoTrust(deps.world.gate, repo, id) === true;
@@ -268,7 +269,7 @@ export function createAgents(deps: {
           settings: deps.settings(actor),
           // The SDK replaces the environment rather than adding to it.
           env: { ...process.env, ...agentGitEnv(process.env) },
-          maxBudgetUsd,
+          ...(budgetLeft !== null && { maxBudgetUsd: budgetLeft }),
         };
       },
       // Output between turns has no turn end to clear the line it would set.

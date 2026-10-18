@@ -44,8 +44,8 @@ The phone paired with the old shared token keeps working until 1 January 2027 (`
 | `CLAUDIOBOT_CLAUDE` | `claude` on `PATH` | Path to the Claude Code executable. Useful when the bridge runs under launchd. |
 | `CLAUDIOBOT_MODEL` | your Claude Code default | Pins the model for bots and agents. Bots run in auto permission mode, so pick a model that supports it. The SDK probe found that `claude-haiku-4-5` and `claude-sonnet-4-5` silently fall back to default mode. |
 | `CLAUDIOBOT_USER_NAME` | first word of `id -F`, else `$USER` | Your first name, as bots use it. |
-| `CLAUDIOBOT_DAILY_USD` | `10` | Daily spend cap per bot in US dollars, its agents included. The cap set in a bot's profile wins. |
-| `CLAUDIOBOT_AGENT_USD` | `5` | Lifetime budget per Mac agent in US dollars. |
+| `CLAUDIOBOT_DAILY_USD` | none | Daily spend cap per bot in US dollars, its agents included. The cap set in a bot's profile wins. Without either, a bot has no cap. |
+| `CLAUDIOBOT_AGENT_USD` | none | Lifetime budget per Mac agent in US dollars. Without it, an agent has no budget of its own. |
 | `CLAUDIOBOT_PUSH_URL` | off | An ntfy topic URL. When set, the bridge pushes while no phone is connected. |
 | `CLAUDIOBOT_WEBHOOK_PORT` | `7879` | Port of the webhook listener, on 127.0.0.1 only. `0` picks a free port. |
 | `CLAUDIOBOT_WORKTREES` | `~/.claudiobot-worktrees` | The folder Mac agents' worktrees go in. |

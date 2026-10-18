@@ -992,7 +992,7 @@ export function createSession(spec: SessionSpec): Session {
     const path = executable();
     if (!path) throw new Error("claude was not found on PATH, or CLAUDIOBOT_CLAUDE does not name an executable");
     const options = spec.options();
-    // Above 0: the headroom check let this turn start, and it sees the same spend.
+    // Above 0 when the bot has a cap: the headroom check let this turn start, and it sees the same spend. Null: no cap.
     const cap = unattended ? spec.ledger.dailyLeft(spec.actor.botId) : null;
     const gen = ++generation;
     const inbox: SDKUserMessage[] = [];

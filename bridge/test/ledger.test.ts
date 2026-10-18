@@ -3,7 +3,7 @@ import { appendFileSync, chmodSync, mkdtempSync, readdirSync, readFileSync, rmSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentId, BotId, RoutineId, RunId } from "../src/protocol";
-import { createLedger, DEFAULT_AGENT_BUDGET_USD, DEFAULT_DAILY_CAP_USD, type UsageRow } from "../src/ledger";
+import { createLedger, type UsageRow } from "../src/ledger";
 import type { Actor, Initiator } from "../src/world";
 
 // bun test runs in UTC unless TZ is set, where local and UTC days coincide. A zone 3 h behind UTC puts 23:50 local on
@@ -138,7 +138,7 @@ test("the totals a real session reported across closed and resumed queries charg
 });
 
 test("a cumulative below the baseline is logged as an anomaly", () => {
-  const { logs, ledger } = harness();
+  const { logs, ledger } = harness({ caps: { b1: 10 } });
   ledger.add({ actor: bot1, sessionId: "s1", initiator: user, cumulativeUsd: 3 });
   expect(logs.filter((l) => l.startsWith("usage: WARNING"))).toEqual([]);
   ledger.add({ actor: bot1, sessionId: "s1", initiator: user, cumulativeUsd: 1 });
@@ -206,13 +206,14 @@ test("a turn that crosses local midnight counts on the day its result lands", ()
   expect(ledger.headroom(bot1, routine)).toMatchObject({ ok: false, reason: "daily_cap" });
 });
 
-test("without its own cap a bot uses the default, which CLAUDIOBOT_DAILY_USD overrides", () => {
+test("without its own cap a bot has none, unless CLAUDIOBOT_DAILY_USD sets one for every bot", () => {
   withEnv("CLAUDIOBOT_DAILY_USD", undefined, () => {
     const plain = harness();
-    spend(plain.ledger, bot1, DEFAULT_DAILY_CAP_USD - 0.01);
+    spend(plain.ledger, bot1, 1000, routine);
     expect(plain.ledger.headroom(bot1, routine)).toEqual({ ok: true, capReached: false });
-    spend(plain.ledger, bot1, 0.01);
-    expect(plain.ledger.headroom(bot1, routine)).toMatchObject({ ok: false, reason: "daily_cap" });
+    expect(plain.ledger.headroom(bot1, user)).toEqual({ ok: true, capReached: false });
+    expect(plain.ledger.dailyLeft(B1)).toBeNull();
+    expect(plain.ledger.botSpend(B1)).toEqual({ spentTodayUsd: 1000, capUsd: null });
   });
   withEnv("CLAUDIOBOT_DAILY_USD", "2", () => {
     const overridden = harness({ caps: { b2: 50 } });
@@ -220,24 +221,43 @@ test("without its own cap a bot uses the default, which CLAUDIOBOT_DAILY_USD ove
     spend(overridden.ledger, bot2, 2);
     expect(overridden.ledger.headroom(bot1, routine)).toMatchObject({ ok: false, reason: "daily_cap" });
     expect(overridden.ledger.headroom(bot2, routine)).toEqual({ ok: true, capReached: false });
+    expect(overridden.ledger.botSpend(B1)).toEqual({ spentTodayUsd: 2, capUsd: 2 });
   });
 });
 
-test("a cap or budget that is not a finite non-negative number falls back to the default", () => {
+test("without its own budget an agent has none, unless CLAUDIOBOT_AGENT_USD sets one for every agent", () => {
+  withEnv("CLAUDIOBOT_AGENT_USD", undefined, () => {
+    const { ledger } = harness();
+    spend(ledger, agent1, 1000, routine);
+    expect(ledger.budgetLeft(A1)).toBeNull();
+    expect(ledger.headroom(agent1, routine)).toEqual({ ok: true, capReached: false });
+    expect(ledger.agentSpend(A1)).toEqual({ spentUsd: 1000, budgetUsd: null });
+  });
+  withEnv("CLAUDIOBOT_AGENT_USD", "1", () => {
+    const { ledger } = harness();
+    spend(ledger, agent1, 1);
+    expect(ledger.budgetLeft(A1)).toBe(0);
+    expect(ledger.headroom(agent1, user)).toEqual({ ok: false, reason: "agent_budget" });
+  });
+});
+
+test("a cap or budget that is not a finite non-negative number falls back to the bridge default", () => {
+  const bad = [Number.NaN, -1, Number.POSITIVE_INFINITY];
+  const open = () => harness({ caps: { b1: bad[0]!, b2: bad[1]! }, budgets: { a1: bad[0]!, a2: bad[2]! } }).ledger;
   withEnv("CLAUDIOBOT_DAILY_USD", undefined, () =>
     withEnv("CLAUDIOBOT_AGENT_USD", undefined, () => {
-      const bad = [Number.NaN, -1, Number.POSITIVE_INFINITY];
-      const { ledger } = harness({
-        caps: { b1: bad[0]!, b2: bad[1]! },
-        budgets: { a1: bad[0]!, a2: bad[2]! },
-      });
-      expect(ledger.dailyLeft(B1)).toBe(DEFAULT_DAILY_CAP_USD);
-      expect(ledger.dailyLeft(B2)).toBe(DEFAULT_DAILY_CAP_USD);
+      const ledger = open();
+      expect([ledger.dailyLeft(B1), ledger.dailyLeft(B2), ledger.budgetLeft(A1), ledger.budgetLeft(A2)]).toEqual([null, null, null, null]);
       expect(ledger.headroom(bot2, routine)).toEqual({ ok: true, capReached: false });
-      expect(ledger.budgetLeft(A1)).toBe(DEFAULT_AGENT_BUDGET_USD);
-      expect(ledger.budgetLeft(A2)).toBe(DEFAULT_AGENT_BUDGET_USD);
     }),
   );
+  withEnv("CLAUDIOBOT_DAILY_USD", "4", () =>
+    withEnv("CLAUDIOBOT_AGENT_USD", "3", () => {
+      const ledger = open();
+      expect([ledger.dailyLeft(B1), ledger.dailyLeft(B2), ledger.budgetLeft(A1), ledger.budgetLeft(A2)]).toEqual([4, 4, 3, 3]);
+    }),
+  );
+  withEnv("CLAUDIOBOT_DAILY_USD", "lots", () => expect(harness().ledger.dailyLeft(B1)).toBeNull());
 });
 
 test("dailyLeft is the bot's cap minus today's spend by it and its agents, never below 0", () => {
@@ -321,7 +341,7 @@ test("budgetLeft is the agent's budget minus its lifetime spend, and a spent age
   withEnv("CLAUDIOBOT_AGENT_USD", undefined, () => {
     const { ledger } = harness({ budgets: { a1: 2 }, caps: { b1: 100 } });
     expect(ledger.budgetLeft(A1)).toBe(2);
-    expect(ledger.budgetLeft(A2)).toBe(DEFAULT_AGENT_BUDGET_USD);
+    expect(ledger.budgetLeft(A2)).toBeNull();
     spend(ledger, agent1, 0.5);
     expect(ledger.budgetLeft(A1)).toBeCloseTo(1.5, 9);
     expect(ledger.headroom(agent1, user)).toEqual({ ok: true, capReached: false });
@@ -381,14 +401,14 @@ test("a missing usage directory is created and starts empty", () => {
   const root = mkdtempSync(join(tmpdir(), "claudiobot-ledger-"));
   dirs.push(root);
   const h = harness({ dir: join(root, "usage") });
-  expect(h.ledger.budgetLeft(A1)).toBe(DEFAULT_AGENT_BUDGET_USD);
+  expect(h.ledger.budgetLeft(A1)).toBeNull();
   expect(h.ledger.headroom(bot1, routine)).toEqual({ ok: true, capReached: false });
 });
 
 test("files that are not month files are ignored", () => {
   const h = harness();
   writeFileSync(join(h.dir, "notes.jsonl"), JSON.stringify({ actor: "agent:a1", deltaUsd: 99 }) + "\n");
-  expect(h.reopen().budgetLeft(A1)).toBe(DEFAULT_AGENT_BUDGET_USD);
+  expect(h.reopen().agentSpend(A1).spentUsd).toBe(0);
 });
 
 test("a rebuild after restart gives the same totals and baselines as the live index", () => {
@@ -437,10 +457,10 @@ test("botSpend: today's spend by the bot and its agents, against the cap in forc
   spend(ledger, bot1, 1.5);
   spend(ledger, agent1, 2);
   spend(ledger, bot2, 0.25);
-  expect(ledger.botSpend(B1)).toEqual({ spentTodayUsd: 3.5, capUsd: DEFAULT_DAILY_CAP_USD });
+  expect(ledger.botSpend(B1)).toEqual({ spentTodayUsd: 3.5, capUsd: null });
   expect(ledger.botSpend(B2)).toEqual({ spentTodayUsd: 0.25, capUsd: 3 });
   clock.now = local(2026, 10, 18, 0, 5);
-  expect(ledger.botSpend(B1)).toEqual({ spentTodayUsd: 0, capUsd: DEFAULT_DAILY_CAP_USD });
+  expect(ledger.botSpend(B1)).toEqual({ spentTodayUsd: 0, capUsd: null });
 });
 
 test("agentSpend: lifetime spend across days, against the agent's budget in force", () => {
@@ -448,6 +468,6 @@ test("agentSpend: lifetime spend across days, against the agent's budget in forc
   spend(ledger, agent1, 0.75);
   clock.now = local(2026, 10, 19);
   spend(ledger, agent1, 0.5);
-  expect(ledger.agentSpend(A1)).toEqual({ spentUsd: 1.25, budgetUsd: DEFAULT_AGENT_BUDGET_USD });
+  expect(ledger.agentSpend(A1)).toEqual({ spentUsd: 1.25, budgetUsd: null });
   expect(ledger.agentSpend(A2)).toEqual({ spentUsd: 0, budgetUsd: 1 });
 });

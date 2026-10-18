@@ -92,7 +92,7 @@ export const server = [
   ] },
   { type: "pair_code", code: "K7QD-M2XP", expiresAt: "2026-10-16T12:10:00.000Z" },
   { type: "message", seq: 53, botId: "b1", message: { kind: "user", id: "m11", at, text: "Ship it", attachments: [], clientId: "c_9b1e" } },
-  { type: "bot", seq: 54, bot: { ...bot, muted: true } },
+  { type: "bot", seq: 54, bot: { ...bot, muted: true, spentTodayUsd: 1.25, capUsd: null } },
   {
     type: "agent", seq: 55, messages: [], agent: {
       ...agent, status: "capped",

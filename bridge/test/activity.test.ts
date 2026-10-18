@@ -36,6 +36,8 @@ test.each<[string, SDKMessage, string | null]>([
   ["a tool result", { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] }, parent_tool_use_id: null, session_id: "s" } as unknown as SDKMessage, null],
   ["a result", { type: "result", subtype: "success", result: "done" } as unknown as SDKMessage, null],
   ["system init", { type: "system", subtype: "init" } as unknown as SDKMessage, null],
+  ["compacting", { type: "system", subtype: "status", status: "compacting" } as unknown as SDKMessage, "Compacting the conversation"],
+  ["a status that is not compacting", { type: "system", subtype: "status", status: "requesting" } as unknown as SDKMessage, null],
 ])("activityOf %s", (_, m, want) => {
   expect(activityOf(m)).toBe(want);
 });

@@ -6,6 +6,7 @@ import type { Options, query, SDKMessage, SDKResultMessage, SDKUserMessage } fro
 import type { Headroom, Ledger } from "../src/ledger";
 import type { AgentId, BotId, RoutineId, RunId } from "../src/protocol";
 import {
+  BACKGROUND_WAIT_MS,
   BREAKER_NOTE,
   CAP_NOTE,
   HEADROOM_RETRY_MS,
@@ -20,6 +21,7 @@ import {
   createSession,
   freshMemo,
   noSignals,
+  spawnGroup,
   step,
   type Core,
   type Effect,
@@ -278,15 +280,15 @@ describe("step", () => {
     expect(endsOf(t.effects)).toEqual([["a", "stopped"]]);
   });
 
-  test("a command starts as its bare text, and the notices wait for the envelope after it, even once it has output", () => {
+  test("a command carries the notices like an envelope, so the envelope after it does not repeat them", () => {
     const c = core({ kind: "idle" }, []);
     c.session.notices = [{ at: NOW.toISOString(), text: "[Your question expired.]" }];
     const command: Pending = { ...env("c"), kind: "command", text: "/greet Ana" };
     const started = run(c, { kind: "push", pending: command });
-    expect(started.effects).toEqual([{ kind: "send", pending: { ...command, attempts: 1 }, text: "/greet Ana" }]);
+    expect(started.effects).toEqual([{ kind: "send", pending: { ...command, attempts: 1 }, text: "[Your question expired.]\n/greet Ana" }]);
     const answered = run(run(started.core, { kind: "output" }).core, { kind: "end", outcome: { kind: "result", result: {} as never } });
     const next = run(answered.core, { kind: "push", pending: env("a") });
-    expect(next.effects).toContainEqual({ kind: "send", pending: env("a", user, 1), text: "[Your question expired.]\n[a]" });
+    expect(next.effects).toContainEqual({ kind: "send", pending: env("a", user, 1), text: "[a]" });
   });
 
   test.each([
@@ -539,8 +541,12 @@ describe("classify", () => {
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+type Content = SDKUserMessage["message"]["content"];
+const textOf = (c: Content) => (typeof c === "string" ? c : c.map((b) => (b.type === "text" ? b.text : `[${b.type}]`)).join("\n\n"));
+
 class FakeQuery {
-  readonly received: { text: string; disk: SessionState }[] = [];
+  readonly received: { text: string; content: Content; uuid: string | undefined; disk: SessionState }[] = [];
+  readonly stoppedTasks: string[] = [];
   interrupts = 0;
   closed = false;
   private queue: SDKMessage[] = [];
@@ -554,7 +560,7 @@ class FakeQuery {
     disk: () => SessionState,
   ) {
     void (async () => {
-      for await (const m of prompt) this.received.push({ text: m.message.content as string, disk: disk() });
+      for await (const m of prompt) this.received.push({ text: textOf(m.message.content), content: m.message.content, uuid: m.uuid, disk: disk() });
     })();
   }
 
@@ -572,6 +578,9 @@ class FakeQuery {
   }
   async interrupt() {
     this.interrupts++;
+  }
+  async stopTask(id: string) {
+    this.stoppedTasks.push(id);
   }
   close() {
     this.closed = true;
@@ -1633,6 +1642,362 @@ describe("a conversation Claude Code no longer has", () => {
     h.q().emit(gone("s_old"));
     await flush();
     expect(h.sent()[1]).toStartWith("Facts: likes tea\n\n");
+  });
+});
+
+const tasks = (...ts: { task_id: string; description: string; ambient?: boolean }[]) =>
+  ({ type: "system", subtype: "background_tasks_changed", tasks: ts.map((t) => ({ task_type: "local_bash", ...t })), uuid: "bg", session_id: "s_1" }) as unknown as SDKMessage;
+const build = { task_id: "t1", description: "npm run build" };
+const lint = { task_id: "t2", description: "npm run lint" };
+/** A frame as Claude Code stamps it with the uuids of the user messages its turn consumed. */
+const echoing = (m: SDKMessage, ...uuids: string[]) => ({ ...m, user_message_uuid: uuids.at(-1), user_message_uuids: uuids }) as SDKMessage;
+const lastUuid = (h: Harness) => h.q().received.at(-1)!.uuid!;
+const allowed = (status: "allowed" | "allowed_warning", info: object = {}) =>
+  ({ type: "rate_limit_event", uuid: "rl", session_id: "s_1", rate_limit_info: { status, ...info } }) as unknown as SDKMessage;
+
+describe("background work", () => {
+  test("a query with background work is not closed when idle; the 15 minutes start once the work is done", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(tasks(build), resultMsg(0.1));
+    await flush();
+    expect(h.session.nextDeadline()).toBeNull();
+    await h.advance(60 * 60_000);
+    expect(h.q().closed).toBe(false);
+    h.q().emit(tasks());
+    await flush();
+    await h.advance(15 * 60_000);
+    expect(h.q().closed).toBe(true);
+  });
+
+  test("ambient tasks are not background work", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(tasks({ task_id: "w", description: "watch", ambient: true }), resultMsg(0.1));
+    await flush();
+    await h.advance(15 * 60_000);
+    expect(h.q().closed).toBe(true);
+  });
+
+  test("a new query starts with no background work, whatever the last one had", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(tasks(build), resultMsg(0.1));
+    await flush();
+    h.q().exit();
+    await flush();
+    h.push("[b]");
+    await flush();
+    h.q().emit(resultMsg(0.2));
+    await flush();
+    await h.advance(15 * 60_000);
+    expect([h.queries.length, h.q().closed]).toEqual([2, true]);
+  });
+
+  test("reopen waits for background work: an idle query closes once its set empties", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(tasks(build), resultMsg(0.1));
+    await flush();
+    h.session.reopen();
+    expect(h.q().closed).toBe(false);
+    h.q().emit(tasks());
+    await flush();
+    expect(h.q().closed).toBe(true);
+  });
+
+  test("a stale query is not closed after its turn while background work runs, and closes once the work is done", async () => {
+    const { h } = await started("[a]");
+    h.session.reopen();
+    h.q().emit(tasks(build), resultMsg(0.1));
+    await flush();
+    expect(h.q().closed).toBe(false);
+    h.q().emit(tasks());
+    await flush();
+    expect(h.q().closed).toBe(true);
+  });
+
+  test("an unattended turn waits while background work runs, then runs on a query of its own", async () => {
+    const { h } = await started("[a]");
+    const first = h.q();
+    first.emit(tasks(build), resultMsg(0.1));
+    await flush();
+    const r = h.push("[r]", routine);
+    await flush();
+    expect([first.closed, h.queries.length, h.session.current?.id as string | undefined]).toEqual([false, 1, r]);
+    first.emit(tasks());
+    await flush();
+    expect([first.closed, h.queries.length, h.q().received.map((x) => x.text), h.q().options.maxBudgetUsd]).toEqual([true, 2, ["[r]"], 10]);
+    expect(h.notes).toEqual([]);
+  });
+
+  test("an unattended turn waits for background work at most BACKGROUND_WAIT_MS, then the work is stopped with a note", async () => {
+    const { h } = await started("[a]");
+    const first = h.q();
+    first.emit(tasks(build, lint), resultMsg(0.1));
+    await flush();
+    h.push("[r]", routine);
+    await flush();
+    expect(h.session.nextDeadline()).toBe(new Date(h.clock.t + BACKGROUND_WAIT_MS).toISOString());
+    await h.advance(BACKGROUND_WAIT_MS - 1);
+    expect([first.closed, h.queries.length]).toEqual([false, 1]);
+    await h.advance(1);
+    expect([first.closed, h.q().received.map((x) => x.text)]).toEqual([true, ["[r]"]]);
+    expect(h.notes).toEqual(["Ana's background work stopped: npm run build; npm run lint."]);
+  });
+
+  test("a result while an unattended turn waits is not that turn's", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(tasks(build), resultMsg(0.1));
+    await flush();
+    const r = h.push("[r]", routine);
+    await flush();
+    h.q().emit(said("The build finished."), resultMsg(0.2));
+    await flush();
+    expect([h.finals(r), h.session.current?.id as string | undefined]).toEqual([[], r]);
+  });
+
+  test("an attended turn on a stale query with background work runs on it rather than kill the work", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(tasks(build), resultMsg(0.1));
+    await flush();
+    h.session.reopen();
+    h.push("[b]");
+    await flush();
+    expect([h.queries.length, h.q().closed, h.sent()]).toEqual([1, false, ["[a]", "[b]"]]);
+  });
+
+  test("Stop stops every background task, and stops them even when no turn runs", async () => {
+    const { h, id } = await started("[a]");
+    h.q().emit(tasks(build, lint));
+    await flush();
+    expect(await h.session.interrupt()).toBe(true);
+    expect(h.q().stoppedTasks).toEqual(["t1", "t2"]);
+    h.q().emit(interruptedResult(0.1));
+    await flush();
+    expect(h.finals(id)).toMatchObject([{ end: { kind: "stopped" } }]);
+    h.q().emit(tasks(lint));
+    await flush();
+    expect(await h.session.interrupt()).toBe(true);
+    expect(h.q().stoppedTasks).toEqual(["t1", "t2", "t2"]);
+  });
+
+  test("Stop while an unattended turn waits on background work ends it as stopped, and nothing is sent", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(tasks(build), resultMsg(0.1));
+    await flush();
+    const r = h.push("[r]", routine, false, fired);
+    await flush();
+    await h.session.interrupt();
+    await flush();
+    h.q().emit(tasks());
+    await flush();
+    expect(h.finals(r).map((e) => e.end.kind)).toEqual(["stopped"]);
+    expect([h.queries.length, h.sent()]).toEqual([1, ["[a]"]]);
+  });
+
+  test("background work a restart stopped is named in one note, once", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(tasks(build, { task_id: "t3", description: "x".repeat(200) }), resultMsg(0.1));
+    await flush();
+    h.session.close();
+    const after = harness({ state: structuredClone(h.state) });
+    await flush();
+    expect(after.notes).toEqual([`The bridge restarted, so Ana's background work stopped: npm run build; ${"x".repeat(79)}….`]);
+    after.session.close();
+    const again = harness({ state: structuredClone(after.state) });
+    await flush();
+    expect(again.notes).toEqual([]);
+  });
+
+  test("background work that ends on its own leaves nothing for a restart to name", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(tasks(build), resultMsg(0.1));
+    await flush();
+    h.q().emit(tasks());
+    await flush();
+    h.session.close();
+    const after = harness({ state: structuredClone(h.state) });
+    await flush();
+    expect(after.notes).toEqual([]);
+  });
+});
+
+describe("turns a background task wakes", () => {
+  test("every turn's message carries its own uuid", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(resultMsg(0.1));
+    await flush();
+    h.push("[b]");
+    await flush();
+    const [a, b] = h.q().received.map((r) => r.uuid);
+    expect(a).toMatch(/^[0-9a-f-]{36}$/);
+    expect(b).toMatch(/^[0-9a-f-]{36}$/);
+    expect(a).not.toBe(b);
+  });
+
+  test("a result that echoes other uuids does not end the user's turn, and its cost is the system's", async () => {
+    const { h, id } = await started("[a]");
+    const mine = lastUuid(h);
+    h.q().emit(echoing(said("The build finished."), "wake"), echoing(resultMsg(0.3), "wake"));
+    await flush();
+    expect([h.finals(id), h.session.current?.id as string | undefined]).toEqual([[], id]);
+    expect(h.usage.map((u) => [u.cumulativeUsd, (u.initiator as Initiator).kind])).toEqual([[0.3, "system"]]);
+    expect(h.messages.map((x) => x.turn)).toEqual([null, null]);
+    h.q().emit(echoing(said("hi"), mine), echoing(resultMsg(0.5), "wake", mine));
+    await flush();
+    expect(h.finals(id).map((e) => e.end.kind)).toEqual(["done"]);
+  });
+
+  test("an assistant message that echoes other uuids is no output of the user's turn, so its error still retries", async () => {
+    const { h, id } = await started("[a]");
+    const mine = lastUuid(h);
+    h.q().emit(echoing(said("Woke up."), "wake"), echoing(apiErrorMessage("overloaded"), mine), apiErrorResult(0));
+    await flush();
+    expect(h.ends.filter((e) => e.id === id).map((e) => e.end.kind)).toEqual(["deferred"]);
+  });
+
+  test("a result with no echo that a task notification started does not end the user's turn", async () => {
+    const { h, id } = await started("[a]");
+    h.q().emit(resultMsg(0.3, { origin: { kind: "task-notification" } }));
+    await flush();
+    expect(h.finals(id)).toEqual([]);
+    h.q().emit(resultMsg(0.4));
+    await flush();
+    expect(h.finals(id).map((e) => e.end.kind)).toEqual(["done"]);
+  });
+
+  test("an account-wide usage limit a wake turn hits parks the account, with or without a turn in flight", async () => {
+    const resetsAt = Math.floor(NOW.getTime() / 1000) + 3_600;
+    const until = new Date(resetsAt * 1000 + USAGE_PARK_SLACK_MS).toISOString();
+    const busy = await started("[a]");
+    busy.h.q().emit(rejected(resetsAt), echoing(apiErrorResult(0), "wake"));
+    await flush();
+    expect([busy.h.account.parkedUntil, busy.h.finals(busy.id), busy.h.session.current?.id as string | undefined]).toEqual([until, [], busy.id]);
+    const idle = await started("[a]");
+    idle.h.q().emit(resultMsg(0.1));
+    await flush();
+    idle.h.q().emit(rejected(resetsAt), apiErrorResult(0));
+    await flush();
+    expect(idle.h.account.parkedUntil).toBe(until);
+  });
+});
+
+describe("usage limit signals", () => {
+  const resetsAt = Math.floor(NOW.getTime() / 1000) + 3_600;
+  test.each([
+    ["overageStatus allowed", { overageStatus: "allowed" }],
+    ["overageStatus allowed_warning", { overageStatus: "allowed_warning" }],
+    ["overageInUse", { overageInUse: true }],
+  ])("a rejection with %s is not a usage limit", async (_, info) => {
+    const { h } = await started("[a]");
+    h.q().emit(rejected(resetsAt, info), apiErrorMessage("overloaded"), apiErrorResult(0));
+    await flush();
+    expect(h.account.parkedUntil).toBeNull();
+    expect(h.state.lifecycle).toMatchObject({ kind: "backoff" });
+  });
+
+  test("a later allowance of the same limit clears the rejection; another limit's does not", async () => {
+    const cleared = await started("[a]");
+    cleared.h.q().emit(rejected(resetsAt, { rateLimitType: "five_hour" }), allowed("allowed", { rateLimitType: "five_hour" }), apiErrorMessage("overloaded"), apiErrorResult(0));
+    await flush();
+    expect(cleared.h.account.parkedUntil).toBeNull();
+    const other = await started("[a]");
+    other.h.q().emit(rejected(resetsAt, { rateLimitType: "five_hour" }), allowed("allowed_warning", { rateLimitType: "seven_day" }), apiErrorResult(0));
+    await flush();
+    expect(other.h.account.parkedUntil).not.toBeNull();
+  });
+
+  test("a warning past a threshold is noted once per limit and reset", async () => {
+    const { h } = await started("[a]");
+    const warn = (over: object) => allowed("allowed_warning", { rateLimitType: "seven_day", resetsAt: resetsAt + 7, surpassedThreshold: 0.9, ...over });
+    h.q().emit(warn({}), warn({ utilization: 0.93 }), warn({ rateLimitType: "five_hour" }), allowed("allowed_warning", { rateLimitType: "seven_day_opus" }));
+    await flush();
+    expect(h.notes).toHaveLength(2);
+    expect(h.notes[0]).toMatch(/^Weekly limit at 90%, resets [A-Z][a-z]{2} \d{2}:\d{2}\.$/);
+    expect(h.notes[1]).toMatch(/^Session limit at 90%, resets /);
+    expect(h.state.lifecycle.kind).toBe("working");
+  });
+});
+
+describe("compaction", () => {
+  const boundary = (trigger: "auto" | "manual") =>
+    ({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger, pre_tokens: 1 }, uuid: "cb", session_id: "s_1" }) as unknown as SDKMessage;
+  test("an automatic compaction leaves one note; one the user asked for does not", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(boundary("manual"), boundary("auto"));
+    await flush();
+    expect(h.notes).toEqual(["Ana's conversation was compacted to make room; older details are summarized now."]);
+  });
+});
+
+describe("commands", () => {
+  const command = (text: string): SessionInput => ({ kind: "command", text, initiator: user, settles: null });
+  test("a command runs last, behind the notices and context it carries as their own block", async () => {
+    const h = harness({ context: () => "Facts: likes tea" });
+    h.session.notice("[Your question expired.]");
+    h.session.push(command("/greet Ana"));
+    await flush();
+    expect(h.q().received[0]!.content).toEqual([
+      { type: "text", text: "Facts: likes tea\n\n[Your question expired.]" },
+      { type: "text", text: "/greet Ana" },
+    ]);
+    h.q().emit(said("Hi Ana"), resultMsg(0.1));
+    await flush();
+    h.push("[b]");
+    await flush();
+    expect(h.sent().at(-1)).toBe("[b]");
+  });
+
+  test("a command with nothing to carry is sent as its bare text", async () => {
+    const h = harness();
+    h.session.push(command("/greet Ana"));
+    await flush();
+    expect(h.q().received[0]!.content).toBe("/greet Ana");
+  });
+});
+
+describe("the Claude Code process group", () => {
+  test("every query spawns Claude Code through the group spawner", async () => {
+    const { h } = await started("[a]");
+    expect(typeof h.q().options.spawnClaudeCodeProcess).toBe("function");
+  });
+
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  async function gone(pid: number) {
+    for (let i = 0; i < 100 && alive(pid); i++) await new Promise((r) => setTimeout(r, 20));
+    return !alive(pid);
+  }
+  const spawnOf = (script: string, signal = new AbortController().signal, stderr: (d: string) => void = () => {}) =>
+    spawnGroup({ command: "/bin/sh", args: ["-c", script], env: { ...process.env }, signal }, stderr);
+  async function grandchild(p: ReturnType<typeof spawnOf>): Promise<number> {
+    let out = "";
+    for await (const chunk of p.stdout) {
+      out += String(chunk);
+      if (out.includes("\n")) break;
+    }
+    return Number(out.trim());
+  }
+
+  test("a grandchild dies when Claude Code exits", async () => {
+    const p = spawnOf("sleep 30 & echo $!; read _");
+    const pid = await grandchild(p);
+    expect(alive(pid)).toBe(true);
+    p.stdin.end();
+    expect(await gone(pid)).toBe(true);
+  });
+
+  test("a grandchild dies when the query's signal aborts, and stderr reaches the session", async () => {
+    const abort = new AbortController();
+    let err = "";
+    const p = spawnOf("echo oops >&2; sleep 30 & echo $!; wait", abort.signal, (d) => (err += d));
+    const pid = await grandchild(p);
+    abort.abort();
+    expect(await gone(pid)).toBe(true);
+    expect(err).toBe("oops\n");
   });
 });
 

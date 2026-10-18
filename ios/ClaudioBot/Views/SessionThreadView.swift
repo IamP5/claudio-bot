@@ -138,6 +138,13 @@ struct SessionThreadView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .topBar { banner(model) }
+        .composerBar {
+            SessionComposer(sessionId: sessionId, controls: model.controls) {
+                followsBottom = true
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.3)) { position.scrollTo(edge: .bottom) }
+            }
+            .frame(maxWidth: 760)
+        }
         .onChange(of: Self.openCard(model.items)) { old, new in
             if let new, new.id != old?.id { AccessibilityNotification.Announcement(new.announcement).post() }
         }

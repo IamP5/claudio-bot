@@ -69,6 +69,7 @@ struct MainView: View {
             .animation(.snappy, value: inspectorBot)
         }
         .sheet(isPresented: $router.showingNewChat) { NewChatView() }
+        .sheet(item: $router.newSession) { NewSessionSheet(projectId: $0.projectId) }
         .sheet(isPresented: $router.showingSettings) { SettingsView() }
         .sheet(isPresented: $router.showingUsage) { PlanUsageView() }
         .sensoryFeedback(.warning, trigger: asking) { old, new in

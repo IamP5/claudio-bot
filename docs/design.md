@@ -179,6 +179,12 @@ Typing `@` lists bots, then the bot's connectors with their status, as Grok Bot 
 
 The bridge keeps the text of every `message_bot` message for each pair of bots, the newest 200, and drops a pair's log when either bot is deleted. Tapping "Messaged X" opens it, like Grok Bot.
 
+## Groups
+
+A group is a chat with the user and 2 to 8 bots. On the wire it is a `Bot` with `kind: "group"` and `members`, so the app lists, renames, pins, mutes and deletes it like a bot. In the bridge it lives in `World.groups`, apart from `world.bots`, and has no Claude Code session, home folder, routines, agents, skills, connectors, commands or uploads. Every path that walks the bots therefore never reaches a group. Its ids start with `g_`, and its older messages archive to `groups/<id>.jsonl`.
+
+A user message goes to the members it mentions, or to every member when it mentions none. Each of those members gets a turn that carries the group's name, its members and the recent transcript. The member's reply posts to the group as a bot message with `from` set to that member. A reply with no text posts nothing. A reply that mentions another member by name hands that member a turn at the next hop, and the shared hop limit of 2 stops the chain. Cards a member opens during a group turn stay in that member's own chat, and the group gets a line saying so. The group shows `working` only while its members run turns for it. Its `activity` line names them ("ana and Bo are typing…"), which the app reads for its typing row.
+
 ## The activity line
 
 While a turn runs, the app shows one line per bot or mac agent, such as "Reading hub.ts" or "Running tests". `activity.ts` reads it from `tool_use` blocks only, cuts URLs to their host, drops command-line options with their values, then masks secrets with `text.redact`. It sends at most one line per actor every 1.5 s, sends the trailing line when the window closes, and never sends the same text twice. Every turn end clears it, a deferred one included, and `delete_bot` clears it before `bot_removed`. Tool use between turns sets none. The line is a signal: never stored, replayed or pushed.

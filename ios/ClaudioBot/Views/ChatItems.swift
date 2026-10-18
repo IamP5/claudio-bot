@@ -24,7 +24,9 @@ struct ChatRowView: View {
             case let .user(_, _, text, attachments, _, mentions):
                 UserBubble(text: text, attachments: attachments, color: bot.avatar.color, mentions: mentions)
             case let .bot(_, _, text, from?):
-                MemberBubble(sender: store.bots[from], text: text, opensRun: opensRun) { router.open($0) }
+                MemberBubble(
+                    sender: store.bots[from], text: text, members: bot.members.compactMap { store.bots[$0] }, opensRun: opensRun
+                ) { router.open($0) }
             case let .bot(_, _, text, nil):
                 BotBubble(text: text)
             case let .question(id, _, card):
@@ -44,10 +46,12 @@ struct ChatRowView: View {
 
 struct BotBubble: View {
     let text: String
+    /// The group's members, whose "@name" in the text reads bold in their color.
+    var members: [Bot] = []
 
     var body: some View {
         HStack(spacing: 0) {
-            MarkdownText(text: text)
+            MarkdownText(text: text, members: members)
                 .font(.system(size: 17))
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
@@ -77,10 +81,7 @@ struct UserBubble: View {
                 out += MarkdownText.inline(s)
             case let .mention(mention, label):
                 var run = AttributedString(label)
-                run.inlinePresentationIntent = .stronglyEmphasized
-                let style = MentionText.Style.filledBubble
-                run.foregroundColor = style.usesBubbleTextColor ? color.onAccent : nil
-                run.backgroundColor = color.onAccent.opacity(style.tintOpacity)
+                MentionText.Style.filledBubble.mark(&run, color: color.onAccent, bubbleText: color.onAccent)
                 if case .bot(let id, _) = mention {
                     run.link = URL(string: "claudiobot://bot/\(id.rawValue)")
                 }
@@ -115,6 +116,15 @@ struct UserBubble: View {
             if store.bots[id] != nil { router.open(id) }
             return .handled
         })
+    }
+}
+
+extension MentionText.Style {
+    /// Bold, then in the bubble's text color over a faint tint of it, or bare in the mentioned bot's color.
+    func mark(_ run: inout AttributedString, color: Color, bubbleText: Color) {
+        run.inlinePresentationIntent = .stronglyEmphasized
+        run.foregroundColor = usesBubbleTextColor ? bubbleText : color
+        if tintOpacity > 0 { run.backgroundColor = bubbleText.opacity(tintOpacity) }
     }
 }
 

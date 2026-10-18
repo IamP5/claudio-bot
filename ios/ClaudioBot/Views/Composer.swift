@@ -2,7 +2,8 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The message bar: + for attachments, a field that leaves quotes alone, dictation and send.
+/// The message bar: + for attachments, a field that leaves quotes alone, dictation and send. A group has no +: it has no
+/// folder, so the bridge refuses uploads there.
 struct Composer: View {
     let bot: Bot
     let openQuestion: Bool
@@ -59,7 +60,7 @@ struct Composer: View {
                 Text(note).font(.footnote).foregroundStyle(AvatarColor.amber.color).padding(.horizontal, 8)
             }
             HStack(alignment: .bottom, spacing: 10) {
-                attachMenu
+                if !bot.isGroup { attachMenu }
                 HStack(alignment: .bottom, spacing: 6) {
                     PromptTextView(
                         draft: $draft, caret: $caret, placeholder: placeholder, maxLines: 6,

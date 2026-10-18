@@ -163,6 +163,18 @@ private func backspace(_ draft: inout ComposerDraft, caret: inout Int) {
         #expect(MentionMenu.candidates("eng ", in: digest, bots: [engineer, lead], connectors: []).isEmpty)
     }
 
+    @Test func theMenuRanksBotsAndConnectorsEachOnTheirOwnBotsFirst() {
+        let pager = bot("b5", "pager", minutesAgo: 30)
+        let ops = bot("b6", "on-call pager", minutesAgo: 2)
+        let paper = bot("b7", "newspaper", minutesAgo: 3)
+        let jira = Connector(name: "jira-pages", status: .connected, enabled: true)
+        let pipe = Connector(name: "pipedream", status: .connected, enabled: true)
+        let names = MentionMenu.candidates("pa", in: digest, bots: [pager, ops, paper], connectors: [jira, pipe]).map(\.name)
+        #expect(names == ["pager", "on-call pager", "newspaper", "jira-pages"])
+        #expect(MentionMenu.candidates("p", in: digest, bots: [paper, pager], connectors: [jira, pipe]).map(\.name)
+            == ["pager", "newspaper", "pipedream", "jira-pages"])
+    }
+
     @Test func inAGroupItsMembersLeadInTheirOrder() {
         let names = MentionMenu.candidates("", in: crew, bots: [engineer, lead, digest, crew], connectors: []).map(\.name)
         #expect(names == ["news digest", "engineer", "Engineering Lead"])
@@ -222,6 +234,15 @@ private func backspace(_ draft: inout ComposerDraft, caret: inout Int) {
         #expect(CommandMenu.matches(commands, query: "zzz").isEmpty)
     }
 
+    @Test func namesThatStartWithTheQueryComeFirstThenAWordInsideThenAnyOtherMatch() {
+        let commands = ["disk-cleanup", "setup-agent-harness", "to-prd", "pineapple", "superpowers:plan", "map", "pstack"]
+            .map { Command(name: $0, description: "", argumentHint: "", source: .skill) }
+        #expect(CommandMenu.matches(commands, query: "p").map(\.name) == [
+            "pineapple", "pstack", "to-prd", "superpowers:plan", "disk-cleanup", "setup-agent-harness", "map",
+        ])
+        #expect(CommandMenu.matches(commands, query: "P").map(\.name).prefix(2) == ["pineapple", "pstack"])
+    }
+
     @Test func aPluginSkillSplitsIntoItsPluginAndItsSkill() {
         #expect(CommandMenu.parts("superpowers:brainstorm") == ("superpowers", "brainstorm"))
         #expect(CommandMenu.parts("review") == (nil, "review"))
@@ -238,6 +259,17 @@ private func backspace(_ draft: inout ComposerDraft, caret: inout Int) {
             .text(" about a@github and @newsy"),
         ])
         #expect(MentionText.segments("plain", mentions: []) == [.text("plain")])
+    }
+
+    @Test func aMembersReplyNamesAMemberTheWayTheBridgeReadsIt() {
+        let ana = bot("m1", "Ana")
+        let anaLee = bot("m2", "Ana Lee")
+        let grok = bot("m3", "Grok Bot")
+        let text = "@ana lee, over to @GROK BOT. Not mail@ana, @anabel or @Ana_x. **@Ana** and @Ana"
+        let found = MentionText.memberMentions(in: text, members: [ana, anaLee, grok]).map { (String(text[$0.range]), $0.member.id) }
+        #expect(found.map(\.0) == ["@ana lee", "@GROK BOT", "@Ana", "@Ana"])
+        #expect(found.map(\.1) == [anaLee.id, grok.id, ana.id, ana.id])
+        #expect(MentionText.memberMentions(in: "@Ana", members: []).isEmpty)
     }
 
     @Test func aMentionInAFilledBubbleTakesTheBubbleTextOverAFaintTint() {

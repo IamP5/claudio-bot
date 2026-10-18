@@ -54,6 +54,7 @@ struct GroupAvatar: View {
 struct MemberBubble: View {
     let sender: Bot?
     let text: String
+    var members: [Bot] = []
     let opensRun: Bool
     var onSender: (BotID) -> Void = { _ in }
 
@@ -77,7 +78,7 @@ struct MemberBubble: View {
                         .foregroundStyle(sender?.avatar.color.accent ?? Theme.secondary)
                         .padding(.leading, 4)
                 }
-                BotBubble(text: text)
+                BotBubble(text: text, members: members)
             }
         }
     }

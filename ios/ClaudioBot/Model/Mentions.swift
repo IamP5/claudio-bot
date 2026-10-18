@@ -213,15 +213,49 @@ enum MentionCandidate: Equatable, Identifiable {
 }
 
 enum MentionMenu {
-    /// Bots first, then the chat's connectors that are on, each kept when its name contains the query. A 1:1 chat leaves
+    /// Bots first, then the chat's connectors that are on, each kept when its name contains the query and ranked by
+    /// MenuMatch within its kind. A 1:1 chat leaves
     /// out its own bot. A group's members lead, in the order the user picked them. Groups are not mentionable.
     static func candidates(_ query: String, in chat: Bot, bots: [Bot], connectors: [Connector]) -> [MentionCandidate] {
         let plain = bots.filter { $0.kind != .group && $0.id != chat.id }
         let members = chat.members.compactMap { id in plain.first { $0.id == id } }
         let others = plain.filter { !chat.members.contains($0.id) }.sorted(by: Bot.homeOrder)
-        let matches = { (name: String) in query.isEmpty || name.localizedCaseInsensitiveContains(query) }
-        return (members + others).filter { matches($0.name) }.map(MentionCandidate.bot)
-            + connectors.filter { $0.enabled && matches($0.name) }.map(MentionCandidate.connector)
+        return MenuMatch.ranked(members + others, query: query, name: \.name).map(MentionCandidate.bot)
+            + MenuMatch.ranked(connectors.filter(\.enabled), query: query, name: \.name).map(MentionCandidate.connector)
+    }
+}
+
+/// How a name contains a menu's query, best first.
+enum MenuMatch: Int, CaseIterable {
+    /// The name starts with the query.
+    case prefix
+    /// A word inside the name starts with it, after "-", ":" or a space.
+    case wordStart
+    /// The query is somewhere else in the name.
+    case inside
+
+    /// The best way the name contains the query, ignoring case. nil when it does not contain it.
+    static func of(_ name: String, query: String) -> MenuMatch? {
+        var best: MenuMatch?
+        var from = name.startIndex
+        while let found = name.range(of: query, options: .caseInsensitive, range: from..<name.endIndex, locale: .current) {
+            if found.lowerBound == name.startIndex { return .prefix }
+            if "-: ".contains(name[name.index(before: found.lowerBound)]) { return .wordStart }
+            best = .inside
+            from = name.index(after: found.lowerBound)
+        }
+        return best
+    }
+
+    /// The items whose name contains the query, best match first, keeping their order within a match. An empty query
+    /// keeps every item in order.
+    static func ranked<Item>(_ items: [Item], query: String, name: (Item) -> String) -> [Item] {
+        guard !query.isEmpty else { return items }
+        var tiers = Array(repeating: [Item](), count: allCases.count)
+        for item in items {
+            if let match = of(name(item), query: query) { tiers[match.rawValue].append(item) }
+        }
+        return tiers.flatMap { $0 }
     }
 }
 
@@ -270,9 +304,9 @@ extension Connector {
 }
 
 enum CommandMenu {
-    /// The commands whose name contains the query, in the bridge's order.
+    /// The commands whose name contains the query, ranked by MenuMatch, in the bridge's order within a rank.
     static func matches(_ commands: [Command], query: String) -> [Command] {
-        commands.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+        MenuMatch.ranked(commands, query: query, name: \.name)
     }
 
     /// "plugin:skill" names a plugin's skill. A plain name has no plugin.
@@ -296,6 +330,28 @@ enum MentionText {
 
         var usesBubbleTextColor: Bool { self == .filledBubble }
         var tintOpacity: Double { self == .filledBubble ? 0.22 : 0 }
+    }
+
+    /// Where a group member's reply names a member: "@" and the member's exact name, ignoring case, at the start of a
+    /// word and not running on into one. Longer names win, so "@Ana Lee" is Ana Lee, not Ana. The bridge's
+    /// mentionedIn reads a reply the same way.
+    static func memberMentions(in text: String, members: [Bot]) -> [(range: Range<String.Index>, member: Bot)] {
+        let isWord = { (c: Character) in c.isLetter || c.isNumber || c == "_" }
+        let names = members.filter { !$0.name.isEmpty }.sorted { $0.name.count > $1.name.count }
+        var found: [(range: Range<String.Index>, member: Bot)] = []
+        var index = text.startIndex
+        while let at = text[index...].firstIndex(of: "@") {
+            index = text.index(after: at)
+            if at > text.startIndex && isWord(text[text.index(before: at)]) { continue }
+            for member in names {
+                guard let name = text.range(of: member.name, options: [.caseInsensitive, .anchored], range: index..<text.endIndex),
+                      name.upperBound == text.endIndex || !isWord(text[name.upperBound]) else { continue }
+                found.append((at..<name.upperBound, member))
+                index = name.upperBound
+                break
+            }
+        }
+        return found
     }
 
     /// Each "@name" a mention names, at the start of a word, becomes a segment. Longer names win, so "@news digest"

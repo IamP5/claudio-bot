@@ -63,21 +63,23 @@ enum MarkdownBlock: Equatable {
 
 struct MarkdownText: View {
     let text: String
+    /// A group's members, whose "@name" reads bold in their color. Code blocks keep their text as written.
+    var members: [Bot] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(MarkdownBlock.parse(text).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .prose(let s):
-                    Text(Self.inline(s))
+                    Text(inline(s))
                         .textSelection(.enabled)
                 case let .item(marker, s):
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(marker).monospacedDigit().frame(minWidth: 16, alignment: .trailing)
-                        Text(Self.inline(s)).textSelection(.enabled)
+                        Text(inline(s)).textSelection(.enabled)
                     }
                 case .heading(let s):
-                    Text(Self.inline(s))
+                    Text(inline(s))
                         .font(.headline)
                 case .code(let language, let s):
                     CodeBlock(language: language, code: s)
@@ -85,6 +87,20 @@ struct MarkdownText: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func inline(_ s: String) -> AttributedString {
+        var text = Self.inline(s)
+        guard !members.isEmpty else { return text }
+        let plain = String(text.characters)
+        for (range, member) in MentionText.memberMentions(in: plain, members: members).reversed() {
+            let lower = text.characters.index(text.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: range.lowerBound))
+            let upper = text.characters.index(lower, offsetBy: plain.distance(from: range.lowerBound, to: range.upperBound))
+            var run = AttributedString(text[lower..<upper])
+            MentionText.Style.grayBubble.mark(&run, color: member.avatar.color.accent, bubbleText: .white)
+            text.replaceSubrange(lower..<upper, with: run)
+        }
+        return text
     }
 
     // Inline-only keeps line breaks and list markers as written; full block parsing would merge them.

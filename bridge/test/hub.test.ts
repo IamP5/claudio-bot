@@ -1350,6 +1350,51 @@ test("the bot a user mentioned hears from the bot handing it work as a hop of th
   expect(h.bo.session.pending.map((p) => p.initiator)).toEqual([{ kind: "bot", botId: h.ana.id, hops: 1, origin: { kind: "user" } }]);
 });
 
+test("a long message_bot text reaches the other bot cut at a word, with a pointer, and stays whole in the exchange", async () => {
+  const h = await pair();
+  const long = "word ".repeat(4000).trimEnd();
+  await callTool(h.anaQuery, "message_bot", { bot: "bo", text: long });
+  await flush();
+
+  const prompt = h.q().received.at(-1)!;
+  expect(prompt).toContain(`\n${"word ".repeat(1599)}word\n`);
+  expect(prompt).not.toContain("word ".repeat(1601));
+  expect(prompt).toEndWith("\n[cut: the full message is in ana's chat]");
+  const [log] = await h.hub.handle({ type: "exchange", botId: h.bo.id, peer: h.ana.id });
+  expect(log).toMatchObject({ messages: [{ from: h.ana.id, text: long }] });
+});
+
+test("a long agent report reaches its bot cut at a line, with a pointer, and stays whole in the agent's thread", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-agent-")));
+  roots.push(cwd);
+  world.agents.set("a_1" as AgentId, {
+    agent: { id: "a_1" as AgentId, botId: b.id, title: "Ship it", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null },
+    cwd,
+    messages: [],
+    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "Ship it.", initiator: { kind: "user" }, settles: null, attempts: 0 }] },
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: { kind: "user" },
+  });
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  h.hub.boot(false);
+  await flush();
+  const report = Array.from({ length: 300 }, (_, i) => `Line ${String(i).padStart(3, "0")}: ${"x".repeat(40)}`).join("\n");
+  h.q().emit(result(0.1, { result: report }));
+  for (let i = 0; i < 20 && !h.queries.some((q) => q.options.cwd !== cwd); i++) await new Promise((r) => setTimeout(r, 25));
+  await flush();
+
+  const prompt = h.queries.find((q) => q.options.cwd !== cwd)!.received.at(-1)!;
+  expect(prompt).toContain("Line 150:");
+  expect(prompt).not.toContain("Line 180:");
+  expect(prompt).toMatch(/x\n`+\n\[cut: the full report is on the agent's card\]$/);
+  expect(world.agents.get("a_1" as AgentId)!.messages.at(-1)!.text).toBe(report);
+});
+
 test("message_bot reaches a bot by its title, and a miss lists names with titles", async () => {
   const h = await pair();
   const [server, client] = InMemoryTransport.createLinkedPair();

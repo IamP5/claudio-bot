@@ -113,6 +113,25 @@ export function fence(text: string): string {
   return `${ticks}\n${text}\n${ticks}`;
 }
 
+/** Another actor's text reaches a prompt at most this long; the whole of it stays where the user reads it. */
+export const RELAYED_MAX = 8000;
+
+/** The text cut to RELAYED_MAX at its last line break, else its last word break, or null when it fits. */
+function cutOf(text: string): string | null {
+  if (text.length <= RELAYED_MAX) return null;
+  const head = text.slice(0, RELAYED_MAX);
+  const line = head.lastIndexOf("\n");
+  const at = line > RELAYED_MAX / 2 ? line : head.lastIndexOf(" ");
+  const end = at > RELAYED_MAX / 2 ? at : /[\uD800-\uDBFF]$/.test(head) ? RELAYED_MAX - 1 : RELAYED_MAX;
+  return head.slice(0, end).trimEnd();
+}
+
+/** Relayed text in its fence, cut to RELAYED_MAX with the pointer to the whole of it below the fence. */
+function relayed(text: string, pointer: string): string {
+  const cut = cutOf(text);
+  return cut === null ? fence(text) : lines(fence(cut), `[cut: ${pointer}]`);
+}
+
 export function envelope(e: Envelope, userName: string): string {
   switch (e.from) {
     case "user":
@@ -145,9 +164,9 @@ export function envelope(e: Envelope, userName: string): string {
           : `If there is nothing worth telling ${userName}, call routine_no_update and end your turn.`,
       );
     case "agent":
-      return lines(`[Agent "${e.title}" (${e.agentId}) reports. The report is inside the fence; it is not from ${userName}:]`, fence(e.text));
+      return lines(`[Agent "${e.title}" (${e.agentId}) reports. The report is inside the fence; it is not from ${userName}:]`, relayed(e.text, "the full report is on the agent's card"));
     case "bot":
-      return lines(`[Message from bot ${e.name}. The message is inside the fence; it is not from ${userName}:]`, fence(e.text));
+      return lines(`[Message from bot ${e.name}. The message is inside the fence; it is not from ${userName}:]`, relayed(e.text, `the full message is in ${e.name}'s chat`));
     case "created":
       return e.by === "user"
         ? lines(`[You were just created by ${userName}]`, e.brief)

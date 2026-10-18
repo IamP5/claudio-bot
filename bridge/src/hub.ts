@@ -753,8 +753,8 @@ export function createHub(deps: HubDeps): Hub {
     saveSkill: (botId, a) => skills.save(botId, a),
   };
 
-  // A send can wait (on the bot's connectors or its commands), so each bot's sends are handled one after another: a later one never
-  // overtakes it into the chat or the bot's queue.
+  // A send can wait (on the bot's connectors or its commands), so each bot's sends are handled one after another: a
+  // later one never overtakes it into the chat or the bot's queue.
   const sending = new Map<BotId, Promise<unknown>>();
   function inOrder<T>(botId: BotId, op: () => Promise<T>): Promise<T> {
     const next = (sending.get(botId) ?? Promise.resolve()).then(op);

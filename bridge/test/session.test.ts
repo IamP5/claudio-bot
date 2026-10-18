@@ -278,6 +278,17 @@ describe("step", () => {
     expect(endsOf(t.effects)).toEqual([["a", "stopped"]]);
   });
 
+  test("a command starts as its bare text, and the notices wait for the envelope after it, even once it has output", () => {
+    const c = core({ kind: "idle" }, []);
+    c.session.notices = [{ at: NOW.toISOString(), text: "[Your question expired.]" }];
+    const command: Pending = { ...env("c"), kind: "command", text: "/greet Ana" };
+    const started = run(c, { kind: "push", pending: command });
+    expect(started.effects).toEqual([{ kind: "send", pending: { ...command, attempts: 1 }, text: "/greet Ana" }]);
+    const answered = run(run(started.core, { kind: "output" }).core, { kind: "end", outcome: { kind: "result", result: {} as never } });
+    const next = run(answered.core, { kind: "push", pending: env("a") });
+    expect(next.effects).toContainEqual({ kind: "send", pending: env("a", user, 1), text: "[Your question expired.]\n[a]" });
+  });
+
   test.each([
     { kind: "backoff", until: later(1_000), attempt: 1 },
     { kind: "parked", reason: "usage_limit", until: later(1_000) },

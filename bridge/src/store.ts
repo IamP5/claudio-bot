@@ -109,7 +109,7 @@ const session = z.looseObject({
   pending: z.array(
     z.looseObject({
       id: text,
-      kind: z.enum(["envelope", "continuation"]).optional(),
+      kind: z.enum(["envelope", "continuation", "command"]).optional(),
       text,
       initiator,
       settles: z.looseObject({ routineId: text, runId: text }).nullable(),

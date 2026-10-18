@@ -5,6 +5,7 @@ import type { Settings } from "@anthropic-ai/claude-agent-sdk";
 import { createActivity } from "./activity";
 import { createAgents } from "./agents";
 import { createClock, type Tickable } from "./clock";
+import { commandOf, createCommands, probeCommands, slashName } from "./commands";
 import { connectorSettings, createConnectors } from "./connectors";
 import { accessOf } from "./access";
 import { createGate } from "./gate";
@@ -126,7 +127,7 @@ type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; carded: bool
 type Pushes = { pushed: { id: MessageId; at: number } | null; last: MessageId | null };
 
 /** What hello advertises: the FEATURES this bridge serves. Each new one joins when the hub implements it. */
-const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "exchanges"];
+const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges"];
 
 const BAD_NAME = `A bot name is 1 to ${BOT_NAME_MAX} characters, with no control or invisible characters.`;
 /** The same rule as the bot tools' name: a name a phone would show cut short or other than it reads is refused. */
@@ -436,7 +437,21 @@ export function createHub(deps: HubDeps): Hub {
     changed: (id) => {
       brains.get(id)?.reopen();
       deps.broadcast({ type: "skills", botId: id, skills: skills.list(id) });
+      commands.refresh(id);
     },
+  });
+  const commands = createCommands({
+    live: (id) => brains.get(id)?.mcp() ?? null,
+    // What the bot's own query would offer: its home's project skills, the user's and plugins'. No MCP server starts, so
+    // only an open query's list has MCP prompts.
+    probe: (id) => {
+      homes.ensureFolders(id);
+      return probeCommands(deps.claude, { cwd: homes.homeOf(id), settingSources: ["user", "project"], settings: settingsFor(id), strictMcpConfig: true, mcpServers: {} });
+    },
+    changed: (id, menu) => {
+      if (world.bots.has(id)) deps.broadcast({ type: "commands", botId: id, commands: menu });
+    },
+    log: deps.log,
   });
 
   function brain(bot: BotRecord): Session {
@@ -475,6 +490,8 @@ export function createHub(deps: HubDeps): Hub {
       },
       onMessage(m, pending) {
         if (!world.bots.has(bot.id)) return;
+        if (m.type === "system" && m.subtype === "init") commands.refresh(bot.id);
+        if (m.type === "system" && m.subtype === "commands_changed") commands.seen(bot.id, m.commands);
         // Output between turns, such as a background task finishing, has no turn to wait for, and no turn end would
         // clear an activity line it set.
         if (pending === null) return postBubbles(bot, { pushed: null, last: null }, readTurn(freshTurn, m).bubbles);
@@ -730,7 +747,7 @@ export function createHub(deps: HubDeps): Hub {
     saveSkill: (botId, a) => skills.save(botId, a),
   };
 
-  // A send can wait (on the bot's connectors), so each bot's sends are handled one after another: a later one never
+  // A send can wait (on the bot's connectors or its commands), so each bot's sends are handled one after another: a later one never
   // overtakes it into the chat or the bot's queue.
   const sending = new Map<BotId, Promise<unknown>>();
   function inOrder<T>(botId: BotId, op: () => Promise<T>): Promise<T> {
@@ -753,6 +770,8 @@ export function createHub(deps: HubDeps): Hub {
     const sent = m.clientId === undefined ? undefined : bot.messages.find((x) => x.kind === "user" && x.clientId === m.clientId);
     if (sent) return [{ type: "message", botId: bot.id, message: sent }];
     const on = await connectorsOn(bot.id, m.mentions ?? []);
+    // "/name args" with no uploads runs a command the bot's menu offers; anything else is an ordinary message.
+    const command = m.uploads.length === 0 && slashName(m.text) !== null ? commandOf(m.text, await commands.list(bot.id)) : null;
     if (!world.bots.has(bot.id)) return error("Unknown bot");
     const mentions = resolveMentions(world, m.mentions ?? [], on);
     const attachments = homes.saveUploads(bot.id, m.uploads);
@@ -767,7 +786,7 @@ export function createHub(deps: HubDeps): Hub {
       ...(mentions.length > 0 && { mentions }),
     });
     const others = mentions.filter((x) => x.kind !== "bot" || x.id !== bot.id);
-    deliver(botActor(bot.id), { from: "user", text: m.text, attachments, mentions: others });
+    deliver(botActor(bot.id), command !== null ? { from: "command", line: m.text.trim() } : { from: "user", text: m.text, attachments, mentions: others });
     return [];
   }
 
@@ -857,6 +876,7 @@ export function createHub(deps: HubDeps): Hub {
         brains.delete(bot.id);
         readings.delete(bot.id);
         sending.delete(bot.id);
+        commands.forget(bot.id);
         agents.stopFor(bot.id);
         // Before the agents go: the gate finds the agents' grants through them.
         gate.forgetBot(bot.id);
@@ -910,7 +930,7 @@ export function createHub(deps: HubDeps): Hub {
         return "error" in made ? error(made.error) : [{ type: "webhook_token", botId: bot.id, routineId: message.routineId, ...made }];
       }
       case "commands":
-        return error("This bridge cannot list commands yet.");
+        return [{ type: "commands", botId: bot.id, commands: await commands.list(bot.id) }];
       case "exchange":
         return [{ type: "exchange", botId: bot.id, peer: message.peer, messages: exchangeBetween(world, bot.id, message.peer) }];
     }

@@ -2,13 +2,13 @@ import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { McpSdkServerConfigWithInstance, Options, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { McpSdkServerConfigWithInstance, Options, query, SDKMessage, SDKUserMessage, SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHomes } from "../src/home";
 import { createHub, tickEach } from "../src/hub";
 import type { Project } from "../src/projects";
-import type { AgentId, BotId, ClientMessage, Message, MessageId, RoutineId, RunId, ServerMessage, Signal, StreamPosition } from "../src/protocol";
+import type { AgentId, BotId, ClientMessage, Command, Message, MessageId, RoutineId, RunId, ServerMessage, Signal, StreamPosition } from "../src/protocol";
 import { createPush, type Push, type PushReason } from "../src/push";
 import { BREAKER_NOTE } from "../src/session";
 import { CLAUDIO_TOOLS } from "../src/tools";
@@ -25,6 +25,13 @@ const at = "2026-10-17T12:00:00.000Z";
 const inAnHour = () => new Date(Date.now() + 3_600_000).toISOString();
 const NO_RING: StreamPosition = { epoch: "", seq: 0, resumed: false };
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+/** What Claude Code reports a bot can run: a project skill, and two built-ins of which the menu shows one. */
+const COMMANDS: SlashCommand[] = [
+  { name: "greet", description: "Greet someone by name (project)", argumentHint: "[name]" },
+  { name: "clear", description: "Start a new session with empty context", argumentHint: "", builtin: true, aliases: ["reset", "new"] },
+  { name: "compact", description: "Free up context", argumentHint: "<instructions>", builtin: true },
+];
 
 /** A live SDK query the test drives: what the session sent it, and what it answers. */
 class FakeQuery {
@@ -58,6 +65,13 @@ class FakeQuery {
   }
   async toggleMcpServer(name: string, enabled: boolean) {
     this.toggles.push(`${name} ${enabled}`);
+  }
+  commands: SlashCommand[] = COMMANDS;
+  async supportedCommands() {
+    return this.commands;
+  }
+  get closed() {
+    return this.done;
   }
   close() {
     this.done = true;
@@ -899,7 +913,7 @@ test("one ticker throwing is logged, and the tickers after it still run", () => 
 
 test("hello lists every feature this bridge has", () => {
   const hello = hubOver(emptyWorld()).hub.hello(NO_RING);
-  expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "exchanges"]);
+  expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges"]);
 });
 
 test("a send's clientId comes back on the user's message, and a send without one adds none", async () => {
@@ -1147,6 +1161,74 @@ test("a rename from the phone rewrites the bot's CLAUDE.md heading and reaches i
   expect(first).toEndWith("[Alex]\nhi");
   expect(second).toStartWith("[Standing brief: this replaces what you were told before where they differ.]\nYou are Juno, a Bot in ClaudioBot.");
   expect(third).toBe("[Alex]\nand again");
+});
+
+const MENU: Command[] = [
+  { name: "greet", description: "Greet someone by name", argumentHint: "[name]", source: "skill" },
+  { name: "compact", description: "Free up context", argumentHint: "<instructions>", source: "builtin" },
+];
+
+/** A resumed bot with a notice waiting, whose next ordinary turn would carry the standing brief and the notice. */
+function resumedBot() {
+  const world = emptyWorld();
+  const b = bot("eng", { session: { ...emptySession("s_1"), notices: [{ at, text: "[Your question expired unanswered.]" }] } });
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n\n## Job\n\nShip.\n");
+  return { ...h, bot: b };
+}
+
+test("with no query open, the commands frame reads the menu from a query that is sent nothing and closed", async () => {
+  const h = resumedBot();
+
+  expect(await h.hub.handle({ type: "commands", botId: h.bot.id })).toEqual([{ type: "commands", botId: h.bot.id, commands: MENU }]);
+
+  const probe = h.q();
+  expect([h.queries.length, probe.received, probe.closed, probe.options.persistSession, probe.options.resume]).toEqual([1, [], true, false, undefined]);
+  expect(h.frames).toContainEqual({ type: "commands", botId: h.bot.id, commands: MENU });
+});
+
+test("the commands frame answers from the bot's open query, and a list the query pushes reaches every phone", async () => {
+  const h = resumedBot();
+  await h.hub.handle({ type: "send", botId: h.bot.id, text: "hi", uploads: [] });
+  await flush();
+  h.q().commands = [...COMMANDS, { name: "standup", description: "Write the standup (user)", argumentHint: "" }];
+
+  const [frame] = await h.hub.handle({ type: "commands", botId: h.bot.id });
+  expect(frame?.type === "commands" && frame.commands.map((c) => c.name)).toEqual(["greet", "compact", "standup"]);
+  expect(h.queries).toHaveLength(1);
+
+  h.q().emit({ type: "system", subtype: "commands_changed", commands: COMMANDS, uuid: "u", session_id: "s_1" } as unknown as SDKMessage);
+  await flush();
+  expect(h.frames.at(-1)).toEqual({ type: "commands", botId: h.bot.id, commands: MENU });
+});
+
+test("a /command from the menu reaches the bot as the bare text, shows as typed, and the brief and notices wait for the next turn", async () => {
+  const h = resumedBot();
+
+  await h.hub.handle({ type: "send", botId: h.bot.id, text: "  /greet Ana ", uploads: [] });
+  await flush();
+  h.q().emit(assistant(text("Hello Ana!")), result());
+  await flush();
+  await h.hub.handle({ type: "send", botId: h.bot.id, text: "thanks", uploads: [] });
+  await flush();
+
+  const [command, next] = h.q().received;
+  expect(command).toBe("/greet Ana");
+  expect(h.bot.messages.find((m) => m.kind === "user")).toMatchObject({ text: "  /greet Ana " });
+  expect(next).toStartWith("[Standing brief: this replaces what you were told before where they differ.]");
+  expect(next).toEndWith("[Your question expired unanswered.]\n[Alex]\nthanks");
+});
+
+test.each([
+  ["a built-in the menu hides", "/clear", []],
+  ["a name the menu does not have", "/greeting Ana", []],
+  ["a command with an upload", "/greet Ana", [{ name: "a.txt", mime: "text/plain", data: Buffer.from("hi").toString("base64") }]],
+])("%s is an ordinary message", async (_, typed, uploads) => {
+  const h = resumedBot();
+  await h.hub.handle({ type: "send", botId: h.bot.id, text: typed, uploads });
+  await flush();
+  expect(h.q().received[0]).toContain(`[Alex]\n${typed}`);
 });
 
 test("update_self with a name rewrites the bot's CLAUDE.md heading", async () => {

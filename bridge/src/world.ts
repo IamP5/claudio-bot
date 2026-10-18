@@ -93,8 +93,10 @@ export type Pending = {
   /**
    * continuation: the decision envelope after a permission card was answered. It runs ahead of other queued work,
    * Stop keeps it, and its turn's start arms the grant's short window (gate.beginTurn).
+   * command: a /command or skill, text being exactly "/name args". Claude Code runs it only from the bare text, so it
+   * is sent as is: the notices, standing brief and context an envelope would carry wait for the next envelope.
    */
-  kind: "envelope" | "continuation";
+  kind: "envelope" | "continuation" | "command";
   at: string;
   /** The rendered envelope. Notices are prepended when it starts, not stored here. */
   text: string;

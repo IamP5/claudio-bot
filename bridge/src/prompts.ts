@@ -5,6 +5,8 @@ import type { Initiator, Notice, Origin, Pending, RunRef } from "./world";
 export type Envelope =
   // mentions: resolved by the hub (world.resolveMentions), without the receiving bot itself.
   | { from: "user"; text: string; attachments: Attachment[]; mentions?: Mention[] }
+  // The user's /command or skill, as typed and trimmed: Claude Code runs it only from the bare text.
+  | { from: "command"; line: string }
   // An answer carries the initiator of the turn that asked: a tap on a routine's question does not make it the user's work.
   | { from: "answer"; question: string; option: string; initiator: Initiator }
   | { from: "dismiss"; question: string; initiator: Initiator }
@@ -23,6 +25,7 @@ export type Envelope =
 export function initiatorOf(e: Envelope): Initiator {
   switch (e.from) {
     case "user":
+    case "command":
       return { kind: "user" };
     case "answer":
     case "dismiss":
@@ -40,7 +43,8 @@ export function initiatorOf(e: Envelope): Initiator {
 }
 
 /** An approval continuation runs before anything else queued, so the grant it relies on is still fresh. */
-const kindOf = (e: Envelope): Pending["kind"] => (e.from === "decision" ? "continuation" : "envelope");
+const KIND: { [F in Envelope["from"]]?: Pending["kind"] } = { decision: "continuation", command: "command" };
+const kindOf = (e: Envelope): Pending["kind"] => KIND[e.from] ?? "envelope";
 
 /** Only a routine's own fire settles its run. A continuation keeps the routine's initiator but settles nothing. */
 const settlesOf = (e: Envelope): RunRef | null => (e.from === "routine" ? e.run : null);
@@ -79,6 +83,8 @@ export function envelope(e: Envelope, userName: string): string {
   switch (e.from) {
     case "user":
       return lines(`[${userName}]`, e.text, ...(e.mentions ?? []).map((m) => mentionLine(m, userName)), ...e.attachments.map((a) => `Attached: ${a.path}`));
+    case "command":
+      return e.line;
     case "answer":
       return `[${userName} answered "${e.question}": ${e.option}]`;
     case "dismiss":

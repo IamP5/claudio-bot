@@ -148,7 +148,16 @@ const V3_FILE = z.looseObject({
       rules: z.array(z.looseObject({ decision: z.enum(["allow", "deny"]), signature: text })),
     }),
   ),
-  agents: z.array(z.looseObject({ ...agentThread, session, cloudSession: maybeText, budgetUsd: z.number().nullable(), startedBy: initiator })),
+  agents: z.array(
+    z.looseObject({
+      ...agentThread,
+      session,
+      cloudSession: maybeText,
+      budgetUsd: z.number().nullable(),
+      startedBy: initiator,
+      unreported: z.array(z.looseObject({ status: text, text, by: initiator })).optional(),
+    }),
+  ),
   gate: z.looseObject({ open: z.array(anyObject), grants: z.array(anyObject), daily: z.array(anyObject), repos: z.array(anyObject).optional() }),
   devices: z.array(anyObject),
   push: z.looseObject({ sent: z.array(anyObject) }),

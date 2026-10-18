@@ -15,7 +15,7 @@ import type { Persist } from "./store";
 import { errorText } from "./text";
 import type { Isolate } from "./tools";
 import { prepareWorkspace, removeWorktree, worktreesRoot, type Workspace } from "./worktree";
-import { emptySession, newMessageId, repoTrust, type Actor, type AgentActor, type AgentRecord, type Initiator, type World } from "./world";
+import { emptySession, newMessageId, repoTrust, type Actor, type AgentActor, type AgentRecord, type AgentReport, type Initiator, type World } from "./world";
 
 // Agents are actors like bots: mac agents run on the same session module behind the same gate, metered by the same
 // ledger. Cloud agents run on claude.ai: the bridge neither gates nor meters them.
@@ -185,13 +185,21 @@ export function createAgents(deps: {
     });
   }
 
+  /** Saved before git is read, so a restart while it waits delivers the report instead of losing it. */
+  function reportWithEvidence(rec: AgentRecord, report: AgentReport) {
+    (rec.unreported ??= []).push(report);
+    deps.persist("now");
+    deliverWithEvidence(rec, report);
+  }
+
   /** The bridge's git line goes above the agent's words, so nothing the agent writes can stand in for it. */
-  function reportWithEvidence(rec: AgentRecord, status: AgentStatus, text: string, by: Initiator) {
+  function deliverWithEvidence(rec: AgentRecord, report: AgentReport) {
     queueReport(rec, async () => {
-      const evidence = await readEvidence(rec.cwd, text, new Date(deps.now()), rec.base ?? null);
+      const evidence = await readEvidence(rec.cwd, report.text, new Date(deps.now()), rec.base ?? null);
       rec.agent = { ...rec.agent, evidence };
-      update(rec, status, { from: "agent", text });
-      deps.reported(rec, reportText(evidence, text), by);
+      rec.unreported = rec.unreported?.filter((r) => r !== report);
+      update(rec, report.status, { from: "agent", text: report.text });
+      deps.reported(rec, reportText(evidence, report.text), report.by);
     });
   }
 
@@ -205,7 +213,7 @@ export function createAgents(deps: {
       case "done": {
         const m = end.result;
         const text = m.subtype === "success" ? m.result : `The agent stopped with an error: ${m.errors.join("; ") || m.subtype}`;
-        return reportWithEvidence(rec, m.subtype === "success" ? "waiting" : "failed", text.trim() || "(no final message)", by);
+        return reportWithEvidence(rec, { status: m.subtype === "success" ? "waiting" : "failed", text: text.trim() || "(no final message)", by });
       }
       case "stopped":
         return report(rec, "waiting", `Stopped by ${deps.userName}.`, by);
@@ -421,9 +429,11 @@ export function createAgents(deps: {
     resume() {
       for (const rec of deps.world.agents.values()) {
         if (rec.agent.where !== "mac") continue;
+        const unreported = rec.unreported ?? [];
+        for (const r of unreported) deliverWithEvidence(rec, r);
         if (rec.session.pending.length > 0) macSession(rec);
         // A mac agent cut off mid-turn with nothing queued will never report, so tell its bot.
-        else if (rec.agent.status === "working") report(rec, "failed", "The bridge restarted while this agent was working. Send it a message to resume it.", rec.startedBy);
+        else if (rec.agent.status === "working" && unreported.length === 0) report(rec, "failed", "The bridge restarted while this agent was working. Send it a message to resume it.", rec.startedBy);
       }
     },
 

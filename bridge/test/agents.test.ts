@@ -7,6 +7,7 @@ import { createAgents, projectConfigOf } from "../src/agents";
 import type { Headroom, Ledger } from "../src/ledger";
 import type { AgentEvidence, AgentId, AgentStatus, BotId, RoutineId, RunId } from "../src/protocol";
 import type { Project } from "../src/projects";
+import { flushNow, loadWorld } from "../src/store";
 import { emptySession, emptyWorld, newBot, own, type AgentRecord, type GateState, type Initiator, type OpenCard, type World } from "../src/world";
 
 const AT = "2026-10-17T12:00:00.000Z";
@@ -77,7 +78,9 @@ afterEach(() => {
   else process.env.CLAUDIOBOT_CLAUDE = configuredClaude;
 });
 
-function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; project?: Project; sandbox?: () => SandboxSettings; worktrees?: string; budgetLeft?: number } = {}) {
+function harness(
+  opts: { world?: World; headroom?: (i: Initiator) => Headroom; project?: Project; sandbox?: () => SandboxSettings; worktrees?: string; budgetLeft?: number; persist?: (urgency?: "now") => void } = {},
+) {
   const world = opts.world ?? emptyWorld();
   const queries: FakeQuery[] = [];
   const reports: { agentId: AgentId; text: string; by: Initiator }[] = [];
@@ -115,7 +118,7 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; p
     settings: () => ({ autoMemoryEnabled: false }),
     observe: () => {},
     idle: () => {},
-    persist: () => {},
+    persist: (urgency) => opts.persist?.(urgency),
     now: () => AT,
     changed: (rec) => {
       statuses.push(rec.agent.status);
@@ -364,6 +367,47 @@ test("an agent whose query ran out of budget mid-turn reports that it used its b
   await flush();
   expect(rec.agent.status).toBe("failed");
   expect(h.reports.map((r) => r.text)).toEqual(["The agent used its budget."]);
+});
+
+test("a turn's report is saved before git is read and cleared once it reaches the bot", async () => {
+  const saves: { urgency: string | undefined; unreported: string[]; reported: number }[] = [];
+  let rec: AgentRecord | undefined;
+  const h = harness({ persist: (urgency) => rec && saves.push({ urgency, unreported: (rec.unreported ?? []).map((r) => r.text), reported: h.reports.length }) });
+  rec = await h.start("mac", routine);
+  await flush();
+  h.q().emit(result("Done: opened PR #4."));
+  await flush();
+  await flush();
+
+  expect(saves).toContainEqual({ urgency: "now", unreported: ["Done: opened PR #4."], reported: 0 });
+  expect(h.reports.map((r) => r.text)).toEqual(["[Git: not readable]\nDone: opened PR #4."]);
+  expect(rec.unreported).toEqual([]);
+});
+
+test("a report saved but not delivered when the bridge stopped reaches the bot after a restart, with fresh evidence", async () => {
+  const world = emptyWorld();
+  world.agents.set("a_done" as AgentId, {
+    agent: { id: "a_done" as AgentId, botId: B1, title: "Fix tests", where: "mac", projectName: "shop", status: "working", url: null, createdAt: AT, updatedAt: AT, evidence: null, worktree: null },
+    cwd: "/code/shop",
+    messages: [],
+    session: emptySession("s_old"),
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: user,
+    unreported: [{ status: "waiting", text: "Done: opened PR #4.", by: routine }],
+  });
+  const home = mkdtempSync(join(tmpdir(), "claudiobot-agents-"));
+  roots.push(home);
+  flushNow(world, home);
+  const reloaded = loadWorld(home).world;
+  const h = harness({ world: reloaded });
+  h.agents.resume();
+  await flush();
+  await flush();
+
+  expect(h.reports).toEqual([{ agentId: "a_done" as AgentId, text: "[Git: not readable]\nDone: opened PR #4.", by: routine }]);
+  const rec = reloaded.agents.get("a_done" as AgentId)!;
+  expect([rec.agent.status, rec.unreported, rec.messages.map((m) => m.text)]).toEqual(["waiting", [], ["Done: opened PR #4."]]);
 });
 
 test("resume starts mac agents with queued work and tells bots about agents a restart cut off", async () => {

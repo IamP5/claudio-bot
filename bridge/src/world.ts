@@ -7,6 +7,7 @@ import {
   type AgentId,
   type AgentMessage,
   type AgentPeer,
+  type AgentStatus,
   type Avatar,
   type Bot,
   type BotId,
@@ -351,7 +352,15 @@ export type AgentRecord = {
   budgetUsd: number | null;
   /** The bot turn that started the agent. A report with no turn behind it (a restart cut it off) inherits this lineage. */
   startedBy: Initiator;
+  /**
+   * Finished turns' reports not yet delivered to the bot, oldest first. Saved before git is read, so a restart delivers
+   * them with fresh evidence. Writer: agents.ts. Absent on older records.
+   */
+  unreported?: AgentReport[];
 };
+
+/** A finished turn's report: the status it leaves, the agent's final message, and the initiator of its turn. */
+export type AgentReport = { status: AgentStatus; text: string; by: Initiator };
 
 /**
  * The text of every message_bot message between two bots, oldest first, at most EXCHANGE_KEEP. bots is the pair in

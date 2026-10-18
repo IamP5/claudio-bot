@@ -29,7 +29,7 @@ To run on your own iPhone, pick your team under Signing & Capabilities for the C
 
 ### Demo mode and screenshots
 
-Debug builds accept `-demo`. It loads sample bots into the store through the same reducer the bridge feeds, with no bridge running. Add `-demoScreen <name>` to open a screen directly. The names are `home`, `newchat`, `chat`, `profile`, `links`, `library`, `file`, `agent`, `digest`, `engineer`, `factory`, `pair`, `settings`, `routine` and `approval`. The pairing and connection states have their own: `pairconfirm` and `outdated` while unpaired, and `confirm`, `unrecognized`, `error` and `oldbridge` while paired.
+Debug builds accept `-demo`. It loads sample bots into the store through the same reducer the bridge feeds, with no bridge running. Add `-demoScreen <name>` to open a screen directly. The names are `home`, `newchat`, `chat`, `profile`, `links`, `library`, `file`, `agent`, `digest`, `engineer`, `factory`, `pair`, `settings`, `routine` and `approval`. `mention`, `chip` and `command` open a chat with the composer mid-sentence: the "@" menu, two picked tokens, and the "/" menu. `group`, `groupprofile`, `newgroup` and `botexchange` open a group chat, its details, the group picker and an exchange between two bots. The pairing and connection states have their own: `pairconfirm` and `outdated` while unpaired, and `confirm`, `unrecognized`, `error` and `oldbridge` while paired.
 
 `scripts/screenshots.sh <udid> <path/to/ClaudioBot.app>` launches each screen and saves PNGs to `screenshots/`.
 
@@ -65,13 +65,19 @@ A Stop tapped while offline is sent on reconnect only if it is under a minute ol
 
 **Home.** One row per bot, pinned bots first, then the newest activity. A blue dot means unread. An orange star badge on the avatar means the bot asked you something, and the row shows that question. Long-press a row to pin, mark as unread, rename, hide or delete the bot. Delete waits up to 3 s for the bot's details, then says the bot's folder moves to the bridge's trash folder and names any agent worktrees that stay on the Mac. When it lists worktrees it sends `force`, because the bridge refuses to delete a bot whose agents hold worktrees otherwise. Details that do not arrive in time give the dialog without worktrees. The initials button opens Settings, and an amber number on it counts facts bots proposed that wait for you. + opens the new chat picker. While the Mac is out of reach a banner shows the countdown to the next try.
 
-**New chat.** Create new Bot comes first. The bridge makes the bot, and the app opens it as soon as it exists. Every bot follows, hidden ones included.
+**New chat.** Create new Bot comes first. The bridge makes the bot, and the app opens it as soon as it exists. Create group chat follows on a bridge with groups: tick 2 to 8 bots and name the group, or keep the name made of theirs (cut to 40 characters). Every bot follows, hidden ones included.
 
 **Chat.** Bot messages are gray bubbles with markdown. Your messages use the bot's color. A centered time appears before the first message and after every gap of more than an hour. A question card lists lettered options. Tap one to answer, or tap X to dismiss it. You can also type a free answer while it is open. A question with a deadline closes as Expired when nobody answers in time.
 
 A permission card holds a tool call the bot or one of its agents wants to run. It shows the rule that asked, the exact command in monospace and what Always would cover. Allow once, Always allow, Deny and Never are the only way a held call runs. Typing in the chat never approves one. An unanswered card expires at its deadline and the call does not run. Centered gray lines show what the bot did on its own, such as "Messaged standup notes" or "4 messages with Set up verification skill". Tap one to open that agent, bot or routine. While the bot works, its avatar bobs beside "Typing…", and Stop ends the turn. A bot waiting on a permission card wears an Awaiting approval chip in the list and the chat. A bot paused by the usage limit or its daily cap wears Parked. A bar at the top says when the Mac is out of reach; what you send waits and goes on reconnect. Once the bot and its agents have spent 80% of today's cap, a card says so with **Change the cap**. A fact the bot asked to remember shows as a card with **Confirm** (every bot then knows it) and **Forget**. The app finds a bot's proposals by `proposerBotId`, and by the bot's name from a bridge that does not send it.
 
 The composer's + menu attaches a photo from the library, a new photo or a file. Each upload can be up to 10 MB. The mic dictates into the field with the Speech framework.
+
+On a bridge with mentions, "@" at the start of a word opens a list above the composer: bots first (a group's members lead, and a chat's own bot is left out), then the bot's connectors that are on, with their state. What follows the "@" filters by any part of a name. Tap a row or press Return to pick it. A pick becomes "@name" in bold, in the bot's color (connectors in the link color), and a backspace into it removes it whole. Escape, or a space that leaves nothing matching, closes the list. The send keeps the text and lists what each token points to. On a bridge with commands, "/" as the first character lists the bot's skills and the built-in commands the bridge allows, and a pick leaves "/name " for the arguments. A group has no "/" list.
+
+A message that mentions a bot shows "@name" bold in that bot's current color. Tap it to open that bot.
+
+**Group chat.** On a bridge with groups, a group is a chat with several bots. Its row stacks its first members' avatars. Each member's messages carry its avatar and its name in its color, once per run. The typing line names the members at work. Its profile lists the members (tap one to open it), with Add members, a remove button per member (a group keeps at least 2), rename and Delete Group. A group has no routines, library, computer, skills, connectors or spending.
 
 **Profile.** Tap the name pill at the top of a chat. You can edit the name and the label. The tabs are Info, Library (files the bot made), Agents (coding agents it started, with their status) and Links (every link in the conversation). On iPhone the profile is its own screen. On iPad it opens as a column beside the chat.
 
@@ -86,6 +92,8 @@ Info holds, in order:
 A section whose feature the bridge does not list says "Update the bridge on your Mac to …" instead of disappearing.
 
 **Exchange.** What a bot and one of its agents said to each other, with the agent's status and, for a Mac agent, its spend against its budget. A working agent has Stop. Cloud agents have Open in Claude. Below the thread, what the bridge read from git after the agent's last turn: branch, commits ahead, files changed, uncommitted work and a PR link, and the agent's own worktree with **Remove**, which the bridge refuses while the worktree holds uncommitted work.
+
+On a bridge with exchanges, a line such as "2 messages with standup notes" opens what the two bots said: "bot maker ⇄ standup notes" on top, time separators, and each message in a gray bubble with its sender's avatar and name in the sender's color. A name on top opens that bot's chat. Close Chat goes back. On an older bridge the line opens the other bot's chat.
 
 **Settings.** The Mac with **Change address**, the paired phones with Revoke, Pair another device (a code and its QR code), **Memory** (the facts bots know about you: tap to edit, swipe to forget, Confirm or Forget a bot's proposal), notifications and Unpair.
 
@@ -104,6 +112,8 @@ An app build from before protocol 3 still connects to a new bridge. It does not 
 | `ClaudioBot/Model/Protocol.swift` | Codable mirror of the wire protocol |
 | `ClaudioBot/Model/Store.swift` | `AppStore`, the reducer every server message goes through, and the alerts it returns |
 | `ClaudioBot/Model/Display.swift` | Pure display rules: row badges, event line labels, time separators, time labels, library groups |
+| `ClaudioBot/Model/Mentions.swift` | The composer's draft and its "@name" tokens, the "@" and "/" menus, and mentions split out of a sent message |
+| `ClaudioBot/Model/Groups.swift` | Group rules: member count, suggested name, typing line, sender runs |
 | `ClaudioBot/Model/BridgeClient.swift` | The WebSocket, the stream cursor for replay, reconnect backoff, ping, outbox, revocation and reopening the visible bot |
 | `ClaudioBot/Model/Pairing.swift` | Pairing codes, the per-device token, the socket request and Keychain storage |
 | `ClaudioBot/Model/DeepLink.swift` | Every `claudiobot://` link the app opens |

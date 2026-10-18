@@ -43,8 +43,11 @@ export type ConnectorsDeps = {
   world: World;
   /** The bot's live query, when one is open. */
   live: (botId: BotId) => McpControl | null;
-  /** Close the bot's and its agents' live queries at their next chance, so the next opens with the new settings. */
-  reopen: (botId: BotId) => void;
+  /**
+   * Close the bot's agents' live queries, and with "all" the bot's own, at their next chance, so the next opens with the
+   * new settings. The bot's own is left open when the live toggle took the change.
+   */
+  reopen: (botId: BotId, which: "agents" | "all") => void;
   persist: Persist;
   log: (line: string) => void;
 };
@@ -83,6 +86,19 @@ export function createConnectors(deps: ConnectorsDeps): Connectors {
     return lastSeen.get(botId) ?? [];
   }
 
+  /** Whether the bot's live query took the change itself, so only its agents' queries need reopening. */
+  async function toggled(botId: BotId, name: string, enabled: boolean): Promise<boolean> {
+    const live = deps.live(botId);
+    if (live === null) return false;
+    try {
+      await live.toggleMcpServer(name, enabled);
+      return true;
+    } catch (e) {
+      deps.log(`connectors: live toggle of ${name} for ${botId} failed: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+  }
+
   return {
     async list(botId) {
       const bot = deps.world.bots.get(botId);
@@ -110,12 +126,7 @@ export function createConnectors(deps: ConnectorsDeps): Connectors {
       if (enabled && at >= 0) off.splice(at, 1);
       if (!enabled && at < 0) off.push(name);
       deps.persist("now");
-      try {
-        await deps.live(botId)?.toggleMcpServer(name, enabled);
-      } catch (e) {
-        deps.log(`connectors: live toggle of ${name} for ${botId} failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-      deps.reopen(botId);
+      deps.reopen(botId, (await toggled(botId, name, enabled)) ? "agents" : "all");
       return { ok: true };
     },
   };

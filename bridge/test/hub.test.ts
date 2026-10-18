@@ -856,7 +856,7 @@ test("the client requests of the pass 3 units answer through their modules", asy
   expect(await h.hub.handle({ type: "remove_worktree", agentId: "a_none" as AgentId })).toEqual([{ type: "error", message: "Unknown agent" }]);
 });
 
-test("turning a connector off answers with the new list, toggles the live query, and every later bot and agent query denies it", async () => {
+test("turning a connector off answers with the new list, toggles the live bot query and keeps it, and the agent's next query denies it", async () => {
   const world = emptyWorld();
   const b = bot("eng");
   world.bots.set(b.id, b);
@@ -898,15 +898,15 @@ test("turning a connector off answers with the new list, toggles the live query,
   const agentAfter = h.queries.findLast((q) => q.options.cwd === cwd)!;
 
   const denied = { autoMemoryEnabled: false, cleanupPeriodDays: 3650, deniedMcpServers: [{ serverName: "chrome-devtools" }] };
-  expect([botAfter === botBefore, agentAfter === agentBefore]).toEqual([false, false]);
-  expect([botAfter.received.length, botAfter.received[0], agentAfter.received.length, agentAfter.received[0]]).toEqual([
-    1,
+  expect([botAfter === botBefore, agentAfter === agentBefore]).toEqual([true, false]);
+  expect([botAfter.received.length, botAfter.received[1], agentAfter.received.length, agentAfter.received[0]]).toEqual([
+    2,
     expect.stringContaining("again"),
     1,
     expect.stringContaining("And the docs."),
   ]);
-  expect([botBefore.options.settings, agentBefore.options.settings]).toEqual([{ autoMemoryEnabled: false, cleanupPeriodDays: 3650 }, { autoMemoryEnabled: false, cleanupPeriodDays: 3650 }]);
-  expect([botAfter.options.settings, agentAfter.options.settings]).toEqual([denied, denied]);
+  expect(agentBefore.options.settings).toEqual({ autoMemoryEnabled: false, cleanupPeriodDays: 3650 });
+  expect(agentAfter.options.settings).toEqual(denied);
 });
 
 test("a send repeated with the same clientId posts one user message and delivers one envelope", async () => {

@@ -535,8 +535,8 @@ export function createHub(deps: HubDeps): Hub {
   }
 
   /** The bot's and its agents' live queries close at their next chance, so the next ones open with fresh options. */
-  function reopenAll(botId: BotId) {
-    brains.get(botId)?.reopen();
+  function reopenFor(botId: BotId, which: "agents" | "all") {
+    if (which === "all") brains.get(botId)?.reopen();
     for (const rec of world.agents.values()) if (rec.agent.botId === botId) agents.session(rec.agent.id)?.reopen();
   }
 
@@ -773,7 +773,7 @@ export function createHub(deps: HubDeps): Hub {
     },
   });
 
-  const connectors = createConnectors({ world, live: (id) => brains.get(id)?.mcp() ?? null, reopen: reopenAll, persist: deps.persist, log: deps.log });
+  const connectors = createConnectors({ world, live: (id) => brains.get(id)?.mcp() ?? null, reopen: reopenFor, persist: deps.persist, log: deps.log });
   const webhooks = createWebhooks({ world, scheduler, port: deps.webhookPort, now: clockNow, log: deps.log });
 
   const allSessions = () => [...brains.values(), ...agents.sessions()];

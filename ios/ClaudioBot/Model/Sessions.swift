@@ -248,6 +248,14 @@ enum SessionText {
         }
     }
 
+    /// "Last updated just now", then "Last updated 3 min ago". A list newer than the clock reads as just now.
+    static func updated(_ date: Date, now: Date = .now) -> String {
+        guard now.timeIntervalSince(date) >= 60 else { return "Last updated just now" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return "Last updated \(formatter.localizedString(for: date, relativeTo: now))"
+    }
+
     static func origin(_ origin: SessionOrigin, botName: String?) -> String {
         switch origin {
         case .phone: "started on this phone"

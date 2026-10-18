@@ -119,6 +119,10 @@ enum Demo {
         }
     }
 
+    /// `-demoColumns` opens the iPad with the sidebar beside the detail. A simulator in portrait cannot be turned from
+    /// inside the app, and this is the split view a landscape iPad shows.
+    static let showsAllColumns = arguments.contains("-demoColumns")
+
     /// The bots already ticked when `newgroup` opens the group picker.
     static var groupPick: [BotID]? {
         screen == "newgroup" ? [BotID("engineer"), BotID("news")] : nil

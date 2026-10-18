@@ -178,7 +178,8 @@ struct SessionComposer: View {
         .padding(.horizontal, 11)
         .frame(minHeight: 32)
         .glass(in: Capsule(), interactive: true)
-        .contentShape(Capsule())
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
     }
 
     /// The chip's short name: "Default (Opus 5.5)" reads "Default"; the menu keeps the whole label.

@@ -5,7 +5,11 @@ struct MainView: View {
     @Environment(AppStore.self) private var store
     @Environment(Router.self) private var router
     @Environment(\.horizontalSizeClass) private var sizeClass
+    #if DEBUG
+    @State private var visibility: NavigationSplitViewVisibility = Demo.showsAllColumns ? .all : .automatic
+    #else
     @State private var visibility: NavigationSplitViewVisibility = .automatic
+    #endif
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Whether each bot has an open question. A bot that gains one buzzes; bots arriving in a snapshot do not.

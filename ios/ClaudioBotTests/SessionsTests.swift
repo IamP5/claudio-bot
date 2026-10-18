@@ -166,6 +166,12 @@ private func invalidates(_ read: () -> Void, by change: () -> Void) -> Bool {
         #expect(spoken.hasPrefix("solta-o-som, Update README, working, by Claudio's agent, PR 87 open, "))
     }
 
+    @Test func anOfflineListSaysHowOldItIsAndNeverLooksAhead() {
+        #expect(SessionText.updated(at + 2, now: at) == "Last updated just now")
+        #expect(SessionText.updated(at, now: at + 30) == "Last updated just now")
+        #expect(SessionText.updated(at, now: at + 180).hasSuffix("ago"))
+    }
+
     @Test func ageIsShort() {
         #expect(SessionText.age(at, now: at + 20) == "now")
         #expect(SessionText.age(at, now: at + 5 * 60) == "5m")

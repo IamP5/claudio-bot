@@ -78,7 +78,7 @@ struct SessionsSidebar: View {
                 }
             } else {
                 FilterChips(query: $query, counts: index.counts, hidden: index.hiddenCount)
-                    .plainRow(insets: EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
+                    .plainRow(insets: EdgeInsets(top: 0, leading: 0, bottom: 2, trailing: 0))
                 if sections.isEmpty {
                     emptyState
                 }
@@ -378,14 +378,13 @@ struct ProjectHeader: View {
                 Image(systemName: "plus")
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(Theme.secondary)
-                    .frame(width: 44, height: 32)
+                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("New session in \(project.name)")
         }
         .padding(.leading, 4)
-        .padding(.top, 6)
         .textCase(nil)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(project.name), \(count) \(count == 1 ? "session" : "sessions")")
@@ -429,7 +428,8 @@ struct FilterChips: View {
             .padding(.horizontal, 12)
             .frame(minHeight: 32)
             .background(on ? Color.white : Theme.card, in: Capsule())
-            .contentShape(Capsule())
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.pressable)
         .accessibilityAddTraits(on ? .isSelected : [])
@@ -446,7 +446,7 @@ struct StaleListBanner: View {
         HStack(spacing: 10) {
             ConnectionBadge(state: state)
             TimelineView(.periodic(from: .now, by: 30)) { context in
-                Text("Last updated \(RelativeDateTimeFormatter().localizedString(for: updatedAt, relativeTo: context.date))")
+                Text(SessionText.updated(updatedAt, now: context.date))
                     .font(.footnote)
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(2)

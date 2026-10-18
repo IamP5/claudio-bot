@@ -161,7 +161,7 @@ struct ThinkingRow: View {
                         .rotationEffect(.degrees(open ? 90 : 0))
                 }
                 .foregroundStyle(Theme.tertiary)
-                .frame(minHeight: 32)
+                .frame(minHeight: 44)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -302,7 +302,7 @@ struct ToolStepRow: View {
                     Button("Full output") { onFullOutput(step) }
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.link)
-                        .frame(minHeight: 32)
+                        .frame(minHeight: 44)
                 }
                 .padding(.leading, 26)
             }
@@ -518,7 +518,7 @@ struct AskCard: View {
                         Image(systemName: "xmark")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(Theme.tertiary)
-                            .frame(width: 44, height: 32)
+                            .frame(width: 44, height: 44)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)

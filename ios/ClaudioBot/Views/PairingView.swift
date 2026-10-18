@@ -49,9 +49,12 @@ struct PairingView: View {
         .scrollDismissesKeyboard(.interactively)
         .background(Theme.background)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { app.cancelPairing() }
-                    .disabled(flow.isPairing)
+            // Only the sheet over a paired app has something to cancel back to.
+            if client.pairing != nil {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { app.cancelPairing() }
+                        .disabled(flow.isPairing)
+                }
             }
         }
         #if os(iOS)

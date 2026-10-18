@@ -258,6 +258,8 @@ struct BotRow: View {
                     Text(TimeLabel.home(bot.lastAt))
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.tertiary)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
                 HStack(spacing: 6) {
                     Group {

@@ -61,6 +61,8 @@ export type Sessions = Tickable & {
   handle(m: SessionClientMessage): Promise<ServerMessage[]>;
   /** An agent record changed: its row and its thread's controls follow. */
   agentChanged(rec: AgentRecord): void;
+  /** A mac agent's turn ended done: its session becomes due for the Claude app (the mirror policy). */
+  agentTurnDone(rec: AgentRecord): void;
   stop(): void;
 };
 
@@ -68,6 +70,10 @@ export type Sessions = Tickable & {
 type Writer = { kind: "agent"; rec: AgentRecord } | { kind: "none"; reason: string };
 
 const INDEX_FILE = "sessions-index.json";
+/** The mirror policy (docs/sessions-design.md §8.4): one import a minute at most, for a day, on an idle Mac. */
+const MIRROR_EVERY_MS = 60_000;
+const MIRROR_WINDOW_MS = 24 * 3_600_000;
+const MIRROR_IDLE_S = 120;
 
 function readIndex(file: string): Head[] {
   try {
@@ -98,6 +104,10 @@ export function createSessions(deps: SessionsDeps): Sessions {
   const projects = createProjects({ file: join(deps.cacheDir, "projects.json") });
   let savedAt = 0;
   let polledAt = 0;
+  let mirrorAt = 0;
+  let mirroring = false;
+  /** The session id each agent last had, so a restart under a new id moves its watchers there. */
+  const lastIds = new Map<string, SessionId>();
 
   function agentOf(id: SessionId): AgentRecord | null {
     for (const rec of deps.world.agents.values()) if (rec.agent.where === "mac" && rec.session.id === id) return rec;
@@ -190,6 +200,42 @@ export function createSessions(deps: SessionsDeps): Sessions {
     return [];
   }
 
+  /** Asks the Claude app to list the newest due session, when every gate of the mirror policy holds. */
+  async function mirrorOne() {
+    const now = deps.now().getTime();
+    const desktop = deps.apps.desktop();
+    const due = [...deps.world.sessions.values()].filter((r) => r.mirror && !r.mirror.failed);
+    for (const r of due) {
+      if (desktop.has(r.id) || now - Date.parse(r.mirror!.dueAt) > MIRROR_WINDOW_MS || !known(r.id)) {
+        delete r.mirror;
+        deps.persist();
+        catalog.touch();
+      }
+    }
+    if (deps.world.sessionPrefs.mirror !== "auto") return;
+    const next = due.filter((r) => r.mirror && !driven(r.id)?.working).sort((a, b) => b.mirror!.dueAt.localeCompare(a.mirror!.dueAt))[0];
+    if (!next) return;
+    if ((await deps.apps.desktopState()) !== "background") return;
+    if (((await deps.apps.idleSeconds()) ?? 0) < MIRROR_IDLE_S) return;
+    const ok = await deps.apps.importToDesktop(next.id);
+    deps.log(`sessions: the Claude app ${ok ? "lists" : "did not list"} ${next.id}`);
+    if (ok) delete next.mirror;
+    else if (next.mirror) next.mirror.failed = true;
+    deps.persist();
+    catalog.touch();
+  }
+
+  async function openInDesktop(id: SessionId): Promise<ServerMessage[]> {
+    const ok = await deps.apps.openInDesktop(id);
+    const rec = deps.world.sessions.get(id);
+    if (ok && rec?.mirror) {
+      delete rec.mirror;
+      deps.persist();
+    }
+    catalog.touch();
+    return ok ? [] : error("The Claude app did not list this session. Check that claude:// links open the Claude app, then try again.");
+  }
+
   function save() {
     try {
       writeIndex(indexFile, heads.cached());
@@ -243,19 +289,35 @@ export function createSessions(deps: SessionsDeps): Sessions {
           own<SessionPrefs>(deps.world.sessionPrefs).mirror = m.mirror;
           deps.persist();
           return [listFrame()];
+        case "session_open_desktop":
+          return known(m.sessionId) ? openInDesktop(m.sessionId) : gone(m.sessionId);
         case "session_send":
         case "session_stop":
         case "session_decide":
         case "session_answer":
         case "session_create":
-        case "session_open_desktop":
           return error(READ_ONLY);
       }
     },
 
     agentChanged(rec) {
       catalog.touch();
-      if (rec.session.id) threads.refresh(rec.session.id as SessionId);
+      const id = rec.session.id as SessionId | null;
+      const was = lastIds.get(rec.agent.id);
+      if (id) lastIds.set(rec.agent.id, id);
+      if (was && id && was !== id) threads.removed(was, id);
+      if (id) threads.refresh(id);
+    },
+
+    agentTurnDone(rec) {
+      const id = rec.session.id as SessionId | null;
+      if (!id || deps.world.sessionPrefs.mirror !== "auto" || deps.apps.desktop().has(id)) return;
+      const r = recordOf(id);
+      if (r.mirror) return;
+      r.mirror = { dueAt: deps.now().toISOString(), failed: false };
+      deps.persist();
+      catalog.touch();
+      mirrorAt = 0;
     },
 
     async sync() {
@@ -269,15 +331,23 @@ export function createSessions(deps: SessionsDeps): Sessions {
         polledAt = at.getTime();
         void threads.poll();
       }
+      if (at.getTime() >= mirrorAt && !mirroring) {
+        mirrorAt = at.getTime() + MIRROR_EVERY_MS;
+        mirroring = true;
+        void mirrorOne()
+          .catch((e) => deps.log(`sessions: the Claude app import failed: ${errorText(e)}`))
+          .finally(() => (mirroring = false));
+      }
       if (at.getTime() - savedAt >= 60_000) {
         savedAt = at.getTime();
         save();
       }
     },
     nextDeadline: () => {
-      const poll = new Date(polledAt + THREAD_POLL_MS).toISOString();
+      const soonest = Math.min(polledAt + THREAD_POLL_MS, mirrorAt);
+      const own = new Date(soonest).toISOString();
       const index = catalog.nextDeadline();
-      return index !== null && index < poll ? index : poll;
+      return index !== null && index < own ? index : own;
     },
 
     stop() {

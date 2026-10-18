@@ -385,6 +385,12 @@ export type SessionRecord = {
   hidden: boolean;
   /** When the user last left the thread. Unread needs it set (or the bridge driving the session). */
   visitedAt: string | null;
+  /**
+   * An import into the Claude app is due (docs/sessions-design.md §8.4): since `dueAt`, after the session's first
+   * finished turn. failed: one ran and the app did not list the session within 10 s, so automatic tries stopped.
+   * Absent when none is due, or once the app lists the session.
+   */
+  mirror?: { dueAt: string; failed: boolean };
 };
 
 /** Settings, "Show agent sessions in the Claude app". Writer: sessions.ts. */

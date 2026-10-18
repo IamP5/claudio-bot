@@ -79,9 +79,12 @@ afterEach(() => {
 });
 
 function harness(
-  opts: { world?: World; headroom?: (i: Initiator) => Headroom; project?: Project; sandbox?: () => SandboxSettings; worktrees?: string; budgetLeft?: number | null; persist?: (urgency?: "now") => void } = {},
+  opts: { world?: World; headroom?: (i: Initiator) => Headroom; project?: Project; sandbox?: () => SandboxSettings; budgetLeft?: number | null; persist?: (urgency?: "now") => void } = {},
 ) {
   const world = opts.world ?? emptyWorld();
+  // The records a test starts with stand for agents that ran before: Claude Code has their transcripts.
+  const transcripts = new Set([...world.agents.values()].flatMap((r) => (r.session.id ? [r.session.id] : [])));
+  const done: AgentId[] = [];
   const queries: FakeQuery[] = [];
   const reports: { agentId: AgentId; text: string; by: Initiator }[] = [];
   const notes: { agentId: AgentId; text: string }[] = [];
@@ -126,11 +129,12 @@ function harness(
     },
     reported: (rec, text, by) => reports.push({ agentId: rec.agent.id, text, by }),
     note: (rec, text) => notes.push({ agentId: rec.agent.id, text }),
-    worktrees: opts.worktrees,
+    transcriptExists: (id) => transcripts.has(id),
+    turnDone: (rec) => done.push(rec.agent.id),
   });
   const start = (where: "mac" | "cloud" = "mac", initiator: Initiator = user, botId: BotId = B1) =>
     agents.start(botId, { title: "Fix tests", prompt: "Make the suite green.", project: where === "cloud" ? cloudProject : (opts.project ?? project), where, isolate: "auto", botName: "Ana", initiator, budgetUsd: null });
-  return { world, agents, queries, reports, notes, statuses, evidence, begun, trustCards, start, q: () => queries.at(-1)! };
+  return { world, agents, queries, reports, notes, statuses, evidence, begun, trustCards, transcripts, done, start, q: () => queries.at(-1)! };
 }
 
 const AGENT_RULES =
@@ -442,8 +446,11 @@ test("a finished agent's session is let go once its idle query closes; the recor
   const h = harness();
   const rec = await h.start();
   await flush();
+  const allocated = h.q().options.sessionId;
   h.q().emit(result("Done."));
   await flush();
+  // Claude Code wrote the session's transcript during that turn.
+  h.transcripts.add("s_a");
   const tick = (min: number) => h.agents.sessions().forEach((s) => s.tick(new Date(Date.now() + min * 60_000)));
   tick(14);
   expect([h.q().closed, h.agents.sessions().length]).toEqual([false, 1]);
@@ -451,10 +458,27 @@ test("a finished agent's session is let go once its idle query closes; the recor
   expect([h.q().closed, h.agents.session(rec.agent.id), h.world.agents.get(rec.agent.id)?.agent.status]).toEqual([true, null, "waiting"]);
   await h.agents.message(rec, "Also fix the lint.", user);
   await flush();
-  expect(h.queries.map((q) => [q.options.resume, q.received.at(-1)])).toEqual([
-    [undefined, AGENT_PROMPT],
-    ["s_a", "Also fix the lint."],
+  expect(h.queries.map((q) => [q.options.sessionId, q.options.title, q.options.resume, q.received.at(-1)])).toEqual([
+    [allocated, "Fix tests", undefined, AGENT_PROMPT],
+    [undefined, undefined, "s_a", "Also fix the lint."],
   ]);
+  expect(allocated).toMatch(/^[0-9a-f-]{36}$/);
+});
+
+test("a mac agent's session id is chosen and saved before Claude Code starts; a taken id is resumed rather than lost", async () => {
+  const saves: string[] = [];
+  const h = harness({ persist: (u) => saves.push(u ?? "later") });
+  const rec = await h.start();
+  expect(rec.session.id).toMatch(/^[0-9a-f-]{36}$/);
+  expect(saves[0]).toBe("now");
+  await flush();
+  const first = h.q();
+  expect([first.options.sessionId, first.options.resume]).toEqual([rec.session.id!, undefined]);
+  first.crash(new Error(`Claude Code process exited with code 1. stderr: Error: Session ID ${rec.session.id} is already in use.`));
+  await until(() => h.queries.length === 2);
+  await flush();
+  expect([h.q().options.sessionId, h.q().options.title, h.q().options.resume, h.q().received]).toEqual([undefined, undefined, rec.session.id!, [AGENT_PROMPT]]);
+  expect(h.reports).toEqual([]);
 });
 
 test("a crashed agent's session is let go at the next tick", async () => {
@@ -649,9 +673,9 @@ function tempDir() {
 
 function worktreeHarness(opts: { world?: World; dir?: string; path?: string } = {}) {
   const dir = opts.dir ?? tempRepo();
-  const worktrees = tempDir();
+  const worktrees = join(dir, ".claude", "worktrees");
   const shop: Project = { name: "shop", path: opts.path ?? dir, branch: "main", githubRepo: null };
-  const h = harness({ ...opts, project: shop, worktrees });
+  const h = harness({ ...opts, project: shop });
   const startIn = (isolate: "auto" | "none" | "worktree", where: "mac" | "cloud" = "mac") =>
     h.agents.start(B1, { title: "Fix tests", prompt: "Make the suite green.", project: shop, where, isolate, botName: "Ana", initiator: user, budgetUsd: null });
   return { ...h, dir, worktrees, startIn };
@@ -663,7 +687,7 @@ test("isolate worktree starts the agent in its own worktree, with the repo's con
   writeFileSync(join(h.dir, ".claude", "settings.json"), "{}");
   const rec = await h.startIn("worktree");
   await flush();
-  const path = join(h.worktrees, "shop", rec.agent.id);
+  const path = join(h.worktrees, `claudio-${rec.agent.id.slice(2, 10)}`);
 
   expect([rec.cwd, rec.agent.worktree, h.q().options.cwd, h.q().options.projectConfigRoot]).toEqual([
     path,

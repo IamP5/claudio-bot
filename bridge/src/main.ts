@@ -15,7 +15,7 @@ import { migrateHome } from "./migrate";
 import { scanProjects } from "./projects";
 import { createPush, senderFromEnv } from "./push";
 import { serve, threadTopic } from "./serve";
-import { createClaudeApps, realAppsDeps } from "./claudeApps";
+import { createClaudeApps, fakeDesktop, realAppsDeps } from "./claudeApps";
 import { claudeExecutable, ownPids } from "./session";
 import { bridgeHome, createSaver, loadWorld } from "./store";
 import { createStream } from "./stream";
@@ -128,7 +128,10 @@ const hub = createHub({
   sessions: {
     epoch: stream.epoch,
     projectsDir: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects"),
-    apps: createClaudeApps(realAppsDeps(ownPids)),
+    // CLAUDIOBOT_DESKTOP_FAKE: a verification run's stand-in for the Claude app, which records imports to that file.
+    apps: process.env.CLAUDIOBOT_DESKTOP_FAKE
+      ? fakeDesktop(createClaudeApps(realAppsDeps(ownPids)), process.env.CLAUDIOBOT_DESKTOP_FAKE)
+      : createClaudeApps(realAppsDeps(ownPids)),
     cacheDir: join(home, "cache"),
     signal: { list: (frame) => transport.signal(frame, "sessions"), thread: (id, frame) => transport.signal(frame, threadTopic(id)) },
     watchers: (id) => transport.watchers(id),

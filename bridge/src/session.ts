@@ -103,6 +103,8 @@ const FORGOTTEN_NOTICE =
   "[Your earlier conversation history is gone: Claude Code deleted it. Your notes and the facts about the user are kept; ask if you need something from before.]";
 /** What Claude Code says when --resume names a transcript it has deleted (after cleanupPeriodDays, or by hand). */
 const forgotten = (text: string, id: string) => text.includes(`No conversation found with session ID: ${id}`);
+/** What Claude Code says when a query asks to start a session under an id that already has a transcript. */
+const inUse = (text: string, id: string) => text.includes(`Session ID ${id} is already in use`);
 const tasksOf = (tasks: readonly Background[]) => tasks.map((t) => t.description ?? t.id).join("; ");
 const backgroundStoppedNote = (name: string, tasks: readonly Background[]) => `${name}'s background work stopped: ${tasksOf(tasks)}.`;
 const restartStoppedNote = (name: string, tasks: readonly Background[]) =>
@@ -178,6 +180,8 @@ export type Event =
   | { kind: "unstarted"; error: string }
   /** The query resumed a session Claude Code no longer has, before any output: start over on a fresh one. */
   | { kind: "forgotten" }
+  /** The query asked to start a session whose id Claude Code already has, before any output: send it again, resuming. */
+  | { kind: "claimed" }
   | { kind: "stop" }
   /** Deadlines are due, or a hold may have lifted: a daily-cap park re-checks headroom on every tick. */
   | { kind: "tick" }
@@ -441,6 +445,14 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
       pump();
       break;
     }
+    case "claimed": {
+      const t = turnOf(s.lifecycle);
+      if (!t) break;
+      if (s.lifecycle.kind === "stopping") finish(t, { kind: "stopped", by: stoppedBy(t) });
+      else requeue(t);
+      pump();
+      break;
+    }
     case "stop": {
       const life = s.lifecycle;
       if (life.kind === "working") {
@@ -691,6 +703,8 @@ type Live = {
   sandboxNoted: boolean;
   /** The session id the query resumed, null for a fresh one. */
   resumed: string | null;
+  /** The id a fresh query asked Claude Code to create the session under (Options.sessionId), null when it let it pick. */
+  claimed: string | null;
   /** A turn on this query has ended, so a later "No conversation found" is not about its resume. */
   answered: boolean;
   /** Its live background tasks, as the last background_tasks_changed listed them, ambient ones left out. Closing kills them. */
@@ -776,6 +790,9 @@ export function createSession(spec: SessionSpec): Session {
    * cannot charge the new query's turns.
    */
   let closing: Live | null = null;
+
+  /** Claude Code said the id the options name for a new session is taken: from now on that id is resumed. */
+  let takenId: string | null = null;
 
   /** What the turn in flight carries, recorded as sent once the model answers it, so a turn that never ran sends it again. */
   let carried: SessionState["sent"] | null = null;
@@ -993,7 +1010,9 @@ export function createSession(spec: SessionSpec): Session {
   function open(unattended: boolean): Live {
     const path = executable();
     if (!path) throw new Error("claude was not found on PATH, or CLAUDIOBOT_CLAUDE does not name an executable");
-    const options = spec.options();
+    const asked = spec.options();
+    const { sessionId: _claim, title: _title, ...resumable } = asked;
+    const options: Options = takenId !== null && asked.sessionId === takenId ? { ...resumable, resume: takenId } : asked;
     // Above 0 when the bot has a cap: the headroom check let this turn start, and it sees the same spend. Null: no cap.
     const cap = unattended ? spec.ledger.dailyLeft(spec.actor.botId) : null;
     const gen = ++generation;
@@ -1039,6 +1058,7 @@ export function createSession(spec: SessionSpec): Session {
       q,
       fresh: !options.resume,
       resumed: options.resume ?? null,
+      claimed: options.resume ? null : (options.sessionId ?? null),
       answered: false,
       capped: cap !== null,
       stale: false,
@@ -1113,7 +1133,7 @@ export function createSession(spec: SessionSpec): Session {
     const tail = l.stderr();
     const text = tail ? `${error}\n${tail}` : error;
     if (!current()) return;
-    if (forgot(text, l)) return;
+    if (forgot(text, l) || taken(text, l)) return;
     if (!startedSandbox(text)) dispatch({ kind: "end", outcome: { kind: "transient", error: maskSecrets(text) } });
   }
 
@@ -1126,6 +1146,15 @@ export function createSession(spec: SessionSpec): Session {
     if (reason === null || turnOf(spec.state.lifecycle as Lifecycle)?.output !== false) return false;
     closeLive();
     dispatch({ kind: "unstarted", error: `the sandbox could not start (${reason})` });
+    return true;
+  }
+
+  /** A fresh query's id was taken before any output: the turn goes again on a query that resumes it. */
+  function taken(text: string, l: Live): boolean {
+    if (l.claimed === null || l.answered || !inUse(text, l.claimed) || turnOf(spec.state.lifecycle as Lifecycle)?.output !== false) return false;
+    takenId = l.claimed;
+    closeLive();
+    dispatch({ kind: "claimed" });
     return true;
   }
 

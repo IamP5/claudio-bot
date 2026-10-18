@@ -1,11 +1,11 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ClaudeApps, DesktopEntry, Live } from "../src/claudeApps";
-import type { ServerMessage, SessionId, SessionItem, SessionRow, SessionsChannelFrame, ThreadChannelFrame } from "../src/protocol";
+import type { AgentId, BotId, ServerMessage, SessionId, SessionItem, SessionRow, SessionsChannelFrame, ThreadChannelFrame } from "../src/protocol";
 import { createSessions, type Sessions } from "../src/sessions";
-import { emptyWorld, type World } from "../src/world";
+import { emptySession, emptyWorld, own, type AgentRecord, type SessionState, type World } from "../src/world";
 
 // The Sessions facade over a temp CLAUDE_CONFIG_DIR holding recorded transcripts, with the Claude app faked and the
 // sockets' channels recorded. Driving sessions (send, cards) is tested where the drivers are.
@@ -25,14 +25,24 @@ let thread: { id: SessionId; frame: ThreadChannelFrame }[];
 let watchers: Map<SessionId, number>;
 let holders: Map<SessionId, Live>;
 let changes: (() => void)[];
+/** The Claude app as the test sets it: what it lists, whether it is in front, how idle the Mac is, what imports do. */
+let app: { listed: Map<SessionId, DesktopEntry>; state: "absent" | "background" | "front"; idle: number | null; lists: boolean; imports: SessionId[]; opened: SessionId[] };
 
 const fakeApps = (): ClaudeApps => ({
   holders: () => holders,
-  desktop: () => new Map<SessionId, DesktopEntry>(),
-  desktopState: async () => "absent",
-  idleSeconds: async () => null,
-  importToDesktop: async () => false,
-  openInDesktop: async () => false,
+  desktop: () => app.listed,
+  desktopState: async () => app.state,
+  idleSeconds: async () => app.idle,
+  async importToDesktop(id) {
+    app.imports.push(id);
+    if (app.lists) app.listed.set(id, { localId: `local_${id}`, archived: false, parent: null, title: null });
+    return app.lists;
+  },
+  async openInDesktop(id) {
+    app.opened.push(id);
+    if (app.lists) app.listed.set(id, { localId: `local_${id}`, archived: false, parent: null, title: null });
+    return app.lists;
+  },
   refresh() {},
   onChange: (f) => void changes.push(f),
   close() {},
@@ -89,6 +99,7 @@ beforeEach(() => {
   watchers = new Map();
   holders = new Map();
   changes = [];
+  app = { listed: new Map(), state: "absent", idle: null, lists: true, imports: [], opened: [] };
 });
 afterEach(() => {
   sessions?.stop();
@@ -222,4 +233,103 @@ test("a bot's own sessions, under the bridge home, are not listed", async () => 
 test("sending is refused until a driver exists", async () => {
   await start();
   expect(await sessions.handle({ type: "session_send", sessionId: ASK, text: "hi", clientId: "c1", interrupt: false })).toEqual([{ type: "error", message: expect.any(String) }]);
+});
+
+function agentOn(id: SessionId, over: Partial<AgentRecord["agent"]> = {}): AgentRecord {
+  const rec: AgentRecord = {
+    agent: { id: "a_1" as AgentId, botId: "b_1" as BotId, title: "Pick a color", where: "mac", projectName: "demo", status: "waiting", url: null, createdAt: "2026-10-18T12:00:00.000Z", updatedAt: "2026-10-18T12:00:00.000Z", evidence: null, worktree: null, ...over },
+    cwd: repo,
+    repo,
+    messages: [],
+    session: emptySession(id),
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: { kind: "user" },
+  };
+  world.agents.set(rec.agent.id, rec);
+  return rec;
+}
+
+test("an agent's session lists under its project before Claude Code has written a word, and fills in once it does", async () => {
+  const id = crypto.randomUUID() as SessionId;
+  agentOn(id, { status: "working" });
+  await start();
+  expect(rowOf(await rowsOf(), id)).toMatchObject({ title: "Pick a color", origin: "agent", agent: { botId: "b_1", agentId: "a_1" }, status: "working" });
+  watchers.set(id, 1);
+  expect(await one({ type: "watch_session", sessionId: id, after: null })).toMatchObject({ type: "session", items: [] });
+  install("own-ask", id);
+  await sessions.sync();
+  const frame = thread.find((t) => t.id === id)?.frame as Extract<ThreadChannelFrame, { type: "session_items" }>;
+  expect(frame.items.map((i) => i.kind)).toEqual(["user", "work", "assistant", "ask", "work", "assistant"]);
+  expect(frame.items[0]).toMatchObject({ kind: "user", from: "bot" });
+});
+
+test("an agent's session that restarts under a new id moves its watchers there", async () => {
+  const rec = agentOn(ASK);
+  await start();
+  sessions.agentChanged(rec);
+  watchers.set(ASK, 1);
+  await sessions.handle({ type: "watch_session", sessionId: ASK, after: null });
+  own<SessionState>(rec.session).id = PERMISSION;
+  sessions.agentChanged(rec);
+  expect(thread.find((t) => t.frame.type === "session_removed")?.frame).toEqual({ type: "session_removed", sessionId: ASK, movedTo: PERMISSION });
+});
+
+describe("the Claude app mirror", () => {
+  const due = async () => {
+    const rec = agentOn(ASK);
+    await start();
+    sessions.agentTurnDone(rec);
+    return rec;
+  };
+  const tickOnce = async () => {
+    sessions.tick(new Date(Date.now() + 61_000 * ++ticks));
+    await Bun.sleep(20);
+  };
+  let ticks = 0;
+
+  test("after an agent's first finished turn the session is due, and imports only while the app is in the background and the Mac idle", async () => {
+    await due();
+    expect(rowOf(await rowsOf(), ASK).mirror).toBe("pending");
+    app.state = "front";
+    app.idle = 600;
+    await tickOnce();
+    app.state = "background";
+    app.idle = 30;
+    await tickOnce();
+    expect(app.imports).toEqual([]);
+    app.idle = 600;
+    await tickOnce();
+    expect(app.imports).toEqual([ASK]);
+    expect(world.sessions.get(ASK)?.mirror).toBeUndefined();
+    expect(rowOf(await rowsOf(), ASK).mirror).toBe("imported");
+    await tickOnce();
+    expect(app.imports).toEqual([ASK]);
+  });
+
+  test("an import the app never lists is failed and not tried again; Open in Claude app still tries", async () => {
+    await due();
+    app.state = "background";
+    app.idle = 600;
+    app.lists = false;
+    await tickOnce();
+    await tickOnce();
+    expect(app.imports).toEqual([ASK]);
+    expect(rowOf(await rowsOf(), ASK).mirror).toBe("failed");
+    expect(await sessions.handle({ type: "session_open_desktop", sessionId: ASK })).toEqual([{ type: "error", message: expect.stringContaining("claude://") }]);
+    app.lists = true;
+    expect(await sessions.handle({ type: "session_open_desktop", sessionId: ASK })).toEqual([]);
+    expect(app.opened).toEqual([ASK, ASK]);
+    expect(rowOf(await rowsOf(), ASK).mirror).toBe("imported");
+  });
+
+  test("with the setting on When I tap, nothing is imported on its own", async () => {
+    await start();
+    await sessions.handle({ type: "session_prefs", mirror: "tap" });
+    sessions.agentTurnDone(agentOn(ASK));
+    app.state = "background";
+    app.idle = 600;
+    await tickOnce();
+    expect([app.imports, world.sessions.get(ASK)?.mirror, rowOf(await rowsOf(), ASK).mirror]).toEqual([[], undefined, "none"]);
+  });
 });

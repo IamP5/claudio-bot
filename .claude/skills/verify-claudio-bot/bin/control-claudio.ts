@@ -195,6 +195,8 @@ async function launch() {
   git(pushme, "commit", "-q", "--allow-empty", "-m", "init");
   git(pushme, "push", "-q", "origin", "main");
   git(pushme, "commit", "-q", "--allow-empty", "-m", "a change to push");
+  // The bridge passes no SSH agent, so a user's global commit signing would fail every agent's commit in a seed repo.
+  for (const repo of [demo, pushme]) git(repo, "config", "commit.gpgsign", "false");
 
   const realClaude = Bun.which("claude") ?? die("the claude CLI is not on PATH");
   const wrapper = join(bin, "claude");
@@ -244,7 +246,7 @@ console.log("ntfy-sink " + s.port);
     CLAUDIOBOT_MODEL: model,
     CLAUDIOBOT_USER_NAME: "Alex",
     CLAUDIOBOT_PUSH_URL: `http://127.0.0.1:${ntfyPort}/verify`,
-    CLAUDIOBOT_WORKTREES: worktrees,
+    CLAUDIOBOT_DESKTOP_FAKE: join(dir, "desktop-imports.txt"),
     CLAUDIOBOT_WEBHOOK_PORT: String(webhookPort),
     CLAUDIOBOT_CLAUDE: wrapper,
     PATH: `${bin}:${process.env.PATH ?? ""}`,
@@ -256,7 +258,7 @@ console.log("ntfy-sink " + s.port);
   for (const k of Object.keys(env)) if (/^(CLAUDE_CODE_|CLAUDE_AGENT_SDK_|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDECODE$|AI_AGENT$)/.test(k)) delete env[k];
   // Inherited CLAUDIOBOT_* settings would leak the user's own configuration into the run. Access and sandbox modes pass
   // through on purpose, so full access can be verified by setting them for one launch.
-  const ours = new Set(["CLAUDIOBOT_PORT", "CLAUDIOBOT_ROOTS", "CLAUDIOBOT_HOME", "CLAUDIOBOT_MODEL", "CLAUDIOBOT_USER_NAME", "CLAUDIOBOT_PUSH_URL", "CLAUDIOBOT_WORKTREES", "CLAUDIOBOT_WEBHOOK_PORT", "CLAUDIOBOT_CLAUDE", "CLAUDIOBOT_ACCESS", "CLAUDIOBOT_SANDBOX"]);
+  const ours = new Set(["CLAUDIOBOT_PORT", "CLAUDIOBOT_ROOTS", "CLAUDIOBOT_HOME", "CLAUDIOBOT_MODEL", "CLAUDIOBOT_USER_NAME", "CLAUDIOBOT_PUSH_URL", "CLAUDIOBOT_DESKTOP_FAKE", "CLAUDIOBOT_WEBHOOK_PORT", "CLAUDIOBOT_CLAUDE", "CLAUDIOBOT_ACCESS", "CLAUDIOBOT_SANDBOX"]);
   for (const k of Object.keys(env)) if (k.startsWith("CLAUDIOBOT_") && !ours.has(k)) delete env[k];
   for (const k of ["CLAUDIOBOT_ACCESS", "CLAUDIOBOT_SANDBOX"]) if (process.env[k] !== undefined) console.log(`note: ${k}=${process.env[k]} is passed through from your shell`);
 
@@ -264,7 +266,7 @@ console.log("ntfy-sink " + s.port);
   const rules: [boolean, string][] = [
     [inRun(env.CLAUDIOBOT_HOME), `CLAUDIOBOT_HOME is the run's (${env.CLAUDIOBOT_HOME})`],
     [inRun(env.CLAUDIOBOT_ROOTS), `project roots are the run's (${env.CLAUDIOBOT_ROOTS})`],
-    [inRun(env.CLAUDIOBOT_WORKTREES), `worktrees are the run's (${env.CLAUDIOBOT_WORKTREES})`],
+    [inRun(env.CLAUDIOBOT_DESKTOP_FAKE), `the Claude app is the run's stand-in, imports go to ${env.CLAUDIOBOT_DESKTOP_FAKE}`],
     [env.SSH_AUTH_SOCK === undefined, "SSH_AUTH_SOCK is unset"],
     [env.GH_TOKEN === undefined && env.GITHUB_TOKEN === undefined, "GH_TOKEN and GITHUB_TOKEN are unset"],
     [env.ENABLE_CLAUDEAI_MCP_SERVERS === "false", "claude.ai connectors are off"],

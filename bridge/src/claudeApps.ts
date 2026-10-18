@@ -1,4 +1,4 @@
-import { watch as fsWatch, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, watch as fsWatch, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { SessionId } from "./protocol";
@@ -187,6 +187,39 @@ export function createClaudeApps(deps: AppsDeps): ClaudeApps {
     close() {
       for (const w of watchers) w.close();
       listeners.length = 0;
+    },
+  };
+}
+
+/**
+ * The Claude app as a verification run sees it: imports are written to `file` and listed at once, nothing is opened,
+ * the app reads as running in the background and the Mac as idle, so the mirror policy's gates pass.
+ */
+export function fakeDesktop(real: ClaudeApps, file: string): ClaudeApps {
+  const imported = new Map<SessionId, DesktopEntry>();
+  const listeners: (() => void)[] = [];
+  const note = (what: string, id: SessionId) => appendFileSync(file, `${new Date().toISOString()} ${what} ${id}\n`);
+  const importToDesktop = async (id: SessionId) => {
+    if (real.desktop().has(id) || imported.has(id)) return true;
+    note("import", id);
+    imported.set(id, { localId: `local_fake_${id}`, archived: false, parent: null, title: null });
+    for (const f of listeners) f();
+    return true;
+  };
+  return {
+    ...real,
+    desktop: () => new Map([...real.desktop(), ...imported]),
+    desktopState: async () => "background",
+    idleSeconds: async () => 3600,
+    importToDesktop,
+    async openInDesktop(id) {
+      const ok = await importToDesktop(id);
+      note("open", id);
+      return ok;
+    },
+    onChange(f) {
+      listeners.push(f);
+      real.onChange(f);
     },
   };
 }

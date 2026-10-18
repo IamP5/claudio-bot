@@ -167,7 +167,6 @@ The project used to be called claudebot, with its home in `~/.claudebot`. On its
 | `CLAUDIOBOT_AGENT_USD` | none | A lifetime budget in US dollars for every Mac agent. |
 | `CLAUDIOBOT_PUSH_URL` | off | An [ntfy](https://ntfy.sh) topic URL for pushes while the app is closed. |
 | `CLAUDIOBOT_WEBHOOK_PORT` | `7879` | Port of the webhook listener, on 127.0.0.1 only. `0` picks a free port. |
-| `CLAUDIOBOT_WORKTREES` | `~/.claudiobot-worktrees` | The folder Mac agents' worktrees go in. |
 | `CLAUDIOBOT_ACCESS` | `guarded` | `full` gives bots and Mac agents the access you have. See [Full access](#full-access). |
 | `CLAUDIOBOT_SANDBOX` | `on`, `off` under full access | `off` runs shell commands outside the OS sandbox. `on` keeps it under full access too. |
 | `CLAUDIOBOT_ALLOWED_DOMAINS` | | Comma-separated hosts that sandboxed commands may reach without review, on top of GitHub, npm, Yarn, PyPI and crates.io. |

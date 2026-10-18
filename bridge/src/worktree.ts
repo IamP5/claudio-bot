@@ -1,17 +1,18 @@
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { defaultBranch, hardenedGit, inRepo } from "./evidence";
 import type { Worktree } from "./protocol";
 import { refused, type Result } from "./result";
 import type { Isolate } from "./tools";
 
-// A mac agent may work in its own git worktree under ~/.claudiobot-worktrees, outside the
-// bridge home and every bot home (the floors and the sandbox keep those private). Made with hardened git calls;
-// removed only when the user asks (remove_worktree), never with --force and never while it holds uncommitted work.
+// A mac agent may work in its own git worktree at <repo>/.claude/worktrees/claudio-<8>, where Claude Code and the
+// Claude app put a repo's worktrees: the app groups a session under its repo only when the session's folder sits under
+// the trusted repo (docs/sessions-design.md §8.2). Made with hardened git calls; removed only when the user asks
+// (remove_worktree), never with --force and never while it holds uncommitted work. Worktrees made before this
+// placement (under ~/.claudiobot-worktrees) keep their paths.
 
-/** CLAUDIOBOT_WORKTREES moves it, like CLAUDIOBOT_HOME moves the bridge home. */
-export const worktreesRoot = (env: Record<string, string | undefined> = process.env) => env.CLAUDIOBOT_WORKTREES || join(homedir(), ".claudiobot-worktrees");
+/** Relative to the repo's root. git status and the trust check look past it: it holds checkouts, not config. */
+export const WORKTREES_DIR = ".claude/worktrees";
 
 /** base: the commit a worktree started from. note: a line for the bot's chat about where the agent ended up. */
 export type Workspace = { cwd: string; worktree: Worktree | null; base: string | null; note: string | null };
@@ -19,7 +20,23 @@ export type Workspace = { cwd: string; worktree: Worktree | null; base: string |
 /** claudio/<first 8 of the agent's uuid>. */
 export const branchOf = (agentId: string) => `claudio/${agentId.replace(/^a_/, "").slice(0, 8)}`;
 
-const folderName = (name: string) => name.replace(/[^\w.-]/g, "-").replace(/^\.+/, "") || "project";
+/** claudio-<first 8 of the agent's uuid>, the worktree's folder under WORKTREES_DIR. */
+export const worktreeFolder = (agentId: string) => `claudio-${agentId.replace(/^a_/, "").slice(0, 8)}`;
+
+/**
+ * Keeps WORKTREES_DIR out of the repo's status, through the common dir's info/exclude, which nothing commits. A repo
+ * that already ignores it is left alone.
+ */
+async function exclude(git: (args: string[]) => Promise<string | null>, root: string) {
+  if ((await git(["check-ignore", "-q", `${WORKTREES_DIR}/`])) !== null) return;
+  const common = await git(["rev-parse", "--git-common-dir"]);
+  if (common === null) return;
+  const file = join(resolve(root, common), "info", "exclude");
+  const had = existsSync(file) ? readFileSync(file, "utf8") : "";
+  if (had.split("\n").some((l) => l.trim() === `${WORKTREES_DIR}/` || l.trim() === `/${WORKTREES_DIR}/`)) return;
+  mkdirSync(dirname(file), { recursive: true });
+  appendFileSync(file, `${had === "" || had.endsWith("\n") ? "" : "\n"}/${WORKTREES_DIR}/\n`);
+}
 
 /**
  * Where the agent works. none: the project folder. worktree: always a new worktree on claudio/<id> from the default
@@ -31,7 +48,7 @@ export async function prepareWorkspace(
   project: { path: string; name: string },
   agentId: string,
   isolate: Isolate,
-  opts: { busy?: boolean; root?: string } = {},
+  opts: { busy?: boolean } = {},
 ): Promise<Workspace> {
   const folder: Workspace = { cwd: project.path, worktree: null, base: null, note: null };
   if (isolate === "none") return folder;
@@ -41,7 +58,7 @@ export async function prepareWorkspace(
   }
   const git = await hardenedGit(project.path);
   if (isolate === "auto" && !opts.busy) {
-    const status = await git(["status", "--porcelain", "--ignore-submodules=dirty"]);
+    const status = await git(["status", "--porcelain", "--ignore-submodules=dirty", "--", ".", `:(exclude)${WORKTREES_DIR}`]);
     if (status === "") return folder;
   }
   const branches = await defaultBranch(git);
@@ -50,9 +67,10 @@ export async function prepareWorkspace(
     if (isolate === "auto") return { ...folder, note: `${project.name} has no main or master branch to start a worktree from, so the agent works in the project folder.` };
     throw new Error(`${project.name} has no main or master branch to start a worktree from.`);
   }
-  const parent = join(opts.root ?? worktreesRoot(), folderName(project.name));
-  mkdirSync(parent, { recursive: true, mode: 0o700 });
-  const path = join(parent, agentId);
+  await exclude(git, project.path);
+  const parent = join(project.path, WORKTREES_DIR);
+  mkdirSync(parent, { recursive: true });
+  const path = join(parent, worktreeFolder(agentId));
   const branch = branchOf(agentId);
   if ((await git(["worktree", "add", "-b", branch, "--end-of-options", path, base])) === null) {
     throw new Error(`git could not make a worktree for ${project.name} on ${branch}.`);

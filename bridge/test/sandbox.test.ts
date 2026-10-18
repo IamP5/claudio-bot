@@ -282,6 +282,14 @@ describe("a mac agent", () => {
   });
 });
 
+test("an agent in a worktree under .claude/worktrees writes its worktree but not its .claude, nor the main checkout's", () => {
+  const repo = "/Users/u/Dev/app";
+  const wt = `${repo}/.claude/worktrees/claudio-1234abcd`;
+  const s = sandboxFor(agent, agentScope(wt), ENV, [`${repo}/.git`, `${repo}/.git/worktrees/claudio-1234abcd`]);
+  expect([canWrite(s, `${wt}/src/a.ts`), canWrite(s, `${wt}/src/hooks/useX.ts`), canWrite(s, `${repo}/.git/objects/ab`)]).toEqual([true, true, true]);
+  expect([canWrite(s, `${wt}/.claude/settings.json`), canWrite(s, `${repo}/.claude/settings.json`), canWrite(s, `${repo}/src/a.ts`), canWrite(s, `${repo}/.git/hooks/pre-commit`)]).toEqual([false, false, false, false]);
+});
+
 describe("both actors", () => {
   const cases = [
     ["bot", sandboxFor(bot, botScope, ENV)],

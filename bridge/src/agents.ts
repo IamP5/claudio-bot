@@ -1,6 +1,6 @@
 import type { CanUseTool, HookCallbackMatcher, HookEvent, Options, SandboxSettings, SDKMessage, Settings } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, readdirSync, realpathSync } from "node:fs";
-import { join, sep } from "node:path";
+import { join } from "node:path";
 import { createCloudSession, followUpCloudSession } from "./cloud";
 import { readEvidence, reportText } from "./evidence";
 import type { Ledger } from "./ledger";
@@ -14,7 +14,7 @@ import { agentGitEnv } from "./sandbox";
 import type { Persist } from "./store";
 import { errorText } from "./text";
 import type { Isolate } from "./tools";
-import { prepareWorkspace, removeWorktree, worktreesRoot, type Workspace } from "./worktree";
+import { prepareWorkspace, removeWorktree, WORKTREES_DIR, type Workspace } from "./worktree";
 import { emptySession, newMessageId, repoTrust, type Actor, type AgentActor, type AgentRecord, type AgentReport, type Initiator, type World } from "./world";
 
 // Agents are actors like bots: mac agents run on the same session module behind the same gate, metered by the same
@@ -71,13 +71,15 @@ const queued = (text: string, initiator: Initiator): SessionInput => ({ kind: "e
 /**
  * What a repo carries that Claude Code would load and run from it: project settings and their hooks, .mcp.json
  * servers, commands, agents and skills. Relative paths, sorted. An empty folder loads nothing, so it does not count:
- * Claude Code itself leaves an empty .claude/.cc-writes in a folder an agent wrote to.
+ * Claude Code itself leaves an empty .claude/.cc-writes in a folder an agent wrote to. Nor do the worktrees under
+ * .claude/worktrees, which are checkouts.
  */
 export function projectConfigOf(root: string): string[] {
   const found = existsSync(join(root, ".mcp.json")) ? [".mcp.json"] : [];
   const dir = join(root, ".claude");
   try {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (`.claude/${entry.name}` === WORKTREES_DIR) continue;
       if (entry.isDirectory() && readdirSync(join(dir, entry.name)).length === 0) continue;
       found.push(`.claude/${entry.name}`);
     }
@@ -123,8 +125,10 @@ export function createAgents(deps: {
   observe: (actor: AgentActor, m: SDKMessage) => void;
   /** A mac agent's turn ended (activity.clear). */
   idle: (actor: AgentActor) => void;
-  /** Where worktrees go; tests pass a temp folder. Default worktree.worktreesRoot(). */
-  worktrees?: string;
+  /** Whether Claude Code has a transcript for the session id, so the query resumes it rather than starts it. */
+  transcriptExists: (sessionId: string, cwd: string) => boolean;
+  /** A mac agent's turn ended done (the Claude app mirror policy). */
+  turnDone?: (agent: AgentRecord) => void;
 }): Agents {
   const sessions = new Map<AgentId, Session>();
   const cloudQueues = new Map<AgentId, Promise<void>>();
@@ -137,12 +141,8 @@ export function createAgents(deps: {
   /** The checkout repo trust and project config are keyed on, also for an agent in a worktree. */
   const repoOf = (rec: AgentRecord) => rec.repo ?? rec.cwd;
 
-  const worktrees = deps.worktrees ?? worktreesRoot();
-  /** Its worktree is being or was removed: the folder its session resumes in no longer exists. */
-  const gone = (rec: AgentRecord) => {
-    const root = existsSync(worktrees) ? realpathSync(worktrees) : worktrees;
-    return removing.has(rec.agent.id) || (rec.cwd.startsWith(root + sep) && !existsSync(rec.cwd));
-  };
+  /** Its worktree is being or was removed: the folder its session resumes in, apart from the repo, no longer exists. */
+  const gone = (rec: AgentRecord) => removing.has(rec.agent.id) || (rec.cwd !== repoOf(rec) && !existsSync(rec.cwd));
 
   /** A mac agent shows what its session is doing, or an open card; once neither holds, what its last report left. */
   function statusOf(rec: AgentRecord, reported: AgentStatus): AgentStatus {
@@ -213,6 +213,7 @@ export function createAgents(deps: {
     switch (end.kind) {
       case "done": {
         const m = end.result;
+        deps.turnDone?.(rec);
         const text = m.subtype === "success" ? m.result : `The agent stopped with an error: ${m.errors.join("; ") || m.subtype}`;
         return reportWithEvidence(rec, { status: m.subtype === "success" ? "waiting" : "failed", text: text.trim() || "(no final message)", by });
       }
@@ -251,12 +252,17 @@ export function createAgents(deps: {
         // Full access loads every repo's own config, as the user's own Claude Code does.
         const trusted = accessOf(process.env).full || repoTrust(deps.world.gate, repo, id) === true;
         const botName = deps.world.bots.get(rec.agent.botId)?.name ?? rec.agent.botId;
+        // The id is chosen when the agent starts, so its row and transcript name it before Claude Code runs: the first
+        // query creates the session under it with the agent's title, every later one resumes it.
+        const sessionId = rec.session.id;
+        const identity =
+          sessionId === null ? {} : deps.transcriptExists(sessionId, rec.cwd) ? { resume: sessionId } : { sessionId, title: rec.agent.title };
         return {
           cwd: rec.cwd,
           // Project settings, hooks and .mcp.json come from here instead of the checkout, which the agent and every
           // branch it checks out can change. A trusted worktree loads them from its main checkout, the one trusted.
           ...(!trusted ? { projectConfigRoot: deps.configRoot(id) } : rec.agent.worktree ? { projectConfigRoot: repo } : {}),
-          resume: rec.session.id ?? undefined,
+          ...identity,
           settingSources: ["user", "project"],
           systemPrompt: { type: "preset", preset: "claude_code", append: agentRules({ botName, userName: deps.userName }) },
           permissionMode: "auto",
@@ -308,7 +314,7 @@ export function createAgents(deps: {
       if (a.where === "mac") {
         preparing.set(id, repo);
         try {
-          workspace = await prepareWorkspace(a.project, id, a.isolate, { busy, root: worktrees });
+          workspace = await prepareWorkspace(a.project, id, a.isolate, { busy });
         } finally {
           preparing.delete(id);
         }
@@ -334,12 +340,14 @@ export function createAgents(deps: {
         repo,
         base: workspace.base,
         messages: [{ id: newMessageId(), at, from: "bot", text: command ?? a.prompt }],
-        session: emptySession(),
+        session: emptySession(a.where === "mac" ? crypto.randomUUID() : null),
         cloudSession: null,
         budgetUsd: a.budgetUsd,
         startedBy: a.initiator,
       };
       deps.world.agents.set(rec.agent.id, rec);
+      // Saved before anything runs, so a restart resumes the session under the id its transcript will carry.
+      deps.persist("now");
       deps.changed(rec);
       if (a.where === "mac") {
         if (workspace.note) deps.note(rec, workspace.note);

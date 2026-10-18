@@ -254,6 +254,25 @@ export function statOf(path: string): TranscriptFile | null {
   }
 }
 
+/** Claude Code's folder for a cwd: every character but a letter or digit becomes "-". */
+export const folderOf = (cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, "-");
+
+/**
+ * Whether Claude Code keeps a transcript for the id: in the cwd's own folder, else in any (a long cwd gets a hashed
+ * folder name). Stats only.
+ */
+export function transcriptExists(projectsDir: string, id: string, cwd: string): boolean {
+  const name = `${id}.jsonl`;
+  if (statOf(join(projectsDir, folderOf(cwd), name))) return true;
+  let folders: string[];
+  try {
+    folders = readdirSync(projectsDir);
+  } catch {
+    return false;
+  }
+  return folders.some((f) => statOf(join(projectsDir, f, name)) !== null);
+}
+
 /** The SDK's readers, a fake in tests. */
 export type SdkReaders = {
   listSessions: typeof listSessions;

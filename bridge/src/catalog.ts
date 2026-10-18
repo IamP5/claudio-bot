@@ -132,7 +132,7 @@ export function createCatalog(deps: CatalogDeps): Catalog {
         branch: head?.branch ?? rec?.agent.worktree?.branch ?? null,
         worktree: project.worktree,
         pr: head?.pr ?? null,
-        mirror: desktop.has(id) ? "imported" : "none",
+        mirror: desktop.has(id) ? "imported" : overlay?.mirror?.failed ? "failed" : overlay?.mirror && deps.world.sessionPrefs.mirror === "auto" ? "pending" : "none",
         hidden: overlay?.hidden ?? false,
         url: null,
         createdAt: iso(createdAt),

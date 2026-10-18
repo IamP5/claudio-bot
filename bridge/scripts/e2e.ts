@@ -611,7 +611,7 @@ try {
     await c.waitFor(() => c.resting(claudio), "the bot to rest after the report", 300_000);
     const rec = agentTitled("Worktree file") as unknown as { agent: { id: string; worktree: { path: string; branch: string } | null; evidence: { ahead: number } | null } };
     const wt = rec.agent.worktree;
-    check(wt !== null && wt.path.startsWith(`${realpathSync(worktrees)}/demo/`) && wt.branch.startsWith("claudio/"), `the agent got a worktree under CLAUDIOBOT_WORKTREES: ${JSON.stringify(wt)}`);
+    check(wt !== null && wt.path.startsWith(`${realpathSync(demo)}/.claude/worktrees/claudio-`) && wt.branch.startsWith("claudio/"), `the agent got a worktree under demo/.claude/worktrees: ${JSON.stringify(wt)}`);
     const there = (await git(wt.path, "log", "-1", "--name-only", "--format=%s")).text();
     check(there.includes("wt.txt") && (await git(wt.path, "symbolic-ref", "--short", "HEAD")).text().trim() === wt.branch, `the commit landed on ${wt.branch} in the worktree: ${JSON.stringify(there.trim())}`);
     check((await head(demo, "HEAD")) === demoHead && (await git(demo, "symbolic-ref", "--short", "HEAD")).text().trim() === demoBranch && !existsSync(join(demo, "wt.txt")), "the main checkout is untouched");

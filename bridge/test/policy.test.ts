@@ -1305,3 +1305,30 @@ describe("full access: only the bridge's own state is floored, and only what lea
     expect(verdict(call("mcp__claudio__start_agent", { title: "t", prompt: "p", where: "mac", project: "app" }), full({ initiator: routine }))).toBe("ask:claudio.start_agent");
   });
 });
+
+describe("an agent in a worktree under the repo's .claude/worktrees", () => {
+  const WT = `${PROJECT}/.claude/worktrees/claudio-1234abcd`;
+  const inWorktree = { actor: agent, scope: { ...agentScope, own: WT }, initiator: { kind: "agent", agentId: "a_1", hops: 0, origin: { kind: "user" } } as Initiator };
+  const at = (path: string) => `${WT}/${path}`;
+
+  test.each([
+    ["an edit", call("Edit", { file_path: at("src/a.ts"), old_string: "a", new_string: "b" }, { cwd: WT })],
+    ["a new file in a folder named like Claude config", call("Write", { file_path: at("src/hooks/useAudio.ts"), content: "x" }, { cwd: WT })],
+    ["the tests", sh("bun test", { cwd: WT })],
+    ["a commit", sh("git add -A && git commit -m fix", { cwd: WT })],
+    ["code that writes a file by its absolute path", sh(`python3 -c "open('${at("out.txt")}','w').write('x')"`, { cwd: WT })],
+    ["a cleanup", sh("rm -rf node_modules dist", { cwd: WT })],
+  ])("works as in the main checkout: %s", (_, c) => {
+    expect(verdict(c, inWorktree)).toBe("pass");
+  });
+
+  test.each([
+    ["the worktree's own skills", call("Write", { file_path: at(".claude/skills/x/SKILL.md"), content: "x" }, { cwd: WT }), "ask:self.escalate"],
+    ["the main checkout's settings", call("Write", { file_path: `${PROJECT}/.claude/settings.json`, content: "{}" }, { cwd: WT }), "ask:self.escalate"],
+    ["the main checkout's commands, from Bash", sh(`echo x > ${PROJECT}/.claude/commands/deploy.md`, { cwd: WT }), "ask:self.escalate"],
+    ["the main checkout's hooks", call("Write", { file_path: `${PROJECT}/.claude/hooks/pre.sh`, content: "x" }, { cwd: WT }), "ask:self.escalate"],
+    ["its own settings", call("Write", { file_path: at(".claude/settings.json"), content: "{}" }, { cwd: WT }), "deny:floor.selfescalate"],
+  ])("still holds Claude config: %s", (_, c, expected) => {
+    expect(verdict(c, inWorktree)).toBe(expected);
+  });
+});

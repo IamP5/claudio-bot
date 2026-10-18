@@ -43,6 +43,7 @@ import type { Result } from "./result";
 import { gitDirsOf, sandboxFor } from "./sandbox";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { createSessions, type Sessions, type SessionsEnv } from "./sessions";
+import { transcriptExists } from "./transcript";
 import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { createSkills } from "./skills";
 import { createUsageMonitor } from "./usage";
@@ -224,6 +225,9 @@ export function createHub(deps: HubDeps): Hub {
     now: clockNow,
     log: deps.log,
   });
+
+  /** Claude Code's transcripts, which tell a new session from one to resume. */
+  const projectsDir = deps.sessions?.projectsDir ?? join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects");
 
   const accountParked = () => world.account.parkedUntil !== null && world.account.parkedUntil > now();
   /**
@@ -773,6 +777,8 @@ export function createHub(deps: HubDeps): Hub {
       return sandboxFor(actor, scope, process.env, gitDirsOf(scope.own));
     },
     configRoot: (id) => homes.agentConfig(id),
+    transcriptExists: (id, cwd) => transcriptExists(projectsDir, id, cwd),
+    turnDone: (rec) => sessions?.agentTurnDone(rec),
     trustCard: (actor, repo) => gate.trustCard(actor, repo),
     settings: (actor) => settingsFor(actor.botId),
     observe(actor, m) {

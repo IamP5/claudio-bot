@@ -381,10 +381,27 @@ struct PairingVault: Sendable {
     }
 
     private var query: [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: service,
-         kSecAttrAccount as String: Self.account]
+        var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                    kSecAttrService as String: service,
+                                    kSecAttrAccount as String: Self.account]
+        #if os(macOS)
+        if Self.dataProtection { query[kSecUseDataProtectionKeychain as String] = true }
+        #endif
+        return query
     }
+
+    #if os(macOS)
+    /// The data protection keychain needs an app signed with a team. A build signed to run locally gets
+    /// errSecMissingEntitlement there, so it keeps the pairing in the login keychain instead.
+    private static let dataProtection: Bool = {
+        let probe: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                    kSecAttrService as String: "dev.claudiobot.keychain-probe",
+                                    kSecUseDataProtectionKeychain as String: true]
+        let status = SecItemAdd(probe.merging([kSecValueData as String: Data()]) { $1 } as CFDictionary, nil)
+        SecItemDelete(probe as CFDictionary)
+        return status != errSecMissingEntitlement
+    }()
+    #endif
 
     func load() -> Pairing? {
         var q = query

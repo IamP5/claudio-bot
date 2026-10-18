@@ -13,6 +13,7 @@
 		0C71660CA79F7BBD30B8EC97 /* SessionsSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A11260EC7F3C9E5789F5F4F /* SessionsSidebar.swift */; };
 		0DA1049B7D59CCCB02C2ED05 /* PromptTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 092A81439AEE386898334298 /* PromptTextView.swift */; };
 		0EA3767EDA4633EA7F580779 /* Usage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 793A4ED4251CB9F9136B3525 /* Usage.swift */; };
+		0F2A29F13D0B77FADCB229DC /* LocalBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D148F81D82C17B498089BEA7 /* LocalBridgeTests.swift */; };
 		0F739C796389BAAE857F7D42 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 795BC99E02710AB9C992CE01 /* HomeView.swift */; };
 		0FAE72B97A514A757B4505A8 /* EditAddressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 842CE585B51D18F01F24F8D4 /* EditAddressView.swift */; };
 		11D3501C0BC0FA28ECAD37CD /* Mentions.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D2F5263DCB3C0CC9A46D36 /* Mentions.swift */; };
@@ -46,6 +47,7 @@
 		37C3CD090EEE0200FA855E69 /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2ACF9F0339737C2D0EFF06 /* Store.swift */; };
 		38D0F49B666F874DE0206E6D /* PromptTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E0B562982B5FAB600891A58 /* PromptTextView.swift */; };
 		3A40458D683B1F13A1FABE2A /* ClaudioBotApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C210149B5827EAFB36F61F0 /* ClaudioBotApp.swift */; };
+		3D6AE77141DFCE768D314BD0 /* BridgeViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DE3A6C4B1EF2E441ADFF64 /* BridgeViews.swift */; };
 		3E75FC2610A4E6A4AA15D56A /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E239D4F0DF5EA2B3D309E36 /* Theme.swift */; };
 		3F346005F2E2C7878338CEA6 /* SessionComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCA5E07DE76D0F52EBC2333D /* SessionComposer.swift */; };
 		493AFBE5086E056A3A4DCAD5 /* ClaudioBotMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B12810083B7E8254D9262B1B /* ClaudioBotMacApp.swift */; };
@@ -95,6 +97,7 @@
 		A70E45A6D568823E4775006E /* Mentions.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D2F5263DCB3C0CC9A46D36 /* Mentions.swift */; };
 		AAA17DF788E524DB9B1223CD /* DeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = D784CF4F0E9AD11C9698E1B8 /* DeepLink.swift */; };
 		AD829CCB4376E32073C6A59A /* PromptTextViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09AF3C72A0FA97F743E8DF2F /* PromptTextViewTests.swift */; };
+		B14C584BC7BFDAE84FBB79B1 /* LocalBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7210A34FDFDC73B0B972F06E /* LocalBridge.swift */; };
 		B1B2BC714CF0F074388DBBFC /* PromptTextViewMacTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 462E1C258B97806F7CE30448 /* PromptTextViewMacTests.swift */; };
 		B230E30CB3D7C3386EDAD091 /* AgentEvidenceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88F8332127C9916FFC1D3090 /* AgentEvidenceView.swift */; };
 		B5ABEA77B87DD846521E1C51 /* protocol.json in Resources */ = {isa = PBXBuildFile; fileRef = B39EB6FB6164288CB6A58B65 /* protocol.json */; };
@@ -171,6 +174,7 @@
 		0E3BE12B6F1C5728B7BDF60B /* Composer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Composer.swift; sourceTree = "<group>"; };
 		0F1DF58E4527B980D434F6EB /* ExchangeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExchangeView.swift; sourceTree = "<group>"; };
 		1386BE6CADD2BFA8FDDFC925 /* MacShims.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacShims.swift; sourceTree = "<group>"; };
+		13DE3A6C4B1EF2E441ADFF64 /* BridgeViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeViews.swift; sourceTree = "<group>"; };
 		15CFA4B56595601AD5093D37 /* NewChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewChatView.swift; sourceTree = "<group>"; };
 		19071CBB4F5EEB23881F2161 /* ClaudioBotMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClaudioBotMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1D8486BDEC5C8AFBE5B2661B /* Avatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Avatar.swift; sourceTree = "<group>"; };
@@ -192,6 +196,7 @@
 		6A5953065B9EE16E05C830E5 /* Brand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Brand.swift; sourceTree = "<group>"; };
 		6E239D4F0DF5EA2B3D309E36 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		702ADCCAC3224198DEEABCB4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		7210A34FDFDC73B0B972F06E /* LocalBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalBridge.swift; sourceTree = "<group>"; };
 		7820C0044FEE201808CA15BD /* GroupViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupViews.swift; sourceTree = "<group>"; };
 		793A4ED4251CB9F9136B3525 /* Usage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Usage.swift; sourceTree = "<group>"; };
 		795BC99E02710AB9C992CE01 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
@@ -226,6 +231,7 @@
 		C5B3A683A87EDE6B0692EC79 /* Demo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Demo.swift; sourceTree = "<group>"; };
 		C5DB853F507FAAC2088B4B45 /* Notifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notifier.swift; sourceTree = "<group>"; };
 		D0D1687E09903FB1B7174792 /* ClaudioBotMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClaudioBotMac.entitlements; sourceTree = "<group>"; };
+		D148F81D82C17B498089BEA7 /* LocalBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalBridgeTests.swift; sourceTree = "<group>"; };
 		D784CF4F0E9AD11C9698E1B8 /* DeepLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLink.swift; sourceTree = "<group>"; };
 		DCA5E07DE76D0F52EBC2333D /* SessionComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionComposer.swift; sourceTree = "<group>"; };
 		E41D942EF4BC15933EE5DB0C /* Display.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Display.swift; sourceTree = "<group>"; };
@@ -245,10 +251,12 @@
 		53AA4E61E691974606C80800 /* ClaudioBotMac */ = {
 			isa = PBXGroup;
 			children = (
+				13DE3A6C4B1EF2E441ADFF64 /* BridgeViews.swift */,
 				D0D1687E09903FB1B7174792 /* ClaudioBotMac.entitlements */,
 				B12810083B7E8254D9262B1B /* ClaudioBotMacApp.swift */,
 				4633353FE91E1727DCE709FF /* DebugPairing.swift */,
 				2077E51368C2A07BE25DB7FE /* Info.plist */,
+				7210A34FDFDC73B0B972F06E /* LocalBridge.swift */,
 				5D42AAD3A263EFB80B3B1803 /* MacCommands.swift */,
 				1386BE6CADD2BFA8FDDFC925 /* MacShims.swift */,
 				2E0B562982B5FAB600891A58 /* PromptTextView.swift */,
@@ -259,6 +267,7 @@
 		540E9C1F902AC94340B23902 /* ClaudioBotMacTests */ = {
 			isa = PBXGroup;
 			children = (
+				D148F81D82C17B498089BEA7 /* LocalBridgeTests.swift */,
 				462E1C258B97806F7CE30448 /* PromptTextViewMacTests.swift */,
 			);
 			path = ClaudioBotMacTests;
@@ -624,6 +633,7 @@
 				F2F68AFFC1A12911025907CC /* Avatar.swift in Sources */,
 				6039FAC0B04D8D1745FC4B7E /* Brand.swift in Sources */,
 				2DF903D22EA1A22F104A2959 /* BridgeClient.swift in Sources */,
+				3D6AE77141DFCE768D314BD0 /* BridgeViews.swift in Sources */,
 				EF22354B191EFD0CA90FF12F /* ChatItems.swift in Sources */,
 				E927D4976DA9672D4ED903FA /* ChatNotices.swift in Sources */,
 				F6D2970137BB68151CBC9D6B /* ChatView.swift in Sources */,
@@ -645,6 +655,7 @@
 				366384BB6FCC73CFE5F56905 /* GroupViews.swift in Sources */,
 				EEA6ADDD829E09F38160A151 /* Groups.swift in Sources */,
 				0F739C796389BAAE857F7D42 /* HomeView.swift in Sources */,
+				B14C584BC7BFDAE84FBB79B1 /* LocalBridge.swift in Sources */,
 				E7DE6408866CABF2F876F656 /* MacCommands.swift in Sources */,
 				35A9EA4FA475C275B2FBB0A8 /* MacShims.swift in Sources */,
 				C1BAACAF45074976D7D9BDFC /* MainView.swift in Sources */,
@@ -687,6 +698,7 @@
 			files = (
 				00856B227ECFDFD264CF6F1E /* BridgeClientTests.swift in Sources */,
 				536D4AC12412A81BB722100A /* FakeBridge.swift in Sources */,
+				0F2A29F13D0B77FADCB229DC /* LocalBridgeTests.swift in Sources */,
 				C9FCF80196C9FEA6B66AA9BA /* MentionsTests.swift in Sources */,
 				B1B2BC714CF0F074388DBBFC /* PromptTextViewMacTests.swift in Sources */,
 				CE1B1ED14F6E6D62F444C8DA /* ProtocolTests.swift in Sources */,
@@ -732,6 +744,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLAUDIOBOT_CHECKOUT = "$(SRCROOT)/..";
 				CODE_SIGN_ENTITLEMENTS = ClaudioBotMac/ClaudioBotMac.entitlements;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
@@ -810,6 +823,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLAUDIOBOT_CHECKOUT = "$(SRCROOT)/..";
 				CODE_SIGN_ENTITLEMENTS = ClaudioBotMac/ClaudioBotMac.entitlements;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;

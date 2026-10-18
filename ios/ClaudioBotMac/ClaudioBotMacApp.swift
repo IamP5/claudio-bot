@@ -4,69 +4,180 @@ import SwiftUI
 @main
 struct ClaudioBotMacApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var delegate
-    @State private var app = AppModel()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         Window("ClaudioBot", id: "main") {
             MacRoot()
-                .shared(app)
-                .onOpenURL { app.open($0) }
+                .shared(delegate)
+                .onOpenURL { url in
+                    #if DEBUG
+                    if DebugURL.handle(url, delegate) { return }
+                    #endif
+                    delegate.app.open(url)
+                }
                 .frame(minWidth: 760, minHeight: 520)
         }
         .defaultSize(width: 1180, height: 780)
         .defaultLaunchBehavior(.presented)
         .windowResizability(.contentMinSize)
-        .commands { MacCommands(app: app) }
-        .onChange(of: scenePhase) { _, phase in app.scenePhaseChanged(phase) }
+        .commands { MacCommands(app: delegate.app, local: delegate.local, chrome: delegate.chrome) }
+        .onChange(of: scenePhase) { _, phase in delegate.app.scenePhaseChanged(phase) }
 
         Settings {
-            TabView {
-                SettingsView()
-                    .tabItem { Label("General", systemImage: "gearshape") }
+            MacSettings()
+                .shared(delegate)
+                .frame(width: 560, height: 640)
+        }
+
+        MenuBarExtra("ClaudioBot", systemImage: "bubble.left.and.text.bubble.right") {
+            MenuBarContent()
+                .shared(delegate)
+        }
+        .menuBarExtraStyle(.menu)
+    }
+}
+
+/// Owns the models, so the Dock badge, presence and the service probe keep running while no window is open.
+/// Closing the window keeps the app, its socket and so its notifications running. The Dock icon reopens the window.
+@MainActor
+final class MacAppDelegate: NSObject, NSApplicationDelegate {
+    let app = AppModel()
+    let local = LocalBridge()
+    let chrome = MacChrome()
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let client = app.client
+        client.attended = NSApp.isActive
+        for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { client.attended = NSApp.isActive }
             }
-            .shared(app)
-            .frame(width: 560, height: 640)
+        }
+        badgeDock()
+        let store = app.store
+        Task { [local] in
+            await local.run { client.pairing?.url.isLoopback == true && store.machine == nil }
+        }
+    }
+
+    private func badgeDock() {
+        let waiting = withObservationTracking { app.store.waitingOnYou } onChange: { [weak self] in
+            Task { @MainActor in self?.badgeDock() }
+        }
+        NSApp.dockTile.badgeLabel = waiting > 0 ? "\(waiting)" : nil
+    }
+}
+
+/// Unpaired: the welcome screen, or the shared pairing form for another Mac. Paired: the shared RootView with the
+/// iPad layout (list selection, the profile in a column beside the chat). A window too narrow for that column gets
+/// the iPhone layout instead, where the profile is pushed over the chat.
+private struct MacRoot: View {
+    static let profileColumnWidth: CGFloat = 1100
+    @State private var wide = true
+    @State private var anotherMac = false
+    @AppStorage(Editor.preferenceKey) private var editor = ""
+    @Environment(AppStore.self) private var store
+    @Environment(BridgeClient.self) private var client
+    @Environment(Router.self) private var router
+    @Environment(MacChrome.self) private var chrome
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        @Bindable var chrome = chrome
+        Group {
+            if store.connection == .unpaired && !anotherMac {
+                WelcomeView { anotherMac = true }
+            } else {
+                RootView()
+                    .toolbar {
+                        if store.connection == .unpaired {
+                            ToolbarItem(placement: .navigation) {
+                                Button("Back", systemImage: "chevron.left") { anotherMac = false }
+                            }
+                        }
+                    }
+            }
+        }
+        .environment(\.horizontalSizeClass, wide ? .regular : .compact)
+        .environment(\.localOpener, BridgePlace(client.pairing) == .thisMac ? LocalOpener.installed(editor: Editor.preferred(editor)) : nil)
+        .textFieldStyle(.plain)
+        // The bot pill in the chat's toolbar names the window; a title beside it would say it twice.
+        .toolbar(removing: .title)
+        .onGeometryChange(for: Bool.self) { $0.size.width >= Self.profileColumnWidth } action: { wide = $0 }
+        // After a revoke the app is back at the welcome screen, and pairs again only on a click.
+        .onChange(of: store.connection == .unpaired) { _, unpaired in if unpaired { anotherMac = false } }
+        // The phone's Settings sheet is the Settings window here.
+        .onChange(of: router.showingSettings, initial: true) { _, showing in
+            guard showing else { return }
+            router.showingSettings = false
+            openSettings()
+        }
+        .sheet(isPresented: $chrome.pairingIPhone) {
+            PairAnotherView()
+                .frame(width: 440, height: 600)
+        }
+        #if DEBUG
+        .modifier(DebugConfirmPairing())
+        #endif
+    }
+}
+
+/// ⌘, : the shared Settings, and where this Mac's bridge runs.
+private struct MacSettings: View {
+    @AppStorage("settingsTab") private var tab = "general"
+
+    var body: some View {
+        TabView(selection: $tab) {
+            SettingsView()
+                .tabItem { Label("General", systemImage: "gearshape") }
+                .tag("general")
+            BridgeSettings()
+                .tabItem { Label("Bridge", systemImage: "server.rack") }
+                .tag("bridge")
         }
     }
 }
 
-/// The shared RootView with the iPad layout: list selection, and the profile in a column beside the chat. A window too
-/// narrow for that column gets the iPhone layout instead, where the profile is pushed over the chat.
-private struct MacRoot: View {
-    static let profileColumnWidth: CGFloat = 1100
-    @State private var wide = true
-    @Environment(Router.self) private var router
-    @Environment(\.openSettings) private var openSettings
+/// The minimal menu bar extra: where things stand, and the ways in.
+private struct MenuBarContent: View {
+    @Environment(AppStore.self) private var store
+    @Environment(AppModel.self) private var app
+    @Environment(LocalBridge.self) private var local
+    @Environment(MacChrome.self) private var chrome
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        RootView()
-            .environment(\.horizontalSizeClass, wide ? .regular : .compact)
-            .textFieldStyle(.plain)
-            .onGeometryChange(for: Bool.self) { $0.size.width >= Self.profileColumnWidth } action: { wide = $0 }
-            // The phone's Settings sheet is the Settings window here.
-            .onChange(of: router.showingSettings, initial: true) { _, showing in
-                guard showing else { return }
-                router.showingSettings = false
-                openSettings()
-            }
-            #if DEBUG
-            .modifier(DebugConfirmPairing())
-            #endif
+        let context = MacContext(app: app, local: local, chrome: chrome, openMain: openMain)
+        Text(store.connection == .unpaired ? "Not paired" : store.connection.summary)
+        if store.waitingOnYou > 0 {
+            Text(store.waitingOnYou == 1 ? "1 waiting on you" : "\(store.waitingOnYou) waiting on you")
+        }
+        Divider()
+        Button(MacCommand.pairIPhone.title(context)) { MacCommand.pairIPhone.perform(context) }
+            .disabled(!MacCommand.pairIPhone.isEnabled(context))
+        Button("Open ClaudioBot", action: openMain)
+        Divider()
+        Button("Quit ClaudioBot") { NSApp.terminate(nil) }
+            .keyboardShortcut("q")
+    }
+
+    private func openMain() {
+        openWindow(id: "main")
+        NSApp.activate()
     }
 }
 
-/// Closing the window keeps the app, its socket and so its notifications running. The Dock icon reopens the window.
-final class MacAppDelegate: NSObject, NSApplicationDelegate {
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-}
-
 private extension View {
-    func shared(_ app: AppModel) -> some View {
-        environment(app)
-            .environment(app.store)
-            .environment(app.client)
-            .environment(app.router)
+    func shared(_ delegate: MacAppDelegate) -> some View {
+        environment(delegate.app)
+            .environment(delegate.app.store)
+            .environment(delegate.app.client)
+            .environment(delegate.app.router)
+            .environment(delegate.local)
+            .environment(delegate.chrome)
             .preferredColorScheme(.dark)
             .formStyle(.grouped)
     }

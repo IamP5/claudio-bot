@@ -90,6 +90,8 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.developer-tools
+        # The repository this build came from, where Install the Bridge runs when no service is installed yet.
+        ClaudioBotCheckout: $(CLAUDIOBOT_CHECKOUT)
         NSMicrophoneUsageDescription: ClaudioBot listens while you dictate a message to a bot.
         NSSpeechRecognitionUsageDescription: ClaudioBot turns your dictation into text for the message you are writing.
         NSLocalNetworkUsageDescription: ClaudioBot connects to the ClaudioBot bridge on this Mac or another Mac over your local network or Tailscale.
@@ -113,6 +115,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.claudiobot.mac
         PRODUCT_NAME: ClaudioBot
         PRODUCT_MODULE_NAME: ClaudioBot
+        CLAUDIOBOT_CHECKOUT: $(SRCROOT)/..
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         # Signed to run locally, without a team. Not sandboxed: later builds run launchctl and open local folders.

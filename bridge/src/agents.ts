@@ -20,10 +20,23 @@ import { emptySession, newMessageId, repoTrust, type Actor, type AgentActor, typ
 // Agents are actors like bots: mac agents run on the same session module behind the same gate, metered by the same
 // ledger. Cloud agents run on claude.ai: the bridge neither gates nor meters them.
 export type Agents = {
-  /** initiator: the bot turn's, so an agent started by a routine runs as routine work; kept as startedBy. budgetUsd null: the default. */
+  /**
+   * initiator: the bot turn's, so an agent started by a routine runs as routine work; kept as startedBy. budgetUsd null:
+   * the default. slash (mac only): the agent's first turn is the command "/<slash> <prompt>" instead of the agent prompt.
+   */
   start(
     botId: BotId,
-    a: { title: string; prompt: string; project: Project; where: "mac" | "cloud"; isolate: Isolate; botName: string; initiator: Initiator; budgetUsd: number | null },
+    a: {
+      title: string;
+      prompt: string;
+      project: Project;
+      where: "mac" | "cloud";
+      isolate: Isolate;
+      botName: string;
+      initiator: Initiator;
+      budgetUsd: number | null;
+      slash?: string | null;
+    },
   ): Promise<AgentRecord>;
   /** The phone's remove_worktree. Refused while the agent works, or while its worktree holds uncommitted work or ignored files other than build folders. */
   removeWorktree(rec: AgentRecord): Promise<Result>;
@@ -288,6 +301,8 @@ export function createAgents(deps: {
         }
       }
       const at = deps.now();
+      // A command runs only as the bare text, so it goes without the agent prompt's framing.
+      const command = a.where === "mac" && a.slash ? `/${a.slash} ${a.prompt}` : null;
       const rec: AgentRecord = {
         agent: {
           id,
@@ -305,7 +320,7 @@ export function createAgents(deps: {
         cwd: workspace.cwd,
         repo,
         base: workspace.base,
-        messages: [{ id: newMessageId(), at, from: "bot", text: a.prompt }],
+        messages: [{ id: newMessageId(), at, from: "bot", text: command ?? a.prompt }],
         session: emptySession(),
         cloudSession: null,
         budgetUsd: a.budgetUsd,
@@ -316,7 +331,7 @@ export function createAgents(deps: {
       const prompt = agentPrompt({ botName: a.botName, userName: deps.userName, prompt: a.prompt });
       if (a.where === "mac") {
         if (workspace.note) deps.note(rec, workspace.note);
-        macSession(rec).push(queued(prompt, a.initiator));
+        macSession(rec).push(command === null ? queued(prompt, a.initiator) : { kind: "command", text: command, initiator: a.initiator, settles: null });
         const found = accessOf(process.env).full ? [] : projectConfigOf(repo);
         if (found.length > 0) deps.trustCard({ kind: "agent", botId, agentId: rec.agent.id }, { root: repo, name: a.project.name, found });
         return rec;

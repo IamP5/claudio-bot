@@ -676,7 +676,13 @@ export function createHub(deps: HubDeps): Hub {
       const project = findProject(scanned, a.project);
       if (!project) return `No project "${a.project}". Call list_projects for the names.`;
       if (a.where === "cloud" && !project.githubRepo) return `${project.name} has no GitHub remote, so start it with where "mac".`;
-      const rec = await agents.start(botId, { ...a, project, botName: bot.name, initiator: initiatorNow(bot), budgetUsd: null });
+      const slash = a.slash?.trim().replace(/^\//, "") ?? null;
+      if (slash !== null) {
+        if (a.where === "cloud") return "slash works for mac agents only. Start it with where \"mac\", or put the request in the prompt.";
+        if (slashName(`/${slash}`) !== slash) return "slash is one skill or command name, without spaces, such as code-review.";
+        if (commands.hidden(botId, slash)) return `/${slash} changes or ends a Claude Code session, so an agent is not started with it.`;
+      }
+      const rec = await agents.start(botId, { ...a, slash, project, botName: bot.name, initiator: initiatorNow(bot), budgetUsd: null });
       exchange(bot, agentPeer(rec.agent), "sent");
       if (rec.agent.where === "mac") return `Started agent ${rec.agent.id} on ${project.name}. It reports back to you when its turn ends.`;
       if (rec.agent.status === "failed") return `The cloud agent failed to start: ${rec.messages.at(-1)?.text}`;

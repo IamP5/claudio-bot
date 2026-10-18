@@ -1231,6 +1231,34 @@ test.each([
   expect(h.q().received[0]).toContain(`[Alex]\n${typed}`);
 });
 
+test("start_agent with a slash starts a mac agent on that command, and refuses a cloud agent or a hidden built-in", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-repo-")));
+  roots.push(repo);
+  const h = hubOver(world, { scan: async () => [{ name: "app", path: repo, branch: "main", githubRepo: "acme/app" }] });
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "review PR 12", uploads: [] });
+  await flush();
+  const [server, client] = InMemoryTransport.createLinkedPair();
+  await (h.q().options.mcpServers!.claudio as McpSdkServerConfigWithInstance).instance.connect(server);
+  const mcp = new Client({ name: "test", version: "1" });
+  await mcp.connect(client);
+  const start = async (args: Record<string, unknown>) =>
+    ((await mcp.callTool({ name: "start_agent", arguments: { title: "Review", prompt: "PR 12", project: "app", ...args } })).content as { text: string }[])[0]!.text;
+  await h.hub.handle({ type: "commands", botId: b.id });
+
+  expect(await start({ slash: "/clear" })).toBe("/clear changes or ends a Claude Code session, so an agent is not started with it.");
+  expect(await start({ slash: "code-review", where: "cloud" })).toStartWith("slash works for mac agents only.");
+  expect(await start({ slash: "code review" })).toStartWith("slash is one skill or command name");
+  expect(world.agents.size).toBe(0);
+
+  expect(await start({ slash: "/code-review" })).toStartWith("Started agent");
+  await flush();
+  expect(h.q().received).toEqual(["/code-review PR 12"]);
+});
+
 test("update_self with a name rewrites the bot's CLAUDE.md heading", async () => {
   const world = emptyWorld();
   const b = bot("New Bot");

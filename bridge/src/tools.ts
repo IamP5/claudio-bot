@@ -29,7 +29,7 @@ export type Isolate = "auto" | "none" | "worktree";
 
 export type BotActions = {
   ask(botId: BotId, a: { question: string; options: string[] }): string;
-  startAgent(botId: BotId, a: { title: string; prompt: string; project: string; where: "mac" | "cloud"; isolate: Isolate }): Promise<string>;
+  startAgent(botId: BotId, a: { title: string; prompt: string; project: string; where: "mac" | "cloud"; isolate: Isolate; slash?: string }): Promise<string>;
   messageAgent(botId: BotId, a: { agentId: string; text: string }): Promise<string>;
   listProjects(): Promise<string>;
   messageBot(botId: BotId, a: { bot: string; text: string }): string;
@@ -72,13 +72,14 @@ export function botToolServer(botId: BotId, act: BotActions) {
     ),
     start_agent: tool(
       "start_agent",
-      "Start a Claude Code agent on a project for coding work. project is a name or path from list_projects. where is mac (default, reports back to you) or cloud (needs a GitHub remote, does not report back). isolate (mac only): auto (default) lets the bridge decide, worktree gives the agent its own git worktree, none works in the project folder itself. Returns the agent id.",
+      "Start a Claude Code agent on a project for coding work. project is a name or path from list_projects. where is mac (default, reports back to you) or cloud (needs a GitHub remote, does not report back). isolate (mac only): auto (default) lets the bridge decide, worktree gives the agent its own git worktree, none works in the project folder itself. slash (mac only): a skill or command name, without the /; the agent's first turn is then exactly \"/<slash> <prompt>\", as if the user typed it, which runs skills that only the user can invoke. Returns the agent id.",
       {
         title: z.string().min(1),
         prompt: z.string().min(1),
         project: z.string().min(1),
         where: z.enum(["mac", "cloud"]).default("mac"),
         isolate: z.enum(["auto", "none", "worktree"]).default("auto"),
+        slash: z.string().min(1).optional(),
       },
       (a) => reply(() => act.startAgent(botId, a)),
       always,

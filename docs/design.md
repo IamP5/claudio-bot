@@ -48,6 +48,7 @@ Each module is the only writer of its slice of `state.json`. `world.ts` declares
 | `push.ts` | ntfy pushes while no socket is live | `World.push` |
 | `migrate.ts`, `lock.ts` | the move from `~/.claudebot`, one bridge per home | the home links |
 | `cli.ts`, `service.ts`, `doctor.ts` | the `claudiobot` command: LaunchAgent install, status, doctor, logs, pair, update | the plist and the log |
+| `claudeCode.ts` | facts about the Claude Code install (version floor, config dir, managed MCP) and reads from a query that runs no turn | nothing |
 | `text.ts` | the one rule set for names, errors and secrets that leave the bridge | nothing |
 | `memory.ts` | facts, proposals and notes, and the facts block a bot's turn carries | `USER.md`, a bot's `CLAUDE.md` |
 | `skills.ts` | a bot's saved skills | `bots/<id>/.claude/skills/` |
@@ -57,6 +58,8 @@ Each module is the only writer of its slice of `state.json`. `world.ts` declares
 | `evidence.ts`, `worktree.ts` | hardened git reads after an agent's turn, agent worktrees | worktrees under `~/.claudiobot-worktrees` |
 
 `store.ts` loads and saves the file. Loading fails closed: an unknown version, unreadable JSON or a malformed record stops the bridge with a message and writes nothing. A v2 file is upgraded in memory, its exact bytes go to `state.v2.json.bak`, and then v3 is written. `persist("now")` writes synchronously (temp file, `fsync`, rename, directory `fsync`) before an effect that depends on it. Everything else is debounced by 250 ms.
+
+`claudiobot install` pins PATH, the `CLAUDIOBOT_*` variables, `CLAUDE_CONFIG_DIR` and `ENABLE_CLAUDEAI_MCP_SERVERS` into the plist, since launchd hands the service nothing from the shell; HOME is never pinned. `claudiobot doctor` checks the service as launchd runs it: the claude it resolves on the service PATH and a warning below `MIN_CLAUDE` (2.1.301), the Claude Code config dir it reads, and the login, read from a query that is sent no message, so the doctor spends no turn. Where an admin's `managed-mcp.json` exists, Claude Code exits on `--strict-mcp-config`, so the cloud CLI, the commands probe and the doctor leave it out (`claudeCode.ts`).
 
 ## A turn's life
 
@@ -169,9 +172,9 @@ A **connector** is an MCP server a bot's queries load. The phone sees each one's
 
 ## Commands
 
-Typing `/` in the composer lists what the bot's own Claude Code session can run: the user's skills, plugin skills (`plugin:skill`), the bot's project skills, and nine allowed built-ins (compact, code-review, security-review, simplify, init, verify, dataviz, deep-research, claude-api). The list comes from the Agent SDK's `supportedCommands()` and lives in one table in `bridge/src/commands.ts`. Every other built-in stays hidden, so a new CLI built-in never appears by default, and neither does a skill that shares a hidden built-in's name. Reading the list opens a query and sends it nothing, so it costs no turn. The cache belongs to the query it came from and is read again once that query closes.
+Typing `/` in the composer lists what the bot's own Claude Code session can run: the user's skills, plugin skills (`plugin:skill`), the bot's project skills, and nine allowed built-ins (compact, code-review, security-review, simplify, init, verify, dataviz, deep-research, claude-api). The list comes from the Agent SDK's `supportedCommands()` and lives in one table in `bridge/src/commands.ts`. Every other built-in stays hidden, so a new CLI built-in never appears by default, and neither does a skill that shares a hidden built-in's name. Reading the list opens a query and sends it nothing, so it costs no turn. The cache belongs to the query it came from and is read again once that query closes. A skill the bot saves shows at once: the menu adds the skills in its home that the open query does not list yet, under the same rule that a built-in owns its name.
 
-A send whose text starts with `/name` for a listed command is a `command` turn. The bridge sends it to Claude Code as the bare string, exactly as typed, with no envelope, name line, brief or facts. A pending brief or set of facts waits for the next ordinary turn. This is the only form Claude Code expands: the same text with anything above it, or as one block among several, reaches the model as plain text (measured on Agent SDK 0.3.302 and Claude Code 2.1.301). A `/word` that is not on the list goes as an ordinary message, so it can never run `/clear` on a bot's long-lived session. `start_agent` takes `slash` the same way, so a bot can hand an agent a skill that only the user may invoke.
+A send whose text starts with `/name` for a listed command is a `command` turn. Claude Code expands a command sent as the bare string, or as the last text block of the message's content when that block starts with `/`, so text blocks above it (a name line, context) leave it a command. Text prepended inside that same block makes it plain text (measured on Agent SDK 0.3.302 and Claude Code 2.1.301). A `/word` that is not on the list goes as an ordinary message, so it can never run `/clear` on a bot's long-lived session. `start_agent` takes `slash` the same way, so a bot can hand an agent a skill that only the user may invoke.
 
 ## Mentions and exchanges
 

@@ -30,6 +30,7 @@ let queries: FakeQuery[];
 let directs: { agentId: string; text: string; clientId: string }[];
 let gateDecisions: { botId: string; cardId: string; choice: string }[];
 let clock: number;
+let appChanged: (() => void)[] = [];
 
 const apps = (): ClaudeApps => ({
   holders: () => holders,
@@ -39,7 +40,7 @@ const apps = (): ClaudeApps => ({
   importToDesktop: async () => false,
   openInDesktop: async () => false,
   refresh() {},
-  onChange() {},
+  onChange: (f) => void appChanged.push(f),
   close() {},
 });
 
@@ -103,6 +104,7 @@ beforeEach(() => {
   directs = [];
   gateDecisions = [];
   clock = Date.parse("2026-10-18T12:00:00.000Z");
+  appChanged = [];
 });
 afterEach(() => {
   sessions?.stop();
@@ -187,6 +189,51 @@ describe("taking on a session from the phone", () => {
     await send("Later");
     expect(queries).toHaveLength(0);
     expect(await rowOf(ASK)).toMatchObject({ status: "parked", holder: "desktop" });
+  });
+
+  test("the moment the other Claude Code lets go, the waiting turn runs, and the composer never claims it was working", async () => {
+    await start();
+    holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "cli", kind: "interactive", cwd: repo, busy: true });
+    await send("When you can");
+    expect((await snapshot(ASK)).controls).toMatchObject({ canSend: false, working: false, reason: "Working in a terminal." });
+    expect((await snapshot(ASK)).items.filter((i) => i.kind === "notice")).toEqual([]);
+    holders.clear();
+    for (const f of appChanged) f();
+    await flush();
+    expect(queries.map((q) => q.received)).toEqual([["When you can"]]);
+  });
+
+  test("a message the phone sends again after a reconnect runs once, even after its turn ended", async () => {
+    await start();
+    await send("Once", "c_once");
+    queries[0]!.emit(result(0.01, { session_id: ASK }));
+    await flush();
+    await send("Once", "c_once");
+    await flush();
+    expect(queries.flatMap((q) => q.received)).toEqual(["Once"]);
+  });
+
+  test("a thread opened while its turn runs shows the user's message once", async () => {
+    await start();
+    await send("Only once");
+    const lines = readFileSync(fileOf(ASK), "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
+    const leaf = lines.findLast((l) => typeof l.uuid === "string" && l.type !== "queue-operation")!;
+    appendFileSync(fileOf(ASK), `${JSON.stringify({ parentUuid: leaf.uuid, isSidechain: false, type: "user", message: { role: "user", content: "Only once" }, uuid: crypto.randomUUID(), timestamp: new Date(Date.now() + 1000).toISOString(), cwd: repo, sessionId: ASK })}\n`);
+    sessions.stop();
+    await start();
+    const users = (await snapshot(ASK)).items.filter((i) => i.kind === "user" && i.text === "Only once");
+    expect(users).toHaveLength(1);
+  });
+
+  test("a session the phone took on resumes even when its transcript is gone, so it fails rather than starts afresh", async () => {
+    await start();
+    holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "cli", kind: "interactive", cwd: repo, busy: true });
+    await send("Queued");
+    rmSync(fileOf(ASK));
+    holders.clear();
+    for (const f of appChanged) f();
+    await flush();
+    expect([queries[0]!.options.resume, queries[0]!.options.sessionId]).toEqual([ASK, undefined]);
   });
 
   test("a transcript Claude Code no longer has fails the turn with a notice; nothing starts in its place", async () => {

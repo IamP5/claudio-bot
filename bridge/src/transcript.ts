@@ -182,14 +182,19 @@ function scan(lines: readonly string[], into: Facts): Facts {
  * The facts a row needs that listSessions does not give: entrypoints, PR, mode, model, last role. A transcript only
  * grows, so when `prior` covers a shorter prefix only the appended bytes are read.
  */
-export function sniff(file: string, size: number, prior: (Facts & { size: number }) | null): Facts {
+export function sniff(file: string, size: number, prior: (Facts & { size: number }) | null): Facts & { size: number } {
+  /** Where the read ends: past its last complete line, so a line still being written is read whole next time. */
+  const through = (from: number, text: string) => from + Buffer.byteLength(text.slice(0, text.lastIndexOf("\n") + 1));
   if (prior !== null && size >= prior.size && size - prior.size <= APPEND_SCAN_MAX) {
-    return scan(linesOf(readRange(file, prior.size, size), false), prior);
+    const text = readRange(file, prior.size, size);
+    return { ...scan(linesOf(text, false), prior), size: through(prior.size, text) };
   }
-  const head = scan(linesOf(readRange(file, 0, Math.min(size, HEAD_BYTES)), false), prior ?? noFacts());
-  if (size <= HEAD_BYTES) return head;
+  const headText = readRange(file, 0, Math.min(size, HEAD_BYTES));
+  const head = scan(linesOf(headText, false), prior ?? noFacts());
+  if (size <= HEAD_BYTES) return { ...head, size: through(0, headText) };
   const from = Math.max(HEAD_BYTES, size - TAIL_BYTES);
-  return scan(linesOf(readRange(file, from, size), from > HEAD_BYTES), head);
+  const tailText = readRange(file, from, size);
+  return { ...scan(linesOf(tailText, from > HEAD_BYTES), head), size: through(from, tailText) };
 }
 
 function headOf(info: SDKSessionInfo, file: { path: string; size: number; mtimeMs: number }, facts: Facts): Head | null {
@@ -245,6 +250,9 @@ export function listFiles(projectsDir: string): TranscriptFile[] {
   return out;
 }
 
+/** A session's transcript file name: <uuid>.jsonl. Subagent files and others are not sessions. */
+export const isTranscriptName = (name: string) => UUID_FILE.test(name);
+
 export function statOf(path: string): TranscriptFile | null {
   try {
     const s = statSync(path);
@@ -294,38 +302,51 @@ export function createHeads(opts: { projectsDir: string; sdk?: SdkReaders; seed?
 
   const fresh = (c: Cached | undefined, f: TranscriptFile) => c !== undefined && c.head.size === f.size && c.head.mtimeMs === f.mtimeMs;
 
+  /** Files with no head (a bot's, one the SDK does not list), at the size and mtime they had, so they are not read again unchanged. */
+  const headless = new Map<string, { size: number; mtimeMs: number }>();
+  const skip = (f: TranscriptFile) => {
+    const h = headless.get(f.path);
+    return h !== undefined && h.size === f.size && h.mtimeMs === f.mtimeMs;
+  };
+  const noHead = (f: TranscriptFile) => {
+    cache.delete(f.path);
+    headless.set(f.path, { size: f.size, mtimeMs: f.mtimeMs });
+    return null;
+  };
+
   function build(info: SDKSessionInfo, f: TranscriptFile): Head | null {
     const prior = cache.get(f.path);
     let facts: Facts & { size: number };
     try {
-      facts = { ...sniff(f.path, f.size, prior?.facts ?? null), size: f.size };
+      facts = sniff(f.path, f.size, prior?.facts ?? null);
     } catch {
-      return null;
+      // A read that failed says nothing about the session: what was known stands.
+      return prior?.head ?? null;
     }
     const found = headOf(info, f, facts);
-    const head = found && opts.exclude?.(found.cwd) ? null : found;
-    if (head) cache.set(f.path, { head, facts });
-    else cache.delete(f.path);
-    return head;
+    if (!found || opts.exclude?.(found.cwd)) return noHead(f);
+    headless.delete(f.path);
+    cache.set(f.path, { head: found, facts });
+    return found;
   }
 
   return {
     async scan(): Promise<Head[]> {
       const files = listFiles(opts.projectsDir);
-      const stale = files.filter((f) => !fresh(cache.get(f.path), f));
+      const stale = files.filter((f) => !fresh(cache.get(f.path), f) && !skip(f));
       const infos = stale.length === 0 ? [] : await sdk.listSessions();
       const byId = new Map(infos.map((i) => [i.sessionId, i]));
       const live = new Set(files.map((f) => f.path));
       for (const path of cache.keys()) if (!live.has(path)) cache.delete(path);
+      for (const path of headless.keys()) if (!live.has(path)) headless.delete(path);
       const heads: Head[] = [];
       for (const f of files) {
         const c = cache.get(f.path);
         if (fresh(c, f)) heads.push(c!.head);
-        else {
+        else if (!skip(f)) {
           const info = byId.get(f.id);
-          const head = info ? build(info, f) : null;
+          const head = info ? build(info, f) : noHead(f);
           if (head) heads.push(head);
-          else cache.delete(f.path);
         }
       }
       return heads;
@@ -339,9 +360,13 @@ export function createHeads(opts: { projectsDir: string; sdk?: SdkReaders; seed?
       }
       const c = cache.get(path);
       if (fresh(c, f)) return c!.head;
+      if (skip(f)) return null;
       // Without a dir the SDK finds the file by its id in every project folder, whatever folder name a cwd got.
-      const info = await sdk.getSessionInfo(f.id).catch(() => undefined);
-      return info ? build(info, f) : null;
+      let failed = false;
+      const info = await sdk.getSessionInfo(f.id).catch(() => void (failed = true));
+      // A failed read says nothing about the session: what was known stands.
+      if (failed) return c?.head ?? null;
+      return info ? build(info, f) : noHead(f);
     },
     cached: (): Head[] => [...cache.values()].map((c) => c.head),
   };
@@ -349,7 +374,7 @@ export function createHeads(opts: { projectsDir: string; sdk?: SdkReaders; seed?
 
 export type Heads = ReturnType<typeof createHeads>;
 
-/** A thread read whole: its entries in chain order, and how far the file was read. */
+/** A thread read whole: its entries in chain order, and how far the file was read (through its last complete line). */
 export type Thread = { entries: Entry[]; chain: Chain; size: number; mtimeMs: number };
 
 /**
@@ -363,7 +388,10 @@ export async function readThread(id: SessionId, path: string, cwd: string, sdk: 
   if (!f) throw new Error("This session's transcript is gone.");
   const byUuid = new Map<string, Entry>();
   const order: string[] = [];
-  for (const line of linesOf(readRange(path, 0, f.size), false)) {
+  const text = readRange(path, 0, f.size);
+  // Read up to the last complete line: a line Claude Code is still writing is followed from its start.
+  const read = Buffer.byteLength(text.slice(0, text.lastIndexOf("\n") + 1));
+  for (const line of linesOf(text, false)) {
     const e = parseEntry(line);
     if (!e || e.sidechain) continue;
     if (!byUuid.has(e.uuid)) order.push(e.uuid);
@@ -372,7 +400,7 @@ export async function readThread(id: SessionId, path: string, cwd: string, sdk: 
   const listed = await sdk.getSessionMessages(id, { dir: cwd, includeSystemMessages: true }).catch(() => []);
   const chosen = listed.length > 0 ? listed.map((m) => m.uuid) : order;
   const entries = chosen.flatMap((u) => byUuid.get(u) ?? []);
-  return { entries, chain: { uuids: new Set(entries.map((e) => e.uuid)), leaf: entries.at(-1)?.uuid ?? null }, size: f.size, mtimeMs: f.mtimeMs };
+  return { entries, chain: { uuids: new Set(entries.map((e) => e.uuid)), leaf: entries.at(-1)?.uuid ?? null }, size: read, mtimeMs: f.mtimeMs };
 }
 
 /** Entries appended since `offset`. A partial last line stays for the next call. */

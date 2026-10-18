@@ -1,6 +1,6 @@
 import type { CanUseTool, HookCallbackMatcher, Options, PermissionResult, PermissionUpdate, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
 import type { Tickable } from "./clock";
-import { failClosed, toCall, toHookOutput } from "./gate";
+import { failClosed, resolveReal, toCall, toHookOutput } from "./gate";
 import type { Ledger } from "./ledger";
 import { detailOf, floors, type Scope } from "./policy";
 import {
@@ -69,6 +69,8 @@ export type Own = Tickable & {
   status(rec: SessionRecord): { status: SessionStatus; working: boolean };
   /** The live query of a session that another process now works on closes, so the bridge yields. */
   yieldTo(id: SessionId): void;
+  /** The other process let go: a turn that waited on it goes now. */
+  unblock(id: SessionId): void;
   /** At start, before any phone connects: every open card is expired. */
   resume(): void;
   /** Once the index is read: sessions with queued input start. */
@@ -118,6 +120,8 @@ export function createOwn(deps: OwnDeps): Own {
   const waiting = new Map<MessageId, (r: Reply) => void>();
   const notices = new Map<SessionId, SessionItem[]>();
   const failed = new Set<SessionId>();
+  /** Sessions whose last start waited on another Claude Code, so its letting go starts them at once. */
+  const held = new Set<SessionId>();
 
   const now = () => deps.now().toISOString();
   const driveOf = (rec: SessionRecord): OwnDrive => {
@@ -267,7 +271,7 @@ export function createOwn(deps: OwnDeps): Own {
               callsToday: {},
               connectorsOff: [],
               now: now(),
-              realpath: (p) => p,
+              realpath: resolveReal,
             });
             return d === null ? {} : toHookOutput(d, null, deps.userName);
           },
@@ -295,14 +299,20 @@ export function createOwn(deps: OwnDeps): Own {
       log: deps.log,
       ...deps.claude,
       forgotten: "fail",
+      notices: false,
       idleMs: OWN_IDLE_MS,
       now: deps.now,
-      blocked: () => deps.blocked(id),
+      blocked: () => {
+        const wait = deps.blocked(id);
+        if (wait !== null) held.add(id);
+        return wait;
+      },
       options: (): Options => {
         const model = drive.model ?? deps.last(id).model ?? undefined;
         return {
           cwd: drive.cwd,
-          ...(deps.transcriptExists(id, drive.cwd) ? { resume: id } : { sessionId: id }),
+          // Only a session the phone made may be created under its id; one it took on resumes, and fails if Claude Code lost it.
+          ...(!drive.created || deps.transcriptExists(id, drive.cwd) ? { resume: id } : { sessionId: id }),
           // The user's own regime, as in the Claude app: their settings, their prompts, no bridge sandbox.
           settingSources: ["user", "project", "local"],
           systemPrompt: { type: "preset", preset: "claude_code" },
@@ -329,7 +339,8 @@ export function createOwn(deps: OwnDeps): Own {
         void pending;
       },
       onChange: () => deps.changed(id),
-      note: (text) => notice(id, text),
+      // A start held by another Claude Code is what the composer already says; the retry note would only repeat it.
+      note: (text) => (deps.blocked(id) !== null && text.startsWith("Claude Code could not start") ? undefined : notice(id, text)),
       onDormant() {
         drivers.delete(id);
         session.close();
@@ -420,7 +431,7 @@ export function createOwn(deps: OwnDeps): Own {
       return {
         canSend: wait === null,
         reason: wait,
-        working: s?.working ?? false,
+        working: wait === null && (s?.working ?? false),
         queued: Math.max(0, pending.length - inFlight),
         model: rec.own?.model ?? null,
         models: MODELS,
@@ -446,6 +457,11 @@ export function createOwn(deps: OwnDeps): Own {
     yieldTo(id) {
       const s = drivers.get(id);
       if (s && !s.working) s.reopen();
+    },
+
+    unblock(id) {
+      if (!held.delete(id)) return;
+      drivers.get(id)?.retry();
     },
 
     resume() {

@@ -50,9 +50,27 @@ describe("heads", () => {
     expect(heads.find((h) => h.id === IDS["own-plan"])!.mode).toBe("plan");
   });
 
-  test("a session whose cwd is excluded (a bot's home) has no head", async () => {
-    const heads = await createHeads({ projectsDir: projects, exclude: (cwd) => cwd === "<cwd>" }).scan();
-    expect(heads).toEqual([]);
+  test("a session whose cwd is excluded (a bot's home) has no head, and is not read again while unchanged", async () => {
+    let asked = 0;
+    const counting: SdkReaders = { ...sdkReaders, listSessions: async (o) => (asked++, sdkReaders.listSessions(o)), getSessionInfo: async (id, o) => (asked++, sdkReaders.getSessionInfo(id, o)) };
+    const heads = createHeads({ projectsDir: projects, sdk: counting, exclude: (cwd) => cwd === "<cwd>" });
+    expect(await heads.scan()).toEqual([]);
+    await heads.scan();
+    expect(await heads.refresh(fileOf("own-ask"))).toBeNull();
+    expect(asked).toBe(1);
+  });
+
+  test("a head read that fails keeps what was known", async () => {
+    const heads = createHeads({ projectsDir: projects, sdk: { ...sdkReaders, getSessionInfo: async () => { throw new Error("busy"); } } });
+    const known = (await heads.scan()).find((h) => h.id === IDS["own-ask"])!;
+    const file = fileOf("own-ask");
+    const before = readFileSync(file, "utf8");
+    try {
+      appendFileSync(file, `${JSON.stringify({ type: "custom-title", customTitle: "x", sessionId: IDS["own-ask"] })}\n`);
+      expect(await heads.refresh(file)).toEqual(known);
+    } finally {
+      writeFileSync(file, before);
+    }
   });
 
   test("a rename and a PR appended later reach the head, and an unchanged file is not read again", async () => {
@@ -121,6 +139,27 @@ describe("threads", () => {
 });
 
 describe("live tail", () => {
+  test("a line Claude Code was still writing when the thread was read is read whole once it ends", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "torn-"));
+    try {
+      const path = join(dir, `${IDS["own-ask"]}.jsonl`);
+      const text = fixture("own-ask");
+      const lines = text.trim().split("\n");
+      const lastAssistant = lines.findLastIndex((l) => l.includes('"type":"assistant"'));
+      const before = `${lines.slice(0, lastAssistant).join("\n")}\n`;
+      const torn = lines[lastAssistant]!;
+      writeFileSync(path, before + torn.slice(0, 40));
+      const none: SdkReaders = { ...sdkReaders, getSessionMessages: async () => [] };
+      const thread = await readThread(IDS["own-ask"] as SessionId, path, "<cwd>", none);
+      expect(thread.size).toBe(Buffer.byteLength(before));
+      appendFileSync(path, `${torn.slice(40)}\n`);
+      const read = follow(path, thread.size);
+      expect(extend(thread.chain, read.entries).appended.map((e) => e.uuid)).toEqual([JSON.parse(torn).uuid]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("lines appended in pieces, a torn line included, project to the same items as the whole file", async () => {
     const dir = mkdtempSync(join(tmpdir(), "tail-"));
     try {

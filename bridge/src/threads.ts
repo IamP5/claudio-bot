@@ -131,6 +131,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
           queue: Promise.resolve(),
           usedAt: Date.now(),
         };
+        suppress(s, s.items);
         absorbOverlay(s);
         // A thread opened mid-block starts from what already went out, so the next delta's offset fits.
         const st = streams.get(id);
@@ -180,14 +181,22 @@ export function createThreads(deps: ThreadsDeps): Threads {
     deps.publish(s.id, { type: "session_items", sessionId: s.id, rev: s.rev, items, removed, controls });
   }
 
-  /** What the overlay and controls changed since last published, with the transcript items it now replaces. */
-  function overlayDiff(s: State, transcriptChanged: readonly SessionItem[]): { items: SessionItem[]; removed: ItemId[]; controls: SessionControls | null } {
-    for (const t of transcriptChanged) {
+  /**
+   * The phone's messages, sent or still queued, that these transcript prompts now show under Claude Code's own ids:
+   * the same words, written after the phone sent them.
+   */
+  function suppress(s: State, transcript: readonly SessionItem[]) {
+    const overlay = deps.overlay(s.id);
+    for (const t of transcript) {
       if (t.kind !== "user") continue;
-      // The phone's message, sent or still queued, now in the transcript under Claude Code's own id.
-      const mine = deps.overlay(s.id).find((o) => o.kind === "user" && o.text.trim() === t.text.trim() && !s.shownByTranscript.has(o.id));
+      const mine = overlay.find((o) => o.kind === "user" && !s.shownByTranscript.has(o.id) && o.text.trim() === t.text.trim() && t.at >= o.at);
       if (mine) s.shownByTranscript.add(mine.id);
     }
+  }
+
+  /** What the overlay and controls changed since last published, with the transcript items it now replaces. */
+  function overlayDiff(s: State, transcriptChanged: readonly SessionItem[]): { items: SessionItem[]; removed: ItemId[]; controls: SessionControls | null } {
+    suppress(s, transcriptChanged);
     const before = s.overlay;
     const beforeControls = s.controls;
     const overlay = absorbOverlay(s);
@@ -247,6 +256,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
     const old = new Map(s.items.map((item) => [item.id, JSON.stringify(item)]));
     const fresh = await read(s.id);
     Object.assign(s, fresh);
+    suppress(s, fresh.items);
     const changed = fresh.items.filter((item) => old.get(item.id) !== JSON.stringify(item));
     const gone = [...old.keys()].filter((id) => !s.index.has(id)) as ItemId[];
     const o = overlayDiff(s, changed);

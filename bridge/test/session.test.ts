@@ -755,6 +755,24 @@ async function started(text: string, initiator: Initiator = user): Promise<{ h: 
 }
 
 describe("a phone's own session", () => {
+  test("the bridge's notices never ride on its turns, which are the user's own words", async () => {
+    const h = harness({ spec: { actor: { kind: "own", sessionId: "s_1" as never }, notices: false } });
+    h.session.notice("[A bridge notice]");
+    h.push("hello");
+    await flush();
+    expect(h.sent()).toEqual(["hello"]);
+  });
+
+  test("a taken id reported as a failed result is resumed too", async () => {
+    const h = harness({ options: () => ({ cwd: "/x", sessionId: "s_new" }) });
+    h.push("hello");
+    await flush();
+    h.q().emit(resultMsg(0, { subtype: "error_during_execution", is_error: true, errors: ["Error: Session ID s_new is already in use."] }));
+    await flush();
+    await flush();
+    expect(h.queries.map((q) => [q.options.sessionId, q.options.resume])).toEqual([["s_new", undefined], [undefined, "s_new"]]);
+  });
+
   test("a turn waits while another Claude Code is busy on the session, then runs once it is not", async () => {
     let busy: string | null = "Working in the Claude app.";
     const h = harness({ spec: { actor: { kind: "own", sessionId: "s_1" as never }, blocked: () => busy } });

@@ -1,10 +1,10 @@
 import { watch } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { Tickable } from "./clock";
 import type { ClaudeApps } from "./claudeApps";
 import type { ProjectOf } from "./projects";
 import type { Holder, SessionId, SessionOrigin, SessionProject, SessionRow, SessionsChannelFrame, SessionStatus } from "./protocol";
-import type { Head, Heads } from "./transcript";
+import { isTranscriptName, type Head, type Heads } from "./transcript";
 import type { AgentRecord, World } from "./world";
 
 // The index of every Claude Code session on this Mac: the transcripts' heads joined with what the bridge drives, who
@@ -215,7 +215,7 @@ export function createCatalog(deps: CatalogDeps): Catalog {
       if (deps.watch !== false) {
         try {
           watcher = watch(deps.projectsDir, { recursive: true }, (_, name) => {
-            if (typeof name !== "string" || !name.endsWith(".jsonl")) return;
+            if (typeof name !== "string" || !isTranscriptName(basename(name))) return;
             const path = join(deps.projectsDir, name);
             dirty.add(path);
             deps.appended(path);

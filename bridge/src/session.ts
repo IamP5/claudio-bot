@@ -183,6 +183,8 @@ export type Event =
   | { kind: "forgotten" }
   /** The query asked to start a session whose id Claude Code already has, before any output: send it again, resuming. */
   | { kind: "claimed" }
+  /** What held the queue head's start has gone: a start waiting out its retry goes now. */
+  | { kind: "retry" }
   | { kind: "stop" }
   /** Deadlines are due, or a hold may have lifted: a daily-cap park re-checks headroom on every tick. */
   | { kind: "tick" }
@@ -214,7 +216,8 @@ type Memo = {
 export const freshMemo = (): Memo => ({ carried: 0, capNoted: false, told: {}, startFailures: 0 });
 
 export type Core = { session: SessionState; parkedUntil: string | null; memo: Memo };
-type StepContext = { now: Date; headroom: (initiator: Initiator) => Headroom; userName: string };
+/** quiet: notices are dropped instead of riding on the turn's text (the user's own session, whose transcript the app shows). */
+type StepContext = { now: Date; headroom: (initiator: Initiator) => Headroom; userName: string; quiet?: boolean };
 
 const turnOf = (life: Lifecycle): ActiveTurn | null => (life.kind === "working" || life.kind === "stopping" ? life.turn : null);
 
@@ -297,7 +300,7 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
     delete c.memo.told[p.id];
     s.lifecycle = { kind: "working", turn: { pending: p.id, startedAt: iso(now), output: false, denials: 0 } };
     c.memo.carried = s.notices.length;
-    fx.push({ kind: "send", pending: started, text: withNotices(started.text, s.notices) });
+    fx.push({ kind: "send", pending: started, text: ctx.quiet ? started.text : withNotices(started.text, s.notices) });
     if (!capReached) c.memo.capNoted = false;
     else if (!c.memo.capNoted) {
       c.memo.capNoted = true;
@@ -446,6 +449,10 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
       pump();
       break;
     }
+    case "retry":
+      if (s.lifecycle.kind === "backoff") s.lifecycle = { kind: "idle" };
+      pump();
+      break;
     case "claimed": {
       const t = turnOf(s.lifecycle);
       if (!t) break;
@@ -624,6 +631,8 @@ export type Session = Tickable & {
   interrupt(): Promise<boolean>;
   /** The ledger's answer may have changed (update_bot set dailyCapUsd): a daily-cap park asks headroom again now. */
   recheck(): void;
+  /** What held a start (blocked) has gone: a turn waiting out its start retry goes now. */
+  retry(): void;
   /** options() would now give something else: the live query closes now, or when the turn it serves ends. */
   reopen(): void;
   /** The live query's controls (MCP status and toggles, the commands it offers), or null while no query is open. */
@@ -697,6 +706,8 @@ export type SessionSpec = {
    * keeps the turn queued and retries it as a start that could not open does.
    */
   blocked?: () => string | null;
+  /** false: the bridge's notices never ride on a turn's text, which here is the user's own words. Default true. */
+  notices?: boolean;
   log?: (line: string) => void;
   /** The SDK's query in the bridge; a fake in tests. Required, so no test falls back to the real CLI. */
   query: typeof query;
@@ -891,7 +902,7 @@ export function createSession(spec: SessionSpec): Session {
 
   function transition(ev: Event, now: Date): Effect[] {
     const before = { session: structuredClone(spec.state) as SessionState, parkedUntil: spec.account.parkedUntil, memo };
-    const t = step(before, ev, { now, headroom: (i) => headroom(i, now), userName });
+    const t = step(before, ev, { now, headroom: (i) => headroom(i, now), userName, quiet: spec.notices === false });
     const state = own<SessionState>(spec.state);
     const changed =
       JSON.stringify([before.session, before.parkedUntil]) !== JSON.stringify([t.core.session, t.core.parkedUntil]);
@@ -1236,7 +1247,7 @@ export function createSession(spec: SessionSpec): Session {
     }
     const failed = m.subtype !== "success" || m.is_error;
     const said = m.subtype === "success" ? m.result : m.errors.join("\n");
-    if (failed && forgot(said, l)) return;
+    if (failed && (forgot(said, l) || taken(said, l))) return;
     l.answered = true;
     if (failed && startedSandbox(said)) return;
     if (!failed) accepted();
@@ -1316,6 +1327,9 @@ export function createSession(spec: SessionSpec): Session {
     },
     recheck() {
       dispatch({ kind: "tick" });
+    },
+    retry() {
+      dispatch({ kind: "retry" });
     },
     mcp: () => live?.q ?? null,
     controls: () => live?.q ?? null,

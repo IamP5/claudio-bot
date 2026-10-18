@@ -127,6 +127,7 @@ function writeIndex(file: string, heads: readonly Head[]) {
 const THREAD_POLL_MS = 1_000;
 
 const GONE = "This session's transcript is gone.";
+const SENT_KEPT = 50;
 /** Shown cards per agent, so a settled gate card stays in the agent's thread with its answer. */
 const GATE_CARDS_KEPT = 20;
 
@@ -291,7 +292,11 @@ export function createSessions(deps: SessionsDeps): Sessions {
   const drivers = createOwn(ownDeps);
   // The bridge always yields: a session another Claude Code turned busy on loses the bridge's idle query.
   deps.apps.onChange(() => {
-    for (const rec of deps.world.sessions.values()) if (rec.own && blocked(rec.id) !== null) drivers.yieldTo(rec.id);
+    for (const rec of deps.world.sessions.values()) {
+      if (!rec.own) continue;
+      if (blocked(rec.id) !== null) drivers.yieldTo(rec.id);
+      else if (rec.own.session.pending.length > 0) drivers.unblock(rec.id);
+    }
   });
 
   const watched = (id: SessionId) => deps.watchers(id) > 0;
@@ -367,7 +372,17 @@ export function createSessions(deps: SessionsDeps): Sessions {
 
   const reply = (r: Result): ServerMessage[] => (r.ok ? [] : error(r.error));
 
+  /** The phone's clientIds each session took, so a resend after a reconnect runs nothing twice. */
+  const taken = new Map<SessionId, string[]>();
   async function send(m: Extract<SessionClientMessage, { type: "session_send" }>): Promise<ServerMessage[]> {
+    const seen = taken.get(m.sessionId) ?? [];
+    if (seen.includes(m.clientId)) return [];
+    const replies = await route(m);
+    if (replies.length === 0) taken.set(m.sessionId, [...seen, m.clientId].slice(-SENT_KEPT));
+    return replies;
+  }
+
+  async function route(m: Extract<SessionClientMessage, { type: "session_send" }>): Promise<ServerMessage[]> {
     const w = driverOf(m.sessionId);
     switch (w.kind) {
       case "agent": {

@@ -262,7 +262,7 @@ function toPermission(out: SyncHookJSONOutput, input: Record<string, unknown>): 
 const PROMPTED = "claude.ask";
 
 /** realpath of the longest existing prefix, so a file about to be created resolves through any symlinked folder above it. */
-function resolveReal(path: string): string {
+export function resolveReal(path: string): string {
   const rest: string[] = [];
   for (let head = path; ; head = dirname(head)) {
     try {

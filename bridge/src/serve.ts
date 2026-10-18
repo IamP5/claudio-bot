@@ -33,7 +33,7 @@ type Socket = ServerWebSocket<SocketData>;
 export type ServeDeps = {
   devices: Devices;
   stream: Stream;
-  hub: Pick<Hub, "hello" | "handle">;
+  hub: Pick<Hub, "hello" | "greeting" | "handle">;
   legacy: Legacy;
   log: (line: string) => void;
   now: () => Date;
@@ -45,7 +45,7 @@ export type Transport = {
   readonly port: number;
   /** Stamps the message with the next seq and sends it to every open socket. */
   publish(message: ServerMessage): void;
-  /** Sends the message to protocol 3 sockets as it is: no seq, not kept for replay. */
+  /** Sends the message to protocol 3 sockets as it is: no seq, not kept for replay. A protocol 2 app never gets one. */
   signal(message: Signal): void;
   /** Open authenticated sockets heard from within LIVE_WINDOW_MS. */
   live(): number;
@@ -191,9 +191,11 @@ export function serve(deps: ServeDeps): Transport {
         const { deviceId, resume } = ws.data;
         if (!isPaired(deviceId)) return ws.close(4001, "revoked");
         const missed = resume ? stream.since(resume.epoch, resume.after) : null;
-        // Hello, replay and subscribe in one tick, so no broadcast falls between them.
+        // Hello, replay and subscribe in one tick, so no broadcast falls between them. Signals are not replayed, so a
+        // protocol 3 socket gets the latest of those (plan usage) as it connects.
         send(ws, hub.hello(stream.position(missed !== null)));
         for (const frame of missed ?? []) ws.send(frame);
+        if (ws.data.protocol === 3) for (const live of hub.greeting()) send(ws, live);
         ws.subscribe(TOPIC[ws.data.protocol]);
         sockets.set(deviceId, (sockets.get(deviceId) ?? new Set()).add(ws));
         devices.seen(deviceId);

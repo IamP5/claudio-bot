@@ -6,9 +6,9 @@ import type { McpSdkServerConfigWithInstance, Options, query, SDKMessage, SDKUse
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHomes } from "../src/home";
-import { createHub } from "../src/hub";
+import { createHub, type HubDeps } from "../src/hub";
 import type { Project } from "../src/projects";
-import type { BotId, MessageId, ServerMessage, Signal, StreamPosition } from "../src/protocol";
+import type { BotId, MessageId, PlanUsage, ServerMessage, Signal, StreamPosition } from "../src/protocol";
 import type { Push, PushReason } from "../src/push";
 import { newBot, type BotRecord, type World } from "../src/world";
 
@@ -106,14 +106,22 @@ export type PushCall = { botId: BotId; reason: PushReason; messageId: MessageId 
 /** sends: whether the fake push goes out (default: always). push: a real push instead of the fake. */
 export function hubOver(
   world: World,
-  opts: { persist?: (urgency?: "now") => void; sends?: (call: PushCall, n: number) => boolean; push?: Push; scan?: () => Promise<Project[]>; executable?: string | null } = {},
+  opts: {
+    persist?: (urgency?: "now") => void;
+    sends?: (call: PushCall, n: number) => boolean;
+    push?: Push;
+    scan?: () => Promise<Project[]>;
+    executable?: string | null;
+    usage?: HubDeps["usage"];
+  } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "claudiobot-hub-"));
   roots.push(root);
   const homes = createHomes(root);
   const events: string[] = [];
   const frames: ServerMessage[] = [];
-  const signals: Signal[] = [];
+  const signals: Extract<Signal, { type: "activity" }>[] = [];
+  const usage: PlanUsage[] = [];
   const pushes: PushCall[] = [];
   const attempts: PushCall[] = [];
   const queries: FakeQuery[] = [];
@@ -131,7 +139,8 @@ export function hubOver(
     model: undefined,
     scan: opts.scan ?? (async () => []),
     broadcast: (m) => frames.push(m),
-    signal: (s) => signals.push(s),
+    signal: (s) => (s.type === "activity" ? signals.push(s) : usage.push(s.usage)),
+    usage: opts.usage,
     webhookPort: null,
     persist: (urgency) => {
       opts.persist?.(urgency);
@@ -158,7 +167,7 @@ export function hubOver(
       executable: () => (opts.executable === undefined ? "/fake/claude" : opts.executable),
     },
   });
-  return { hub, homes, root, events, frames, signals, pushes, attempts, queries, q: () => queries.at(-1)! };
+  return { hub, homes, root, events, frames, signals, usage, pushes, attempts, queries, q: () => queries.at(-1)! };
 }
 
 /** The bridge's real gate, called the way Claude Code calls the PreToolUse hook the session was given. */

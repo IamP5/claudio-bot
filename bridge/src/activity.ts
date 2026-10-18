@@ -112,7 +112,7 @@ export type Activity = {
 /** One actor's line: what the phone shows, when it was sent, and the newer line waiting out the throttle. */
 type Line = { shown: string | null; sentAt: number; waiting: string | null; timer: ReturnType<typeof setTimeout> | null };
 
-export function createActivity(deps: { signal: (s: Signal) => void; now: () => Date }): Activity {
+export function createActivity(deps: { signal: (s: Extract<Signal, { type: "activity" }>) => void; now: () => Date }): Activity {
   const lines = new Map<ActorKey, Line>();
 
   function send(actor: Actor, line: Line, text: string | null) {

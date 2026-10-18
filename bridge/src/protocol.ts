@@ -22,7 +22,7 @@ export type FactId = string & { readonly __brand: "FactId" };
  */
 export const FEATURES = [
   "memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend",
-  "mentions", "commands", "exchanges", "groups",
+  "mentions", "commands", "exchanges", "groups", "usage",
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 
@@ -345,10 +345,13 @@ export type ServerMessage =
   | { type: "exchange"; botId: BotId; peer: BotId; messages: ExchangeMessage[] }
   // A new token for a webhook routine, shown once. The bridge keeps only its hash. url answers on this Mac only.
   | { type: "webhook_token"; botId: BotId; routineId: RoutineId; url: string; token: string }
+  // The plan's usage limits (feature "usage"). Live sockets only, like activity: sent after the hello to each socket
+  // that connects, and to every live socket when they change. Never sequenced or replayed.
+  | { type: "usage"; usage: PlanUsage }
   | { type: "error"; message: string };
 
-/** Sent to live sockets only, without a seq: not kept for replay. */
-export type Signal = Extract<ServerMessage, { type: "activity" }>;
+/** Sent to live protocol 3 sockets only, without a seq: not kept for replay. */
+export type Signal = Extract<ServerMessage, { type: "activity" | "usage" }>;
 
 // A frame published to every socket carries the stream seq. Replies to one client do not.
 export type Broadcast = ServerMessage & { seq: number };
@@ -399,6 +402,8 @@ export type ClientMessage =
   | { type: "webhook_token"; botId: BotId; routineId: RoutineId }
   // Removes the agent's worktree. Refused while the agent works, or while the worktree holds uncommitted work or ignored files other than build folders.
   | { type: "remove_worktree"; agentId: AgentId }
+  // Reads the plan's usage now, as pull-to-refresh does. Answered with a usage frame once the read ends.
+  | { type: "refresh_usage" }
   // Transport messages: the socket layer answers these, because they need the socket's own device.
   | { type: "devices" }
   | { type: "revoke_device"; deviceId: DeviceId }

@@ -4,6 +4,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import qrcode from "qrcode-terminal";
 import { accessLine, accessOf } from "./access";
 import { bridgeUrls, lanAddresses, pairLink, readNames } from "./address";
+import { readPlanUsage, strictMcp } from "./claudeCode";
 import { createDevices, type PairCode } from "./devices";
 import { createHomes } from "./home";
 import { createHub } from "./hub";
@@ -13,9 +14,11 @@ import { migrateHome } from "./migrate";
 import { scanProjects } from "./projects";
 import { createPush, senderFromEnv } from "./push";
 import { serve } from "./serve";
+import { claudeExecutable } from "./session";
 import { bridgeHome, createSaver, loadWorld } from "./store";
 import { createStream } from "./stream";
 import { errorText } from "./text";
+import { USAGE_TIMEOUT_MS } from "./usage";
 
 /** A helper command's output, or "" when it is missing, fails or takes over 2 s (it is killed then). */
 async function run(argv: string[]): Promise<string> {
@@ -51,6 +54,16 @@ function holdLock(home: string) {
 }
 
 const now = () => new Date();
+
+/**
+ * The plan's usage, read from a query that loads no settings, so the user's SessionStart hooks do not run every five
+ * minutes. The login is not a setting: Claude Code reads it all the same.
+ */
+function readUsage() {
+  const path = claudeExecutable();
+  if (!path) return Promise.reject(new Error("claude was not found on PATH, or CLAUDIOBOT_CLAUDE does not name an executable"));
+  return readPlanUsage(query, { pathToClaudeCodeExecutable: path, cwd: homedir(), settingSources: [], ...strictMcp(), mcpServers: {} }, USAGE_TIMEOUT_MS);
+}
 const log = (line: string) => console.log(line);
 
 const home = bridgeHome();
@@ -107,6 +120,7 @@ const hub = createHub({
   log,
   push,
   webhookPort: Number(process.env.CLAUDIOBOT_WEBHOOK_PORT ?? 7879),
+  usage: { read: readUsage, watched: () => transport.live() > 0 },
 });
 
 const transport = serve({ devices, stream: createStream(), hub, legacy, log, now, port });

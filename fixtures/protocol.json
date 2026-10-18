@@ -15,7 +15,8 @@
         "mentions",
         "commands",
         "exchanges",
-        "groups"
+        "groups",
+        "usage"
       ],
       "epoch": "e_7f3a",
       "seq": 41,
@@ -1144,6 +1145,49 @@
           "text": "Added."
         }
       ]
+    },
+    {
+      "type": "usage",
+      "usage": {
+        "state": "ok",
+        "plan": "max",
+        "fetchedAt": "2026-10-16T14:00:00.000Z",
+        "stale": false,
+        "windows": [
+          {
+            "id": "session",
+            "kind": "session",
+            "label": "Current session",
+            "utilization": 0.37,
+            "resetsAt": "2026-10-16T16:14:00.000Z",
+            "severity": "normal"
+          },
+          {
+            "id": "weekly",
+            "kind": "weekly",
+            "label": "Weekly · all models",
+            "utilization": 0.82,
+            "resetsAt": "2026-10-20T12:00:00.000Z",
+            "severity": "warning"
+          },
+          {
+            "id": "weekly:fable",
+            "kind": "weekly_model",
+            "label": "Weekly · Fable",
+            "utilization": 1,
+            "resetsAt": null,
+            "severity": "critical"
+          }
+        ]
+      }
+    },
+    {
+      "type": "usage",
+      "usage": {
+        "state": "unavailable",
+        "reason": "api_key",
+        "fetchedAt": "2026-10-16T14:00:00.000Z"
+      }
     }
   ],
   "client": [
@@ -1364,6 +1408,9 @@
           "b3"
         ]
       }
+    },
+    {
+      "type": "refresh_usage"
     }
   ]
 }

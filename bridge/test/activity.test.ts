@@ -64,7 +64,7 @@ const agent: Actor = { kind: "agent", botId: "b1" as never, agentId: "a1" as nev
 const read = (f: string) => tool("Read", { file_path: `/x/${f}` });
 
 let clock = 0;
-let sent: Signal[] = [];
+let sent: Extract<Signal, { type: "activity" }>[] = [];
 const tick = (ms: number) => {
   clock += ms;
   jest.advanceTimersByTime(ms);

@@ -22,7 +22,7 @@ function tempHome(legacy?: string) {
 }
 
 /** What main.ts does at start, against a temp home, with a fake hub and a clock the test moves. */
-function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m: ClientMessage) => ServerMessage[] } = {}) {
+function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m: ClientMessage) => ServerMessage[]; greeting?: ServerMessage[] } = {}) {
   let now = new Date("2026-10-17T09:00:00.000Z");
   let saving = true;
   const { world } = loadWorld(home);
@@ -38,6 +38,7 @@ function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m
   const handled: ClientMessage[] = [];
   const hub = {
     hello: (position: StreamPosition): ServerMessage => ({ type: "hello", protocol: 3, features: [], ...position, machine: "Mac", userName: "Alex", bots: [] }),
+    greeting: () => opts.greeting ?? [],
     handle: async (message: ClientMessage): Promise<ServerMessage[]> => {
       handled.push(message);
       return opts.replies?.(message) ?? [];
@@ -363,6 +364,25 @@ test("a protocol 3 app resumes from the replay ring; an app that did not announc
   expect(await resumed.next("hello")).toMatchObject({ epoch, seq: 1, resumed: true });
   expect(await resumed.next("bot_removed")).toMatchObject({ botId: "b_gone", seq: 1 });
   expect(await today.next("hello")).toMatchObject({ epoch, seq: 1, resumed: false });
+  await Bun.sleep(50);
+  expect(today.inbox).toEqual([]);
+});
+
+test("a protocol 3 app gets the latest plan usage right after its hello and each change after; a protocol 2 app never does", async () => {
+  const usage = (utilization: number): Extract<ServerMessage, { type: "usage" }> => ({
+    type: "usage",
+    usage: { state: "ok", plan: "max", fetchedAt: "2026-10-17T09:00:00.000Z", stale: false, windows: [{ id: "session", kind: "session", label: "Current session", utilization, resetsAt: null, severity: "normal" }] },
+  });
+  const b = boot(tempHome(), { greeting: [usage(0.1)] });
+  const { token } = await pairPhone(b);
+  const next = connect(b, { bearer: token, query: "?protocol=3" });
+  const today = connect(b, { bearer: token });
+  await until(() => next.inbox.length >= 2, "hello and usage");
+  expect(next.inbox.splice(0).map((m) => (m.type === "usage" ? m : m.type))).toEqual(["hello", usage(0.1)]);
+  await today.next("hello");
+
+  b.transport.signal(usage(0.2));
+  expect(await next.next("usage")).toEqual(usage(0.2));
   await Bun.sleep(50);
   expect(today.inbox).toEqual([]);
 });

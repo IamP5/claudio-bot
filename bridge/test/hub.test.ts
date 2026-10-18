@@ -11,6 +11,7 @@ import type { Project } from "../src/projects";
 import type { AgentId, BotId, ClientMessage, Command, Message, MessageId, RoutineId, RunId, ServerMessage } from "../src/protocol";
 import { createPush } from "../src/push";
 import { BREAKER_NOTE } from "../src/session";
+import type { UsageRead } from "../src/claudeCode";
 import { CLAUDIO_TOOLS } from "../src/tools";
 import { emptySession, emptyWorld, type AgentRecord, type BotRecord, type EnvelopeId, type Fingerprint, type GateState, type RoutineRecord, type Signature, type World } from "../src/world";
 import { assistant, at, bot, callTool, cleanup, COMMANDS, flush, hubOver, inAnHour, later, NO_RING, result, roots, runBash, text, toolUse } from "./hub-kit";
@@ -792,9 +793,53 @@ test("one ticker throwing is logged, and the tickers after it still run", () => 
   expect(logs[0]).toContain("bad routine");
 });
 
-test("hello lists every feature this bridge has", () => {
+test("hello lists every feature this bridge has, and usage only with a usage reader", () => {
   const hello = hubOver(emptyWorld()).hub.hello(NO_RING);
   expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups"]);
+  const reading = hubOver(emptyWorld(), { usage: { read: () => new Promise(() => {}), watched: () => true } }).hub.hello(NO_RING);
+  expect(reading.type === "hello" && reading.features.at(-1)).toBe("usage");
+});
+
+const SESSION_37: UsageRead = {
+  state: "ok",
+  plan: "max",
+  windows: [{ id: "session", kind: "session", label: "Current session", utilization: 0.37, resetsAt: null, severity: "normal" }],
+};
+
+test("plan usage: read at the first tick, sent to a phone as it connects, and read again on refresh_usage", async () => {
+  let reads = 0;
+  const h = hubOver(emptyWorld(), { usage: { read: async () => (reads++, SESSION_37), watched: () => true } });
+  expect(h.hub.greeting()).toEqual([]);
+  h.hub.tick(new Date());
+  await flush();
+  expect(h.usage).toMatchObject([{ state: "ok", stale: false, windows: [{ utilization: 0.37 }] }]);
+  expect(h.hub.greeting()).toEqual([{ type: "usage", usage: h.usage[0]! }]);
+  expect(await h.hub.handle({ type: "refresh_usage" })).toMatchObject([{ type: "usage", usage: { state: "ok" } }]);
+  expect([reads, h.frames.filter((f) => f.type === "usage")]).toEqual([2, []]);
+});
+
+test("plan usage: a bot turn's result reads it again 10 s later", async () => {
+  let reads = 0;
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world, { usage: { read: async () => (reads++, SESSION_37), watched: () => true } });
+  h.hub.tick(new Date());
+  await flush();
+  await h.hub.handle({ type: "send", botId: b.id, text: "hi", uploads: [] });
+  await flush();
+  h.q().emit(result());
+  await flush();
+  h.hub.tick(new Date(Date.now() + 9_000));
+  expect(reads).toBe(1);
+  h.hub.tick(new Date(Date.now() + 10_500));
+  expect(reads).toBe(2);
+});
+
+test("a bridge without a usage reader refuses refresh_usage and greets with nothing", async () => {
+  const h = hubOver(emptyWorld());
+  expect(await h.hub.handle({ type: "refresh_usage" })).toEqual([{ type: "error", message: "This bridge does not read plan usage." }]);
+  expect(h.hub.greeting()).toEqual([]);
 });
 
 test("a send's clientId comes back on the user's message, and a send without one adds none", async () => {

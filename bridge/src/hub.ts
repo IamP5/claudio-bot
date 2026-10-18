@@ -1,10 +1,10 @@
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
-import type { Settings } from "@anthropic-ai/claude-agent-sdk";
+import type { SDKMessage, Settings } from "@anthropic-ai/claude-agent-sdk";
 import { createActivity } from "./activity";
 import { createAgents } from "./agents";
-import { strictMcp } from "./claudeCode";
+import { strictMcp, type UsageRead } from "./claudeCode";
 import { createClock, type Tickable } from "./clock";
 import { commandOf, createCommands, probeCommands, slashName } from "./commands";
 import { connectorSettings, createConnectors } from "./connectors";
@@ -43,6 +43,7 @@ import { gitDirsOf, sandboxFor } from "./sandbox";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { createSkills } from "./skills";
+import { createUsageMonitor } from "./usage";
 import { appendArchive, type Persist } from "./store";
 import { BOT_NAME_MAX, errorText, hasHiddenCharacters } from "./text";
 import { botToolServer, type BotActions } from "./tools";
@@ -92,6 +93,8 @@ import {
 export type Hub = {
   /** The snapshot a socket gets first, at the stream's position. */
   hello(position: StreamPosition): ServerMessage;
+  /** The live frames a protocol 3 socket gets right after its hello and replay: the latest plan usage. */
+  greeting(): ServerMessage[];
   /** Every client message. The transport ones (devices, revoke_device, pair_code) belong to main.ts, which answers them first. */
   handle(message: ClientMessage): Promise<ServerMessage[]>;
   /** Runs every stored-deadline owner once at `now`. One that throws is logged and the rest still run. */
@@ -119,6 +122,8 @@ export type HubDeps = {
   webhookPort: number | null;
   /** Tests pass a fake SDK. The bridge uses the real query and the claude on PATH. */
   claude: Pick<SessionSpec, "query" | "executable">;
+  /** The plan's usage limits: how to read them, and whether a phone is live to see them. Absent: no "usage" feature. */
+  usage?: { read: () => Promise<UsageRead>; watched: () => boolean };
 };
 
 /** The routine's own scheduled fire. Its bubbles wait for the result, so a run with nothing to say posts nothing. */
@@ -542,6 +547,19 @@ export function createHub(deps: HubDeps): Hub {
   }
 
   const activity = createActivity({ signal: deps.signal, now: clockNow });
+  const usage =
+    deps.usage &&
+    createUsageMonitor({
+      ...deps.usage,
+      changed: (u) => deps.signal({ type: "usage", usage: u }),
+      poke: () => poke(),
+      now: clockNow,
+      log: deps.log,
+    });
+  /** A turn's result or a rate limit event moves the plan's usage. */
+  const metered = (m: SDKMessage) => {
+    if (m.type === "result" || m.type === "rate_limit_event") usage?.nudge();
+  };
   const memory = createMemory({
     homes,
     botName: (id) => world.bots.get(id)?.name ?? "a bot",
@@ -613,6 +631,7 @@ export function createHub(deps: HubDeps): Hub {
         };
       },
       onMessage(m, pending) {
+        metered(m);
         if (!world.bots.has(bot.id)) return;
         if (m.type === "system" && m.subtype === "init") commands.refresh(bot.id);
         if (m.type === "system" && m.subtype === "commands_changed") commands.seen(bot.id, m.commands);
@@ -752,7 +771,10 @@ export function createHub(deps: HubDeps): Hub {
     configRoot: (id) => homes.agentConfig(id),
     trustCard: (actor, repo) => gate.trustCard(actor, repo),
     settings: (actor) => settingsFor(actor.botId),
-    observe: (actor, m) => activity.observe(actor, m),
+    observe(actor, m) {
+      metered(m);
+      activity.observe(actor, m);
+    },
     idle: (actor) => activity.clear(actor),
     persist: deps.persist,
     now,
@@ -796,7 +818,7 @@ export function createHub(deps: HubDeps): Hub {
       return next.toISOString();
     },
   };
-  const tickers = { scheduler, gate, sessions, push: deps.push, midnight };
+  const tickers = { scheduler, gate, sessions, push: deps.push, midnight, ...(usage && { usage }) };
   const clock = createClock({ tickers: Object.values(tickers), now: clockNow, log: deps.log });
   poke = () => clock.poke();
 
@@ -1060,6 +1082,8 @@ export function createHub(deps: HubDeps): Hub {
       case "revoke_device":
       case "pair_code":
         return error("This bridge cannot manage devices yet.");
+      case "refresh_usage":
+        return usage ? [{ type: "usage", usage: await usage.refresh() }] : error("This bridge does not read plan usage.");
       case "create_group": {
         if (!nameOk(message.name)) return error(BAD_NAME);
         const why = membersError(world, message.members);
@@ -1183,12 +1207,16 @@ export function createHub(deps: HubDeps): Hub {
     hello: (position) => ({
       type: "hello",
       protocol: PROTOCOL,
-      features: [...SERVED],
+      features: usage ? [...SERVED, "usage"] : [...SERVED],
       ...position,
       machine: deps.machine,
       userName,
       bots: sortBots([...[...world.bots.values()].map(view), ...[...world.groups.values()].map(groupView)]),
     }),
+    greeting() {
+      const latest = usage?.opened() ?? null;
+      return latest ? [{ type: "usage", usage: latest }] : [];
+    },
     handle,
     tick: (at) => tickEach(tickers, at, deps.log),
 

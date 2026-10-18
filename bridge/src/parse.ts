@@ -158,6 +158,7 @@ const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
   create_group: (o) => ({ type: "create_group", ref: str(o, "ref"), name: boundedStr(o, "name", BOT_NAME_MAX), members: members(o.members) }),
   webhook_token: (o) => ({ type: "webhook_token", botId: botId(o), routineId: routineId(o) }),
   remove_worktree: (o) => ({ type: "remove_worktree", agentId: agentId(o) }),
+  refresh_usage: () => ({ type: "refresh_usage" }),
   devices: () => ({ type: "devices" }),
   revoke_device: (o) => ({ type: "revoke_device", deviceId: str(o, "deviceId") as DeviceId }),
   pair_code: () => ({ type: "pair_code" }),

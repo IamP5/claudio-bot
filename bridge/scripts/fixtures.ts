@@ -124,6 +124,12 @@ export const server = [
     { id: "x1", at, from: "b1", text: "Put PR #142 in tomorrow's digest." },
     { id: "x2", at: later, from: "b2", text: "Added." },
   ] },
+  { type: "usage", usage: { state: "ok", plan: "max", fetchedAt: later, stale: false, windows: [
+    { id: "session", kind: "session", label: "Current session", utilization: 0.37, resetsAt: "2026-10-16T16:14:00.000Z", severity: "normal" },
+    { id: "weekly", kind: "weekly", label: "Weekly · all models", utilization: 0.82, resetsAt: "2026-10-20T12:00:00.000Z", severity: "warning" },
+    { id: "weekly:fable", kind: "weekly_model", label: "Weekly · Fable", utilization: 1, resetsAt: null, severity: "critical" },
+  ] } },
+  { type: "usage", usage: { state: "unavailable", reason: "api_key", fetchedAt: later } },
 ] satisfies (Wire<ServerMessage> | Wire<Broadcast>)[];
 
 export const client = [
@@ -165,6 +171,7 @@ export const client = [
   { type: "exchange", botId: "b1", peer: "b2" },
   { type: "create_group", ref: "c2", name: "launch crew", members: ["b1", "b2"] },
   { type: "update_bot", botId: "g1", patch: { members: ["b1", "b2", "b3"] } },
+  { type: "refresh_usage" },
 ] satisfies Wire<ClientMessage>[];
 
 // Compile-time coverage: every server type, client type and message kind has a fixture, so the Swift mirror is pinned

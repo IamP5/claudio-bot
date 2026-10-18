@@ -31,6 +31,13 @@ A flat blob character with two eyes. 13 shapes (circle, cloud, rounded diamond, 
 - While the bot works, its avatar animates and a "Typing…" row shows.
 - Composer: `+` (Attach image, Take photo, Choose file), text field, mic (dictation), a voice-mode button tinted with the bot color. The placeholder is "Message <bot>". It changes to "Type your answer, or talk about something else" while a question card is open.
 
+### Mentions
+
+- Typing `@` in the composer opens a menu above it. Bots come first, then the connected apps ("Plugin"), each row with its icon, its name and, for an app, its state in gray ("connected", "needs auth", "error"). The kind sits on the right ("Bot", "Plugin").
+- Typing after `@` filters the list by any part of the name ("eng" keeps engineer and Engineering Lead). Return or a click picks the highlighted row.
+- A pick becomes a chip in the composer: the bot's avatar and its name in bold, tinted with the bot's color.
+- The Mac build seen in October 2026 has no `/` menu and no group chat entry. ClaudioBot adds both (see docs/design.md).
+
 ### Question card
 
 - A card with the question in bold and lettered options (A, B, C, D). Tapping an option answers it. iPhone adds an X to dismiss without answering.
@@ -45,6 +52,7 @@ A flat blob character with two eyes. 13 shapes (circle, cloud, rounded diamond, 
 - "4 messages with ⚙ Add checkout smoke tests" (an exchange with an agent this bot started).
 - "Message from ⚙ Add checkout smoke tests" (the agent reported back).
 - Tapping an exchange opens it in place. A breadcrumb reads "engineer ⇄ Add checkout smoke tests", with a "Close Chat" button at the bottom.
+- An exchange with another bot opens the same way and shows the actual messages: a time separator, then each message as a gray bubble with the sender's avatar beside it and the sender's name above it in the sender's color.
 
 ## Details panel (Mac right panel, iPhone profile screen)
 

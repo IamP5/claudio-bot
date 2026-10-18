@@ -1,11 +1,11 @@
-import type { HookCallbackMatcher, HookEvent, Options, SandboxSettings, SDKMessage, Settings } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, HookCallbackMatcher, HookEvent, Options, SandboxSettings, SDKMessage, Settings } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 import { createCloudSession, followUpCloudSession } from "./cloud";
 import { readEvidence, reportText } from "./evidence";
 import type { Ledger } from "./ledger";
 import type { AgentId, AgentStatus, BotId } from "./protocol";
-import { agentPrompt, type SessionInput } from "./prompts";
+import { agentPrompt, agentRules, type SessionInput } from "./prompts";
 import type { Project } from "./projects";
 import { createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { refused, type Result } from "./result";
@@ -15,7 +15,7 @@ import type { Persist } from "./store";
 import { errorText } from "./text";
 import type { Isolate } from "./tools";
 import { prepareWorkspace, removeWorktree, worktreesRoot, type Workspace } from "./worktree";
-import { emptySession, newMessageId, repoTrust, type Actor, type AgentActor, type AgentRecord, type Initiator, type World } from "./world";
+import { emptySession, newMessageId, repoTrust, type Actor, type AgentActor, type AgentRecord, type AgentReport, type Initiator, type World } from "./world";
 
 // Agents are actors like bots: mac agents run on the same session module behind the same gate, metered by the same
 // ledger. Cloud agents run on claude.ai: the bridge neither gates nor meters them.
@@ -98,6 +98,8 @@ export function createAgents(deps: {
   /** Tests pass a fake SDK. */
   claude: Pick<SessionSpec, "query" | "executable">;
   hooks: (actor: Actor) => Partial<Record<HookEvent, HookCallbackMatcher[]>>;
+  /** gate.canUseTool: what Claude Code asks about on its own becomes a card in the bot's chat. */
+  canUseTool: (actor: Actor) => CanUseTool;
   /** An approval continuation's turn starts (gate.beginTurn). */
   beginTurn: (actor: Actor) => void;
   /** The OS sandbox for the agent's Bash calls (sandbox.sandboxFor), read as each query opens. */
@@ -183,13 +185,21 @@ export function createAgents(deps: {
     });
   }
 
+  /** Saved before git is read, so a restart while it waits delivers the report instead of losing it. */
+  function reportWithEvidence(rec: AgentRecord, report: AgentReport) {
+    (rec.unreported ??= []).push(report);
+    deps.persist("now");
+    deliverWithEvidence(rec, report);
+  }
+
   /** The bridge's git line goes above the agent's words, so nothing the agent writes can stand in for it. */
-  function reportWithEvidence(rec: AgentRecord, status: AgentStatus, text: string, by: Initiator) {
+  function deliverWithEvidence(rec: AgentRecord, report: AgentReport) {
     queueReport(rec, async () => {
-      const evidence = await readEvidence(rec.cwd, text, new Date(deps.now()), rec.base ?? null);
+      const evidence = await readEvidence(rec.cwd, report.text, new Date(deps.now()), rec.base ?? null);
       rec.agent = { ...rec.agent, evidence };
-      update(rec, status, { from: "agent", text });
-      deps.reported(rec, reportText(evidence, text), by);
+      rec.unreported = rec.unreported?.filter((r) => r !== report);
+      update(rec, report.status, { from: "agent", text: report.text });
+      deps.reported(rec, reportText(evidence, report.text), report.by);
     });
   }
 
@@ -203,7 +213,7 @@ export function createAgents(deps: {
       case "done": {
         const m = end.result;
         const text = m.subtype === "success" ? m.result : `The agent stopped with an error: ${m.errors.join("; ") || m.subtype}`;
-        return reportWithEvidence(rec, m.subtype === "success" ? "waiting" : "failed", text.trim() || "(no final message)", by);
+        return reportWithEvidence(rec, { status: m.subtype === "success" ? "waiting" : "failed", text: text.trim() || "(no final message)", by });
       }
       case "stopped":
         return report(rec, "waiting", `Stopped by ${deps.userName}.`, by);
@@ -239,6 +249,7 @@ export function createAgents(deps: {
         const repo = repoOf(rec);
         // Full access loads every repo's own config, as the user's own Claude Code does.
         const trusted = accessOf(process.env).full || repoTrust(deps.world.gate, repo, id) === true;
+        const botName = deps.world.bots.get(rec.agent.botId)?.name ?? rec.agent.botId;
         return {
           cwd: rec.cwd,
           // Project settings, hooks and .mcp.json come from here instead of the checkout, which the agent and every
@@ -246,12 +257,13 @@ export function createAgents(deps: {
           ...(!trusted ? { projectConfigRoot: deps.configRoot(id) } : rec.agent.worktree ? { projectConfigRoot: repo } : {}),
           resume: rec.session.id ?? undefined,
           settingSources: ["user", "project"],
-          systemPrompt: { type: "preset", preset: "claude_code" },
+          systemPrompt: { type: "preset", preset: "claude_code", append: agentRules({ botName, userName: deps.userName }) },
           permissionMode: "auto",
-          // Nobody is at the agent's terminal to answer; it reports to its bot instead.
-          disallowedTools: ["AskUserQuestion"],
+          // Nobody is at the agent's terminal to answer a question or approve a plan; it reports to its bot instead.
+          disallowedTools: ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"],
           model: deps.model,
           hooks: deps.hooks(actor),
+          canUseTool: deps.canUseTool(actor),
           sandbox: deps.sandbox(actor),
           settings: deps.settings(actor),
           // The SDK replaces the environment rather than adding to it.
@@ -328,17 +340,16 @@ export function createAgents(deps: {
       };
       deps.world.agents.set(rec.agent.id, rec);
       deps.changed(rec);
-      const prompt = agentPrompt({ botName: a.botName, userName: deps.userName, prompt: a.prompt });
       if (a.where === "mac") {
         if (workspace.note) deps.note(rec, workspace.note);
-        macSession(rec).push(command === null ? queued(prompt, a.initiator) : { kind: "command", text: command, initiator: a.initiator, settles: null });
+        macSession(rec).push(command === null ? queued(a.prompt, a.initiator) : { kind: "command", text: command, initiator: a.initiator, settles: null });
         const found = accessOf(process.env).full ? [] : projectConfigOf(repo);
         if (found.length > 0) deps.trustCard({ kind: "agent", botId, agentId: rec.agent.id }, { root: repo, name: a.project.name, found });
         return rec;
       }
       await cloud(rec, async () => {
         try {
-          const created = await createCloudSession(rec.cwd, prompt);
+          const created = await createCloudSession(rec.cwd, agentPrompt({ botName: a.botName, userName: deps.userName, prompt: a.prompt }));
           rec.cloudSession = created.sessionId;
           rec.agent = { ...rec.agent, url: created.url };
           update(rec, "in_cloud");
@@ -418,9 +429,11 @@ export function createAgents(deps: {
     resume() {
       for (const rec of deps.world.agents.values()) {
         if (rec.agent.where !== "mac") continue;
+        const unreported = rec.unreported ?? [];
+        for (const r of unreported) deliverWithEvidence(rec, r);
         if (rec.session.pending.length > 0) macSession(rec);
         // A mac agent cut off mid-turn with nothing queued will never report, so tell its bot.
-        else if (rec.agent.status === "working") report(rec, "failed", "The bridge restarted while this agent was working. Send it a message to resume it.", rec.startedBy);
+        else if (rec.agent.status === "working" && unreported.length === 0) report(rec, "failed", "The bridge restarted while this agent was working. Send it a message to resume it.", rec.startedBy);
       }
     },
 

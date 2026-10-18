@@ -7,7 +7,8 @@ import { createAgents, projectConfigOf } from "../src/agents";
 import type { Headroom, Ledger } from "../src/ledger";
 import type { AgentEvidence, AgentId, AgentStatus, BotId, RoutineId, RunId } from "../src/protocol";
 import type { Project } from "../src/projects";
-import { emptySession, emptyWorld, own, type AgentRecord, type GateState, type Initiator, type OpenCard, type World } from "../src/world";
+import { flushNow, loadWorld } from "../src/store";
+import { emptySession, emptyWorld, newBot, own, type AgentRecord, type GateState, type Initiator, type OpenCard, type World } from "../src/world";
 
 const AT = "2026-10-17T12:00:00.000Z";
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -77,7 +78,9 @@ afterEach(() => {
   else process.env.CLAUDIOBOT_CLAUDE = configuredClaude;
 });
 
-function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; project?: Project; sandbox?: () => SandboxSettings; worktrees?: string; budgetLeft?: number } = {}) {
+function harness(
+  opts: { world?: World; headroom?: (i: Initiator) => Headroom; project?: Project; sandbox?: () => SandboxSettings; worktrees?: string; budgetLeft?: number; persist?: (urgency?: "now") => void } = {},
+) {
   const world = opts.world ?? emptyWorld();
   const queries: FakeQuery[] = [];
   const reports: { agentId: AgentId; text: string; by: Initiator }[] = [];
@@ -107,6 +110,7 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; p
       executable: () => "/fake/claude",
     },
     hooks: (actor) => ({ PreToolUse: [{ matcher: actor.kind === "agent" ? actor.agentId : "bot", hooks: [] }] }),
+    canUseTool: (actor) => async () => ({ behavior: "deny", message: `prompted ${actor.kind === "agent" ? actor.agentId : "bot"}` }),
     beginTurn: (actor) => begun.push(actor.kind === "agent" ? actor.agentId : actor.botId),
     sandbox: opts.sandbox ?? ((actor) => ({ enabled: true, filesystem: { allowWrite: [actor.kind === "agent" ? actor.agentId : actor.botId] } })),
     configRoot: (id) => `/bridge/agent-config/${id}`,
@@ -114,7 +118,7 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; p
     settings: () => ({ autoMemoryEnabled: false }),
     observe: () => {},
     idle: () => {},
-    persist: () => {},
+    persist: (urgency) => opts.persist?.(urgency),
     now: () => AT,
     changed: (rec) => {
       statuses.push(rec.agent.status);
@@ -129,9 +133,10 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; p
   return { world, agents, queries, reports, notes, statuses, evidence, begun, trustCards, start, q: () => queries.at(-1)! };
 }
 
-const AGENT_PROMPT =
-  "You were started by the bot Ana for Alex. Work on a new branch, verify your change, and open a PR when done. " +
-  "Your final message each turn is reported to the bot.\n\nMake the suite green.";
+const AGENT_RULES =
+  "You were started by the bot Ana for Alex. Nobody is at this terminal: your final message each turn is reported to the bot. " +
+  "Work on a new branch, verify your change, and open a PR when done.";
+const AGENT_PROMPT = "Make the suite green.";
 
 let cloudProject: Project = project;
 
@@ -149,21 +154,25 @@ function fakeCloudClaude(ok: boolean) {
   process.env.CLAUDIOBOT_CLAUDE = path;
 }
 
-test("a mac agent starts on its project with the agent prompt, its budget, no resume id and the hooks for its actor", async () => {
-  const h = harness();
+test("a mac agent starts on its project with its standing rules in the system prompt, the task as its first turn, its budget, no resume id and the hooks for its actor", async () => {
+  const world = emptyWorld();
+  world.bots.set(B1, newBot({ id: B1, name: "Ana", avatar: { shape: "circle", color: "white" }, at: AT }));
+  const h = harness({ world });
   const rec = await h.start("mac", routine);
   await flush();
-  expect(h.q().received).toEqual([AGENT_PROMPT]);
+  expect(h.q().received).toEqual(["Make the suite green."]);
   const o = h.q().options;
+  expect(o.systemPrompt).toEqual({ type: "preset", preset: "claude_code", append: AGENT_RULES });
   expect([o.cwd, o.resume, o.maxBudgetUsd, o.permissionMode, o.disallowedTools, o.model, o.hooks?.PreToolUse?.[0]?.matcher]).toEqual([
     "/code/shop",
     undefined,
     4.5,
     "auto",
-    ["AskUserQuestion"],
+    ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"],
     "claude-sonnet-5-5",
     rec.agent.id,
   ]);
+  expect(await o.canUseTool?.("Bash", {}, { signal: new AbortController().signal, toolUseID: "t1", requestId: "r1" })).toEqual({ behavior: "deny", message: `prompted ${rec.agent.id}` });
   expect(o.sandbox).toEqual({ enabled: true, filesystem: { allowWrite: [rec.agent.id] } });
   expect([o.env?.PATH, o.env?.GIT_CONFIG_KEY_0, o.env?.GIT_CONFIG_VALUE_0]).toEqual([process.env.PATH, "url.https://github.com/.insteadOf", "git@github.com:"]);
   expect(h.world.agents.get(rec.agent.id)).toMatchObject({
@@ -358,6 +367,47 @@ test("an agent whose query ran out of budget mid-turn reports that it used its b
   await flush();
   expect(rec.agent.status).toBe("failed");
   expect(h.reports.map((r) => r.text)).toEqual(["The agent used its budget."]);
+});
+
+test("a turn's report is saved before git is read and cleared once it reaches the bot", async () => {
+  const saves: { urgency: string | undefined; unreported: string[]; reported: number }[] = [];
+  let rec: AgentRecord | undefined;
+  const h = harness({ persist: (urgency) => rec && saves.push({ urgency, unreported: (rec.unreported ?? []).map((r) => r.text), reported: h.reports.length }) });
+  rec = await h.start("mac", routine);
+  await flush();
+  h.q().emit(result("Done: opened PR #4."));
+  await flush();
+  await flush();
+
+  expect(saves).toContainEqual({ urgency: "now", unreported: ["Done: opened PR #4."], reported: 0 });
+  expect(h.reports.map((r) => r.text)).toEqual(["[Git: not readable]\nDone: opened PR #4."]);
+  expect(rec.unreported).toEqual([]);
+});
+
+test("a report saved but not delivered when the bridge stopped reaches the bot after a restart, with fresh evidence", async () => {
+  const world = emptyWorld();
+  world.agents.set("a_done" as AgentId, {
+    agent: { id: "a_done" as AgentId, botId: B1, title: "Fix tests", where: "mac", projectName: "shop", status: "working", url: null, createdAt: AT, updatedAt: AT, evidence: null, worktree: null },
+    cwd: "/code/shop",
+    messages: [],
+    session: emptySession("s_old"),
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: user,
+    unreported: [{ status: "waiting", text: "Done: opened PR #4.", by: routine }],
+  });
+  const home = mkdtempSync(join(tmpdir(), "claudiobot-agents-"));
+  roots.push(home);
+  flushNow(world, home);
+  const reloaded = loadWorld(home).world;
+  const h = harness({ world: reloaded });
+  h.agents.resume();
+  await flush();
+  await flush();
+
+  expect(h.reports).toEqual([{ agentId: "a_done" as AgentId, text: "[Git: not readable]\nDone: opened PR #4.", by: routine }]);
+  const rec = reloaded.agents.get("a_done" as AgentId)!;
+  expect([rec.agent.status, rec.unreported, rec.messages.map((m) => m.text)]).toEqual(["waiting", [], ["Done: opened PR #4."]]);
 });
 
 test("resume starts mac agents with queued work and tells bots about agents a restart cut off", async () => {

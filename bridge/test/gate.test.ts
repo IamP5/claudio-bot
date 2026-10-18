@@ -95,6 +95,9 @@ function setup(opts: { bridgeName?: string } = {}) {
     gate.hooks(actor).PreToolUse![0]!.hooks[0]!(i, i.tool_use_id, { signal: new AbortController().signal });
   const call = (tool: string, toolInput: unknown, over: Partial<PreToolUseHookInput> = {}, actor?: Actor) => fire(input(tool, toolInput, over), actor);
   const bash = (command: string, actor?: Actor) => call("Bash", { command, description: "run" }, {}, actor);
+  /** Claude Code asking through canUseTool, as after the hook passed the call with this tool_use_id. */
+  const prompt = (command: string, toolUseID: string, actor: Actor = botActor(B1)) =>
+    gate.canUseTool(actor)("Bash", { command, description: "run" }, { signal: new AbortController().signal, toolUseID, requestId: `req_${toolUseID}`, title: `Claude wants to run ${command}` });
   const cards = () => bot.messages.filter((m): m is Extract<Message, { kind: "permission" }> => m.kind === "permission");
   return {
     gate,
@@ -118,6 +121,7 @@ function setup(opts: { bridgeName?: string } = {}) {
     fire,
     call,
     bash,
+    prompt,
     cards,
     advance: (ms: number) => {
       clock = new Date(clock.getTime() + ms);
@@ -301,6 +305,74 @@ describe("the permission flow", () => {
     expect(t.delivered[0]!.actor).toEqual(actor);
     expect(gateState(t.world).grants[0]!.actor).toBe(`agent:${A1}`);
     expect(decisionOf(await t.call("Bash", { command: "npm publish" }, { cwd: t.root }, actor))).toBe("allow");
+  });
+});
+
+describe("Claude Code's own prompts", () => {
+  test("a prompt posts a permission card and denies with the held reason, and Allow once lets the retry through the hook", async () => {
+    const t = setup();
+    const i = t.input("Bash", { command: "make release", description: "run" });
+    expect(decisionOf(await t.fire(i))).toBe("pass");
+
+    const held = await t.prompt("make release", i.tool_use_id);
+    const [card] = t.cards();
+    expect(card).toMatchObject({ tool: "Bash", label: "Claude wants to run make release", detail: "make release", always: "", answer: null, from: null });
+    expect(held).toEqual({ behavior: "deny", message: expect.stringContaining(`Held for Alex's approval (card ${card!.id}). It has not run.`) });
+    expect(t.notified).toEqual([{ reason: "card", id: card!.id }]);
+    expect(t.auditRows().at(-1)).toMatchObject({ tool: "Bash", toolUseId: i.tool_use_id, decision: "ask", cardId: card!.id });
+    expect(t.denials()).toBe(1);
+
+    expect(t.gate.answer(B1, card!.id, { kind: "permission", choice: "once" })).toEqual({ ok: true });
+    const retry = t.input("Bash", { command: "make release", description: "run" });
+    expect(decisionOf(await t.fire(retry))).toBe("allow");
+    expect(await t.prompt("make release", retry.tool_use_id)).toEqual({ behavior: "allow", updatedInput: { command: "make release", description: "run" } });
+    expect(t.cards()).toHaveLength(1);
+  });
+
+  test("a repeated prompt for one tool_use_id gets the same verdict, and an identical call waits on the open card", async () => {
+    const t = setup();
+    const first = await t.prompt("make release", "toolu_a");
+    expect(await t.prompt("make release", "toolu_a")).toEqual(first);
+    const other = await t.prompt("make release", "toolu_b");
+    expect(t.cards()).toHaveLength(1);
+    expect(other).toMatchObject({ behavior: "deny", message: expect.stringContaining("already waiting") });
+    expect(t.notified).toHaveLength(1);
+  });
+
+  test("prompts count toward the open-card cap", async () => {
+    const t = setup();
+    t.turn.initiator = routine;
+    for (let i = 0; i < 10; i++) await t.bash(`git push origin f${i}`);
+    expect(await t.prompt("make release", "toolu_over")).toMatchObject({ behavior: "deny", message: expect.stringContaining("requests waiting") });
+    expect(t.cards()).toHaveLength(10);
+  });
+
+  test("Never on a prompted call refuses that exact call without a card from then on", async () => {
+    const t = setup();
+    await t.prompt("make release", "toolu_a");
+    t.gate.answer(B1, t.cards()[0]!.id, { kind: "permission", choice: "never" });
+    expect(await t.prompt("make release", "toolu_b")).toMatchObject({ behavior: "deny", message: expect.stringContaining("said never") });
+    expect(t.cards()).toHaveLength(1);
+    await t.prompt("make clean", "toolu_c");
+    expect(t.cards()).toHaveLength(2);
+  });
+
+  test("a prompt while the turn is stopping is denied without a card", async () => {
+    const t = setup();
+    t.turn.stopping = true;
+    expect(await t.prompt("make release", "toolu_a")).toMatchObject({ behavior: "deny", message: expect.stringContaining("pressed Stop") });
+    expect(t.cards()).toHaveLength(0);
+  });
+
+  test("an agent's prompt shows in its bot's chat and the decision goes to the agent", async () => {
+    const t = setup();
+    const agent: Agent = { id: A1, botId: B1, title: "Fix login", where: "mac", projectName: "app", status: "working", url: null, createdAt: START.toISOString(), updatedAt: START.toISOString(), evidence: null, worktree: null };
+    t.world.agents.set(A1, { agent, cwd: t.root, messages: [], session: emptySession(), cloudSession: null, budgetUsd: null, startedBy: user });
+    const actor: Actor = { kind: "agent", botId: B1, agentId: A1 };
+    await t.prompt("make release", "toolu_a", actor);
+    expect(t.cards()[0]!.from).toEqual({ kind: "agent", id: A1, title: "Fix login" });
+    t.gate.answer(B1, t.cards()[0]!.id, { kind: "permission", choice: "once" });
+    expect(t.delivered[0]!.actor).toEqual(actor);
   });
 });
 

@@ -24,6 +24,28 @@ export const CLAUDIO_TOOLS = [
 ] as const;
 export type ClaudioTool = (typeof CLAUDIO_TOOLS)[number];
 
+/**
+ * Whether a tool has no effect outside the bot's own turn: it reads, or it only shapes what the turn shows. Keyed on
+ * every tool, so a new one is classified before it ships. These skip Claude Code's auto-mode classifier (allowedTools);
+ * the gate still sees each call.
+ */
+const NO_EFFECT: Readonly<Record<ClaudioTool, boolean>> = {
+  ask: true,
+  start_agent: false,
+  message_agent: false,
+  list_projects: true,
+  message_bot: false,
+  create_bot: false,
+  update_self: false,
+  set_routine: false,
+  delete_routine: false,
+  list_routines: true,
+  routine_no_update: true,
+  remember: false,
+  save_skill: false,
+};
+export const NO_EFFECT_TOOLS: readonly string[] = CLAUDIO_TOOLS.filter((t) => NO_EFFECT[t]).map((t) => `mcp__claudio__${t}`);
+
 /** Where a mac agent works: auto lets the bridge choose (a worktree when the checkout has uncommitted work or another agent). */
 export type Isolate = "auto" | "none" | "worktree";
 

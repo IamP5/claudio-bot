@@ -31,7 +31,7 @@ function setup(opts: { statuses?: McpServerStatus[]; live?: boolean } = {}) {
   const connectors = createConnectors({
     world,
     live: (id) => (live && id === B ? control : null),
-    reopen: (id) => void events.push(`reopen ${id}`),
+    reopen: (id, which) => void events.push(`reopen ${which} ${id}`),
     persist: (urgency) => void events.push(`persist ${urgency ?? "later"}`),
     log: () => {},
   });
@@ -85,16 +85,31 @@ test("with no live query, list shows the last list seen this run, else the off n
   expect(await seen.connectors.list(B)).toHaveLength(4);
 });
 
-test("set persists the choice before toggling the live query, then reopens", async () => {
+test("set persists the choice before toggling the live query, which then stays open while the bot's agents reopen", async () => {
   const { connectors, events, bot } = setup();
   expect(await connectors.set(B, "chrome-devtools", false)).toEqual({ ok: true });
   expect(bot.connectorsOff).toEqual(["chrome-devtools"]);
-  expect(events).toEqual(["persist now", "toggle chrome-devtools false", `reopen ${B}`]);
+  expect(events).toEqual(["persist now", "toggle chrome-devtools false", `reopen agents ${B}`]);
 
   events.length = 0;
   expect(await connectors.set(B, "chrome-devtools", true)).toEqual({ ok: true });
   expect(bot.connectorsOff).toEqual([]);
-  expect(events).toEqual(["persist now", "toggle chrome-devtools true", `reopen ${B}`]);
+  expect(events).toEqual(["persist now", "toggle chrome-devtools true", `reopen agents ${B}`]);
+});
+
+test("a live toggle that fails reopens the bot's query too", async () => {
+  const world = emptyWorld();
+  world.bots.set(B, newBot({ id: B, name: "Claudio", avatar: { shape: "circle", color: "white" }, at: "2026-10-17T09:00:00.000Z" }));
+  const reopened: string[] = [];
+  const connectors = createConnectors({
+    world,
+    live: () => ({ mcpServerStatus: async () => STATUSES, toggleMcpServer: async () => { throw new Error("closed"); } }),
+    reopen: (id, which) => void reopened.push(`${which} ${id}`),
+    persist: () => {},
+    log: () => {},
+  });
+  expect(await connectors.set(B, "linear", false)).toEqual({ ok: true });
+  expect(reopened).toEqual([`all ${B}`]);
 });
 
 test("turning a server off twice keeps one entry", async () => {
@@ -110,7 +125,7 @@ test("set without a live query still persists and reopens", async () => {
   close();
   expect(await connectors.set(B, "linear", false)).toEqual({ ok: true });
   expect(bot.connectorsOff).toEqual(["linear"]);
-  expect(events).toEqual(["persist now", `reopen ${B}`]);
+  expect(events).toEqual(["persist now", `reopen all ${B}`]);
 });
 
 test("only a server the bot has listed can be turned off, while any name can be turned back on", async () => {

@@ -45,7 +45,7 @@ import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec
 import { createSkills } from "./skills";
 import { appendArchive, type Persist } from "./store";
 import { BOT_NAME_MAX, errorText, hasHiddenCharacters } from "./text";
-import { botToolServer, type BotActions } from "./tools";
+import { botToolServer, NO_EFFECT_TOOLS, type BotActions } from "./tools";
 import { freshTurn, readTurn, type Bubble, type Turn } from "./turn";
 import { createWebhooks } from "./webhook";
 import {
@@ -536,8 +536,8 @@ export function createHub(deps: HubDeps): Hub {
   }
 
   /** The bot's and its agents' live queries close at their next chance, so the next ones open with fresh options. */
-  function reopenAll(botId: BotId) {
-    brains.get(botId)?.reopen();
+  function reopenFor(botId: BotId, which: "agents" | "all") {
+    if (which === "all") brains.get(botId)?.reopen();
     for (const rec of world.agents.values()) if (rec.agent.botId === botId) agents.session(rec.agent.id)?.reopen();
   }
 
@@ -602,10 +602,13 @@ export function createHub(deps: HubDeps): Hub {
           systemPrompt: { type: "preset", preset: "claude_code", append: persona({ name: bot.name, userName }) },
           permissionMode: "auto",
           mcpServers: { claudio: botToolServer(bot.id, actions) },
-          // A bot asks with its own ask tool, which posts a card instead of blocking the turn.
-          disallowedTools: ["AskUserQuestion"],
+          // A bot asks with its own ask tool, which posts a card instead of blocking the turn. Plan mode would wait for
+          // an approval nobody can give.
+          disallowedTools: ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"],
+          allowedTools: [...NO_EFFECT_TOOLS],
           model: deps.model,
           hooks: gate.hooks(actor),
+          canUseTool: gate.canUseTool(actor),
           sandbox: sandboxFor(actor, scopeOf(actor), process.env),
           settings: settingsFor(bot.id),
         };
@@ -741,6 +744,7 @@ export function createHub(deps: HubDeps): Hub {
     log: deps.log,
     claude: deps.claude,
     hooks: (actor) => gate.hooks(actor),
+    canUseTool: (actor) => gate.canUseTool(actor),
     beginTurn: (actor) => gate.beginTurn(actor),
     sandbox(actor) {
       const scope = scopeOf(actor);
@@ -771,7 +775,7 @@ export function createHub(deps: HubDeps): Hub {
     },
   });
 
-  const connectors = createConnectors({ world, live: (id) => brains.get(id)?.mcp() ?? null, reopen: reopenAll, persist: deps.persist, log: deps.log });
+  const connectors = createConnectors({ world, live: (id) => brains.get(id)?.mcp() ?? null, reopen: reopenFor, persist: deps.persist, log: deps.log });
   const webhooks = createWebhooks({ world, scheduler, port: deps.webhookPort, now: clockNow, log: deps.log });
 
   const allSessions = () => [...brains.values(), ...agents.sessions()];

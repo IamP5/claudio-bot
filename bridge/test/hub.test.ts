@@ -435,6 +435,47 @@ test("a protocol 2 app answering Allow once on a held call grants it once for th
   expect(h.q().received.at(-1)).toStartWith("[Alex allowed once: Bash `git push origin main`.");
 });
 
+test("a prompt from Claude Code in a bot's or an agent's query posts a card in the bot's chat and holds the call", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-agent-")));
+  roots.push(cwd);
+  world.agents.set("a_1" as AgentId, {
+    agent: { id: "a_1" as AgentId, botId: b.id, title: "Ship it", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null },
+    cwd,
+    messages: [],
+    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "Release it.", initiator: { kind: "user" }, settles: null, attempts: 0 }] },
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: { kind: "user" },
+  });
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  h.hub.boot(false);
+  await flush();
+  const agentQuery = h.q();
+  await h.hub.handle({ type: "send", botId: b.id, text: "release", uploads: [] });
+  await flush();
+  const botQuery = h.q();
+  const ask = (q: typeof botQuery, toolUseID: string) =>
+    q.options.canUseTool!("Bash", { command: "make release" }, { signal: new AbortController().signal, toolUseID, requestId: "r1", title: "Claude wants to run make release" });
+
+  const fromBot = await ask(botQuery, "toolu_bot");
+  const fromAgent = await ask(agentQuery, "toolu_agent");
+
+  const cards = b.messages.filter((m) => m.kind === "permission");
+  expect(cards.map((m) => m.kind === "permission" && [m.detail, m.from])).toEqual([
+    ["make release", null],
+    ["make release", { kind: "agent", id: "a_1" as AgentId, title: "Ship it" }],
+  ]);
+  expect([fromBot, fromAgent]).toEqual([
+    { behavior: "deny", message: expect.stringContaining(`card ${cards[0]!.id}`) },
+    { behavior: "deny", message: expect.stringContaining(`card ${cards[1]!.id}`) },
+  ]);
+  expect(h.pushes.map((p) => p.messageId)).toEqual(cards.map((c) => c.id));
+});
+
 test("Allow once's ten minutes start when the continuation's turn starts, not at the tap", async () => {
   setSystemTime(new Date(at));
   const world = emptyWorld();
@@ -791,6 +832,18 @@ test("the bot's tool server offers every claudio tool, and list_routines and set
   expect(await text("list_routines", {})).toStartWith("- digest: Every day at 9:00 AM (0 9 * * *), next ");
 });
 
+test("a bot's query refuses plan mode and Claude Code's question tool, and runs only its no-effect claudio tools without the classifier", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  await h.hub.handle({ type: "send", botId: b.id, text: "hi", uploads: [] });
+  await flush();
+
+  expect(h.q().options.disallowedTools).toEqual(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"]);
+  expect(h.q().options.allowedTools).toEqual(["mcp__claudio__ask", "mcp__claudio__list_projects", "mcp__claudio__list_routines", "mcp__claudio__routine_no_update"]);
+});
+
 test("the client requests of the pass 3 units answer through their modules", async () => {
   const world = emptyWorld();
   const b = bot("eng");
@@ -803,7 +856,7 @@ test("the client requests of the pass 3 units answer through their modules", asy
   expect(await h.hub.handle({ type: "remove_worktree", agentId: "a_none" as AgentId })).toEqual([{ type: "error", message: "Unknown agent" }]);
 });
 
-test("turning a connector off answers with the new list, toggles the live query, and every later bot and agent query denies it", async () => {
+test("turning a connector off answers with the new list, toggles the live bot query and keeps it, and the agent's next query denies it", async () => {
   const world = emptyWorld();
   const b = bot("eng");
   world.bots.set(b.id, b);
@@ -845,15 +898,15 @@ test("turning a connector off answers with the new list, toggles the live query,
   const agentAfter = h.queries.findLast((q) => q.options.cwd === cwd)!;
 
   const denied = { autoMemoryEnabled: false, cleanupPeriodDays: 3650, deniedMcpServers: [{ serverName: "chrome-devtools" }] };
-  expect([botAfter === botBefore, agentAfter === agentBefore]).toEqual([false, false]);
-  expect([botAfter.received.length, botAfter.received[0], agentAfter.received.length, agentAfter.received[0]]).toEqual([
-    1,
+  expect([botAfter === botBefore, agentAfter === agentBefore]).toEqual([true, false]);
+  expect([botAfter.received.length, botAfter.received[1], agentAfter.received.length, agentAfter.received[0]]).toEqual([
+    2,
     expect.stringContaining("again"),
     1,
     expect.stringContaining("And the docs."),
   ]);
-  expect([botBefore.options.settings, agentBefore.options.settings]).toEqual([{ autoMemoryEnabled: false, cleanupPeriodDays: 3650 }, { autoMemoryEnabled: false, cleanupPeriodDays: 3650 }]);
-  expect([botAfter.options.settings, agentAfter.options.settings]).toEqual([denied, denied]);
+  expect(agentBefore.options.settings).toEqual({ autoMemoryEnabled: false, cleanupPeriodDays: 3650 });
+  expect(agentAfter.options.settings).toEqual(denied);
 });
 
 test("a send repeated with the same clientId posts one user message and delivers one envelope", async () => {
@@ -877,6 +930,23 @@ test("a send repeated with the same clientId posts one user message and delivers
 
   await h.hub.handle({ ...send, clientId: "c-2" });
   expect(b.messages.filter((m) => m.kind === "user")).toHaveLength(2);
+});
+
+test("a /command sent twice at once with the same clientId posts one user message and runs once", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  const send: ClientMessage = { type: "send", botId: b.id, text: "/greet Sam", uploads: [], clientId: "c-1" };
+
+  const replies = await Promise.all([h.hub.handle(send), h.hub.handle(send)]);
+  await flush();
+
+  const users = b.messages.filter((m) => m.kind === "user");
+  expect(users).toHaveLength(1);
+  expect(replies).toEqual([[], [{ type: "message", botId: b.id, message: users[0]! }]]);
+  expect(h.queries.flatMap((q) => q.received)).toEqual(["/greet Sam"]);
 });
 
 test("delete_bot removes the config folders of the bot's agents and keeps other bots'", async () => {
@@ -1278,6 +1348,51 @@ test("the bot a user mentioned hears from the bot handing it work as a hop of th
   const h = await pair();
   await callTool(h.anaQuery, "message_bot", { bot: "bo", text: "Alex wants the release cut." });
   expect(h.bo.session.pending.map((p) => p.initiator)).toEqual([{ kind: "bot", botId: h.ana.id, hops: 1, origin: { kind: "user" } }]);
+});
+
+test("a long message_bot text reaches the other bot cut at a word, with a pointer, and stays whole in the exchange", async () => {
+  const h = await pair();
+  const long = "word ".repeat(4000).trimEnd();
+  await callTool(h.anaQuery, "message_bot", { bot: "bo", text: long });
+  await flush();
+
+  const prompt = h.q().received.at(-1)!;
+  expect(prompt).toContain(`\n${"word ".repeat(1599)}word\n`);
+  expect(prompt).not.toContain("word ".repeat(1601));
+  expect(prompt).toEndWith("\n[cut: the full message is in ana's chat]");
+  const [log] = await h.hub.handle({ type: "exchange", botId: h.bo.id, peer: h.ana.id });
+  expect(log).toMatchObject({ messages: [{ from: h.ana.id, text: long }] });
+});
+
+test("a long agent report reaches its bot cut at a line, with a pointer, and stays whole in the agent's thread", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-agent-")));
+  roots.push(cwd);
+  world.agents.set("a_1" as AgentId, {
+    agent: { id: "a_1" as AgentId, botId: b.id, title: "Ship it", where: "mac", projectName: "app", status: "working", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null },
+    cwd,
+    messages: [],
+    session: { ...emptySession(), pending: [{ id: "e1" as EnvelopeId, kind: "envelope", at, text: "Ship it.", initiator: { kind: "user" }, settles: null, attempts: 0 }] },
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: { kind: "user" },
+  });
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  h.hub.boot(false);
+  await flush();
+  const report = Array.from({ length: 300 }, (_, i) => `Line ${String(i).padStart(3, "0")}: ${"x".repeat(40)}`).join("\n");
+  h.q().emit(result(0.1, { result: report }));
+  for (let i = 0; i < 20 && !h.queries.some((q) => q.options.cwd !== cwd); i++) await new Promise((r) => setTimeout(r, 25));
+  await flush();
+
+  const prompt = h.queries.find((q) => q.options.cwd !== cwd)!.received.at(-1)!;
+  expect(prompt).toContain("Line 150:");
+  expect(prompt).not.toContain("Line 180:");
+  expect(prompt).toMatch(/x\n`+\n\[cut: the full report is on the agent's card\]$/);
+  expect(world.agents.get("a_1" as AgentId)!.messages.at(-1)!.text).toBe(report);
 });
 
 test("message_bot reaches a bot by its title, and a miss lists names with titles", async () => {

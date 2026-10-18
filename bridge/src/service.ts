@@ -35,8 +35,11 @@ export const defaultLogDir = (home = homedir()) => join(home, "Library", "Logs",
 /** Names that steer this CLI, not the bridge, so they stay out of the service's environment. */
 const CONTROL_VARS = ["CLAUDIOBOT_SERVICE_LABEL", "CLAUDIOBOT_LOG_DIR"] as const;
 
-/** Claude Code's own variables the bridge's queries inherit. ENABLE_CLAUDEAI_MCP_SERVERS=false leaves claude.ai connectors out. */
-const CLAUDE_VARS = ["ENABLE_CLAUDEAI_MCP_SERVERS"] as const;
+/**
+ * Claude Code's own variables the bridge's queries inherit. CLAUDE_CONFIG_DIR picks the config (and login) the bots
+ * use; HOME is never pinned. ENABLE_CLAUDEAI_MCP_SERVERS=false leaves claude.ai connectors out.
+ */
+const CLAUDE_VARS = ["CLAUDE_CONFIG_DIR", "ENABLE_CLAUDEAI_MCP_SERVERS"] as const;
 
 /** launchd starts agents with a bare PATH and none of the shell's variables, so the install-time ones are pinned. */
 export function capturedEnv(env: Record<string, string | undefined>): Record<string, string> {

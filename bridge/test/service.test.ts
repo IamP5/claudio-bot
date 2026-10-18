@@ -86,7 +86,7 @@ describe("plist", () => {
   });
 });
 
-test("captures PATH and CLAUDIOBOT_* but not the CLI's own controls or other variables", () => {
+test("captures PATH, CLAUDIOBOT_* and Claude Code's config dir but not the CLI's own controls or other variables", () => {
   expect(
     capturedEnv({
       PATH: "/bin",
@@ -98,8 +98,15 @@ test("captures PATH and CLAUDIOBOT_* but not the CLI's own controls or other var
       GITHUB_TOKEN: "secret",
       CLAUDEBOT_HOME: "/old",
       ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+      CLAUDE_CONFIG_DIR: "/Users/me/.claude-work",
     }),
-  ).toEqual({ CLAUDIOBOT_CLAUDE: "/Users/me/.local/bin/claude", CLAUDIOBOT_PORT: "7999", ENABLE_CLAUDEAI_MCP_SERVERS: "false", PATH: "/bin" });
+  ).toEqual({
+    CLAUDE_CONFIG_DIR: "/Users/me/.claude-work",
+    CLAUDIOBOT_CLAUDE: "/Users/me/.local/bin/claude",
+    CLAUDIOBOT_PORT: "7999",
+    ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+    PATH: "/bin",
+  });
 });
 
 test("reads the service's own state and pid, not the nested blocks'", () => {

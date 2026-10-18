@@ -104,7 +104,7 @@ enum Demo {
             return
         default: break
         }
-        guard case let .send(botId, text, _, _) = msg, var bot = store.bots[botId] else { return }
+        guard case let .send(botId, text, _, _, _) = msg, var bot = store.bots[botId] else { return }
         store.apply(.message(botId: botId, message: me(UUID().uuidString, .now, text)))
         bot.status = .working
         store.apply(.bot(bot))

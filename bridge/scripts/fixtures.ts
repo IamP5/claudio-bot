@@ -1,3 +1,4 @@
+import { FEATURES } from "../src/protocol";
 import type { AgentView, Bot, Broadcast, ClientMessage, Message, Peer, Routine, ServerMessage } from "../src/protocol";
 
 // The wire form of T: branded ids are plain strings, so fixtures type-check without casts.
@@ -18,7 +19,7 @@ const routine: Wire<Routine> = {
   ],
 };
 const bot: Wire<Bot> = {
-  id: "b1", name: "engineer", title: null, avatar: { shape: "hexagon", color: "orange" },
+  id: "b1", kind: "bot", members: [], name: "engineer", title: null, avatar: { shape: "hexagon", color: "orange" },
   pinned: false, hidden: false, status: "idle", unread: 2,
   question: "Want me to merge any of these now?", preview: "Want me to merge any of these now?",
   lastAt: at, createdAt: at, routines: [routine], dailyCapUsd: null, muted: false,
@@ -45,7 +46,7 @@ const agent: Wire<AgentView> = {
 };
 
 export const server = [
-  { type: "hello", protocol: 3, features: ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend"], epoch: "e_7f3a", seq: 41, resumed: false, machine: "MacBook", userName: "Alex", bots: [bot] },
+  { type: "hello", protocol: 3, features: [...FEATURES], epoch: "e_7f3a", seq: 41, resumed: false, machine: "MacBook", userName: "Alex", bots: [bot] },
   { type: "bot", seq: 42, bot: { ...bot, id: "b2", name: "news digest", title: "Morning digest", avatar: { shape: "pentagon", color: "teal" }, status: "working", unread: 0, question: null, pinned: true, dailyCapUsd: 5, spentTodayUsd: 0, capUsd: 5 } },
   { type: "bot_removed", botId: "b2" },
   { type: "created", ref: "c1", botId: "b3" },
@@ -112,6 +113,17 @@ export const server = [
   ] },
   { type: "skills", botId: "b1", skills: [{ name: "release-notes", description: "Write release notes from merged PRs", updatedAt: at }] },
   { type: "webhook_token", botId: "b1", routineId: "r2", url: "http://127.0.0.1:7879/hook/r2", token: "whk_3s9dK2" },
+  { type: "bot", seq: 57, bot: { ...bot, id: "g1", kind: "group", members: ["b1", "b2"], name: "launch crew", avatar: { shape: "flower", color: "purple" }, unread: 1, question: null, preview: "Staging is green." } },
+  { type: "message", seq: 58, botId: "g1", message: { kind: "user", id: "m12", at, text: "@engineer is staging green? Check @github", attachments: [], mentions: [{ kind: "bot", id: "b1", name: "engineer" }, { kind: "connector", name: "github" }] } },
+  { type: "message", seq: 59, botId: "g1", message: { kind: "bot", id: "m13", at: later, text: "Staging is green.", from: "b1" } },
+  { type: "commands", botId: "b1", commands: [
+    { name: "release-notes", description: "Write release notes from merged PRs", argumentHint: "", source: "skill" },
+    { name: "compact", description: "Summarize the conversation to free up context", argumentHint: "[instructions]", source: "builtin" },
+  ] },
+  { type: "exchange", botId: "b1", peer: "b2", messages: [
+    { id: "x1", at, from: "b1", text: "Put PR #142 in tomorrow's digest." },
+    { id: "x2", at: later, from: "b2", text: "Added." },
+  ] },
 ] satisfies (Wire<ServerMessage> | Wire<Broadcast>)[];
 
 export const client = [
@@ -148,6 +160,11 @@ export const client = [
   { type: "delete_skill", botId: "b1", name: "release-notes" },
   { type: "webhook_token", botId: "b1", routineId: "r2" },
   { type: "remove_worktree", agentId: "a1" },
+  { type: "send", botId: "g1", text: "@engineer check @github", uploads: [], mentions: [{ kind: "bot", id: "b1", name: "engineer" }, { kind: "connector", name: "github" }] },
+  { type: "commands", botId: "b1" },
+  { type: "exchange", botId: "b1", peer: "b2" },
+  { type: "create_group", ref: "c2", name: "launch crew", members: ["b1", "b2"] },
+  { type: "update_bot", botId: "g1", patch: { members: ["b1", "b2", "b3"] } },
 ] satisfies Wire<ClientMessage>[];
 
 // Compile-time coverage: every server type, client type and message kind has a fixture, so the Swift mirror is pinned

@@ -158,9 +158,13 @@ enum TriggerKind: OpenEnum {
 /// What a bridge can do beyond protocol 3's base (hello.features). Screens for a feature the bridge does not list stay hidden.
 enum Feature: OpenEnum {
     case memory, activity, mute, worktrees, connectors, skills, webhooks, spend
+    case mentions, commands, exchanges, groups
     case unknown(String)
 
-    static let allCases: [Feature] = [.memory, .activity, .mute, .worktrees, .connectors, .skills, .webhooks, .spend]
+    static let allCases: [Feature] = [
+        .memory, .activity, .mute, .worktrees, .connectors, .skills, .webhooks, .spend,
+        .mentions, .commands, .exchanges, .groups,
+    ]
     init?(rawValue: String) { self.init(wire: rawValue) }
 
     var rawValue: String {
@@ -173,6 +177,10 @@ enum Feature: OpenEnum {
         case .skills: "skills"
         case .webhooks: "webhooks"
         case .spend: "spend"
+        case .mentions: "mentions"
+        case .commands: "commands"
+        case .exchanges: "exchanges"
+        case .groups: "groups"
         case .unknown(let raw): raw
         }
     }
@@ -283,8 +291,29 @@ struct Routine: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+/// A group is a chat of the user and several bots. It has no Claude Code session of its own: its members answer in it.
+enum BotKind: OpenEnum {
+    case bot, group
+    case unknown(String)
+
+    static let allCases: [BotKind] = [.bot, .group]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .bot: "bot"
+        case .group: "group"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
 struct Bot: Codable, Hashable, Sendable, Identifiable {
     let id: BotID
+    /// .bot from a bridge without the groups feature.
+    var kind: BotKind
+    /// The bots in a group. Empty for a plain bot.
+    var members: [BotID]
     var name: String
     var title: String?
     var avatar: Avatar
@@ -307,15 +336,18 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, title, avatar, pinned, hidden, status, unread, question, preview, lastAt, createdAt, routines, dailyCapUsd, muted
-        case spentTodayUsd, capUsd
+        case spentTodayUsd, capUsd, kind, members
     }
 
     init(
         id: BotID, name: String, title: String?, avatar: Avatar, pinned: Bool, hidden: Bool, status: BotStatus,
         unread: Int, question: String?, preview: String, lastAt: Date, createdAt: Date, routines: [Routine],
-        dailyCapUsd: Double? = nil, muted: Bool = false, spentTodayUsd: Double? = nil, capUsd: Double? = nil
+        dailyCapUsd: Double? = nil, muted: Bool = false, spentTodayUsd: Double? = nil, capUsd: Double? = nil,
+        kind: BotKind = .bot, members: [BotID] = []
     ) {
         self.id = id
+        self.kind = kind
+        self.members = members
         self.name = name
         self.title = title
         self.avatar = avatar
@@ -337,6 +369,8 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(BotID.self, forKey: .id)
+        kind = try c.decodeIfPresent(BotKind.self, forKey: .kind) ?? .bot
+        members = try c.decodeIfPresent([BotID].self, forKey: .members) ?? []
         name = try c.decode(String.self, forKey: .name)
         title = try c.decodeIfPresent(String.self, forKey: .title)
         avatar = try c.decode(Avatar.self, forKey: .avatar)
@@ -358,6 +392,8 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(members, forKey: .members)
         try c.encode(name, forKey: .name)
         try c.encode(title, forKey: .title)
         try c.encode(avatar, forKey: .avatar)
@@ -437,6 +473,39 @@ struct Attachment: Codable, Hashable, Sendable {
     let name: String
     let mime: String
     let path: String
+}
+
+/// What one "@name" token in a user message points to. The text keeps the token.
+enum Mention: Codable, Hashable, Sendable {
+    case bot(id: BotID, name: String)
+    case connector(name: String)
+    case unknown(kind: String)
+
+    private enum CodingKeys: String, CodingKey { case kind, id, name }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        switch try c.decode(String.self, forKey: .kind) {
+        case "bot": self = .bot(id: try c.decode(BotID.self, forKey: .id), name: try c.decode(String.self, forKey: .name))
+        case "connector": self = .connector(name: try c.decode(String.self, forKey: .name))
+        case let other: self = .unknown(kind: other)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .bot(id, name):
+            try c.encode("bot", forKey: .kind)
+            try c.encode(id, forKey: .id)
+            try c.encode(name, forKey: .name)
+        case let .connector(name):
+            try c.encode("connector", forKey: .kind)
+            try c.encode(name, forKey: .name)
+        case let .unknown(kind):
+            try c.encode(kind, forKey: .kind)
+        }
+    }
 }
 
 /// How a question card was closed. `nil` on the message means it is still open.
@@ -529,9 +598,10 @@ struct PermissionCard: Hashable, Sendable {
 }
 
 enum Message: Codable, Hashable, Sendable, Identifiable {
-    /// clientId: the id the app gave its send, echoed back by the bridge.
-    case user(id: MessageID, at: Date, text: String, attachments: [Attachment], clientId: String? = nil)
-    case bot(id: MessageID, at: Date, text: String)
+    /// clientId: the id the app gave its send, echoed back by the bridge. mentions: what each "@name" in text points to.
+    case user(id: MessageID, at: Date, text: String, attachments: [Attachment], clientId: String? = nil, mentions: [Mention] = [])
+    /// from: in a group conversation, the member who posted it. nil in a bot's own chat.
+    case bot(id: MessageID, at: Date, text: String, from: BotID? = nil)
     case question(id: MessageID, at: Date, card: QuestionCard)
     case permission(id: MessageID, at: Date, card: PermissionCard)
     /// A run of messages between this bot and one peer.
@@ -542,21 +612,21 @@ enum Message: Codable, Hashable, Sendable, Identifiable {
 
     var id: MessageID {
         switch self {
-        case .user(let id, _, _, _, _), .bot(let id, _, _), .question(let id, _, _), .permission(let id, _, _),
+        case .user(let id, _, _, _, _, _), .bot(let id, _, _, _), .question(let id, _, _), .permission(let id, _, _),
              .exchange(let id, _, _, _, _), .note(let id, _, _, _), .unknown(let id, _, _): id
         }
     }
 
     var at: Date {
         switch self {
-        case .user(_, let at, _, _, _), .bot(_, let at, _), .question(_, let at, _), .permission(_, let at, _),
+        case .user(_, let at, _, _, _, _), .bot(_, let at, _, _), .question(_, let at, _), .permission(_, let at, _),
              .exchange(_, let at, _, _, _), .note(_, let at, _, _), .unknown(_, let at, _): at
         }
     }
 
     private enum CodingKeys: String, CodingKey {
         case kind, id, at, text, attachments, question, options, answer, expiresAt, peer, sent, received, refs
-        case from, tool, label, detail, always, clientId
+        case from, tool, label, detail, always, clientId, mentions
     }
 
     init(from decoder: Decoder) throws {
@@ -568,10 +638,11 @@ enum Message: Codable, Hashable, Sendable, Identifiable {
             self = .user(
                 id: id, at: at, text: try c.decode(String.self, forKey: .text),
                 attachments: try c.decode([Attachment].self, forKey: .attachments),
-                clientId: try c.decodeIfPresent(String.self, forKey: .clientId)
+                clientId: try c.decodeIfPresent(String.self, forKey: .clientId),
+                mentions: try c.decodeIfPresent([Mention].self, forKey: .mentions) ?? []
             )
         case "bot":
-            self = .bot(id: id, at: at, text: try c.decode(String.self, forKey: .text))
+            self = .bot(id: id, at: at, text: try c.decode(String.self, forKey: .text), from: try c.decodeIfPresent(BotID.self, forKey: .from))
         case "question":
             self = .question(id: id, at: at, card: QuestionCard(
                 question: try c.decode(String.self, forKey: .question),
@@ -606,14 +677,16 @@ enum Message: Codable, Hashable, Sendable, Identifiable {
         try c.encode(id, forKey: .id)
         try c.encode(at, forKey: .at)
         switch self {
-        case let .user(_, _, text, attachments, clientId):
+        case let .user(_, _, text, attachments, clientId, mentions):
             try c.encode("user", forKey: .kind)
             try c.encode(text, forKey: .text)
             try c.encode(attachments, forKey: .attachments)
             try c.encodeIfPresent(clientId, forKey: .clientId)
-        case let .bot(_, _, text):
+            if !mentions.isEmpty { try c.encode(mentions, forKey: .mentions) }
+        case let .bot(_, _, text, from):
             try c.encode("bot", forKey: .kind)
             try c.encode(text, forKey: .text)
+            try c.encodeIfPresent(from, forKey: .from)
         case let .question(_, _, card):
             try c.encode("question", forKey: .kind)
             try c.encode(card.question, forKey: .question)
@@ -901,6 +974,40 @@ struct Skill: Codable, Hashable, Sendable, Identifiable {
     var id: String { name }
 }
 
+enum CommandSource: OpenEnum {
+    case skill, builtin
+    case unknown(String)
+
+    static let allCases: [CommandSource] = [.skill, .builtin]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .skill: "skill"
+        case .builtin: "builtin"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// One entry of the "/" menu, as the bot's Claude Code session reports it. argumentHint is empty when it takes none.
+struct Command: Codable, Hashable, Sendable, Identifiable {
+    let name: String
+    var description: String
+    var argumentHint: String
+    var source: CommandSource
+
+    var id: String { name }
+}
+
+/// One message between two bots, the text behind an exchange line.
+struct ExchangeMessage: Codable, Hashable, Sendable, Identifiable {
+    let id: MessageID
+    let at: Date
+    let from: BotID
+    let text: String
+}
+
 /// A webhook routine's new token, shown once.
 struct WebhookToken: Codable, Hashable, Sendable {
     let routineId: RoutineID
@@ -961,6 +1068,9 @@ enum ServerMessage: Codable, Sendable {
     case connectors(botId: BotID, connectors: [Connector])
     case skills(botId: BotID, skills: [Skill])
     case webhookToken(botId: BotID, token: WebhookToken)
+    case commands(botId: BotID, commands: [Command])
+    /// Every message between botId and peer, oldest first.
+    case exchange(botId: BotID, peer: BotID, messages: [ExchangeMessage])
     case error(message: String)
     case unknown(type: String)
 
@@ -968,7 +1078,7 @@ enum ServerMessage: Codable, Sendable {
         case type, machine, userName, bots, bot, botId, ref, messages, message, library, links, agents, routines, agent
         case path, mime, content, data, devices, code, expiresAt
         case `protocol`, epoch, seq, resumed, features
-        case agentId, text, at, facts, connectors, skills, routineId, url, token
+        case agentId, text, at, facts, connectors, skills, routineId, url, token, commands, peer
     }
 
     init(from decoder: Decoder) throws {
@@ -1040,6 +1150,14 @@ enum ServerMessage: Codable, Sendable {
                 url: try c.decode(URL.self, forKey: .url),
                 token: try c.decode(String.self, forKey: .token)
             ))
+        case "commands":
+            self = .commands(botId: try c.decode(BotID.self, forKey: .botId), commands: try c.decode([Command].self, forKey: .commands))
+        case "exchange":
+            self = .exchange(
+                botId: try c.decode(BotID.self, forKey: .botId),
+                peer: try c.decode(BotID.self, forKey: .peer),
+                messages: try c.decode([ExchangeMessage].self, forKey: .messages)
+            )
         case "error":
             self = .error(message: try c.decode(String.self, forKey: .message))
         case let other:
@@ -1126,6 +1244,15 @@ enum ServerMessage: Codable, Sendable {
             try c.encode(token.routineId, forKey: .routineId)
             try c.encode(token.url, forKey: .url)
             try c.encode(token.token, forKey: .token)
+        case let .commands(botId, commands):
+            try c.encode("commands", forKey: .type)
+            try c.encode(botId, forKey: .botId)
+            try c.encode(commands, forKey: .commands)
+        case let .exchange(botId, peer, messages):
+            try c.encode("exchange", forKey: .type)
+            try c.encode(botId, forKey: .botId)
+            try c.encode(peer, forKey: .peer)
+            try c.encode(messages, forKey: .messages)
         case let .error(message):
             try c.encode("error", forKey: .type)
             try c.encode(message, forKey: .message)
@@ -1178,12 +1305,14 @@ struct BotPatch: Codable, Hashable, Sendable {
     /// `.some(nil)` goes back to the bridge default.
     var dailyCapUsd: Double??
     var muted: Bool?
+    /// A group's members, 2 to 8 different bots.
+    var members: [BotID]?
 
-    private enum CodingKeys: String, CodingKey { case name, title, avatar, pinned, hidden, dailyCapUsd, muted }
+    private enum CodingKeys: String, CodingKey { case name, title, avatar, pinned, hidden, dailyCapUsd, muted, members }
 
     init(
         name: String? = nil, title: String?? = nil, avatar: Avatar? = nil, pinned: Bool? = nil, hidden: Bool? = nil,
-        dailyCapUsd: Double?? = nil, muted: Bool? = nil
+        dailyCapUsd: Double?? = nil, muted: Bool? = nil, members: [BotID]? = nil
     ) {
         self.name = name
         self.title = title
@@ -1192,6 +1321,7 @@ struct BotPatch: Codable, Hashable, Sendable {
         self.hidden = hidden
         self.dailyCapUsd = dailyCapUsd
         self.muted = muted
+        self.members = members
     }
 
     init(from decoder: Decoder) throws {
@@ -1207,6 +1337,7 @@ struct BotPatch: Codable, Hashable, Sendable {
             dailyCapUsd = .some(try c.decodeNil(forKey: .dailyCapUsd) ? nil : try c.decode(Double.self, forKey: .dailyCapUsd))
         }
         muted = try c.decodeIfPresent(Bool.self, forKey: .muted)
+        members = try c.decodeIfPresent([BotID].self, forKey: .members)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1218,6 +1349,7 @@ struct BotPatch: Codable, Hashable, Sendable {
         try c.encodeIfPresent(hidden, forKey: .hidden)
         if let dailyCapUsd { try c.encode(dailyCapUsd, forKey: .dailyCapUsd) }
         try c.encodeIfPresent(muted, forKey: .muted)
+        try c.encodeIfPresent(members, forKey: .members)
     }
 }
 
@@ -1226,7 +1358,8 @@ enum ClientMessage: Codable, Hashable, Sendable {
     /// Asks for the conversation and marks the bot read.
     case open(botId: BotID)
     /// clientId lets the bridge drop a send it already has and the app match the echo to its bubble.
-    case send(botId: BotID, text: String, uploads: [Upload], clientId: String? = nil)
+    /// mentions: what each "@name" in text points to, at most 10.
+    case send(botId: BotID, text: String, uploads: [Upload], clientId: String? = nil, mentions: [Mention] = [])
     case answer(botId: BotID, messageId: MessageID, option: Int)
     case dismiss(botId: BotID, messageId: MessageID)
     /// Answers a permission card. Chat text never approves.
@@ -1254,13 +1387,18 @@ enum ClientMessage: Codable, Hashable, Sendable {
     case deleteSkill(botId: BotID, name: String)
     case webhookToken(botId: BotID, routineId: RoutineID)
     case removeWorktree(agentId: AgentID)
+    case commands(botId: BotID)
+    /// The messages behind the exchange lines between botId and peer.
+    case exchange(botId: BotID, peer: BotID)
+    /// Answered by created with the same ref. members: 2 to 8 different bots.
+    case createGroup(ref: String, name: String, members: [BotID])
     case devices
     case revokeDevice(deviceId: DeviceID)
     case pairCode
 
     private enum CodingKeys: String, CodingKey {
         case type, ref, botId, text, uploads, messageId, option, choice, patch, routineId, enabled, agentId, path, deviceId
-        case clientId, factId, name, force
+        case clientId, factId, name, force, mentions, peer, members
     }
 
     init(from decoder: Decoder) throws {
@@ -1272,7 +1410,8 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case "send":
             self = .send(
                 botId: try bot(), text: try c.decode(String.self, forKey: .text), uploads: try c.decode([Upload].self, forKey: .uploads),
-                clientId: try c.decodeIfPresent(String.self, forKey: .clientId)
+                clientId: try c.decodeIfPresent(String.self, forKey: .clientId),
+                mentions: try c.decodeIfPresent([Mention].self, forKey: .mentions) ?? []
             )
         case "answer":
             self = .answer(botId: try bot(), messageId: try c.decode(MessageID.self, forKey: .messageId), option: try c.decode(Int.self, forKey: .option))
@@ -1301,6 +1440,13 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case "delete_skill": self = .deleteSkill(botId: try bot(), name: try c.decode(String.self, forKey: .name))
         case "webhook_token": self = .webhookToken(botId: try bot(), routineId: try c.decode(RoutineID.self, forKey: .routineId))
         case "remove_worktree": self = .removeWorktree(agentId: try c.decode(AgentID.self, forKey: .agentId))
+        case "commands": self = .commands(botId: try bot())
+        case "exchange": self = .exchange(botId: try bot(), peer: try c.decode(BotID.self, forKey: .peer))
+        case "create_group":
+            self = .createGroup(
+                ref: try c.decode(String.self, forKey: .ref), name: try c.decode(String.self, forKey: .name),
+                members: try c.decode([BotID].self, forKey: .members)
+            )
         case "devices": self = .devices
         case "revoke_device": self = .revokeDevice(deviceId: try c.decode(DeviceID.self, forKey: .deviceId))
         case "pair_code": self = .pairCode
@@ -1318,12 +1464,13 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case let .open(botId):
             try c.encode("open", forKey: .type)
             try c.encode(botId, forKey: .botId)
-        case let .send(botId, text, uploads, clientId):
+        case let .send(botId, text, uploads, clientId, mentions):
             try c.encode("send", forKey: .type)
             try c.encode(botId, forKey: .botId)
             try c.encode(text, forKey: .text)
             try c.encode(uploads, forKey: .uploads)
             try c.encodeIfPresent(clientId, forKey: .clientId)
+            if !mentions.isEmpty { try c.encode(mentions, forKey: .mentions) }
         case let .answer(botId, messageId, option):
             try c.encode("answer", forKey: .type)
             try c.encode(botId, forKey: .botId)
@@ -1408,6 +1555,18 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case let .removeWorktree(agentId):
             try c.encode("remove_worktree", forKey: .type)
             try c.encode(agentId, forKey: .agentId)
+        case let .commands(botId):
+            try c.encode("commands", forKey: .type)
+            try c.encode(botId, forKey: .botId)
+        case let .exchange(botId, peer):
+            try c.encode("exchange", forKey: .type)
+            try c.encode(botId, forKey: .botId)
+            try c.encode(peer, forKey: .peer)
+        case let .createGroup(ref, name, members):
+            try c.encode("create_group", forKey: .type)
+            try c.encode(ref, forKey: .ref)
+            try c.encode(name, forKey: .name)
+            try c.encode(members, forKey: .members)
         case .devices:
             try c.encode("devices", forKey: .type)
         case let .revokeDevice(deviceId):

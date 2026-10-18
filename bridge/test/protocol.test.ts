@@ -43,6 +43,18 @@ test.each([
   ["a delete_skill without a name", { type: "delete_skill", botId: "b1" }],
   ["a webhook_token without a routine", { type: "webhook_token", botId: "b1" }],
   ["a remove_worktree without an agent", { type: "remove_worktree" }],
+  ["eleven mentions", { type: "send", botId: "b1", text: "hi", uploads: [], mentions: Array.from({ length: 11 }, () => ({ kind: "connector", name: "github" })) }],
+  ["a mention of an unknown kind", { type: "send", botId: "b1", text: "hi", uploads: [], mentions: [{ kind: "agent", name: "x" }] }],
+  ["a bot mention without an id", { type: "send", botId: "b1", text: "hi", uploads: [], mentions: [{ kind: "bot", name: "engineer" }] }],
+  ["a mention with an empty name", { type: "send", botId: "b1", text: "hi", uploads: [], mentions: [{ kind: "connector", name: "" }] }],
+  ["a mention name over 64 characters", { type: "send", botId: "b1", text: "hi", uploads: [], mentions: [{ kind: "connector", name: "x".repeat(65) }] }],
+  ["a group of one", { type: "create_group", ref: "c2", name: "crew", members: ["b1"] }],
+  ["a group of nine", { type: "create_group", ref: "c2", name: "crew", members: Array.from({ length: 9 }, (_, i) => `b${i}`) }],
+  ["a group naming a bot twice", { type: "create_group", ref: "c2", name: "crew", members: ["b1", "b1"] }],
+  ["a group with a blank name", { type: "create_group", ref: "c2", name: "   ", members: ["b1", "b2"] }],
+  ["a group name over the bot name limit", { type: "create_group", ref: "c2", name: "x".repeat(41), members: ["b1", "b2"] }],
+  ["a group member that is not a string", { type: "create_group", ref: "c2", name: "crew", members: ["b1", 2] }],
+  ["a members patch of one bot", { type: "update_bot", botId: "g1", patch: { members: ["b1"] } }],
 ])("rejects %s", (_, raw) => {
   expect(parseClientMessage(typeof raw === "string" ? raw : JSON.stringify(raw)).ok).toBe(false);
 });
@@ -50,6 +62,11 @@ test.each([
 test("a send with only an upload is accepted", () => {
   const parsed = parseClientMessage(JSON.stringify({ type: "send", botId: "b1", text: "", uploads: [{ name: "a.png", mime: "image/png", data: "AA==" }] }));
   expect(parsed.ok).toBe(true);
+});
+
+test("a group name is trimmed", () => {
+  const parsed = parseClientMessage(JSON.stringify({ type: "create_group", ref: "c2", name: "  crew ", members: ["b1", "b2"] }));
+  expect(parsed).toEqual({ ok: true, message: { type: "create_group", ref: "c2", name: "crew", members: ["b1", "b2"] } } as never);
 });
 
 test("a daily cap of null goes back to the bridge default", () => {

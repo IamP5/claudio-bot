@@ -14,9 +14,9 @@ struct ChatRowView: View {
                 .frame(maxWidth: .infinity)
         case .message(let message):
             switch message {
-            case let .user(_, _, text, attachments, _):
+            case let .user(_, _, text, attachments, _, _):
                 UserBubble(text: text, attachments: attachments, color: bot.avatar.color)
-            case let .bot(_, _, text):
+            case let .bot(_, _, text, _):
                 BotBubble(text: text)
             case let .question(id, _, card):
                 QuestionCardView(botId: bot.id, messageId: id, card: card, color: bot.avatar.color)

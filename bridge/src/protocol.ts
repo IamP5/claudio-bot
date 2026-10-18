@@ -16,11 +16,14 @@ export type DeviceId = string & { readonly __brand: "DeviceId" };
 export type FactId = string & { readonly __brand: "FactId" };
 
 /**
- * What this bridge can do beyond protocol 3's base, sent in hello.features. An app hides the screens a bridge does not
- * list, so a new app on an older bridge never offers a control the bridge would ignore. Additive changes extend this
- * list instead of bumping PROTOCOL.
+ * What a bridge can do beyond protocol 3's base. hello.features lists the ones this bridge serves, which may be fewer
+ * than FEATURES names. An app hides the screens a bridge does not list, so a new app on an older bridge never offers a
+ * control the bridge would ignore. Additive changes extend this list instead of bumping PROTOCOL.
  */
-export const FEATURES = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend"] as const;
+export const FEATURES = [
+  "memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend",
+  "mentions", "commands", "exchanges", "groups",
+] as const;
 export type Feature = (typeof FEATURES)[number];
 
 export const SHAPES = [
@@ -75,8 +78,15 @@ export type Routine = {
 // bridge keeps trying.
 export type BotStatus = "idle" | "working" | "awaiting_approval" | "parked" | "unavailable";
 
+// A group is a chat of the user and several bots. It has no Claude Code session of its own: its members answer in it.
+// The app treats an unknown kind as a plain bot.
+export type BotKind = "bot" | "group";
+
 export type Bot = {
   id: BotId;
+  kind: BotKind;
+  // The bots in a group, in the order the user picked them. [] for a plain bot.
+  members: BotId[];
   name: string;
   // The optional label under the name.
   title: string | null;
@@ -118,6 +128,9 @@ export type AgentPeer = Extract<Peer, { kind: "agent" }>;
 
 export type Attachment = { name: string; mime: string; path: string };
 
+/** What one "@name" token in a user message points to. The text keeps the token; the app renders it from this. */
+export type Mention = { kind: "bot"; id: BotId; name: string } | { kind: "connector"; name: string };
+
 // Allow once, Always for this bot, Deny, Never. The app renders the labels and sends only these strings.
 export const PERMISSION_CHOICES = ["once", "always", "deny", "never"] as const;
 export type PermissionChoice = (typeof PERMISSION_CHOICES)[number];
@@ -125,8 +138,10 @@ export type PermissionChoice = (typeof PERMISSION_CHOICES)[number];
 export type Message =
   // clientId: the id the app gave its send, echoed so the app can replace its optimistic bubble. Absent on messages
   // from before it existed and on sends that carried none.
-  | { kind: "user"; id: MessageId; at: string; text: string; attachments: Attachment[]; clientId?: string }
-  | { kind: "bot"; id: MessageId; at: string; text: string }
+  // mentions: absent when the message mentions nothing.
+  | { kind: "user"; id: MessageId; at: string; text: string; attachments: Attachment[]; clientId?: string; mentions?: Mention[] }
+  // from: in a group conversation, the member who posted it. Absent in a bot's own chat.
+  | { kind: "bot"; id: MessageId; at: string; text: string; from?: BotId }
   | {
       kind: "question";
       id: MessageId;
@@ -254,6 +269,17 @@ export type Connector = { name: string; status: ConnectorStatus; enabled: boolea
 /** A skill in the bot's own .claude/skills, saved with save_skill. */
 export type Skill = { name: string; description: string; updatedAt: string };
 
+/**
+ * One entry of the "/" menu, as the bot's Claude Code session reports it: an installed or plugin skill, or a built-in
+ * command the bridge allows from the phone. argumentHint is "" when the command takes none. The app treats an unknown
+ * source as "skill".
+ */
+export type CommandSource = "skill" | "builtin";
+export type Command = { name: string; description: string; argumentHint: string; source: CommandSource };
+
+/** One message between two bots, the text behind an exchange line. from: the bot that sent it. */
+export type ExchangeMessage = { id: MessageId; at: string; from: BotId; text: string };
+
 export type ServerMessage =
   // The app shows "Update the bridge" or "Update the app" when protocol is outside the range it speaks.
   | ({ type: "hello"; protocol: number; features: Feature[]; machine: string; userName: string; bots: Bot[] } & StreamPosition)
@@ -280,6 +306,9 @@ export type ServerMessage =
   | { type: "memory"; facts: Fact[] }
   | { type: "connectors"; botId: BotId; connectors: Connector[] }
   | { type: "skills"; botId: BotId; skills: Skill[] }
+  | { type: "commands"; botId: BotId; commands: Command[] }
+  // Every message between botId and peer, oldest first, in answer to exchange.
+  | { type: "exchange"; botId: BotId; peer: BotId; messages: ExchangeMessage[] }
   // A new token for a webhook routine, shown once. The bridge keeps only its hash. url answers on this Mac only.
   | { type: "webhook_token"; botId: BotId; routineId: RoutineId; url: string; token: string }
   | { type: "error"; message: string };
@@ -292,13 +321,14 @@ export type Broadcast = ServerMessage & { seq: number };
 
 export type Upload = { name: string; mime: string; data: string };
 
-export type BotPatch = Partial<Pick<Bot, "name" | "title" | "avatar" | "pinned" | "hidden" | "dailyCapUsd" | "muted">>;
+// members applies to a group only.
+export type BotPatch = Partial<Pick<Bot, "name" | "title" | "avatar" | "pinned" | "hidden" | "dailyCapUsd" | "muted" | "members">>;
 
 export type ClientMessage =
   | { type: "create_bot"; ref: string }
   // Sends the conversation and marks the bot read.
   | { type: "open"; botId: BotId }
-  | { type: "send"; botId: BotId; text: string; uploads: Upload[]; clientId?: string }
+  | { type: "send"; botId: BotId; text: string; uploads: Upload[]; clientId?: string; mentions?: Mention[] }
   | { type: "answer"; botId: BotId; messageId: MessageId; option: number }
   | { type: "dismiss"; botId: BotId; messageId: MessageId }
   // Answers a permission card. The only way a held call can run: chat text never approves.
@@ -326,6 +356,11 @@ export type ClientMessage =
   | { type: "set_connector"; botId: BotId; name: string; enabled: boolean }
   | { type: "skills"; botId: BotId }
   | { type: "delete_skill"; botId: BotId; name: string }
+  | { type: "commands"; botId: BotId }
+  // The messages behind the exchange lines between botId and peer.
+  | { type: "exchange"; botId: BotId; peer: BotId }
+  // Answered by created with the same ref, like create_bot.
+  | { type: "create_group"; ref: string; name: string; members: BotId[] }
   // Makes a new token for a webhook routine and invalidates the old one.
   | { type: "webhook_token"; botId: BotId; routineId: RoutineId }
   // Removes the agent's worktree. Refused while the agent works, or while the worktree holds uncommitted work or ignored files other than build folders.

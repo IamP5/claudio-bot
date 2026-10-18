@@ -1,3 +1,4 @@
+import { BOT_NAME_MAX } from "./text";
 import {
   COLORS,
   PERMISSION_CHOICES,
@@ -9,6 +10,7 @@ import {
   type ClientMessage,
   type DeviceId,
   type FactId,
+  type Mention,
   type MessageId,
   type RoutineId,
   type Upload,
@@ -60,6 +62,35 @@ function avatar(v: unknown): Avatar {
   return { shape: oneOf(o, "shape", SHAPES), color: oneOf(o, "color", COLORS) };
 }
 
+function boundedStr(o: Obj, key: string, max: number): string {
+  const v = str(o, key).trim();
+  if (v === "" || Array.from(v).length > max) throw new ParseError(`${key} must be 1 to ${max} characters`);
+  return v;
+}
+
+const MENTIONS_MAX = 10;
+const MENTION_NAME_MAX = 64;
+const GROUP_MEMBERS = { min: 2, max: 8 };
+
+function mentions(v: unknown): Mention[] {
+  if (!Array.isArray(v)) throw new ParseError("mentions must be an array");
+  if (v.length > MENTIONS_MAX) throw new ParseError(`mentions holds at most ${MENTIONS_MAX}`);
+  return v.map((m): Mention => {
+    const o = obj(m, "mention");
+    const kind = oneOf(o, "kind", ["bot", "connector"] as const);
+    const name = str(o, "name");
+    if (Array.from(name).length > MENTION_NAME_MAX) throw new ParseError(`name must be at most ${MENTION_NAME_MAX} characters`);
+    return kind === "bot" ? { kind, id: str(o, "id") as BotId, name } : { kind, name };
+  });
+}
+
+function members(v: unknown): BotId[] {
+  if (!Array.isArray(v) || v.some((id) => typeof id !== "string" || id === "")) throw new ParseError("members must be an array of bot ids");
+  if (v.length < GROUP_MEMBERS.min || v.length > GROUP_MEMBERS.max || new Set(v).size !== v.length)
+    throw new ParseError(`members must be ${GROUP_MEMBERS.min} to ${GROUP_MEMBERS.max} different bots`);
+  return v as BotId[];
+}
+
 function patch(v: unknown): BotPatch {
   const o = obj(v, "patch");
   const p: BotPatch = {};
@@ -70,6 +101,7 @@ function patch(v: unknown): BotPatch {
   if (o.hidden !== undefined) p.hidden = bool(o, "hidden");
   if (o.dailyCapUsd !== undefined) p.dailyCapUsd = usd(o, "dailyCapUsd");
   if (o.muted !== undefined) p.muted = bool(o, "muted");
+  if (o.members !== undefined) p.members = members(o.members);
   return p;
 }
 
@@ -94,7 +126,11 @@ const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
   send: (o) => {
     const message = { type: "send", botId: botId(o), text: str(o, "text", { empty: true }), uploads: uploads(o.uploads) } as const;
     if (message.text.trim() === "" && message.uploads.length === 0) throw new ParseError("send needs text or uploads");
-    return o.clientId === undefined ? message : { ...message, clientId: str(o, "clientId") };
+    return {
+      ...message,
+      ...(o.clientId !== undefined && { clientId: str(o, "clientId") }),
+      ...(o.mentions !== undefined && { mentions: mentions(o.mentions) }),
+    };
   },
   answer: (o) => ({ type: "answer", botId: botId(o), messageId: messageId(o), option: index(o, "option") }),
   dismiss: (o) => ({ type: "dismiss", botId: botId(o), messageId: messageId(o) }),
@@ -117,6 +153,9 @@ const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
   set_connector: (o) => ({ type: "set_connector", botId: botId(o), name: str(o, "name"), enabled: bool(o, "enabled") }),
   skills: (o) => ({ type: "skills", botId: botId(o) }),
   delete_skill: (o) => ({ type: "delete_skill", botId: botId(o), name: str(o, "name") }),
+  commands: (o) => ({ type: "commands", botId: botId(o) }),
+  exchange: (o) => ({ type: "exchange", botId: botId(o), peer: str(o, "peer") as BotId }),
+  create_group: (o) => ({ type: "create_group", ref: str(o, "ref"), name: boundedStr(o, "name", BOT_NAME_MAX), members: members(o.members) }),
   webhook_token: (o) => ({ type: "webhook_token", botId: botId(o), routineId: routineId(o) }),
   remove_worktree: (o) => ({ type: "remove_worktree", agentId: agentId(o) }),
   devices: () => ({ type: "devices" }),

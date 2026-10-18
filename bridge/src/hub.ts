@@ -14,7 +14,6 @@ import { createMemory, writeAtomic } from "./memory";
 import type { Scope } from "./policy";
 import type { Project } from "./projects";
 import {
-  FEATURES,
   PROTOCOL,
   type Agent,
   type AgentId,
@@ -23,6 +22,7 @@ import {
   type Bot,
   type BotId,
   type ClientMessage,
+  type Feature,
   type Message,
   type MessageId,
   type Peer,
@@ -119,6 +119,9 @@ const holdsBubbles = (p: Pending) => p.settles !== null && p.initiator.kind === 
  */
 type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; carded: boolean } & Pushes;
 type Pushes = { pushed: { id: MessageId; at: number } | null; last: MessageId | null };
+
+/** What hello advertises: the FEATURES this bridge serves. Each new one joins when the hub implements it. */
+const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend"];
 
 const BAD_NAME = `A bot name is 1 to ${BOT_NAME_MAX} characters, with no control or invisible characters.`;
 /** The same rule as the bot tools' name: a name a phone would show cut short or other than it reads is refused. */
@@ -759,6 +762,8 @@ export function createHub(deps: HubDeps): Hub {
       case "revoke_device":
       case "pair_code":
         return error("This bridge cannot manage devices yet.");
+      case "create_group":
+        return error("This bridge cannot make groups yet.");
     }
 
     const bot = world.bots.get(message.botId);
@@ -790,6 +795,7 @@ export function createHub(deps: HubDeps): Hub {
       case "stop":
         return (await brains.get(bot.id)?.interrupt()) ? [] : error("Nothing is running.");
       case "update_bot":
+        if (message.patch.members !== undefined) return error("This bridge cannot change group members yet.");
         if (message.patch.name !== undefined && !nameOk(message.patch.name)) return error(BAD_NAME);
         Object.assign(bot, message.patch, message.patch.name !== undefined && { name: message.patch.name.trim() });
         if (message.patch.name !== undefined) retitle(bot.id, bot.name);
@@ -863,6 +869,10 @@ export function createHub(deps: HubDeps): Hub {
         const made = webhooks.token(bot.id, message.routineId);
         return "error" in made ? error(made.error) : [{ type: "webhook_token", botId: bot.id, routineId: message.routineId, ...made }];
       }
+      case "commands":
+        return error("This bridge cannot list commands yet.");
+      case "exchange":
+        return error("This bridge cannot show exchanges yet.");
     }
   }
 
@@ -870,7 +880,7 @@ export function createHub(deps: HubDeps): Hub {
     hello: (position) => ({
       type: "hello",
       protocol: PROTOCOL,
-      features: [...FEATURES],
+      features: [...SERVED],
       ...position,
       machine: deps.machine,
       userName,

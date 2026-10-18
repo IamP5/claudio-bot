@@ -210,14 +210,14 @@ final class AppStore {
             return []
         }
         unechoedSends.removeAll { pending in
-            guard case .send(let botId, _, _, _) = pending.message, bots[botId] != nil else { return true }
+            guard case .send(let botId, _, _, _, _) = pending.message, bots[botId] != nil else { return true }
             return pending.transmitted >= 3
         }
         return unechoedSends.map(\.message)
     }
 
     private static func clientId(of msg: ClientMessage) -> String? {
-        if case .send(_, _, _, let clientId) = msg { clientId } else { nil }
+        if case .send(_, _, _, let clientId, _) = msg { clientId } else { nil }
     }
 
     func decisionSent(_ choice: PermissionChoice, for card: MessageID) {
@@ -288,7 +288,7 @@ final class AppStore {
             let previous = conversations[botId]?[message.id]
             guard conversations[botId, default: Conversation()].upsert(message), let bot = bots[botId] else { return [] }
             switch message {
-            case .bot(_, _, let text) where previous == nil:
+            case .bot(_, _, let text, _) where previous == nil:
                 return [Alert(bot: bot, reason: .message(text))]
             case .question(let id, _, let card) where previous == nil && card.answer == nil:
                 return [Alert(bot: bot, reason: .question(id: id, question: card.question, options: card.options))]
@@ -351,14 +351,14 @@ final class AppStore {
             lastError = ErrorNotice(message: message)
             return []
 
-        case .unknown:
+        case .commands, .exchange, .unknown:
             return []
         }
     }
 
     private func settlePending(_ message: Message) {
         if case .permission(let id, _, let card) = message, card.answer != nil { pendingDecisions[id] = nil }
-        if case .user(_, _, _, _, let clientId?) = message { unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId } }
+        if case .user(_, _, _, _, let clientId?, _) = message { unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId } }
     }
 
     /// The home list: visible bots, pinned first, then newest activity.

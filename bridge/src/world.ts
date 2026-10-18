@@ -497,6 +497,8 @@ export function toBot(bot: BotRecord, status: BotStatus): Omit<Bot, keyof BotSpe
   const card = openCard(bot.messages);
   return {
     id: bot.id,
+    kind: "bot",
+    members: [],
     name: bot.name,
     title: bot.title,
     avatar: bot.avatar,

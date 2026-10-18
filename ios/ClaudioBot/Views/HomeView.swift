@@ -382,7 +382,7 @@ struct UpdateBanner: View {
 }
 
 /// The account initials that open Settings. On iOS 26 it opts out of the shared glass because it brings its own fill.
-private struct InitialsItem: ToolbarContent {
+struct InitialsItem: ToolbarContent {
     let name: String
     /// Facts bots proposed that wait for the user, badged on the button that leads to them.
     let proposals: Int

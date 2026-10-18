@@ -6,7 +6,9 @@ import Foundation
 /// opens a screen directly for screenshots. `mention|chip|command` open a chat with the composer mid-sentence, and
 /// `group|groupprofile|newgroup|botexchange` the group and bot exchange screens. `usage` opens Plan usage over the bot list,
 /// `usagehot` with the session near its limit and `usageoff` with no plan limits to read. The pairing and connection states have their own:
-/// `pairconfirm|outdated` (unpaired), `confirm|unrecognized|error|oldbridge` (paired).
+/// `pairconfirm|outdated` (unpaired), `confirm|unrecognized|error|oldbridge` (paired). Sessions: `sessions` (the sidebar),
+/// `thread` (work runs and a permission card), `ask`, `plan`, `streaming`, `cloud`, `longthread` (500 items), `newsession`,
+/// `sessionsempty` and `sessionsoffline`.
 @MainActor
 enum Demo {
     private static let arguments = ProcessInfo.processInfo.arguments
@@ -29,7 +31,7 @@ enum Demo {
         let features: [Feature] = switch screen {
         case "live": [.activity]
         case "oldbridge": []
-        default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage]
+        default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions]
         }
         store.apply(.hello(Hello(protocol: oldBridge ? 2 : Wire.protocolVersion, features: features, machine: "MacBook Pro", userName: "Alex", bots: bots)))
         if !oldBridge { store.apply(.usage(usage(screen))) }
@@ -41,7 +43,12 @@ enum Demo {
         store.apply(.details(botId: BotID("engineer"), library: [], links: [], agents: agents, routines: []))
         store.apply(.agent(agents[0], messages: agentMessages))
         store.apply(.file(botId: BotID("claude"), path: "library/merge-plan.md", file: BotFile(mime: "text/markdown", content: plan, data: nil)))
+        if features.contains(.sessions) {
+            DemoSessions.load(into: store, empty: screen == "sessionsempty")
+            DemoSessions.streamParity(into: store)
+        }
 
+        router.sidebar = .bots
         switch screen {
         case "newchat": router.showingNewChat = true
         case "usage", "usagehot", "usageoff": router.showingUsage = true
@@ -95,6 +102,19 @@ enum Demo {
             router.selection = .bot(BotID("release"))
             store.apply(.error(message: "That card already closed."))
         case "oldbridge": router.showingSettings = true
+        case "sessions", "sessionsempty": router.sidebar = .sessions
+        case "thread": router.open(.session(DemoSessions.fade))
+        case "ask": router.open(.session(DemoSessions.sidebar))
+        case "plan": router.open(.session(DemoSessions.playlist))
+        case "streaming": router.open(.session(DemoSessions.parity))
+        case "cloud": router.open(.session(DemoSessions.changelog))
+        case "longthread": router.open(.session(DemoSessions.catalog))
+        case "newsession":
+            router.sidebar = .sessions
+            router.newSession = NewSessionRequest(projectId: DemoSessions.soltaOSom)
+        case "sessionsoffline":
+            router.sidebar = .sessions
+            store.setConnection(.disconnected(retryAt: .now + 25))
         default: break
         }
     }
@@ -125,6 +145,7 @@ enum Demo {
 
     /// Stands in for the bridge: answers devices and pair_code, settles question and permission cards, and replies to a send.
     static func respond(to msg: ClientMessage, store: AppStore) {
+        if DemoSessions.respond(to: msg, store: store) { return }
         switch msg {
         case .devices:
             store.apply(.devices(devices))

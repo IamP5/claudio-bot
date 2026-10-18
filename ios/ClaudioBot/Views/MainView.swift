@@ -22,7 +22,7 @@ struct MainView: View {
     var body: some View {
         @Bindable var router = router
         NavigationSplitView(columnVisibility: $visibility) {
-            HomeView()
+            SidebarRoot()
                 .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 400)
         } detail: {
             // A plain column rather than .inspector: on iPad portrait the inspector covers and dims the chat.

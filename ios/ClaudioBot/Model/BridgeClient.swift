@@ -110,6 +110,15 @@ final class BridgeClient {
         }
     }
 
+    /// Whether someone is looking at this app, sent after every hello and on every change to a bridge with presence.
+    /// nil never sends one, so the bridge counts the socket as attended: the iPhone leaves it nil.
+    var attended: Bool? {
+        didSet {
+            guard let attended, attended != oldValue, store.has(.presence) else { return }
+            transmitIfConnected(.presence(attended: attended))
+        }
+    }
+
     @ObservationIgnored private let vault: PairingVault
     @ObservationIgnored private let deviceName: String
     @ObservationIgnored private let timing: Timing
@@ -389,6 +398,7 @@ final class BridgeClient {
             switch msg {
             case .hello:
                 greeted = true
+                if let attended, store.has(.presence) { transmit(.presence(attended: attended), on: ws) }
                 if let openBot { transmit(.open(botId: openBot), on: ws) }
                 // Facts bots propose show as a badge and in their chats, so the app keeps them live from the start.
                 if store.has(.memory) { transmit(.memory, on: ws) }

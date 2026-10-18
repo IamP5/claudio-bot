@@ -325,6 +325,39 @@ private func scratchVault() -> PairingVault {
         client.stop()
     }
 
+    @Test func anAppThatTracksAttentionSaysSoAfterEveryHelloAndOnEveryChangeOnlyToABridgeWithPresence() async throws {
+        let presenceHello = #"{"type":"hello","protocol":3,"features":["presence"],"machine":"Mac","userName":"Alex","epoch":"","seq":0,"resumed":false,"bots":[]}"#
+        let bridge = try FakeBridge(onOpen: { $0.send($0.index == 0 ? presenceHello : hello()) })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        client.attended = false
+        client.start(pairing)
+        try await eventually("presence after the hello") { bridge.texts.contains(#"{"attended":false,"type":"presence"}"#) }
+        client.attended = true
+        try await eventually("presence on the change") { bridge.texts.contains(#"{"attended":true,"type":"presence"}"#) }
+
+        bridge.sockets[0].close(code: 1000)
+        try await eventually("the second hello") { client.store.machine != nil && bridge.sockets.count == 2 }
+        client.attended = false
+        client.send(.devices)
+        try await eventually("the devices request") { bridge.texts.filter { $0 == #"{"type":"devices"}"# }.count == 1 }
+        #expect(bridge.texts.filter { $0.contains("presence") }.count == 2)
+        client.stop()
+    }
+
+    @Test func anAppThatNeverSetsAttentionNeverSendsPresence() async throws {
+        let presenceHello = #"{"type":"hello","protocol":3,"features":["presence"],"machine":"Mac","userName":"Alex","epoch":"","seq":0,"resumed":false,"bots":[]}"#
+        let bridge = try FakeBridge(onOpen: { $0.send(presenceHello) })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        client.start(pairing)
+        try await eventually("the hello") { client.store.machine != nil }
+        client.send(.devices)
+        try await eventually("the devices request") { bridge.texts.contains(#"{"type":"devices"}"#) }
+        #expect(!bridge.texts.contains { $0.contains("presence") })
+        client.stop()
+    }
+
     @Test func aStopTappedOfflineLongAgoIsNotSentWhileAMessageStillIs() async throws {
         let bridge = try FakeBridge(onOpen: { $0.send(hello()) })
         let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))

@@ -380,6 +380,42 @@ private func invalidates(_ read: () -> Void, by change: () -> Void) -> Bool {
 }
 
 @MainActor
+@Suite struct ThreadScreenTests {
+    @Test func theBannerSaysWhoElseHoldsTheSession() {
+        var desktop = row("d")
+        desktop.holder = .desktop
+        var busy = controls
+        busy.canSend = false
+        #expect(ThreadBanner.of(row: desktop, controls: controls) == .alsoInDesktop)
+        #expect(ThreadBanner.of(row: desktop, controls: busy) == .busyElsewhere("Working in the Claude app. Read only."))
+        var terminal = row("t")
+        terminal.holder = .terminal
+        #expect(ThreadBanner.of(row: terminal, controls: controls) == nil, "an idle terminal leaves the phone free to send")
+        #expect(ThreadBanner.of(row: terminal, controls: busy) == .busyElsewhere("Working in a terminal. Read only."))
+        var cloud = row("c")
+        cloud.origin = .cloud
+        cloud.url = URL(string: "https://claude.ai/code/session_01")
+        #expect(ThreadBanner.of(row: cloud, controls: busy) == .cloud(URL(string: "https://claude.ai/code/session_01")))
+        #expect(ThreadBanner.of(row: row("n"), controls: controls) == nil)
+    }
+
+    @Test func theNewestCardThatWaitsOnTheUserIsTheOneAnnounced() {
+        let open = PermissionCard(from: nil, tool: "Bash", label: "Delete build", detail: "rm -rf build", always: "rm", answer: nil, expiresAt: at + 60)
+        var closed = open
+        closed.answer = .chose(.deny)
+        let ask = SessionItem.ask(id: ItemID("q"), at: at, questions: [AskQuestion(question: "Which?", header: "", options: [], multiSelect: false)], answers: nil, cardId: MessageID("m2"))
+        let answeredElsewhere = SessionItem.ask(id: ItemID("q2"), at: at, questions: [], answers: nil, cardId: nil)
+        let permission = { (id: String, card: PermissionCard) in
+            SessionItem.permission(id: ItemID(id), at: at, permission: SessionPermission(cardId: MessageID(id), at: at, card: card))
+        }
+        #expect(SessionThreadView.openCard([permission("p1", open), ask, permission("p2", closed)])?.id == ItemID("q"))
+        #expect(SessionThreadView.openCard([ask, permission("p1", open)])?.announcement == "Approval needed: Delete build")
+        #expect(SessionThreadView.openCard([answeredElsewhere, permission("p2", closed), say("a", "Done")]) == nil)
+        #expect(SessionThreadView.openCard([.plan(id: ItemID("pl"), at: at, text: "1. Do it", state: .proposed, cardId: MessageID("m3"))]) != nil)
+    }
+}
+
+@MainActor
 @Suite struct SessionRoutingTests {
     @Test func aSessionLinkOpensItsThread() {
         #expect(DeepLink(url: URL(string: "claudiobot://session/6b1f3c2a")!) == .session(SessionID("6b1f3c2a")))

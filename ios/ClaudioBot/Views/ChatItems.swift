@@ -32,7 +32,7 @@ struct ChatRowView: View {
             case let .question(id, _, card):
                 QuestionCardView(botId: bot.id, messageId: id, card: card, color: bot.avatar.color)
             case let .permission(id, _, card):
-                PermissionCardView(botId: bot.id, messageId: id, card: card)
+                PermissionCardView(messageId: id, card: card) { .decide(botId: bot.id, messageId: id, choice: $0) }
             case let .exchange(_, _, peer, sent, received):
                 EventLineView(segments: EventLine.exchange(peer: peer, sent: sent, received: received), onPeer: onExchange ?? onPeer)
             case let .note(_, _, text, refs):
@@ -209,24 +209,25 @@ private struct QuestionCardBody: View {
     }
 }
 
-/// A tool call held for approval: the exact call, what Always would cover, and the four choices.
+/// A tool call held for approval: the exact call, what Always would cover, and the four choices. A bot's chat and a
+/// session's thread show the same card; each says which frame a choice sends.
 struct PermissionCardView: View {
-    let botId: BotID
     let messageId: MessageID
     let card: PermissionCard
+    let decision: (PermissionChoice) -> ClientMessage
 
     var body: some View {
         TimelineView(.deadline(card.expiresAt)) { _ in
-            PermissionCardBody(botId: botId, messageId: messageId, card: card, answer: card.answer(at: .now))
+            PermissionCardBody(messageId: messageId, card: card, answer: card.answer(at: .now), decision: decision)
         }
     }
 }
 
 private struct PermissionCardBody: View {
-    let botId: BotID
     let messageId: MessageID
     let card: PermissionCard
     let answer: PermissionAnswer?
+    let decision: (PermissionChoice) -> ClientMessage
 
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
@@ -315,7 +316,7 @@ private struct PermissionCardBody: View {
 
     private func choiceButton(_ choice: PermissionChoice) -> some View {
         Button {
-            client.send(.decide(botId: botId, messageId: messageId, choice: choice))
+            client.send(decision(choice))
         } label: {
             HStack(spacing: 6) {
                 if sent == choice { ProgressView().controlSize(.mini) }

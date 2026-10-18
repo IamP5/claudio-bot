@@ -34,7 +34,7 @@ struct MainView: View {
                             ChatView(botId: id)
                                 .id(id)
                         case .session(let id):
-                            Text(id.rawValue).foregroundStyle(Theme.secondary)
+                            SessionThreadView(sessionId: id)
                                 .id(id)
                         default:
                             ContentUnavailableView(

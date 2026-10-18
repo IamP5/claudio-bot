@@ -126,17 +126,16 @@ struct WorkingRing: View {
     var size: CGFloat = 12
     var color: Color = AvatarColor.orange.color
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var spinning = false
 
     var body: some View {
-        Circle()
-            .trim(from: 0.12, to: 0.82)
-            .stroke(color, style: StrokeStyle(lineWidth: max(1.5, size * 0.16), lineCap: .round))
-            .frame(width: size, height: size)
-            .rotationEffect(.degrees(spinning ? 360 : 0))
-            .animation(reduceMotion ? nil : .linear(duration: 0.9).repeatForever(autoreverses: false), value: spinning)
-            .onAppear { spinning = !reduceMotion }
-            .onChange(of: reduceMotion) { _, reduce in spinning = !reduce }
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { context in
+            let turn = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.9) / 0.9
+            Circle()
+                .trim(from: 0.12, to: 0.82)
+                .stroke(color, style: StrokeStyle(lineWidth: max(1.5, size * 0.16), lineCap: .round))
+                .rotationEffect(.degrees(reduceMotion ? 0 : turn * 360))
+        }
+        .frame(width: size, height: size)
     }
 }
 

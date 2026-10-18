@@ -118,6 +118,20 @@ struct PairInvite: Equatable, Sendable {
     }
 }
 
+extension PairCode {
+    /// What another device scans: every address the bridge listed, best first, minus the loopback ones only this
+    /// computer reaches. A bridge that lists none (one from before pair_code carried URLs) falls back to the address
+    /// this app pairs at. nil when nothing is left that another device could reach.
+    func invite(fallingBackTo own: URL?) -> PairInvite? {
+        let listed = (urls ?? []).compactMap { try? PairInvite.bridgeURL($0) }.filter { !$0.isLoopback }
+        var seen = Set<URL>()
+        let addresses = (listed.isEmpty ? [own].compactMap { $0 }.filter { !$0.isLoopback } : listed)
+            .filter { seen.insert($0).inserted }
+        guard let first = addresses.first else { return nil }
+        return PairInvite(url: first, code: code, fallbacks: Array(addresses.dropFirst()))
+    }
+}
+
 struct PairingConfirmation: Equatable, Sendable {
     let title: String
     let detail: String?
@@ -180,6 +194,14 @@ extension URL {
         components.path = components.path.hasSuffix("/ws") ? String(components.path.dropLast(2)) + name : "/" + name
         components.query = nil
         return components.url!
+    }
+
+    /// localhost, 127.0.0.0/8 or ::1.
+    var isLoopback: Bool {
+        guard let host = host(percentEncoded: false)?.lowercased() else { return false }
+        if host == "localhost" || host == "::1" { return true }
+        let octets = host.split(separator: ".", omittingEmptySubsequences: false)
+        return octets.count == 4 && octets.allSatisfy { UInt8($0) != nil } && octets[0] == "127"
     }
 
     /// host:port, the part of the address a person recognizes their Mac by.

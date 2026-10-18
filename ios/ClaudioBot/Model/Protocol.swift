@@ -158,12 +158,12 @@ enum TriggerKind: OpenEnum {
 /// What a bridge can do beyond protocol 3's base (hello.features). Screens for a feature the bridge does not list stay hidden.
 enum Feature: OpenEnum {
     case memory, activity, mute, worktrees, connectors, skills, webhooks, spend
-    case mentions, commands, exchanges, groups, usage, sessions
+    case mentions, commands, exchanges, groups, usage, sessions, presence
     case unknown(String)
 
     static let allCases: [Feature] = [
         .memory, .activity, .mute, .worktrees, .connectors, .skills, .webhooks, .spend,
-        .mentions, .commands, .exchanges, .groups, .usage, .sessions,
+        .mentions, .commands, .exchanges, .groups, .usage, .sessions, .presence,
     ]
     init?(rawValue: String) { self.init(wire: rawValue) }
 
@@ -183,6 +183,7 @@ enum Feature: OpenEnum {
         case .groups: "groups"
         case .usage: "usage"
         case .sessions: "sessions"
+        case .presence: "presence"
         case .unknown(let raw): raw
         }
     }
@@ -1020,10 +1021,18 @@ struct WebhookToken: Codable, Hashable, Sendable {
     let token: String
 }
 
-/// A one-time code another phone can pair with.
+/// A one-time code another device can pair with, and the bridge's socket URLs best first. A bridge from before
+/// pair_code carried URLs sends none.
 struct PairCode: Codable, Hashable, Sendable {
     let code: String
     let expiresAt: Date
+    var urls: [String]?
+
+    init(code: String, expiresAt: Date, urls: [String]? = nil) {
+        self.code = code
+        self.expiresAt = expiresAt
+        self.urls = urls
+    }
 }
 
 /// Where the broadcast stream stands. An empty epoch means the bridge keeps no replay ring.
@@ -1894,7 +1903,7 @@ enum ServerMessage: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case type, machine, userName, bots, bot, botId, ref, messages, message, library, links, agents, routines, agent
-        case path, mime, content, data, devices, code, expiresAt
+        case path, mime, content, data, devices, code, expiresAt, urls
         case `protocol`, epoch, seq, resumed, features
         case agentId, text, at, facts, connectors, skills, routineId, url, token, commands, peer, usage
         case projects, rows, mirror, removed, sessionId, rev, items, before, controls, live, itemId, offset, toolUseId, output, movedTo
@@ -1951,7 +1960,10 @@ enum ServerMessage: Codable, Sendable {
         case "devices":
             self = .devices(try c.decode([Device].self, forKey: .devices))
         case "pair_code":
-            self = .pairCode(PairCode(code: try c.decode(String.self, forKey: .code), expiresAt: try c.decode(Date.self, forKey: .expiresAt)))
+            self = .pairCode(PairCode(
+                code: try c.decode(String.self, forKey: .code), expiresAt: try c.decode(Date.self, forKey: .expiresAt),
+                urls: try c.decodeIfPresent([String].self, forKey: .urls)
+            ))
         case "activity":
             self = .activity(
                 botId: try c.decode(BotID.self, forKey: .botId),
@@ -2089,6 +2101,7 @@ enum ServerMessage: Codable, Sendable {
             try c.encode("pair_code", forKey: .type)
             try c.encode(code.code, forKey: .code)
             try c.encode(code.expiresAt, forKey: .expiresAt)
+            try c.encodeIfPresent(code.urls, forKey: .urls)
         case let .activity(botId, agentId, text, at):
             try c.encode("activity", forKey: .type)
             try c.encode(botId, forKey: .botId)
@@ -2314,6 +2327,8 @@ enum ClientMessage: Codable, Hashable, Sendable {
     case devices
     case revokeDevice(deviceId: DeviceID)
     case pairCode
+    /// Feature presence. false: nobody is looking at this app, so its socket does not hold back phone pushes.
+    case presence(attended: Bool)
     /// Reads the plan's usage now. Answered with a usage frame.
     case refreshUsage
     /// Subscribes to the Sessions list. Answered with a sessions frame; send again after each hello.
@@ -2346,6 +2361,7 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case type, ref, botId, text, uploads, messageId, option, choice, patch, routineId, enabled, agentId, path, deviceId
         case clientId, factId, name, force, mentions, peer, members
         case sessionId, after, before, interrupt, cardId, answers, projectId, model, mode, isolate, toolUseId, mirror
+        case attended
     }
 
     init(from decoder: Decoder) throws {
@@ -2399,6 +2415,7 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case "devices": self = .devices
         case "revoke_device": self = .revokeDevice(deviceId: try c.decode(DeviceID.self, forKey: .deviceId))
         case "pair_code": self = .pairCode
+        case "presence": self = .presence(attended: try c.decode(Bool.self, forKey: .attended))
         case "refresh_usage": self = .refreshUsage
         case "watch_sessions": self = .watchSessions
         case "unwatch_sessions": self = .unwatchSessions
@@ -2549,6 +2566,9 @@ enum ClientMessage: Codable, Hashable, Sendable {
             try c.encode(deviceId, forKey: .deviceId)
         case .pairCode:
             try c.encode("pair_code", forKey: .type)
+        case let .presence(attended):
+            try c.encode("presence", forKey: .type)
+            try c.encode(attended, forKey: .attended)
         case .refreshUsage:
             try c.encode("refresh_usage", forKey: .type)
         case .watchSessions:

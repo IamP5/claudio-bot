@@ -158,8 +158,8 @@ private struct DeviceRow: View {
     }
 }
 
-/// Shows a one-time code, as text and as the QR code another phone scans.
-private struct PairAnotherView: View {
+/// Shows a one-time code, as text and as the QR code another phone scans, with every address the bridge listed.
+struct PairAnotherView: View {
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
     @Environment(\.dismiss) private var dismiss
@@ -167,12 +167,14 @@ private struct PairAnotherView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 24) {
-                if let code = store.pairCode, let url = client.pairing?.url {
+                if let code = store.pairCode {
                     TimelineView(.deadline(code.expiresAt)) { _ in
-                        if Date.now < code.expiresAt {
-                            live(code, invite: PairInvite(url: url, code: code.code))
-                        } else {
+                        if Date.now >= code.expiresAt {
                             expired
+                        } else if let invite = code.invite(fallingBackTo: client.pairing?.url) {
+                            live(code, invite: invite)
+                        } else {
+                            unreachable
                         }
                     }
                 } else {
@@ -213,6 +215,14 @@ private struct PairAnotherView: View {
                 .foregroundStyle(Theme.secondary)
                 .multilineTextAlignment(.center)
         }
+    }
+
+    private var unreachable: some View {
+        ContentUnavailableView(
+            "No address to share",
+            systemImage: "network.slash",
+            description: Text("Your Mac reported only addresses another device cannot reach. Join it to Wi-Fi or Tailscale, then get a new code.")
+        )
     }
 
     private var expired: some View {

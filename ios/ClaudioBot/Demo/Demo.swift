@@ -155,7 +155,10 @@ enum Demo {
             store.apply(.devices(devices))
             return
         case .pairCode:
-            store.apply(.pairCode(PairCode(code: "K7QD-M2XP", expiresAt: .now + 600)))
+            store.apply(.pairCode(PairCode(
+                code: "K7QD-M2XP", expiresAt: .now + 600,
+                urls: ["ws://mac.tail1234.ts.net:7878/ws", "ws://Mac.local:7878/ws", "ws://192.168.1.20:7878/ws"]
+            )))
             return
         case .refreshUsage:
             store.apply(.usage(usage(screen, ago: 0)))

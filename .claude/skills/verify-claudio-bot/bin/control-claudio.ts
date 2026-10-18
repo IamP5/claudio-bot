@@ -460,6 +460,8 @@ async function main() {
       return sessionsList(loadRun());
     case "thread":
       return thread(loadRun(), args[0] ?? die("usage: thread <sessionId|largest> [--after epoch:rev] [--for s]"));
+    case "session-flow":
+      return sessionFlow(loadRun(), flag("project") ?? "demo", flag("model") ?? "haiku");
     case "evidence":
       return evidence(loadRun(), args[0] ?? "snapshot");
     case "cleanup":
@@ -586,6 +588,125 @@ async function thread(run: Run, ref: string) {
     print();
   }
   print();
+  c.close();
+}
+
+/** A socket that keeps every frame with the time it arrived, for session-flow. */
+async function socketOf(run: Run) {
+  const c = await connect(run);
+  const t0 = Date.now();
+  const timed: { at: number; f: Frame }[] = [];
+  const old = c.ws.onmessage;
+  c.ws.onmessage = (e) => {
+    old?.call(c.ws, e);
+    timed.push({ at: Date.now() - t0, f: JSON.parse(String(e.data)) as Frame });
+  };
+  return { ...c, timed, t0 };
+}
+
+type Item = { kind: string; id: string; text?: string; card?: { id: string; answer: unknown; label: string; detail: string }; steps?: { label: string; state: string }[]; tone?: string };
+const itemsIn = (f: Frame) => ((f.items as Item[] | undefined) ?? []);
+
+/**
+ * session-flow [--project demo] [--model haiku]: the Sessions journey over the socket, asserted step by step: a new
+ * session in a seed project, its Bash call held as a permission item, Allow once, the turn's text streamed; a
+ * follow-up that streams while the socket drops and a new socket resumes it; Stop in the middle of a turn. Prints
+ * each step's evidence and timings.
+ */
+async function sessionFlow(run: Run, projectName: string, model: string) {
+  const step = (s: string) => console.log(`\n== ${s}`);
+  const check = (ok: unknown, what: string) => {
+    if (!ok) die(`FAILED: ${what}`);
+    console.log(`ok: ${what}`);
+  };
+  let c = await socketOf(run);
+  const l = await listOf(run, c);
+  const project = l.projects.find((p) => p.name === projectName && ownProject(run, p)) ?? die(`no seed project ${projectName}`);
+  step(`list: ${l.rows.length} rows in ${l.projects.length} projects in ${l.ms} ms`);
+
+  step("create");
+  let at = c.timed.length;
+  const t = Date.now();
+  c.send({ type: "session_create", ref: "flow-1", projectId: project.id, model, mode: "default", isolate: "none", text: "Run this Bash command exactly: date > when.txt\nThen reply with one short sentence saying it is done." });
+  const created = await c.waitFor(() => c.timed.slice(at).find((x) => x.f.type === "session_created" || x.f.type === "error")?.f, "session_created", 30);
+  if (created.type === "error") die(`session_create: ${created.message}`);
+  const id = created.sessionId as string;
+  console.log(`session ${id} created in ${Date.now() - t} ms`);
+  c.send({ type: "watch_session", sessionId: id, after: null });
+  const all = () => c.timed.filter((x) => x.f.sessionId === id);
+  const perm = await c.waitFor(() => all().flatMap((x) => itemsIn(x.f)).find((i) => i.kind === "permission" && i.card?.answer === null), "a permission item", 120);
+  check(perm.card!.detail.includes("date > when.txt"), `permission item "${perm.card!.label}: ${perm.card!.detail}" after ${Date.now() - t} ms`);
+  const rowsNow = () => c.timed.filter((x) => x.f.type === "session_rows").flatMap((x) => (x.f.rows as Row[]).filter((r) => r.id === id));
+  const td = Date.now();
+  at = c.timed.length;
+  c.send({ type: "session_decide", sessionId: id, cardId: perm.card!.id, choice: "once" });
+  const ran = await c.waitFor(() => all().slice(0).flatMap((x) => itemsIn(x.f)).find((i) => i.kind === "work" && i.steps?.some((s) => s.state === "ok")), "the step to run", 120);
+  check(ran, `the Bash step ran: ${ran.steps!.map((s) => `${s.label}:${s.state}`).join("; ")}`);
+  const reply = await c.waitFor(() => all().flatMap((x) => itemsIn(x.f)).find((i) => i.kind === "assistant"), "the reply", 120);
+  const replyDeltas = all().filter((x) => x.f.type === "session_delta" && x.f.itemId === reply.id);
+  check(replyDeltas.length > 0, `the reply streamed as ${replyDeltas.length} delta(s) under ${reply.id} before its upsert: "${reply.text?.slice(0, 80)}"`);
+  await c.waitFor(() => rowsNow().some((r) => r.status === "idle"), "the row to go idle", 60);
+  console.log(`decide → idle row in ${Date.now() - td} ms; row ${JSON.stringify(rowsNow().at(-1))}`);
+  check(existsSync(join(project.path, "when.txt")), "when.txt exists in the seed project");
+
+  step("follow-up, socket drop mid-stream, resume");
+  at = c.timed.length;
+  c.send({ type: "session_send", sessionId: id, text: "Write a story of about 250 words about a lighthouse keeper. Plain text, no headings.", clientId: "flow-2", interrupt: false });
+  const queued = await c.waitFor(() => c.timed.slice(at).flatMap((x) => itemsIn(x.f)).find((i) => i.kind === "user" && i.id === "flow-2"), "the queued message", 20);
+  check(queued, "the follow-up shows under its clientId until the transcript has it");
+  const firstDelta = await c.waitFor(() => c.timed.slice(at).find((x) => x.f.type === "session_delta" && x.f.sessionId === id), "the story to stream", 120);
+  const storyId = firstDelta.f.itemId as string;
+  await Bun.sleep(400);
+  const last = c.timed.filter((x) => x.f.sessionId === id && (x.f.type === "session_items" || x.f.type === "session")).at(-1)!.f;
+  const epoch = (c.timed.find((x) => x.f.type === "session" && x.f.sessionId === id)!.f.epoch as string);
+  const position = { epoch, rev: last.rev as number };
+  const before = c.timed.filter((x) => x.f.type === "session_delta" && x.f.itemId === storyId).length;
+  c.close();
+  console.log(`dropped the socket after ${before} story deltas at rev ${position.rev}`);
+  await Bun.sleep(300);
+  c = await socketOf(run);
+  c.send({ type: "watch_sessions" });
+  c.send({ type: "watch_session", sessionId: id, after: position });
+  const resumed = await c.waitFor(() => c.timed.find((x) => x.f.sessionId === id && (x.f.type === "session_items" || x.f.type === "session"))?.f, "the resume reply", 30);
+  console.log(`resumed with ${resumed.type} rev=${resumed.rev}${resumed.type === "session" ? " (snapshot)" : " (ring replay)"}`);
+  // The app's live text for the story, kept by the delta rule: a delta applies only at the current length.
+  let live = resumed.type === "session" && (resumed.live as { itemId: string } | null)?.itemId === storyId ? String((resumed.live as { text: string }).text) : "";
+  let applied = 0;
+  let dropped = 0;
+  let seen = 0;
+  const story = await c.waitFor(() => {
+    const frames = c.timed.filter((x) => x.f.sessionId === id);
+    for (const x of frames.slice(seen)) {
+      if (x.f.type === "session_delta" && x.f.itemId === storyId) {
+        if (x.f.offset === live.length) {
+          live += String(x.f.text);
+          applied++;
+        } else dropped++;
+      }
+    }
+    seen = frames.length;
+    return frames.flatMap((x) => itemsIn(x.f)).find((i) => i.id === storyId && i.kind === "assistant");
+  }, "the story's upsert", 180);
+  check(applied > 0 && dropped === 0, `after the resume ${applied} deltas applied in order, ${dropped} dropped`);
+  const head = live.trim().slice(0, 80);
+  check(head.length > 0 && story.text!.startsWith(head), `the upsert's text (${story.text!.length} chars) is the live text (${live.length} chars) made whole`);
+
+  step("stop mid-turn");
+  at = c.timed.length;
+  c.send({ type: "session_send", sessionId: id, text: "Count from 1 to 400, one number per line, nothing else.", clientId: "flow-3", interrupt: false });
+  await c.waitFor(() => c.timed.slice(at).find((x) => x.f.type === "session_delta" && x.f.sessionId === id), "the count to stream", 120);
+  const ts = Date.now();
+  const stopAt = c.timed.length;
+  c.send({ type: "session_stop", sessionId: id });
+  await c.waitFor(() => c.timed.slice(stopAt).some((x) => x.f.sessionId === id && x.f.type === "session_items" && (x.f.controls as { working: boolean } | null)?.working === false), "the turn to stop", 60);
+  check(true, `stopped: controls working=false ${Date.now() - ts} ms after session_stop`);
+  const noted = await c.waitFor(() => c.timed.slice(stopAt).flatMap((x) => itemsIn(x.f)).find((i) => i.kind === "notice" || (i.kind === "assistant" && /\d/.test(i.text ?? ""))), "the stopped turn in the thread", 30);
+  console.log(`the thread shows ${noted.kind}${noted.text ? ` "${noted.text.slice(0, 40).replace(/\n/g, " ")}"` : ""}`);
+
+  step("summary");
+  const types = c.timed.concat().map((x) => x.f.type);
+  console.log(`frames on the second socket: ${countBy(types, (x) => x)}`);
+  console.log(`spent so far: $${spent(run).toFixed(4)}`);
   c.close();
 }
 

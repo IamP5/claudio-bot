@@ -38,3 +38,4 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Routines](./routines.md): scheduled and webhook routines, Run now, the on/off switch.
 - [Memory](./memory.md): a bot's proposed fact, the user's confirm, edit and forget, recall in a later turn.
 - [Pairing and devices](./pairing.md): pair a phone with a one-time code, list and revoke devices. No model turns.
+- [Sessions](./sessions.md): every Claude Code session by project, a live thread, approvals, streaming, resume, Stop, new sessions.

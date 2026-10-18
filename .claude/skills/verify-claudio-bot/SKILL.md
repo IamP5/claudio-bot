@@ -63,6 +63,7 @@ Bots are addressed by name (case-insensitive) or id. Every command prints conver
 | `$H raw '<ClientMessage JSON>' [--frames t1,t2] [--for s]` | anything else the app can send | prints the server frames for `s` seconds (default 3) |
 | `$H sessions [--names]` | opened the Sessions tab | the `sessions` frame; prints its timing and counts, and the rows of the run's seed projects |
 | `$H thread <sessionId\|largest> [--after epoch:rev] [--for s]` | opened a session's thread | the first frame; prints timings and each frame after it for `s` seconds |
+| `$H session-flow [--project demo] [--model haiku]` | started a session, approved its call, followed it through a dropped connection, stopped it | each step's assertion; exits 1 on the first that fails |
 
 "Rest" means status `idle` or `awaiting_approval` (`bridge/src/protocol.ts` `BotStatus`). `raw` covers every other screen: `{"type":"details","botId":…}` (Library, Links, Agents, Routines), `{"type":"memory"}`, `{"type":"set_fact",…}`, `{"type":"run_routine",…}`, `{"type":"devices"}`, `{"type":"pair_code"}`, `{"type":"remove_worktree",…}` and so on. The exact shapes are `ClientMessage` and `ServerMessage` in `bridge/src/protocol.ts`.
 
@@ -100,7 +101,7 @@ Takes a `final` evidence snapshot, SIGTERMs the bridge and push sink by the pids
 
 ## Helper reference
 
-`bin/control-claudio.ts` (Bun, executable). Subcommands: `launch [--budget usd] [--model id]`, `doctor`, `runs`, `bots`, `messages`, `send`, `wait`, `decide`, `answer`, `dismiss`, `stop`, `raw`, `sessions`, `thread`, `evidence <label>`, `cleanup [--no-evidence]`. Global: `--run <id>`. Environment: `CLAUDIOBOT_VERIFY_DIR`, `CLAUDIOBOT_VERIFY_MODEL`, `CLAUDIOBOT_VERIFY_BUDGET_USD`, `CLAUDIO_RUN`. Run layout: `runs/<id>/{run.json,token,bridge.log,ntfy.log,pushes.jsonl,desktop-imports.txt,home/,roots/{demo,pushme}/,origin.git/,bin/claude}`.
+`bin/control-claudio.ts` (Bun, executable). Subcommands: `launch [--budget usd] [--model id]`, `doctor`, `runs`, `bots`, `messages`, `send`, `wait`, `decide`, `answer`, `dismiss`, `stop`, `raw`, `sessions`, `thread`, `session-flow`, `evidence <label>`, `cleanup [--no-evidence]`. Global: `--run <id>`. Environment: `CLAUDIOBOT_VERIFY_DIR`, `CLAUDIOBOT_VERIFY_MODEL`, `CLAUDIOBOT_VERIFY_BUDGET_USD`, `CLAUDIO_RUN`. Run layout: `runs/<id>/{run.json,token,bridge.log,ntfy.log,pushes.jsonl,desktop-imports.txt,home/,roots/{demo,pushme}/,origin.git/,bin/claude}`.
 
 Related harnesses: `cd bridge && bun test` (unit, no network) and `bun run e2e` (29 scripted scenarios against real Claude Code, about $1.60). Use the e2e for a full regression pass; use this skill to prove one behavior interactively.
 

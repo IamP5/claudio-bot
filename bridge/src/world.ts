@@ -119,6 +119,8 @@ export type Pending = {
    * chat, and on every envelope saved before groups existed.
    */
   group?: BotId;
+  /** The user's message in the group that began the chain this turn is part of (groups.createChains). Set with group. */
+  chain?: MessageId;
 };
 
 /** The turn in flight. Persisted so a restart can apply the replay rule. */

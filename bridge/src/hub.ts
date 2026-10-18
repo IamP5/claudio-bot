@@ -9,7 +9,7 @@ import { commandOf, createCommands, probeCommands, slashName } from "./commands"
 import { connectorSettings, createConnectors } from "./connectors";
 import { accessOf } from "./access";
 import { createGate } from "./gate";
-import { GROUP_SIZE, mentionedIn, membersError, newGroup, targetsOf, transcript, typingLine } from "./groups";
+import { chainBudget, createChains, GROUP_SIZE, mentionedIn, membersError, newGroup, targetsOf, transcript, typingLine } from "./groups";
 import type { Homes } from "./home";
 import { createLedger, localDay } from "./ledger";
 import { createMemory, writeAtomic } from "./memory";
@@ -348,12 +348,18 @@ export function createHub(deps: HubDeps): Hub {
 
   const noteInGroup = (group: GroupRecord, text: string, refs: Peer[] = []) => sayInGroup(group, { kind: "note", id: newMessageId(), at: now(), text, refs });
 
+  /** The turns each user message in a group has caused, so mentions between members stop at a budget. */
+  const chains = createChains();
+  /** A turn saved before chains were recorded is a chain of its own. */
+  const chainOf = (turn: Pending): MessageId => turn.chain ?? (turn.id as string as MessageId);
+
   /** One member's turn on a message in the group. skip: the message itself, which the envelope carries apart. */
-  function handTo(group: GroupRecord, member: BotRecord, message: { text: string; addressed: boolean; skip: ReadonlySet<MessageId> }, by: Extract<Envelope, { from: "group" }>["by"]) {
+  function handTo(group: GroupRecord, member: BotRecord, message: { text: string; addressed: boolean; skip: ReadonlySet<MessageId> }, chain: MessageId, by: Extract<Envelope, { from: "group" }>["by"]) {
     const nameOf = (id: BotId) => world.bots.get(id)?.name ?? "a former member";
     deliver(botActor(member.id), {
       from: "group",
       group: { id: group.id, name: group.name },
+      chain,
       members: membersOf(group).map((b) => ({ name: b.name, you: b.id === member.id })),
       transcript: transcript(group, nameOf, userName, message.skip),
       text: message.text,
@@ -365,6 +371,7 @@ export function createHub(deps: HubDeps): Hub {
   /**
    * A member's reply that @mentions other members hands each of them a turn, one hop further down the chain the reply
    * was part of. A turn at HOP_LIMIT hands nothing on, as message_bot would be refused there, so mentions never loop.
+   * Nor does a chain past its budget (groups.chainBudget), which says so in the group once.
    */
   function relay(from: BotRecord, turn: Pending, said: readonly Bubble[]) {
     const group = groupFor(turn.group, from);
@@ -373,7 +380,13 @@ export function createHub(deps: HubDeps): Hub {
     const others = membersOf(group).filter((b) => b.id !== from.id);
     const by = { kind: "bot" as const, name: from.name, botId: from.id, hops: hopsAfter(turn.initiator), origin: rootOf(turn.initiator) };
     const skip = new Set(said.map((b) => b.id));
-    for (const id of mentionedIn(text, others)) handTo(group, world.bots.get(id)!, { text, addressed: true, skip }, by);
+    const chain = chainOf(turn);
+    const budget = chainBudget(group.members.length);
+    for (const id of mentionedIn(text, others)) {
+      const verdict = chains.handOn(chain, budget);
+      if (verdict === "run") handTo(group, world.bots.get(id)!, { text, addressed: true, skip }, chain, by);
+      else if (verdict === "stop and note") noteInGroup(group, `Stopped passing the conversation on after ${budget} replies. Send a message to keep going.`);
+    }
   }
 
   /** The turn's held bubbles go out now, ahead of a card or note it caused; the rest of the turn posts as it arrives. */
@@ -627,24 +640,27 @@ export function createHub(deps: HubDeps): Hub {
         if (r.turn.asked) release(bot);
       },
       onTurnEnd(pending, end) {
-        if (!world.bots.has(bot.id)) return;
-        // A deferred turn waits (a retry, a limit) with nothing running, so its line clears too.
-        activity.clear(actor);
-        const r = readings.get(bot.id);
-        let quiet = false;
-        if (end.kind !== "deferred" && r?.id === pending.id) {
-          readings.delete(bot.id);
-          quiet = r.turn.quiet && !r.turn.asked && !r.carded;
-          if (r.held !== null && !quiet) postBubbles(bot, r, r.held);
-          const chat = r.group === null ? bot : groupFor(r.group, bot);
-          if (chat && !quiet) pushEnd(chat, r);
-          if (end.kind === "done") relay(bot, pending, r.said);
+        if (world.bots.has(bot.id)) {
+          // A deferred turn waits (a retry, a limit) with nothing running, so its line clears too.
+          activity.clear(actor);
+          const r = readings.get(bot.id);
+          let quiet = false;
+          if (end.kind !== "deferred" && r?.id === pending.id) {
+            readings.delete(bot.id);
+            quiet = r.turn.quiet && !r.turn.asked && !r.carded;
+            if (r.held !== null && !quiet) postBubbles(bot, r, r.held);
+            const chat = r.group === null ? bot : groupFor(r.group, bot);
+            if (chat && !quiet) pushEnd(chat, r);
+            if (end.kind === "done") relay(bot, pending, r.said);
+          }
+          endTurn(bot, pending, end, quiet);
+          retypeFor(bot.id);
+          // The session saved the turn's end before calling here, so a held run's report and its settled run would
+          // otherwise wait for the debounced save.
+          if (end.kind !== "deferred" && holdsBubbles(pending)) deps.persist("now");
         }
-        endTurn(bot, pending, end, quiet);
-        retypeFor(bot.id);
-        // The session saved the turn's end before calling here, so a held run's report and its settled run would
-        // otherwise wait for the debounced save.
-        if (end.kind !== "deferred" && holdsBubbles(pending)) deps.persist("now");
+        // After relay, so the chain still holds this turn while it hands on.
+        if (end.kind !== "deferred" && pending.group !== undefined) chains.end(chainOf(pending));
       },
       onChange() {
         if (!world.bots.has(bot.id)) return;
@@ -952,8 +968,9 @@ export function createHub(deps: HubDeps): Hub {
     sayInGroup(group, message);
     const targets = targetsOf(group, mentions);
     const addressed = targets.length < group.members.length;
-    for (const member of membersOf(group).filter((b) => targets.includes(b.id)))
-      handTo(group, member, { text: m.text, addressed, skip: new Set([message.id]) }, { kind: "user" });
+    const members = membersOf(group).filter((b) => targets.includes(b.id));
+    chains.start(message.id, members.length, chainBudget(group.members.length));
+    for (const member of members) handTo(group, member, { text: m.text, addressed, skip: new Set([message.id]) }, message.id, { kind: "user" });
     return [];
   }
 

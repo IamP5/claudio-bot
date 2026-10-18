@@ -96,3 +96,44 @@ export function typingLine(names: readonly string[]): string | null {
       return `${names[0]}, ${names[1]} and ${names.length - 2} more are typing…`;
   }
 }
+
+/** The group turns one user message may cause in all, its first fan-out included. */
+export const chainBudget = (members: number): number => Math.max(4, 2 * members);
+
+/** What a chain says to one more hand-on: run it, refuse it, or refuse it and tell the group, the first time only. */
+export type HandOn = "run" | "stop" | "stop and note";
+
+/**
+ * The turns each chain of a group has spent. A chain is one user message in a group and every turn the @mentions in
+ * its replies hand on, named by that message's id. Held in memory only: a chain is forgotten once none of its turns is
+ * queued or running, and after a restart a chain still going starts its count again.
+ */
+export function createChains() {
+  // live: turns handed out and not yet ended.
+  const chains = new Map<MessageId, { budget: number; spent: number; live: number; stopped: boolean }>();
+  return {
+    /** The user's message hands `turns` members a turn each. */
+    start(chain: MessageId, turns: number, budget: number) {
+      chains.set(chain, { budget, spent: turns, live: turns, stopped: false });
+    },
+    /** A turn of the chain wants to hand one more on. A chain unknown here (a restart) counts the asking turn as spent. */
+    handOn(chain: MessageId, budget: number): HandOn {
+      let c = chains.get(chain);
+      if (!c) chains.set(chain, (c = { budget, spent: 1, live: 1, stopped: false }));
+      if (c.spent < c.budget) {
+        c.spent++;
+        c.live++;
+        return "run";
+      }
+      if (c.stopped) return "stop";
+      c.stopped = true;
+      return "stop and note";
+    },
+    /** A turn of the chain left the queue, run or not. */
+    end(chain: MessageId) {
+      const c = chains.get(chain);
+      if (c && --c.live <= 0) chains.delete(chain);
+    },
+    size: () => chains.size,
+  };
+}

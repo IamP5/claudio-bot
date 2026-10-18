@@ -1,4 +1,4 @@
-import type { AgentId, Attachment, Avatar, BotId, Mention, PermissionChoice } from "./protocol";
+import type { AgentId, Attachment, Avatar, BotId, Mention, MessageId, PermissionChoice } from "./protocol";
 import type { Initiator, Notice, Origin, Pending, RunRef } from "./world";
 
 // Everything that reaches a bot or an agent is one envelope. Its initiator is a pure function of the envelope.
@@ -23,10 +23,11 @@ export type Envelope =
   | { from: "created"; by: { bot: string; botId: BotId; hops: number; origin: Origin } | "user"; brief: string | null }
   // A message in a group the bot is a member of: the user's, or a member's reply that @mentioned this bot (hops and
   // origin as for "bot"). The turn's text posts to the group. transcript: groups.transcript of what came before it.
-  // addressed: the message names this bot, rather than going to every member.
+  // addressed: the message names this bot, rather than going to every member. chain: the user's message that began it.
   | {
       from: "group";
       group: { id: BotId; name: string };
+      chain: MessageId;
       members: { name: string; you: boolean }[];
       transcript: string;
       text: string;
@@ -64,14 +65,14 @@ const kindOf = (e: Envelope): Pending["kind"] => KIND[e.from] ?? "envelope";
 const settlesOf = (e: Envelope): RunRef | null => (e.from === "routine" ? e.run : null);
 
 /** What a session queues for one envelope. Session.push takes this, and Pending keeps all of it. */
-export type SessionInput = Pick<Pending, "kind" | "text" | "initiator" | "settles" | "group">;
+export type SessionInput = Pick<Pending, "kind" | "text" | "initiator" | "settles" | "group" | "chain">;
 
 export const inputOf = (e: Envelope, userName: string): SessionInput => ({
   kind: kindOf(e),
   text: envelope(e, userName),
   initiator: initiatorOf(e),
   settles: settlesOf(e),
-  ...(e.from === "group" && { group: e.group.id }),
+  ...(e.from === "group" && { group: e.group.id, chain: e.chain }),
 });
 
 const andList = (xs: readonly string[]) => (xs.length < 2 ? (xs[0] ?? "") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);

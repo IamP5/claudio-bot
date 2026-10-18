@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { GROUP_SIZE, mentionedIn, transcript, typingLine } from "../src/groups";
+import { chainBudget, createChains, GROUP_SIZE, mentionedIn, transcript, typingLine } from "../src/groups";
 import { parseClientMessage } from "../src/parse";
 import type { BotId, Message, MessageId, ServerMessage } from "../src/protocol";
 import { createPush } from "../src/push";
@@ -185,7 +185,7 @@ test("a member mentioning itself hands nothing on", async () => {
   expect(h.ana.session.pending).toEqual([]);
 });
 
-test("two bots that always mention each other stop at the hop limit: 6 turns from a send to both, then silence", async () => {
+test("two bots that always mention each other stop at the chain budget: 4 turns from a send to both, one note, then silence", async () => {
   const h = await crew();
   await h.send("Discuss.");
 
@@ -198,9 +198,54 @@ test("two bots that always mention each other stop at the hop limit: 6 turns fro
     turns++;
   }
 
-  expect(turns).toBe(6);
+  expect(turns).toBe(4);
   for (const b of h.bots) expect([b.session.lifecycle.kind, b.session.pending.length]).toEqual(["idle", 0]);
-  expect(h.said()).toHaveLength(6);
+  expect(h.said()).toHaveLength(4);
+  const notes = h.group.messages.flatMap((m) => (m.kind === "note" ? [m.text] : []));
+  expect(notes).toEqual(["Stopped passing the conversation on after 4 replies. Send a message to keep going."]);
+});
+
+test("after a chain stops at its budget, the next message starts a new chain and a mention hands on again", async () => {
+  const h = await crew();
+  await h.send("Discuss.");
+  for (let i = 0; i < 20; i++) {
+    const busy = h.bots.find((b) => b.session.lifecycle.kind === "working");
+    if (!busy) break;
+    await h.answer(busy, `@${h.bots.find((b) => b !== busy)!.name} over to you.`);
+  }
+
+  await h.send("@ana again", [h.ana]);
+  await h.answer(h.ana, "@bo you next.");
+
+  expect(h.bo.session.pending.map((p) => p.initiator)).toEqual([{ kind: "bot", botId: h.ana.id, hops: 1, origin: { kind: "user" } }]);
+  await h.answer(h.bo, "On it.");
+  expect(h.said().slice(-2)).toEqual([`${h.ana.id}: @bo you next.`, `${h.bo.id}: On it.`]);
+  expect(h.group.messages.filter((m) => m.kind === "note")).toHaveLength(1);
+});
+
+test("a chain spends at most max(4, 2 × members) turns, says so once, and is forgotten when its last turn ends", () => {
+  expect([chainBudget(2), chainBudget(3), chainBudget(8)]).toEqual([4, 6, 16]);
+  const chains = createChains();
+  const chain = "m_1" as MessageId;
+  chains.start(chain, 3, chainBudget(3));
+  const verdicts = Array.from({ length: 5 }, () => chains.handOn(chain, chainBudget(3)));
+  expect(verdicts).toEqual(["run", "run", "run", "stop and note", "stop"]);
+  for (let i = 0; i < 5; i++) chains.end(chain);
+  expect(chains.size()).toBe(1);
+  chains.end(chain);
+  expect(chains.size()).toBe(0);
+});
+
+test("a chain unknown after a restart starts its count again, counting the turn that hands on", () => {
+  const chains = createChains();
+  const chain = "m_1" as MessageId;
+  expect(Array.from({ length: 4 }, () => chains.handOn(chain, 4))).toEqual(["run", "run", "run", "stop and note"]);
+  chains.end(chain);
+  expect(chains.size()).toBe(1);
+  for (let i = 0; i < 3; i++) chains.end(chain);
+  expect(chains.size()).toBe(0);
+  chains.end(chain);
+  expect(chains.size()).toBe(0);
 });
 
 test("a chain the user started at one member runs ana, bo, ana and stops", async () => {

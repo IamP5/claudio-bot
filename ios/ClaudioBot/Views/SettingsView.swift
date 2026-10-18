@@ -210,7 +210,7 @@ struct PairAnotherView: View {
             Text("Expires in \(Text(code.expiresAt, style: .relative))")
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)
-            Text("On the other phone, open ClaudioBot and scan this code. Or enter \(invite.url.absoluteString) and the code by hand.")
+            Text("On the other device, open ClaudioBot and scan this code. Or enter \(invite.url.absoluteString) and the code by hand.")
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)
                 .multilineTextAlignment(.center)

@@ -74,7 +74,9 @@ struct MainView: View {
         }
         .sheet(isPresented: $router.showingNewChat) { NewChatView() }
         .sheet(item: $router.newSession) { NewSessionSheet(projectId: $0.projectId) }
+        #if os(iOS)
         .sheet(isPresented: $router.showingSettings) { SettingsView() }
+        #endif
         .sheet(isPresented: $router.showingUsage) { PlanUsageView() }
         .sensoryFeedback(.warning, trigger: asking) { old, new in
             new.contains { id, asks in asks && old[id] == false }

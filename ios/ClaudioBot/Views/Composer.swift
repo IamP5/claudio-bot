@@ -145,6 +145,12 @@ struct Composer: View {
                 .glass(in: Circle(), interactive: true)
                 .contentShape(Circle())
         }
+        #if os(macOS)
+        // A Mac menu otherwise draws its own bezel and arrow around the round button.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        #endif
         .accessibilityLabel("Attach")
     }
 

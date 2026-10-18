@@ -25,6 +25,7 @@ struct SidebarRoot: View {
                     Text("Sessions").tag(SidebarMode.sessions)
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
                 .padding(.horizontal, 16)
                 .padding(.bottom, 8)
             }

@@ -807,8 +807,33 @@ export function createHub(deps: HubDeps): Hub {
     },
   });
 
+  /** What the floors protect for a session the phone drives in cwd: the same private paths as for an agent. */
+  function scopeIn(cwd: string): Scope {
+    const home = realpathSync(homedir());
+    const users = { [userInfo().username]: home, root: process.platform === "darwin" ? "/var/root" : "/root" };
+    let own = cwd;
+    try {
+      own = realpathSync(cwd);
+    } catch {}
+    return { bridgeHome: realpathSync(root), own, userMd: null, homedir: home, users, full: false };
+  }
+
   const sessions: Sessions | null = deps.sessions
-    ? createSessions({ ...deps.sessions, world, userName, bridgeHome: realpathSync(root), agents, scan: deps.scan, persist: deps.persist, now: clockNow, log: deps.log })
+    ? createSessions({
+        ...deps.sessions,
+        world,
+        userName,
+        bridgeHome: realpathSync(root),
+        agents,
+        decideGate: (botId, cardId, choice) => gate.answer(botId as BotId, cardId, { kind: "permission", choice }),
+        ledger,
+        claude: deps.claude,
+        scope: scopeIn,
+        scan: deps.scan,
+        persist: deps.persist,
+        now: clockNow,
+        log: deps.log,
+      })
     : null;
 
   const connectors = createConnectors({ world, live: (id) => brains.get(id)?.mcp() ?? null, reopen: reopenFor, persist: deps.persist, log: deps.log });
@@ -1249,6 +1274,7 @@ export function createHub(deps: HubDeps): Hub {
         if (bot.session.pending.length > 0 || bot.session.lifecycle.kind !== "idle") brain(bot);
       }
       agents.resume();
+      sessions?.resume();
       webhooks.start();
       void sessions?.start().catch((e) => deps.log(`sessions: the index could not start: ${errorText(e)}`));
     },

@@ -5,7 +5,7 @@ import { createCloudSession, followUpCloudSession } from "./cloud";
 import { readEvidence, reportText } from "./evidence";
 import type { Ledger } from "./ledger";
 import type { AgentId, AgentStatus, BotId } from "./protocol";
-import { agentPrompt, agentRules, type SessionInput } from "./prompts";
+import { agentPrompt, agentRules, directHeader, type SessionInput } from "./prompts";
 import type { Project } from "./projects";
 import { createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { refused, type Result } from "./result";
@@ -45,6 +45,12 @@ export type Agents = {
   message(rec: AgentRecord, text: string, initiator: Initiator): Promise<string>;
   /** Gate → mac agent (a decision envelope): queued, not recorded in the thread. Ignored for cloud agents. */
   deliver(rec: AgentRecord, input: SessionInput): void;
+  /**
+   * The user → a mac agent, from its session on the phone: queued in the same inbox as the bot's follow-ups, as the
+   * user's turn, under a header that tells the agent who wrote it. Not relayed to the bot; its next report says the
+   * user wrote. null once queued, else why not.
+   */
+  direct(rec: AgentRecord, text: string, clientId: string): string | null;
   notice(rec: AgentRecord, text: string): void;
   /** Stop from the phone. False when nothing runs (and always for cloud agents). The turn's end reports to the bot. */
   stop(rec: AgentRecord): Promise<boolean>;
@@ -179,10 +185,18 @@ export function createAgents(deps: {
     reportQueues.set(id, next.catch((e) => deps.log(`agent ${id} report: ${errorText(e)}`)));
   }
 
+  /** What the bot hears: the report, after a line when the user also messaged the agent directly since the last one. */
+  function told(rec: AgentRecord, text: string): string {
+    if (!rec.directed) return text;
+    delete rec.directed;
+    deps.persist();
+    return `${deps.userName} also messaged this agent directly.\n${text}`;
+  }
+
   function report(rec: AgentRecord, status: AgentStatus, text: string, by: Initiator) {
     queueReport(rec, () => {
       update(rec, status, { from: "agent", text });
-      deps.reported(rec, text, by);
+      deps.reported(rec, told(rec, text), by);
     });
   }
 
@@ -200,7 +214,7 @@ export function createAgents(deps: {
       rec.agent = { ...rec.agent, evidence };
       rec.unreported = rec.unreported?.filter((r) => r !== report);
       update(rec, report.status, { from: "agent", text: report.text });
-      deps.reported(rec, reportText(evidence, report.text), report.by);
+      deps.reported(rec, told(rec, reportText(evidence, report.text)), report.by);
     });
   }
 
@@ -397,6 +411,16 @@ export function createAgents(deps: {
       if (rec.agent.where !== "mac" || gone(rec)) return;
       macSession(rec).push(input);
       refresh(rec);
+    },
+
+    direct(rec, text, clientId) {
+      if (rec.agent.where !== "mac") return "A cloud agent's session is on claude.ai.";
+      if (gone(rec)) return `${rec.agent.title} worked in a worktree that was removed, so it cannot continue.`;
+      if (rec.session.pending.some((p) => p.clientId === clientId)) return null;
+      rec.directed = true;
+      macSession(rec).push({ kind: "envelope", text: `${directHeader(deps.userName)}\n${text}`, initiator: { kind: "user" }, settles: null, clientId });
+      refresh(rec);
+      return null;
     },
 
     notice(rec, text) {

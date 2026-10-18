@@ -1410,6 +1410,29 @@ function rawFloorDeny(call: ToolCall, ctx: PolicyContext): Decision | null {
   return null;
 }
 
+/**
+ * The floors alone: a deny, or null for no opinion. A session the phone drives keeps the user's own settings and their
+ * prompts, and gets only this from the bridge: what a remote surface must never be talked into.
+ */
+export function floors(call: ToolCall, outer: PolicyContext): Decision | null {
+  if (SDK_INTERNAL.has(call.tool)) return null;
+  // Too long to parse in bounded time: a floor root spelled in it is still refused.
+  if (call.tool === "Bash" && typeof call.input.command === "string" && call.input.command.length > MAX_BASH_LEN) return rawFloorDeny(call, outer);
+  const ctx: PolicyContext = { ...outer, realpath: boundedRealpath(outer.realpath) };
+  let at = "floor.paths";
+  try {
+    const view = viewOf(call, ctx);
+    for (const floor of floorsFor(ctx)) {
+      at = floor.id;
+      if (floorHit(floor, call, view, ctx)) return deny("floor", floor.id, floorReason(floor), floor.handOff ?? false);
+    }
+    return null;
+  } catch (e) {
+    if (e instanceof TooManyPaths) return rawFloorDeny(call, outer);
+    return deny("floor", at, `The bridge could not check this call against ${at}, so it was blocked and did not run. Do not retry it this turn.`);
+  }
+}
+
 export function decide(call: ToolCall, outer: PolicyContext): Decision {
   if (SDK_INTERNAL.has(call.tool)) return PASS;
   // A command too long to scan in bounded time is held rather than parsed, so the hook never freezes the bridge.

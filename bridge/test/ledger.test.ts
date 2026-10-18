@@ -471,3 +471,15 @@ test("agentSpend: lifetime spend across days, against the agent's budget in forc
   expect(ledger.agentSpend(A1)).toEqual({ spentUsd: 1.25, budgetUsd: null });
   expect(ledger.agentSpend(A2)).toEqual({ spentUsd: 0, budgetUsd: 1 });
 });
+
+test("a session the phone drives is metered with no bot: no cap holds it, no bot's spend counts it, and its baseline survives a restart", () => {
+  const h = harness({ caps: { [B1]: 1 } });
+  const own = { kind: "own" as const, sessionId: "s_own" as never };
+  h.ledger.add({ actor: own, sessionId: "s_own", initiator: user, cumulativeUsd: 2, fresh: true });
+  expect(rowsIn(h.dir)).toMatchObject([{ actor: "own:s_own", botId: null, deltaUsd: 2 }]);
+  expect([h.ledger.headroom(own, system), h.ledger.botSpend(B1).spentTodayUsd]).toEqual([{ ok: true, capReached: false }, 0]);
+  const again = h.reopen();
+  again.add({ actor: own, sessionId: "s_own", initiator: user, cumulativeUsd: 2.5 });
+  expect(rowsIn(h.dir).at(-1)).toMatchObject({ deltaUsd: 0.5 });
+  expect(h.logs.filter((l) => l.includes("unreadable"))).toEqual([]);
+});

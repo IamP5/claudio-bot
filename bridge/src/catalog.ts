@@ -22,6 +22,8 @@ export type CatalogDeps = {
   world: World;
   /** The bridge's writer on the id (an agent's session, or the phone's), null when it has none. */
   driven(id: SessionId): Driven | null;
+  /** Sessions the phone started, which list before Claude Code has written their transcript. */
+  drafts(): { id: SessionId; cwd: string; title: string; at: string }[];
   /** A socket has the thread open, so nothing in it is unread. */
   watched(id: SessionId): boolean;
   /** The project folders under the roots, so a project with no session yet still lists. */
@@ -99,21 +101,23 @@ export function createCatalog(deps: CatalogDeps): Catalog {
     const agents = agentsById();
     const holders = deps.apps.holders();
     const desktop = deps.apps.desktop();
-    const ids = new Set<SessionId>([...heads.keys(), ...agents.keys()]);
+    const drafts = new Map(deps.drafts().map((d) => [d.id, d]));
+    const ids = new Set<SessionId>([...heads.keys(), ...agents.keys(), ...drafts.keys()]);
     const projects = new Map<string, SessionProject>();
     const rows: SessionRow[] = [];
     for (const seed of seeds) projects.set(seed.id, { id: seed.id, name: seed.name, path: seed.root, githubRepo: seed.githubRepo, lastAt: null, canCloud: false });
     for (const id of ids) {
       const head = heads.get(id) ?? null;
       const rec = agents.get(id) ?? null;
-      const cwd = head?.cwd ?? rec?.cwd;
+      const draft = drafts.get(id);
+      const cwd = head?.cwd ?? rec?.cwd ?? draft?.cwd;
       if (cwd === undefined) continue;
       const project = deps.projects.of(cwd);
       const overlay = deps.world.sessions.get(id);
       const driven = deps.driven(id);
       const held = holders.get(id);
-      const lastAt = head?.lastAt ?? Date.parse(rec!.agent.updatedAt);
-      const createdAt = head?.createdAt ?? Date.parse(rec!.agent.createdAt);
+      const lastAt = head?.lastAt ?? Date.parse(rec?.agent.updatedAt ?? draft!.at);
+      const createdAt = head?.createdAt ?? Date.parse(rec?.agent.createdAt ?? draft!.at);
       const visited = overlay?.visitedAt ?? null;
       const unread =
         !deps.watched(id) && (driven !== null || rec !== null || visited !== null) && head?.lastRole === "assistant" && (visited === null || lastAt > Date.parse(visited));
@@ -123,8 +127,8 @@ export function createCatalog(deps: CatalogDeps): Catalog {
         id,
         projectId: project.id,
         parentId: desktop.get(id)?.parent ?? null,
-        title: head?.title ?? rec!.agent.title,
-        origin: rec ? "agent" : originOf(head),
+        title: head?.title ?? rec?.agent.title ?? draft!.title,
+        origin: rec ? "agent" : overlay?.own?.created ? "phone" : originOf(head),
         agent: rec ? { botId: rec.agent.botId, agentId: rec.agent.id } : null,
         status,
         holder,

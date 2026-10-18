@@ -847,3 +847,23 @@ test("a repo's empty .claude folders, like the .cc-writes Claude Code leaves, ar
   mkdirSync(join(repo, ".claude", "skills", "greet"));
   expect(projectConfigOf(repo)).toEqual([".claude/settings.json", ".claude/skills"]);
 });
+
+test("the user's message from the agent's session joins its inbox as the user's turn, and the bot hears only that it happened", async () => {
+  const h = harness();
+  const rec = await h.start();
+  await flush();
+  expect(h.agents.direct(rec, "Use the blue palette.", "c_1")).toBeNull();
+  expect(h.agents.direct(rec, "Use the blue palette.", "c_1")).toBeNull();
+  expect(rec.session.pending.map((p) => [p.text, p.initiator.kind, p.clientId])).toEqual([
+    [AGENT_PROMPT, "user", undefined],
+    ["[Alex messaged this agent directly]\nUse the blue palette.", "user", "c_1"],
+  ]);
+  h.q().emit(result("First turn done."));
+  await until(() => h.reports.length === 1);
+  expect(h.reports[0]!.text.split("\n").slice(0, 1)).toEqual(["Alex also messaged this agent directly."]);
+  await flush();
+  expect(h.q().received.at(-1)).toBe("[Alex messaged this agent directly]\nUse the blue palette.");
+  h.q().emit(result("Second turn done."));
+  await until(() => h.reports.length === 2);
+  expect(h.reports[1]!.text).not.toContain("also messaged");
+});

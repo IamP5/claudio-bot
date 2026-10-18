@@ -65,7 +65,7 @@ const kindOf = (e: Envelope): Pending["kind"] => KIND[e.from] ?? "envelope";
 const settlesOf = (e: Envelope): RunRef | null => (e.from === "routine" ? e.run : null);
 
 /** What a session queues for one envelope. Session.push takes this, and Pending keeps all of it. */
-export type SessionInput = Pick<Pending, "kind" | "text" | "initiator" | "settles" | "group" | "chain">;
+export type SessionInput = Pick<Pending, "kind" | "text" | "initiator" | "settles" | "group" | "chain" | "clientId">;
 
 export const inputOf = (e: Envelope, userName: string): SessionInput => ({
   kind: kindOf(e),

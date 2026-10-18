@@ -28,7 +28,9 @@ import {
   type Effect,
   type Event,
   type Outcome,
+  type SessionSpec,
   type TurnEnd,
+  GONE_ERROR,
   usedBudget,
 } from "../src/session";
 import type { SessionInput } from "../src/prompts";
@@ -658,6 +660,7 @@ function harness(
     dailyLeft?: () => number | null;
     context?: () => string;
     brief?: () => string;
+    spec?: Partial<SessionSpec>;
   } = {},
 ) {
   const clock = opts.clock ?? { t: NOW.getTime() };
@@ -706,6 +709,7 @@ function harness(
     spawn: (_o, _stderr, exited) => new FakeProcess(exited) as unknown as SpawnedProcess,
     ...(!opts.defaultExecutable && { executable: () => (opts.executable === undefined ? "/fake/claude" : opts.executable) }),
     now: () => new Date(clock.t),
+    ...opts.spec,
   });
   return {
     session,
@@ -749,6 +753,33 @@ async function started(text: string, initiator: Initiator = user): Promise<{ h: 
   await flush();
   return { h, id };
 }
+
+describe("a phone's own session", () => {
+  test("a turn waits while another Claude Code is busy on the session, then runs once it is not", async () => {
+    let busy: string | null = "Working in the Claude app.";
+    const h = harness({ spec: { actor: { kind: "own", sessionId: "s_1" as never }, blocked: () => busy } });
+    const a = h.push("hello");
+    await flush();
+    expect([h.queries.length, h.session.lifecycle.kind, h.state.pending.length]).toEqual([0, "backoff", 1]);
+    expect(h.ends).toMatchObject([{ id: a, end: { kind: "deferred", why: "retry" } }]);
+    busy = null;
+    await h.advance(START_RETRY_MS[0]);
+    expect(h.sent()).toEqual(["hello"]);
+  });
+
+  test("its query closes after its own idle time, and its turns are metered with no bot", async () => {
+    const h = harness({ spec: { actor: { kind: "own", sessionId: "s_1" as never }, idleMs: 10 * 60_000 } });
+    h.push("hello");
+    await flush();
+    h.q().emit(resultMsg(0.2));
+    await flush();
+    expect(h.usage).toMatchObject([{ actor: { kind: "own", sessionId: "s_1" }, cumulativeUsd: 0.2 }]);
+    await h.advance(10 * 60_000 - 1000);
+    expect(h.q().closed).toBe(false);
+    await h.advance(2000);
+    expect(h.q().closed).toBe(true);
+  });
+});
 
 describe("session", () => {
   test("the context rides on a turn's message when it changed since this session last sent it, even on an open query", async () => {
@@ -1623,6 +1654,17 @@ describe("a conversation Claude Code no longer has", () => {
     const text = `No conversation found with session ID: ${id}`;
     return resultMsg(0, { subtype: "error_during_execution", is_error: true, result: text, errors: [text], session_id: id });
   };
+
+  test("a session that must not be replaced fails its turn instead, and starts nothing new", async () => {
+    const h = harness({ state: emptySession("s_old"), spec: { forgotten: "fail" } });
+    const a = h.push("hello");
+    await flush();
+    h.q().emit(gone("s_old"));
+    await flush();
+    expect(h.queries).toHaveLength(1);
+    expect(h.finals(a)).toMatchObject([{ end: { kind: "failed", error: GONE_ERROR } }]);
+    expect([h.state.id, h.notes]).toEqual(["s_old", []]);
+  });
 
   test("the session id is cleared, the user is told, and the same envelope runs on a fresh session without spending an attempt", async () => {
     const h = harness({ state: emptySession("s_old") });

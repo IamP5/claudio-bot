@@ -39,6 +39,8 @@ export class FakeQuery {
   /** Each message's content: a string, or the blocks of a /command sent after context. */
   readonly received: string[] = [];
   readonly toggles: string[] = [];
+  /** setPermissionMode and setModel calls, as "mode <m>" and "model <m>". */
+  readonly controls: string[] = [];
   interrupts = 0;
   private queue: SDKMessage[] = [];
   private done = false;
@@ -67,6 +69,15 @@ export class FakeQuery {
   }
   async toggleMcpServer(name: string, enabled: boolean) {
     this.toggles.push(`${name} ${enabled}`);
+  }
+  async setPermissionMode(mode: string) {
+    this.controls.push(`mode ${mode}`);
+  }
+  async setModel(model?: string) {
+    this.controls.push(`model ${model ?? "default"}`);
+  }
+  async supportedModels() {
+    return [];
   }
   commands: SlashCommand[] = COMMANDS;
   async supportedCommands() {

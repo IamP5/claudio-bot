@@ -21,6 +21,10 @@ import {
   type MessageId,
   type MirrorPref,
   type Peer,
+  type AskQuestion,
+  type PermissionMessage,
+  type PermissionMode,
+  type PhoneMode,
   type Routine,
   type RoutineId,
   type RoutineRun,
@@ -39,6 +43,13 @@ export type AgentActor = Extract<Actor, { kind: "agent" }>;
 export type ActorKey = `bot:${string}` | `agent:${string}`;
 export const actorKey = (a: Actor): ActorKey => (a.kind === "bot" ? `bot:${a.botId}` : `agent:${a.agentId}`);
 export const botActor = (botId: BotId): BotActor => ({ kind: "bot", botId });
+
+/** A session the user drives from the phone. Never a gate actor: the gate and the policy keep taking Actor. */
+export type OwnActor = { kind: "own"; sessionId: SessionId };
+/** Whoever a session.ts Session runs and the ledger meters: a bot, an agent, or the phone's own session. */
+export type Driver = Actor | OwnActor;
+export type DriverKey = ActorKey | `own:${string}`;
+export const driverKey = (d: Driver): DriverKey => (d.kind === "own" ? `own:${d.sessionId}` : actorKey(d));
 
 export type RunRef = { routineId: RoutineId; runId: RunId };
 
@@ -124,6 +135,8 @@ export type Pending = {
   group?: BotId;
   /** The user's message in the group that began the chain this turn is part of (groups.createChains). Set with group. */
   chain?: MessageId;
+  /** The id the phone gave a message it sent to a session, which its queued item carries until the transcript shows it. */
+  clientId?: string;
 };
 
 /** The turn in flight. Persisted so a restart can apply the replay rule. */
@@ -364,6 +377,8 @@ export type AgentRecord = {
    * them with fresh evidence. Writer: agents.ts. Absent on older records.
    */
   unreported?: AgentReport[];
+  /** The user messaged the agent from its session since its last report, so the next report says so. Writer: agents.ts. */
+  directed?: boolean;
 };
 
 /** A finished turn's report: the status it leaves, the agent's final message, and the initiator of its turn. */
@@ -391,7 +406,57 @@ export type SessionRecord = {
    * Absent when none is due, or once the app lists the session.
    */
   mirror?: { dueAt: string; failed: boolean };
+  /** Present once the phone has sent to it or made it; never on an id an agent owns. */
+  own?: OwnDrive;
 };
+
+/** A session the user drives from the phone. Writer: own.ts, its session slice session.ts. */
+export type OwnDrive = {
+  /** Where the query opens, fixed at the first send from the transcript (or the new session's folder). */
+  cwd: string;
+  /** Started from the phone (origin "phone"). */
+  created: boolean;
+  /** When the phone first sent to it. */
+  at: string;
+  /** A session the phone started: its first prompt, the row's title until Claude Code names it. */
+  prompt?: string;
+  /** null: the transcript's last model, else Claude Code's default. */
+  model: string | null;
+  /** null: the transcript's last mode, else the user's settings.permissions.defaultMode. */
+  mode: PhoneMode | null;
+  readonly session: Owned<SessionState>;
+  /** Open cards and the newest settled ones. Writer: own.ts. */
+  cards: OwnCard[];
+};
+
+/**
+ * What Claude Code asked the phone. Live only on the SDK side: the query waiting on it dies with the bridge, so at
+ * boot every open one is expired.
+ * - permission: a tool call Claude Code's own settings ask about. suggestions: what Always applies, for the session.
+ * - ask: AskUserQuestion, answered by question text.
+ * - plan: ExitPlanMode. modeBefore: the mode to go back to once the plan is approved.
+ */
+export type OwnCard =
+  | { kind: "permission"; card: PermissionMessage; toolUseId: string; suggestions: unknown[] }
+  | {
+      kind: "ask";
+      cardId: MessageId;
+      toolUseId: string;
+      at: string;
+      expiresAt: string;
+      questions: AskQuestion[];
+      answers: Record<string, string> | "dismissed" | "expired" | null;
+    }
+  | {
+      kind: "plan";
+      cardId: MessageId;
+      toolUseId: string;
+      at: string;
+      expiresAt: string;
+      text: string;
+      state: "proposed" | "approved" | "rejected" | "expired";
+      modeBefore: PermissionMode;
+    };
 
 /** Settings, "Show agent sessions in the Claude app". Writer: sessions.ts. */
 export type SessionPrefs = { mirror: MirrorPref };

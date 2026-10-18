@@ -1,25 +1,36 @@
 import { renameSession } from "@anthropic-ai/claude-agent-sdk";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import type { Agents } from "./agents";
 import { createCatalog, type Driven } from "./catalog";
 import type { ClaudeApps } from "./claudeApps";
 import type { Tickable } from "./clock";
+import type { Ledger } from "./ledger";
+import { createOwn, newDrive, type OwnDeps } from "./own";
+import type { Scope } from "./policy";
 import { createProjects, type Project } from "./projects";
 import {
   PHONE_MODES,
+  type ItemId,
+  type MessageId,
+  type PermissionChoice,
+  type PhoneMode,
   type ServerMessage,
   type SessionClientMessage,
   type SessionControls,
   type SessionId,
+  type SessionItem,
   type SessionsChannelFrame,
   type SessionStatus,
   type ThreadChannelFrame,
 } from "./protocol";
+import type { Result } from "./result";
+import type { SessionSpec } from "./session";
 import type { Persist } from "./store";
 import { errorText } from "./text";
 import { createThreads } from "./threads";
-import { createHeads, sdkReaders, type Head, type SdkReaders } from "./transcript";
+import { createHeads, sdkReaders, transcriptExists, type Head, type SdkReaders } from "./transcript";
+import { prepareWorkspace } from "./worktree";
 import { own, type AgentRecord, type SessionPrefs, type SessionRecord, type World } from "./world";
 
 // The facade the hub calls for every session verb. It owns the index (catalog.ts), the threads (threads.ts) and the
@@ -47,7 +58,15 @@ export type SessionsDeps = SessionsEnv & {
   userName: string;
   /** The bridge home: a session whose cwd is under it is a bot's, shown in the Bots view instead. */
   bridgeHome: string;
-  agents: Pick<Agents, "session">;
+  agents: Pick<Agents, "session" | "direct" | "stop" | "message">;
+  /** The gate's answer to one of its cards: an agent's permission card, decided from the agent's thread. */
+  decideGate(botId: string, cardId: MessageId, choice: PermissionChoice): Result;
+  ledger: Ledger;
+  claude: Pick<SessionSpec, "query" | "executable">;
+  /** Paths the floors protect, for a session working in cwd. */
+  scope(cwd: string): Scope;
+  /** A card in a session the phone drives: a push that says only that a session needs the user. */
+  notify?(id: SessionId, cardId: MessageId): void;
   scan(): Promise<Project[]>;
   persist: Persist;
   now(): Date;
@@ -63,11 +82,20 @@ export type Sessions = Tickable & {
   agentChanged(rec: AgentRecord): void;
   /** A mac agent's turn ended done: its session becomes due for the Claude app (the mirror policy). */
   agentTurnDone(rec: AgentRecord): void;
+  /** At start: open cards of the phone's sessions expire, and those with queued input start. */
+  resume(): void;
   stop(): void;
 };
 
-/** Who writes a session. An agent link wins; the phone drives only what no agent owns. */
-type Writer = { kind: "agent"; rec: AgentRecord } | { kind: "none"; reason: string };
+/**
+ * Who writes a session: the one rule, encoded here only. An agent link wins. Otherwise the phone drives it once it
+ * has sent to it (own), or may take it on (open) while Claude Code has its transcript.
+ */
+type Writer =
+  | { kind: "agent"; rec: AgentRecord }
+  | { kind: "own"; rec: SessionRecord }
+  | { kind: "open"; head: Head }
+  | { kind: "none"; reason: string };
 
 const INDEX_FILE = "sessions-index.json";
 /** The mirror policy (docs/sessions-design.md §8.4): one import a minute at most, for a day, on an idle Mac. */
@@ -94,7 +122,22 @@ function writeIndex(file: string, heads: readonly Head[]) {
 /** An open thread's transcript is checked this often, so a missed watch event delays it at most this long. */
 const THREAD_POLL_MS = 1_000;
 
-const READ_ONLY = "Sending from the phone is not on in this bridge yet.";
+const GONE = "This session's transcript is gone.";
+/** Shown cards per agent, so a settled gate card stays in the agent's thread with its answer. */
+const GATE_CARDS_KEPT = 20;
+
+/** The user's settings.permissions.defaultMode, when the phone may use it. */
+function settingsMode(configDir: string): PhoneMode | null {
+  try {
+    const v: unknown = JSON.parse(readFileSync(join(configDir, "settings.json"), "utf8"));
+    const mode = (v as { permissions?: { defaultMode?: unknown } })?.permissions?.defaultMode;
+    return typeof mode === "string" && (PHONE_MODES as readonly string[]).includes(mode) ? (mode as PhoneMode) : null;
+  } catch {
+    return null;
+  }
+}
+
+const HELD_BY: Record<string, string> = { "claude-desktop": "Working in the Claude app.", cli: "Working in a terminal." };
 
 export function createSessions(deps: SessionsDeps): Sessions {
   const sdk = deps.sdk ?? sdkReaders;
@@ -115,13 +158,32 @@ export function createSessions(deps: SessionsDeps): Sessions {
   }
 
   function driverOf(id: SessionId): Writer {
-    const rec = agentOf(id);
-    if (rec) return { kind: "agent", rec };
-    return { kind: "none", reason: READ_ONLY };
+    const agent = agentOf(id);
+    if (agent) return { kind: "agent", rec: agent };
+    const rec = deps.world.sessions.get(id);
+    if (rec?.own) return { kind: "own", rec };
+    const head = catalog.head(id);
+    return head ? { kind: "open", head } : { kind: "none", reason: GONE };
+  }
+
+  /** The phone takes the session on: its drive is made, with the cwd its transcript names. */
+  function take(id: SessionId, head: Head): SessionRecord {
+    const rec = recordOf(id);
+    rec.own ??= newDrive({ id, cwd: head.cwd, created: false, at: deps.now().toISOString(), model: null, mode: null });
+    deps.persist("now");
+    return rec;
+  }
+
+  /** Why the phone must wait to send: another live Claude Code is busy on the id. */
+  function blocked(id: SessionId): string | null {
+    const held = deps.apps.holders().get(id);
+    if (!held?.busy) return null;
+    return HELD_BY[held.entrypoint] ?? "Another Claude Code is working on this session.";
   }
 
   function driven(id: SessionId): Driven | null {
     const w = driverOf(id);
+    if (w.kind === "own") return drivers.status(w.rec);
     if (w.kind !== "agent") return null;
     const session = deps.agents.session(w.rec.agent.id);
     const status: SessionStatus = session?.working ? "working" : session?.parkedFor ? "parked" : AGENT_STATUS[w.rec.agent.status];
@@ -130,19 +192,86 @@ export function createSessions(deps: SessionsDeps): Sessions {
 
   function controls(id: SessionId): SessionControls {
     const w = driverOf(id);
-    const head = catalog.head(id);
-    const working = w.kind === "agent" ? (deps.agents.session(w.rec.agent.id)?.working ?? false) : (deps.apps.holders().get(id)?.busy ?? false);
-    return {
-      canSend: false,
-      reason: w.kind === "none" ? w.reason : READ_ONLY,
-      working,
-      queued: 0,
-      model: null,
-      models: [],
-      mode: head?.mode ?? "default",
-      modes: [...PHONE_MODES],
-    };
+    switch (w.kind) {
+      case "own":
+        return drivers.controls(w.rec);
+      case "agent": {
+        const session = deps.agents.session(w.rec.agent.id);
+        const pending = w.rec.session.pending.length;
+        const life = w.rec.session.lifecycle;
+        const busy = life.kind === "working" || life.kind === "stopping" ? 1 : 0;
+        return { canSend: true, reason: null, working: session?.working ?? false, queued: Math.max(0, pending - busy), model: null, models: [], mode: "auto", modes: [] };
+      }
+      case "open":
+      case "none": {
+        const wait = w.kind === "none" ? w.reason : blocked(id);
+        const head = catalog.head(id);
+        const mode = head?.mode && (PHONE_MODES as readonly string[]).includes(head.mode) ? (head.mode as PhoneMode) : (settingsMode(configDir) ?? "default");
+        return { canSend: wait === null, reason: wait, working: deps.apps.holders().get(id)?.busy ?? false, queued: 0, model: null, models: MODELS_SHOWN, mode, modes: [...PHONE_MODES] };
+      }
+    }
   }
+
+  /** The gate's cards of an agent, shown in its thread: the open ones, and the newest it showed since the bridge started. */
+  const gateShown = new Map<string, MessageId[]>();
+  function agentOverlay(rec: AgentRecord): SessionItem[] {
+    const open = deps.world.gate.open.filter((c) => c.kind === "permission" && c.actor.kind === "agent" && c.actor.agentId === rec.agent.id).map((c) => c.cardId);
+    const shown = [...new Set([...(gateShown.get(rec.agent.id) ?? []), ...open])].slice(-GATE_CARDS_KEPT);
+    gateShown.set(rec.agent.id, shown);
+    const bot = deps.world.bots.get(rec.agent.botId);
+    const items: SessionItem[] = [];
+    for (const id of shown) {
+      const m = bot?.messages.find((x) => x.id === id);
+      if (m?.kind === "permission") items.push({ kind: "permission", id: id as string as ItemId, at: m.at, card: { ...m } });
+    }
+    const life = rec.session.lifecycle;
+    const inFlight = life.kind === "working" || life.kind === "stopping" ? life.turn.pending : null;
+    for (const p of rec.session.pending) {
+      if (p.clientId === undefined) continue;
+      const text = p.text.split("\n").slice(1).join("\n");
+      items.push({ kind: "user", id: p.clientId as ItemId, at: p.at, text, from: "user", queued: p.id !== inFlight });
+    }
+    return items;
+  }
+
+  function overlay(id: SessionId): SessionItem[] {
+    const w = driverOf(id);
+    if (w.kind === "agent") return agentOverlay(w.rec);
+    if (w.kind === "own") return drivers.overlay(w.rec);
+    return [];
+  }
+
+  const configDir = dirname(deps.projectsDir);
+  const ownDeps: OwnDeps = {
+    world: deps.world,
+    userName: deps.userName,
+    ledger: deps.ledger,
+    persist: deps.persist,
+    claude: deps.claude,
+    last: (id) => {
+      const head = catalog.head(id);
+      return { mode: head?.mode ?? null, model: head?.model ?? null };
+    },
+    transcriptExists: (id, cwd) => transcriptExists(deps.projectsDir, id, cwd),
+    blocked,
+    defaultMode: () => settingsMode(configDir),
+    scope: deps.scope,
+    changed(id) {
+      catalog.touch();
+      threads.refresh(id);
+    },
+    done(id) {
+      if (deps.world.sessions.get(id)?.own?.created) due(id);
+    },
+    ...(deps.notify && { notify: deps.notify }),
+    now: deps.now,
+    log: deps.log,
+  };
+  const drivers = createOwn(ownDeps);
+  // The bridge always yields: a session another Claude Code turned busy on loses the bridge's idle query.
+  deps.apps.onChange(() => {
+    for (const rec of deps.world.sessions.values()) if (rec.own && blocked(rec.id) !== null) drivers.yieldTo(rec.id);
+  });
 
   const watched = (id: SessionId) => deps.watchers(id) > 0;
 
@@ -153,6 +282,10 @@ export function createSessions(deps: SessionsDeps): Sessions {
     apps: deps.apps,
     world: deps.world,
     driven,
+    drafts: () =>
+      [...deps.world.sessions.values()].flatMap((r) =>
+        r.own?.created ? [{ id: r.id, cwd: r.own.cwd, title: (r.own.prompt ?? "New session").split("\n")[0]!.slice(0, 80), at: r.own.at }] : [],
+      ),
     watched,
     scan: deps.scan,
     publish: deps.signal.list,
@@ -167,8 +300,8 @@ export function createSessions(deps: SessionsDeps): Sessions {
   const threads = createThreads({
     epoch: deps.epoch,
     head: (id) => catalog.head(id),
-    context: (id, head) => ({ cwd: head?.cwd ?? agentOf(id)?.cwd ?? "", userName: deps.userName, agent: agentOf(id) !== null }),
-    overlay: () => [],
+    context: (id, head) => ({ cwd: head?.cwd ?? agentOf(id)?.cwd ?? deps.world.sessions.get(id)?.own?.cwd ?? "", userName: deps.userName, agent: agentOf(id) !== null }),
+    overlay,
     controls,
     publish: deps.signal.thread,
     watched,
@@ -184,7 +317,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   }
 
   const listFrame = (): ServerMessage => ({ type: "sessions", ...catalog.snapshot(), mirror: deps.world.sessionPrefs.mirror });
-  const known = (id: SessionId) => catalog.head(id) !== null || agentOf(id) !== null;
+  const known = (id: SessionId) => catalog.head(id) !== null || agentOf(id) !== null || deps.world.sessions.get(id)?.own?.created === true;
   const gone = (id: SessionId): ServerMessage[] => [{ type: "session_removed", sessionId: id, movedTo: null }];
   const error = (message: string): ServerMessage[] => [{ type: "error", message }];
 
@@ -198,6 +331,90 @@ export function createSessions(deps: SessionsDeps): Sessions {
     }
     catalog.changed(head.file);
     return [];
+  }
+
+  /** The session is due for the Claude app once, after its first finished turn, while the setting is Automatically. */
+  function due(id: SessionId) {
+    if (deps.world.sessionPrefs.mirror !== "auto" || deps.apps.desktop().has(id)) return;
+    const r = recordOf(id);
+    if (r.mirror) return;
+    r.mirror = { dueAt: deps.now().toISOString(), failed: false };
+    deps.persist();
+    catalog.touch();
+    mirrorAt = 0;
+  }
+
+  const reply = (r: Result): ServerMessage[] => (r.ok ? [] : error(r.error));
+
+  async function send(m: Extract<SessionClientMessage, { type: "session_send" }>): Promise<ServerMessage[]> {
+    const w = driverOf(m.sessionId);
+    switch (w.kind) {
+      case "agent": {
+        if (m.interrupt) await deps.agents.stop(w.rec);
+        const refusal = deps.agents.direct(w.rec, m.text, m.clientId);
+        return refusal === null ? [] : error(refusal);
+      }
+      case "own":
+        return reply(await drivers.send(w.rec, m.text, m.clientId, m.interrupt));
+      case "open":
+        return reply(await drivers.send(take(m.sessionId, w.head), m.text, m.clientId, m.interrupt));
+      case "none":
+        return error(w.reason);
+    }
+  }
+
+  async function stopTurn(id: SessionId): Promise<ServerMessage[]> {
+    const w = driverOf(id);
+    const stopped = w.kind === "agent" ? await deps.agents.stop(w.rec) : w.kind === "own" ? await drivers.stop(w.rec) : false;
+    return stopped ? [] : error("Nothing is running.");
+  }
+
+  function decide(m: Extract<SessionClientMessage, { type: "session_decide" }>): ServerMessage[] {
+    const w = driverOf(m.sessionId);
+    if (w.kind === "own") return reply(drivers.decide(w.rec, m.cardId, m.choice));
+    if (w.kind === "agent") return reply(deps.decideGate(w.rec.agent.botId, m.cardId, m.choice));
+    return error("Unknown card");
+  }
+
+  async function create(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<ServerMessage[]> {
+    const project = catalog.snapshot().projects.find((p) => p.id === m.projectId);
+    if (!project) return error("Unknown project");
+    if (!existsSync(project.path)) return error(`${project.name}'s folder is gone from this Mac.`);
+    const id = crypto.randomUUID() as SessionId;
+    let cwd = project.path;
+    if (m.isolate === "worktree") {
+      try {
+        cwd = (await prepareWorkspace({ path: project.path, name: project.name }, id, "worktree")).cwd;
+      } catch (e) {
+        return error(errorText(e));
+      }
+    }
+    const rec = recordOf(id);
+    rec.own = newDrive({ id, cwd, created: true, at: deps.now().toISOString(), model: m.model, mode: m.mode, prompt: m.text });
+    deps.persist("now");
+    const sent = await drivers.send(rec, m.text, m.ref, false);
+    if (!sent.ok) return error(sent.error);
+    catalog.touch();
+    return [{ type: "session_created", ref: m.ref, sessionId: id }];
+  }
+
+  async function set(m: Extract<SessionClientMessage, { type: "session_set" }>): Promise<ServerMessage[]> {
+    const id = m.sessionId;
+    const { title, hidden, model, mode } = m.patch;
+    if (model !== undefined || mode !== undefined) {
+      const w = driverOf(id);
+      if (w.kind === "agent") return error("An agent runs with its bot's model and mode.");
+      if (w.kind === "none") return error(w.reason);
+      const rec = w.kind === "own" ? w.rec : take(id, w.head);
+      const r = await drivers.set(rec, { ...(model !== undefined && { model }), ...(mode !== undefined && { mode }) });
+      if (!r.ok) return error(r.error);
+    }
+    if (hidden !== undefined) {
+      recordOf(id).hidden = hidden;
+      deps.persist();
+      catalog.touch();
+    }
+    return title !== undefined ? rename(id, title) : [];
   }
 
   /** Asks the Claude app to list the newest due session, when every gate of the mirror policy holds. */
@@ -274,17 +491,8 @@ export function createSessions(deps: SessionsDeps): Sessions {
           return known(m.sessionId) ? threads.page(m.sessionId, m.before) : gone(m.sessionId);
         case "session_tool":
           return threads.tool(m.sessionId, m.toolUseId);
-        case "session_set": {
-          if (!known(m.sessionId)) return gone(m.sessionId);
-          const { title, hidden, model, mode } = m.patch;
-          if (model !== undefined || mode !== undefined) return error(READ_ONLY);
-          if (hidden !== undefined) {
-            recordOf(m.sessionId).hidden = hidden;
-            deps.persist();
-            catalog.touch();
-          }
-          return title !== undefined ? rename(m.sessionId, title) : [];
-        }
+        case "session_set":
+          return known(m.sessionId) ? set(m) : gone(m.sessionId);
         case "session_prefs":
           own<SessionPrefs>(deps.world.sessionPrefs).mirror = m.mirror;
           deps.persist();
@@ -292,11 +500,17 @@ export function createSessions(deps: SessionsDeps): Sessions {
         case "session_open_desktop":
           return known(m.sessionId) ? openInDesktop(m.sessionId) : gone(m.sessionId);
         case "session_send":
+          return send(m);
         case "session_stop":
+          return stopTurn(m.sessionId);
         case "session_decide":
-        case "session_answer":
+          return decide(m);
+        case "session_answer": {
+          const w = driverOf(m.sessionId);
+          return w.kind === "own" ? reply(drivers.answer(w.rec, m.cardId, m.answers)) : error("Unknown card");
+        }
         case "session_create":
-          return error(READ_ONLY);
+          return create(m);
       }
     },
 
@@ -310,14 +524,18 @@ export function createSessions(deps: SessionsDeps): Sessions {
     },
 
     agentTurnDone(rec) {
-      const id = rec.session.id as SessionId | null;
-      if (!id || deps.world.sessionPrefs.mirror !== "auto" || deps.apps.desktop().has(id)) return;
-      const r = recordOf(id);
-      if (r.mirror) return;
-      r.mirror = { dueAt: deps.now().toISOString(), failed: false };
-      deps.persist();
-      catalog.touch();
-      mirrorAt = 0;
+      if (rec.session.id) due(rec.session.id as SessionId);
+    },
+
+    resume() {
+      // An overlay record an agent now owns (a phone drive on its id from before) is dropped: one writer per id.
+      for (const rec of deps.world.sessions.values()) {
+        if (rec.own && agentOf(rec.id)) {
+          deps.log(`sessions: ${rec.id} belongs to an agent, so the phone's drive on it was dropped`);
+          delete rec.own;
+        }
+      }
+      drivers.resume();
     },
 
     async sync() {
@@ -327,6 +545,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
 
     tick(at) {
       catalog.tick(at);
+      drivers.tick(at);
       if (at.getTime() - polledAt >= THREAD_POLL_MS) {
         polledAt = at.getTime();
         void threads.poll();
@@ -344,19 +563,24 @@ export function createSessions(deps: SessionsDeps): Sessions {
       }
     },
     nextDeadline: () => {
-      const soonest = Math.min(polledAt + THREAD_POLL_MS, mirrorAt);
-      const own = new Date(soonest).toISOString();
-      const index = catalog.nextDeadline();
-      return index !== null && index < own ? index : own;
+      const soonest = new Date(Math.min(polledAt + THREAD_POLL_MS, mirrorAt)).toISOString();
+      return [catalog.nextDeadline(), drivers.nextDeadline()].reduce<string>((min, d) => (d !== null && d < min ? d : min), soonest);
     },
 
     stop() {
       save();
+      drivers.close();
       catalog.stop();
       threads.stop();
     },
   };
 }
+
+const MODELS_SHOWN = [
+  { id: "opus", label: "Opus" },
+  { id: "sonnet", label: "Sonnet" },
+  { id: "haiku", label: "Haiku" },
+];
 
 const AGENT_STATUS: Record<AgentRecord["agent"]["status"], SessionStatus> = {
   working: "working",

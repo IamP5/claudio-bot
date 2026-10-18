@@ -19,12 +19,12 @@ import { sandboxFailure } from "./sandbox";
 import type { Persist } from "./store";
 import { displayName, errorText, maskSecrets } from "./text";
 import {
-  actorKey,
   attended,
+  driverKey,
   own,
   type AccountState,
   type ActiveTurn,
-  type Actor,
+  type Driver,
   type EnvelopeId,
   type Initiator,
   type Lifecycle,
@@ -94,6 +94,7 @@ const MODEL_LIMITS: ReadonlySet<string> = new Set(["seven_day_opus", "seven_day_
 export const CAP_NOTE = "Daily cap reached. Your messages still run; routines and other background work wait until tomorrow.";
 export const BREAKER_NOTE = `Stopped this turn after ${DENIALS_PER_TURN} held or denied tool calls.`;
 export const RESTARTED_ERROR = "The bridge restarted during this turn.";
+export const GONE_ERROR = "This session's transcript is gone: Claude Code no longer has it.";
 const stallNote = (name: string) => `${name} has been silent for 30 minutes; you can press Stop.`;
 const startFailedNote = (error: string) =>
   `Claude Code could not start: ${error.replace(/\.?\s*$/, ".")} Queued messages are kept, and it keeps trying.`;
@@ -627,6 +628,8 @@ export type Session = Tickable & {
   reopen(): void;
   /** The live query's controls (MCP status and toggles, the commands it offers), or null while no query is open. */
   mcp(): Pick<Query, "mcpServerStatus" | "toggleMcpServer" | "supportedCommands"> | null;
+  /** The live query's model and mode, which change at once; null while no query is open. */
+  controls(): Pick<Query, "setModel" | "setPermissionMode" | "supportedModels"> | null;
   /** Recovered TurnEnds not yet told are told before it closes. */
   close(): void;
   /** A turn is running or retrying, or envelopes wait and nothing holds them. */
@@ -641,7 +644,7 @@ export type Session = Tickable & {
 };
 
 export type SessionSpec = {
-  actor: Actor;
+  actor: Driver;
   /** The record's slice. This module is its only writer. */
   state: Owned<SessionState>;
   /** Shared by every session: a usage-limit rejection of the whole account parks them all. */
@@ -681,6 +684,19 @@ export type SessionSpec = {
    * close and forget this one: a new session over the same state resumes it.
    */
   onDormant?: () => void;
+  /**
+   * When a resumed session turns out gone ("No conversation found"): restart, a new session that is told its history is
+   * gone (a bot's or an agent's), or fail, the turn ends failed and nothing starts in its place (the user's own
+   * session, which must never be silently replaced). Default restart.
+   */
+  forgotten?: "restart" | "fail";
+  /** How long a query with nothing to do stays open. Default 15 minutes. */
+  idleMs?: number;
+  /**
+   * Read before a turn is sent: why it must wait (another live Claude Code is busy on the session), or null. A wait
+   * keeps the turn queued and retries it as a start that could not open does.
+   */
+  blocked?: () => string | null;
   log?: (line: string) => void;
   /** The SDK's query in the bridge; a fake in tests. Required, so no test falls back to the real CLI. */
   query: typeof query;
@@ -767,7 +783,8 @@ export function createSession(spec: SessionSpec): Session {
   const executable = spec.executable ?? claudeExecutable;
   const spawnProcess = spec.spawn ?? spawnGroup;
   const userName = spec.userName ?? "The user";
-  const label = actorKey(spec.actor);
+  const label = driverKey(spec.actor);
+  const idleMs = spec.idleMs ?? IDLE_MS;
   let memo = freshMemo();
   let live: Live | null = null;
   let generation = 0;
@@ -960,6 +977,9 @@ export function createSession(spec: SessionSpec): Session {
   }
 
   function deliver(p: Pending, text: string, unattended: boolean) {
+    let wait: string | null = null;
+    guard("blocked", () => void (wait = spec.blocked?.() ?? null));
+    if (wait !== null) return dispatch({ kind: "unstarted", error: wait });
     let l: Live;
     try {
       l = live ?? open(unattended);
@@ -984,7 +1004,7 @@ export function createSession(spec: SessionSpec): Session {
     const wake = live.cli.kind === "due" ? live.cli.until : null;
     const kind = spec.state.lifecycle.kind;
     const own =
-      kind === "stopping" ? null : held ? held.until : kind === "working" ? (stallNoted ? null : heardAt + STALL_MS) : busy(live) ? null : heardAt + IDLE_MS;
+      kind === "stopping" ? null : held ? held.until : kind === "working" ? (stallNoted ? null : heardAt + STALL_MS) : busy(live) ? null : heardAt + idleMs;
     return wake === null ? own : own === null ? wake : Math.min(wake, own);
   }
 
@@ -1014,7 +1034,7 @@ export function createSession(spec: SessionSpec): Session {
     const { sessionId: _claim, title: _title, ...resumable } = asked;
     const options: Options = takenId !== null && asked.sessionId === takenId ? { ...resumable, resume: takenId } : asked;
     // Above 0 when the bot has a cap: the headroom check let this turn start, and it sees the same spend. Null: no cap.
-    const cap = unattended ? spec.ledger.dailyLeft(spec.actor.botId) : null;
+    const cap = unattended && spec.actor.kind !== "own" ? spec.ledger.dailyLeft(spec.actor.botId) : null;
     const gen = ++generation;
     const inbox: SDKUserMessage[] = [];
     let wake: (() => void) | null = null;
@@ -1158,10 +1178,17 @@ export function createSession(spec: SessionSpec): Session {
     return true;
   }
 
-  /** A resumed query found its session gone before any output: the session id is cleared and the turn starts over. */
+  /**
+   * A resumed query found its session gone before any output: the session id is cleared and the turn starts over, or,
+   * for a session that must not be replaced, the turn fails.
+   */
   function forgot(text: string, l: Live): boolean {
     if (l.resumed === null || l.answered || !forgotten(text, l.resumed) || turnOf(spec.state.lifecycle as Lifecycle)?.output !== false) return false;
     closeLive();
+    if (spec.forgotten === "fail") {
+      dispatch({ kind: "end", outcome: { kind: "terminal", error: GONE_ERROR } });
+      return true;
+    }
     dispatch({ kind: "forgotten" });
     guard("note", () => spec.note(forgottenNote(spec.name?.() ?? "Claude Code")));
     return true;
@@ -1291,6 +1318,7 @@ export function createSession(spec: SessionSpec): Session {
       dispatch({ kind: "tick" });
     },
     mcp: () => live?.q ?? null,
+    controls: () => live?.q ?? null,
     reopen() {
       if (!live) return;
       live.stale = true;

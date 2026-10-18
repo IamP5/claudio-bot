@@ -74,7 +74,11 @@ function start() {
     world,
     userName: "Alex",
     bridgeHome: join(base, "home"),
-    agents: { session: () => null },
+    agents: { session: () => null, direct: () => "no agents here", stop: async () => false, message: async () => "" },
+    decideGate: () => ({ ok: false, error: "Unknown card" }),
+    ledger: { add() {}, headroom: () => ({ ok: true, capReached: false }), budgetLeft: () => null, dailyLeft: () => null },
+    claude: { query: (() => { throw new Error("no Claude Code in this test"); }) as never, executable: () => "/fake/claude" },
+    scope: (cwd) => ({ bridgeHome: join(base, "home"), own: cwd, userMd: null, homedir: base }),
     scan: async () => [],
     persist: () => {},
     now: () => new Date(),
@@ -149,7 +153,7 @@ test("a thread opens on its newest page, then streams what Claude Code appends, 
   const snapshot = (await one({ type: "watch_session", sessionId: ASK, after: null })) as Extract<ServerMessage, { type: "session" }>;
   const epoch = snapshot.epoch;
   expect(epoch).toStartWith("e1.");
-  expect(snapshot).toMatchObject({ rev: 0, before: null, live: null, controls: { canSend: false } });
+  expect(snapshot).toMatchObject({ rev: 0, before: null, live: null, controls: { canSend: true, queued: 0, working: false } });
   expect(snapshot.items.map((i) => i.kind)).toEqual(["user", "work", "assistant", "ask", "work", "assistant"]);
 
   const prompt = continueWith(ASK, { type: "user", message: { role: "user", content: "One more thing" } });
@@ -158,7 +162,7 @@ test("a thread opens on its newest page, then streams what Claude Code appends, 
   expect(frame).toMatchObject({ type: "session_items", rev: 1, removed: [], controls: null, items: [expect.objectContaining({ kind: "user", id: prompt, text: "One more thing" })] });
 
   const replayed = structuredClone(await sessions.handle({ type: "watch_session", sessionId: ASK, after: { epoch, rev: 0 } }));
-  expect(replayed).toEqual([{ type: "session_items", sessionId: ASK, rev: 1, items: [expect.objectContaining({ id: prompt })], removed: [], controls: expect.objectContaining({ canSend: false }) }]);
+  expect(replayed).toEqual([{ type: "session_items", sessionId: ASK, rev: 1, items: [expect.objectContaining({ id: prompt })], removed: [], controls: expect.objectContaining({ canSend: true }) }]);
   const fresh = (await one({ type: "watch_session", sessionId: ASK, after: { epoch: "e0.1", rev: 1 } })) as Extract<ServerMessage, { type: "session" }>;
   expect(fresh.type).toBe("session");
   expect(fresh.items.at(-1)).toMatchObject({ id: prompt });
@@ -230,10 +234,6 @@ test("a bot's own sessions, under the bridge home, are not listed", async () => 
   expect((await rowsOf()).map((r) => r.id).sort()).toEqual([PERMISSION, ASK].sort());
 });
 
-test("sending is refused until a driver exists", async () => {
-  await start();
-  expect(await sessions.handle({ type: "session_send", sessionId: ASK, text: "hi", clientId: "c1", interrupt: false })).toEqual([{ type: "error", message: expect.any(String) }]);
-});
 
 function agentOn(id: SessionId, over: Partial<AgentRecord["agent"]> = {}): AgentRecord {
   const rec: AgentRecord = {

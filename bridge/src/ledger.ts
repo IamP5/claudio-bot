@@ -8,7 +8,7 @@ import { appendFileSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentId, BotId, BotSpend } from "./protocol";
 import { errorText } from "./text";
-import { actorKey, attended, type Actor, type ActorKey, type Initiator } from "./world";
+import { attended, driverKey, type Driver, type DriverKey, type Initiator } from "./world";
 
 // Spend limits are off unless set. CLAUDIOBOT_DAILY_USD sets a daily cap for every bot (per local day, its agents
 // included), and a bot's own dailyCapUsd wins over it. CLAUDIOBOT_AGENT_USD sets a lifetime budget for every mac agent.
@@ -17,9 +17,9 @@ import { actorKey, attended, type Actor, type ActorKey, type Initiator } from ".
 /** One row per turn result. Every value is the decided one, so the file sums without replaying any rule. */
 export type UsageRow = {
   at: string;
-  actor: ActorKey;
-  /** The bot whose daily cap this counts against: the actor itself, or the agent's bot. */
-  botId: BotId;
+  actor: DriverKey;
+  /** The bot whose daily cap this counts against: the actor itself, or the agent's bot. null: a session the phone drives, which no cap holds. */
+  botId: BotId | null;
   sessionId: string;
   initiator: Initiator;
   /** total_cost_usd as the SDK reported it: cumulative per query, continued across resume, an estimate. */
@@ -56,8 +56,9 @@ export type Ledger = {
    * - A cumulative below the baseline charges nothing, becomes the baseline, and logs a warning. Fresh queries are
    *   handled by `fresh`, so this is an anomaly: a stale total, or two queries resuming one session id.
    */
-  add(result: { actor: Actor; sessionId: string; initiator: Initiator; cumulativeUsd: number; fresh?: boolean }): void;
-  headroom(actor: Actor, initiator: Initiator): Headroom;
+  add(result: { actor: Driver; sessionId: string; initiator: Initiator; cumulativeUsd: number; fresh?: boolean }): void;
+  /** A session the phone drives always has room: the plan's own usage limits are its guard. */
+  headroom(actor: Driver, initiator: Initiator): Headroom;
   /**
    * What is left of a mac agent's lifetime budget, never below 0; null when it has none. Passed as Options.maxBudgetUsd
    * when its query starts so the SDK enforces it mid-turn (the SDK counts only spend since that query started). Check
@@ -90,6 +91,7 @@ type Index = {
 
 const MONTH_FILE = /^\d{4}-\d{2}\.jsonl$/;
 const AGENT_PREFIX = "agent:";
+const OWN_PREFIX = "own:";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 export const localDay = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -104,9 +106,11 @@ function charge(baseline: number | undefined, cumulativeUsd: number): { deltaUsd
 
 function fold(ix: Index, row: UsageRow): void {
   if (row.cumulativeUsd > 0 || row.fresh) ix.baseline.set(row.sessionId, Math.max(0, row.cumulativeUsd));
-  let day = ix.spend.get(row.day);
-  if (!day) ix.spend.set(row.day, (day = new Map()));
-  day.set(row.botId, (day.get(row.botId) ?? 0) + row.deltaUsd);
+  if (row.botId !== null) {
+    let day = ix.spend.get(row.day);
+    if (!day) ix.spend.set(row.day, (day = new Map()));
+    day.set(row.botId, (day.get(row.botId) ?? 0) + row.deltaUsd);
+  }
   if (row.actor.startsWith(AGENT_PREFIX)) {
     const agentId = row.actor.slice(AGENT_PREFIX.length) as AgentId;
     ix.byAgent.set(agentId, (ix.byAgent.get(agentId) ?? 0) + row.deltaUsd);
@@ -125,8 +129,8 @@ function parseRow(line: string): UsageRow | null {
   const ok =
     typeof r.at === "string" &&
     typeof r.actor === "string" &&
-    (r.actor.startsWith("bot:") || r.actor.startsWith(AGENT_PREFIX)) &&
-    typeof r.botId === "string" &&
+    (r.actor.startsWith("bot:") || r.actor.startsWith(AGENT_PREFIX) || r.actor.startsWith(OWN_PREFIX)) &&
+    (typeof r.botId === "string" || (r.botId === null && r.actor.startsWith(OWN_PREFIX))) &&
     typeof r.sessionId === "string" &&
     typeof r.initiator === "object" &&
     r.initiator !== null &&
@@ -188,8 +192,8 @@ export function createLedger(deps: {
       const { deltaUsd, below } = charge(baseline, cumulative);
       const row: UsageRow = {
         at: now.toISOString(),
-        actor: actorKey(actor),
-        botId: actor.botId,
+        actor: driverKey(actor),
+        botId: actor.kind === "own" ? null : actor.botId,
         sessionId,
         initiator,
         cumulativeUsd: cumulative,
@@ -215,6 +219,7 @@ export function createLedger(deps: {
     },
 
     headroom(actor, initiator) {
+      if (actor.kind === "own") return { ok: true, capReached: false };
       if (actor.kind === "agent" && budgetLeft(actor.agentId) === 0) return { ok: false, reason: "agent_budget" };
       const now = deps.now();
       const capReached = left(cap(actor.botId), spentOn(localDay(now), actor.botId)) === 0;

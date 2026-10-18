@@ -157,7 +157,9 @@ export function createThreads(deps: ThreadsDeps): Threads {
   function overlayDiff(s: State, transcriptChanged: readonly SessionItem[]): { items: SessionItem[]; removed: ItemId[]; controls: SessionControls | null } {
     for (const t of transcriptChanged) {
       if (t.kind !== "user") continue;
-      for (const o of deps.overlay(s.id)) if (o.kind === "user" && o.queued && o.text.trim() === t.text.trim() && !s.shownByTranscript.has(o.id)) s.shownByTranscript.add(o.id);
+      // The phone's message, sent or still queued, now in the transcript under Claude Code's own id.
+      const mine = deps.overlay(s.id).find((o) => o.kind === "user" && o.text.trim() === t.text.trim() && !s.shownByTranscript.has(o.id));
+      if (mine) s.shownByTranscript.add(mine.id);
     }
     const before = s.overlay;
     const beforeControls = s.controls;

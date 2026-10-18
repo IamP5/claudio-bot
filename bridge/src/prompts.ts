@@ -204,9 +204,13 @@ How you work:
 - Never take an outward action without an explicit yes in chat: merging, deploying, posting, sending messages to people, setting secrets, spending money, deleting data.
 - Recurring work is a routine. Offer one when a job repeats.`;
 
-export const agentPrompt = ({ botName, userName, prompt }: { botName: string; userName: string; prompt: string }) =>
-  `You were started by the bot ${botName} for ${userName}. Work on a new branch, verify your change, and open a PR when done. ` +
-  `Your final message each turn is reported to the bot.\n\n${prompt}`;
+/** What holds for every turn of an agent: a mac agent's system prompt carries it, its first turn only the task. */
+export const agentRules = ({ botName, userName }: { botName: string; userName: string }) =>
+  `You were started by the bot ${botName} for ${userName}. Nobody is at this terminal: your final message each turn is reported to the bot. ` +
+  `Work on a new branch, verify your change, and open a PR when done.`;
+
+/** A cloud agent's first message: claude.ai takes no system prompt from the bridge. */
+export const agentPrompt = (a: { botName: string; userName: string; prompt: string }) => `${agentRules(a)}\n\n${a.prompt}`;
 
 /**
  * Claude Code's own memory lives in ~/.claude/projects, which the gate's floors and the sandbox keep from every bot and

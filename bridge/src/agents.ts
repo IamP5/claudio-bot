@@ -5,7 +5,7 @@ import { createCloudSession, followUpCloudSession } from "./cloud";
 import { readEvidence, reportText } from "./evidence";
 import type { Ledger } from "./ledger";
 import type { AgentId, AgentStatus, BotId } from "./protocol";
-import { agentPrompt, type SessionInput } from "./prompts";
+import { agentPrompt, agentRules, type SessionInput } from "./prompts";
 import type { Project } from "./projects";
 import { createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { refused, type Result } from "./result";
@@ -241,6 +241,7 @@ export function createAgents(deps: {
         const repo = repoOf(rec);
         // Full access loads every repo's own config, as the user's own Claude Code does.
         const trusted = accessOf(process.env).full || repoTrust(deps.world.gate, repo, id) === true;
+        const botName = deps.world.bots.get(rec.agent.botId)?.name ?? rec.agent.botId;
         return {
           cwd: rec.cwd,
           // Project settings, hooks and .mcp.json come from here instead of the checkout, which the agent and every
@@ -248,7 +249,7 @@ export function createAgents(deps: {
           ...(!trusted ? { projectConfigRoot: deps.configRoot(id) } : rec.agent.worktree ? { projectConfigRoot: repo } : {}),
           resume: rec.session.id ?? undefined,
           settingSources: ["user", "project"],
-          systemPrompt: { type: "preset", preset: "claude_code" },
+          systemPrompt: { type: "preset", preset: "claude_code", append: agentRules({ botName, userName: deps.userName }) },
           permissionMode: "auto",
           // Nobody is at the agent's terminal to answer a question or approve a plan; it reports to its bot instead.
           disallowedTools: ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"],
@@ -331,17 +332,16 @@ export function createAgents(deps: {
       };
       deps.world.agents.set(rec.agent.id, rec);
       deps.changed(rec);
-      const prompt = agentPrompt({ botName: a.botName, userName: deps.userName, prompt: a.prompt });
       if (a.where === "mac") {
         if (workspace.note) deps.note(rec, workspace.note);
-        macSession(rec).push(command === null ? queued(prompt, a.initiator) : { kind: "command", text: command, initiator: a.initiator, settles: null });
+        macSession(rec).push(command === null ? queued(a.prompt, a.initiator) : { kind: "command", text: command, initiator: a.initiator, settles: null });
         const found = accessOf(process.env).full ? [] : projectConfigOf(repo);
         if (found.length > 0) deps.trustCard({ kind: "agent", botId, agentId: rec.agent.id }, { root: repo, name: a.project.name, found });
         return rec;
       }
       await cloud(rec, async () => {
         try {
-          const created = await createCloudSession(rec.cwd, prompt);
+          const created = await createCloudSession(rec.cwd, agentPrompt({ botName: a.botName, userName: deps.userName, prompt: a.prompt }));
           rec.cloudSession = created.sessionId;
           rec.agent = { ...rec.agent, url: created.url };
           update(rec, "in_cloud");

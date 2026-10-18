@@ -7,7 +7,7 @@ import { createAgents, projectConfigOf } from "../src/agents";
 import type { Headroom, Ledger } from "../src/ledger";
 import type { AgentEvidence, AgentId, AgentStatus, BotId, RoutineId, RunId } from "../src/protocol";
 import type { Project } from "../src/projects";
-import { emptySession, emptyWorld, own, type AgentRecord, type GateState, type Initiator, type OpenCard, type World } from "../src/world";
+import { emptySession, emptyWorld, newBot, own, type AgentRecord, type GateState, type Initiator, type OpenCard, type World } from "../src/world";
 
 const AT = "2026-10-17T12:00:00.000Z";
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -130,9 +130,10 @@ function harness(opts: { world?: World; headroom?: (i: Initiator) => Headroom; p
   return { world, agents, queries, reports, notes, statuses, evidence, begun, trustCards, start, q: () => queries.at(-1)! };
 }
 
-const AGENT_PROMPT =
-  "You were started by the bot Ana for Alex. Work on a new branch, verify your change, and open a PR when done. " +
-  "Your final message each turn is reported to the bot.\n\nMake the suite green.";
+const AGENT_RULES =
+  "You were started by the bot Ana for Alex. Nobody is at this terminal: your final message each turn is reported to the bot. " +
+  "Work on a new branch, verify your change, and open a PR when done.";
+const AGENT_PROMPT = "Make the suite green.";
 
 let cloudProject: Project = project;
 
@@ -150,12 +151,15 @@ function fakeCloudClaude(ok: boolean) {
   process.env.CLAUDIOBOT_CLAUDE = path;
 }
 
-test("a mac agent starts on its project with the agent prompt, its budget, no resume id and the hooks for its actor", async () => {
-  const h = harness();
+test("a mac agent starts on its project with its standing rules in the system prompt, the task as its first turn, its budget, no resume id and the hooks for its actor", async () => {
+  const world = emptyWorld();
+  world.bots.set(B1, newBot({ id: B1, name: "Ana", avatar: { shape: "circle", color: "white" }, at: AT }));
+  const h = harness({ world });
   const rec = await h.start("mac", routine);
   await flush();
-  expect(h.q().received).toEqual([AGENT_PROMPT]);
+  expect(h.q().received).toEqual(["Make the suite green."]);
   const o = h.q().options;
+  expect(o.systemPrompt).toEqual({ type: "preset", preset: "claude_code", append: AGENT_RULES });
   expect([o.cwd, o.resume, o.maxBudgetUsd, o.permissionMode, o.disallowedTools, o.model, o.hooks?.PreToolUse?.[0]?.matcher]).toEqual([
     "/code/shop",
     undefined,

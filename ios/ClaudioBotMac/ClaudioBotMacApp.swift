@@ -50,6 +50,9 @@ private struct MacRoot: View {
                 router.showingSettings = false
                 openSettings()
             }
+            #if DEBUG
+            .modifier(DebugConfirmPairing())
+            #endif
     }
 }
 

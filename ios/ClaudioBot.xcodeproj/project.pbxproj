@@ -24,6 +24,7 @@
 		1E7E050E2C08BCEB074851F2 /* DeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = D784CF4F0E9AD11C9698E1B8 /* DeepLink.swift */; };
 		1F64435A126DC19C66551DA6 /* SessionsSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A11260EC7F3C9E5789F5F4F /* SessionsSidebar.swift */; };
 		1F960FFC876A4441F973E8D8 /* UsageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAB25DCB611E2EE3D5BE1B17 /* UsageTests.swift */; };
+		210F081C09EB016DF044B27A /* DebugPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4633353FE91E1727DCE709FF /* DebugPairing.swift */; };
 		215373BD7362094BE14EB9BB /* ActivityLine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26275F6328C6D901231FE023 /* ActivityLine.swift */; };
 		22EDCE6EE867613E22E89E2C /* Demo.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5B3A683A87EDE6B0692EC79 /* Demo.swift */; };
 		23288F140278C30D8EA49348 /* ProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 968DA57BA93F923DB93997B3 /* ProtocolTests.swift */; };
@@ -180,6 +181,7 @@
 		31233224646163878DEDDF19 /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
 		458D4E72664733CA07544FD5 /* Sessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sessions.swift; sourceTree = "<group>"; };
 		462E1C258B97806F7CE30448 /* PromptTextViewMacTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptTextViewMacTests.swift; sourceTree = "<group>"; };
+		4633353FE91E1727DCE709FF /* DebugPairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugPairing.swift; sourceTree = "<group>"; };
 		4943C5EC4788FB19E74AAD59 /* PlanUsageViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanUsageViews.swift; sourceTree = "<group>"; };
 		54E063F3E21531DAF270FD36 /* ThreadItems.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadItems.swift; sourceTree = "<group>"; };
 		5A61D6DA58D7DE2CDA74F96F /* Spend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spend.swift; sourceTree = "<group>"; };
@@ -245,6 +247,7 @@
 			children = (
 				D0D1687E09903FB1B7174792 /* ClaudioBotMac.entitlements */,
 				B12810083B7E8254D9262B1B /* ClaudioBotMacApp.swift */,
+				4633353FE91E1727DCE709FF /* DebugPairing.swift */,
 				2077E51368C2A07BE25DB7FE /* Info.plist */,
 				5D42AAD3A263EFB80B3B1803 /* MacCommands.swift */,
 				1386BE6CADD2BFA8FDDFC925 /* MacShims.swift */,
@@ -630,6 +633,7 @@
 				9972813009CB6FD6B2733AC2 /* Composer.swift in Sources */,
 				F7BEE2A1882673A3A21DC2EF /* ComposerMenuView.swift in Sources */,
 				DAA60BC9103E79B45E88B35B /* ConnectorsView.swift in Sources */,
+				210F081C09EB016DF044B27A /* DebugPairing.swift in Sources */,
 				1E7E050E2C08BCEB074851F2 /* DeepLink.swift in Sources */,
 				22EDCE6EE867613E22E89E2C /* Demo.swift in Sources */,
 				E12C5DC0FABBD29E0EBED697 /* DemoSessions.swift in Sources */,

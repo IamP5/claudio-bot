@@ -15,6 +15,7 @@ struct ClaudioBotApp: App {
                 .environment(app.router)
                 .onOpenURL { app.open($0) }
                 .preferredColorScheme(.dark)
+                .overlay { SplashView() }
         }
         .onChange(of: scenePhase) { _, phase in app.scenePhaseChanged(phase) }
     }

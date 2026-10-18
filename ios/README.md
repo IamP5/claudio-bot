@@ -35,10 +35,10 @@ Debug builds accept `-demo`. It loads sample bots into the store through the sam
 
 `scripts/avatar-sheet.sh <out.png>` builds the avatar code for macOS and renders all 13 shapes and 11 colors to one image. Use it to tune the shapes without a simulator.
 
-The app icon comes from `scripts/make-icon.swift`:
+The app icon is drawn by `ClaudioBot/Views/Brand.swift`, the same view the launch splash animates. Render it with:
 
 ```sh
-swift ios/scripts/make-icon.swift ios/ClaudioBot/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+ios/scripts/make-icon.sh ios/ClaudioBot/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 ```
 
 ## Pairing

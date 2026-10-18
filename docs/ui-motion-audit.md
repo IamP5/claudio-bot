@@ -110,3 +110,11 @@ The demo bridge now answers Stop by setting the bot idle, so Stop can be exercis
 - `grok-scroll-dismisses-keyboard.png`: a drag with the keyboard up closes it.
 - iOS 18.5 (iPhone 16e): Home and a working chat render with the fallbacks, meaning the flat initials circle, `safeAreaInset` for the composer, and Stop in the composer.
 - Not checked: haptics (the simulator has none), and the idle avatars under Reduce Motion.
+
+## App icon and launch splash (18 October 2026)
+
+The icon and the splash both come from `Views/Brand.swift`. `scripts/make-icon.sh` renders `BrandIcon` to `AppIcon.png`, and `SplashView` (`Views/Splash.swift`) animates `BrandCharacter`. The mark is ClaudioBot's default white bot on a charcoal tile, using `Face.of(.circle)`'s eyes. A muted gold hairline traces the flag's rhombus behind it.
+
+The icon came out of a swarm. Four ideation lenses (flag geometry, landmarks and culture, nature, Brazilian design history) proposed 20 concepts. Six were drafted three ways each: Calçadão, Jabuticaba, Losango, Bem-te-vi, Joia wink and Bulcão tiles. All 18 are in `icon-concepts.png`, each at full size and at 60 px. The user chose Losango v3.
+
+The splash is a table of timed `SplashPhase` steps. The bot springs in (0.45 s, bounce 0.4), blinks at 0.5 s, glances at 0.6 s, zooms through from 0.95 s and fades from 1.0 s. The overlay is gone at 1.3 s. Under Reduce Motion it fades in, holds, and crossfades out by 0.8 s. The launch screen's color, `LaunchBackground` (0x111111), matches the splash's first frame, so the hand-off doesn't flash. `splash-motion.png` is 100 ms per frame from a recording of a cold launch. Its exit peaks at 68 of 255 mean luminance for one frame. `splash-reduce-motion.png` shows the Reduce Motion path.

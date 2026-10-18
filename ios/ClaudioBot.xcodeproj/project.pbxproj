@@ -13,6 +13,7 @@
 		23288F140278C30D8EA49348 /* ProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 968DA57BA93F923DB93997B3 /* ProtocolTests.swift */; };
 		26A8F24ED9A3BAC4A0434391 /* Protocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E90D10FEF3E09FAB71934012 /* Protocol.swift */; };
 		286FE59C1819BFD712BD9F02 /* ChatNotices.swift in Sources */ = {isa = PBXBuildFile; fileRef = B66044096F0B9816E53050C9 /* ChatNotices.swift */; };
+		2E846BFB41E7893B98ECAEEC /* Brand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A5953065B9EE16E05C830E5 /* Brand.swift */; };
 		32E7D22E40B3361A566B819D /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 795BC99E02710AB9C992CE01 /* HomeView.swift */; };
 		332B484C55D9E03F1E3DE8EA /* SpendingSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CE4B7D7644CD34883E2D581 /* SpendingSection.swift */; };
 		36153193DD22EDA8940B684A /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA2DDB4E3C0A0B83541F52CA /* ProfileView.swift */; };
@@ -47,6 +48,7 @@
 		D63CBBBA113E2E462A8B275A /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AEC678D2C98543C38666D7C /* SettingsView.swift */; };
 		D71C8C4D37722592EF686761 /* FakeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 097EB76BEE0A213D3217C7AC /* FakeBridge.swift */; };
 		DB6AB2521CED8BD33FCE18A8 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA34950BCDD0C39C5EBE5C3D /* Components.swift */; };
+		DB9E1F10424D7DDA27F74E9C /* Splash.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF08C71B354F1D1EA6946487 /* Splash.swift */; };
 		E1016F750B621F757F13A29D /* RoutineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA9652032D83AB4C07B9A127 /* RoutineView.swift */; };
 		E1E102E248602A4C805116AC /* BridgeClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B26A0A11AE96837D15B18BB5 /* BridgeClient.swift */; };
 		E357DFE3046B216B519CD066 /* MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 215D70BAB1D260A81C952891 /* MemoryView.swift */; };
@@ -85,6 +87,7 @@
 		31233224646163878DEDDF19 /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
 		5A61D6DA58D7DE2CDA74F96F /* Spend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spend.swift; sourceTree = "<group>"; };
 		64F093F0E46C0BAC5BE987F1 /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
+		6A5953065B9EE16E05C830E5 /* Brand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Brand.swift; sourceTree = "<group>"; };
 		6E239D4F0DF5EA2B3D309E36 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		702ADCCAC3224198DEEABCB4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		7820C0044FEE201808CA15BD /* GroupViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupViews.swift; sourceTree = "<group>"; };
@@ -123,6 +126,7 @@
 		EA9652032D83AB4C07B9A127 /* RoutineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutineView.swift; sourceTree = "<group>"; };
 		EBEA8C29A5D23D59F250A951 /* WebhookTokenView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebhookTokenView.swift; sourceTree = "<group>"; };
 		FA2DDB4E3C0A0B83541F52CA /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileView.swift; sourceTree = "<group>"; };
+		FF08C71B354F1D1EA6946487 /* Splash.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Splash.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -203,6 +207,7 @@
 				26275F6328C6D901231FE023 /* ActivityLine.swift */,
 				88F8332127C9916FFC1D3090 /* AgentEvidenceView.swift */,
 				1D8486BDEC5C8AFBE5B2661B /* Avatar.swift */,
+				6A5953065B9EE16E05C830E5 /* Brand.swift */,
 				06280DC6DF2D564FD10301E5 /* ChatItems.swift */,
 				B66044096F0B9816E53050C9 /* ChatNotices.swift */,
 				982F1219C87F1A4346344127 /* ChatView.swift */,
@@ -227,6 +232,7 @@
 				8AEC678D2C98543C38666D7C /* SettingsView.swift */,
 				E8AF7584F1B45DED0A0DE9C6 /* SkillsView.swift */,
 				9CE4B7D7644CD34883E2D581 /* SpendingSection.swift */,
+				FF08C71B354F1D1EA6946487 /* Splash.swift */,
 				6E239D4F0DF5EA2B3D309E36 /* Theme.swift */,
 				EBEA8C29A5D23D59F250A951 /* WebhookTokenView.swift */,
 			);
@@ -342,6 +348,7 @@
 				95FAE7357ABDCACD47C316A4 /* ActivityLine.swift in Sources */,
 				B230E30CB3D7C3386EDAD091 /* AgentEvidenceView.swift in Sources */,
 				6461D8CD2C5E5CA675AB7169 /* Avatar.swift in Sources */,
+				2E846BFB41E7893B98ECAEEC /* Brand.swift in Sources */,
 				E1E102E248602A4C805116AC /* BridgeClient.swift in Sources */,
 				5F2A2773D7A467D481B385EA /* ChatItems.swift in Sources */,
 				286FE59C1819BFD712BD9F02 /* ChatNotices.swift in Sources */,
@@ -378,6 +385,7 @@
 				6969788F76B5A2427EF47D29 /* SkillsView.swift in Sources */,
 				E8437FC53424A48F755EA838 /* Spend.swift in Sources */,
 				332B484C55D9E03F1E3DE8EA /* SpendingSection.swift in Sources */,
+				DB9E1F10424D7DDA27F74E9C /* Splash.swift in Sources */,
 				37C3CD090EEE0200FA855E69 /* Store.swift in Sources */,
 				761C26D7E7C8287B4B6797BC /* Theme.swift in Sources */,
 				CEB843B90A8B847C2C0A8B20 /* WebhookTokenView.swift in Sources */,

@@ -698,10 +698,31 @@ type Live = {
    * assistant message echoes, so the frames after it go by this.
    */
   ours: boolean | null;
+  /** Claude Code's own turn on this query, which closing it would cut off. */
+  cli: Cli;
+  /** Its background tasks were stopped with a note, so closing it does not note them again. */
+  stopped: boolean;
+  /** Claude Code's process has exited, or none was spawned: nothing of this query can still touch the session. */
+  gone(): boolean;
   send(m: SDKUserMessage): void;
   release(): void;
   stderr(): string;
 };
+
+/**
+ * What Claude Code is doing on a query on its own account, background tasks aside. running: from a turn's init frame
+ * to its result, ours or one a background task woke; `wake` when a task_notification came meanwhile, so a wake turn
+ * follows the result. due: a task_notification announced a wake turn that has not started; past `until` it is taken
+ * as never coming.
+ */
+type Cli = { kind: "idle" } | { kind: "running"; wake: boolean } | { kind: "due"; until: number };
+
+const IDLE: Cli = { kind: "idle" };
+/** A wake turn was announced and has not started. */
+const wakeAhead = (c: Cli) => c.kind === "due" || (c.kind === "running" && c.wake);
+
+/** Closing the query now would cut work off: its background tasks, or a turn Claude Code runs or is about to run. */
+const busy = (l: Live) => l.background.length > 0 || l.cli.kind !== "idle";
 
 /** A background task of the live query, by what a note would name it. */
 type Background = NonNullable<SessionState["background"]>[number];
@@ -740,8 +761,18 @@ export function createSession(spec: SessionSpec): Session {
   let stallNoted = false;
   /** The uuid the turn in flight was sent with; null until it is sent. Claude Code echoes it on the turn's replies. */
   let sentUuid: string | null = null;
-  /** The turn in flight, not yet sent: it needs a new query, and the live one's background work runs until `until`. */
-  let held: { p: Pending; text: string; until: number } | null = null;
+  /**
+   * The turn in flight, not yet sent, because the query it needs cannot open yet (see advance). At `until` its wait for
+   * the live query runs out: the first time, the query's background tasks are stopped and it gets WAKE_WAIT_MS more
+   * to report them (`stopping`); the second time, the query is closed whatever still runs.
+   */
+  let held: { p: Pending; text: string; until: number; stopping: boolean } | null = null;
+  /**
+   * The last closed query, until its process has exited. No query opens while it runs: two processes on one session
+   * write its transcript at once, and the new one misses the cost total the old one saves as it exits, so the ledger
+   * cannot charge the new query's turns.
+   */
+  let closing: Live | null = null;
 
   /** What the turn in flight carries, recorded as sent once the model answers it, so a turn that never ran sends it again. */
   let carried: SessionState["sent"] | null = null;
@@ -868,29 +899,47 @@ export function createSession(spec: SessionSpec): Session {
    * maxBudgetUsd is fixed when a query opens and counts the spend since then, and the SDK stops a turn at it. So an
    * unattended turn gets a query of its own, capped at what is left of the daily cap as it starts, and an attended turn
    * never runs on such a query: the cap does not hold it. A runaway unattended turn stops at the cap, not at its end.
-   * Closing a query kills its background work, so a turn that needs a new query while the live one has some is held
-   * until the work is done, or for BACKGROUND_WAIT_MS. An attended turn runs on a stale query rather than wait: the new
-   * options can wait, the user should not.
+   * Closing a query kills its background work and any turn Claude Code runs on its own, so a turn that needs a new
+   * query while the live one is busy is held until it is not, or for BACKGROUND_WAIT_MS. An attended turn runs on a
+   * stale busy query rather than wait: the new options can wait, the user should not.
    */
   function send(p: Pending, text: string) {
     sentUuid = null;
-    if (live && live.background.length > 0 && (!attended(p.initiator) || live.capped)) {
-      held = { p, text, until: clock().getTime() + BACKGROUND_WAIT_MS };
-      return;
-    }
-    deliver(p, text);
+    held = { p, text, until: clock().getTime() + BACKGROUND_WAIT_MS, stopping: false };
+    advance(false);
   }
 
-  /** Sends the held turn: the background work it waited on is done, or it waited long enough. */
-  function release() {
+  /**
+   * Sends the held turn once nothing it waits on remains: the live query's work when the turn needs a new query (unless
+   * `force`), and the last closed query's process. Called again by whatever ends one of those.
+   */
+  function advance(force: boolean) {
     const h = held;
+    if (!h || closed) return;
+    const unattended = !attended(h.p.initiator);
+    if (live) {
+      const replace = unattended || live.capped;
+      if (replace && busy(live) && !force) return;
+      if (replace || (live.stale && !busy(live))) closeLive();
+    }
+    if (!live && closing) return;
     held = null;
-    if (h) deliver(h.p, h.text);
+    deliver(h.p, h.text, unattended);
   }
 
-  function deliver(p: Pending, text: string) {
-    const unattended = !attended(p.initiator);
-    if (live && (unattended || live.capped || (live.stale && live.background.length === 0))) closeLive();
+  /** The held turn waited BACKGROUND_WAIT_MS: stop the work and give the query time to report it, then close it. */
+  function expire(h: NonNullable<typeof held>) {
+    const l = live;
+    if (h.stopping || !l || !busy(l)) return advance(true);
+    h.stopping = true;
+    h.until = clock().getTime() + WAKE_WAIT_MS;
+    if (l.background.length === 0) return;
+    l.stopped = true;
+    guard("note", () => spec.note(backgroundStoppedNote(spec.name?.() ?? "Claude Code", l.background)));
+    for (const t of l.background) guard("stopTask", () => void l.q.stopTask(t.id).catch((err) => log(`session ${label}: stopTask failed: ${errorText(err)}`)));
+  }
+
+  function deliver(p: Pending, text: string, unattended: boolean) {
     let l: Live;
     try {
       l = live ?? open(unattended);
@@ -906,27 +955,36 @@ export function createSession(spec: SessionSpec): Session {
     l.send({ type: "user", message: { role: "user", content: contentOf(p, text, l.fresh) }, parent_tool_use_id: null, uuid });
   }
 
-  /** The end of a held turn's wait; the stall note while a turn runs; closing the query while nothing runs on it. */
+  /**
+   * The end of a held turn's wait; the stall note while a turn runs; closing the query while nothing runs on it; giving
+   * up on a wake turn that was announced and never started.
+   */
   function watchDeadline(): number | null {
+    if (!live) return null;
+    const wake = live.cli.kind === "due" ? live.cli.until : null;
     const kind = spec.state.lifecycle.kind;
-    if (!live || kind === "stopping") return null;
-    if (held) return held.until;
-    if (kind === "working") return stallNoted ? null : heardAt + STALL_MS;
-    return live.background.length > 0 ? null : heardAt + IDLE_MS;
+    const own =
+      kind === "stopping" ? null : held ? held.until : kind === "working" ? (stallNoted ? null : heardAt + STALL_MS) : busy(live) ? null : heardAt + IDLE_MS;
+    return wake === null ? own : own === null ? wake : Math.min(wake, own);
   }
 
   function watch(now: Date) {
     if (closed) return;
+    const l = live;
+    if (l && l.cli.kind === "due" && now.getTime() >= l.cli.until) {
+      l.cli = IDLE;
+      settle(l);
+    }
     const due = watchDeadline();
     if (due !== null && now.getTime() >= due) {
-      if (held) release();
+      if (held) expire(held);
       else if (spec.state.lifecycle.kind !== "working") closeLive();
       else {
         stallNoted = true;
         guard("note", () => spec.note(stallNote(spec.name?.() ?? "Claude Code")));
       }
     }
-    if (!live && spec.state.lifecycle.kind === "idle" && spec.state.pending.length === 0) guard("onDormant", () => spec.onDormant?.());
+    if (!live && !closing && spec.state.lifecycle.kind === "idle" && spec.state.pending.length === 0) guard("onDormant", () => spec.onDormant?.());
   }
 
   function open(unattended: boolean): Live {
@@ -940,6 +998,14 @@ export function createSession(spec: SessionSpec): Session {
     let wake: (() => void) | null = null;
     let stderr = "";
     const tail = (d: string) => void (stderr = (stderr + d).slice(-2000));
+    let spawned = false;
+    let exited = false;
+    const exit = () => {
+      exited = true;
+      if (closing?.gen !== gen) return;
+      closing = null;
+      advance(false);
+    };
     // One message per turn: the next is handed over only after this turn's result, so the SDK never queues a second.
     async function* input(): AsyncGenerator<SDKUserMessage> {
       while (gen === generation && !closed) {
@@ -959,7 +1025,10 @@ export function createSession(spec: SessionSpec): Session {
         ...(cap !== null && { maxBudgetUsd: Math.min(cap, options.maxBudgetUsd ?? cap) }),
         pathToClaudeCodeExecutable: path,
         stderr: tail,
-        spawnClaudeCodeProcess: (o) => spawnProcess(o, tail, () => {}),
+        spawnClaudeCodeProcess: (o) => {
+          spawned = true;
+          return spawnProcess(o, tail, exit);
+        },
       },
     });
     const l: Live = {
@@ -973,6 +1042,9 @@ export function createSession(spec: SessionSpec): Session {
       sandboxNoted: false,
       background: [],
       ours: null,
+      cli: IDLE,
+      stopped: false,
+      gone: () => exited || !spawned,
       send(m) {
         inbox.push(m);
         wake?.();
@@ -992,9 +1064,10 @@ export function createSession(spec: SessionSpec): Session {
     generation++;
     l.release();
     guard("close", () => l.q.close());
+    if (!l.gone()) closing = l;
     // close() leaves them on disk for the next start to name.
     if (closed || l.background.length === 0) return;
-    guard("note", () => spec.note(backgroundStoppedNote(spec.name?.() ?? "Claude Code", l.background)));
+    if (!l.stopped) guard("note", () => spec.note(backgroundStoppedNote(spec.name?.() ?? "Claude Code", l.background)));
     remember([]);
   }
 
@@ -1014,11 +1087,11 @@ export function createSession(spec: SessionSpec): Session {
     settle(l);
   }
 
-  /** What waited on the live query's background work goes ahead once it is done: a held turn, or a stale query's close. */
+  /** What waited on the live query's work goes ahead once it is done: a held turn, or a stale query's close. */
   function settle(l: Live) {
-    if (live !== l || l.background.length > 0) return;
-    if (held) release();
-    else if (l.stale && turnOf(spec.state.lifecycle as Lifecycle) === null) closeLive();
+    if (live !== l) return;
+    if (held) advance(false);
+    else if (l.stale && !busy(l) && turnOf(spec.state.lifecycle as Lifecycle) === null) closeLive();
   }
 
   async function consume(l: Live) {
@@ -1033,7 +1106,7 @@ export function createSession(spec: SessionSpec): Session {
     }
     if (l.gen !== generation || closed) return;
     closeLive();
-    if (held) return release();
+    if (held) return advance(false);
     const tail = l.stderr();
     const text = tail ? `${error}\n${tail}` : error;
     if (!current()) return;
@@ -1069,6 +1142,10 @@ export function createSession(spec: SessionSpec): Session {
       guard("persist", () => spec.persist());
     }
     const turn = answers(m, l) ? current() : null;
+    if (m.type === "system" && m.subtype === "init") l.cli = { kind: "running", wake: l.ours === true && wakeAhead(l.cli) };
+    else if (m.type === "system" && m.subtype === "task_notification") {
+      l.cli = l.cli.kind === "running" ? { kind: "running", wake: true } : l.cli.kind === "due" ? l.cli : { kind: "due", until: heardAt + WAKE_WAIT_MS };
+    } else if (m.type === "result" && l.cli.kind === "running") l.cli = l.cli.wake ? { kind: "due", until: heardAt + WAKE_WAIT_MS } : IDLE;
     if (m.type === "assistant" && m.error) signals.apiError = m.error;
     else if (m.type === "assistant" && turn !== null && turnOf(spec.state.lifecycle as Lifecycle)?.output === false) {
       accepted();
@@ -1096,7 +1173,7 @@ export function createSession(spec: SessionSpec): Session {
     signals = noSignals();
     if (!turn) {
       if (outcome.kind === "usage_limit" && outcome.scope === "account") dispatch({ kind: "limit", until: outcome.until });
-      return;
+      return settle(l);
     }
     const failed = m.subtype !== "success" || m.is_error;
     const said = m.subtype === "success" ? m.result : m.errors.join("\n");

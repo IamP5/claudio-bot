@@ -1761,9 +1761,9 @@ describe("background work", () => {
     await flush();
     expect(h.session.nextDeadline()).toBe(new Date(h.clock.t + BACKGROUND_WAIT_MS).toISOString());
     await h.advance(BACKGROUND_WAIT_MS - 1);
-    expect([first.closed, h.queries.length]).toEqual([false, 1]);
+    expect([first.stoppedTasks, h.notes]).toEqual([[], []]);
     await h.advance(1);
-    expect([first.closed, h.q().received.map((x) => x.text)]).toEqual([true, ["[r]"]]);
+    expect(first.stoppedTasks).toEqual(["t1", "t2"]);
     expect(h.notes).toEqual(["Ana's background work stopped: npm run build; npm run lint."]);
   });
 
@@ -1906,7 +1906,7 @@ describe("turns a background task wakes", () => {
 
 const notified = (status = "completed") =>
   ({ type: "system", subtype: "task_notification", task_id: "t1", status, output_file: "", summary: "done", uuid: `n${++uuid}`, session_id: "s_1" }) as unknown as SDKMessage;
-/** The init frame of a turn Claude Code starts on its own: it echoes no user message. */
+/** A turn's init frame. Unless echoing() stamps it with a user message's uuid, Claude Code started the turn on its own. */
 const wakeInit = () => ({ type: "system", subtype: "init", uuid: `i${++uuid}`, session_id: "s_1" }) as unknown as SDKMessage;
 const wakeResult = (cost: number) => resultMsg(cost, { result: "The build finished.", origin: { kind: "task-notification" } });
 const texts = (h: Harness) => h.messages.flatMap(({ m, turn }) => (m.type === "assistant" ? [[textOf(m.message.content as Content), turn?.text ?? null]] : []));
@@ -1964,7 +1964,7 @@ describe("handing a query over to a new one", () => {
   test("a notification during the user's turn makes a held close wait for the wake turn that follows its result", async () => {
     const { h, id } = await started("[a]");
     const first = h.q();
-    first.emit(tasks(build));
+    first.emit(echoing(wakeInit(), lastUuid(h)), tasks(build));
     await flush();
     h.session.reopen();
     first.emit(notified(), tasks(), echoing(resultMsg(0.1), lastUuid(h)));

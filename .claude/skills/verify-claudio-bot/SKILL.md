@@ -35,7 +35,7 @@ It builds nothing (Bun runs `bridge/src/main.ts` directly; run `cd bridge && bun
 
 Ready is the last line: `READY run=<id> bot="Claudio Bot" id=b_… status=working`. `working` there is the greeting turn the first start begins on its own; `send` waits for it to end. The run id is remembered in `<base>/current`, so later commands need no `--run`. Pass `--run <id>` (or `CLAUDIO_RUN=<id>`) to address another run; `$H runs` lists them.
 
-`CLAUDIOBOT_ACCESS` and `CLAUDIOBOT_SANDBOX` pass through from your shell (launch says so), so a launch can verify a non-default sandbox or access mode where the bridge supports one. Every other inherited `CLAUDIOBOT_*` is dropped.
+`CLAUDIOBOT_ACCESS` and `CLAUDIOBOT_SANDBOX` pass through from your shell (launch says so), so `CLAUDIOBOT_ACCESS=full $H launch` verifies full access mode. Every other inherited `CLAUDIOBOT_*` is dropped.
 
 ## Doctor
 

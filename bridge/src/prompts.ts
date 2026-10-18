@@ -1,9 +1,12 @@
-import type { AgentId, Attachment, Avatar, BotId, PermissionChoice } from "./protocol";
+import type { AgentId, Attachment, Avatar, BotId, Mention, PermissionChoice } from "./protocol";
 import type { Initiator, Notice, Origin, Pending, RunRef } from "./world";
 
 // Everything that reaches a bot or an agent is one envelope. Its initiator is a pure function of the envelope.
 export type Envelope =
-  | { from: "user"; text: string; attachments: Attachment[] }
+  // mentions: resolved by the hub (world.resolveMentions), without the receiving bot itself.
+  | { from: "user"; text: string; attachments: Attachment[]; mentions?: Mention[] }
+  // The user's /command or skill, as typed and trimmed: Claude Code runs it only from the bare text.
+  | { from: "command"; line: string }
   // An answer carries the initiator of the turn that asked: a tap on a routine's question does not make it the user's work.
   | { from: "answer"; question: string; option: string; initiator: Initiator }
   | { from: "dismiss"; question: string; initiator: Initiator }
@@ -22,6 +25,7 @@ export type Envelope =
 export function initiatorOf(e: Envelope): Initiator {
   switch (e.from) {
     case "user":
+    case "command":
       return { kind: "user" };
     case "answer":
     case "dismiss":
@@ -39,7 +43,8 @@ export function initiatorOf(e: Envelope): Initiator {
 }
 
 /** An approval continuation runs before anything else queued, so the grant it relies on is still fresh. */
-const kindOf = (e: Envelope): Pending["kind"] => (e.from === "decision" ? "continuation" : "envelope");
+const KIND: { [F in Envelope["from"]]?: Pending["kind"] } = { decision: "continuation", command: "command" };
+const kindOf = (e: Envelope): Pending["kind"] => KIND[e.from] ?? "envelope";
 
 /** Only a routine's own fire settles its run. A continuation keeps the routine's initiator but settles nothing. */
 const settlesOf = (e: Envelope): RunRef | null => (e.from === "routine" ? e.run : null);
@@ -58,6 +63,15 @@ const lines = (...xs: (string | null)[]) => xs.filter((x) => x !== null && x !==
 
 const call = (tool: string, detail: string) => `${tool} \`${detail}\``;
 
+/** What an @mention in the user's message asks of the bot. */
+function mentionLine(m: Mention, userName: string): string {
+  if (m.kind === "connector") return `[${userName} pointed at the connector ${m.name}: use its tools for this.]`;
+  return (
+    `[${userName} mentioned the bot ${m.name}. message_bot with bot "${m.id}" reaches them: ` +
+    `hand ${m.name} the part of this request that is theirs, or loop them in.]`
+  );
+}
+
 /** Text in a fence its own backticks cannot close, so data never reads as the envelope's own words. */
 export function fence(text: string): string {
   const longest = Math.max(2, ...[...text.matchAll(/`+/g)].map((m) => m[0].length));
@@ -68,7 +82,9 @@ export function fence(text: string): string {
 export function envelope(e: Envelope, userName: string): string {
   switch (e.from) {
     case "user":
-      return lines(`[${userName}]`, e.text, ...e.attachments.map((a) => `Attached: ${a.path}`));
+      return lines(`[${userName}]`, e.text, ...(e.mentions ?? []).map((m) => mentionLine(m, userName)), ...e.attachments.map((a) => `Attached: ${a.path}`));
+    case "command":
+      return e.line;
     case "answer":
       return `[${userName} answered "${e.question}": ${e.option}]`;
     case "dismiss":
@@ -143,9 +159,12 @@ How you talk:
 - Markdown is fine: bold, lists, inline code, links. Link every PR, issue and source you mention.
 - For a decision, put any context in one short message, then call ask with one short question, no preamble, and 2 to 4 concrete options. Then end your turn.
 - Messages that start with [ ... ] come from the system, routines, agents or other bots, not from ${userName}. Reply to ${userName} only when there is something worth telling them.
+- ${userName} can run your skills and Claude Code commands by typing /name in the chat. That turn comes from ${userName} and reaches you as the command itself.
 
 How you work:
 - For coding work in a repository, start an agent with start_agent and supervise it. Prefer where "mac". Tell it to work on a branch and open a PR, and to verify its change. When it reports, check its claim and report to ${userName} with links.
+- To hand an agent a skill, such as one ${userName} asks for by name or one only the user can invoke, set start_agent's slash to the skill's name: the agent's first turn runs /<skill> <prompt> as if ${userName} typed it.
+- When ${userName} mentions another bot, message_bot hands that bot its part of the request.
 - Never take an outward action without an explicit yes in chat: merging, deploying, posting, sending messages to people, setting secrets, spending money, deleting data.
 - Recurring work is a routine. Offer one when a job repeats.`;
 

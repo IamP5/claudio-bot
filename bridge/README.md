@@ -95,7 +95,17 @@ Everything that reaches a bot is one message whose first line says where it came
 
 A bot acts through the `claudio` MCP tools: `ask` posts a question card, `start_agent` and `message_agent` run coding agents, `list_projects` lists the repos, `message_bot` and `create_bot` reach other bots, `update_self` renames the bot (names are 1 to 40 characters) and, only in a turn you started, sets its job by rewriting the `## Job` section of its `CLAUDE.md`, `set_routine`, `delete_routine` and `list_routines` manage its routines, `routine_no_update` ends a routine run that has nothing to say, `remember` keeps a fact or a note, and `save_skill` saves a skill.
 
-A phone send carries a `clientId`. If the same send arrives again, after a reconnect, the bridge answers with the message it already has and queues nothing.
+A phone send carries a `clientId`. If the same send arrives again, after a reconnect, the bridge answers with the message it already has and queues nothing. Sends to one bot are handled one at a time, in the order they arrive.
+
+## Commands, mentions and exchanges
+
+The phone's `/` menu (`commands`) lists what the bot's Claude Code session can run, as `supportedCommands()` reports it: the bot's own skills, your user and plugin skills, and only the Claude Code built-ins on an allow list in `src/commands.ts` (`compact`, `code-review`, `security-review`, `simplify`, `init`, `verify`, `dataviz`, `deep-research`, `claude-api`). Every other built-in stays hidden, including any a newer Claude Code adds, and so does a skill that shares a hidden built-in's name. With no query open, the bridge reads the list from a query it sends no message, so no turn runs and nothing is spent. The list is read again when the bot's query opens or pushes a new one, and when its skills change.
+
+A send that is `/name args` for a name on the menu, with no uploads, runs that command: the bot's turn is the bare text, since Claude Code runs a command only from that. The chat shows it as typed. The notices, standing brief and facts that turn would have carried wait for the next ordinary one. `start_agent` takes `slash` too, so a bot can open a Mac agent with `/<skill> <prompt>` and run a skill only you could invoke.
+
+A send's `@` mentions are stored on your message: a mentioned bot must exist and takes its current name, and a mentioned connector must be one the bot has turned on. Anything else is dropped. The bot's turn then names, after your text, the bots to hand their part to with `message_bot` and the connectors to use. A mentioned bot's work arrives through `message_bot`, as a hop of your chain, like any other bot message. `message_bot` finds a bot by id, then name, then title.
+
+`state.json` keeps the text of every `message_bot` message per pair of bots, the newest 200, with secrets masked. The `exchange` frame returns it, oldest first, behind the chat's "Messaged X" line. Deleting a bot drops its pairs.
 
 ## Memory and skills
 

@@ -1,4 +1,5 @@
 import { describe } from "./cron";
+import { maskSecrets } from "./text";
 import {
   COLORS,
   SHAPES,
@@ -12,7 +13,9 @@ import {
   type BotSpend,
   type BotStatus,
   type DeviceId,
+  type ExchangeMessage,
   type Link,
+  type Mention,
   type Message,
   type MessageId,
   type Peer,
@@ -90,8 +93,10 @@ export type Pending = {
   /**
    * continuation: the decision envelope after a permission card was answered. It runs ahead of other queued work,
    * Stop keeps it, and its turn's start arms the grant's short window (gate.beginTurn).
+   * command: a /command or skill, text being exactly "/name args". Claude Code runs it only from the bare text, so it
+   * is sent as is: the notices, standing brief and context an envelope would carry wait for the next envelope.
    */
-  kind: "envelope" | "continuation";
+  kind: "envelope" | "continuation" | "command";
   at: string;
   /** The rendered envelope. Notices are prepended when it starts, not stored here. */
   text: string;
@@ -326,6 +331,12 @@ export type AgentRecord = {
   startedBy: Initiator;
 };
 
+/**
+ * The text of every message_bot message between two bots, oldest first, at most EXCHANGE_KEEP. bots is the pair in
+ * sorted order, so either bot finds the same log. Writer: world.ts (logExchange, forgetExchanges).
+ */
+export type ExchangeLog = { bots: [BotId, BotId]; messages: ExchangeMessage[] };
+
 export type World = {
   bots: Map<BotId, BotRecord>;
   agents: Map<AgentId, AgentRecord>;
@@ -333,6 +344,7 @@ export type World = {
   readonly devices: Owned<DeviceRecord[]>;
   readonly push: Owned<PushState>;
   readonly account: Owned<AccountState>;
+  readonly exchanges: Owned<ExchangeLog[]>;
 };
 
 export const emptyWorld = (): World => ({
@@ -342,7 +354,33 @@ export const emptyWorld = (): World => ({
   devices: [],
   push: { sent: [] },
   account: { parkedUntil: null },
+  exchanges: [],
 });
+
+export const EXCHANGE_KEEP = 200;
+
+const pairOf = (a: BotId, b: BotId): [BotId, BotId] => (a < b ? [a, b] : [b, a]);
+const isPair = (log: Owned<ExchangeLog>, [a, b]: [BotId, BotId]) => log.bots[0] === a && log.bots[1] === b;
+
+/** Records one message_bot message, its secrets masked, and drops the pair's oldest past EXCHANGE_KEEP. */
+export function logExchange(world: World, message: ExchangeMessage, to: BotId) {
+  const pair = pairOf(message.from, to);
+  const logs = own<ExchangeLog[]>(world.exchanges);
+  let log = logs.find((l) => isPair(l, pair));
+  if (!log) logs.push((log = { bots: pair, messages: [] }));
+  log.messages.push({ ...message, text: maskSecrets(message.text) });
+  log.messages.splice(0, Math.max(0, log.messages.length - EXCHANGE_KEEP));
+}
+
+/** Every kept message between the two bots, oldest first; [] for a pair that never exchanged text. */
+export const exchangeBetween = (world: World, a: BotId, b: BotId): ExchangeMessage[] =>
+  (world.exchanges.find((l) => isPair(l, pairOf(a, b)))?.messages ?? []).map((m) => ({ ...m }));
+
+/** A deleted bot's logs go with it, from both sides. */
+export function forgetExchanges(world: World, botId: BotId) {
+  const logs = own<ExchangeLog[]>(world.exchanges);
+  logs.splice(0, logs.length, ...logs.filter((l) => !l.bots.includes(botId)));
+}
 
 export const newMessageId = () => `m_${crypto.randomUUID()}` as MessageId;
 
@@ -519,11 +557,30 @@ export function toBot(bot: BotRecord, status: BotStatus): Omit<Bot, keyof BotSpe
 export const sortBots = <B extends Pick<Bot, "pinned" | "lastAt">>(bots: B[]): B[] =>
   [...bots].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastAt.localeCompare(a.lastAt));
 
+/**
+ * The user's mentions as the bridge keeps them: bots that exist, under their current names, and connectors among
+ * `connectors` (the bot's, turned on). Anything else is dropped, and so is a repeat.
+ */
+export function resolveMentions(world: World, mentions: readonly Mention[], connectors: ReadonlySet<string>): Mention[] {
+  const kept = new Map<string, Mention>();
+  for (const m of mentions) {
+    if (m.kind === "connector") {
+      if (connectors.has(m.name)) kept.set(`connector:${m.name}`, m);
+      continue;
+    }
+    const bot = world.bots.get(m.id);
+    if (bot) kept.set(`bot:${bot.id}`, { kind: "bot", id: bot.id, name: bot.name });
+  }
+  return [...kept.values()];
+}
+
+/** By id, then by name, then by title, ignoring case: a bot is often called by its role ("the engineer"). */
 export function findBot(world: World, ref: string): BotRecord | undefined {
   const byId = world.bots.get(ref as BotId);
   if (byId) return byId;
-  const name = ref.trim().toLowerCase();
-  return [...world.bots.values()].find((b) => b.name.toLowerCase() === name);
+  const key = ref.trim().toLowerCase();
+  const bots = [...world.bots.values()];
+  return bots.find((b) => b.name.toLowerCase() === key) ?? bots.find((b) => b.title?.trim().toLowerCase() === key);
 }
 
 const URL_PATTERN = /https?:\/\/[^\s<>()[\]"'`]+/g;

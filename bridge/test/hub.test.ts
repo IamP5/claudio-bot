@@ -2,13 +2,13 @@ import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { McpSdkServerConfigWithInstance, Options, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { McpSdkServerConfigWithInstance, Options, query, SDKMessage, SDKUserMessage, SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHomes } from "../src/home";
 import { createHub, tickEach } from "../src/hub";
 import type { Project } from "../src/projects";
-import type { AgentId, BotId, ClientMessage, Message, MessageId, RoutineId, RunId, ServerMessage, Signal, StreamPosition } from "../src/protocol";
+import type { AgentId, BotId, ClientMessage, Command, Message, MessageId, RoutineId, RunId, ServerMessage, Signal, StreamPosition } from "../src/protocol";
 import { createPush, type Push, type PushReason } from "../src/push";
 import { BREAKER_NOTE } from "../src/session";
 import { CLAUDIO_TOOLS } from "../src/tools";
@@ -25,6 +25,13 @@ const at = "2026-10-17T12:00:00.000Z";
 const inAnHour = () => new Date(Date.now() + 3_600_000).toISOString();
 const NO_RING: StreamPosition = { epoch: "", seq: 0, resumed: false };
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+/** What Claude Code reports a bot can run: a project skill, and two built-ins of which the menu shows one. */
+const COMMANDS: SlashCommand[] = [
+  { name: "greet", description: "Greet someone by name (project)", argumentHint: "[name]" },
+  { name: "clear", description: "Start a new session with empty context", argumentHint: "", builtin: true, aliases: ["reset", "new"] },
+  { name: "compact", description: "Free up context", argumentHint: "<instructions>", builtin: true },
+];
 
 /** A live SDK query the test drives: what the session sent it, and what it answers. */
 class FakeQuery {
@@ -58,6 +65,13 @@ class FakeQuery {
   }
   async toggleMcpServer(name: string, enabled: boolean) {
     this.toggles.push(`${name} ${enabled}`);
+  }
+  commands: SlashCommand[] = COMMANDS;
+  async supportedCommands() {
+    return this.commands;
+  }
+  get closed() {
+    return this.done;
   }
   close() {
     this.done = true;
@@ -899,7 +913,7 @@ test("one ticker throwing is logged, and the tickers after it still run", () => 
 
 test("hello lists every feature this bridge has", () => {
   const hello = hubOver(emptyWorld()).hub.hello(NO_RING);
-  expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend"]);
+  expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges"]);
 });
 
 test("a send's clientId comes back on the user's message, and a send without one adds none", async () => {
@@ -1149,6 +1163,119 @@ test("a rename from the phone rewrites the bot's CLAUDE.md heading and reaches i
   expect(third).toBe("[Alex]\nand again");
 });
 
+const MENU: Command[] = [
+  { name: "greet", description: "Greet someone by name", argumentHint: "[name]", source: "skill" },
+  { name: "compact", description: "Free up context", argumentHint: "<instructions>", source: "builtin" },
+];
+
+/** A resumed bot with a notice waiting, whose next ordinary turn would carry the standing brief and the notice. */
+function resumedBot() {
+  const world = emptyWorld();
+  const b = bot("eng", { session: { ...emptySession("s_1"), notices: [{ at, text: "[Your question expired unanswered.]" }] } });
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n\n## Job\n\nShip.\n");
+  return { ...h, bot: b };
+}
+
+test("with no query open, the commands frame reads the menu from a query that is sent nothing and closed", async () => {
+  const h = resumedBot();
+
+  expect(await h.hub.handle({ type: "commands", botId: h.bot.id })).toEqual([{ type: "commands", botId: h.bot.id, commands: MENU }]);
+
+  const probe = h.q();
+  expect([h.queries.length, probe.received, probe.closed, probe.options.persistSession, probe.options.resume]).toEqual([1, [], true, false, undefined]);
+  expect(h.frames).toContainEqual({ type: "commands", botId: h.bot.id, commands: MENU });
+});
+
+test("the commands frame answers from the bot's open query, and a list the query pushes reaches every phone", async () => {
+  const h = resumedBot();
+  await h.hub.handle({ type: "send", botId: h.bot.id, text: "hi", uploads: [] });
+  await flush();
+  h.q().commands = [...COMMANDS, { name: "standup", description: "Write the standup (user)", argumentHint: "" }];
+
+  const [frame] = await h.hub.handle({ type: "commands", botId: h.bot.id });
+  expect(frame?.type === "commands" && frame.commands.map((c) => c.name)).toEqual(["greet", "compact", "standup"]);
+  expect(h.queries).toHaveLength(1);
+
+  h.q().emit({ type: "system", subtype: "commands_changed", commands: COMMANDS, uuid: "u", session_id: "s_1" } as unknown as SDKMessage);
+  await flush();
+  expect(h.frames.at(-1)).toEqual({ type: "commands", botId: h.bot.id, commands: MENU });
+});
+
+test("once the query a list came from has closed, the commands frame reads what the next query would load", async () => {
+  const h = resumedBot();
+  await h.hub.handle({ type: "send", botId: h.bot.id, text: "hi", uploads: [] });
+  await flush();
+  const live = h.q();
+  live.commands = [COMMANDS[0]!];
+  live.emit(result());
+  await flush();
+  const names = async () => ((await h.hub.handle({ type: "commands", botId: h.bot.id }))[0] as Extract<ServerMessage, { type: "commands" }>).commands.map((c) => c.name);
+  expect(await names()).toEqual(["greet"]);
+
+  later(16 * 60_000);
+  h.hub.tick(new Date());
+
+  expect([live.closed, await names(), h.queries.length]).toEqual([true, ["greet", "compact"], 2]);
+});
+
+test("a /command from the menu reaches the bot as the bare text, shows as typed, and the brief and notices wait for the next turn", async () => {
+  const h = resumedBot();
+
+  await h.hub.handle({ type: "send", botId: h.bot.id, text: "  /greet Ana ", uploads: [] });
+  await flush();
+  h.q().emit(assistant(text("Hello Ana!")), result());
+  await flush();
+  await h.hub.handle({ type: "send", botId: h.bot.id, text: "thanks", uploads: [] });
+  await flush();
+
+  const [command, next] = h.q().received;
+  expect(command).toBe("/greet Ana");
+  expect(h.bot.messages.find((m) => m.kind === "user")).toMatchObject({ text: "  /greet Ana " });
+  expect(next).toStartWith("[Standing brief: this replaces what you were told before where they differ.]");
+  expect(next).toEndWith("[Your question expired unanswered.]\n[Alex]\nthanks");
+});
+
+test.each([
+  ["a built-in the menu hides", "/clear", []],
+  ["a name the menu does not have", "/greeting Ana", []],
+  ["a command with an upload", "/greet Ana", [{ name: "a.txt", mime: "text/plain", data: Buffer.from("hi").toString("base64") }]],
+])("%s is an ordinary message", async (_, typed, uploads) => {
+  const h = resumedBot();
+  await h.hub.handle({ type: "send", botId: h.bot.id, text: typed, uploads });
+  await flush();
+  expect(h.q().received[0]).toContain(`[Alex]\n${typed}`);
+});
+
+test("start_agent with a slash starts a mac agent on that command, and refuses a cloud agent or a hidden built-in", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-repo-")));
+  roots.push(repo);
+  const h = hubOver(world, { scan: async () => [{ name: "app", path: repo, branch: "main", githubRepo: "acme/app" }] });
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "review PR 12", uploads: [] });
+  await flush();
+  const [server, client] = InMemoryTransport.createLinkedPair();
+  await (h.q().options.mcpServers!.claudio as McpSdkServerConfigWithInstance).instance.connect(server);
+  const mcp = new Client({ name: "test", version: "1" });
+  await mcp.connect(client);
+  const start = async (args: Record<string, unknown>) =>
+    ((await mcp.callTool({ name: "start_agent", arguments: { title: "Review", prompt: "PR 12", project: "app", ...args } })).content as { text: string }[])[0]!.text;
+  await h.hub.handle({ type: "commands", botId: b.id });
+
+  expect(await start({ slash: "/clear" })).toBe("/clear changes or ends a Claude Code session, so an agent is not started with it.");
+  expect(await start({ slash: "code-review", where: "cloud" })).toStartWith("slash works for mac agents only.");
+  expect(await start({ slash: "code review" })).toStartWith("slash is one skill or command name");
+  expect(world.agents.size).toBe(0);
+
+  expect(await start({ slash: "/code-review" })).toStartWith("Started agent");
+  await flush();
+  expect(h.q().received).toEqual(["/code-review PR 12"]);
+});
+
 test("update_self with a name rewrites the bot's CLAUDE.md heading", async () => {
   const world = emptyWorld();
   const b = bot("New Bot");
@@ -1245,6 +1372,97 @@ test("at local midnight every phone gets each bot again, so today's spend starts
   expect(frames()).toBe(before + 1);
   h.hub.tick(new Date(tomorrow.getTime() + 60_000));
   expect(frames()).toBe(before + 1);
+});
+
+/** Two bots with homes, ana's query open on a user turn. */
+async function pair() {
+  const world = emptyWorld();
+  const ana = bot("ana");
+  const bo = bot("bo", { title: "Release manager" });
+  world.bots.set(ana.id, ana);
+  world.bots.set(bo.id, bo);
+  const h = hubOver(world);
+  h.homes.create(ana.id, "# ana\n");
+  h.homes.create(bo.id, "# bo\n");
+  await h.hub.handle({ type: "send", botId: ana.id, text: "Ship it.", uploads: [] });
+  await flush();
+  return { ...h, world, ana, bo, anaQuery: h.q() };
+}
+
+test("message_bot keeps the text of each message both ways, and the exchange frame answers it oldest first from either bot", async () => {
+  const h = await pair();
+  await callTool(h.anaQuery, "message_bot", { bot: "bo", text: "Can you cut the release?" });
+  await flush();
+  const boQuery = h.q();
+  await callTool(boQuery, "message_bot", { bot: "ana", text: "Cut, tagged v2." });
+
+  const fromBo = [{ from: h.ana.id, text: "Can you cut the release?" }, { from: h.bo.id, text: "Cut, tagged v2." }];
+  const [answer] = await h.hub.handle({ type: "exchange", botId: h.ana.id, peer: h.bo.id });
+  expect(answer).toMatchObject({ type: "exchange", botId: h.ana.id, peer: h.bo.id, messages: fromBo });
+  const [mirror] = await h.hub.handle({ type: "exchange", botId: h.bo.id, peer: h.ana.id });
+  expect(mirror).toMatchObject({ type: "exchange", botId: h.bo.id, peer: h.ana.id, messages: fromBo });
+});
+
+test("mentions are kept on the user's message as resolved, and the bot's turn says what each asks of it", async () => {
+  const h = await pair();
+  h.anaQuery.emit(result());
+  await flush();
+  const mentions = [
+    { kind: "bot", id: h.bo.id, name: "Bo (old name)" },
+    { kind: "bot", id: "b_gone" as BotId, name: "gone" },
+    { kind: "bot", id: h.ana.id, name: "ana" },
+    { kind: "connector", name: "chrome-devtools" },
+    { kind: "connector", name: "slack" },
+  ] as const;
+
+  await h.hub.handle({ type: "send", botId: h.ana.id, text: "@bo cut the release, check @chrome-devtools", uploads: [], mentions: [...mentions] });
+  await flush();
+
+  expect(h.ana.messages.findLast((m) => m.kind === "user")).toMatchObject({
+    mentions: [{ kind: "bot", id: h.bo.id, name: "bo" }, { kind: "bot", id: h.ana.id, name: "ana" }, { kind: "connector", name: "chrome-devtools" }],
+  });
+  expect(h.anaQuery.received.at(-1)).toEndWith(
+    "[Alex]\n@bo cut the release, check @chrome-devtools\n" +
+      `[Alex mentioned the bot bo. message_bot with bot "${h.bo.id}" reaches them: hand bo the part of this request that is theirs, or loop them in.]\n` +
+      "[Alex pointed at the connector chrome-devtools: use its tools for this.]",
+  );
+});
+
+test("a send with no mentions stores none and its turn names nobody", async () => {
+  const h = await pair();
+  expect(h.ana.messages.find((m) => m.kind === "user")).not.toHaveProperty("mentions");
+  expect(h.anaQuery.received[0]).toEndWith("[Alex]\nShip it.");
+});
+
+test("the bot a user mentioned hears from the bot handing it work as a hop of the user's own chain", async () => {
+  const h = await pair();
+  await callTool(h.anaQuery, "message_bot", { bot: "bo", text: "Alex wants the release cut." });
+  expect(h.bo.session.pending.map((p) => p.initiator)).toEqual([{ kind: "bot", botId: h.ana.id, hops: 1, origin: { kind: "user" } }]);
+});
+
+test("message_bot reaches a bot by its title, and a miss lists names with titles", async () => {
+  const h = await pair();
+  const [server, client] = InMemoryTransport.createLinkedPair();
+  await (h.anaQuery.options.mcpServers!.claudio as McpSdkServerConfigWithInstance).instance.connect(server);
+  const mcp = new Client({ name: "test", version: "1" });
+  await mcp.connect(client);
+  const sent = await mcp.callTool({ name: "message_bot", arguments: { bot: "release manager", text: "Cut it." } });
+  expect(sent.content).toEqual([{ type: "text", text: "Delivered to bo." }]);
+  await flush();
+  expect(h.q().received[0]).toContain("Cut it.");
+  const missed = await mcp.callTool({ name: "message_bot", arguments: { bot: "designer", text: "Hi." } });
+  expect(missed.content).toEqual([{ type: "text", text: 'No bot "designer". Bots: ana, bo (Release manager).' }]);
+});
+
+test("a pair that never exchanged text answers an empty list, and deleting a bot drops its pair's text", async () => {
+  const h = await pair();
+  expect(await h.hub.handle({ type: "exchange", botId: h.ana.id, peer: h.bo.id })).toEqual([{ type: "exchange", botId: h.ana.id, peer: h.bo.id, messages: [] }]);
+  await callTool(h.anaQuery, "message_bot", { bot: "bo", text: "Can you cut the release?" });
+
+  await h.hub.handle({ type: "delete_bot", botId: h.bo.id });
+
+  expect(await h.hub.handle({ type: "exchange", botId: h.ana.id, peer: h.bo.id })).toEqual([{ type: "exchange", botId: h.ana.id, peer: h.bo.id, messages: [] }]);
+  expect(h.world.exchanges).toEqual([]);
 });
 
 test("boot carries on when USER.md cannot be created, and says why in the log", () => {

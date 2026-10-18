@@ -267,8 +267,10 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
     s.pending.unshift(started);
     delete c.memo.told[p.id];
     s.lifecycle = { kind: "working", turn: { pending: p.id, startedAt: iso(now), output: false, denials: 0 } };
-    c.memo.carried = s.notices.length;
-    fx.push({ kind: "send", pending: started, text: withNotices(started.text, s.notices) });
+    // A command runs only as its bare text, so the notices wait for the next envelope.
+    const command = started.kind === "command";
+    c.memo.carried = command ? 0 : s.notices.length;
+    fx.push({ kind: "send", pending: started, text: command ? started.text : withNotices(started.text, s.notices) });
     if (!capReached) c.memo.capNoted = false;
     else if (!c.memo.capNoted) {
       c.memo.capNoted = true;
@@ -277,6 +279,9 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
   }
 
   function pump() {
+    // The ledger's word for this pass, not due(until): a cap end the ledger reports as already past would otherwise
+    // read as lifted and re-ask it forever.
+    let capHeld = false;
     for (;;) {
       const life = s.lifecycle;
       if (life.kind === "working" || life.kind === "stopping") return;
@@ -286,7 +291,7 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
       }
       if ((life.kind === "backoff" || (life.kind === "parked" && life.reason === "usage_limit")) && !due(life.until)) return;
       if (c.parkedUntil !== null && !due(c.parkedUntil)) return hold("usage_limit", c.parkedUntil);
-      const capped = life.kind === "parked" && life.reason === "daily_cap" && !due(life.until);
+      const capped = capHeld || (life.kind === "parked" && life.reason === "daily_cap" && !due(life.until));
       const next = capped ? s.pending.find((p) => attended(p.initiator)) : s.pending[0];
       if (!next) return;
       if (next.attempts >= MAX_STARTS) {
@@ -303,6 +308,7 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
       }
       if (capped) return;
       hold("daily_cap", room.until);
+      capHeld = true;
     }
   }
 
@@ -513,8 +519,8 @@ export type Session = Tickable & {
   recheck(): void;
   /** options() would now give something else: the live query closes now, or when the turn it serves ends. */
   reopen(): void;
-  /** The live query's MCP controls (status and live toggles), or null while no query is open. */
-  mcp(): Pick<Query, "mcpServerStatus" | "toggleMcpServer"> | null;
+  /** The live query's controls (MCP status and toggles, the commands it offers), or null while no query is open. */
+  mcp(): Pick<Query, "mcpServerStatus" | "toggleMcpServer" | "supportedCommands"> | null;
   /** Recovered TurnEnds not yet told are told before it closes. */
   close(): void;
   /** A turn is running or retrying, or envelopes wait and nothing holds them. */
@@ -755,7 +761,10 @@ export function createSession(spec: SessionSpec): Session {
     heardAt = clock().getTime();
     stallNoted = false;
     if (p.kind === "continuation") guard("continuing", () => spec.continuing?.());
-    l.send({ type: "user", message: { role: "user", content: withContext(text, l.fresh) }, parent_tool_use_id: null });
+    // The brief and context a command cannot carry stay unsent, so the next envelope carries them.
+    if (p.kind === "command") carried = null;
+    const content = p.kind === "command" ? text : withContext(text, l.fresh);
+    l.send({ type: "user", message: { role: "user", content }, parent_tool_use_id: null });
   }
 
   /** The stall note while a turn runs; closing the query while none does. */

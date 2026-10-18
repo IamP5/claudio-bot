@@ -5,6 +5,7 @@ import type { Settings } from "@anthropic-ai/claude-agent-sdk";
 import { createActivity } from "./activity";
 import { createAgents } from "./agents";
 import { createClock, type Tickable } from "./clock";
+import { commandOf, createCommands, probeCommands, slashName } from "./commands";
 import { connectorSettings, createConnectors } from "./connectors";
 import { accessOf } from "./access";
 import { createGate } from "./gate";
@@ -23,6 +24,7 @@ import {
   type BotId,
   type ClientMessage,
   type Feature,
+  type Mention,
   type Message,
   type MessageId,
   type Peer,
@@ -48,12 +50,16 @@ import {
   botActor,
   botPeer,
   botStatus,
+  exchangeBetween,
   findBot,
+  forgetExchanges,
   holdOf,
   hopsAfter,
   hopsOf,
   isOpenCard,
   linksOf,
+  resolveMentions,
+  logExchange,
   newBot,
   newMessageId,
   post,
@@ -121,7 +127,7 @@ type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; carded: bool
 type Pushes = { pushed: { id: MessageId; at: number } | null; last: MessageId | null };
 
 /** What hello advertises: the FEATURES this bridge serves. Each new one joins when the hub implements it. */
-const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend"];
+const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges"];
 
 const BAD_NAME = `A bot name is 1 to ${BOT_NAME_MAX} characters, with no control or invisible characters.`;
 /** The same rule as the bot tools' name: a name a phone would show cut short or other than it reads is refused. */
@@ -431,7 +437,21 @@ export function createHub(deps: HubDeps): Hub {
     changed: (id) => {
       brains.get(id)?.reopen();
       deps.broadcast({ type: "skills", botId: id, skills: skills.list(id) });
+      commands.refresh(id);
     },
+  });
+  const commands = createCommands({
+    live: (id) => brains.get(id)?.mcp() ?? null,
+    // What the bot's own query would offer: its home's project skills, the user's and plugins'. No MCP server starts, so
+    // only an open query's list has MCP prompts.
+    probe: (id) => {
+      homes.ensureFolders(id);
+      return probeCommands(deps.claude, { cwd: homes.homeOf(id), settingSources: ["user", "project"], settings: settingsFor(id), strictMcpConfig: true, mcpServers: {} });
+    },
+    changed: (id, menu) => {
+      if (world.bots.has(id)) deps.broadcast({ type: "commands", botId: id, commands: menu });
+    },
+    log: deps.log,
   });
 
   function brain(bot: BotRecord): Session {
@@ -470,6 +490,8 @@ export function createHub(deps: HubDeps): Hub {
       },
       onMessage(m, pending) {
         if (!world.bots.has(bot.id)) return;
+        if (m.type === "system" && m.subtype === "init") commands.refresh(bot.id);
+        if (m.type === "system" && m.subtype === "commands_changed") commands.seen(bot.id, m.commands);
         // Output between turns, such as a background task finishing, has no turn to wait for, and no turn end would
         // clear an activity line it set.
         if (pending === null) return postBubbles(bot, { pushed: null, last: null }, readTurn(freshTurn, m).bubbles);
@@ -654,7 +676,13 @@ export function createHub(deps: HubDeps): Hub {
       const project = findProject(scanned, a.project);
       if (!project) return `No project "${a.project}". Call list_projects for the names.`;
       if (a.where === "cloud" && !project.githubRepo) return `${project.name} has no GitHub remote, so start it with where "mac".`;
-      const rec = await agents.start(botId, { ...a, project, botName: bot.name, initiator: initiatorNow(bot), budgetUsd: null });
+      const slash = a.slash?.trim().replace(/^\//, "") ?? null;
+      if (slash !== null) {
+        if (a.where === "cloud") return "slash works for mac agents only. Start it with where \"mac\", or put the request in the prompt.";
+        if (slashName(`/${slash}`) !== slash) return "slash is one skill or command name, without spaces, such as code-review.";
+        if (commands.hidden(botId, slash)) return `/${slash} changes or ends a Claude Code session, so an agent is not started with it.`;
+      }
+      const rec = await agents.start(botId, { ...a, slash, project, botName: bot.name, initiator: initiatorNow(bot), budgetUsd: null });
       exchange(bot, agentPeer(rec.agent), "sent");
       if (rec.agent.where === "mac") return `Started agent ${rec.agent.id} on ${project.name}. It reports back to you when its turn ends.`;
       if (rec.agent.status === "failed") return `The cloud agent failed to start: ${rec.messages.at(-1)?.text}`;
@@ -677,8 +705,9 @@ export function createHub(deps: HubDeps): Hub {
     messageBot(botId, a) {
       const from = owned(botId);
       const to = findBot(world, a.bot);
-      if (!to) return `No bot "${a.bot}". Bots: ${[...world.bots.values()].map((b) => b.name).join(", ")}.`;
+      if (!to) return `No bot "${a.bot}". Bots: ${[...world.bots.values()].map((b) => (b.title ? `${b.name} (${b.title})` : b.name)).join(", ")}.`;
       if (to.id === from.id) return "That is you.";
+      logExchange(world, { id: newMessageId(), at: now(), from: from.id, text: a.text }, to.id);
       exchange(from, botPeer(to), "sent");
       exchange(to, botPeer(from), "received");
       const by = initiatorNow(from);
@@ -723,6 +752,49 @@ export function createHub(deps: HubDeps): Hub {
     remember: (botId, a) => memory.remember(botId, a),
     saveSkill: (botId, a) => skills.save(botId, a),
   };
+
+  // A send can wait (on the bot's connectors or its commands), so each bot's sends are handled one after another: a
+  // later one never overtakes it into the chat or the bot's queue.
+  const sending = new Map<BotId, Promise<unknown>>();
+  function inOrder<T>(botId: BotId, op: () => Promise<T>): Promise<T> {
+    const next = (sending.get(botId) ?? Promise.resolve()).then(op);
+    sending.set(botId, next.catch(() => {}));
+    return next;
+  }
+
+  /** The connectors a mention may point at: the bot's, turned on. Asked only when the user pointed at one. */
+  async function connectorsOn(botId: BotId, mentions: readonly Mention[]): Promise<Set<string>> {
+    if (!mentions.some((m) => m.kind === "connector")) return new Set();
+    return new Set((await connectors.list(botId)).filter((c) => c.enabled).map((c) => c.name));
+  }
+
+  async function send(m: Extract<ClientMessage, { type: "send" }>): Promise<ServerMessage[]> {
+    const bot = world.bots.get(m.botId);
+    if (!bot) return error("Unknown bot");
+    // A phone resends what it never saw echoed after a reconnect; the first copy may have arrived. The echo goes back
+    // to the sender so its pending send settles.
+    const sent = m.clientId === undefined ? undefined : bot.messages.find((x) => x.kind === "user" && x.clientId === m.clientId);
+    if (sent) return [{ type: "message", botId: bot.id, message: sent }];
+    const on = await connectorsOn(bot.id, m.mentions ?? []);
+    // "/name args" with no uploads runs a command the bot's menu offers; anything else is an ordinary message.
+    const command = m.uploads.length === 0 && slashName(m.text) !== null ? commandOf(m.text, await commands.list(bot.id)) : null;
+    if (!world.bots.has(bot.id)) return error("Unknown bot");
+    const mentions = resolveMentions(world, m.mentions ?? [], on);
+    const attachments = homes.saveUploads(bot.id, m.uploads);
+    if ("error" in attachments) return error(attachments.error);
+    say(bot, {
+      kind: "user",
+      id: newMessageId(),
+      at: now(),
+      text: m.text,
+      attachments,
+      ...(m.clientId !== undefined && { clientId: m.clientId }),
+      ...(mentions.length > 0 && { mentions }),
+    });
+    const others = mentions.filter((x) => x.kind !== "bot" || x.id !== bot.id);
+    deliver(botActor(bot.id), command !== null ? { from: "command", line: m.text.trim() } : { from: "user", text: m.text, attachments, mentions: others });
+    return [];
+  }
 
   const error = (message: string): ServerMessage[] => [{ type: "error", message }];
   const replyTo = (r: Result): ServerMessage[] => (r.ok ? [] : error(r.error));
@@ -774,17 +846,8 @@ export function createHub(deps: HubDeps): Hub {
         bot.unread = 0;
         changed(bot);
         return [{ type: "conversation", botId: bot.id, messages: bot.messages }];
-      case "send": {
-        // A phone resends what it never saw echoed after a reconnect; the first copy may have arrived. The echo goes back
-        // to the sender so its pending send settles.
-        const sent = message.clientId === undefined ? undefined : bot.messages.find((m) => m.kind === "user" && m.clientId === message.clientId);
-        if (sent) return [{ type: "message", botId: bot.id, message: sent }];
-        const attachments = homes.saveUploads(bot.id, message.uploads);
-        if ("error" in attachments) return error(attachments.error);
-        say(bot, { kind: "user", id: newMessageId(), at: now(), text: message.text, attachments, ...(message.clientId !== undefined && { clientId: message.clientId }) });
-        deliver(botActor(bot.id), { from: "user", text: message.text, attachments });
-        return [];
-      }
+      case "send":
+        return inOrder(bot.id, () => send(message));
       case "answer":
       case "dismiss": {
         const reply = cardReply(bot.messages.find((m) => m.id === message.messageId), message);
@@ -818,6 +881,8 @@ export function createHub(deps: HubDeps): Hub {
         brains.get(bot.id)?.close();
         brains.delete(bot.id);
         readings.delete(bot.id);
+        sending.delete(bot.id);
+        commands.forget(bot.id);
         agents.stopFor(bot.id);
         // Before the agents go: the gate finds the agents' grants through them.
         gate.forgetBot(bot.id);
@@ -826,6 +891,7 @@ export function createHub(deps: HubDeps): Hub {
         for (const id of doomed) activity.clear({ kind: "agent", botId: bot.id, agentId: id });
         for (const id of doomed) world.agents.delete(id);
         world.bots.delete(bot.id);
+        forgetExchanges(world, bot.id);
         // A crash between these two leaves an orphan home rather than a bot whose home is gone.
         deps.persist("now");
         homes.trash(bot.id, new Date());
@@ -870,9 +936,9 @@ export function createHub(deps: HubDeps): Hub {
         return "error" in made ? error(made.error) : [{ type: "webhook_token", botId: bot.id, routineId: message.routineId, ...made }];
       }
       case "commands":
-        return error("This bridge cannot list commands yet.");
+        return [{ type: "commands", botId: bot.id, commands: await commands.list(bot.id) }];
       case "exchange":
-        return error("This bridge cannot show exchanges yet.");
+        return [{ type: "exchange", botId: bot.id, peer: message.peer, messages: exchangeBetween(world, bot.id, message.peer) }];
     }
   }
 

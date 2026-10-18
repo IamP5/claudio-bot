@@ -174,6 +174,14 @@ test("a mac agent starts on its project with the agent prompt, its budget, no re
   });
 });
 
+test("a mac agent started with a slash opens with that command as its bare first turn, shown in its thread", async () => {
+  const h = harness();
+  const rec = await h.agents.start(B1, { title: "Review", prompt: "PR 12, focus on auth", project, where: "mac", isolate: "auto", botName: "Ana", initiator: user, budgetUsd: null, slash: "code-review" });
+  await flush();
+  expect(h.q().received).toEqual(["/code-review PR 12, focus on auth"]);
+  expect(rec.messages).toMatchObject([{ from: "bot", text: "/code-review PR 12, focus on auth" }]);
+});
+
 test("the turn's final message is reported to the bot with the turn's initiator, and the agent waits", async () => {
   const h = harness();
   const rec = await h.start("mac", routine);

@@ -278,6 +278,17 @@ describe("step", () => {
     expect(endsOf(t.effects)).toEqual([["a", "stopped"]]);
   });
 
+  test("a command starts as its bare text, and the notices wait for the envelope after it, even once it has output", () => {
+    const c = core({ kind: "idle" }, []);
+    c.session.notices = [{ at: NOW.toISOString(), text: "[Your question expired.]" }];
+    const command: Pending = { ...env("c"), kind: "command", text: "/greet Ana" };
+    const started = run(c, { kind: "push", pending: command });
+    expect(started.effects).toEqual([{ kind: "send", pending: { ...command, attempts: 1 }, text: "/greet Ana" }]);
+    const answered = run(run(started.core, { kind: "output" }).core, { kind: "end", outcome: { kind: "result", result: {} as never } });
+    const next = run(answered.core, { kind: "push", pending: env("a") });
+    expect(next.effects).toContainEqual({ kind: "send", pending: env("a", user, 1), text: "[Your question expired.]\n[a]" });
+  });
+
   test.each([
     { kind: "backoff", until: later(1_000), attempt: 1 },
     { kind: "parked", reason: "usage_limit", until: later(1_000) },
@@ -300,6 +311,14 @@ describe("step", () => {
     capped = false;
     const t = run(still.core, { kind: "tick" }, headroom, new Date(later(120_000)));
     expect(t.core.session.lifecycle).toEqual({ kind: "working", turn: turn("r", { startedAt: later(120_000) }) });
+  });
+
+  test("a daily cap whose end the ledger reports as already past still parks the head, and attended work behind it runs", () => {
+    const until = later(-60_000);
+    const headroom = (i: Initiator): Headroom => (attendedNow(i) ? roomy() : { ok: false, reason: "daily_cap", until });
+    const t = run(core({ kind: "idle" }, [env("r", routine)]), { kind: "push", pending: env("u") }, headroom);
+    expect(t.core.session.lifecycle).toEqual({ kind: "working", turn: turn("u") });
+    expect(endsOf(t.effects)).toEqual([["r", "deferred"]]);
   });
 
   test("a park whose deadline keeps moving is told once", () => {

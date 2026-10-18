@@ -38,7 +38,8 @@ const IDLE_TIMEOUT_S = 60;
 
 /**
  * limited: the protocol 2 shared token, or an app that did not announce protocol 3 (see `refusal`). threads: the
- * sessions this socket watches, so its close unwatches them.
+ * sessions this socket watches, so its close unwatches them. turns: the socket's requests run one at a time in the
+ * order sent, so an answer never overtakes the one asked before it.
  */
 type SocketData = {
   deviceId: DeviceId;
@@ -47,6 +48,7 @@ type SocketData = {
   heardAt: number;
   limited: boolean;
   threads: Set<SessionId>;
+  turns: Promise<void>;
 };
 type Socket = ServerWebSocket<SocketData>;
 
@@ -231,7 +233,7 @@ export function serve(deps: ServeDeps): Transport {
         // The ring holds protocol 3 frames, and a protocol 2 app never asks to resume.
         const resume = epoch && protocol === 3 ? { epoch, after: Number(url.searchParams.get("after") ?? NaN) } : null;
         const limited = protocol === 2 || devices.list(null).some((d) => d.id === deviceId && d.legacy);
-        if (server.upgrade(req, { data: { deviceId, protocol, resume, heardAt: deps.now().getTime(), limited, threads: new Set() } })) return;
+        if (server.upgrade(req, { data: { deviceId, protocol, resume, heardAt: deps.now().getTime(), limited, threads: new Set(), turns: Promise.resolve() } })) return;
         return new Response("Expected a WebSocket upgrade", { status: 426 });
       }
       return new Response("Not found", { status: 404 });
@@ -257,27 +259,34 @@ export function serve(deps: ServeDeps): Transport {
       },
       close(ws) {
         sockets.get(ws.data.deviceId)?.delete(ws);
-        // Bun drops a closed socket's topics; the hub hears it left each thread.
-        for (const sessionId of ws.data.threads) void hub.handle({ type: "unwatch_session", sessionId }).catch(() => {});
-        ws.data.threads.clear();
+        // Bun drops a closed socket's topics; the hub hears it left each thread, after the requests already sent.
+        ws.data.turns = ws.data.turns.then(async () => {
+          for (const sessionId of ws.data.threads) await hub.handle({ type: "unwatch_session", sessionId }).catch(() => {});
+          ws.data.threads.clear();
+        });
       },
-      async message(ws, raw) {
+      message(ws, raw) {
         heard(ws);
-        if (!isPaired(ws.data.deviceId)) return ws.close(4001, "revoked");
-        const parsed = parseClientMessage(String(raw));
-        if (!parsed.ok) return send(ws, { type: "error", message: parsed.error });
-        const refused = refusal(ws.data, parsed.message);
-        if (refused !== null) return send(ws, { type: "error", message: refused });
-        try {
-          subscribe(ws, parsed.message);
-          const replies = isTransport(parsed.message) ? transport(ws, parsed.message) : await hub.handle(parsed.message);
-          for (const reply of replies) send(ws, reply);
-        } catch (e) {
-          send(ws, { type: "error", message: errorText(e) });
-        }
+        ws.data.turns = ws.data.turns.then(() => handle(ws, String(raw))).catch((e) => log(`serve: ${errorText(e)}`));
       },
     },
   });
+
+  async function handle(ws: Socket, raw: string) {
+    if (ws.readyState !== 1) return;
+    if (!isPaired(ws.data.deviceId)) return ws.close(4001, "revoked");
+    const parsed = parseClientMessage(raw);
+    if (!parsed.ok) return send(ws, { type: "error", message: parsed.error });
+    const refused = refusal(ws.data, parsed.message);
+    if (refused !== null) return send(ws, { type: "error", message: refused });
+    try {
+      subscribe(ws, parsed.message);
+      const replies = isTransport(parsed.message) ? transport(ws, parsed.message) : await hub.handle(parsed.message);
+      for (const reply of replies) send(ws, reply);
+    } catch (e) {
+      send(ws, { type: "error", message: errorText(e) });
+    }
+  }
 
   return {
     get port() {

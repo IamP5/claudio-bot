@@ -22,7 +22,7 @@ function tempHome(legacy?: string) {
 }
 
 /** What main.ts does at start, against a temp home, with a fake hub and a clock the test moves. */
-function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m: ClientMessage) => ServerMessage[]; greeting?: ServerMessage[] } = {}) {
+function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m: ClientMessage) => ServerMessage[] | Promise<ServerMessage[]>; greeting?: ServerMessage[] } = {}) {
   let now = new Date("2026-10-17T09:00:00.000Z");
   let saving = true;
   const { world } = loadWorld(home);
@@ -41,7 +41,7 @@ function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m
     greeting: () => opts.greeting ?? [],
     handle: async (message: ClientMessage): Promise<ServerMessage[]> => {
       handled.push(message);
-      return opts.replies?.(message) ?? [];
+      return (await opts.replies?.(message)) ?? [];
     },
   };
   const transport = serve({
@@ -364,6 +364,26 @@ test("session channels reach only the sockets watching them, until they unwatch 
   b.transport.signal(rows, "sessions");
   await Bun.sleep(50);
   expect(list.inbox).toEqual([]);
+});
+
+test("a socket's requests are handled and answered in the order it sent them, even when an earlier one is slow", async () => {
+  const b = boot(tempHome(), {
+    replies: async (m) => {
+      if (m.type === "watch_sessions") await Bun.sleep(40);
+      return [{ type: "error", message: m.type }];
+    },
+  });
+  const { token } = await pairPhone(b);
+  const app = connect(b, { bearer: token, query: "?protocol=3" });
+  await app.next("hello");
+  app.send({ type: "watch_sessions" });
+  app.send({ type: "watch_session", sessionId: "s1", after: null });
+  app.send({ type: "unwatch_session", sessionId: "s1" });
+  await until(() => app.inbox.length === 3, "three answers");
+
+  expect(app.inbox).toEqual(["watch_sessions", "watch_session", "unwatch_session"].map((message) => ({ type: "error", message })));
+  expect(b.handled.map((m) => m.type)).toEqual(["watch_sessions", "watch_session", "unwatch_session"]);
+  expect(b.transport.watchers("s1" as SessionId)).toBe(0);
 });
 
 test("uploads up to the frame limit reach the hub; a frame over it closes the socket", async () => {

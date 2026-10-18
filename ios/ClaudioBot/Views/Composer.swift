@@ -10,11 +10,19 @@ struct Composer: View {
 
     @Environment(BridgeClient.self) private var client
     @Environment(AppStore.self) private var store
-    @State private var text = ""
+    #if DEBUG
+    @State private var draft = Demo.draft?.draft ?? ComposerDraft()
+    @State private var caret = Demo.draft?.caret ?? 0
+    #else
+    @State private var draft = ComposerDraft()
+    @State private var caret = 0
+    #endif
+    /// Where the menu the user closed with Escape started, so it stays closed until a new trigger.
+    @State private var closedMenuAt: Int?
     @State private var uploads: [Upload] = []
     @State private var problem: String?
     @State private var dictation = Dictation()
-    @State private var dictationBase = ""
+    @State private var dictationBase = ComposerDraft()
     @State private var pickingPhotos = false
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var takingPhoto = false
@@ -29,11 +37,23 @@ struct Composer: View {
     }
 
     private var canSend: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !uploads.isEmpty
+        !draft.isBlank || !uploads.isEmpty
+    }
+
+    private var menu: ComposerMenu? {
+        let menu = ComposerMenu.at(
+            caret, in: draft, chat: bot, features: store.features, bots: Array(store.bots.values),
+            connectors: store.connectors[bot.id] ?? [], commands: store.commands[bot.id] ?? []
+        )
+        return menu?.trigger.range.location == closedMenuAt ? nil : menu
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let menu {
+                ComposerMenuView(menu: menu, onMention: { pick($0, in: menu) }, onCommand: { pick($0, in: menu) })
+                    .transition(.opacity.combined(with: .offset(y: 6)))
+            }
             if !uploads.isEmpty { pendingUploads }
             if let note = problem ?? dictation.failure {
                 Text(note).font(.footnote).foregroundStyle(AvatarColor.amber.color).padding(.horizontal, 8)
@@ -41,7 +61,10 @@ struct Composer: View {
             HStack(alignment: .bottom, spacing: 10) {
                 attachMenu
                 HStack(alignment: .bottom, spacing: 6) {
-                    PromptTextView(text: $text, placeholder: placeholder, maxLines: 6)
+                    PromptTextView(
+                        draft: $draft, caret: $caret, placeholder: placeholder, maxLines: 6,
+                        tokenColor: tokenColor, onReturn: pickFirst, onEscape: closeMenu
+                    )
                         .padding(.vertical, 11)
                         .padding(.leading, 16)
                     micButton
@@ -54,6 +77,10 @@ struct Composer: View {
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
+        .animation(.snappy(duration: 0.2), value: menu?.trigger.kind)
+        .onChange(of: draft.trigger(caret: caret)?.range.location) { _, location in
+            if location != closedMenuAt { closedMenuAt = nil }
+        }
         .photosPicker(isPresented: $pickingPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
@@ -95,10 +122,13 @@ struct Composer: View {
             if dictation.isRecording {
                 dictation.stop()
             } else {
-                dictationBase = text
+                dictationBase = draft
                 Task {
                     await dictation.start { transcript in
-                        text = dictationBase.isEmpty ? transcript : dictationBase + " " + transcript
+                        var spoken = dictationBase
+                        spoken.append(dictationBase.text.isEmpty ? transcript : " " + transcript)
+                        draft = spoken
+                        caret = (spoken.text as NSString).length
                     }
                 }
             }
@@ -152,14 +182,42 @@ struct Composer: View {
         }
     }
 
+    /// A bot mention reads in that bot's color, a connector in the link color.
+    private func tokenColor(_ mention: Mention) -> Color {
+        if case .bot(let id, _) = mention, let mentioned = store.bots[id] { return mentioned.avatar.color.accent }
+        return Theme.link
+    }
+
+    private func pick(_ candidate: MentionCandidate, in menu: ComposerMenu) {
+        caret = draft.pick(candidate.mention, replacing: menu.trigger.range)
+    }
+
+    private func pick(_ command: Command, in menu: ComposerMenu) {
+        caret = draft.pick(command: command.name, replacing: menu.trigger.range)
+    }
+
+    /// Return picks the menu's first row. A menu only shows while something matches, so there always is one.
+    private func pickFirst() -> Bool {
+        guard let menu else { return false }
+        switch menu {
+        case .mentions(_, let candidates): if let first = candidates.first { pick(first, in: menu) }
+        case .commands(_, let commands): if let first = commands.first { pick(first, in: menu) }
+        }
+        return true
+    }
+
+    private func closeMenu() {
+        closedMenuAt = menu?.trigger.range.location
+    }
+
     private func send() {
-        let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
         dictation.stop()
-        let send = ClientMessage.send(botId: bot.id, text: message, uploads: uploads, clientId: UUID().uuidString)
+        let send = draft.send(to: bot.id, uploads: uploads, clientId: UUID().uuidString)
         store.sendStarted(send)
         client.send(send)
-        text = ""
+        draft = ComposerDraft()
+        caret = 0
         uploads = []
         problem = nil
         sends += 1

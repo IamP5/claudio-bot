@@ -109,6 +109,26 @@ private func backspace(_ draft: inout ComposerDraft, caret: inout Int) {
         #expect(plain?["mentions"] == nil)
     }
 
+    @Test func anEditReadFromTheNewTextMovesTokensAndABackspaceIntoOneTakesItWhole() {
+        var draft = ComposerDraft()
+        var caret = 0
+        typed("hi @eng", into: &draft, caret: &caret)
+        caret = draft.pick(.bot(id: BotID("b1"), name: "engineer"), replacing: draft.trigger(caret: caret)!.range)
+        #expect(draft.text == "hi @engineer ")
+
+        caret = draft.edit(to: "oh hi @engineer ", caret: 3)
+        #expect(caret == 3)
+        #expect(draft.tokens.map(\.range) == [NSRange(location: 6, length: 9)])
+        caret = draft.edit(to: "oh hi @engineer", caret: 15)
+        #expect(draft.mentions.count == 1)
+        caret = draft.edit(to: "oh hi @enginee", caret: 14)
+        #expect(draft.text == "oh hi ")
+        #expect(caret == 6)
+        #expect(draft.mentions.isEmpty)
+        #expect(draft.edit(to: "oh hi 👋", caret: 8) == 8)
+        #expect(draft.text == "oh hi 👋")
+    }
+
     @Test func committedTextTheDraftDidNotSeeKeepsOnlyTokensThatStillReadTheirName() {
         var draft = ComposerDraft()
         var caret = 0
@@ -152,6 +172,40 @@ private func backspace(_ draft: inout ComposerDraft, caret: inout Int) {
         #expect(github.mentionState == "connected")
         #expect(linear.mentionState == "needs auth")
         #expect(Connector(name: "x", status: .failed, enabled: true).mentionState == "error")
+    }
+}
+
+@Suite struct ComposerMenuTests {
+    private let review = Command(name: "review", description: "Review the open PR", argumentHint: "", source: .skill)
+
+    private func menu(_ text: String, chat: Bot = digest, features: Set<Feature> = [.mentions, .commands]) -> ComposerMenu? {
+        let draft = ComposerDraft(text: text)
+        return ComposerMenu.at(
+            (text as NSString).length, in: draft, chat: chat, features: features,
+            bots: [engineer, lead, digest, crew], connectors: [github], commands: [review]
+        )
+    }
+
+    @Test func eachMenuWaitsForItsFeature() {
+        #expect(menu("@eng", features: []) == nil)
+        #expect(menu("/re", features: [.mentions]) == nil)
+        if case .mentions(_, let found)? = menu("@eng") { #expect(found.map(\.name) == ["Engineering Lead", "engineer"]) } else { Issue.record("no @ menu") }
+        if case .commands(_, let found)? = menu("/re") { #expect(found == [review]) } else { Issue.record("no / menu") }
+    }
+
+    @Test func aGroupHasNoCommandsAndNoConnectorsToMention() {
+        #expect(menu("/re", chat: crew) == nil)
+        if case .mentions(_, let found)? = menu("@", chat: crew) {
+            #expect(found.map(\.name) == ["news digest", "engineer", "Engineering Lead"])
+        } else {
+            Issue.record("no @ menu in a group")
+        }
+    }
+
+    @Test func aQueryThatMatchesNothingClosesTheMenu() {
+        #expect(menu("@zzz") == nil)
+        #expect(menu("@engineer please") == nil)
+        #expect(menu("/zzz") == nil)
     }
 }
 

@@ -1,12 +1,17 @@
 import SwiftUI
 
-/// "To: Start a chat with…": Create new Bot first, then every bot, hidden ones included.
+/// "To: Start a chat with…": Create new Bot, Create group chat, then every bot, hidden ones included.
 struct NewChatView: View {
     @Environment(AppModel.self) private var app
     @Environment(AppStore.self) private var store
     @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    #if DEBUG
+    @State private var creatingGroup = Demo.groupPick != nil
+    #else
+    @State private var creatingGroup = false
+    #endif
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -38,10 +43,22 @@ struct NewChatView: View {
                                 dismiss()
                                 app.createBot()
                             }
+                            if store.has(.groups) {
+                                row {
+                                        Image(systemName: "person.2")
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundStyle(Theme.secondary)
+                                            .frame(width: 30, height: 30)
+                                            .background(Theme.raised, in: Circle())
+                                        Text("Create group chat")
+                                } action: {
+                                    creatingGroup = true
+                                }
+                            }
                         }
                         ForEach(store.bots(matching: query)) { bot in
                             row {
-                                AvatarView(avatar: bot.avatar, size: 30)
+                                BotAvatar(bot: bot, size: 30)
                                 Text(bot.name)
                                 if bot.hidden {
                                     Text("Hidden").font(.caption).foregroundStyle(Theme.tertiary)
@@ -57,6 +74,7 @@ struct NewChatView: View {
                 }
             }
             .background(Theme.background)
+            .navigationDestination(isPresented: $creatingGroup) { NewGroupView() }
             .navigationTitle("New chat")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -71,17 +89,19 @@ struct NewChatView: View {
     }
 
     private func row<Label: View>(@ViewBuilder _ label: () -> Label, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                label()
-                Spacer()
-            }
-            .font(.system(size: 16))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
-            .contentShape(Rectangle())
+        Button(action: action) { rowLabel(label) }
+            .buttonStyle(.plain)
+    }
+
+    private func rowLabel<Label: View>(@ViewBuilder _ label: () -> Label) -> some View {
+        HStack(spacing: 12) {
+            label()
+            Spacer()
         }
-        .buttonStyle(.plain)
+        .font(.system(size: 16))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .contentShape(Rectangle())
     }
 }

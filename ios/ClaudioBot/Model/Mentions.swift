@@ -84,6 +84,29 @@ struct ComposerDraft: Equatable, Sendable {
         return range
     }
 
+    /// Applies the edit that turned the text into newText, with the caret just after what was typed, and returns where
+    /// the caret goes. UIKit reports only the result of some edits, so the edit is read from what stayed the same on
+    /// either side of the caret. A backspace into a token still takes the whole token.
+    mutating func edit(to newText: String, caret: Int) -> Int {
+        let old = Array(text.utf16)
+        let new = Array(newText.utf16)
+        guard old != new else { return caret }
+        let caret = min(max(caret, 0), new.count)
+        var suffix = 0
+        while suffix < min(old.count, new.count - caret), old[old.count - 1 - suffix] == new[new.count - 1 - suffix] {
+            suffix += 1
+        }
+        var prefix = 0
+        while prefix < min(old.count, new.count) - suffix, old[prefix] == new[prefix] {
+            prefix += 1
+        }
+        let range = NSRange(location: prefix, length: old.count - suffix - prefix)
+        let inserted = String(decoding: new[prefix..<(new.count - suffix)], as: UTF16.self)
+        let replaced = replace(range, with: inserted)
+        if replaced == range && text != newText { sync(to: newText) }
+        return replaced.location + (new.count - suffix - prefix)
+    }
+
     /// Puts a token where the trigger was, followed by a space, and returns where the caret goes.
     mutating func pick(_ mention: Mention, replacing range: NSRange) -> Int {
         guard let label = mention.label else { return range.location }
@@ -199,6 +222,36 @@ enum MentionMenu {
         let matches = { (name: String) in query.isEmpty || name.localizedCaseInsensitiveContains(query) }
         return (members + others).filter { matches($0.name) }.map(MentionCandidate.bot)
             + connectors.filter { $0.enabled && matches($0.name) }.map(MentionCandidate.connector)
+    }
+}
+
+/// The list above the composer, for the trigger at the caret. It shows only while something matches.
+enum ComposerMenu: Equatable {
+    case mentions(ComposerTrigger, [MentionCandidate])
+    case commands(ComposerTrigger, [Command])
+
+    var trigger: ComposerTrigger {
+        switch self {
+        case .mentions(let trigger, _), .commands(let trigger, _): trigger
+        }
+    }
+
+    /// "@" needs a bridge with mentions. "/" needs commands, and a group has none: its members answer, not a session.
+    static func at(
+        _ caret: Int, in draft: ComposerDraft, chat: Bot, features: Set<Feature>,
+        bots: [Bot], connectors: [Connector], commands: [Command]
+    ) -> ComposerMenu? {
+        guard let trigger = draft.trigger(caret: caret) else { return nil }
+        switch trigger.kind {
+        case .mention:
+            guard features.contains(.mentions) else { return nil }
+            let found = MentionMenu.candidates(trigger.query, in: chat, bots: bots, connectors: chat.isGroup ? [] : connectors)
+            return found.isEmpty ? nil : .mentions(trigger, found)
+        case .command:
+            guard features.contains(.commands), !chat.isGroup else { return nil }
+            let found = CommandMenu.matches(commands, query: trigger.query)
+            return found.isEmpty ? nil : .commands(trigger, found)
+        }
     }
 }
 

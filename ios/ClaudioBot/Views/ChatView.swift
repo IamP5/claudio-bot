@@ -20,8 +20,9 @@ struct ChatView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                        ChatRowView(row: row, bot: bot, onPeer: open)
-                            .padding(.top, index == 0 ? 8 : Self.gap(between: rows[index - 1], and: row))
+                        let opensRun = Timeline.opensRun(rows, at: index)
+                        ChatRowView(row: row, bot: bot, onPeer: open, onExchange: openExchange, opensRun: opensRun)
+                            .padding(.top, index == 0 ? 8 : opensRun ? 14 : Self.gap(between: rows[index - 1], and: row))
                             .transition(arrival)
                     }
                     ForEach(store.proposedFacts(by: bot)) { fact in
@@ -32,9 +33,21 @@ struct ChatView: View {
                         SpendWarning(bot: bot, spend: spend, onChangeCap: openProfile)
                             .padding(.top, 14)
                     }
+                    let working = store.members(of: bot).filter { $0.status == .working }
+                    // A group types through its members, so the row names the ones at work.
+                    if bot.isGroup && (!working.isEmpty || bot.status == .working) {
+                        TypingRow(
+                            avatars: working.isEmpty ? store.members(of: bot).prefix(1).map(\.avatar) : working.map(\.avatar),
+                            text: GroupRules.typing(working.map(\.name))
+                        ) {
+                            client.send(.stop(botId: botId))
+                        }
+                        .padding(.top, 12)
+                        .transition(arrival)
+                    }
                     switch bot.status {
-                    case .working:
-                        TypingRow(avatar: bot.avatar) { client.send(.stop(botId: botId)) }
+                    case .working where !bot.isGroup:
+                        TypingRow(avatars: [bot.avatar]) { client.send(.stop(botId: botId)) }
                             .padding(.top, 12)
                             .transition(arrival)
                         ActivityLine(botId: botId)
@@ -119,6 +132,13 @@ struct ChatView: View {
                     .accessibilityLabel("More")
                 }
             }
+            // The "/" menu and the connectors the "@" menu offers. A group has neither: its members answer.
+            .task(id: store.has(.commands)) {
+                if store.has(.commands), !bot.isGroup { client.send(.commands(botId: botId)) }
+            }
+            .task(id: store.has(.mentions) && store.has(.connectors)) {
+                if store.has(.mentions), store.has(.connectors), !bot.isGroup { client.send(.connectors(botId: botId)) }
+            }
         }
     }
 
@@ -158,6 +178,15 @@ struct ChatView: View {
         }
     }
 
+    /// An exchange with another bot opens what they said, on a bridge that serves it. Otherwise it opens that bot.
+    private func openExchange(_ peer: Peer) {
+        if case .bot(let id, _, _) = peer, store.has(.exchanges), store.bots[id] != nil {
+            router.path.append(.botExchange(botId, peer: id))
+        } else {
+            open(peer)
+        }
+    }
+
     private func open(_ peer: Peer) {
         switch peer {
         case .agent(let id, _): router.path.append(.exchange(id))
@@ -178,7 +207,7 @@ struct HeaderPill: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            AvatarView(avatar: bot.avatar, size: 26, animated: bot.status == .working)
+            BotAvatar(bot: bot, size: 26, animated: bot.status == .working)
             Text(bot.name)
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.white)
@@ -193,14 +222,19 @@ struct HeaderPill: View {
 }
 
 struct TypingRow: View {
-    let avatar: Avatar
+    let avatars: [Avatar]
+    var text = "Typing…"
     let onStop: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
             HStack(spacing: 10) {
-                AvatarView(avatar: avatar, size: 28, animated: true)
-                Text("Typing…")
+                HStack(spacing: -8) {
+                    ForEach(Array(avatars.prefix(3).enumerated()), id: \.offset) { _, avatar in
+                        AvatarView(avatar: avatar, size: 28, animated: true)
+                    }
+                }
+                Text(text)
                     .font(.subheadline)
                     .foregroundStyle(Theme.secondary)
             }

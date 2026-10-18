@@ -45,6 +45,7 @@ struct MainView: View {
                         switch route {
                         case .profile(let bot, let tab): ProfileView(botId: bot, tab: tab)
                         case .exchange(let agent): ExchangeView(agentId: agent)
+                        case .botExchange(let bot, let peer): ExchangeView(botId: bot, peer: peer)
                         case .file(let bot, let path): FileView(botId: bot, path: path)
                         case .routine(let bot, let routine): RoutineView(botId: bot, routineId: routine)
                         }

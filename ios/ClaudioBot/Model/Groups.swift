@@ -34,6 +34,12 @@ extension ExchangeMessage {
     }
 }
 
+extension ChatRow {
+    var isSeparator: Bool {
+        if case .separator = self { true } else { false }
+    }
+}
+
 extension Timeline {
     /// Whether this row opens a run of messages from one sender, so it carries the sender's avatar and name.
     static func opensRun(_ rows: [ChatRow], at index: Int) -> Bool {

@@ -3,7 +3,8 @@ import Foundation
 
 /// `-demo` fills the store with sample bots through the reducer, without a bridge.
 /// `-demoScreen home|newchat|chat|profile|links|library|file|agent|digest|engineer|factory|pair|settings|routine|approval`
-/// opens a screen directly for screenshots. The pairing and connection states have their own:
+/// opens a screen directly for screenshots. `mention|chip|command` open a chat with the composer mid-sentence, and
+/// `group|groupprofile|newgroup|botexchange` the group and bot exchange screens. The pairing and connection states have their own:
 /// `pairconfirm|outdated` (unpaired), `confirm|unrecognized|error|oldbridge` (paired).
 @MainActor
 enum Demo {
@@ -24,7 +25,12 @@ enum Demo {
         default: break
         }
         let oldBridge = screen == "oldbridge"
-        store.apply(.hello(Hello(protocol: oldBridge ? 2 : Wire.protocolVersion, features: screen == "live" ? [.activity] : [], machine: "MacBook Pro", userName: "Alex", bots: bots)))
+        let features: [Feature] = switch screen {
+        case "live": [.activity]
+        case "oldbridge": []
+        default: [.mentions, .commands, .exchanges, .groups, .connectors]
+        }
+        store.apply(.hello(Hello(protocol: oldBridge ? 2 : Wire.protocolVersion, features: features, machine: "MacBook Pro", userName: "Alex", bots: bots)))
         if !oldBridge { store.apply(.devices(devices)) }
         for (bot, messages) in conversations {
             store.apply(.conversation(botId: BotID(bot), messages: messages))
@@ -59,6 +65,15 @@ enum Demo {
             router.selection = BotID("news")
             router.path = [.routine(BotID("news"), RoutineID("r1"))]
         case "approval", "live": router.selection = BotID("release")
+        case "mention", "chip", "command": router.selection = BotID("claude")
+        case "group": router.selection = BotID("crew")
+        case "groupprofile":
+            router.selection = BotID("crew")
+            router.path = [.profile(BotID("crew"))]
+        case "newgroup": router.showingNewChat = true
+        case "botexchange":
+            router.selection = BotID("maker")
+            router.path = [.botExchange(BotID("maker"), peer: BotID("standup"))]
         case "homelive":
             // A bot further down posts a question, so Home moves it to the top with the dot and badge.
             Task {
@@ -78,6 +93,30 @@ enum Demo {
             store.apply(.error(message: "That card already closed."))
         case "oldbridge": router.showingSettings = true
         default: break
+        }
+    }
+
+    /// The bots already ticked when `newgroup` opens the group picker.
+    static var groupPick: [BotID]? {
+        screen == "newgroup" ? [BotID("engineer"), BotID("news")] : nil
+    }
+
+    /// What the composer holds when a screen opens mid-sentence: the "@" menu, a picked token, or the "/" menu.
+    static var draft: (draft: ComposerDraft, caret: Int)? {
+        switch screen {
+        case "mention":
+            return (ComposerDraft(text: "Ask @n"), 6)
+        case "chip":
+            var draft = ComposerDraft(text: "@")
+            var caret = draft.pick(.bot(id: BotID("engineer"), name: "engineer"), replacing: NSRange(location: 0, length: 1))
+            draft.append("check PR #148 with @")
+            caret = draft.pick(.connector(name: "github"), replacing: NSRange(location: (draft.text as NSString).length - 1, length: 1))
+            draft.append("before the release")
+            return (draft, (draft.text as NSString).length)
+        case "command":
+            return (ComposerDraft(text: "/"), 1)
+        default:
+            return nil
         }
     }
 
@@ -102,10 +141,44 @@ enum Demo {
             answered.answer = .option(option)
             store.apply(.message(botId: botId, message: .question(id: id, at: at, card: answered)))
             return
+        case let .commands(botId):
+            store.apply(.commands(botId: botId, commands: commands))
+            return
+        case let .connectors(botId):
+            store.apply(.connectors(botId: botId, connectors: connectors))
+            return
+        case let .exchange(botId, peer):
+            let messages = botId == BotID("maker") && peer == BotID("standup") ? makerExchange : []
+            store.apply(.exchange(botId: botId, peer: peer, messages: messages))
+            return
+        case let .createGroup(ref, name, members):
+            let id = BotID("group-\(ref.prefix(8))")
+            store.apply(.bot(Bot(
+                id: id, name: name, title: nil, avatar: Avatar(shape: .circle, color: .gray), pinned: false, hidden: false,
+                status: .idle, unread: 0, question: nil, preview: "", lastAt: .now, createdAt: .now, routines: [],
+                kind: .group, members: members
+            )))
+            store.apply(.conversation(botId: id, messages: []))
+            store.apply(.created(ref: ref, botId: id))
+            return
+        case let .updateBot(botId, patch):
+            guard var bot = store.bots[botId] else { return }
+            if let name = patch.name { bot.name = name }
+            if let title = patch.title { bot.title = title }
+            if let avatar = patch.avatar { bot.avatar = avatar }
+            if let pinned = patch.pinned { bot.pinned = pinned }
+            if let hidden = patch.hidden { bot.hidden = hidden }
+            if let members = patch.members { bot.members = members }
+            store.apply(.bot(bot))
+            return
+        case let .deleteBot(botId, _):
+            store.apply(.botRemoved(botId))
+            return
         default: break
         }
-        guard case let .send(botId, text, _, _, _) = msg, var bot = store.bots[botId] else { return }
-        store.apply(.message(botId: botId, message: me(UUID().uuidString, .now, text)))
+        guard case let .send(botId, text, _, _, mentions) = msg, var bot = store.bots[botId] else { return }
+        store.apply(.message(botId: botId, message: .user(id: MessageID(UUID().uuidString), at: .now, text: text, attachments: [], mentions: mentions)))
+        if bot.isGroup { return answerInGroup(bot, mentions: mentions, store: store) }
         bot.status = .working
         store.apply(.bot(bot))
         Task {
@@ -116,6 +189,23 @@ enum Demo {
             store.apply(.message(botId: botId, message: say(UUID().uuidString, .now, "On it. I'll check it against main and report back with anything that blocks a merge.")))
             bot.status = .idle
             store.apply(.bot(bot))
+        }
+    }
+
+    /// The first member the user mentioned, or the first member, types for a moment and answers in the group.
+    private static func answerInGroup(_ group: Bot, mentions: [Mention], store: AppStore) {
+        let mentioned = mentions.compactMap { if case .bot(let id, _) = $0, group.members.contains(id) { id } else { nil } }.first
+        guard var member = (mentioned ?? group.members.first).flatMap({ store.bots[$0] }) else { return }
+        let before = member.status
+        member.status = .working
+        store.apply(.bot(member))
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            store.apply(.message(botId: group.id, message: .bot(
+                id: MessageID(UUID().uuidString), at: .now, text: "On it. I'll post here when it's done.", from: member.id
+            )))
+            member.status = before
+            store.apply(.bot(member))
         }
     }
 
@@ -182,6 +272,12 @@ enum Demo {
                 routine("r4", "bot-checkup", "0 9 * * 1", "Mondays at 9:00 AM", enabled: false),
                 routine("r5", "weekly-review", "0 17 * * 5", "Fridays at 5:00 PM", enabled: false),
             ]),
+        Bot(
+            id: BotID("crew"), name: "launch crew", title: nil, avatar: Avatar(shape: .circle, color: .blue), pinned: false,
+            hidden: false, status: .idle, unread: 0, question: nil,
+            preview: "Got it. I'll tag v2.5.0 as soon as engineer says CI is green.", lastAt: ago(minutes: 20),
+            createdAt: at(1, 9, 0), routines: [], kind: .group, members: [BotID("engineer"), BotID("release"), BotID("news")]
+        ),
     ]
 
     private static func say(_ id: String, _ date: Date, _ text: String) -> Message {
@@ -246,7 +342,7 @@ enum Demo {
             .note(id: MessageID("g6"), at: at(9, 18, 38), text: "Created {0}", refs: [
                 .bot(id: BotID("standup"), name: "standup notes", avatar: Avatar(shape: .star4, color: .blue)),
             ]),
-            .exchange(id: MessageID("g7"), at: at(9, 18, 39), peer: .bot(id: BotID("standup"), name: "standup notes", avatar: Avatar(shape: .star4, color: .blue)), sent: 1, received: 0),
+            .exchange(id: MessageID("g7"), at: at(9, 18, 39), peer: .bot(id: BotID("standup"), name: "standup notes", avatar: Avatar(shape: .star4, color: .blue)), sent: 1, received: 1),
             say("g8", at(9, 18, 40), "I made standup notes. Its one job is your daily summary: what you shipped yesterday, what's next, and what's blocking you."),
             say("g9", at(9, 18, 40), "If you hate it, long-press it in the list and choose Delete."),
         ]),
@@ -262,6 +358,27 @@ enum Demo {
         ("standup", [
             say("k1", at(8, 9, 2), "Yesterday: 3 PRs merged, 1 bug filed, release on track. Today: review the checkout tests and pair on the login fix."),
         ]),
+        ("crew", [
+            .user(
+                id: MessageID("t1"), at: ago(minutes: 26),
+                text: "@engineer what's left before Friday's release? @release captain cut it once CI is green.", attachments: [],
+                mentions: [.bot(id: BotID("engineer"), name: "engineer"), .bot(id: BotID("release"), name: "release captain")]
+            ),
+            .bot(id: MessageID("t2"), at: ago(minutes: 24), text: "Two things. The checkout smoke tests in [PR #148](\(pr)148) need your review, and the flaky login test is still running in the cloud.", from: BotID("engineer")),
+            .bot(id: MessageID("t3"), at: ago(minutes: 24), text: "I'll say here when both are green.", from: BotID("engineer")),
+            .bot(id: MessageID("t4"), at: ago(minutes: 20), text: "Got it. I'll tag v2.5.0 as soon as engineer says CI is green, and I'll post the changelog here first.", from: BotID("release")),
+        ]),
+    ]
+
+    static let makerExchange: [ExchangeMessage] = [
+        ExchangeMessage(
+            id: MessageID("x1"), at: at(9, 18, 39), from: BotID("maker"),
+            text: "Hi standup notes. I made you for Alex. Each weekday at 9:00, post what Alex shipped yesterday, what's next and what's blocking, in three short lines."
+        ),
+        ExchangeMessage(
+            id: MessageID("x2"), at: at(9, 18, 40), from: BotID("standup"),
+            text: "Got it. I'll read yesterday's merged PRs and the open issues, and keep it to three lines."
+        ),
     ]
 
     static let agents: [Agent] = [
@@ -277,6 +394,20 @@ enum Demo {
         AgentMessage(id: MessageID("am2"), at: at(5, 23, 0), from: .agent, text: "The tests pass locally, but the payment step timed out twice in the headless browser."),
         AgentMessage(id: MessageID("am3"), at: at(5, 23, 2), from: .bot, text: "Commit, push and open the PR first. Then look at the timeout. If it fails a third time, mark that test as skipped and say why in the PR."),
         AgentMessage(id: MessageID("am4"), at: at(5, 23, 49), from: .agent, text: "PR #148 is open with 6 tests for cart, address, payment and the receipt. All pass. The payment timeout was a missing wait on the card form."),
+    ]
+
+    static let commands: [Command] = [
+        Command(name: "review", description: "Review the open pull request and list what blocks a merge", argumentHint: "[pr]", source: .skill),
+        Command(name: "release-notes", description: "Draft release notes from the commits since the last tag", argumentHint: "<version>", source: .skill),
+        Command(name: "superpowers:brainstorm", description: "Explore an idea with questions before any code", argumentHint: "", source: .skill),
+        Command(name: "compact", description: "Summarize the conversation so far to free up context", argumentHint: "[instructions]", source: .builtin),
+        Command(name: "clear", description: "Start a fresh session. The bot keeps its notes and memory", argumentHint: "", source: .builtin),
+    ]
+
+    static let connectors: [Connector] = [
+        Connector(name: "github", status: .connected, enabled: true),
+        Connector(name: "linear", status: .needsAuth, enabled: true),
+        Connector(name: "sentry", status: .failed, enabled: true),
     ]
 
     static let library: [LibraryFile] = [

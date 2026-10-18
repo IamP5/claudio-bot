@@ -408,8 +408,11 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
         try c.encode(routines, forKey: .routines)
         try c.encode(dailyCapUsd, forKey: .dailyCapUsd)
         try c.encode(muted, forKey: .muted)
-        try c.encodeIfPresent(spentTodayUsd, forKey: .spentTodayUsd)
-        try c.encodeIfPresent(capUsd, forKey: .capUsd)
+        // A bridge with spend sends capUsd beside spentTodayUsd, null when there is no cap.
+        if let spentTodayUsd {
+            try c.encode(spentTodayUsd, forKey: .spentTodayUsd)
+            try c.encode(capUsd, forKey: .capUsd)
+        }
     }
 }
 

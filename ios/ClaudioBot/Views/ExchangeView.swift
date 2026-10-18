@@ -182,7 +182,8 @@ struct ExchangeView: View {
     /// Cloud agents run on claude.ai, which the bridge does not meter, so they have no line.
     static func spendLine(_ agent: Agent) -> String? {
         guard let spend = agent.spend else { return nil }
-        return spend.reached ? "Used its \(Money.text(spend.limitUsd)) budget" : "Spent \(spend.text) budget"
+        guard let budget = spend.limitUsd else { return "Spent \(spend.text)" }
+        return spend.reached ? "Used its \(Money.text(budget)) budget" : "Spent \(spend.text) budget"
     }
 
     private func actions(_ agent: Agent) -> some View {

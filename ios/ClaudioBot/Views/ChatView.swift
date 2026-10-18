@@ -29,8 +29,8 @@ struct ChatView: View {
                         ProposedFactCard(bot: bot, fact: fact)
                             .padding(.top, 14)
                     }
-                    if let spend = bot.spend, spend.nearLimit {
-                        SpendWarning(bot: bot, spend: spend, onChangeCap: openProfile)
+                    if let spend = bot.spend, let cap = spend.limitUsd, spend.nearLimit {
+                        SpendWarning(bot: bot, spend: spend, cap: cap, onChangeCap: openProfile)
                             .padding(.top, 14)
                     }
                     let working = GroupRules.typists(store.members(of: bot), line: ActivityLine.text(in: store, botId: botId))

@@ -804,10 +804,23 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(b.spend?.nearLimit == true)
         #expect(b.spend?.reached == false)
         #expect(b.spend?.text == "$8.00 of $10.00")
-        #expect(SpendWarning.text(b, b.spend!).hasPrefix("bot b1 has spent $8.00 of $10.00 today."))
+        #expect(SpendWarning.text(b, b.spend!, cap: 10).hasPrefix("bot b1 has spent $8.00 of $10.00 today."))
         b.spentTodayUsd = 10
-        #expect(SpendWarning.text(b, b.spend!).hasPrefix("bot b1 reached today's $10.00 cap."))
+        #expect(SpendWarning.text(b, b.spend!, cap: 10).hasPrefix("bot b1 reached today's $10.00 cap."))
         #expect(Spend(spentUsd: 0, limitUsd: 0).reached, "a cap of 0 holds all background work")
+    }
+
+    @Test func aBotWithNoCapStillShowsTodaysSpendButNeverWarnsOrReachesIt() {
+        var b = bot("b1")
+        b.spentTodayUsd = 123.4
+        b.capUsd = nil
+        let spend = try! #require(b.spend, "no cap is not a bridge without spend")
+        #expect(spend.text == "$123.40")
+        #expect(spend.fraction == nil)
+        #expect(!spend.nearLimit && !spend.reached)
+        #expect(SpendingSection.capLabel(b) == "No cap")
+        #expect(!SpendingSection.footer(spend).contains("At the cap"))
+        #expect(SpendingSection.footer(Spend(spentUsd: 1, limitUsd: 5)).contains("At the cap"))
     }
 
     @Test func theDailyCapRowShowsTheOwnCapOrTheDefaultAndSendsNullForDefault() throws {
@@ -847,6 +860,8 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(ExchangeView.spendLine(agent) == "Spent $1.20 of $5.00 budget")
         agent.spentUsd = 5
         #expect(ExchangeView.spendLine(agent) == "Used its $5.00 budget")
+        agent.budgetUsd = nil
+        #expect(ExchangeView.spendLine(agent) == "Spent $5.00", "an agent with no budget still shows its spend")
     }
 
     @Test func theDeleteDialogSaysTheFolderGoesToTrashAndNamesWorktreesLeftBehind() {

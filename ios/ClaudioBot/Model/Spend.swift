@@ -1,23 +1,25 @@
 import Foundation
 
-/// Spend against a limit: a bot's day against its daily cap, or an agent's lifetime against its budget.
-/// The amounts are Claude Code's own cost estimates, as the bridge's ledger summed them.
+/// Spend, against a limit when there is one: a bot's day against its daily cap, or an agent's lifetime against its
+/// budget. The amounts are Claude Code's own cost estimates, as the bridge's ledger summed them.
 struct Spend: Equatable, Sendable {
     let spentUsd: Double
-    let limitUsd: Double
+    /// nil: no limit, so nothing waits on spend.
+    let limitUsd: Double?
 
     /// The share at which the chat warns that background work will soon stop.
     static let warnAt = 0.8
 
-    var fraction: Double {
-        limitUsd > 0 ? spentUsd / limitUsd : 1
+    /// nil without a limit.
+    var fraction: Double? {
+        limitUsd.map { $0 > 0 ? spentUsd / $0 : 1 }
     }
 
-    var reached: Bool { spentUsd >= limitUsd }
-    var nearLimit: Bool { fraction >= Self.warnAt }
+    var reached: Bool { limitUsd.map { spentUsd >= $0 } ?? false }
+    var nearLimit: Bool { (fraction ?? 0) >= Self.warnAt }
 
-    /// "$8.40 of $10.00".
-    var text: String { "\(Money.text(spentUsd)) of \(Money.text(limitUsd))" }
+    /// "$8.40 of $10.00", or "$8.40" without a limit.
+    var text: String { limitUsd.map { "\(Money.text(spentUsd)) of \(Money.text($0))" } ?? Money.text(spentUsd) }
 }
 
 enum Money {
@@ -59,15 +61,15 @@ enum Money {
 }
 
 extension Bot {
+    /// nil only from a bridge that predates spend. A bot with no cap still has today's spend.
     var spend: Spend? {
-        guard let spentTodayUsd, let capUsd else { return nil }
-        return Spend(spentUsd: spentTodayUsd, limitUsd: capUsd)
+        spentTodayUsd.map { Spend(spentUsd: $0, limitUsd: capUsd) }
     }
 }
 
 extension Agent {
+    /// nil for a cloud agent, which the bridge does not meter.
     var spend: Spend? {
-        guard let spentUsd, let budgetUsd else { return nil }
-        return Spend(spentUsd: spentUsd, limitUsd: budgetUsd)
+        spentUsd.map { Spend(spentUsd: $0, limitUsd: budgetUsd) }
     }
 }

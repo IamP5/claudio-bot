@@ -147,6 +147,15 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(details.first { $0.where == .cloud }?.spend == nil)
     }
 
+    @Test func aBotWithNoCapDecodesTodaysSpendWithNoLimit() throws {
+        let bots = try Fixture.server().compactMap { frame -> Bot? in
+            if case .bot(let bot) = frame.message { bot } else { nil }
+        }
+        let uncapped = try #require(bots.first { $0.muted })
+        #expect(uncapped.capUsd == nil)
+        #expect(uncapped.spend == Spend(spentUsd: 1.25, limitUsd: nil))
+    }
+
     @Test func aProtocol2HelloReadsAsProtocol2WithNoReplayRing() throws {
         let msg = try decode(ServerMessage.self, #"{"type":"hello","machine":"Mac","userName":"Alex","bots":[]}"#)
         guard case .hello(let hello) = msg else { Issue.record("not hello"); return }

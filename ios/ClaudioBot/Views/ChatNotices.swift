@@ -33,18 +33,19 @@ struct OfflineBar: View {
 struct SpendWarning: View {
     let bot: Bot
     let spend: Spend
+    let cap: Double
     let onChangeCap: () -> Void
 
-    static func text(_ bot: Bot, _ spend: Spend) -> String {
+    static func text(_ bot: Bot, _ spend: Spend, cap: Double) -> String {
         let head = spend.reached
-            ? "\(bot.name) reached today's \(Money.text(spend.limitUsd)) cap."
+            ? "\(bot.name) reached today's \(Money.text(cap)) cap."
             : "\(bot.name) has spent \(spend.text) today."
         return "\(head) At the cap, routines and agents wait until midnight. Messages you type still run."
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(Self.text(bot, spend), systemImage: "gauge.with.dots.needle.67percent")
+            Label(Self.text(bot, spend, cap: cap), systemImage: "gauge.with.dots.needle.67percent")
                 .font(.system(size: 14))
                 .foregroundStyle(.white)
             Button("Change the cap", action: onChangeCap)

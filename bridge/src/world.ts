@@ -554,11 +554,13 @@ export function toBot(bot: BotRecord, status: BotStatus): Omit<Bot, keyof BotSpe
 export const sortBots = <B extends Pick<Bot, "pinned" | "lastAt">>(bots: B[]): B[] =>
   [...bots].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastAt.localeCompare(a.lastAt));
 
+/** By id, then by name, then by title, ignoring case: a bot is often called by its role ("the engineer"). */
 export function findBot(world: World, ref: string): BotRecord | undefined {
   const byId = world.bots.get(ref as BotId);
   if (byId) return byId;
-  const name = ref.trim().toLowerCase();
-  return [...world.bots.values()].find((b) => b.name.toLowerCase() === name);
+  const key = ref.trim().toLowerCase();
+  const bots = [...world.bots.values()];
+  return bots.find((b) => b.name.toLowerCase() === key) ?? bots.find((b) => b.title?.trim().toLowerCase() === key);
 }
 
 const URL_PATTERN = /https?:\/\/[^\s<>()[\]"'`]+/g;

@@ -239,6 +239,16 @@ test("bots are found by id or by name, ignoring case", () => {
   expect(findBot(world, "nobody")).toBeUndefined();
 });
 
+test("a bot is found by its title when no bot has that name, and a name match wins over a title match", () => {
+  const world = emptyWorld();
+  const forge = { ...bot("forge"), title: "Engineer" };
+  world.bots.set(forge.id, forge);
+  expect(findBot(world, "engineer ")?.name).toBe("forge");
+  const named = bot("engineer");
+  world.bots.set(named.id, named);
+  expect(findBot(world, "Engineer")?.name).toBe("engineer");
+});
+
 test.each([
   [{ from: "user", text: "Fix it", attachments: [{ name: "a.png", mime: "image/png", path: "inbox/a.png" }] }, "[Alex]\nFix it\nAttached: inbox/a.png"],
   [{ from: "answer", question: "Which?", option: "B" }, '[Alex answered "Which?": B]'],

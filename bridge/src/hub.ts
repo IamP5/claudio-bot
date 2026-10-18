@@ -680,7 +680,7 @@ export function createHub(deps: HubDeps): Hub {
     messageBot(botId, a) {
       const from = owned(botId);
       const to = findBot(world, a.bot);
-      if (!to) return `No bot "${a.bot}". Bots: ${[...world.bots.values()].map((b) => b.name).join(", ")}.`;
+      if (!to) return `No bot "${a.bot}". Bots: ${[...world.bots.values()].map((b) => (b.title ? `${b.name} (${b.title})` : b.name)).join(", ")}.`;
       if (to.id === from.id) return "That is you.";
       logExchange(world, { id: newMessageId(), at: now(), from: from.id, text: a.text }, to.id);
       exchange(from, botPeer(to), "sent");

@@ -1276,6 +1276,20 @@ test("message_bot keeps the text of each message both ways, and the exchange fra
   expect(mirror).toMatchObject({ type: "exchange", botId: h.bo.id, peer: h.ana.id, messages: fromBo });
 });
 
+test("message_bot reaches a bot by its title, and a miss lists names with titles", async () => {
+  const h = await pair();
+  const [server, client] = InMemoryTransport.createLinkedPair();
+  await (h.anaQuery.options.mcpServers!.claudio as McpSdkServerConfigWithInstance).instance.connect(server);
+  const mcp = new Client({ name: "test", version: "1" });
+  await mcp.connect(client);
+  const sent = await mcp.callTool({ name: "message_bot", arguments: { bot: "release manager", text: "Cut it." } });
+  expect(sent.content).toEqual([{ type: "text", text: "Delivered to bo." }]);
+  await flush();
+  expect(h.q().received[0]).toContain("Cut it.");
+  const missed = await mcp.callTool({ name: "message_bot", arguments: { bot: "designer", text: "Hi." } });
+  expect(missed.content).toEqual([{ type: "text", text: 'No bot "designer". Bots: ana, bo (Release manager).' }]);
+});
+
 test("a pair that never exchanged text answers an empty list, and deleting a bot drops its pair's text", async () => {
   const h = await pair();
   expect(await h.hub.handle({ type: "exchange", botId: h.ana.id, peer: h.bo.id })).toEqual([{ type: "exchange", botId: h.ana.id, peer: h.bo.id, messages: [] }]);

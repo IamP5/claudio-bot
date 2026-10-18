@@ -93,7 +93,7 @@ export function botToolServer(botId: BotId, act: BotActions) {
     list_projects: tool("list_projects", "List the git projects on this Mac: name, path, branch and GitHub repo.", {}, () => reply(() => act.listProjects()), always),
     message_bot: tool(
       "message_bot",
-      "Send a message to another bot, by name or id.",
+      "Send a message to another bot, by name, title or id.",
       { bot: z.string().min(1), text: z.string().min(1) },
       (a) => reply(() => act.messageBot(botId, a)),
       always,

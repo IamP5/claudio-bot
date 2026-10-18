@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { BotId } from "../src/protocol";
-import { createSession, type TurnEnd } from "../src/session";
+import type { BotId, RoutineId, RunId } from "../src/protocol";
+import { createSession, WAKE_WAIT_MS, type TurnEnd } from "../src/session";
 import { emptySession, type Initiator } from "../src/world";
 import { flush } from "./hub-kit";
 import { player, replay, type Transcript } from "./transcript";
@@ -133,6 +133,36 @@ describe("a background task's wake turn, recorded", () => {
     const second = t.outbound[1]!.message.content as string;
     const toSecond = h.bound.filter((b) => b.turn === second && b.m.type === "assistant").map((b) => textOf(b.m)).filter((s) => s !== "");
     expect(toSecond).toEqual(["4"]);
+  });
+});
+
+describe("handing a session over to a new query, recorded", () => {
+  const routine: Initiator = { kind: "routine", run: { routineId: "r_1" as RoutineId, runId: "run_1" as RunId }, manual: false };
+
+  test("a routine held behind background work waits out the wake turn, then resumes the session on a query whose total continues", async () => {
+    const t = replay("background-wake-handoff");
+    const h = sessionOver(t);
+    await flush();
+    h.session.push({ kind: "envelope", text: t.outbound[0]!.message.content as string, initiator: { kind: "user" }, settles: null });
+    h.session.push({ kind: "envelope", text: t.outbound[1]!.message.content as string, initiator: routine, settles: null });
+    for (let i = 0; i < 4; i++) await flush();
+    h.player.done();
+    expect([0, 1].map((i) => h.finals(i).map((e) => (e.end.kind === "done" ? said(e.end.result) : e.end.kind)))).toEqual([[said(answerTo(t, 0))], ["4"]]);
+    expect(h.usage).toEqual([
+      { usd: answerTo(t, 0).total_cost_usd, initiator: "user" },
+      { usd: wakeOf(t).total_cost_usd, initiator: "system" },
+      { usd: answerTo(t, 1).total_cost_usd, initiator: "routine" },
+    ]);
+    expect(answerTo(t, 1).total_cost_usd).toBeGreaterThan(wakeOf(t).total_cost_usd);
+    expect(h.bound.filter((b) => b.m.type === "assistant" && textOf(b.m).startsWith("The background command")).map((b) => b.turn)).toEqual([null]);
+  });
+
+  test("Claude Code starts the wake turn well inside WAKE_WAIT_MS of the notification that announces it", () => {
+    const t = replay("background-wake-handoff");
+    const frames = recorded(t);
+    const notified = frames.findIndex((m) => m.type === "system" && m.subtype === "task_notification");
+    const init = frames.slice(notified).find((m) => m.type === "system" && m.subtype === "init")!;
+    expect(t.at.get(init)! - t.at.get(frames[notified]!)!).toBeLessThan(WAKE_WAIT_MS / 100);
   });
 });
 

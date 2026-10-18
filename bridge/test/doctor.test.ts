@@ -16,7 +16,9 @@ const healthy: Facts = {
   mainExists: true,
   envFrom: "plist",
   bun: { path: "/opt/homebrew/bin/bun", version: "1.3.14" },
-  claude: { asked: "claude", path: "/Users/me/.local/bin/claude", version: "2.1.0 (Claude Code)" },
+  claude: { asked: "claude", path: "/Users/me/.local/bin/claude", version: "2.1.301 (Claude Code)" },
+  config: { dir: "/Users/me/.claude", set: false, shellDir: "/Users/me/.claude" },
+  login: { kind: "in", how: "me@example.com (Claude Max)" },
   home: { path: "/Users/me/.claudiobot", mode: 0o700 },
   secrets: [{ path: "/Users/me/.claudiobot/state.json", mode: 0o600 }],
   state: { kind: "v3", bots: 2, devices: 1 },
@@ -38,7 +40,7 @@ describe("checks", () => {
     expect(findings.filter((f) => f.level !== "PASS")).toEqual([
       { level: "WARN", check: "mcp env", detail: expect.stringContaining("launchd does not read .zshrc") },
     ]);
-    expect(findings.map((f) => f.check)).toEqual(["macos", "service", "bun", "claude", "home", "secrets", "state", "health", "lock", "roots", "tailscale", "access", "lan", "home link", "mcp env"]);
+    expect(findings.map((f) => f.check)).toEqual(["macos", "service", "bun", "claude", "config", "login", "home", "secrets", "state", "health", "lock", "roots", "tailscale", "access", "lan", "home link", "mcp env"]);
   });
 
   const table: [string, string, Partial<Facts>, string, string][] = [
@@ -50,6 +52,14 @@ describe("checks", () => {
     ["bun", "missing", { bun: { path: null, version: null } }, "FAIL", "bun is not on PATH"],
     ["claude", "not on the service PATH", { claude: { asked: "claude", path: null, version: null } }, "FAIL", "claude does not resolve under the service PATH. Set CLAUDIOBOT_CLAUDE to its full path and run claudiobot install"],
     ["claude", "found but broken", { claude: { asked: "claude", path: "/x/claude", version: null } }, "FAIL", "/x/claude --version failed"],
+    ["claude", "older than the floor", { claude: { asked: "claude", path: "/x/claude", version: "2.1.299 (Claude Code)" } }, "WARN", "2.1.299 (Claude Code) at /x/claude is older than 2.1.301, the oldest Claude Code ClaudioBot is tested with. Run: claude update"],
+    ["config", "default", {}, "PASS", "Claude Code's config is /Users/me/.claude"],
+    ["config", "set for the service only", { config: { dir: "/c/svc", set: true, shellDir: "/Users/me/.claude" } }, "WARN", "the service reads Claude Code's config from /c/svc but this shell from /Users/me/.claude. Run claudiobot install from the shell whose config the bots should use"],
+    ["config", "the shell's, no service", { envFrom: "shell", installed: null, config: { dir: "/c/work", set: true, shellDir: "/c/work" } }, "PASS", "Claude Code's config is /c/work"],
+    ["login", "logged in", {}, "PASS", "logged in: me@example.com (Claude Max)"],
+    ["login", "logged out", { login: { kind: "out" } }, "FAIL", "claude is not logged in for /Users/me/.claude. Run: claude auth login"],
+    ["login", "logged out, own config dir", { login: { kind: "out" }, config: { dir: "/c/work", set: true, shellDir: "/c/work" } }, "FAIL", "claude is not logged in for /c/work. Run: CLAUDE_CONFIG_DIR=/c/work claude auth login"],
+    ["login", "unreadable", { login: { kind: "unknown", why: "Reading the Claude login took over 30 s" } }, "WARN", "could not read the login: Reading the Claude login took over 30 s"],
     ["home", "readable by others", { home: { path: "/h", mode: 0o755 } }, "WARN", "/h is 0755; other users can list it. Run: chmod 700 /h"],
     ["home", "not created yet", { home: { path: "/h", mode: null } }, "WARN", "/h does not exist yet; the bridge creates it on first start"],
     ["secrets", "token readable by others", { secrets: [{ path: "/h/token", mode: 0o644 }] }, "FAIL", "/h/token is 0644. Run: chmod 600 /h/token"],
@@ -96,6 +106,10 @@ describe("checks", () => {
     ]);
     expect(link({ new: { kind: "other" } })[0]!.level).toBe("FAIL");
     expect(levels(link({ homeSet: true, oldEnvSet: true }))).toEqual(["WARN", "PASS"]);
+  });
+
+  test("no login row when there is no claude to ask", () => {
+    expect(findingsFor("login", { login: null })).toEqual([]);
   });
 
   test("no MCP reminder when nothing runs under launchd", () => {
@@ -166,6 +180,7 @@ function world(opts: { plistEnv?: Record<string, string> } = {}) {
     platform: "darwin",
     env,
     homeDir: root,
+    login: async () => ({ email: "me@example.com", subscriptionType: "Claude Max", apiProvider: "firstParty" }),
   };
   return { root, home, v2, target, deps };
 }
@@ -199,6 +214,35 @@ describe("gather", () => {
     const missing = world({ plistEnv: { PATH: "/usr/bin" } });
     missing.deps.env = { ...missing.deps.env, PATH: "/svc/bin" };
     expect((await gather(missing.deps, missing.target)).claude.path).toBeNull();
+  });
+
+  test("asks claude for the login with the config dir the service sees, never the shell's", async () => {
+    const asked: Record<string, string | undefined>[] = [];
+    const set = world({ plistEnv: { PATH: "/svc/bin:/usr/bin", CLAUDE_CONFIG_DIR: "/c/svc" } });
+    set.deps.env = { ...set.deps.env, CLAUDE_CONFIG_DIR: "/c/shell" };
+    set.deps.login = async (path, env) => (asked.push({ path, CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR, PATH: env.PATH }), { tokenSource: "none", apiProvider: "firstParty" });
+    const facts = await gather(set.deps, set.target);
+    expect(facts.config).toEqual({ dir: "/c/svc", set: true, shellDir: "/c/shell" });
+    expect(facts.login).toEqual({ kind: "out" });
+
+    const unset = world({ plistEnv: { PATH: "/svc/bin:/usr/bin" } });
+    unset.deps.env = { ...unset.deps.env, CLAUDE_CONFIG_DIR: "/c/shell" };
+    unset.deps.login = set.deps.login;
+    expect((await gather(unset.deps, unset.target)).config.dir).toBe(join(unset.root, ".claude"));
+    expect(asked).toEqual([
+      { path: "/svc/bin/claude", CLAUDE_CONFIG_DIR: "/c/svc", PATH: "/svc/bin:/usr/bin" },
+      { path: "/svc/bin/claude", CLAUDE_CONFIG_DIR: undefined, PATH: "/svc/bin:/usr/bin" },
+    ]);
+  });
+
+  test("a login read that fails is a WARN, not a crash", async () => {
+    const found = world({ plistEnv: { PATH: "/svc/bin:/usr/bin" } });
+    found.deps.login = async () => Promise.reject(new Error("Reading the Claude login took over 30 s"));
+    expect(check(await gather(found.deps, found.target)).find((f) => f.check === "login")).toEqual({
+      level: "WARN",
+      check: "login",
+      detail: "could not read the login: Reading the Claude login took over 30 s",
+    });
   });
 
   test("an unreadable state.json is a FAIL, not a crash", async () => {

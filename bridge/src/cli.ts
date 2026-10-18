@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import * as fs from "node:fs";
 import { homedir } from "node:os";
 import { lanAddresses } from "./address";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline/promises";
+import { readAccount, strictMcp } from "./claudeCode";
 import { doctor, serviceView, status, type DoctorDeps } from "./doctor";
 import {
   capturedEnv,
@@ -111,6 +113,8 @@ async function main(argv: string[]): Promise<number> {
     platform: process.platform,
     env: process.env,
     homeDir: homedir(),
+    login: (claude, env) =>
+      readAccount(query, { pathToClaudeCodeExecutable: claude, env, cwd: homedir(), settingSources: ["user"], ...strictMcp(), mcpServers: {} }),
   };
 
   switch (command) {

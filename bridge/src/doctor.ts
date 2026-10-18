@@ -1,7 +1,9 @@
+import type { AccountInfo } from "@anthropic-ai/claude-agent-sdk";
 import type * as nodeFs from "node:fs";
 import { join } from "node:path";
 import { accessLine, accessOf, type Access } from "./access";
 import { bridgeUrls, tailnetName } from "./address";
+import { claudeConfigDir, loginOf, MIN_CLAUDE, olderThan, type Login } from "./claudeCode";
 import { lockPathOf, pidIn } from "./lock";
 import { projectRoots } from "./projects";
 import { launchctl, readInstalled, type Exec, type InstalledPlist, type LaunchdState, type ServiceTarget } from "./service";
@@ -24,6 +26,8 @@ export type DoctorDeps = {
   /** The CLI's own environment, used where no plist is installed. */
   env: Record<string, string | undefined>;
   homeDir: string;
+  /** The account a query of `claude` under `env` reports, read without running a turn. */
+  login: (claude: string, env: Record<string, string | undefined>) => Promise<AccountInfo>;
 };
 
 export type Level = "PASS" | "WARN" | "FAIL";
@@ -49,6 +53,10 @@ export type Facts = {
   access: Access;
   bun: { path: string | null; version: string | null };
   claude: { asked: string; path: string | null; version: string | null };
+  /** Claude Code's config dir as the service resolves it (set: from CLAUDE_CONFIG_DIR), and as this shell does. */
+  config: { dir: string; set: boolean; shellDir: string };
+  /** null: no claude to ask. */
+  login: Login | { kind: "unknown"; why: string } | null;
   home: { path: string; mode: number | null };
   secrets: { path: string; mode: number }[];
   state: StateFacts;
@@ -162,6 +170,9 @@ export async function gather(deps: DoctorDeps, target: ServiceTarget): Promise<F
   const claudePath = deps.which(askedClaude, servicePath);
   const tailscalePath = deps.which("tailscale", servicePath) ?? deps.which("tailscale", deps.env.PATH ?? "") ?? (fs.existsSync(TAILSCALE_APP) ? TAILSCALE_APP : null);
 
+  const claudeEnv: Record<string, string | undefined> = { ...deps.env, PATH: servicePath, CLAUDE_CONFIG_DIR: view.env.CLAUDE_CONFIG_DIR };
+  if (!claudeEnv.CLAUDE_CONFIG_DIR) delete claudeEnv.CLAUDE_CONFIG_DIR;
+
   const explicitRoots = Boolean(view.env.CLAUDIOBOT_ROOTS);
   const roots = projectRoots(explicitRoots ? view.env : {}).map((path) => {
     const exists = fs.existsSync(path) && fs.statSync(path).isDirectory();
@@ -185,8 +196,10 @@ export async function gather(deps: DoctorDeps, target: ServiceTarget): Promise<F
     claude: {
       asked: askedClaude,
       path: claudePath,
-      version: claudePath ? await version(exec, [claudePath, "--version"], { ...deps.env, PATH: servicePath }) : null,
+      version: claudePath ? await version(exec, [claudePath, "--version"], claudeEnv) : null,
     },
+    config: { dir: claudeConfigDir(view.env, deps.homeDir), set: Boolean(view.env.CLAUDE_CONFIG_DIR), shellDir: claudeConfigDir(deps.env, deps.homeDir) },
+    login: claudePath ? await deps.login(claudePath, claudeEnv).then(loginOf, (e) => ({ kind: "unknown" as const, why: errorText(e) })) : null,
     home: { path: view.home, mode: modeOf(fs, view.home) },
     secrets: ["token", "state.json"].flatMap((name) => {
       const path = join(view.home, name);
@@ -237,7 +250,22 @@ const CHECKS: Check[] = [
     const where = f.envFrom === "plist" ? "the service PATH" : "this shell's PATH (no service installed)";
     if (!f.claude.path) return fail("claude", `${f.claude.asked} does not resolve under ${where}. Set CLAUDIOBOT_CLAUDE to its full path and run claudiobot install`);
     if (!f.claude.version) return fail("claude", `${f.claude.path} --version failed`);
+    if (olderThan(f.claude.version, MIN_CLAUDE))
+      return warn("claude", `${f.claude.version} at ${f.claude.path} is older than ${MIN_CLAUDE}, the oldest Claude Code ClaudioBot is tested with. Run: claude update`);
     return pass("claude", `${f.claude.version} at ${f.claude.path}, found under ${where}`);
+  },
+
+  (f) =>
+    f.envFrom === "plist" && f.config.dir !== f.config.shellDir
+      ? warn("config", `the service reads Claude Code's config from ${f.config.dir} but this shell from ${f.config.shellDir}. Run claudiobot install from the shell whose config the bots should use`)
+      : pass("config", `Claude Code's config is ${f.config.dir}`),
+
+  (f) => {
+    const l = f.login;
+    if (l === null) return [];
+    if (l.kind === "in") return pass("login", `logged in: ${l.how}`);
+    if (l.kind === "unknown") return warn("login", `could not read the login: ${l.why}`);
+    return fail("login", `claude is not logged in for ${f.config.dir}. Run: ${f.config.set ? `CLAUDE_CONFIG_DIR=${f.config.dir} ` : ""}claude auth login`);
   },
 
   (f) => {

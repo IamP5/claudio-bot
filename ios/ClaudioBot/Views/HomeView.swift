@@ -237,13 +237,14 @@ struct BotRow: View {
         let display = RowDisplay(bot)
         let activity = bot.status == .working ? ActivityLine.text(in: store, botId: bot.id) : nil
         HStack(spacing: 14) {
-            BotAvatar(bot: bot, size: 46, needsAttention: display.needsAttention)
-            VStack(alignment: .leading, spacing: 3) {
+            BotAvatar(bot: bot, size: 46, needsAttention: display.needsAttention, motion: bot.motion)
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(bot.name)
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
                         .lineLimit(1)
+                        .layoutPriority(1)
                     BotStatusChip(status: bot.status)
                     Spacer(minLength: 8)
                     if bot.pinned {
@@ -268,13 +269,13 @@ struct BotRow: View {
                     .lineLimit(1)
                     Spacer(minLength: 4)
                     if display.unreadDot {
-                        Circle().fill(Theme.unread).frame(width: 9, height: 9)
+                        Circle().fill(Theme.unread).frame(width: 8, height: 8)
                             .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
                     }
                 }
             }
         }
-        .padding(.vertical, 14)
+        .padding(.vertical, 16)
         .animation(.snappy(duration: 0.2), value: display.unreadDot)
         .animation(.snappy(duration: 0.2), value: display.needsAttention)
         .contentShape(Rectangle())
@@ -383,12 +384,7 @@ private struct InitialsItem: ToolbarContent {
     let action: () -> Void
 
     var body: some ToolbarContent {
-        if #available(iOS 26.0, *) {
-            ToolbarItem(placement: .topBarLeading) { button }
-                .sharedBackgroundVisibility(.hidden)
-        } else {
-            ToolbarItem(placement: .topBarLeading) { button }
-        }
+        ToolbarItem(placement: .topBarLeading) { button }
     }
 
     private var button: some View {
@@ -397,7 +393,10 @@ private struct InitialsItem: ToolbarContent {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 36, height: 36)
-                .background(Theme.letter, in: Circle())
+                // On iOS 26 the toolbar's glass is the circle, matching search and + beside it.
+                .background {
+                    if #unavailable(iOS 26.0) { Circle().fill(Theme.letter) }
+                }
                 .overlay(alignment: .topTrailing) {
                     if proposals > 0 {
                         Text("\(proposals)")

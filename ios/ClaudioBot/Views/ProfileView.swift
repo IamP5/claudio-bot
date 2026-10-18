@@ -14,6 +14,8 @@ struct ProfileView: View {
     @State private var name = ""
     @State private var label = ""
     @FocusState private var editing: Bool
+    @Namespace private var tabs
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(botId: BotID, tab: Tab = .info) {
         self.botId = botId
@@ -24,7 +26,10 @@ struct ProfileView: View {
         if let bot = store.bots[botId] {
             ScrollView {
                 VStack(spacing: 20) {
-                    BotAvatar(bot: bot, size: 96, needsAttention: bot.question != nil, animated: bot.status == .working)
+                    BotAvatar(bot: bot, size: 96, needsAttention: bot.question != nil, motion: bot.motion)
+                        .id(bot.avatar)
+                        .transition(reduceMotion ? .opacity : .scale(scale: 0.85).combined(with: .opacity))
+                        .animation(.snappy(duration: 0.25), value: bot.avatar)
                         .padding(.top, 8)
                     nameCard(bot)
                     if bot.isGroup {
@@ -109,17 +114,22 @@ struct ProfileView: View {
         HStack(spacing: 24) {
             ForEach(Tab.allCases, id: \.self) { item in
                 Button {
-                    tab = item
+                    withAnimation(.snappy(duration: 0.25)) { tab = item }
                 } label: {
                     VStack(spacing: 8) {
                         Text(item.rawValue)
                             .font(.system(size: 16, weight: tab == item ? .semibold : .regular))
                             .foregroundStyle(tab == item ? .white : Theme.tertiary)
-                        Rectangle()
-                            .fill(tab == item ? Color.white : .clear)
-                            .frame(height: 2)
+                        ZStack {
+                            Rectangle().fill(.clear)
+                            if tab == item {
+                                Rectangle().fill(.white).matchedGeometryEffect(id: "underline", in: tabs)
+                            }
+                        }
+                        .frame(height: 2)
                     }
                     .fixedSize()
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
@@ -127,6 +137,7 @@ struct ProfileView: View {
         }
         .padding(.horizontal, 8)
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
+        .sensoryFeedback(.selection, trigger: tab)
     }
 
     @ViewBuilder
@@ -271,7 +282,7 @@ struct AvatarPicker: View {
                             .padding(5)
                             .overlay(Circle().strokeBorder(bot.avatar.shape == shape ? Theme.secondary : .clear, lineWidth: 2).padding(-2))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pressable)
                     .accessibilityLabel(shape.rawValue)
                     .accessibilityAddTraits(bot.avatar.shape == shape ? .isSelected : [])
             }
@@ -286,7 +297,7 @@ struct AvatarPicker: View {
                             .padding(4)
                             .overlay(Circle().strokeBorder(bot.avatar.color == color ? Theme.secondary : .clear, lineWidth: 2))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pressable)
                     .accessibilityLabel(color.rawValue)
                     .accessibilityAddTraits(bot.avatar.color == color ? .isSelected : [])
             }
@@ -301,6 +312,8 @@ struct AvatarPicker: View {
                 .padding(16)
                 .disabled(bot.avatar == .standard)
         }
+        .animation(.snappy(duration: 0.2), value: bot.avatar)
+        .sensoryFeedback(.selection, trigger: bot.avatar)
     }
 }
 

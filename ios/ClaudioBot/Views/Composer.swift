@@ -11,6 +11,7 @@ struct Composer: View {
 
     @Environment(BridgeClient.self) private var client
     @Environment(AppStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     #if DEBUG
     @State private var draft = Demo.draft?.draft ?? ComposerDraft()
     @State private var caret = Demo.draft?.caret ?? 0
@@ -30,8 +31,14 @@ struct Composer: View {
     @State private var pickingFiles = false
     /// Counts sends, so each one taps the haptic engine once.
     @State private var sends = 0
+    @State private var stops = 0
 
     static let uploadLimit = 10 << 20
+    /// The mic, Send and Stop sit inside the field with the same inset on every side. A one-line field is then 44 pt,
+    /// the minimum touch target, and its corners stay concentric with theirs.
+    static let control: CGFloat = 36
+    static let inset: CGFloat = 4
+    static let field = control + 2 * inset
 
     private var placeholder: String {
         openQuestion ? "Type your answer, or talk about something else" : "Message \(bot.name)"
@@ -39,6 +46,21 @@ struct Composer: View {
 
     private var canSend: Bool {
         !draft.isBlank || !uploads.isEmpty
+    }
+
+    /// While the bot works an empty field offers Stop. Typing turns it back into Send, which queues the message.
+    private var showsStop: Bool {
+        bot.status == .working && !canSend
+    }
+
+    /// An empty field offers the mic and nothing to send. Once there is something to send, Send takes the mic's place.
+    /// Dictation keeps the mic up so it can be stopped while the words arrive.
+    private var showsMic: Bool {
+        !canSend || dictation.isRecording
+    }
+
+    private var swap: AnyTransition {
+        reduceMotion ? .opacity : .scale(scale: 0.5).combined(with: .opacity)
     }
 
     private var menu: ComposerMenu? {
@@ -66,13 +88,16 @@ struct Composer: View {
                         draft: $draft, caret: $caret, placeholder: placeholder, maxLines: 6,
                         tokenColor: tokenColor, onReturn: pickFirst, onEscape: closeMenu
                     )
-                        .padding(.vertical, 11)
+                        .padding(.vertical, 8)
+                        .frame(minHeight: Self.field)
                         .padding(.leading, 16)
-                    micButton
-                    sendButton
+                    if showsMic { micButton.transition(swap) }
+                    if canSend || showsStop { sendButton.transition(swap) }
                 }
-                .padding(.trailing, 5)
-                .glass(in: RoundedRectangle(cornerRadius: 23, style: .continuous))
+                .padding(.trailing, Self.inset)
+                .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.25, extraBounce: 0.12), value: showsMic)
+                .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.25, extraBounce: 0.12), value: canSend || showsStop)
+                .glass(in: RoundedRectangle(cornerRadius: Self.control / 2 + Self.inset, style: .continuous))
             }
         }
         .padding(.horizontal, 12)
@@ -112,8 +137,9 @@ struct Composer: View {
             Image(systemName: "plus")
                 .font(.system(size: 19, weight: .medium))
                 .foregroundStyle(.white)
-                .frame(width: 46, height: 46)
-                .glass(in: Circle())
+                .frame(width: Self.field, height: Self.field)
+                .glass(in: Circle(), interactive: true)
+                .contentShape(Circle())
         }
         .accessibilityLabel("Attach")
     }
@@ -138,27 +164,30 @@ struct Composer: View {
                 .font(.system(size: 17))
                 .foregroundStyle(dictation.isRecording ? bot.avatar.color.accent : Theme.secondary)
                 .symbolEffect(.pulse, isActive: dictation.isRecording)
-                .frame(width: 34, height: 36)
+                .frame(width: Self.control, height: Self.control)
         }
         .buttonStyle(.plain)
+        .padding(.bottom, Self.inset)
         .accessibilityLabel(dictation.isRecording ? "Stop dictation" : "Dictate")
     }
 
     private var sendButton: some View {
-        Button(action: send) {
-            Image(systemName: "arrow.up")
-                .font(.system(size: 16, weight: .bold))
+        Button {
+            if showsStop { stop() } else { send() }
+        } label: {
+            Image(systemName: showsStop ? "stop.fill" : "arrow.up")
+                .font(.system(size: showsStop ? 14 : 16, weight: .bold))
+                .contentTransition(.symbolEffect(.replace))
                 .foregroundStyle(bot.avatar.color.onAccent)
-                .frame(width: 36, height: 36)
-                .background(bot.avatar.color.accent, in: Circle())
-                .opacity(canSend ? 1 : 0.45)
-                .animation(.easeOut(duration: 0.15), value: canSend)
+                .frame(width: Self.control + 10, height: Self.control)
+                .background(bot.avatar.color.accent, in: Capsule())
         }
         .buttonStyle(.pressable)
-        .disabled(!canSend)
         .sensoryFeedback(.impact(weight: .light), trigger: sends)
-        .padding(.bottom, 5)
-        .accessibilityLabel("Send")
+        .sensoryFeedback(.impact(weight: .medium), trigger: stops)
+        .padding(.bottom, Self.inset)
+        .accessibilityLabel(showsStop ? "Stop" : "Send")
+        .accessibilityIdentifier(showsStop ? "stop" : "send")
     }
 
     private var pendingUploads: some View {
@@ -209,6 +238,11 @@ struct Composer: View {
 
     private func closeMenu() {
         closedMenuAt = menu?.trigger.range.location
+    }
+
+    private func stop() {
+        client.send(.stop(botId: bot.id))
+        stops += 1
     }
 
     private func send() {

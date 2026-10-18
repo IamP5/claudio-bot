@@ -203,7 +203,7 @@ private struct QuestionCardBody: View {
         }
         .padding(16)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .padding(.trailing, 20)
+        .padding(.trailing, 36)
         .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: answer)
         .sensoryFeedback(.selection, trigger: taps)
     }
@@ -292,7 +292,7 @@ private struct PermissionCardBody: View {
         }
         .padding(16)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .padding(.trailing, 20)
+        .padding(.trailing, 36)
         .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: answer)
         .sensoryFeedback(trigger: sent) { _, choice in
             choice.map { $0.allows ? .success : .warning }
@@ -395,7 +395,7 @@ private struct OptionRow: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }

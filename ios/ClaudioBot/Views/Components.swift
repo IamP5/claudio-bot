@@ -35,6 +35,50 @@ struct PressableStyle: ButtonStyle {
     }
 }
 
+/// A highlight that sweeps across text while a bot works. Reduce Motion leaves the text as it is.
+struct Shimmer: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        if reduceMotion {
+            content
+        } else {
+            content.overlay {
+                TimelineView(.animation(minimumInterval: 1 / 30)) { context in
+                    let sweep = -0.3 + 1.6 * context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.8) / 1.8
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: sweep - 0.25),
+                            .init(color: .white.opacity(0.85), location: sweep),
+                            .init(color: .clear, location: sweep + 0.25),
+                        ],
+                        startPoint: .leading, endPoint: .trailing
+                    )
+                }
+                .mask { content }
+                .allowsHitTesting(false)
+            }
+        }
+    }
+}
+
+extension View {
+    func shimmering() -> some View { modifier(Shimmer()) }
+}
+
+extension View {
+    /// Pins the composer under a scroll view. On iOS 26 it is a safe area bar, so the content scrolling beneath it
+    /// fades and blurs the way it does under the navigation bar.
+    @ViewBuilder
+    func composerBar(@ViewBuilder _ content: () -> some View) -> some View {
+        if #available(iOS 26.0, *) {
+            safeAreaBar(edge: .bottom, content: content)
+        } else {
+            safeAreaInset(edge: .bottom, content: content)
+        }
+    }
+}
+
 extension ButtonStyle where Self == PressableStyle {
     static var pressable: PressableStyle { PressableStyle() }
 }
@@ -110,11 +154,12 @@ struct ErrorToast: View {
 }
 
 extension View {
-    /// The floating glass look of the reference controls, with a plain fill before iOS 26.
+    /// The floating glass look of the reference controls, with a plain fill before iOS 26. `interactive` glass answers
+    /// a touch with the system's press shimmer. Use it on glass that is a button.
     @ViewBuilder
-    func glass<S: Shape>(in shape: S) -> some View {
+    func glass<S: Shape>(in shape: S, interactive: Bool = false) -> some View {
         if #available(iOS 26.0, *) {
-            glassEffect(.regular, in: shape)
+            glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
         } else {
             background(Theme.raised.opacity(0.92), in: shape)
         }
@@ -124,15 +169,15 @@ extension View {
 /// The lettered square in front of a question option.
 struct LetterBadge: View {
     let index: Int
-    var fill: Color = Theme.letter
-    var ink: Color = Theme.secondary
+    var fill: Color = .white.opacity(0.08)
+    var ink: Color = Theme.tertiary
 
     var body: some View {
         Text(String(UnicodeScalar(UInt8(65 + index % 26))))
-            .font(.system(size: 13, weight: .medium))
+            .font(.system(size: 12, weight: .medium))
             .foregroundStyle(ink)
-            .frame(width: 24, height: 24)
-            .background(fill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .frame(width: 22, height: 22)
+            .background(fill, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 }
 

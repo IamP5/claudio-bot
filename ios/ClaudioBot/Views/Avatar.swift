@@ -166,20 +166,44 @@ private struct Face {
     }
 }
 
+/// How alive an avatar looks. Marks in menus and lists of choices stay still, a bot at rest blinks and glances now and
+/// then, and a bot at work bobs, sways and looks around.
+enum AvatarMotion {
+    case still, idle, working
+}
+
+extension Bot {
+    var motion: AvatarMotion { status == .working ? .working : .idle }
+}
+
 /// The bot character: a flat body with two slanted eyes, plus the orange badge when it waits on the user.
 struct AvatarView: View {
     let avatar: Avatar
     var size: CGFloat = 40
     var needsAttention = false
-    /// Bobs and blinks while the bot is typing. Reduce Motion keeps the blink and drops the bob and sway.
-    var animated = false
+    /// Reduce Motion keeps the blink and drops the bob, the sway and the glances.
+    var motion = AvatarMotion.still
+    /// Spreads idle blinks so a list of bots doesn't blink in step.
+    var seed = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: !animated)) { context in
-            let t = animated ? context.date.timeIntervalSinceReferenceDate : 0
-            character(time: t)
+        Group {
+            switch motion {
+            case .still:
+                character(Pose())
+            case .idle:
+                KeyframeAnimator(initialValue: Pose(), repeating: true) { pose in
+                    character(pose)
+                } keyframes: { _ in
+                    idleKeyframes
+                }
+            case .working:
+                TimelineView(.animation(minimumInterval: 1 / 30)) { context in
+                    character(working(at: context.date.timeIntervalSinceReferenceDate))
+                }
+            }
         }
         .frame(width: size, height: size)
         .overlay(alignment: .bottomTrailing) {
@@ -192,11 +216,48 @@ struct AvatarView: View {
         .accessibilityHidden(true)
     }
 
-    private func character(time t: Double) -> some View {
+    /// One idle cycle: a glance to the side and back, then a blink. Each seed gets its own length and direction.
+    @KeyframesBuilder<Pose>
+    private var idleKeyframes: some Keyframes<Pose> {
+        let cycle = 3.8 + Double(abs(seed) % 29) / 10
+        let side: Double = seed.isMultiple(of: 2) ? 1 : -1
+        let glance = reduceMotion ? 0 : 0.035
+        KeyframeTrack(\.lid) {
+            LinearKeyframe(1, duration: cycle - 0.2)
+            CubicKeyframe(0.12, duration: 0.07)
+            CubicKeyframe(1, duration: 0.13)
+        }
+        KeyframeTrack(\.lookX) {
+            LinearKeyframe(0, duration: cycle * 0.25)
+            SpringKeyframe(side * glance, duration: 0.35, spring: .snappy)
+            LinearKeyframe(side * glance, duration: cycle * 0.3)
+            SpringKeyframe(0, duration: 0.35, spring: .snappy)
+            LinearKeyframe(0, duration: cycle * 0.45 - 0.7)
+        }
+        KeyframeTrack(\.lookY) {
+            LinearKeyframe(0, duration: cycle * 0.25)
+            SpringKeyframe(-glance * 0.5, duration: 0.35, spring: .snappy)
+            LinearKeyframe(-glance * 0.5, duration: cycle * 0.3)
+            SpringKeyframe(0, duration: 0.35, spring: .snappy)
+            LinearKeyframe(0, duration: cycle * 0.45 - 0.7)
+        }
+    }
+
+    private func working(at t: Double) -> Pose {
+        let blink = t.truncatingRemainder(dividingBy: 2.6) < 0.14
+        guard !reduceMotion else { return Pose(lid: blink ? 0.14 : 1) }
+        return Pose(
+            lid: blink ? 0.14 : 1,
+            lookX: sin(t * 1.9) * 0.04,
+            lookY: sin(t * 1.3) * 0.015,
+            bob: sin(t * 5) * 0.05,
+            sway: sin(t * 2.5) * 6
+        )
+    }
+
+    private func character(_ pose: Pose) -> some View {
         let face = Face.of(avatar.shape)
-        let moves = animated && !reduceMotion
-        let bob = moves ? sin(t * 5) * size * 0.05 : 0
-        let blink = animated && t.truncatingRemainder(dividingBy: 2.6) < 0.14
+        let look = CGSize(width: pose.lookX * size, height: pose.lookY * size)
         return ZStack {
             AvatarBody(shape: avatar.shape)
                 .fill(avatar.color.color)
@@ -204,21 +265,31 @@ struct AvatarView: View {
                     AvatarBody(shape: avatar.shape)
                         .fill(LinearGradient(colors: [.white.opacity(0.1), .clear, .black.opacity(0.06)], startPoint: .top, endPoint: .bottom))
                 )
-            eye(at: face.left, tilt: face.tilt, blink: blink)
-            eye(at: face.right, tilt: face.tilt, blink: blink)
+            eye(at: face.left, tilt: face.tilt, lid: pose.lid).offset(look)
+            eye(at: face.right, tilt: face.tilt, lid: pose.lid).offset(look)
         }
         .frame(width: size, height: size)
-        .rotationEffect(.degrees(moves ? sin(t * 2.5) * 6 : 0))
-        .offset(y: bob)
+        .rotationEffect(.degrees(pose.sway))
+        .offset(y: pose.bob * size)
     }
 
-    private func eye(at point: CGPoint, tilt: Double, blink: Bool) -> some View {
+    /// `lid` is how open the eye is, 1 wide open.
+    private func eye(at point: CGPoint, tilt: Double, lid: Double) -> some View {
         Capsule()
             .fill(Color(hex: 0x161616))
-            .frame(width: size * 0.095, height: size * (blink ? 0.03 : 0.21))
+            .frame(width: size * 0.095, height: size * 0.21 * max(lid, 0.14))
             .rotationEffect(.degrees(tilt))
             .position(x: point.x * size, y: point.y * size)
     }
+}
+
+/// Where the eyes and body are at one moment. Offsets are fractions of the avatar's size.
+struct Pose {
+    var lid = 1.0
+    var lookX = 0.0
+    var lookY = 0.0
+    var bob = 0.0
+    var sway = 0.0
 }
 
 struct AttentionBadge: View {

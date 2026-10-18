@@ -77,7 +77,7 @@ struct PairingView: View {
 
     private var header: some View {
         VStack(spacing: 14) {
-            AvatarView(avatar: .standard, size: 84)
+            AvatarView(avatar: .standard, size: 84, motion: .idle)
                 .padding(.top, 24)
             Text("Pair with your Mac")
                 .font(.largeTitle.bold())

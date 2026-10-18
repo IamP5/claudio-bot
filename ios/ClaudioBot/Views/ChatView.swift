@@ -39,17 +39,15 @@ struct ChatView: View {
                         TypingRow(
                             avatars: working.isEmpty ? store.members(of: bot).prefix(1).map(\.avatar) : working.map(\.avatar),
                             text: GroupRules.typing(working.map(\.name))
-                        ) {
-                            client.send(.stop(botId: botId))
-                        }
-                        .padding(.top, 12)
-                        .transition(arrival)
+                        )
+                        .padding(.top, 14)
+                        .transition(typing)
                     }
                     switch bot.status {
                     case .working where !bot.isGroup:
-                        TypingRow(avatars: [bot.avatar]) { client.send(.stop(botId: botId)) }
-                            .padding(.top, 12)
-                            .transition(arrival)
+                        TypingRow(avatars: [bot.avatar])
+                            .padding(.top, 14)
+                            .transition(typing)
                         ActivityLine(botId: botId)
                     case .unavailable:
                         Text("Claude Code could not start on your Mac. Your messages wait, and the bridge keeps trying.")
@@ -101,7 +99,17 @@ struct ChatView: View {
                         .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.8)))
                 }
             }
-            .scrollDismissesKeyboard(.interactively)
+            .scrollDismissesKeyboard(.immediately)
+            // Opening the keyboard is starting a reply, so the newest message rides up with it from wherever the
+            // list was. Moving a scrolled-up list by the keyboard's height can't be done reliably mid-transition.
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                followsBottom = true
+                position.scrollTo(edge: .bottom)
+            }
+            // A tap on the conversation puts the keyboard away. Simultaneous, so links and options still take the tap.
+            .simultaneousGesture(TapGesture().onEnded {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            })
             .background(Theme.background)
             .safeAreaInset(edge: .top) {
                 if OfflineBar.shows(store.connection) {
@@ -109,7 +117,7 @@ struct ChatView: View {
                         .frame(maxWidth: 760)
                 }
             }
-            .safeAreaInset(edge: .bottom) {
+            .composerBar {
                 Composer(bot: bot, openQuestion: store.openQuestion(in: botId) != nil) {
                     followsBottom = true
                     withAnimation { position.scrollTo(edge: .bottom) }
@@ -145,6 +153,15 @@ struct ChatView: View {
     /// New rows fade up a few points; under Reduce Motion they only fade.
     private var arrival: AnyTransition {
         reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 8))
+    }
+
+    /// The typing avatar pops in from its corner and shrinks back into it when the turn ends.
+    private var typing: AnyTransition {
+        if reduceMotion { return .opacity }
+        return .asymmetric(
+            insertion: .scale(scale: 0.5, anchor: .bottomLeading).combined(with: .opacity),
+            removal: .scale(scale: 0.6, anchor: .bottomLeading).combined(with: .opacity)
+        )
     }
 
     private func jumpToLatest() {
@@ -207,7 +224,7 @@ struct HeaderPill: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            BotAvatar(bot: bot, size: 26, animated: bot.status == .working)
+            BotAvatar(bot: bot, size: 26, motion: bot.motion)
             Text(bot.name)
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.white)
@@ -224,24 +241,20 @@ struct HeaderPill: View {
 struct TypingRow: View {
     let avatars: [Avatar]
     var text = "Typing…"
-    let onStop: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            HStack(spacing: 10) {
-                HStack(spacing: -8) {
-                    ForEach(Array(avatars.prefix(3).enumerated()), id: \.offset) { _, avatar in
-                        AvatarView(avatar: avatar, size: 28, animated: true)
-                    }
+            HStack(spacing: -8) {
+                ForEach(Array(avatars.prefix(3).enumerated()), id: \.offset) { _, avatar in
+                    AvatarView(avatar: avatar, size: 28, motion: .working)
                 }
-                Text(text)
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.secondary)
             }
-            .accessibilityElement(children: .combine)
-            Spacer(minLength: 8)
-            StopButton(action: onStop)
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(Theme.secondary)
+                .shimmering()
         }
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -255,29 +268,12 @@ struct JumpToLatestButton: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 40, height: 40)
-                .glass(in: Circle())
+                .glass(in: Circle(), interactive: true)
                 // The glass isn't hit-testable on its own, so without this a tap falls through to the list.
                 .contentShape(Circle())
         }
         .buttonStyle(.pressable)
         .accessibilityLabel("Jump to latest message")
         .accessibilityIdentifier("jumpToLatest")
-    }
-}
-
-/// Stops the turn in flight. Queued work the user typed still runs.
-struct StopButton: View {
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Label("Stop", systemImage: "stop.fill")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(Theme.raised, in: Capsule())
-        }
-        .buttonStyle(.pressable)
     }
 }

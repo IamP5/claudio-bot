@@ -174,6 +174,11 @@ enum Demo {
         case let .deleteBot(botId, _):
             store.apply(.botRemoved(botId))
             return
+        case let .stop(botId):
+            guard var bot = store.bots[botId] else { return }
+            bot.status = .idle
+            store.apply(.bot(bot))
+            return
         default: break
         }
         guard case let .send(botId, text, _, _, mentions) = msg, var bot = store.bots[botId] else { return }

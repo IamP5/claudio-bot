@@ -5,7 +5,7 @@ struct BotAvatar: View {
     let bot: Bot
     var size: CGFloat = 40
     var needsAttention = false
-    var animated = false
+    var motion = AvatarMotion.still
 
     @Environment(AppStore.self) private var store
 
@@ -13,7 +13,7 @@ struct BotAvatar: View {
         if bot.isGroup {
             GroupAvatar(avatars: store.members(of: bot).prefix(3).map(\.avatar), size: size)
         } else {
-            AvatarView(avatar: bot.avatar, size: size, needsAttention: needsAttention, animated: animated)
+            AvatarView(avatar: bot.avatar, size: size, needsAttention: needsAttention, motion: motion, seed: bot.id.hashValue)
         }
     }
 }

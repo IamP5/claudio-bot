@@ -16,6 +16,7 @@ import {
   USAGE_PARK_FALLBACK_MS,
   USAGE_PARK_MAX_MS,
   USAGE_PARK_SLACK_MS,
+  WAKE_WAIT_MS,
   classify,
   claudeExecutable,
   createSession,
@@ -670,6 +671,7 @@ function harness(
   const queries: FakeQuery[] = [];
   let disk = structuredClone(state);
   let changes = 0;
+  let dormant = 0;
   const session = createSession({
     actor: { kind: "bot", botId: "b_1" as BotId },
     state,
@@ -686,6 +688,7 @@ function harness(
     onMessage: (m, t) => messages.push({ m, turn: t }),
     onTurnEnd: (p, end) => ends.push({ id: p.id, text: p.text, pending: p, end }),
     onChange: () => changes++,
+    onDormant: () => dormant++,
     note: (text) => notes.push(text),
     persist:
       opts.persist ??
@@ -717,6 +720,9 @@ function harness(
     clock,
     get disk() {
       return disk;
+    },
+    get dormant() {
+      return dormant;
     },
     get changes() {
       return changes;
@@ -1895,6 +1901,168 @@ describe("turns a background task wakes", () => {
     idle.h.q().emit(rejected(resetsAt), apiErrorResult(0));
     await flush();
     expect(idle.h.account.parkedUntil).toBe(until);
+  });
+});
+
+const notified = (status = "completed") =>
+  ({ type: "system", subtype: "task_notification", task_id: "t1", status, output_file: "", summary: "done", uuid: `n${++uuid}`, session_id: "s_1" }) as unknown as SDKMessage;
+/** The init frame of a turn Claude Code starts on its own: it echoes no user message. */
+const wakeInit = () => ({ type: "system", subtype: "init", uuid: `i${++uuid}`, session_id: "s_1" }) as unknown as SDKMessage;
+const wakeResult = (cost: number) => resultMsg(cost, { result: "The build finished.", origin: { kind: "task-notification" } });
+const texts = (h: Harness) => h.messages.flatMap(({ m, turn }) => (m.type === "assistant" ? [[textOf(m.message.content as Content), turn?.text ?? null]] : []));
+
+describe("handing a query over to a new one", () => {
+  test("a held routine waits for the wake turn its background work announced, then for the old process to exit", async () => {
+    const { h } = await started("[a]");
+    const first = h.q();
+    first.emit(tasks(build), resultMsg(0.1));
+    await flush();
+    const r = h.push("[r]", routine, false, fired);
+    await flush();
+    first.process.lingers = true;
+    first.emit(notified(), tasks());
+    await flush();
+    expect([first.closed, h.queries.length]).toEqual([false, 1]);
+    first.emit(wakeInit(), said("The build finished."));
+    await flush();
+    await h.advance(WAKE_WAIT_MS);
+    expect([first.closed, h.queries.length]).toEqual([false, 1]);
+    first.emit(wakeResult(0.15));
+    await flush();
+    expect([first.closed, h.queries.length]).toEqual([true, 1]);
+    first.process.exit();
+    await flush();
+    expect([h.queries.length, h.q().received.map((x) => x.text)]).toEqual([2, ["[r]"]]);
+    h.q().emit(echoing(resultMsg(0.2), lastUuid(h)));
+    await flush();
+    expect(h.usage.map((u) => [u.cumulativeUsd, (u.initiator as Initiator).kind])).toEqual([
+      [0.1, "user"],
+      [0.15, "system"],
+      [0.2, "routine"],
+    ]);
+    expect(texts(h)).toEqual([["The build finished.", null]]);
+    expect(h.finals(r).map((e) => e.end.kind)).toEqual(["done"]);
+    expect(h.notes).toEqual([]);
+  });
+
+  test("a wake turn the notification announced but Claude Code never starts holds the routine for WAKE_WAIT_MS at most", async () => {
+    const { h } = await started("[a]");
+    const first = h.q();
+    first.emit(tasks(build), resultMsg(0.1));
+    await flush();
+    h.push("[r]", routine);
+    await flush();
+    first.emit(notified(), tasks());
+    await flush();
+    expect(h.session.nextDeadline()).toBe(new Date(h.clock.t + WAKE_WAIT_MS).toISOString());
+    await h.advance(WAKE_WAIT_MS - 1);
+    expect([first.closed, h.queries.length]).toEqual([false, 1]);
+    await h.advance(1);
+    expect([first.closed, h.q().received.map((x) => x.text)]).toEqual([true, ["[r]"]]);
+  });
+
+  test("a notification during the user's turn makes a held close wait for the wake turn that follows its result", async () => {
+    const { h, id } = await started("[a]");
+    const first = h.q();
+    first.emit(tasks(build));
+    await flush();
+    h.session.reopen();
+    first.emit(notified(), tasks(), echoing(resultMsg(0.1), lastUuid(h)));
+    await flush();
+    expect([h.finals(id).length, first.closed]).toEqual([1, false]);
+    first.emit(wakeInit(), said("The build finished."), wakeResult(0.15));
+    await flush();
+    expect(first.closed).toBe(true);
+    expect(texts(h)).toEqual([["The build finished.", null]]);
+  });
+
+  test("the idle close never cuts off a turn Claude Code runs on its own", async () => {
+    const { h } = await started("[a]");
+    const first = h.q();
+    first.emit(resultMsg(0.1), wakeInit());
+    await flush();
+    await h.advance(60 * 60_000);
+    expect(first.closed).toBe(false);
+    first.emit(wakeResult(0.15));
+    await flush();
+    await h.advance(15 * 60_000);
+    expect(first.closed).toBe(true);
+  });
+
+  test("an unattended turn whose background wait ran out stops the work, lets the old query report it, and opens after it exited", async () => {
+    const { h } = await started("[a]");
+    const first = h.q();
+    first.emit(tasks(build), resultMsg(0.1));
+    await flush();
+    const r = h.push("[r]", routine, false, fired);
+    await flush();
+    first.process.lingers = true;
+    await h.advance(BACKGROUND_WAIT_MS);
+    expect([first.stoppedTasks, first.closed, h.queries.length]).toEqual([["t1"], false, 1]);
+    expect(h.notes).toEqual(["Ana's background work stopped: npm run build."]);
+    first.emit(notified("stopped"), tasks(), wakeInit(), wakeResult(0.12));
+    await flush();
+    expect([first.closed, h.queries.length]).toEqual([true, 1]);
+    first.process.exit();
+    await flush();
+    expect(h.q().received.map((x) => x.text)).toEqual(["[r]"]);
+    h.q().emit(echoing(resultMsg(0.2), lastUuid(h)));
+    await flush();
+    expect(h.usage.map((u) => [u.cumulativeUsd, (u.initiator as Initiator).kind])).toEqual([
+      [0.1, "user"],
+      [0.12, "system"],
+      [0.2, "routine"],
+    ]);
+    expect(h.finals(r).map((e) => e.end.kind)).toEqual(["done"]);
+    expect(h.notes).toEqual(["Ana's background work stopped: npm run build."]);
+  });
+
+  test("background work that ignores the stop is cut off by closing the query, after WAKE_WAIT_MS more", async () => {
+    const { h } = await started("[a]");
+    const first = h.q();
+    first.emit(tasks(build), resultMsg(0.1));
+    await flush();
+    h.push("[r]", routine);
+    await flush();
+    await h.advance(BACKGROUND_WAIT_MS);
+    await h.advance(WAKE_WAIT_MS - 1);
+    expect([first.closed, h.queries.length]).toEqual([false, 1]);
+    await h.advance(1);
+    expect([first.closed, h.q().received.map((x) => x.text)]).toEqual([true, ["[r]"]]);
+    expect(h.notes).toEqual(["Ana's background work stopped: npm run build."]);
+  });
+
+  test.each([
+    ["an unattended turn", routine, () => {}],
+    ["an attended turn on a stale query", user, (h: Harness) => h.session.reopen()],
+  ] as const)("%s never opens a new query while the old one's process still runs", async (_, initiator, before) => {
+    const { h } = await started("[a]");
+    const first = h.q();
+    first.emit(resultMsg(0.1));
+    await flush();
+    first.process.lingers = true;
+    before(h);
+    h.push("[b]", initiator);
+    await flush();
+    await h.advance(60_000);
+    expect([first.closed, h.queries.length]).toEqual([true, 1]);
+    first.process.exit();
+    await flush();
+    expect([h.queries.length, h.q().received.map((x) => x.text)]).toEqual([2, ["[b]"]]);
+  });
+
+  test("a closed query whose process still runs keeps the session from going dormant, so no new session resumes it", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(resultMsg(0.1));
+    await flush();
+    h.q().process.lingers = true;
+    h.session.reopen();
+    await h.advance(1_000);
+    expect([h.q().closed, h.dormant]).toEqual([true, 0]);
+    h.q().process.exit();
+    await flush();
+    await h.advance(1_000);
+    expect(h.dormant).toBeGreaterThan(0);
   });
 });
 

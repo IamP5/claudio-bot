@@ -21,6 +21,20 @@ enum GroupRules {
         default: "\(names[0]), \(names[1]) and \(names.count - 2) more are typing…"
         }
     }
+
+    /// The members the bridge's activity line for the group names ("engineer is typing…"). The bridge sends that line
+    /// only for turns in this group, so a member busy in its own chat is never one. Longer names match first, so
+    /// "Engineering Lead" is not also read as a member called "Engineering".
+    static func typists(_ members: [Bot], line: String?) -> [Bot] {
+        guard var rest = line else { return [] }
+        var found: Set<BotID> = []
+        for member in members.sorted(by: { $0.name.count > $1.name.count }) {
+            guard let range = rest.range(of: member.name) else { continue }
+            found.insert(member.id)
+            rest.removeSubrange(range)
+        }
+        return members.filter { found.contains($0.id) }
+    }
 }
 
 extension Bot {

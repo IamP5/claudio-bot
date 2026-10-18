@@ -33,9 +33,9 @@ struct ChatView: View {
                         SpendWarning(bot: bot, spend: spend, onChangeCap: openProfile)
                             .padding(.top, 14)
                     }
-                    let working = store.members(of: bot).filter { $0.status == .working }
-                    // A group types through its members, so the row names the ones at work.
-                    if bot.isGroup && (!working.isEmpty || bot.status == .working) {
+                    let working = GroupRules.typists(store.members(of: bot), line: ActivityLine.text(in: store, botId: botId))
+                    // A group types through its members, so the row names the ones at work on it.
+                    if bot.isGroup && bot.status == .working {
                         TypingRow(
                             avatars: working.isEmpty ? store.members(of: bot).prefix(1).map(\.avatar) : working.map(\.avatar),
                             text: GroupRules.typing(working.map(\.name))

@@ -180,6 +180,7 @@ describe("taking on a session from the phone", () => {
     await sessions.sync();
     const frame = thread.findLast((t) => t.frame.type === "session_items")!.frame as Extract<ThreadChannelFrame, { type: "session_items" }>;
     expect(frame.removed).toEqual(["c_First" as never]);
+    expect(frame.items).toContainEqual(expect.objectContaining({ kind: "user", text: "First", queued: false }));
   });
 
   test("while the Claude app is busy on it the phone may not send, and a queued turn waits rather than runs beside it", async () => {

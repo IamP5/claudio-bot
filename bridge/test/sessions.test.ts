@@ -197,6 +197,19 @@ test("leaving a thread marks it visited; a later answer makes it unread until it
   expect(rowOf(await rowsOf(), PERMISSION).unread).toBe(false);
 });
 
+test("Mark as Read on a session never opened records the visit, and watching the list again answers the list as it is now", async () => {
+  await start();
+  expect(world.sessions.get(PERMISSION)?.visitedAt ?? null).toBeNull();
+  expect(await sessions.handle({ type: "unwatch_session", sessionId: PERMISSION })).toEqual([]);
+  expect(world.sessions.get(PERMISSION)?.visitedAt).toEqual(expect.any(String));
+
+  expect((await rowsOf()).map((r) => r.id).sort()).toEqual([PERMISSION, ASK].sort());
+  const later = "33333333-3333-4333-8333-333333333333" as SessionId;
+  install("own-plan", later);
+  await sessions.sync();
+  expect((await rowsOf()).map((r) => r.id).sort()).toEqual([PERMISSION, ASK, later].sort());
+});
+
 test("hide, rename through Claude Code, the mirror setting, and a tool's full output", async () => {
   await start();
   expect(await sessions.handle({ type: "session_set", sessionId: ASK, patch: { hidden: true } })).toEqual([]);

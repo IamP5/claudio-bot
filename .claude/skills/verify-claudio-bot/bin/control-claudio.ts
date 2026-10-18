@@ -6,7 +6,7 @@
 // Isolation follows bridge/scripts/e2e.ts: HOME stays real only for the Claude login; CLAUDIOBOT_HOME, roots and
 // worktrees point into the run folder; no SSH agent, no GitHub token, no claude.ai connectors; claude is a wrapper that
 // refuses --cloud; push goes to a local sink. The user's own bridge (~/.claudiobot, port 7878) is never touched.
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -216,9 +216,12 @@ const s = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async (req) => {
 console.log("ntfy-sink " + s.port);
 `,
   );
-  // setsid puts each process in its own session, so it outlives this command and the shell that ran it.
+  // setsid puts each process in its own session, so it outlives this command and the shell that ran it. stdout and
+  // stderr share one append-mode descriptor: two separate opens of the file overwrite each other's lines.
   const detach = (argv: string[], logFile: string, env: Record<string, string | undefined>) => {
-    const p = Bun.spawn(["perl", "-MPOSIX", "-e", "POSIX::setsid(); exec @ARGV", ...argv], { env, stdout: Bun.file(logFile), stderr: Bun.file(logFile), stdin: "ignore" });
+    const fd = openSync(logFile, "a");
+    const p = Bun.spawn(["perl", "-MPOSIX", "-e", "POSIX::setsid(); exec @ARGV", ...argv], { env, stdout: fd, stderr: fd, stdin: "ignore" });
+    closeSync(fd);
     p.unref();
     return p;
   };

@@ -156,7 +156,7 @@ export const server = [
     { id: "d1", name: "Alex's iPhone", createdAt: at, lastSeenAt: later, legacy: false, current: true },
     { id: "d0", name: "Paired before protocol 3", createdAt: at, lastSeenAt: null, legacy: true, current: false },
   ] },
-  { type: "pair_code", code: "K7QD-M2XP", expiresAt: "2026-10-16T12:10:00.000Z" },
+  { type: "pair_code", code: "K7QD-M2XP", expiresAt: "2026-10-16T12:10:00.000Z", urls: ["ws://mac.tail1234.ts.net:7878/ws", "ws://Mac.local:7878/ws", "ws://192.168.1.20:7878/ws"] },
   { type: "message", seq: 53, botId: "b1", message: { kind: "user", id: "m11", at, text: "Ship it", attachments: [], clientId: "c_9b1e" } },
   { type: "bot", seq: 54, bot: { ...bot, muted: true, spentTodayUsd: 1.25, capUsd: null } },
   {
@@ -242,6 +242,7 @@ export const client = [
   { type: "devices" },
   { type: "revoke_device", deviceId: "d0" },
   { type: "pair_code" },
+  { type: "presence", attended: false },
   { type: "send", botId: "b1", text: "Ship it", uploads: [], clientId: "c_9b1e" },
   { type: "update_bot", botId: "b1", patch: { muted: true } },
   { type: "memory" },

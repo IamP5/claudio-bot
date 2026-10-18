@@ -16,6 +16,7 @@ import { scanProjects } from "./projects";
 import { createPush, senderFromEnv } from "./push";
 import { serve, threadTopic } from "./serve";
 import { createClaudeApps, fakeDesktop, realAppsDeps } from "./claudeApps";
+import type { PairOffer } from "./protocol";
 import { claudeExecutable, ownPids } from "./session";
 import { bridgeHome, createSaver, loadWorld } from "./store";
 import { createStream } from "./stream";
@@ -92,7 +93,8 @@ if (migration.kind === "linked" || migration.kind === "moved_aside") holdLock(ho
 mkdirSync(home, { recursive: true, mode: 0o700 });
 
 const port = Number(process.env.CLAUDIOBOT_PORT ?? 7878);
-const machine = await machineName();
+// The names are read before the bridge listens, so no pair_code can arrive before the addresses it carries.
+const [machine, names] = await Promise.all([machineName(), readNames(run)]);
 const { world, firstRun } = loadWorld(home);
 const saver = createSaver(world, home, 250, log);
 const devices = createDevices({ world, persist: saver.schedule, now, announce });
@@ -138,7 +140,12 @@ const hub = createHub({
   },
 });
 
-const transport = serve({ devices, stream, hub, legacy, log, now, port });
+const transport = serve({ devices, stream, hub, legacy, log, now, port, offer });
+const urls = bridgeUrls(names, lanAddresses(), transport.port);
+
+function offer(): PairOffer {
+  return { ...devices.newCode(), urls };
+}
 
 function shutdown() {
   let saved = true;
@@ -156,8 +163,6 @@ function shutdown() {
   process.exit(saved ? 0 : 1);
 }
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, shutdown);
-
-const urls = bridgeUrls(await readNames(run), lanAddresses(), transport.port);
 
 console.log(`claudiobot bridge on ${machine}`);
 for (const url of urls) console.log(`  ${url}`);

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { BotId, MessageId, RoutineId, RunId } from "../src/protocol";
+import type { BotId, MessageId, RoutineId, RunId, SessionId } from "../src/protocol";
 import { newGroup } from "../src/groups";
 import { createSaver, flushNow, loadWorld, StateFileError } from "../src/store";
 import { emptySession, emptyWorld, exchangeBetween, logExchange, newBot, type Signature } from "../src/world";
@@ -368,6 +368,23 @@ test("groups and a group turn's envelope survive a save and a load, apart from t
   const old = freshHome();
   writeState(old, v3({ bots: [v3Bot] }));
   expect(loadWorld(old).world.groups.size).toBe(0);
+});
+
+test("the sessions overlay and the mirror setting survive a save and a load; a file from before them reads as none and auto", () => {
+  const home = freshHome();
+  const { world } = loadWorld(home);
+  const id = "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31" as SessionId;
+  world.sessions.set(id, { id, hidden: true, visitedAt: at });
+  (world.sessionPrefs as { mirror: string }).mirror = "tap";
+  flushNow(world, home);
+  const again = loadWorld(home).world;
+  expect(again.sessions.get(id)).toEqual({ id, hidden: true, visitedAt: at });
+  expect(again.sessionPrefs).toEqual({ mirror: "tap" });
+
+  const old = freshHome();
+  writeState(old, v3({ bots: [v3Bot] }));
+  expect(loadWorld(old).world.sessions.size).toBe(0);
+  expect(loadWorld(old).world.sessionPrefs).toEqual({ mirror: "auto" });
 });
 
 test("the saver debounces, and \"now\" writes before it returns", async () => {

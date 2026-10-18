@@ -128,7 +128,8 @@ async function connect(run: Run) {
       if (v !== undefined && v !== null && v !== false) return v;
       if (Date.now() > deadline) die(`timed out after ${seconds}s waiting for ${what}`);
       if (spent(run) > run.budgetUsd) die(`stopped: this run's ledger charged $${spent(run).toFixed(2)}, over its $${run.budgetUsd} budget`);
-      await Bun.sleep(250);
+      // Short, so the timings `sessions` and `thread` print measure the bridge rather than this wait.
+      await Bun.sleep(10);
     }
   };
   await waitFor(() => frames.some((f) => f.type === "hello"), "hello", 10);
@@ -250,6 +251,9 @@ console.log("ntfy-sink " + s.port);
     ENABLE_CLAUDEAI_MCP_SERVERS: "false",
   };
   for (const k of ["CLAUDEBOT_HOME", "SSH_AUTH_SOCK", "GH_TOKEN", "GITHUB_TOKEN", "CLAUDIOBOT_ALLOWED_DOMAINS", "CLAUDIOBOT_SANDBOX_STRICT_NETWORK", "CLAUDIOBOT_SANDBOX_GH"]) delete env[k];
+  // A Claude Code this helper runs inside (the desktop app, a terminal) leaves its session id, entrypoint and messaging
+  // socket in the environment; the bridge's own Claude Code children must not inherit them.
+  for (const k of Object.keys(env)) if (/^(CLAUDE_CODE_|CLAUDE_AGENT_SDK_|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDECODE$|AI_AGENT$)/.test(k)) delete env[k];
   // Inherited CLAUDIOBOT_* settings would leak the user's own configuration into the run. Access and sandbox modes pass
   // through on purpose, so full access can be verified by setting them for one launch.
   const ours = new Set(["CLAUDIOBOT_PORT", "CLAUDIOBOT_ROOTS", "CLAUDIOBOT_HOME", "CLAUDIOBOT_MODEL", "CLAUDIOBOT_USER_NAME", "CLAUDIOBOT_PUSH_URL", "CLAUDIOBOT_WORKTREES", "CLAUDIOBOT_WEBHOOK_PORT", "CLAUDIOBOT_CLAUDE", "CLAUDIOBOT_ACCESS", "CLAUDIOBOT_SANDBOX"]);
@@ -267,6 +271,7 @@ console.log("ntfy-sink " + s.port);
     [env.CLAUDIOBOT_CLAUDE === wrapper && env.PATH!.startsWith(`${bin}:`), "claude is the --cloud-refusing wrapper"],
     [env.CLAUDIOBOT_PUSH_URL!.startsWith("http://127.0.0.1:"), "push goes to the local sink"],
     [port !== 7878 && webhookPort !== 7879, `ports ${port}/${webhookPort} are not the real bridge's 7878/7879`],
+    [!Object.keys(env).some((k) => k.startsWith("CLAUDE_CODE_") || k === "CLAUDECODE"), "no CLAUDE_CODE_* variable of a surrounding Claude Code"],
   ];
   for (const [ok, what] of rules) console.log(`isolation ${ok ? "ok" : "FAILED"}: ${what}`);
   if (rules.some(([ok]) => !ok)) {
@@ -449,6 +454,10 @@ async function main() {
       c.close();
       return;
     }
+    case "sessions":
+      return sessionsList(loadRun());
+    case "thread":
+      return thread(loadRun(), args[0] ?? die("usage: thread <sessionId|largest> [--after epoch:rev] [--for s]"));
     case "evidence":
       return evidence(loadRun(), args[0] ?? "snapshot");
     case "cleanup":
@@ -459,6 +468,125 @@ async function main() {
 }
 
 /** Copies what proves a behavior into evidence/<run>/<label>/. Never the token. */
+type Row = { id: string; projectId: string; title: string; origin: string; status: string; holder: string; unread: boolean; agent: unknown; mirror: string; hidden: boolean; branch: string | null; worktree: boolean };
+type Project = { id: string; name: string; path: string };
+
+const countBy = <T>(xs: T[], key: (x: T) => string) => Object.entries(xs.reduce<Record<string, number>>((m, x) => ((m[key(x)] = (m[key(x)] ?? 0) + 1), m), {})).map(([k, n]) => `${k}=${n}`).join(" ");
+
+/** A session is the run's own when its project lies under the run's roots: only those are printed with their words. */
+const ownProject = (run: Run, p: Project | undefined) => p !== undefined && (p.path === run.roots || p.path.startsWith(`${run.roots}/`));
+
+async function listOf(run: Run, c: Awaited<ReturnType<typeof connect>>) {
+  const at = c.frames.length;
+  const t = performance.now();
+  c.send({ type: "watch_sessions" });
+  const f = await c.waitFor(() => c.frames.slice(at).find((x) => x.type === "sessions" || x.type === "error"), "the sessions frame", 60);
+  if (f.type === "error") die(`watch_sessions: ${f.message}`);
+  return { ms: Math.round(performance.now() - t), bytes: JSON.stringify(f).length, projects: f.projects as Project[], rows: f.rows as Row[] };
+}
+
+/**
+ * sessions: the Sessions list as the app gets it. The user's own sessions are printed as counts only; the run's seed
+ * projects with their rows.
+ */
+async function sessionsList(run: Run) {
+  const c = await connect(run);
+  const l = await listOf(run, c);
+  console.log(`sessions frame in ${l.ms} ms: ${l.projects.length} projects, ${l.rows.length} rows, ${l.bytes} bytes`);
+  console.log(`  origin ${countBy(l.rows, (r) => r.origin)}`);
+  console.log(`  status ${countBy(l.rows, (r) => r.status)}; holder ${countBy(l.rows, (r) => r.holder)}; mirror ${countBy(l.rows, (r) => r.mirror)}; unread ${l.rows.filter((r) => r.unread).length}; hidden ${l.rows.filter((r) => r.hidden).length}; worktree ${l.rows.filter((r) => r.worktree).length}`);
+  for (const p of l.projects.filter((p) => ownProject(run, p))) {
+    const rows = l.rows.filter((r) => r.projectId === p.id);
+    console.log(`seed project ${p.name} (${p.id}) ${p.path}: ${rows.length} rows`);
+    for (const r of rows) console.log(`  row ${r.id} "${r.title}" origin=${r.origin} status=${r.status} holder=${r.holder} unread=${r.unread} mirror=${r.mirror} branch=${r.branch} worktree=${r.worktree}${r.agent ? ` agent=${JSON.stringify(r.agent)}` : ""}`);
+  }
+  if (flag("names")) for (const p of l.projects) console.log(`  project ${p.name}: ${l.rows.filter((r) => r.projectId === p.id).length}`);
+  c.close();
+}
+
+/** A frame in a line: types, revs, item kinds and ids, delta offsets; the words only for the run's own sessions. */
+function frameLine(f: Frame, words: boolean): string {
+  const items = (f.items as { kind: string; id: string; text?: string; steps?: { label: string; state: string }[]; card?: { label: string; detail: string; answer: unknown }; state?: string }[] | undefined) ?? [];
+  const shown = items.map((i) => {
+    const detail = !words
+      ? ""
+      : i.kind === "work"
+        ? ` [${(i.steps ?? []).map((s) => `${s.label}:${s.state}`).join("; ")}]`
+        : i.kind === "permission"
+          ? ` [${i.card?.label}: ${i.card?.detail} answer=${i.card?.answer}]`
+          : i.text !== undefined
+            ? ` "${i.text.slice(0, 80).replace(/\n/g, " ")}"`
+            : i.state !== undefined
+              ? ` ${i.state}`
+              : "";
+    return `${i.kind}:${i.id}${detail}`;
+  });
+  switch (f.type) {
+    case "session":
+      return `session epoch=${f.epoch} rev=${f.rev} items=${items.length} before=${f.before === null ? "null" : "cursor"} live=${f.live ? "yes" : "no"} canSend=${(f.controls as { canSend: boolean }).canSend}${words ? ` ${shown.join(" | ")}` : ` kinds: ${countBy(items, (i) => i.kind)}`}`;
+    case "session_items":
+      return `session_items rev=${f.rev} items=${items.length} removed=${(f.removed as string[]).length} controls=${f.controls ? "set" : "null"}${words ? ` ${shown.join(" | ")}` : ` kinds: ${countBy(items, (i) => i.kind)}`}`;
+    case "session_delta":
+      return `session_delta item=${f.itemId} offset=${f.offset} chars=${String(f.text).length}${words ? ` "${String(f.text).slice(0, 60).replace(/\n/g, " ")}"` : ""}`;
+    default:
+      return words ? JSON.stringify(f).slice(0, 300) : f.type;
+  }
+}
+
+/** thread <id|largest> [--after epoch:rev] [--for s]: opens one thread as the app does and prints what arrives. */
+async function thread(run: Run, ref: string) {
+  const after = flag("after");
+  const secs = Number(flag("for") ?? 0);
+  const c = await connect(run);
+  const l = await listOf(run, c);
+  let id = ref;
+  if (ref === "largest") {
+    const listed = new Set(l.rows.map((r) => r.id));
+    const projects = join(homedir(), ".claude", "projects");
+    let best = { id: "", size: -1 };
+    for (const d of readdirSync(projects)) {
+      let names: string[] = [];
+      try {
+        names = readdirSync(join(projects, d));
+      } catch {}
+      for (const n of names) {
+        const sid = n.replace(/\.jsonl$/, "");
+        if (n.endsWith(".jsonl") && listed.has(sid)) {
+          const size = Bun.file(join(projects, d, n)).size;
+          if (size > best.size) best = { id: sid, size };
+        }
+      }
+    }
+    if (!best.id) die("no listed transcript found");
+    id = best.id;
+    console.log(`largest listed transcript: ${id} (${(best.size / 1e6).toFixed(1)} MB)`);
+  }
+  const row = l.rows.find((r) => r.id === id);
+  const words = ownProject(run, l.projects.find((p) => p.id === row?.projectId));
+  const at = c.frames.length;
+  const t = performance.now();
+  const [epoch, rev] = after ? [after.slice(0, after.lastIndexOf(":")), Number(after.slice(after.lastIndexOf(":") + 1))] : [null, 0];
+  c.send({ type: "watch_session", sessionId: id, after: epoch === null ? null : { epoch, rev } });
+  const first = await c.waitFor(() => c.frames.slice(at).find((f) => ["session", "session_items", "session_removed", "error"].includes(f.type)), "the thread", 120);
+  console.log(`opened in ${Math.round(performance.now() - t)} ms, ${JSON.stringify(first).length} bytes`);
+  const seen = new Set<Frame>();
+  const print = () => {
+    for (const f of c.frames.slice(at)) if (!seen.has(f) && f.type !== "session_rows" && f.type !== "activity" && f.type !== "usage") (seen.add(f), console.log(frameLine(f, words)));
+  };
+  print();
+  if (first.type === "session" && first.before !== null && words) {
+    c.send({ type: "session_page", sessionId: id, before: first.before });
+    await Bun.sleep(500);
+  }
+  const end = Date.now() + secs * 1000;
+  while (Date.now() < end) {
+    await Bun.sleep(250);
+    print();
+  }
+  print();
+  c.close();
+}
+
 async function evidence(run: Run, label: string) {
   const out = join(BASE, "evidence", run.id, label);
   mkdirSync(out, { recursive: true });

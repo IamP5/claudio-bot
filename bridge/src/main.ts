@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { homedir, hostname } from "node:os";
+import { join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import qrcode from "qrcode-terminal";
 import { accessLine, accessOf } from "./access";
@@ -13,8 +14,9 @@ import { lockHome } from "./lock";
 import { migrateHome } from "./migrate";
 import { scanProjects } from "./projects";
 import { createPush, senderFromEnv } from "./push";
-import { serve } from "./serve";
-import { claudeExecutable } from "./session";
+import { serve, threadTopic } from "./serve";
+import { createClaudeApps, realAppsDeps } from "./claudeApps";
+import { claudeExecutable, ownPids } from "./session";
 import { bridgeHome, createSaver, loadWorld } from "./store";
 import { createStream } from "./stream";
 import { errorText } from "./text";
@@ -106,6 +108,8 @@ const push = createPush({
   log,
 });
 
+const stream = createStream();
+
 const hub = createHub({
   machine,
   userName: await firstName(),
@@ -121,9 +125,17 @@ const hub = createHub({
   push,
   webhookPort: Number(process.env.CLAUDIOBOT_WEBHOOK_PORT ?? 7879),
   usage: { read: readUsage, watched: () => transport.live() > 0 },
+  sessions: {
+    epoch: stream.epoch,
+    projectsDir: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects"),
+    apps: createClaudeApps(realAppsDeps(ownPids)),
+    cacheDir: join(home, "cache"),
+    signal: { list: (frame) => transport.signal(frame, "sessions"), thread: (id, frame) => transport.signal(frame, threadTopic(id)) },
+    watchers: (id) => transport.watchers(id),
+  },
 });
 
-const transport = serve({ devices, stream: createStream(), hub, legacy, log, now, port });
+const transport = serve({ devices, stream, hub, legacy, log, now, port });
 
 function shutdown() {
   let saved = true;

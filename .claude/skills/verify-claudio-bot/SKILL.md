@@ -18,7 +18,8 @@ H=.claude/skills/verify-claudio-bot/bin/control-claudio.ts
 - **Never touch the user's own bridge.** It normally runs as a LaunchAgent on port 7878 with its home in `~/.claudiobot`. Do not connect to it, stop it, pair with it or read its state. The helper always starts its own bridge on free ports with its own home, so the two run side by side (the home lock is per home).
 - **Turns cost real money.** Every bot or agent turn runs real Claude Code on the user's login and is charged by the ledger. First start alone spends about $0.20 (the bot greets). Each run has a budget (default $2, `--budget` on launch); helper commands abort once the run's ledger passes it. Keep prompts short and literal.
 - **Do not weaken isolation.** Launch prints `isolation ok:` lines for every rule (temp home, temp roots and worktrees, no `SSH_AUTH_SOCK`, no GitHub token, claude.ai connectors off, a `claude` wrapper that refuses `--cloud`, push to a local sink, ports other than 7878/7879). If one says FAILED nothing starts. Do not edit the rules to get past it.
-- `HOME` stays real, only because Claude Code's login lives in the Keychain. Claude Code therefore writes this run's transcripts under the real `~/.claude/projects/`, in folders named after the run's paths. Cleanup removes exactly those.
+- `HOME` stays real, only because Claude Code's login lives in the Keychain. Launch also drops every `CLAUDE_CODE_*` variable a surrounding Claude Code (the desktop app, a terminal) left in your shell, so the bridge's children are plain SDK sessions.
+- The bridge reads the real `~/.claude/projects`, `~/.claude/sessions` and the Claude app's session store to list sessions. It writes to none of them unless you rename a session (`session_set` with a title appends to that transcript): only rename the run's own. Claude Code therefore writes this run's transcripts under the real `~/.claude/projects/`, in folders named after the run's paths. Cleanup removes exactly those.
 
 ## Launch
 
@@ -60,8 +61,12 @@ Bots are addressed by name (case-insensitive) or id. Every command prints conver
 | `$H dismiss <bot> <messageId>` | dismissed a question card | the card to close |
 | `$H stop <bot> [--wait]` | pressed Stop | with `--wait`, rest |
 | `$H raw '<ClientMessage JSON>' [--frames t1,t2] [--for s]` | anything else the app can send | prints the server frames for `s` seconds (default 3) |
+| `$H sessions [--names]` | opened the Sessions tab | the `sessions` frame; prints its timing and counts, and the rows of the run's seed projects |
+| `$H thread <sessionId\|largest> [--after epoch:rev] [--for s]` | opened a session's thread | the first frame; prints timings and each frame after it for `s` seconds |
 
 "Rest" means status `idle` or `awaiting_approval` (`bridge/src/protocol.ts` `BotStatus`). `raw` covers every other screen: `{"type":"details","botId":…}` (Library, Links, Agents, Routines), `{"type":"memory"}`, `{"type":"set_fact",…}`, `{"type":"run_routine",…}`, `{"type":"devices"}`, `{"type":"pair_code"}`, `{"type":"remove_worktree",…}` and so on. The exact shapes are `ClientMessage` and `ServerMessage` in `bridge/src/protocol.ts`.
+
+`sessions` and `thread` list the user's real Claude Code sessions (the bridge reads `~/.claude/projects`), so they print counts, ids and timings for those, and words only for sessions in the run's own seed projects. Never paste a real session's titles or items into evidence. `thread largest` opens the biggest listed transcript, the open-time check.
 
 Tips that save turns:
 - Ask for tool calls by name with literal arguments ("Call set_routine now with name "x", schedule "0 3 * * *" …. Then confirm in one line."). Bots act through tools; vague asks wander.
@@ -95,7 +100,7 @@ Takes a `final` evidence snapshot, SIGTERMs the bridge and push sink by the pids
 
 ## Helper reference
 
-`bin/control-claudio.ts` (Bun, executable). Subcommands: `launch [--budget usd] [--model id]`, `doctor`, `runs`, `bots`, `messages`, `send`, `wait`, `decide`, `answer`, `dismiss`, `stop`, `raw`, `evidence <label>`, `cleanup [--no-evidence]`. Global: `--run <id>`. Environment: `CLAUDIOBOT_VERIFY_DIR`, `CLAUDIOBOT_VERIFY_MODEL`, `CLAUDIOBOT_VERIFY_BUDGET_USD`, `CLAUDIO_RUN`. Run layout: `runs/<id>/{run.json,token,bridge.log,ntfy.log,pushes.jsonl,home/,roots/{demo,pushme}/,origin.git/,worktrees/,bin/claude}`.
+`bin/control-claudio.ts` (Bun, executable). Subcommands: `launch [--budget usd] [--model id]`, `doctor`, `runs`, `bots`, `messages`, `send`, `wait`, `decide`, `answer`, `dismiss`, `stop`, `raw`, `sessions`, `thread`, `evidence <label>`, `cleanup [--no-evidence]`. Global: `--run <id>`. Environment: `CLAUDIOBOT_VERIFY_DIR`, `CLAUDIOBOT_VERIFY_MODEL`, `CLAUDIOBOT_VERIFY_BUDGET_USD`, `CLAUDIO_RUN`. Run layout: `runs/<id>/{run.json,token,bridge.log,ntfy.log,pushes.jsonl,home/,roots/{demo,pushme}/,origin.git/,worktrees/,bin/claude}`.
 
 Related harnesses: `cd bridge && bun test` (unit, no network) and `bun run e2e` (29 scripted scenarios against real Claude Code, about $1.60). Use the e2e for a full regression pass; use this skill to prove one behavior interactively.
 

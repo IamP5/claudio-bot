@@ -245,7 +245,7 @@ function watch(dir: string, onEvent: () => void): { close(): void } {
 
 export function realAppsDeps(own: () => ReadonlySet<number>): AppsDeps {
   return {
-    registryDir: join(homedir(), ".claude", "sessions"),
+    registryDir: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "sessions"),
     storeDir: join(homedir(), "Library", "Application Support", "Claude", "claude-code-sessions"),
     run,
     alive,

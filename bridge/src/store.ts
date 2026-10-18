@@ -2,7 +2,7 @@ import { chmodSync, closeSync, existsSync, fstatSync, fsyncSync, mkdirSync, open
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
-import type { Agent, AgentMessage, Avatar, BotId, Message, MessageId, RoutineId, RunId } from "./protocol";
+import { MIRROR_PREFS, type Agent, type AgentMessage, type Avatar, type BotId, type Message, type MessageId, type RoutineId, type RunId } from "./protocol";
 import { errorText } from "./text";
 import {
   emptySession,
@@ -17,6 +17,8 @@ import {
   type GroupRecord,
   type Owned,
   type PushState,
+  type SessionPrefs,
+  type SessionRecord,
   type SessionState,
   type World,
 } from "./world";
@@ -43,6 +45,9 @@ type StateFileV3 = {
   exchanges?: Owned<ExchangeLog[]>;
   /** Absent in files from before groups: every record in bots is a plain bot, and there are no groups. */
   groups?: GroupRecord[];
+  /** Absent in files from before Sessions: no session was hidden or visited. */
+  sessions?: SessionRecord[];
+  sessionPrefs?: Owned<SessionPrefs>;
 };
 
 // Protocol 2's records, frozen here for the upgrade only.
@@ -164,6 +169,8 @@ const V3_FILE = z.looseObject({
   account: z.looseObject({ parkedUntil: maybeText }),
   exchanges: z.array(z.looseObject({ bots: z.tuple([text, text]), messages: z.array(z.looseObject({ id: text, at: text, from: text, text })) })).optional(),
   groups: z.array(z.looseObject({ ...profile, muted: z.boolean(), members: z.array(text) })).optional(),
+  sessions: z.array(z.looseObject({ id: text, hidden: z.boolean(), visitedAt: maybeText })).optional(),
+  sessionPrefs: z.looseObject({ mirror: z.enum(MIRROR_PREFS) }).optional(),
 });
 
 /**
@@ -338,6 +345,8 @@ function fromV3(file: StateFileV3): World {
     push: file.push,
     account: file.account,
     exchanges: file.exchanges ?? [],
+    sessions: new Map((file.sessions ?? []).map((r) => [r.id, r])),
+    sessionPrefs: file.sessionPrefs ?? { mirror: "auto" },
   };
 }
 
@@ -351,6 +360,8 @@ const toFile = (world: World): StateFileV3 => ({
   account: world.account,
   exchanges: world.exchanges,
   groups: [...world.groups.values()],
+  sessions: [...world.sessions.values()],
+  sessionPrefs: world.sessionPrefs,
 });
 
 /**

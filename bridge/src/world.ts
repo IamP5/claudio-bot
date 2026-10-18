@@ -19,11 +19,13 @@ import {
   type Mention,
   type Message,
   type MessageId,
+  type MirrorPref,
   type Peer,
   type Routine,
   type RoutineId,
   type RoutineRun,
   type RunId,
+  type SessionId,
 } from "./protocol";
 
 // The records in state.json (version 3) and the pure rules over them. Every persisted shape is declared here, so the
@@ -373,6 +375,21 @@ export type AgentReport = { status: AgentStatus; text: string; by: Initiator };
  */
 export type ExchangeLog = { bots: [BotId, BotId]; messages: ExchangeMessage[] };
 
+/**
+ * The bridge's own facts about one Claude Code session it has shown or driven: the transcript owns everything else
+ * (docs/sessions-design.md §2.1). Writer: sessions.ts.
+ */
+export type SessionRecord = {
+  id: SessionId;
+  /** ClaudioBot's own archive. The Claude app's archive is its own store, never written. */
+  hidden: boolean;
+  /** When the user last left the thread. Unread needs it set (or the bridge driving the session). */
+  visitedAt: string | null;
+};
+
+/** Settings, "Show agent sessions in the Claude app". Writer: sessions.ts. */
+export type SessionPrefs = { mirror: MirrorPref };
+
 export type World = {
   bots: Map<BotId, BotRecord>;
   /** Group ids share the bot id space, as Bot.id on the wire, and never collide with a bot's. */
@@ -383,6 +400,8 @@ export type World = {
   readonly push: Owned<PushState>;
   readonly account: Owned<AccountState>;
   readonly exchanges: Owned<ExchangeLog[]>;
+  sessions: Map<SessionId, SessionRecord>;
+  readonly sessionPrefs: Owned<SessionPrefs>;
 };
 
 export const emptyWorld = (): World => ({
@@ -394,6 +413,8 @@ export const emptyWorld = (): World => ({
   push: { sent: [] },
   account: { parkedUntil: null },
   exchanges: [],
+  sessions: new Map(),
+  sessionPrefs: { mirror: "auto" },
 });
 
 export const EXCHANGE_KEEP = 200;

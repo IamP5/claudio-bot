@@ -42,6 +42,7 @@ import type { Push } from "./push";
 import type { Result } from "./result";
 import { gitDirsOf, sandboxFor } from "./sandbox";
 import { createScheduler, type RunOutcome } from "./scheduler";
+import { createSessions, type Sessions, type SessionsEnv } from "./sessions";
 import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { createSkills } from "./skills";
 import { createUsageMonitor } from "./usage";
@@ -125,6 +126,8 @@ export type HubDeps = {
   claude: Pick<SessionSpec, "query" | "executable">;
   /** The plan's usage limits: how to read them, and whether a phone is live to see them. Absent: no "usage" feature. */
   usage?: { read: () => Promise<UsageRead>; watched: () => boolean };
+  /** Claude Code's folders, the Claude app and the sockets' channels. Absent: no "sessions" feature. */
+  sessions?: SessionsEnv;
 };
 
 /** The routine's own scheduled fire. Its bubbles wait for the result, so a run with nothing to say posts nothing. */
@@ -783,6 +786,7 @@ export function createHub(deps: HubDeps): Hub {
       trim(rec.messages, archiveOf(rec.agent.botId, rec.agent.id), () => false);
       deps.broadcast({ type: "agent", agent: agentView(rec.agent), messages: rec.messages });
       deps.persist();
+      sessions?.agentChanged(rec);
       poke();
     },
     reported(rec, text, by) {
@@ -797,11 +801,15 @@ export function createHub(deps: HubDeps): Hub {
     },
   });
 
+  const sessions: Sessions | null = deps.sessions
+    ? createSessions({ ...deps.sessions, world, userName, bridgeHome: realpathSync(root), agents, scan: deps.scan, persist: deps.persist, now: clockNow, log: deps.log })
+    : null;
+
   const connectors = createConnectors({ world, live: (id) => brains.get(id)?.mcp() ?? null, reopen: reopenFor, persist: deps.persist, log: deps.log });
   const webhooks = createWebhooks({ world, scheduler, port: deps.webhookPort, now: clockNow, log: deps.log });
 
   const allSessions = () => [...brains.values(), ...agents.sessions()];
-  const sessions: Tickable = {
+  const turns: Tickable = {
     tick: (at) => allSessions().forEach((s) => s.tick(at)),
     nextDeadline: () => earliest(allSessions().map((s) => s.nextDeadline())),
   };
@@ -819,7 +827,7 @@ export function createHub(deps: HubDeps): Hub {
       return next.toISOString();
     },
   };
-  const tickers = { scheduler, gate, sessions, push: deps.push, midnight, ...(usage && { usage }) };
+  const tickers = { scheduler, gate, sessions: turns, push: deps.push, midnight, ...(usage && { usage }), ...(sessions && { index: sessions }) };
   const clock = createClock({ tickers: Object.values(tickers), now: clockNow, log: deps.log });
   poke = () => clock.poke();
 
@@ -1045,7 +1053,7 @@ export function createHub(deps: HubDeps): Hub {
   }
 
   async function handle(message: ClientMessage): Promise<ServerMessage[]> {
-    if (isSessionRequest(message)) return error("This bridge does not serve sessions yet.");
+    if (isSessionRequest(message)) return sessions ? sessions.handle(message) : error("This bridge does not serve sessions.");
     switch (message.type) {
       case "create_bot": {
         const bot = makeBot(
@@ -1204,7 +1212,7 @@ export function createHub(deps: HubDeps): Hub {
     hello: (position) => ({
       type: "hello",
       protocol: PROTOCOL,
-      features: usage ? [...SERVED, "usage"] : [...SERVED],
+      features: [...SERVED, ...(usage ? (["usage"] as const) : []), ...(sessions ? (["sessions"] as const) : [])],
       ...position,
       machine: deps.machine,
       userName,
@@ -1236,6 +1244,7 @@ export function createHub(deps: HubDeps): Hub {
       }
       agents.resume();
       webhooks.start();
+      void sessions?.start().catch((e) => deps.log(`sessions: the index could not start: ${errorText(e)}`));
     },
 
     startTicker() {
@@ -1246,6 +1255,7 @@ export function createHub(deps: HubDeps): Hub {
     close() {
       clock.stop();
       webhooks.stop();
+      sessions?.stop();
       for (const session of brains.values()) session.close();
       for (const bot of world.bots.values()) agents.stopFor(bot.id);
     },

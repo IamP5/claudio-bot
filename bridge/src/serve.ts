@@ -3,7 +3,17 @@ import { rejectsOrigin, type Devices } from "./devices";
 import type { Hub } from "./hub";
 import type { Legacy } from "./legacy";
 import { parseClientMessage } from "./parse";
-import { isSessionRequest, type ClientMessage, type DeviceId, type ServerMessage, type Signal, type TransportMessage } from "./protocol";
+import {
+  isSessionRequest,
+  type ClientMessage,
+  type DeviceId,
+  type ServerMessage,
+  type SessionId,
+  type SessionsChannelFrame,
+  type Signal,
+  type ThreadChannelFrame,
+  type TransportMessage,
+} from "./protocol";
 import { forProtocol2 } from "./protocol2";
 import type { Stream } from "./stream";
 import { errorText } from "./text";
@@ -26,8 +36,18 @@ const LIVE_WINDOW_MS = 45_000;
 // Bun pings a socket silent for 44 s and closes it at 60 s, so a dead one goes away instead of lingering for two minutes.
 const IDLE_TIMEOUT_S = 60;
 
-/** limited: the protocol 2 shared token, or an app that did not announce protocol 3 (see `refusal`). */
-type SocketData = { deviceId: DeviceId; protocol: 2 | 3; resume: { epoch: string; after: number } | null; heardAt: number; limited: boolean };
+/**
+ * limited: the protocol 2 shared token, or an app that did not announce protocol 3 (see `refusal`). threads: the
+ * sessions this socket watches, so its close unwatches them.
+ */
+type SocketData = {
+  deviceId: DeviceId;
+  protocol: 2 | 3;
+  resume: { epoch: string; after: number } | null;
+  heardAt: number;
+  limited: boolean;
+  threads: Set<SessionId>;
+};
 type Socket = ServerWebSocket<SocketData>;
 
 export type ServeDeps = {
@@ -45,14 +65,45 @@ export type Transport = {
   readonly port: number;
   /** Stamps the message with the next seq and sends it to every open socket. */
   publish(message: ServerMessage): void;
-  /** Sends the message to protocol 3 sockets as it is: no seq, not kept for replay. A protocol 2 app never gets one. */
+  /**
+   * Sends the message as it is, no seq and not kept for replay, to every protocol 3 socket, or with a topic only to the
+   * sockets that watch it: "sessions" (watch_sessions) or `s:<sessionId>` (watch_session). A protocol 2 app never
+   * gets one: it may not watch.
+   */
   signal(message: Signal): void;
+  signal(message: SessionsChannelFrame, topic: "sessions"): void;
+  signal(message: ThreadChannelFrame, topic: ThreadTopic): void;
+  /** Sockets that watch the session's thread now. */
+  watchers(sessionId: SessionId): number;
   /** Open authenticated sockets heard from within LIVE_WINDOW_MS. */
   live(): number;
   /** When the last of those goes quiet, or null when none is live. */
   liveUntil(): Date | null;
   stop(): void;
 };
+
+export type ThreadTopic = `s:${string}`;
+export const threadTopic = (id: SessionId): ThreadTopic => `s:${id}`;
+const SESSIONS_TOPIC = "sessions";
+
+/**
+ * Watching is the socket's own: subscribed before the hub answers, so a channel frame the answer does not hold yet
+ * reaches the socket after it rather than being missed. The hub's answer replaces what came before.
+ */
+function subscribe(ws: Socket, m: ClientMessage) {
+  switch (m.type) {
+    case "watch_sessions":
+      return ws.subscribe(SESSIONS_TOPIC);
+    case "unwatch_sessions":
+      return ws.unsubscribe(SESSIONS_TOPIC);
+    case "watch_session":
+      ws.data.threads.add(m.sessionId);
+      return ws.subscribe(threadTopic(m.sessionId));
+    case "unwatch_session":
+      ws.data.threads.delete(m.sessionId);
+      return ws.unsubscribe(threadTopic(m.sessionId));
+  }
+}
 
 const isTransport = (m: ClientMessage): m is TransportMessage => m.type === "devices" || m.type === "revoke_device" || m.type === "pair_code";
 
@@ -180,7 +231,7 @@ export function serve(deps: ServeDeps): Transport {
         // The ring holds protocol 3 frames, and a protocol 2 app never asks to resume.
         const resume = epoch && protocol === 3 ? { epoch, after: Number(url.searchParams.get("after") ?? NaN) } : null;
         const limited = protocol === 2 || devices.list(null).some((d) => d.id === deviceId && d.legacy);
-        if (server.upgrade(req, { data: { deviceId, protocol, resume, heardAt: deps.now().getTime(), limited } })) return;
+        if (server.upgrade(req, { data: { deviceId, protocol, resume, heardAt: deps.now().getTime(), limited, threads: new Set() } })) return;
         return new Response("Expected a WebSocket upgrade", { status: 426 });
       }
       return new Response("Not found", { status: 404 });
@@ -206,6 +257,9 @@ export function serve(deps: ServeDeps): Transport {
       },
       close(ws) {
         sockets.get(ws.data.deviceId)?.delete(ws);
+        // Bun drops a closed socket's topics; the hub hears it left each thread.
+        for (const sessionId of ws.data.threads) void hub.handle({ type: "unwatch_session", sessionId }).catch(() => {});
+        ws.data.threads.clear();
       },
       async message(ws, raw) {
         heard(ws);
@@ -215,6 +269,7 @@ export function serve(deps: ServeDeps): Transport {
         const refused = refusal(ws.data, parsed.message);
         if (refused !== null) return send(ws, { type: "error", message: refused });
         try {
+          subscribe(ws, parsed.message);
           const replies = isTransport(parsed.message) ? transport(ws, parsed.message) : await hub.handle(parsed.message);
           for (const reply of replies) send(ws, reply);
         } catch (e) {
@@ -234,9 +289,10 @@ export function serve(deps: ServeDeps): Transport {
       const old = forProtocol2(message);
       if (old !== null) server.publish(TOPIC[2], old === message ? frame : JSON.stringify({ ...old, seq: stream.seq }));
     },
-    signal: (message) => {
-      server.publish(TOPIC[3], JSON.stringify(message));
+    signal: (message: Signal | SessionsChannelFrame | ThreadChannelFrame, topic?: string) => {
+      server.publish(topic ?? TOPIC[3], JSON.stringify(message));
     },
+    watchers: (sessionId) => server.subscriberCount(threadTopic(sessionId)),
     live: () => quietAt().filter((t) => t > deps.now().getTime()).length,
     liveUntil: () => {
       const last = Math.max(0, ...quietAt());

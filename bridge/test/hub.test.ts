@@ -800,6 +800,25 @@ test("hello lists every feature this bridge has, and usage only with a usage rea
   expect(reading.type === "hello" && reading.features.at(-1)).toBe("usage");
 });
 
+test("a hub with Claude Code's folders serves sessions; one without refuses every session request", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "hub-sessions-"));
+  try {
+    const apps = { holders: () => new Map(), desktop: () => new Map(), desktopState: async () => "absent" as const, idleSeconds: async () => null, importToDesktop: async () => false, openInDesktop: async () => false, refresh() {}, onChange() {}, close() {} };
+    const { hub } = hubOver(emptyWorld(), {
+      sessions: { epoch: "e1", projectsDir: join(dir, "projects"), apps, cacheDir: join(dir, "cache"), signal: { list() {}, thread() {} }, watchers: () => 0, watch: false },
+    });
+    const hello = hub.hello(NO_RING);
+    expect(hello.type === "hello" && hello.features.at(-1)).toBe("sessions");
+    expect(await hub.handle({ type: "watch_sessions" })).toEqual([{ type: "sessions", projects: [], rows: [], mirror: "auto" }]);
+    hub.close();
+    const plain = hubOver(emptyWorld()).hub;
+    expect(await plain.handle({ type: "watch_sessions" })).toEqual([{ type: "error", message: "This bridge does not serve sessions." }]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
 const SESSION_37: UsageRead = {
   state: "ok",
   plan: "max",

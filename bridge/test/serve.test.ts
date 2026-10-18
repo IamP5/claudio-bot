@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDevices, type Devices, type PairCode } from "../src/devices";
 import { legacyToken } from "../src/legacy";
-import type { BotId, ClientMessage, DeviceId, Message, MessageId, PairResponse, ServerMessage, StreamPosition } from "../src/protocol";
-import { MAX_FRAME_BYTES, PAIR_FAILURE_WINDOW_MS, PAIR_FAILURES_PER_ADDRESS, serve } from "../src/serve";
+import type { BotId, ClientMessage, DeviceId, Message, MessageId, PairResponse, ServerMessage, SessionId, SessionsChannelFrame, StreamPosition, ThreadChannelFrame } from "../src/protocol";
+import { MAX_FRAME_BYTES, PAIR_FAILURE_WINDOW_MS, PAIR_FAILURES_PER_ADDRESS, serve, threadTopic } from "../src/serve";
 import { createSaver, loadWorld } from "../src/store";
 import { createStream } from "../src/stream";
 
@@ -332,6 +332,38 @@ test("a protocol 2 app may not watch sessions or send any session request; a pro
   await until(() => b.handled.length === 2, "the protocol 3 requests to reach the hub");
 
   expect(b.handled.map((m) => m.type).sort()).toEqual(["watch_session", "watch_sessions"]);
+});
+
+test("session channels reach only the sockets watching them, until they unwatch or close", async () => {
+  const b = boot(tempHome());
+  const { token } = await pairPhone(b);
+  const list = connect(b, { bearer: token, query: "?protocol=3" });
+  const thread = connect(b, { bearer: token, query: "?protocol=3" });
+  const other = connect(b, { bearer: token, query: "?protocol=3" });
+  for (const c of [list, thread, other]) await c.next("hello");
+  const id = "s1" as SessionId;
+  list.send({ type: "watch_sessions" });
+  thread.send({ type: "watch_session", sessionId: id, after: null });
+  await until(() => b.handled.length === 2 && b.transport.watchers(id) === 1, "both watches");
+
+  const rows: SessionsChannelFrame = { type: "session_rows", rows: [], removed: [id], projects: [] };
+  const items: ThreadChannelFrame = { type: "session_items", sessionId: id, rev: 1, items: [], removed: [], controls: null };
+  b.transport.signal(rows, "sessions");
+  b.transport.signal(items, threadTopic(id));
+  expect(await list.next("session_rows")).toEqual(rows);
+  expect(await thread.next("session_items")).toEqual(items);
+  await Bun.sleep(50);
+  expect(other.inbox).toEqual([]);
+  expect(list.inbox).toEqual([]);
+
+  thread.raw.close();
+  await until(() => b.handled.some((m) => m.type === "unwatch_session"), "the close to unwatch the thread");
+  expect(b.transport.watchers(id)).toBe(0);
+  list.send({ type: "unwatch_sessions" });
+  await until(() => b.handled.length === 4, "the unwatch");
+  b.transport.signal(rows, "sessions");
+  await Bun.sleep(50);
+  expect(list.inbox).toEqual([]);
 });
 
 test("uploads up to the frame limit reach the hub; a frame over it closes the socket", async () => {

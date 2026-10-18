@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BotId, MessageId, RoutineId, RunId } from "../src/protocol";
 import { createSaver, flushNow, loadWorld, StateFileError } from "../src/store";
-import { emptySession, emptyWorld, newBot, type Signature } from "../src/world";
+import { emptySession, emptyWorld, exchangeBetween, logExchange, newBot, type Signature } from "../src/world";
 
 const homes: string[] = [];
 const freshHome = () => {
@@ -332,6 +332,19 @@ test("flushNow writes a private v3 file that loads back to the same world", () =
   const again = loadWorld(home).world;
   expect([...again.bots.values()]).toEqual([...world.bots.values()]);
   expect(again.account).toEqual({ parkedUntil: "2026-10-15T12:00:30.000Z" });
+});
+
+test("exchange logs survive a save and a load; a file from before them reads as none", () => {
+  const home = freshHome();
+  const { world } = loadWorld(home);
+  const sent = { id: "m_1" as MessageId, at, from: "b_1" as BotId, text: "Can you take the deploy?" };
+  logExchange(world, sent, "b_2" as BotId);
+  flushNow(world, home);
+  expect(exchangeBetween(loadWorld(home).world, "b_2" as BotId, "b_1" as BotId)).toEqual([sent]);
+
+  const old = freshHome();
+  writeState(old, v3({ bots: [v3Bot] }));
+  expect(loadWorld(old).world.exchanges).toEqual([]);
 });
 
 test("the saver debounces, and \"now\" writes before it returns", async () => {

@@ -899,7 +899,7 @@ test("one ticker throwing is logged, and the tickers after it still run", () => 
 
 test("hello lists every feature this bridge has", () => {
   const hello = hubOver(emptyWorld()).hub.hello(NO_RING);
-  expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend"]);
+  expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "exchanges"]);
 });
 
 test("a send's clientId comes back on the user's message, and a send without one adds none", async () => {
@@ -1245,6 +1245,46 @@ test("at local midnight every phone gets each bot again, so today's spend starts
   expect(frames()).toBe(before + 1);
   h.hub.tick(new Date(tomorrow.getTime() + 60_000));
   expect(frames()).toBe(before + 1);
+});
+
+/** Two bots with homes, ana's query open on a user turn. */
+async function pair() {
+  const world = emptyWorld();
+  const ana = bot("ana");
+  const bo = bot("bo", { title: "Release manager" });
+  world.bots.set(ana.id, ana);
+  world.bots.set(bo.id, bo);
+  const h = hubOver(world);
+  h.homes.create(ana.id, "# ana\n");
+  h.homes.create(bo.id, "# bo\n");
+  await h.hub.handle({ type: "send", botId: ana.id, text: "Ship it.", uploads: [] });
+  await flush();
+  return { ...h, world, ana, bo, anaQuery: h.q() };
+}
+
+test("message_bot keeps the text of each message both ways, and the exchange frame answers it oldest first from either bot", async () => {
+  const h = await pair();
+  await callTool(h.anaQuery, "message_bot", { bot: "bo", text: "Can you cut the release?" });
+  await flush();
+  const boQuery = h.q();
+  await callTool(boQuery, "message_bot", { bot: "ana", text: "Cut, tagged v2." });
+
+  const fromBo = [{ from: h.ana.id, text: "Can you cut the release?" }, { from: h.bo.id, text: "Cut, tagged v2." }];
+  const [answer] = await h.hub.handle({ type: "exchange", botId: h.ana.id, peer: h.bo.id });
+  expect(answer).toMatchObject({ type: "exchange", botId: h.ana.id, peer: h.bo.id, messages: fromBo });
+  const [mirror] = await h.hub.handle({ type: "exchange", botId: h.bo.id, peer: h.ana.id });
+  expect(mirror).toMatchObject({ type: "exchange", botId: h.bo.id, peer: h.ana.id, messages: fromBo });
+});
+
+test("a pair that never exchanged text answers an empty list, and deleting a bot drops its pair's text", async () => {
+  const h = await pair();
+  expect(await h.hub.handle({ type: "exchange", botId: h.ana.id, peer: h.bo.id })).toEqual([{ type: "exchange", botId: h.ana.id, peer: h.bo.id, messages: [] }]);
+  await callTool(h.anaQuery, "message_bot", { bot: "bo", text: "Can you cut the release?" });
+
+  await h.hub.handle({ type: "delete_bot", botId: h.bo.id });
+
+  expect(await h.hub.handle({ type: "exchange", botId: h.ana.id, peer: h.bo.id })).toEqual([{ type: "exchange", botId: h.ana.id, peer: h.bo.id, messages: [] }]);
+  expect(h.world.exchanges).toEqual([]);
 });
 
 test("boot carries on when USER.md cannot be created, and says why in the log", () => {

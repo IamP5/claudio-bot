@@ -1,4 +1,5 @@
 import { describe } from "./cron";
+import { maskSecrets } from "./text";
 import {
   COLORS,
   SHAPES,
@@ -12,6 +13,7 @@ import {
   type BotSpend,
   type BotStatus,
   type DeviceId,
+  type ExchangeMessage,
   type Link,
   type Message,
   type MessageId,
@@ -326,6 +328,12 @@ export type AgentRecord = {
   startedBy: Initiator;
 };
 
+/**
+ * The text of every message_bot message between two bots, oldest first, at most EXCHANGE_KEEP. bots is the pair in
+ * sorted order, so either bot finds the same log. Writer: world.ts (logExchange, forgetExchanges).
+ */
+export type ExchangeLog = { bots: [BotId, BotId]; messages: ExchangeMessage[] };
+
 export type World = {
   bots: Map<BotId, BotRecord>;
   agents: Map<AgentId, AgentRecord>;
@@ -333,6 +341,7 @@ export type World = {
   readonly devices: Owned<DeviceRecord[]>;
   readonly push: Owned<PushState>;
   readonly account: Owned<AccountState>;
+  readonly exchanges: Owned<ExchangeLog[]>;
 };
 
 export const emptyWorld = (): World => ({
@@ -342,7 +351,33 @@ export const emptyWorld = (): World => ({
   devices: [],
   push: { sent: [] },
   account: { parkedUntil: null },
+  exchanges: [],
 });
+
+export const EXCHANGE_KEEP = 200;
+
+const pairOf = (a: BotId, b: BotId): [BotId, BotId] => (a < b ? [a, b] : [b, a]);
+const isPair = (log: Owned<ExchangeLog>, [a, b]: [BotId, BotId]) => log.bots[0] === a && log.bots[1] === b;
+
+/** Records one message_bot message, its secrets masked, and drops the pair's oldest past EXCHANGE_KEEP. */
+export function logExchange(world: World, message: ExchangeMessage, to: BotId) {
+  const pair = pairOf(message.from, to);
+  const logs = own<ExchangeLog[]>(world.exchanges);
+  let log = logs.find((l) => isPair(l, pair));
+  if (!log) logs.push((log = { bots: pair, messages: [] }));
+  log.messages.push({ ...message, text: maskSecrets(message.text) });
+  log.messages.splice(0, Math.max(0, log.messages.length - EXCHANGE_KEEP));
+}
+
+/** Every kept message between the two bots, oldest first; [] for a pair that never exchanged text. */
+export const exchangeBetween = (world: World, a: BotId, b: BotId): ExchangeMessage[] =>
+  (world.exchanges.find((l) => isPair(l, pairOf(a, b)))?.messages ?? []).map((m) => ({ ...m }));
+
+/** A deleted bot's logs go with it, from both sides. */
+export function forgetExchanges(world: World, botId: BotId) {
+  const logs = own<ExchangeLog[]>(world.exchanges);
+  logs.splice(0, logs.length, ...logs.filter((l) => !l.bots.includes(botId)));
+}
 
 export const newMessageId = () => `m_${crypto.randomUUID()}` as MessageId;
 

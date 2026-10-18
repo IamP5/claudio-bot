@@ -48,12 +48,15 @@ import {
   botActor,
   botPeer,
   botStatus,
+  exchangeBetween,
   findBot,
+  forgetExchanges,
   holdOf,
   hopsAfter,
   hopsOf,
   isOpenCard,
   linksOf,
+  logExchange,
   newBot,
   newMessageId,
   post,
@@ -121,7 +124,7 @@ type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; carded: bool
 type Pushes = { pushed: { id: MessageId; at: number } | null; last: MessageId | null };
 
 /** What hello advertises: the FEATURES this bridge serves. Each new one joins when the hub implements it. */
-const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend"];
+const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "exchanges"];
 
 const BAD_NAME = `A bot name is 1 to ${BOT_NAME_MAX} characters, with no control or invisible characters.`;
 /** The same rule as the bot tools' name: a name a phone would show cut short or other than it reads is refused. */
@@ -679,6 +682,7 @@ export function createHub(deps: HubDeps): Hub {
       const to = findBot(world, a.bot);
       if (!to) return `No bot "${a.bot}". Bots: ${[...world.bots.values()].map((b) => b.name).join(", ")}.`;
       if (to.id === from.id) return "That is you.";
+      logExchange(world, { id: newMessageId(), at: now(), from: from.id, text: a.text }, to.id);
       exchange(from, botPeer(to), "sent");
       exchange(to, botPeer(from), "received");
       const by = initiatorNow(from);
@@ -826,6 +830,7 @@ export function createHub(deps: HubDeps): Hub {
         for (const id of doomed) activity.clear({ kind: "agent", botId: bot.id, agentId: id });
         for (const id of doomed) world.agents.delete(id);
         world.bots.delete(bot.id);
+        forgetExchanges(world, bot.id);
         // A crash between these two leaves an orphan home rather than a bot whose home is gone.
         deps.persist("now");
         homes.trash(bot.id, new Date());
@@ -872,7 +877,7 @@ export function createHub(deps: HubDeps): Hub {
       case "commands":
         return error("This bridge cannot list commands yet.");
       case "exchange":
-        return error("This bridge cannot show exchanges yet.");
+        return [{ type: "exchange", botId: bot.id, peer: message.peer, messages: exchangeBetween(world, bot.id, message.peer) }];
     }
   }
 

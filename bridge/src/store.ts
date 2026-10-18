@@ -12,6 +12,7 @@ import {
   type AgentRecord,
   type BotRecord,
   type DeviceRecord,
+  type ExchangeLog,
   type GateState,
   type Owned,
   type PushState,
@@ -37,6 +38,8 @@ type StateFileV3 = {
   devices: Owned<DeviceRecord[]>;
   push: Owned<PushState>;
   account: Owned<AccountState>;
+  /** Absent in files from before exchanges kept their text. */
+  exchanges?: Owned<ExchangeLog[]>;
 };
 
 // Protocol 2's records, frozen here for the upgrade only.
@@ -147,6 +150,7 @@ const V3_FILE = z.looseObject({
   devices: z.array(anyObject),
   push: z.looseObject({ sent: z.array(anyObject) }),
   account: z.looseObject({ parkedUntil: maybeText }),
+  exchanges: z.array(z.looseObject({ bots: z.tuple([text, text]), messages: z.array(z.looseObject({ id: text, at: text, from: text, text })) })).optional(),
 });
 
 /**
@@ -187,7 +191,7 @@ export function upgradeV2(v2: StateFileV2): StateFileV3 {
     startedBy: { kind: "system" },
   }));
   const world = emptyWorld();
-  return { version: 3, bots, agents, gate: world.gate, devices: world.devices, push: world.push, account: world.account };
+  return { version: 3, bots, agents, gate: world.gate, devices: world.devices, push: world.push, account: world.account, exchanges: world.exchanges };
 }
 
 /**
@@ -316,6 +320,7 @@ function fromV3(file: StateFileV3): World {
     devices: file.devices,
     push: file.push,
     account: file.account,
+    exchanges: file.exchanges ?? [],
   };
 }
 
@@ -327,6 +332,7 @@ const toFile = (world: World): StateFileV3 => ({
   devices: world.devices,
   push: world.push,
   account: world.account,
+  exchanges: world.exchanges,
 });
 
 /**

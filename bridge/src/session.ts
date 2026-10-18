@@ -67,6 +67,12 @@ const IDLE_MS = 15 * 60_000;
  * one's to finish. Then the work is stopped, with a note, and the turn runs.
  */
 export const BACKGROUND_WAIT_MS = 10 * 60_000;
+/**
+ * A task_notification means Claude Code will start a turn of its own to report the task, right after the turn it runs
+ * or at once when it runs none. A close waits this long for that turn's init frame, so it does not cut the turn off,
+ * and a CLI that never wakes holds a turn no longer than this.
+ */
+export const WAKE_WAIT_MS = 30_000;
 const DESCRIPTION_MAX = 80;
 /** When the ledger cannot answer, an unattended start waits this long; an attended one runs. */
 export const HEADROOM_RETRY_MS = 60_000;
@@ -563,16 +569,23 @@ function killGroup(pid: number) {
 /**
  * Spawns Claude Code in a process group of its own and kills the whole group when Claude Code exits or the query's
  * signal aborts, so the MCP servers and shells it started do not outlive it. The SDK reads stderr only from a process
- * it spawned itself, so this one hands it over.
+ * it spawned itself, so this one hands it over. `exited` is called once Claude Code has exited, or at once when it
+ * never started.
  */
-export function spawnGroup(o: SpawnOptions, stderr: (data: string) => void): SpawnedProcess {
+export function spawnGroup(o: SpawnOptions, stderr: (data: string) => void, exited: () => void): SpawnedProcess {
   const child = spawn(o.command, o.args, { cwd: o.cwd, env: o.env, stdio: ["pipe", "pipe", "pipe"], detached: true });
   child.stderr.on("data", (d) => stderr(String(d)));
   const pid = child.pid;
-  if (pid === undefined) return child;
+  if (pid === undefined) {
+    exited();
+    return child;
+  }
   groups.add(pid);
   const kill = () => killGroup(pid);
-  child.once("exit", kill);
+  child.once("exit", () => {
+    kill();
+    exited();
+  });
   if (o.signal.aborted) kill();
   else o.signal.addEventListener("abort", kill, { once: true });
   return child;
@@ -656,6 +669,8 @@ export type SessionSpec = {
   log?: (line: string) => void;
   /** The SDK's query in the bridge; a fake in tests. Required, so no test falls back to the real CLI. */
   query: typeof query;
+  /** Starts Claude Code's process for a query; a fake in tests. Default spawnGroup. */
+  spawn?: typeof spawnGroup;
   executable?: () => string | null;
   now?: () => Date;
 };
@@ -712,6 +727,7 @@ export function createSession(spec: SessionSpec): Session {
   const clock = spec.now ?? (() => new Date());
   const log = spec.log ?? ((line: string) => console.error(line));
   const executable = spec.executable ?? claudeExecutable;
+  const spawnProcess = spec.spawn ?? spawnGroup;
   const userName = spec.userName ?? "The user";
   const label = actorKey(spec.actor);
   let memo = freshMemo();
@@ -943,7 +959,7 @@ export function createSession(spec: SessionSpec): Session {
         ...(cap !== null && { maxBudgetUsd: Math.min(cap, options.maxBudgetUsd ?? cap) }),
         pathToClaudeCodeExecutable: path,
         stderr: tail,
-        spawnClaudeCodeProcess: (o) => spawnGroup(o, tail),
+        spawnClaudeCodeProcess: (o) => spawnProcess(o, tail, () => {}),
       },
     });
     const l: Live = {

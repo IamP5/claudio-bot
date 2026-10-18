@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Options, query, SDKMessage, SDKResultMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, query, SDKMessage, SDKResultMessage, SDKUserMessage, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import type { Headroom, Ledger } from "../src/ledger";
 import type { AgentId, BotId, RoutineId, RunId } from "../src/protocol";
 import {
@@ -544,9 +544,22 @@ const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 type Content = SDKUserMessage["message"]["content"];
 const textOf = (c: Content) => (typeof c === "string" ? c : c.map((b) => (b.type === "text" ? b.text : `[${b.type}]`)).join("\n\n"));
 
+/** Claude Code's process as the session's spawner sees it. It exits when its query closes, unless it lingers. */
+class FakeProcess {
+  alive = true;
+  lingers = false;
+  constructor(private readonly exited: () => void) {}
+  exit() {
+    if (!this.alive) return;
+    this.alive = false;
+    this.exited();
+  }
+}
+
 class FakeQuery {
   readonly received: { text: string; content: Content; uuid: string | undefined; disk: SessionState }[] = [];
   readonly stoppedTasks: string[] = [];
+  readonly process: FakeProcess;
   interrupts = 0;
   closed = false;
   private queue: SDKMessage[] = [];
@@ -559,6 +572,8 @@ class FakeQuery {
     prompt: AsyncIterable<SDKUserMessage>,
     disk: () => SessionState,
   ) {
+    const spawned = options.spawnClaudeCodeProcess?.({ command: "claude", args: [], env: {}, signal: new AbortController().signal });
+    this.process = spawned as unknown as FakeProcess;
     void (async () => {
       for await (const m of prompt) this.received.push({ text: textOf(m.message.content), content: m.message.content, uuid: m.uuid, disk: disk() });
     })();
@@ -570,10 +585,12 @@ class FakeQuery {
   }
   exit() {
     this.ended = true;
+    this.process.exit();
     this.wake?.();
   }
   crash(error: Error) {
     this.failure = error;
+    this.process.exit();
     this.wake?.();
   }
   async interrupt() {
@@ -584,6 +601,7 @@ class FakeQuery {
   }
   close() {
     this.closed = true;
+    if (!this.process.lingers) this.process.exit();
     this.wake?.();
   }
   async *[Symbol.asyncIterator]() {
@@ -682,6 +700,7 @@ function harness(
       queries.push(q);
       return q;
     }) as unknown as typeof query,
+    spawn: (_o, _stderr, exited) => new FakeProcess(exited) as unknown as SpawnedProcess,
     ...(!opts.defaultExecutable && { executable: () => (opts.executable === undefined ? "/fake/claude" : opts.executable) }),
     now: () => new Date(clock.t),
   });
@@ -1972,7 +1991,7 @@ describe("the Claude Code process group", () => {
     return !alive(pid);
   }
   const spawnOf = (script: string, signal = new AbortController().signal, stderr: (d: string) => void = () => {}) =>
-    spawnGroup({ command: "/bin/sh", args: ["-c", script], env: { ...process.env }, signal }, stderr);
+    spawnGroup({ command: "/bin/sh", args: ["-c", script], env: { ...process.env }, signal }, stderr, () => {});
   async function grandchild(p: ReturnType<typeof spawnOf>): Promise<number> {
     let out = "";
     for await (const chunk of p.stdout) {
@@ -1982,12 +2001,14 @@ describe("the Claude Code process group", () => {
     return Number(out.trim());
   }
 
-  test("a grandchild dies when Claude Code exits", async () => {
-    const p = spawnOf("sleep 30 & echo $!; read _");
+  test("a grandchild dies when Claude Code exits, and the session hears of the exit", async () => {
+    let exited = 0;
+    const p = spawnGroup({ command: "/bin/sh", args: ["-c", "sleep 30 & echo $!; read _"], env: { ...process.env }, signal: new AbortController().signal }, () => {}, () => exited++);
     const pid = await grandchild(p);
-    expect(alive(pid)).toBe(true);
+    expect([alive(pid), exited]).toEqual([true, 0]);
     p.stdin.end();
     expect(await gone(pid)).toBe(true);
+    expect(exited).toBe(1);
   });
 
   test("a grandchild dies when the query's signal aborts, and stderr reaches the session", async () => {

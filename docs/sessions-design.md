@@ -111,6 +111,8 @@ type Head = {                        // one per transcript, rebuilt only when (s
 // Built from a 32 KB head read and a 64 KB tail read. 336 files is about 32 MB of reads on a cold boot, then incremental.
 // Persisted to ~/.claudiobot/cache/sessions-index.json (0600). A cache, never state: deleting it costs one rescan.
 // Bot homes (cwd under the bridge home) and isSidechain-only files are skipped: bots live in the Bots view.
+// So are sessions whose cwd is under a temp folder (os.tmpdir(), /tmp, /var/folders) and outside the project roots:
+// script and test-run leftovers, 102 of 162 projects on the first Mac measured.
 ```
 
 Access patterns, traced:
@@ -383,7 +385,7 @@ Each unit ends in a check. Units marked ∥ can run in parallel. The parallel fe
 ### Alternatives considered (whole shapes)
 
 1. **A bridge registry as the session list** (only sessions the bridge started or imported). The smallest reader, but it hand-syncs a list against files another program writes, and it misses the desktop and terminal sessions the user asked to see.
-2. **SDK `listSessions`/`getSessionMessages` as the reader.** Documented, but every call re-parses the whole file (37 MB here), with no cursor, no tail, no cache, and no `entrypoint`, `pr-link` or `permissionMode`. Kept as the test oracle: U1 checks `project(readPage())` against it.
+2. **SDK `listSessions`/`getSessionMessages` as the only reader.** Documented, but the messages leave out what items need (content block index, tool results, flags), and there is no tail and no `entrypoint`, `pr-link` or `permissionMode`. Built instead (§8.3): the SDK gives the list and a thread's chain order, and `transcript.ts` reads the lines themselves for content, heads and the live tail.
 3. **Own sessions as gate actors** (a pseudo-bot using deny-and-regrant). One approval mechanism, but it writes `[Alex allowed once: …]` envelopes and continuation turns into the user's own transcript, which the desktop app then shows, and it puts the bot risk table on hand-driven sessions.
 4. **Per-turn `query` + `resume`.** No idle queries, but background tasks are lost between turns and Claude Code respawns every turn.
 5. **Session frames through the global replay ring.** One busy thread would evict the bots' frames from the 2,000-frame ring.
@@ -412,7 +414,7 @@ Each unit ends in a check. Units marked ∥ can run in parallel. The parallel fe
 2. **Desktop mirroring defaults to automatic**, guarded (§8.4). Settings has "Show agent sessions in the Claude app: Automatically / When I tap / Never".
 3. **Phone-started sessions use the permission mode from your Claude Code settings** (`permissions.defaultMode`, else `default`). The composer's mode menu switches it live. `bypassPermissions` is never offered from the phone.
 4. **The bot hears about a direct reply through a one-line note** in its agent's next report, not the full turn.
-5. **SDK-tool sessions are listed** under their projects with an "SDK" origin badge. Bot-home sessions are not listed: bots live in the Bots view.
+5. **SDK-tool sessions are listed** under their projects with an "SDK" origin badge. Bot-home sessions are not listed: bots live in the Bots view. Nor are sessions left in temp folders outside the project roots.
 
 ### Risks
 
@@ -470,7 +472,7 @@ After the first `done` turn of an agent session or a phone-created session, the 
 
 The import moves the app's view to that session, and these gates keep it from happening while you work there.
 
-Retries come on the bridge clock every 60 s for up to 24 h, newest session first, at most one import per 60 s. Success means `local_<id>.json` appears in the app's store within 10 s. A no-show sets `failed` and stops automatic retries for that session; you may have turned off `claude://` handling. "Open in Claude app" on any row imports when needed, then brings the app forward. An existing `local_<id>.json` makes every attempt a no-op.
+Retries come on the bridge clock every 60 s for up to 24 h, newest session first, at most one import per 60 s. Success means an entry whose `cliSessionId` is the id appears in the app's store within 10 s. The file name is no guide: a session the app started itself is `local_<the app's own uuid>.json` (100 of 102 on the first Mac measured), and only an imported one was seen named after the Claude Code id. So the bridge reads every `local_*.json` and keys them by `cliSessionId`. A no-show sets `failed` and stops automatic retries for that session; you may have turned off `claude://` handling. "Open in Claude app" on any row imports when needed, then brings the app forward. An entry already listing the id makes every attempt a no-op.
 
 ### 8.5 Delivery
 Feature 1 (optional caps, plan usage) lands first on this branch because it edits `ledger.ts`, `session.ts` and the protocol files. The units of §6 follow, with these changes:

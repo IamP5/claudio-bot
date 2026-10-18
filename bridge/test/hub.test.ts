@@ -2,180 +2,20 @@ import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { McpSdkServerConfigWithInstance, Options, query, SDKMessage, SDKUserMessage, SlashCommand } from "@anthropic-ai/claude-agent-sdk";
+import type { McpSdkServerConfigWithInstance, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHomes } from "../src/home";
 import { createHub, tickEach } from "../src/hub";
 import type { Project } from "../src/projects";
-import type { AgentId, BotId, ClientMessage, Command, Message, MessageId, RoutineId, RunId, ServerMessage, Signal, StreamPosition } from "../src/protocol";
-import { createPush, type Push, type PushReason } from "../src/push";
+import type { AgentId, BotId, ClientMessage, Command, Message, MessageId, RoutineId, RunId, ServerMessage } from "../src/protocol";
+import { createPush } from "../src/push";
 import { BREAKER_NOTE } from "../src/session";
 import { CLAUDIO_TOOLS } from "../src/tools";
-import { emptySession, emptyWorld, newBot, type AgentRecord, type BotRecord, type EnvelopeId, type Fingerprint, type GateState, type RoutineRecord, type Signature, type World } from "../src/world";
+import { emptySession, emptyWorld, type AgentRecord, type BotRecord, type EnvelopeId, type Fingerprint, type GateState, type RoutineRecord, type Signature, type World } from "../src/world";
+import { assistant, at, bot, callTool, cleanup, COMMANDS, flush, hubOver, inAnHour, later, NO_RING, result, roots, runBash, text, toolUse } from "./hub-kit";
 
-const roots: string[] = [];
-afterEach(() => {
-  setSystemTime();
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
-});
-const later = (ms: number) => setSystemTime(new Date(Date.now() + ms));
-
-const at = "2026-10-17T12:00:00.000Z";
-const inAnHour = () => new Date(Date.now() + 3_600_000).toISOString();
-const NO_RING: StreamPosition = { epoch: "", seq: 0, resumed: false };
-const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-/** What Claude Code reports a bot can run: a project skill, and two built-ins of which the menu shows one. */
-const COMMANDS: SlashCommand[] = [
-  { name: "greet", description: "Greet someone by name (project)", argumentHint: "[name]" },
-  { name: "clear", description: "Start a new session with empty context", argumentHint: "", builtin: true, aliases: ["reset", "new"] },
-  { name: "compact", description: "Free up context", argumentHint: "<instructions>", builtin: true },
-];
-
-/** A live SDK query the test drives: what the session sent it, and what it answers. */
-class FakeQuery {
-  readonly received: string[] = [];
-  readonly toggles: string[] = [];
-  interrupts = 0;
-  private queue: SDKMessage[] = [];
-  private done = false;
-  private wake: (() => void) | null = null;
-
-  constructor(
-    prompt: AsyncIterable<SDKUserMessage>,
-    readonly options: Options,
-  ) {
-    void (async () => {
-      for await (const m of prompt) this.received.push(m.message.content as string);
-    })();
-  }
-  emit(...ms: SDKMessage[]) {
-    this.queue.push(...ms);
-    this.wake?.();
-  }
-  async interrupt() {
-    this.interrupts++;
-  }
-  async mcpServerStatus() {
-    return [
-      { name: "claudio", status: "connected", source: "sdk" },
-      { name: "chrome-devtools", status: "connected", source: "user" },
-    ];
-  }
-  async toggleMcpServer(name: string, enabled: boolean) {
-    this.toggles.push(`${name} ${enabled}`);
-  }
-  commands: SlashCommand[] = COMMANDS;
-  async supportedCommands() {
-    return this.commands;
-  }
-  get closed() {
-    return this.done;
-  }
-  close() {
-    this.done = true;
-    this.wake?.();
-  }
-  async *[Symbol.asyncIterator]() {
-    for (;;) {
-      const next = this.queue.shift();
-      if (next) {
-        yield next;
-        continue;
-      }
-      if (this.done) return;
-      await new Promise<void>((resolve) => (this.wake = resolve));
-      this.wake = null;
-    }
-  }
-}
-
-let uuid = 0;
-const assistant = (...content: object[]) =>
-  ({ type: "assistant", uuid: `u${++uuid}`, session_id: "s_1", parent_tool_use_id: null, message: { content } }) as unknown as SDKMessage;
-const text = (t: string) => ({ type: "text", text: t });
-const toolUse = (name: string) => ({ type: "tool_use", id: `t${++uuid}`, name, input: {} });
-const result = (cost = 0.25, over: object = {}) =>
-  ({ type: "result", subtype: "success", is_error: false, result: "ok", errors: [], session_id: "s_1", total_cost_usd: cost, ...over }) as unknown as SDKMessage;
-
-type PushCall = { botId: BotId; reason: PushReason; messageId: MessageId };
-
-/** sends: whether the fake push goes out (default: always). push: a real push instead of the fake. */
-function hubOver(
-  world: World,
-  opts: { persist?: (urgency?: "now") => void; sends?: (call: PushCall, n: number) => boolean; push?: Push; scan?: () => Promise<Project[]>; executable?: string | null } = {},
-) {
-  const root = mkdtempSync(join(tmpdir(), "claudiobot-hub-"));
-  roots.push(root);
-  const homes = createHomes(root);
-  const events: string[] = [];
-  const frames: ServerMessage[] = [];
-  const signals: Signal[] = [];
-  const pushes: PushCall[] = [];
-  const attempts: PushCall[] = [];
-  const queries: FakeQuery[] = [];
-  const hub = createHub({
-    machine: "Mac",
-    userName: "Alex",
-    world,
-    homes: {
-      ...homes,
-      trash(id, when) {
-        events.push(`trash ${id}`);
-        homes.trash(id, when);
-      },
-    },
-    model: undefined,
-    scan: opts.scan ?? (async () => []),
-    broadcast: (m) => frames.push(m),
-    signal: (s) => signals.push(s),
-    webhookPort: null,
-    persist: (urgency) => {
-      opts.persist?.(urgency);
-      events.push(`persist ${urgency ?? "later"} with ${[...world.bots.keys()].join(",") || "no bots"}`);
-    },
-    log: () => {},
-    push: opts.push ?? {
-      notify(bot, reason, messageId) {
-        const call = { botId: bot.id, reason, messageId };
-        attempts.push(call);
-        const sent = opts.sends?.(call, attempts.length) ?? true;
-        if (sent) pushes.push(call);
-        return sent;
-      },
-      tick() {},
-      nextDeadline: () => null,
-    },
-    claude: {
-      query: (({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => {
-        const q = new FakeQuery(prompt, options);
-        queries.push(q);
-        return q;
-      }) as unknown as typeof query,
-      executable: () => (opts.executable === undefined ? "/fake/claude" : opts.executable),
-    },
-  });
-  return { hub, homes, root, events, frames, signals, pushes, attempts, queries, q: () => queries.at(-1)! };
-}
-
-/** The bridge's real gate, called the way Claude Code calls the PreToolUse hook the session was given. */
-function runBash(q: FakeQuery, command: string) {
-  const id = `toolu_${++uuid}`;
-  const input = { hook_event_name: "PreToolUse", session_id: "s_1", transcript_path: "/tmp/t.jsonl", cwd: q.options.cwd!, tool_name: "Bash", tool_input: { command, description: "run" }, tool_use_id: id };
-  return q.options.hooks!.PreToolUse![0]!.hooks[0]!(input as never, id, { signal: new AbortController().signal });
-}
-
-/** One of the bot's own tools, called the way Claude Code calls it: over MCP. */
-async function callTool(q: FakeQuery, name: string, args: Record<string, unknown>) {
-  const [server, client] = InMemoryTransport.createLinkedPair();
-  await (q.options.mcpServers!.claudio as McpSdkServerConfigWithInstance).instance.connect(server);
-  const mcp = new Client({ name: "test", version: "1" });
-  await mcp.connect(client);
-  return mcp.callTool({ name, arguments: args });
-}
-
-const bot = (name: string, patch: Partial<BotRecord> = {}): BotRecord => ({ ...newBot({ id: `b_${name}` as BotId, name, avatar: { shape: "circle", color: "white" }, at }), ...patch });
+afterEach(cleanup);
 
 /** A routine due a few seconds ago, so the next tick fires it. */
 function dueRoutine(b: BotRecord): RoutineRecord {

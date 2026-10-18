@@ -1,3 +1,4 @@
+import { MANAGED_MCP, strictMcp } from "./claudeCode";
 import { claudeExecutable } from "./session";
 
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]|\r/g;
@@ -46,17 +47,17 @@ function executable(): string {
  * The cloud CLI runs on this Mac in the project folder, which may be an untrusted repo, and no gate or sandbox watches
  * it: its .claude settings (hooks, env, apiKeyHelper) and .mcp.json would run here. Only the user's own settings load.
  */
-const ISOLATED = ["--setting-sources", "user", "--strict-mcp-config"];
+export const isolated = (managed = MANAGED_MCP) => ["--setting-sources", "user", ...(strictMcp(managed).strictMcpConfig ? ["--strict-mcp-config"] : [])];
 
 export async function createCloudSession(cwd: string, prompt: string): Promise<CloudCreated> {
   // claude --cloud refuses to run without a terminal, so give it one through script(1).
-  const out = await run(cwd, ["script", "-q", "/dev/null", executable(), "--cloud", prompt, ...ISOLATED]);
+  const out = await run(cwd, ["script", "-q", "/dev/null", executable(), "--cloud", prompt, ...isolated()]);
   const created = parseCloudCreated(out.stdout);
   if (!created) throw new Error(`Could not create the cloud session. ${detail(out)}`.trim());
   return created;
 }
 
 export async function followUpCloudSession(cwd: string, sessionId: string, text: string): Promise<void> {
-  const out = await run(cwd, [executable(), "-p", text, "--cloud", sessionId, "--output-format", "json", ...ISOLATED]);
+  const out = await run(cwd, [executable(), "-p", text, "--cloud", sessionId, "--output-format", "json", ...isolated()]);
   if (out.code !== 0 || !followUpAccepted(out.stdout)) throw new Error(`Could not send the follow-up. ${detail(out)}`.trim());
 }

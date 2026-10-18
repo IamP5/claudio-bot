@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCloudSession, followUpAccepted, followUpCloudSession, parseCloudCreated } from "../src/cloud";
+import { createCloudSession, followUpAccepted, followUpCloudSession, isolated, parseCloudCreated } from "../src/cloud";
 
 const captured =
   "\x1b[?25l\x1b[2K\x1b[1G\x1b[32mCreated cloud session: README summary\x1b[39m\r\n" +
@@ -57,4 +57,11 @@ test("creates a cloud session through a terminal, then follows up on it, never l
     "--cloud Summarize the README --setting-sources user --strict-mcp-config",
     "-p Also list the TODOs --cloud session_FAKE --output-format json --setting-sources user --strict-mcp-config",
   ]);
+});
+
+test("leaves out --strict-mcp-config when an admin's managed MCP config exists, since claude exits on it", () => {
+  const managed = join(dir, "managed-mcp.json");
+  expect(isolated(managed)).toEqual(["--setting-sources", "user", "--strict-mcp-config"]);
+  writeFileSync(managed, "{}");
+  expect(isolated(managed)).toEqual(["--setting-sources", "user"]);
 });

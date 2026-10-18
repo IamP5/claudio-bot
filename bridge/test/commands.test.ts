@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { SlashCommand } from "@anthropic-ai/claude-agent-sdk";
-import { commandOf, menuOf } from "../src/commands";
+import { commandOf, createCommands, menuOf } from "../src/commands";
+import type { BotId, Command, Skill } from "../src/protocol";
 
 const row = (name: string, description = `About ${name}`, over: Partial<SlashCommand> = {}): SlashCommand => ({ name, description, argumentHint: "", ...over });
 
@@ -52,4 +53,29 @@ test("only /name or /name args with a name on the menu is a command", () => {
   expect(commandOf("please /greet", menu)).toBeNull();
   expect(commandOf("/ greet", menu)).toBeNull();
   expect(commandOf("//greet", menu)).toBeNull();
+});
+
+test("a skill saved while the bot's query is open shows in the menu at once, after a hidden built-in's name is refused", async () => {
+  const bot = "b_1" as BotId;
+  const saved: Skill[] = [];
+  const menus: Command[][] = [];
+  const open = { supportedCommands: async () => [row("tdd"), row("clear", "Start a new session", { builtin: true })] };
+  const commands = createCommands({
+    live: () => open,
+    probe: async () => [],
+    saved: () => saved,
+    changed: (_id, menu) => menus.push(menu),
+    log: () => {},
+  });
+  expect((await commands.list(bot)).map((c) => c.name)).toEqual(["tdd"]);
+
+  saved.push({ name: "pineapple", description: "Answer with a code word.", updatedAt: "" }, { name: "clear", description: "Mine", updatedAt: "" }, { name: "tdd", description: "Again", updatedAt: "" });
+  commands.refresh(bot);
+  await Bun.sleep(0);
+
+  expect(menus.at(-1)).toEqual([
+    { name: "tdd", description: "About tdd", argumentHint: "", source: "skill" },
+    { name: "pineapple", description: "Answer with a code word.", argumentHint: "", source: "skill" },
+  ]);
+  expect(commandOf("/pineapple banana", await commands.list(bot))).toBe("pineapple");
 });

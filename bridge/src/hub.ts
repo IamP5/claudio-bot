@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import type { Settings } from "@anthropic-ai/claude-agent-sdk";
 import { createActivity } from "./activity";
 import { createAgents } from "./agents";
+import { strictMcp } from "./claudeCode";
 import { createClock, type Tickable } from "./clock";
 import { commandOf, createCommands, probeCommands, slashName } from "./commands";
 import { connectorSettings, createConnectors } from "./connectors";
@@ -566,8 +567,9 @@ export function createHub(deps: HubDeps): Hub {
     // only an open query's list has MCP prompts.
     probe: (id) => {
       homes.ensureFolders(id);
-      return probeCommands(deps.claude, { cwd: homes.homeOf(id), settingSources: ["user", "project"], settings: settingsFor(id), strictMcpConfig: true, mcpServers: {} });
+      return probeCommands(deps.claude, { cwd: homes.homeOf(id), settingSources: ["user", "project"], settings: settingsFor(id), ...strictMcp(), mcpServers: {} });
     },
+    saved: (id) => skills.list(id),
     changed: (id, menu) => {
       if (world.bots.has(id)) deps.broadcast({ type: "commands", botId: id, commands: menu });
     },

@@ -30,14 +30,16 @@ Everything runs on **your Mac, with your own Claude Code login**. There is no ho
 ```
  iPhone / iPad (SwiftUI)                       Your Mac
 ┌───────────────────────┐   WebSocket   ┌──────────────────────────────────────────┐
-│  bot list, chats,     │◀────────────▶ │  bridge (Bun)                            │
-│  question and         │  a token per  │   ├─ one Claude Code session per bot     │
+│  bots, sessions,      │◀────────────▶ │  bridge (Bun)                            │
+│  chats, question and  │  a token per  │   ├─ one Claude Code session per bot     │
 │  permission cards,    │  paired phone │   │    (Claude Agent SDK, your login)    │
-│  routines, library,   │  LAN or       │   ├─ the gate: every tool call checked,  │
-│  agents, links        │  Tailscale    │   │    risky ones held for your tap      │
+│  plan usage, routines,│  LAN or       │   ├─ the gate: every tool call checked,  │
+│  library, links       │  Tailscale    │   │    risky ones held for your tap      │
 └───────────────────────┘               │   ├─ claudio MCP tools: ask, start_agent │
                                         │   │    message_bot, set_routine, …       │
-                                        │   ├─ routines, spend caps, push          │
+                                        │   ├─ routines, plan usage, push          │
+                                        │   ├─ sessions: every Claude Code         │
+                                        │   │    session on the Mac, by project    │
                                         │   └─ agents                              │
                                         │        ├─ mac:   Claude Code in a repo   │
                                         │        └─ cloud: claude --cloud session  │
@@ -48,6 +50,7 @@ Everything runs on **your Mac, with your own Claude Code login**. There is no ho
 - **Bots act through tools**, not by printing commands. `ask` posts a question card. `start_agent` launches a coding agent. `set_routine` schedules work. `message_bot` and `create_bot` reach other bots.
 - **Agents do the coding.** A bot hands repository work to a Claude Code agent, either on your Mac in the project folder or as a Claude Code cloud session. Mac agents report every result back to their bot, which checks the claim before telling you.
 - **The gate stands between a bot and your machine.** Every tool call a bot or a Mac agent makes passes a check first. Some calls are refused outright, such as reading your SSH keys. Risky ones, such as `git push origin main`, wait for your tap on the phone. The rest go on to Claude Code's own auto mode. Under the gate, every shell command runs in the operating system's sandbox, which keeps it out of your keys and the bridge's state even when the command hides what it does. See [Safety model](#safety-model).
+- **Sessions are the other half of the app.** The bridge reads every Claude Code session on your Mac from Claude Code's own transcripts, groups them by project the way the Claude app's sidebar does, and lets the phone open one, follow it live and drive it. Each session has one writer: a bot's agent, the phone, or the Claude app or a terminal that holds it now, which the bridge waits for. A Mac agent's session is born with its title in the project's `.claude/worktrees`, so the Claude app lists it under that project too.
 - **The app** in [`ios/`](ios) is SwiftUI for iPhone and iPad. It pairs with the bridge by a one-time code and talks to it over one WebSocket.
 
 ## Features
@@ -60,12 +63,13 @@ Everything runs on **your Mac, with your own Claude Code login**. There is no ho
 | **Coding agents** | `mac` agents run Claude Code in your repo and report back. `cloud` agents start a Claude Code cloud session and give you the link. The chat shows "Messaged ⚙ Fix login" and "Message from ⚙ Fix login", and tapping either opens the full thread. |
 | **Checked reports** | After each Mac agent turn the bridge reads git: branch, commits ahead, files changed, uncommitted work, and a PR URL the agent named. The bot reads that line before the agent's words, and the agent's screen shows it. |
 | **Worktrees** | A Mac agent can work in its own git worktree on a `claudio/…` branch, so two agents or your own edits don't collide. It goes in the repo's `.claude/worktrees`, where the Claude app files it under the repo. Only you remove a worktree, and the bridge refuses while it holds uncommitted work or files such as an `.env`. |
-| **Sessions** | Every Claude Code session on the Mac, from the Claude app, a terminal, a script or a bot's agent, listed by project like the Claude app's sidebar, with its status, branch, PR and who is on it now. Open one to follow it live, send it a message, approve what it asks, answer its questions, approve its plan, change its model or mode, or stop it. Start a new one in any project, in a new worktree if you like. Agents' sessions show up in the Claude app too. |
+| **Sessions** | A **Bots \| Sessions** switch at the top of the app. Every Claude Code session on the Mac, from the Claude app, a terminal, a script or a bot's agent, listed by project like the Claude app's sidebar, with its status, branch, PR and who is on it now. Open one to follow it live, send it a message, approve what it asks, answer its questions, approve its plan, change its model or mode, or stop it. Start a new one in any project, in a new worktree if you like. Agents' sessions show up in the Claude app too, under their project: after an agent's first turn, while you are away from the Mac, the bridge asks the Claude app to import it, or do it yourself with **Open in Claude app**. Settings, **Show agent sessions in the Claude app**: Automatically, When I tap or Never. Cloud agents are listed with a link to claude.ai. |
 | **Routines** | Cron schedules in local time, shown as "Weekdays at 9:00 AM", with an on/off switch, Run now and the last 20 runs in the bot's profile. A routine with nothing to report posts nothing. A webhook routine fires when a program on your Mac calls it ("When called"). |
 | **Memory** | A bot keeps what it learns about you as a proposal. You see it in Settings, Memory, and once you confirm it every bot knows it. You can add, edit and forget facts there too. |
 | **Skills and connectors** | A bot can save a skill for a task you repeat. Its profile lists its skills and its MCP connectors, with a switch for each connector. |
 | **Live activity** | While a bot or agent works, the chat shows what it is doing, such as "Reading hub.ts". |
-| **Spend caps** | Each bot has a daily cap that its agents share, set in its profile under **Spending**, and each Mac agent has a budget. The profile shows today's spend against the cap, an agent's thread shows its spend against its budget, and the chat warns at 80%. At the cap, routines and other background work wait until midnight. Your own messages still run. |
+| **Plan usage** | Your Claude plan's limits, read from your own Claude Code login: the 5-hour session as a ring at the top of the bot list and in the session composer, and every window (session, weekly, weekly per model) with its reset time under **Plan usage** in Settings. It refreshes while the app is open and right after a turn hits a limit. |
+| **Spend caps (optional)** | Off by default: spend is recorded and the profile shows today's total, and your plan's usage limits are the guard. Set a daily cap for a bot under **Spending**, which its agents share, or one for every bot with `CLAUDIOBOT_DAILY_USD`. With a cap, the chat warns at 80%, and routines and other background work wait until midnight once it is reached. Your own messages still run. |
 | **Library and links** | Files a bot writes to `library/` show up in its Library tab, with a viewer for markdown, text and images. Every link a bot shares is collected under Links. |
 | **Bots talking to bots** | A bot can message another bot or create a new one with a brief. |
 | **Group chats** | Put 2 to 8 bots in one chat. A message goes to the bots it @mentions, or to all of them, and each answers in the group or stays quiet. A bot can @mention another to hand it a task, at most two hops down from your message. |
@@ -249,7 +253,7 @@ Then:
 
 ## Costs
 
-Every turn's cost is what Claude Code reports, and it lands in `usage/YYYY-MM.jsonl`. A query that starts cold pays to write its tools and system prompt into the prompt cache. The bridge starts a new query for each bot's first turn, after 15 idle minutes, for each unattended turn (so its spend cap applies), for each agent, and after a restart.
+Every turn's cost is what Claude Code reports, and it lands in `usage/YYYY-MM.jsonl`. A query that starts cold pays to write its tools and system prompt into the prompt cache. The bridge starts a new query for each bot's first turn, after 15 idle minutes, for each unattended turn (so a spend cap, when set, applies), for each agent, and after a restart.
 
 claude.ai connectors stay on by default, because Claude Code defers their tools and they cost little. On Claude Code 2.1.301 with `claude-sonnet-5-5`, in a temporary home with real user settings, a cold first-run greeting turn cost $0.184. Repeats on a warm cache cost $0.0752 with `ENABLE_CLAUDEAI_MCP_SERVERS=false` and $0.0762 with it unset and 7 claude.ai connectors listed, about 1% more per turn. To keep them out anyway, start the bridge with `ENABLE_CLAUDEAI_MCP_SERVERS=false` (`claudiobot install` keeps it), or turn single connectors off in a bot's profile. MCP servers from your own Claude Code settings and plugins load either way.
 
@@ -315,6 +319,8 @@ The bridge and the app share one contract. If you change `bridge/src/protocol.ts
 - **Cloud agents don't report back.** `claude --cloud` gives no completion signal to another program, so cloud agents are fire-and-follow with a link. A backend that streams cloud runs is the top roadmap item.
 - **Push goes through ntfy, not APNs.** With `CLAUDIOBOT_PUSH_URL` set, the ntfy app shows the push and opens ClaudioBot when tapped. Native push needs APNs and a relay server.
 - **No voice mode and no sidebar sections yet.**
+- **A session open in the Claude app and on the phone.** While the app is busy on a session the phone waits, but if the app holds it idle and you send from the phone, the app may continue from its older copy when you type there next. The thread warns you.
+- **Importing into the Claude app moves its view** to the imported session, so the bridge only does it while the app is in the background and the Mac has been idle for two minutes.
 - **macOS only.** The bridge has only been run on macOS. Linux should be close.
 - **No Mac app.** The iPad layout runs on Apple silicon Macs as "Designed for iPad". A native Mac app is not built yet.
 

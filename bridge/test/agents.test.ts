@@ -161,7 +161,7 @@ test("a mac agent starts on its project with the agent prompt, its budget, no re
     undefined,
     4.5,
     "auto",
-    ["AskUserQuestion"],
+    ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"],
     "claude-sonnet-5-5",
     rec.agent.id,
   ]);

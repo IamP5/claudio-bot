@@ -44,7 +44,7 @@ import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec
 import { createSkills } from "./skills";
 import { appendArchive, type Persist } from "./store";
 import { BOT_NAME_MAX, errorText, hasHiddenCharacters } from "./text";
-import { botToolServer, type BotActions } from "./tools";
+import { botToolServer, NO_EFFECT_TOOLS, type BotActions } from "./tools";
 import { freshTurn, readTurn, type Bubble, type Turn } from "./turn";
 import { createWebhooks } from "./webhook";
 import {
@@ -600,8 +600,10 @@ export function createHub(deps: HubDeps): Hub {
           systemPrompt: { type: "preset", preset: "claude_code", append: persona({ name: bot.name, userName }) },
           permissionMode: "auto",
           mcpServers: { claudio: botToolServer(bot.id, actions) },
-          // A bot asks with its own ask tool, which posts a card instead of blocking the turn.
-          disallowedTools: ["AskUserQuestion"],
+          // A bot asks with its own ask tool, which posts a card instead of blocking the turn. Plan mode would wait for
+          // an approval nobody can give.
+          disallowedTools: ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"],
+          allowedTools: [...NO_EFFECT_TOOLS],
           model: deps.model,
           hooks: gate.hooks(actor),
           canUseTool: gate.canUseTool(actor),

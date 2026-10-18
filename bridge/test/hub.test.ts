@@ -832,6 +832,18 @@ test("the bot's tool server offers every claudio tool, and list_routines and set
   expect(await text("list_routines", {})).toStartWith("- digest: Every day at 9:00 AM (0 9 * * *), next ");
 });
 
+test("a bot's query refuses plan mode and Claude Code's question tool, and runs only its no-effect claudio tools without the classifier", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  await h.hub.handle({ type: "send", botId: b.id, text: "hi", uploads: [] });
+  await flush();
+
+  expect(h.q().options.disallowedTools).toEqual(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"]);
+  expect(h.q().options.allowedTools).toEqual(["mcp__claudio__ask", "mcp__claudio__list_projects", "mcp__claudio__list_routines", "mcp__claudio__routine_no_update"]);
+});
+
 test("the client requests of the pass 3 units answer through their modules", async () => {
   const world = emptyWorld();
   const b = bot("eng");

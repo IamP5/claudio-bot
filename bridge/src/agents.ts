@@ -250,8 +250,8 @@ export function createAgents(deps: {
           settingSources: ["user", "project"],
           systemPrompt: { type: "preset", preset: "claude_code" },
           permissionMode: "auto",
-          // Nobody is at the agent's terminal to answer; it reports to its bot instead.
-          disallowedTools: ["AskUserQuestion"],
+          // Nobody is at the agent's terminal to answer a question or approve a plan; it reports to its bot instead.
+          disallowedTools: ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"],
           model: deps.model,
           hooks: deps.hooks(actor),
           canUseTool: deps.canUseTool(actor),

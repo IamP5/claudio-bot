@@ -277,6 +277,9 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
   }
 
   function pump() {
+    // The ledger's word for this pass, not due(until): a cap end the ledger reports as already past would otherwise
+    // read as lifted and re-ask it forever.
+    let capHeld = false;
     for (;;) {
       const life = s.lifecycle;
       if (life.kind === "working" || life.kind === "stopping") return;
@@ -286,7 +289,7 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
       }
       if ((life.kind === "backoff" || (life.kind === "parked" && life.reason === "usage_limit")) && !due(life.until)) return;
       if (c.parkedUntil !== null && !due(c.parkedUntil)) return hold("usage_limit", c.parkedUntil);
-      const capped = life.kind === "parked" && life.reason === "daily_cap" && !due(life.until);
+      const capped = capHeld || (life.kind === "parked" && life.reason === "daily_cap" && !due(life.until));
       const next = capped ? s.pending.find((p) => attended(p.initiator)) : s.pending[0];
       if (!next) return;
       if (next.attempts >= MAX_STARTS) {
@@ -303,6 +306,7 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
       }
       if (capped) return;
       hold("daily_cap", room.until);
+      capHeld = true;
     }
   }
 

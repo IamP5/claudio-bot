@@ -302,6 +302,14 @@ describe("step", () => {
     expect(t.core.session.lifecycle).toEqual({ kind: "working", turn: turn("r", { startedAt: later(120_000) }) });
   });
 
+  test("a daily cap whose end the ledger reports as already past still parks the head, and attended work behind it runs", () => {
+    const until = later(-60_000);
+    const headroom = (i: Initiator): Headroom => (attendedNow(i) ? roomy() : { ok: false, reason: "daily_cap", until });
+    const t = run(core({ kind: "idle" }, [env("r", routine)]), { kind: "push", pending: env("u") }, headroom);
+    expect(t.core.session.lifecycle).toEqual({ kind: "working", turn: turn("u") });
+    expect(endsOf(t.effects)).toEqual([["r", "deferred"]]);
+  });
+
   test("a park whose deadline keeps moving is told once", () => {
     let at = NOW.getTime();
     const headroom = (): Headroom => ({ ok: false, reason: "daily_cap", until: new Date(at + 60_000).toISOString() });

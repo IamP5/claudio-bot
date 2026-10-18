@@ -90,6 +90,26 @@ final class BridgeClient {
         }
     }
 
+    /// Whether the Sessions list is on screen. It is watched now and again after every hello, and unwatched when it goes.
+    var watchingSessions = false {
+        didSet {
+            guard watchingSessions != oldValue, store.has(.sessions) else { return }
+            transmitIfConnected(watchingSessions ? .watchSessions : .unwatchSessions)
+        }
+    }
+
+    /// The session thread on screen. Watched now and again after every hello with the position the app holds;
+    /// leaving it unwatches it, which marks it visited.
+    var openSession: SessionID? {
+        didSet {
+            guard openSession != oldValue else { return }
+            if let oldValue, store.has(.sessions) { transmitIfConnected(.unwatchSession(sessionId: oldValue)) }
+            guard let openSession else { return }
+            store.threads.open(openSession)
+            if store.has(.sessions) { watchThreadIfConnected(openSession) }
+        }
+    }
+
     @ObservationIgnored private let vault: PairingVault
     @ObservationIgnored private let deviceName: String
     @ObservationIgnored private let timing: Timing
@@ -197,6 +217,7 @@ final class BridgeClient {
     /// Sends now when connected; otherwise holds the message until the next hello.
     func send(_ msg: ClientMessage) {
         if case let .decide(_, card, choice) = msg { store.decisionSent(choice, for: card) }
+        if case let .sessionDecide(_, card, choice) = msg { store.decisionSent(choice, for: card) }
         #if DEBUG
         if Demo.isEnabled { return Demo.respond(to: msg, store: store) }
         #endif
@@ -205,6 +226,11 @@ final class BridgeClient {
         } else {
             outbox.append((msg, .now))
         }
+    }
+
+    /// Pull to refresh: the bridge answers a repeated watch with a fresh list.
+    func refreshSessions() {
+        if store.has(.sessions) { transmitIfConnected(.watchSessions) }
     }
 
     /// Whether a message queued offline still means what the user meant. A Stop is for the turn on screen when it was
@@ -228,7 +254,22 @@ final class BridgeClient {
     }
 
     private func transmitIfConnected(_ msg: ClientMessage) {
+        #if DEBUG
+        if Demo.isEnabled { return Demo.respond(to: msg, store: store) }
+        #endif
         if let socket, store.machine != nil { transmit(msg, on: socket) }
+    }
+
+    private func watchThreadIfConnected(_ id: SessionID) {
+        #if DEBUG
+        if Demo.isEnabled { return Demo.respond(to: .watchSession(sessionId: id, after: nil), store: store) }
+        #endif
+        if let socket, store.machine != nil { watchThread(id, on: socket) }
+    }
+
+    /// The live text goes at the moment the watch is sent: the reply resends any streaming text from offset 0.
+    private func watchThread(_ id: SessionID, on socket: URLSessionWebSocketTask) {
+        transmit(.watchSession(sessionId: id, after: store.threads.willWatch(id)), on: socket)
     }
 
     /// A send's frame counts toward giving up its resends only once a socket took it.
@@ -247,7 +288,10 @@ final class BridgeClient {
         socket.send(.string(String(decoding: data, as: UTF8.self))) { error in
             if let error {
                 log.error("send failed: \(error.localizedDescription)")
-                if case .decide(_, let card, _) = msg { Task { @MainActor in store.decisionFailed(for: card) } }
+                switch msg {
+                case .decide(_, let card, _), .sessionDecide(_, let card, _): Task { @MainActor in store.decisionFailed(for: card) }
+                default: break
+                }
             }
             sent(error == nil)
         }
@@ -348,6 +392,11 @@ final class BridgeClient {
                 if let openBot { transmit(.open(botId: openBot), on: ws) }
                 // Facts bots propose show as a badge and in their chats, so the app keeps them live from the start.
                 if store.has(.memory) { transmit(.memory, on: ws) }
+                // Before the outbox, so a send made offline lands after the thread's snapshot, not before it.
+                if store.has(.sessions) {
+                    if watchingSessions { transmit(.watchSessions, on: ws) }
+                    if let openSession { watchThread(openSession, on: ws) }
+                }
                 let resent = store.resendsAfterHello()
                 resent.forEach { transmitCounted($0, on: ws) }
                 let pending = outbox

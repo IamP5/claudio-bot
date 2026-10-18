@@ -136,6 +136,38 @@ private func scratchVault() -> PairingVault {
         #expect(forgotten)
     }
 
+    @Test func afterEveryHelloTheListAndTheOpenThreadAreWatchedAgainFromWhereTheAppStands() async throws {
+        let sessionsHello = #"{"type":"hello","protocol":3,"features":["sessions"],"machine":"Mac","userName":"Alex","bots":[],"epoch":"","seq":0,"resumed":false}"#
+        let snapshot = #"{"type":"session","sessionId":"s1","epoch":"e_1","rev":7,"items":[],"before":null,"live":{"itemId":"m:1","text":"Half"},"controls":{"canSend":true,"reason":null,"working":true,"queued":0,"model":null,"models":[],"mode":"default","modes":["default"]}}"#
+        let bridge = try FakeBridge(
+            onOpen: { $0.send(sessionsHello) },
+            onText: { socket, text in
+                if socket.index == 0, text.contains(#""type":"watch_session""#) {
+                    socket.send(snapshot)
+                    socket.close(code: 1000)
+                }
+            }
+        )
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        client.watchingSessions = true
+        client.openSession = SessionID("s1")
+        client.start(pairing)
+
+        try await eventually("the second watch of the thread", within: .seconds(8)) {
+            bridge.texts.filter { $0.contains(#""type":"watch_session""#) }.count == 2
+        }
+        let watches = bridge.texts.filter { $0.contains(#""type":"watch_session""#) }
+        #expect(watches[0].contains(#""after":null"#), "the first watch asks for a snapshot")
+        #expect(watches[1].contains(#""epoch":"e_1""#) && watches[1].contains(#""rev":7"#), "the next resumes from the snapshot's position")
+        #expect(bridge.texts.filter { $0.contains(#""type":"watch_sessions""#) }.count == 2)
+        #expect(client.store.threads[SessionID("s1")]?.live.text == "", "watching again drops the live text, as the contract says")
+
+        client.openSession = nil
+        try await eventually("the unwatch") { bridge.texts.contains { $0.contains(#""type":"unwatch_session""#) } }
+        client.stop()
+    }
+
     @Test func aGapInTheStreamReconnectsForAFreshHello() async throws {
         let bridge = try FakeBridge(onOpen: { socket in
             switch socket.index {

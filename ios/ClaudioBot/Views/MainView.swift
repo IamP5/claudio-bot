@@ -5,7 +5,11 @@ struct MainView: View {
     @Environment(AppStore.self) private var store
     @Environment(Router.self) private var router
     @Environment(\.horizontalSizeClass) private var sizeClass
+    #if DEBUG
+    @State private var visibility: NavigationSplitViewVisibility = Demo.showsAllColumns ? .all : .automatic
+    #else
     @State private var visibility: NavigationSplitViewVisibility = .automatic
+    #endif
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Whether each bot has an open question. A bot that gains one buzzes; bots arriving in a snapshot do not.
@@ -13,28 +17,36 @@ struct MainView: View {
         store.bots.mapValues { $0.question != nil }
     }
 
-    /// iPad only. On iPhone the profile is pushed instead.
-    private var inspectorShown: Bool {
-        sizeClass == .regular && router.showingInspector && router.selection != nil
+    /// iPad only, and only beside a bot's chat. On iPhone the profile is pushed instead.
+    private var inspectorBot: BotID? {
+        guard sizeClass == .regular, router.showingInspector, let bot = router.selection?.bot, store.bots[bot] != nil else { return nil }
+        return bot
     }
 
     var body: some View {
         @Bindable var router = router
         NavigationSplitView(columnVisibility: $visibility) {
-            HomeView()
+            SidebarRoot()
                 .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 400)
         } detail: {
             // A plain column rather than .inspector: on iPad portrait the inspector covers and dims the chat.
             HStack(spacing: 0) {
                 NavigationStack(path: $router.path) {
                     Group {
-                        if let id = router.selection, store.bots[id] != nil {
+                        switch router.selection {
+                        case .bot(let id) where store.bots[id] != nil:
                             ChatView(botId: id)
                                 .id(id)
-                        } else {
+                        case .session(let id):
+                            SessionThreadView(sessionId: id)
+                                .id(id)
+                        default:
                             ContentUnavailableView(
-                                "No chat selected", systemImage: "bubble.left.and.bubble.right",
-                                description: Text("Pick a bot, or tap + to start a chat.")
+                                router.sidebar == .sessions ? "No session selected" : "No chat selected",
+                                systemImage: router.sidebar == .sessions ? "chevron.left.forwardslash.chevron.right" : "bubble.left.and.bubble.right",
+                                description: Text(router.sidebar == .sessions
+                                    ? "Pick a session, or tap + to start one in a project."
+                                    : "Pick a bot, or tap + to start a chat.")
                             )
                             .foregroundStyle(Theme.secondary)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -51,16 +63,17 @@ struct MainView: View {
                         }
                     }
                 }
-                if inspectorShown, let id = router.selection {
+                if let id = inspectorBot {
                     Rectangle().fill(Theme.hairline).frame(width: 1).ignoresSafeArea()
                     NavigationStack { ProfileView(botId: id) }
                         .frame(width: 380)
                         .transition(reduceMotion ? .opacity : .move(edge: .trailing))
                 }
             }
-            .animation(.snappy, value: inspectorShown)
+            .animation(.snappy, value: inspectorBot)
         }
         .sheet(isPresented: $router.showingNewChat) { NewChatView() }
+        .sheet(item: $router.newSession) { NewSessionSheet(projectId: $0.projectId) }
         .sheet(isPresented: $router.showingSettings) { SettingsView() }
         .sheet(isPresented: $router.showingUsage) { PlanUsageView() }
         .sensoryFeedback(.warning, trigger: asking) { old, new in

@@ -6,7 +6,9 @@ import Foundation
 /// opens a screen directly for screenshots. `mention|chip|command` open a chat with the composer mid-sentence, and
 /// `group|groupprofile|newgroup|botexchange` the group and bot exchange screens. `usage` opens Plan usage over the bot list,
 /// `usagehot` with the session near its limit and `usageoff` with no plan limits to read. The pairing and connection states have their own:
-/// `pairconfirm|outdated` (unpaired), `confirm|unrecognized|error|oldbridge` (paired).
+/// `pairconfirm|outdated` (unpaired), `confirm|unrecognized|error|oldbridge` (paired). Sessions: `sessions` (the sidebar),
+/// `thread` (work runs and a permission card), `ask`, `plan`, `streaming`, `cloud`, `longthread` (500 items), `newsession`,
+/// `sessionsempty` and `sessionsoffline`.
 @MainActor
 enum Demo {
     private static let arguments = ProcessInfo.processInfo.arguments
@@ -29,7 +31,7 @@ enum Demo {
         let features: [Feature] = switch screen {
         case "live": [.activity]
         case "oldbridge": []
-        default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage]
+        default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions]
         }
         store.apply(.hello(Hello(protocol: oldBridge ? 2 : Wire.protocolVersion, features: features, machine: "MacBook Pro", userName: "Alex", bots: bots)))
         if !oldBridge { store.apply(.usage(usage(screen))) }
@@ -41,41 +43,46 @@ enum Demo {
         store.apply(.details(botId: BotID("engineer"), library: [], links: [], agents: agents, routines: []))
         store.apply(.agent(agents[0], messages: agentMessages))
         store.apply(.file(botId: BotID("claude"), path: "library/merge-plan.md", file: BotFile(mime: "text/markdown", content: plan, data: nil)))
+        if features.contains(.sessions) {
+            DemoSessions.load(into: store, empty: screen == "sessionsempty")
+            DemoSessions.streamParity(into: store)
+        }
 
+        router.sidebar = .bots
         switch screen {
         case "newchat": router.showingNewChat = true
         case "usage", "usagehot", "usageoff": router.showingUsage = true
         case "settings": router.showingSettings = true
         case "chat":
-            router.selection = BotID("claude")
+            router.selection = .bot(BotID("claude"))
             router.showingInspector = true
-        case "digest": router.selection = BotID("news")
-        case "engineer": router.selection = BotID("engineer")
-        case "factory": router.selection = BotID("maker")
+        case "digest": router.selection = .bot(BotID("news"))
+        case "engineer": router.selection = .bot(BotID("engineer"))
+        case "factory": router.selection = .bot(BotID("maker"))
         case "profile":
-            router.selection = BotID("claude")
+            router.selection = .bot(BotID("claude"))
             router.path = [.profile(BotID("claude"))]
         case "links", "library":
-            router.selection = BotID("claude")
+            router.selection = .bot(BotID("claude"))
             router.path = [.profile(BotID("claude"), tab: screen == "links" ? .links : .library)]
         case "file":
-            router.selection = BotID("claude")
+            router.selection = .bot(BotID("claude"))
             router.path = [.profile(BotID("claude"), tab: .library), .file(BotID("claude"), path: "library/merge-plan.md")]
         case "agent":
-            router.selection = BotID("engineer")
+            router.selection = .bot(BotID("engineer"))
             router.path = [.exchange(AgentID("a1"))]
         case "routine":
-            router.selection = BotID("news")
+            router.selection = .bot(BotID("news"))
             router.path = [.routine(BotID("news"), RoutineID("r1"))]
-        case "approval", "live": router.selection = BotID("release")
-        case "mention", "chip", "command": router.selection = BotID("claude")
-        case "group": router.selection = BotID("crew")
+        case "approval", "live": router.selection = .bot(BotID("release"))
+        case "mention", "chip", "command": router.selection = .bot(BotID("claude"))
+        case "group": router.selection = .bot(BotID("crew"))
         case "groupprofile":
-            router.selection = BotID("crew")
+            router.selection = .bot(BotID("crew"))
             router.path = [.profile(BotID("crew"))]
         case "newgroup": router.showingNewChat = true
         case "botexchange":
-            router.selection = BotID("maker")
+            router.selection = .bot(BotID("maker"))
             router.path = [.botExchange(BotID("maker"), peer: BotID("standup"))]
         case "homelive":
             // A bot further down posts a question, so Home moves it to the top with the dot and badge.
@@ -92,12 +99,29 @@ enum Demo {
         case "confirm": app.propose(invite)
         case "unrecognized": store.setConnection(.unrecognized)
         case "error":
-            router.selection = BotID("release")
+            router.selection = .bot(BotID("release"))
             store.apply(.error(message: "That card already closed."))
         case "oldbridge": router.showingSettings = true
+        case "sessions", "sessionsempty": router.sidebar = .sessions
+        case "thread": router.open(.session(DemoSessions.fade))
+        case "ask": router.open(.session(DemoSessions.sidebar))
+        case "plan": router.open(.session(DemoSessions.playlist))
+        case "streaming": router.open(.session(DemoSessions.parity))
+        case "cloud": router.open(.session(DemoSessions.changelog))
+        case "longthread": router.open(.session(DemoSessions.catalog))
+        case "newsession":
+            router.sidebar = .sessions
+            router.newSession = NewSessionRequest(projectId: DemoSessions.soltaOSom)
+        case "sessionsoffline":
+            router.sidebar = .sessions
+            store.setConnection(.disconnected(retryAt: .now + 25))
         default: break
         }
     }
+
+    /// `-demoColumns` opens the iPad with the sidebar beside the detail. A simulator in portrait cannot be turned from
+    /// inside the app, and this is the split view a landscape iPad shows.
+    static let showsAllColumns = arguments.contains("-demoColumns")
 
     /// The bots already ticked when `newgroup` opens the group picker.
     static var groupPick: [BotID]? {
@@ -125,6 +149,7 @@ enum Demo {
 
     /// Stands in for the bridge: answers devices and pair_code, settles question and permission cards, and replies to a send.
     static func respond(to msg: ClientMessage, store: AppStore) {
+        if DemoSessions.respond(to: msg, store: store) { return }
         switch msg {
         case .devices:
             store.apply(.devices(devices))

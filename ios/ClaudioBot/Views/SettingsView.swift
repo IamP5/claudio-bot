@@ -31,6 +31,25 @@ struct SettingsView: View {
 
                 PlanUsageSection()
 
+                if store.has(.sessions) {
+                    Section {
+                        Picker("Show agent sessions in the Claude app", selection: Binding(
+                            get: { store.sessions.mirror ?? .auto },
+                            set: { pref in
+                                store.sessions.setMirror(pref)
+                                client.send(.sessionPrefs(mirror: pref))
+                            }
+                        )) {
+                            ForEach(MirrorPref.allCases, id: \.self) { Text(SessionText.mirror($0)).tag($0) }
+                        }
+                        .pickerStyle(.navigationLink)
+                    } header: {
+                        Text("Sessions")
+                    } footer: {
+                        Text("Sessions your bots' agents and this phone start can appear in the Claude app on your Mac. Automatically adds them while you're away from the Mac; When I tap adds one when you choose Open in Claude app.")
+                    }
+                }
+
                 devices
 
                 MemorySection()

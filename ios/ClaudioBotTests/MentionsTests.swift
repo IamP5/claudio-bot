@@ -239,6 +239,13 @@ private func backspace(_ draft: inout ComposerDraft, caret: inout Int) {
         ])
         #expect(MentionText.segments("plain", mentions: []) == [.text("plain")])
     }
+
+    @Test func aMentionInAFilledBubbleTakesTheBubbleTextOverAFaintTint() {
+        #expect(MentionText.Style.filledBubble.usesBubbleTextColor)
+        #expect(MentionText.Style.filledBubble.tintOpacity > 0 && MentionText.Style.filledBubble.tintOpacity < 0.4)
+        #expect(!MentionText.Style.grayBubble.usesBubbleTextColor)
+        #expect(MentionText.Style.grayBubble.tintOpacity == 0)
+    }
 }
 
 @Suite struct GroupRulesTests {

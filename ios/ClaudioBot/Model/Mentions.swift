@@ -289,6 +289,15 @@ enum MentionText {
         case mention(Mention, label: String)
     }
 
+    /// How a mention reads in a bubble. In a filled bubble the bot's own color would vanish into the fill, so the
+    /// name takes the bubble's text color over a faint tint. In a gray bubble it keeps the bot's color, bare.
+    enum Style: Equatable {
+        case filledBubble, grayBubble
+
+        var usesBubbleTextColor: Bool { self == .filledBubble }
+        var tintOpacity: Double { self == .filledBubble ? 0.22 : 0 }
+    }
+
     /// Each "@name" a mention names, at the start of a word, becomes a segment. Longer names win, so "@news digest"
     /// is not cut to "@news".
     static func segments(_ text: String, mentions: [Mention]) -> [Segment] {

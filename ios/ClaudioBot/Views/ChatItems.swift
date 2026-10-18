@@ -78,13 +78,12 @@ struct UserBubble: View {
             case let .mention(mention, label):
                 var run = AttributedString(label)
                 run.inlinePresentationIntent = .stronglyEmphasized
+                let style = MentionText.Style.filledBubble
+                run.foregroundColor = style.usesBubbleTextColor ? color.onAccent : nil
+                run.backgroundColor = color.onAccent.opacity(style.tintOpacity)
                 if case .bot(let id, _) = mention {
-                    run.foregroundColor = store.bots[id]?.avatar.color.accent ?? color.onAccent
                     run.link = URL(string: "claudiobot://bot/\(id.rawValue)")
-                } else {
-                    run.foregroundColor = Theme.link
                 }
-                run.backgroundColor = Theme.background.opacity(0.55)
                 out += run
             }
         }

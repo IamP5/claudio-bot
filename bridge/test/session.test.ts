@@ -1720,7 +1720,7 @@ describe("background work", () => {
     await flush();
     const r = h.push("[r]", routine);
     await flush();
-    expect([first.closed, h.queries.length, h.session.current?.id]).toEqual([false, 1, r]);
+    expect([first.closed, h.queries.length, h.session.current?.id as string | undefined]).toEqual([false, 1, r]);
     first.emit(tasks());
     await flush();
     expect([first.closed, h.queries.length, h.q().received.map((x) => x.text), h.q().options.maxBudgetUsd]).toEqual([true, 2, ["[r]"], 10]);
@@ -1750,7 +1750,7 @@ describe("background work", () => {
     await flush();
     h.q().emit(said("The build finished."), resultMsg(0.2));
     await flush();
-    expect([h.finals(r), h.session.current?.id]).toEqual([[], r]);
+    expect([h.finals(r), h.session.current?.id as string | undefined]).toEqual([[], r]);
   });
 
   test("an attended turn on a stale query with background work runs on it rather than kill the work", async () => {
@@ -1799,7 +1799,7 @@ describe("background work", () => {
     h.session.close();
     const after = harness({ state: structuredClone(h.state) });
     await flush();
-    expect(after.notes).toEqual([`The bridge restarted, so Ana's background work stopped: npm run build; ${"x".repeat(79)}…`]);
+    expect(after.notes).toEqual([`The bridge restarted, so Ana's background work stopped: npm run build; ${"x".repeat(79)}….`]);
     after.session.close();
     const again = harness({ state: structuredClone(after.state) });
     await flush();
@@ -1837,7 +1837,7 @@ describe("turns a background task wakes", () => {
     const mine = lastUuid(h);
     h.q().emit(echoing(said("The build finished."), "wake"), echoing(resultMsg(0.3), "wake"));
     await flush();
-    expect([h.finals(id), h.session.current?.id]).toEqual([[], id]);
+    expect([h.finals(id), h.session.current?.id as string | undefined]).toEqual([[], id]);
     expect(h.usage.map((u) => [u.cumulativeUsd, (u.initiator as Initiator).kind])).toEqual([[0.3, "system"]]);
     expect(h.messages.map((x) => x.turn)).toEqual([null, null]);
     h.q().emit(echoing(said("hi"), mine), echoing(resultMsg(0.5), "wake", mine));
@@ -1869,7 +1869,7 @@ describe("turns a background task wakes", () => {
     const busy = await started("[a]");
     busy.h.q().emit(rejected(resetsAt), echoing(apiErrorResult(0), "wake"));
     await flush();
-    expect([busy.h.account.parkedUntil, busy.h.finals(busy.id), busy.h.session.current?.id]).toEqual([until, [], busy.id]);
+    expect([busy.h.account.parkedUntil, busy.h.finals(busy.id), busy.h.session.current?.id as string | undefined]).toEqual([until, [], busy.id]);
     const idle = await started("[a]");
     idle.h.q().emit(resultMsg(0.1));
     await flush();
@@ -1935,7 +1935,7 @@ describe("commands", () => {
     h.session.push(command("/greet Ana"));
     await flush();
     expect(h.q().received[0]!.content).toEqual([
-      { type: "text", text: "[Your question expired.]\n\nFacts: likes tea" },
+      { type: "text", text: "Facts: likes tea\n\n[Your question expired.]" },
       { type: "text", text: "/greet Ana" },
     ]);
     h.q().emit(said("Hi Ana"), resultMsg(0.1));

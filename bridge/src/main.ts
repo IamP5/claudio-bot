@@ -16,6 +16,7 @@ import { scanProjects } from "./projects";
 import { createPush, senderFromEnv } from "./push";
 import { serve, threadTopic } from "./serve";
 import { createClaudeApps, fakeDesktop, realAppsDeps } from "./claudeApps";
+import { serveControl } from "./control";
 import type { PairOffer } from "./protocol";
 import { claudeExecutable, ownPids } from "./session";
 import { bridgeHome, createSaver, loadWorld } from "./store";
@@ -142,6 +143,7 @@ const hub = createHub({
 
 const transport = serve({ devices, stream, hub, legacy, log, now, port, offer });
 const urls = bridgeUrls(names, lanAddresses(), transport.port);
+const control = serveControl({ home, offer, log });
 
 function offer(): PairOffer {
   return { ...devices.newCode(), urls };
@@ -149,6 +151,7 @@ function offer(): PairOffer {
 
 function shutdown() {
   let saved = true;
+  control?.stop();
   try {
     hub.close();
   } catch (e) {

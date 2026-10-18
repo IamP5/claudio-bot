@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BotId, MessageId, RoutineId, RunId } from "../src/protocol";
+import { newGroup } from "../src/groups";
 import { createSaver, flushNow, loadWorld, StateFileError } from "../src/store";
 import { emptySession, emptyWorld, exchangeBetween, logExchange, newBot, type Signature } from "../src/world";
 
@@ -345,6 +346,28 @@ test("exchange logs survive a save and a load; a file from before them reads as 
   const old = freshHome();
   writeState(old, v3({ bots: [v3Bot] }));
   expect(loadWorld(old).world.exchanges).toEqual([]);
+});
+
+test("groups and a group turn's envelope survive a save and a load, apart from the bots; a file from before groups has none", () => {
+  const home = freshHome();
+  const { world } = loadWorld(home);
+  const ana = newBot({ id: "b_ana" as BotId, name: "ana", avatar: { shape: "circle", color: "white" }, at });
+  const bo = newBot({ id: "b_bo" as BotId, name: "bo", avatar: { shape: "star4", color: "teal" }, at });
+  world.bots.set(ana.id, ana);
+  world.bots.set(bo.id, bo);
+  const crew = newGroup({ id: "g_crew" as BotId, name: "Crew", members: [ana.id, bo.id, "b_gone" as BotId], avatar: ana.avatar, at });
+  world.groups.set(crew.id, { ...crew, muted: true });
+  (ana.session.pending as unknown[]).push({ id: "e_1", kind: "envelope", at, text: "[Group chat]", initiator: { kind: "user" }, settles: null, attempts: 0, group: crew.id });
+  flushNow(world, home);
+
+  const again = loadWorld(home).world;
+  expect(again.groups.get(crew.id)).toMatchObject({ name: "Crew", muted: true, members: [ana.id, bo.id] });
+  expect(again.bots.get(ana.id)!.session.pending[0]!.group).toBe(crew.id);
+  expect([...again.bots.keys()]).toEqual([ana.id, bo.id]);
+
+  const old = freshHome();
+  writeState(old, v3({ bots: [v3Bot] }));
+  expect(loadWorld(old).world.groups.size).toBe(0);
 });
 
 test("the saver debounces, and \"now\" writes before it returns", async () => {

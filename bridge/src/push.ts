@@ -2,7 +2,7 @@ import type { Tickable } from "./clock";
 import type { BotId, MessageId } from "./protocol";
 import type { Persist } from "./store";
 import { BOT_NAME_MAX, displayName, errorText } from "./text";
-import { own, type PushState, type World } from "./world";
+import { chatOf, own, type PushState, type World } from "./world";
 
 // "<bot> needs you" when no socket is live: an ntfy-style POST to CLAUDIOBOT_PUSH_URL now, APNs later behind the
 // same Sender. The only writer of World.push.
@@ -98,7 +98,7 @@ export function createPush(deps: {
   // Derived from the durable log rather than held in memory, so the throttle survives a restart. A record stamped
   // after now (the clock moved back) does not throttle.
   function throttled(botId: BotId, now: number): boolean {
-    const ids = new Set(world.bots.get(botId)?.messages.map((m) => m.id));
+    const ids = new Set(chatOf(world, botId)?.messages.map((m) => m.id));
     return world.push.sent.some((s) => {
       const at = Date.parse(s.at);
       return s.key.endsWith("|message") && ids.has(idOf(s.key) as MessageId) && !Number.isNaN(at) && now - at >= 0 && now - at < MESSAGE_THROTTLE_MS;
@@ -112,7 +112,7 @@ export function createPush(deps: {
 
   function notify(bot: { id: BotId; name: string }, reason: PushReason, messageId: MessageId, now = deps.now().getTime()): boolean {
     if (sender === null || live(now)) return false;
-    if ((reason === "message" || reason === "result") && world.bots.get(bot.id)?.muted) return false;
+    if ((reason === "message" || reason === "result") && chatOf(world, bot.id)?.muted) return false;
     const key = `${messageId}|${reason}`;
     if (pushed(key)) return false;
     if (now < graceEnds && openAtStart.has(messageId)) {

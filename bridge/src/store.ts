@@ -14,6 +14,7 @@ import {
   type DeviceRecord,
   type ExchangeLog,
   type GateState,
+  type GroupRecord,
   type Owned,
   type PushState,
   type SessionState,
@@ -40,6 +41,8 @@ type StateFileV3 = {
   account: Owned<AccountState>;
   /** Absent in files from before exchanges kept their text. */
   exchanges?: Owned<ExchangeLog[]>;
+  /** Absent in files from before groups: every record in bots is a plain bot, and there are no groups. */
+  groups?: GroupRecord[];
 };
 
 // Protocol 2's records, frozen here for the upgrade only.
@@ -151,6 +154,7 @@ const V3_FILE = z.looseObject({
   push: z.looseObject({ sent: z.array(anyObject) }),
   account: z.looseObject({ parkedUntil: maybeText }),
   exchanges: z.array(z.looseObject({ bots: z.tuple([text, text]), messages: z.array(z.looseObject({ id: text, at: text, from: text, text })) })).optional(),
+  groups: z.array(z.looseObject({ ...profile, muted: z.boolean(), members: z.array(text) })).optional(),
 });
 
 /**
@@ -313,8 +317,12 @@ function fromV3(file: StateFileV3): World {
     if (bot.connectorsOff === undefined) Object.assign(bot, { connectorsOff: [] });
   }
   for (const rec of file.agents) rec.agent = { ...rec.agent, evidence: rec.agent.evidence ?? null, worktree: rec.agent.worktree ?? null };
+  // A member is a bot of this file; a hand-edited file may name one that is gone.
+  const botIds = new Set(file.bots.map((b) => b.id));
+  for (const group of file.groups ?? []) group.members = group.members.filter((id) => botIds.has(id));
   return {
     bots: new Map(file.bots.map((b) => [b.id, b])),
+    groups: new Map((file.groups ?? []).map((g) => [g.id, g])),
     agents: new Map(file.agents.map((a) => [a.agent.id, a])),
     gate: file.gate,
     devices: file.devices,
@@ -333,6 +341,7 @@ const toFile = (world: World): StateFileV3 => ({
   push: world.push,
   account: world.account,
   exchanges: world.exchanges,
+  groups: [...world.groups.values()],
 });
 
 /**

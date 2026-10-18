@@ -264,6 +264,16 @@ private func backspace(_ draft: inout ComposerDraft, caret: inout Int) {
         #expect(GroupRules.typing(["a", "b", "c", "d"]) == "a, b and 2 more are typing…")
     }
 
+    @Test func theTypingRowNamesOnlyTheMembersTheGroupsActivityLineNames() {
+        var busyElsewhere = digest
+        busyElsewhere.status = .working
+        let members = [busyElsewhere, engineer, lead]
+        #expect(GroupRules.typists(members, line: nil).isEmpty)
+        #expect(GroupRules.typists(members, line: "engineer is typing…").map(\.id) == [engineer.id])
+        #expect(GroupRules.typists(members, line: "Engineering Lead is typing…").map(\.id) == [lead.id])
+        #expect(GroupRules.typists(members, line: "engineer and Engineering Lead are typing…").map(\.id) == [engineer.id, lead.id])
+    }
+
     @Test func aRunOfMessagesFromOneMemberShowsItsNameOnce() {
         let messages: [Message] = [
             .bot(id: MessageID("m1"), at: at, text: "one", from: BotID("b1")),

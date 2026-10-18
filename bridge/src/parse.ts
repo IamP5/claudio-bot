@@ -1,3 +1,4 @@
+import { GROUP_SIZE } from "./groups";
 import { BOT_NAME_MAX } from "./text";
 import {
   COLORS,
@@ -70,7 +71,6 @@ function boundedStr(o: Obj, key: string, max: number): string {
 
 const MENTIONS_MAX = 10;
 const MENTION_NAME_MAX = 64;
-const GROUP_MEMBERS = { min: 2, max: 8 };
 
 function mentions(v: unknown): Mention[] {
   if (!Array.isArray(v)) throw new ParseError("mentions must be an array");
@@ -86,8 +86,8 @@ function mentions(v: unknown): Mention[] {
 
 function members(v: unknown): BotId[] {
   if (!Array.isArray(v) || v.some((id) => typeof id !== "string" || id === "")) throw new ParseError("members must be an array of bot ids");
-  if (v.length < GROUP_MEMBERS.min || v.length > GROUP_MEMBERS.max || new Set(v).size !== v.length)
-    throw new ParseError(`members must be ${GROUP_MEMBERS.min} to ${GROUP_MEMBERS.max} different bots`);
+  if (v.length < GROUP_SIZE.min || v.length > GROUP_SIZE.max || new Set(v).size !== v.length)
+    throw new ParseError(`members must be ${GROUP_SIZE.min} to ${GROUP_SIZE.max} different bots`);
   return v as BotId[];
 }
 

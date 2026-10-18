@@ -167,6 +167,18 @@ The first-run brief asks three questions and keeps the answers with `remember`. 
 
 A **connector** is an MCP server a bot's queries load. The phone sees each one's name, status and switch, never its configuration. `BotRecord.connectorsOff` is saved and covers the bot's agents. It reaches every query at open as the `deniedMcpServers` flag setting and the live query at once through `toggleMcpServer`, and the gate denies any call to an off server (`connector.off`), so an agent that kept its query through a toggle is still held to it.
 
+## Commands
+
+Typing `/` in the composer lists what the bot's own Claude Code session can run: the user's skills, plugin skills (`plugin:skill`), the bot's project skills, and nine allowed built-ins (compact, code-review, security-review, simplify, init, verify, dataviz, deep-research, claude-api). The list comes from the Agent SDK's `supportedCommands()` and lives in one table in `bridge/src/commands.ts`. Every other built-in stays hidden, so a new CLI built-in never appears by default, and neither does a skill that shares a hidden built-in's name. Reading the list opens a query and sends it nothing, so it costs no turn. The cache belongs to the query it came from and is read again once that query closes.
+
+A send whose text starts with `/name` for a listed command is a `command` turn. The bridge sends it to Claude Code as the bare string, exactly as typed, with no envelope, name line, brief or facts. A pending brief or set of facts waits for the next ordinary turn. This is the only form Claude Code expands: the same text with anything above it, or as one block among several, reaches the model as plain text (measured on Agent SDK 0.3.302 and Claude Code 2.1.301). A `/word` that is not on the list goes as an ordinary message, so it can never run `/clear` on a bot's long-lived session. `start_agent` takes `slash` the same way, so a bot can hand an agent a skill that only the user may invoke.
+
+## Mentions and exchanges
+
+Typing `@` lists bots, then the bot's connectors with their status, as Grok Bot does. A pick becomes a token, and the send carries `mentions` next to the plain text. The bridge drops a mention of a bot that does not exist, or of a connector that is off or unseen. It keeps the rest on the user message and adds one line per mention to the bot's turn: message this bot with `message_bot` for its part of the request, or use this connector's tools. A handoff starts at hop 0 of the user's chain, so the mentioned bot can still answer. `message_bot` finds a bot by id, name or title.
+
+The bridge keeps the text of every `message_bot` message for each pair of bots, the newest 200, and drops a pair's log when either bot is deleted. Tapping "Messaged X" opens it, like Grok Bot.
+
 ## The activity line
 
 While a turn runs, the app shows one line per bot or mac agent, such as "Reading hub.ts" or "Running tests". `activity.ts` reads it from `tool_use` blocks only, cuts URLs to their host, drops command-line options with their values, then masks secrets with `text.redact`. It sends at most one line per actor every 1.5 s, sends the trailing line when the window closes, and never sends the same text twice. Every turn end clears it, a deferred one included, and `delete_bot` clears it before `bot_removed`. Tool use between turns sets none. The line is a signal: never stored, replayed or pushed.

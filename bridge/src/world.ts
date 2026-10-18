@@ -67,6 +67,9 @@ export const isRoutineChain = (i: Initiator): boolean => rootOf(i).kind === "rou
 /** Bot-to-bot hops that led to this turn. The policy refuses message_bot and create_bot at 2 or more. */
 export const hopsOf = (i: Initiator): number => (i.kind === "bot" || i.kind === "agent" ? i.hops : 0);
 
+/** A turn at this many hops reaches no other bot: message_bot, create_bot and a group mention all stop here. */
+export const HOP_LIMIT = 2;
+
 /** The hop count of a bot message or a bot creation made during a turn that `by` started. */
 export const hopsAfter = (by: Initiator | null): number => (by === null ? 0 : hopsOf(by)) + 1;
 
@@ -111,6 +114,11 @@ export type Pending = {
    * three retries) is the poison limit.
    */
   attempts: number;
+  /**
+   * The group this turn answers in: its text posts to that group's conversation as the bot. Absent for the bot's own
+   * chat, and on every envelope saved before groups existed.
+   */
+  group?: BotId;
 };
 
 /** The turn in flight. Persisted so a restart can apply the replay rule. */
@@ -287,7 +295,8 @@ export type DeviceRecord = {
 export type PushState = { sent: { key: string; at: string }[] };
 
 
-export type BotRecord = {
+/** What a bot and a group share: one chat in the phone's list. Writer: hub. */
+export type ChatRecord = {
   id: BotId;
   name: string;
   title: string | null;
@@ -295,19 +304,30 @@ export type BotRecord = {
   pinned: boolean;
   hidden: boolean;
   createdAt: string;
-  /** Writer: hub.say → post. Status is not stored: it is derived from the session and the gate. */
+  /** Writer: hub.say → post. Status is not stored: it is derived from the sessions and the gate. */
   messages: Message[];
   unread: number;
-  /** null: the bridge default. Writer: hub (update_bot). */
-  dailyCapUsd: number | null;
   /** No message or result pushes. Writer: hub (update_bot); push.ts reads it. */
   muted: boolean;
+};
+
+export type BotRecord = ChatRecord & {
+  /** null: the bridge default. Writer: hub (update_bot). */
+  dailyCapUsd: number | null;
   /** MCP servers the user turned off for this bot and its agents, by name. Writer: connectors.ts. */
   readonly connectorsOff: Owned<string[]>;
   readonly session: Owned<SessionState>;
   readonly routines: Owned<RoutineRecord[]>;
   readonly rules: Owned<StandingRule[]>;
 };
+
+/**
+ * A chat of the user and 2 to 8 bots (groups.GROUP_SIZE). It has no session, home, routines, agents, skills,
+ * connectors, cards or spend: its members answer in it from their own sessions. So it lives in World.groups, apart
+ * from the bots that every session, routine, card and connector path walks. members: in the order the user picked
+ * them. Writer: hub.
+ */
+export type GroupRecord = ChatRecord & { members: BotId[] };
 
 export type AgentRecord = {
   /** Writer: agents.ts. */
@@ -339,6 +359,8 @@ export type ExchangeLog = { bots: [BotId, BotId]; messages: ExchangeMessage[] };
 
 export type World = {
   bots: Map<BotId, BotRecord>;
+  /** Group ids share the bot id space, as Bot.id on the wire, and never collide with a bot's. */
+  groups: Map<BotId, GroupRecord>;
   agents: Map<AgentId, AgentRecord>;
   readonly gate: Owned<GateState>;
   readonly devices: Owned<DeviceRecord[]>;
@@ -349,6 +371,7 @@ export type World = {
 
 export const emptyWorld = (): World => ({
   bots: new Map(),
+  groups: new Map(),
   agents: new Map(),
   gate: { open: [], grants: [], daily: [], repos: [] },
   devices: [],
@@ -382,7 +405,10 @@ export function forgetExchanges(world: World, botId: BotId) {
   logs.splice(0, logs.length, ...logs.filter((l) => !l.bots.includes(botId)));
 }
 
-export const newMessageId = () => `m_${crypto.randomUUID()}` as MessageId;
+/** The bot or the group with this id: the chats the phone lists. */
+export const chatOf = (world: World, id: BotId): ChatRecord | undefined => world.bots.get(id) ?? world.groups.get(id);
+
+export const newMessageId = () =>`m_${crypto.randomUUID()}` as MessageId;
 
 export function newBot(fields: { id: BotId; name: string; avatar: Avatar; at: string }): BotRecord {
   return {
@@ -428,12 +454,12 @@ function unreadDelta(previous: Message | undefined, next: Message): number {
 }
 
 // Replaying the same message changes nothing, so a retried broadcast never double-counts unread.
-export function post(bot: BotRecord, message: Message): Message {
-  const i = bot.messages.findIndex((m) => m.id === message.id);
-  const previous = i === -1 ? undefined : bot.messages[i];
-  bot.unread += unreadDelta(previous, message);
-  if (i === -1) bot.messages.push(message);
-  else bot.messages[i] = message;
+export function post(chat: ChatRecord, message: Message): Message {
+  const i = chat.messages.findIndex((m) => m.id === message.id);
+  const previous = i === -1 ? undefined : chat.messages[i];
+  chat.unread += unreadDelta(previous, message);
+  if (i === -1) chat.messages.push(message);
+  else chat.messages[i] = message;
   return message;
 }
 
@@ -529,30 +555,46 @@ export function routineView(r: Owned<RoutineRecord>, limit = r.runs.length): Rou
   };
 }
 
-/** The bot frame without its spend, which the ledger adds. */
-export function toBot(bot: BotRecord, status: BotStatus): Omit<Bot, keyof BotSpend> {
-  const lastBot = bot.messages.findLast((m) => m.kind === "bot");
-  const card = openCard(bot.messages);
+function chatFrame(chat: ChatRecord, status: BotStatus) {
+  const lastBot = chat.messages.findLast((m) => m.kind === "bot");
   return {
-    id: bot.id,
-    kind: "bot",
-    members: [],
-    name: bot.name,
-    title: bot.title,
-    avatar: bot.avatar,
-    pinned: bot.pinned,
-    hidden: bot.hidden,
+    id: chat.id,
+    name: chat.name,
+    title: chat.title,
+    avatar: chat.avatar,
+    pinned: chat.pinned,
+    hidden: chat.hidden,
     status,
-    unread: bot.unread,
-    question: card === null ? null : card.kind === "question" ? card.question : `${card.label}: ${card.detail}`,
+    unread: chat.unread,
     preview: lastBot?.kind === "bot" ? (lastBot.text.trim().split("\n")[0] ?? "") : "",
-    lastAt: bot.messages.at(-1)?.at ?? bot.createdAt,
-    createdAt: bot.createdAt,
-    routines: bot.routines.map((r) => routineView(r, RUNS_ON_BOT)),
-    dailyCapUsd: bot.dailyCapUsd,
-    muted: bot.muted,
+    lastAt: chat.messages.at(-1)?.at ?? chat.createdAt,
+    createdAt: chat.createdAt,
+    muted: chat.muted,
   };
 }
+
+/** The bot frame without its spend, which the ledger adds. */
+export function toBot(bot: BotRecord, status: BotStatus): Omit<Bot, keyof BotSpend> {
+  const card = openCard(bot.messages);
+  return {
+    ...chatFrame(bot, status),
+    kind: "bot",
+    members: [],
+    question: card === null ? null : card.kind === "question" ? card.question : `${card.label}: ${card.detail}`,
+    routines: bot.routines.map((r) => routineView(r, RUNS_ON_BOT)),
+    dailyCapUsd: bot.dailyCapUsd,
+  };
+}
+
+/** A group's frame. Its members' cards open in their own chats, so a group never asks anything itself. */
+export const toGroup = (group: GroupRecord, status: BotStatus): Omit<Bot, keyof BotSpend> => ({
+  ...chatFrame(group, status),
+  kind: "group",
+  members: [...group.members],
+  question: null,
+  routines: [],
+  dailyCapUsd: null,
+});
 
 export const sortBots = <B extends Pick<Bot, "pinned" | "lastAt">>(bots: B[]): B[] =>
   [...bots].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastAt.localeCompare(a.lastAt));
@@ -589,7 +631,7 @@ function extractUrls(text: string): string[] {
   return (text.match(URL_PATTERN) ?? []).map((u) => u.replace(/[.,;:!?*_]+$/, ""));
 }
 
-export function linksOf(bot: BotRecord, agents: Agent[]): Link[] {
+export function linksOf(bot: ChatRecord, agents: Agent[]): Link[] {
   const found: { url: string; at: string }[] = [];
   for (const m of bot.messages) if (m.kind === "bot") for (const url of extractUrls(m.text)) found.push({ url, at: m.at });
   for (const a of agents) if (a.url) found.push({ url: a.url, at: a.createdAt });

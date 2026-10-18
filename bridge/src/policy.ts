@@ -20,7 +20,7 @@ import type { MessageId } from "./protocol";
 import type { ClaudioTool } from "./tools";
 import { heredocBodies, shellCommands, type Word } from "./shell";
 import { BODY_KEYS, sha256 } from "./text";
-import { actorKey, attended, hopsOf, isRoutineChain, type Actor, type Fingerprint, type Grant, type Initiator, type Signature, type StandingRule } from "./world";
+import { actorKey, attended, HOP_LIMIT, hopsOf, isRoutineChain, type Actor, type Fingerprint, type Grant, type Initiator, type Signature, type StandingRule } from "./world";
 
 /** A tool call as the policy sees it. Nothing in here is `unknown`. */
 export type ToolCall = {
@@ -876,7 +876,7 @@ const BANS: readonly { id: string; tools: readonly string[]; applies: (i: Initia
   {
     id: "ban.hops",
     tools: [claudio("message_bot"), claudio("create_bot")],
-    applies: (i) => hopsOf(i) >= 2,
+    applies: (i) => hopsOf(i) >= HOP_LIMIT,
     reason: "This work came through 2 or more bot-to-bot messages, so it cannot message or create bots. It did not run. Finish with what you have.",
   },
   {

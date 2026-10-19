@@ -88,10 +88,7 @@ struct ExchangeView: View {
                         Group {
                             switch row {
                             case .separator(let date):
-                                Text(TimeLabel.separator(date))
-                                    .font(.ui(size: 13))
-                                    .foregroundStyle(Theme.tertiary)
-                                    .frame(maxWidth: .infinity)
+                                TimeSeparator(date: date)
                             case let .message(.bot(_, _, text, from)):
                                 MemberBubble(sender: from.flatMap { store.bots[$0] }, text: text, opensRun: opensRun) { router.open($0) }
                             case .message:
@@ -107,7 +104,9 @@ struct ExchangeView: View {
                 .frame(maxWidth: .infinity)
             }
             .defaultScrollAnchor(.bottom)
+            #if os(iOS)
             .safeAreaInset(edge: .bottom) { closeBar { EmptyView() } }
+            #endif
         } else {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -134,7 +133,11 @@ struct ExchangeView: View {
                     .frame(maxWidth: .infinity)
                 }
                 .defaultScrollAnchor(.bottom)
+                #if os(macOS)
+                .toolbar { agentToolbar(thread.agent) }
+                #else
                 .safeAreaInset(edge: .bottom) { actions(thread.agent) }
+                #endif
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -145,16 +148,36 @@ struct ExchangeView: View {
         let fromBot = message.from == .bot
         return HStack(spacing: 0) {
             if fromBot { Spacer(minLength: 48) }
-            MarkdownText(text: message.text)
+            MarkdownText(text: message.text, fillsWidth: Bubble.fillsWidth)
                 .font(.ui(size: 16))
+                .bubbleText()
                 .foregroundStyle(fromBot ? color.onAccent : .white)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(fromBot ? color.accent : Theme.bubble, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .padding(Bubble.padding)
+                .background(fromBot ? color.accent : Theme.bubble, in: Bubble.shape)
             if !fromBot { Spacer(minLength: 48) }
         }
+        .bubbleRow(fromBot ? .trailing : .leading)
     }
+
+    #if os(macOS)
+    /// On a Mac, Back and ⌘[ already close the thread, so the agent's actions sit in the toolbar.
+    @ToolbarContentBuilder
+    private func agentToolbar(_ agent: Agent) -> some ToolbarContent {
+        if agent.status == .working {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Stop", systemImage: "stop.fill") { client.send(.stopAgent(agentId: agent.id)) }
+                    .help("Stop the Agent")
+            }
+        }
+        if let url = agent.url {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Open in Claude", systemImage: "arrow.up.right.square") { openURL(url) }
+                    .help("Open in Claude")
+            }
+        }
+    }
+    #endif
 
     private func status(_ agent: Agent) -> some View {
         VStack(spacing: 6) {
@@ -186,6 +209,7 @@ struct ExchangeView: View {
         return spend.reached ? "Used its \(Money.text(budget)) budget" : "Spent \(spend.text) budget"
     }
 
+    #if os(iOS)
     private func actions(_ agent: Agent) -> some View {
         closeBar {
             if agent.status == .working {
@@ -230,4 +254,5 @@ struct ExchangeView: View {
         .padding(.bottom, 8)
         .frame(maxWidth: 560)
     }
+    #endif
 }

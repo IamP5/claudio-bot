@@ -63,6 +63,30 @@ private let refused = "Another ClaudioBot bridge (pid 41) is using /Users/alex/.
         #expect(!ServiceState.notInstalled(checkout: nil).canStart)
         #expect(terminal.selfPairs && !managed.selfPairs)
     }
+
+    @Test func setUpInstallsStartsAndPairsTryingEachStepOnce() {
+        #expect(ServiceState.notInstalled(checkout: checkout).setUpStep(after: []) == .install(checkout))
+        #expect(ServiceState.starting.setUpStep(after: [.install(checkout)]) == .wait)
+        #expect(ServiceState.stopped.setUpStep(after: []) == .start)
+        #expect(ServiceState.running(managed: true, selfPairing: false).setUpStep(after: []) == .restart)
+        #expect(ServiceState.running(managed: true, selfPairing: true).setUpStep(after: [.install(checkout)]) == .pair)
+        // A step that did not help ends the setup instead of looping.
+        #expect(ServiceState.notInstalled(checkout: checkout).setUpStep(after: [.install(checkout)]) == .giveUp)
+        #expect(ServiceState.failed(reason: "x", logTail: []).setUpStep(after: [.restart]) == .giveUp)
+        // Nothing to install from, or a terminal's bridge without the control socket: only the user can help.
+        #expect(ServiceState.notInstalled(checkout: nil).setUpStep(after: []) == .giveUp)
+        #expect(ServiceState.running(managed: false, selfPairing: false).setUpStep(after: []) == .giveUp)
+    }
+
+    @Test func setUpProgressFollowsTheStateAndTheActionUnderWay() {
+        #expect(ServiceState.notInstalled(checkout: checkout).setUpPhase(action: nil) == .install)
+        #expect(ServiceState.stopped.setUpPhase(action: .installing) == .install)
+        #expect(ServiceState.starting.setUpPhase(action: nil) == .start)
+        #expect(ServiceState.failed(reason: "x", logTail: []).setUpPhase(action: nil) == .start)
+        #expect(ServiceState.running(managed: true, selfPairing: false).setUpPhase(action: .restarting) == .start)
+        #expect(ServiceState.running(managed: true, selfPairing: true).setUpPhase(action: nil) == .pair)
+        #expect(ServiceState.running(managed: true, selfPairing: true).setUpPhase(action: .pairing) == .pair)
+    }
 }
 
 @Suite struct ServiceConfigTests {

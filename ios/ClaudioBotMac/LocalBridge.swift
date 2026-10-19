@@ -179,6 +179,54 @@ enum ServiceState: Equatable, Sendable {
     }
 
     var isStarting: Bool { self == .starting }
+
+    enum SetUpStep: Hashable, Sendable { case wait, install(URL), start, restart, pair, giveUp }
+
+    /// What setting up this Mac does next. Each step but waiting runs once, so a step that did not help ends the setup.
+    func setUpStep(after tried: Set<SetUpStep>) -> SetUpStep {
+        let step: SetUpStep = switch self {
+        case .checking, .starting: .wait
+        case .notInstalled(let checkout?): .install(checkout)
+        case .notInstalled(nil), .running(managed: false, selfPairing: false): .giveUp
+        case .stopped: .start
+        case .failed, .running(managed: true, selfPairing: false): .restart
+        case .running(_, selfPairing: true): .pair
+        }
+        return tried.contains(step) ? .giveUp : step
+    }
+
+    /// How far setting up this Mac has come: every phase before it is done.
+    func setUpPhase(action: LocalBridge.Action?) -> SetUpPhase {
+        switch action {
+        case .installing: return .install
+        case .pairing: return .pair
+        default: break
+        }
+        return switch self {
+        case .checking, .notInstalled: .install
+        case .stopped, .starting, .failed, .running(_, selfPairing: false): .start
+        case .running(_, selfPairing: true): .pair
+        }
+    }
+}
+
+enum SetUpPhase: Int, CaseIterable, Comparable, Sendable {
+    case install, start, pair
+
+    static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
+
+    var title: String {
+        switch self {
+        case .install: "Install the bridge"
+        case .start: "Start the bridge"
+        case .pair: "Pair this app with it"
+        }
+    }
+}
+
+/// Whether this Mac has Claude Code, found the way `claudiobot install` finds it: on the login shell's PATH.
+enum ClaudeCodeCheck: Equatable, Sendable {
+    case checking, found(String), missing
 }
 
 /// Where the paired bridge runs, read off the pairing and never stored: a loopback address is this Mac.
@@ -240,6 +288,7 @@ final class LocalBridge {
     private(set) var problem: String?
     /// What the last install printed.
     private(set) var installOutput: String?
+    private(set) var claudeCode: ClaudeCodeCheck = .checking
     /// The repository this app was built from, when it holds the bridge.
     let builtCheckout: URL?
     /// A demo shows sample bots and leaves this Mac's service alone: it never probes, starts or stops it.
@@ -400,9 +449,42 @@ final class LocalBridge {
         NSWorkspace.shared.open(config.log)
     }
 
+    /// The bridge refuses to start without `claude`, so the welcome screen looks before offering this Mac.
+    func checkClaudeCode() async {
+        guard !Self.hostsTests else { return }
+        claudeCode = .checking
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let ran = await Shell.run([shell, "-l", "-c", "command -v \"${CLAUDIOBOT_CLAUDE:-claude}\""])
+        let path = ran.output.split(separator: "\n").last.map { String($0).trimmed } ?? ""
+        claudeCode = ran.status == 0 && path.hasPrefix("/") ? .found(path) : .missing
+    }
+
+    /// Installs, starts and pairs with the bridge on this Mac, waiting out each start, and returns whether it paired.
+    /// It stops at the first step that fails or does not help, leaving its problem and the matching button on screen.
+    func setUp(_ client: BridgeClient) async -> Bool {
+        guard !Self.hostsTests, !isDemo, action == nil else { return false }
+        var tried: Set<ServiceState.SetUpStep> = []
+        // A start settles or fails within its grace, so the waits are bounded; this bounds a stuck probe too.
+        for _ in 0..<120 where !Task.isCancelled {
+            await refresh()
+            let step = state.setUpStep(after: tried)
+            if step != .wait { tried.insert(step) }
+            switch step {
+            case .wait: try? await Task.sleep(for: .seconds(1))
+            case .install(let checkout): await install(from: checkout)
+            case .start: await start()
+            case .restart: await restart()
+            case .pair: return await useThisMac(client)
+            case .giveUp: return false
+            }
+            if problem != nil { return false }
+        }
+        return false
+    }
+
     /// Mints a code over the control socket and redeems it at the loopback address through the one pairing path. The
-    /// click is the confirmation: the address is this Mac and the token never leaves it. Never called on its own,
-    /// so after a phone revokes this Mac it stays unpaired until the user clicks again.
+    /// click is the confirmation: the address is this Mac and the token never leaves it. Only a click runs it,
+    /// directly or through `setUp`, so after a phone revokes this Mac it stays unpaired until the user clicks again.
     func useThisMac(_ client: BridgeClient) async -> Bool {
         var paired = false
         await perform(.pairing) {

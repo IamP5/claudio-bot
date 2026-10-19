@@ -4,8 +4,8 @@ This is the design for the native macOS app. It came from a three-way design are
 
 ## What the user gets
 
-- **On the Mac that runs Claude Code.** Open ClaudioBot.app and click **Use this Mac**. The app finds the bridge's LaunchAgent, pairs itself without a code, and opens the same Bots | Sessions app as the iPhone. **Pair iPhone…** (⇧⌘P) shows a QR that carries every address of the bridge. The iPhone scans it. The app can install, start, stop and restart the bridge service, and it opens a project or worktree in your editor, Finder or Terminal.
-- **On another Mac.** Click **Another Mac**, then paste a `claudiobot://pair?…` link, or type the bridge's URL and a code from a paired phone's **Pair another device**. Everything except the local-folder actions works.
+- **On the Mac that runs Claude Code.** Open ClaudioBot.app. The welcome screen asks where your bots run: **This Mac** or **Another Computer**, and nothing starts before you choose. This Mac first checks that `claude` is on the login shell's PATH, then one click installs the bridge when no LaunchAgent exists, starts it and pairs the app without a code, showing each step. A step that fails stops the setup with its error, **Try Again** and **Show Log**. Paired, it opens the same Bots | Sessions app as the iPhone. **Pair iPhone…** (⇧⌘P) shows a QR that carries every address of the bridge. The iPhone scans it. The app can install, start, stop and restart the bridge service, and it opens a project or worktree in your editor, Finder or Terminal.
+- **On another computer.** Click **Another Computer**, then paste a `claudiobot://pair?…` link, or type the bridge's URL and a code from a paired phone's **Pair another device**. Everything except the local-folder actions works.
 - **Bots keep running** when the app quits. launchd owns the bridge, and the app is only a client.
 - **Phone pushes keep working** while the Mac app is open. The Mac app tells the bridge when nobody is looking at it.
 

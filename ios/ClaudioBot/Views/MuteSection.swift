@@ -9,13 +9,18 @@ struct MuteSection: View {
     var body: some View {
         if store.has(.mute) {
             CardSection(title: "Notifications", footer: "Muted Bots still notify you when they need an answer.") {
-                Toggle("Mute updates", isOn: Binding(
-                    get: { bot.muted },
-                    set: { client.send(.updateBot(botId: bot.id, patch: BotPatch(muted: $0))) }
-                ))
-                .font(.ui(size: 16))
-                .foregroundStyle(.white)
-                .tint(AvatarColor.teal.color)
+                // Label and switch laid out by hand: outside a Form a Mac toggle is a checkbox beside its label.
+                HStack(spacing: 12) {
+                    Text("Mute updates").font(.ui(size: 16)).foregroundStyle(.white)
+                    Spacer(minLength: 0)
+                    Toggle("Mute updates", isOn: Binding(
+                        get: { bot.muted },
+                        set: { client.send(.updateBot(botId: bot.id, patch: BotPatch(muted: $0))) }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(AvatarColor.teal.color)
+                }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }

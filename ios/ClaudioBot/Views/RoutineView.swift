@@ -43,18 +43,23 @@ struct RoutineView: View {
 
     private func header(_ routine: Routine) -> some View {
         VStack(spacing: 0) {
-            Toggle(isOn: Binding(
-                get: { routine.enabled },
-                set: { client.send(.setRoutine(botId: botId, routineId: routineId, enabled: $0)) }
-            )) {
+            // Label and switch laid out by hand: outside a Form a Mac toggle is a checkbox beside its label.
+            HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(routine.describe).font(.ui(size: 16)).foregroundStyle(.white)
                     if !routine.schedule.isEmpty {
                         Text(routine.schedule).font(.ui(size: 13, design: .monospaced)).foregroundStyle(Theme.tertiary)
                     }
                 }
+                Spacer(minLength: 0)
+                Toggle(routine.describe, isOn: Binding(
+                    get: { routine.enabled },
+                    set: { client.send(.setRoutine(botId: botId, routineId: routineId, enabled: $0)) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(AvatarColor.teal.color)
             }
-            .tint(AvatarColor.teal.color)
             .padding(16)
             Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16)
             HStack {
@@ -64,7 +69,7 @@ struct RoutineView: View {
             }
             .padding(16)
         }
-        .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(Theme.card, in: ProfileMetrics.card)
     }
 
     static func nextRun(_ routine: Routine) -> String {

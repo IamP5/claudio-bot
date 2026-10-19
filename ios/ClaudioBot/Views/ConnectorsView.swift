@@ -73,6 +73,7 @@ struct ConnectorsSection: View {
                 set: { client.send(Self.toggle(bot.id, connector, enabled: $0)) }
             ))
             .labelsHidden()
+            .toggleStyle(.switch)
             .tint(AvatarColor.teal.color)
         }
         .padding(.horizontal, 16)

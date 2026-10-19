@@ -9,10 +9,11 @@ struct MainView: View {
     #if os(macOS)
     @State private var windowWidth: CGFloat = 0
     @State private var sidebarWidth: CGFloat = 0
-    /// The sidebar's visibility before the profile hid it to make room, to give back when the profile closes.
-    @State private var columnsBeforeProfile: NavigationSplitViewVisibility?
-    /// The split view lays the chat out no narrower than this beside an inspector (measured), and opening the
-    /// profile neither grows the window nor hides the sidebar on its own: the columns run past the window's edges.
+    /// The sidebar's visibility before it was hidden to make room, to give back once the chat has room beside it.
+    @State private var columnsBeforeHiding: NavigationSplitViewVisibility?
+    /// The split view lays the chat out no narrower than this (measured), and neither a narrower window (a
+    /// half-screen tile) nor opening the profile shrinks the sidebar or hides it on its own: the columns run past
+    /// the window's edges.
     private static let chatMinimum: CGFloat = 470
     private static let profileWidth: CGFloat = 320
     #endif
@@ -34,7 +35,8 @@ struct MainView: View {
             SidebarRoot()
                 #if os(macOS)
                 .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 400)
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { sidebarWidth = $0 }
+                // A hidden sidebar keeps the width it comes back at.
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if $0 > 0 { sidebarWidth = $0 } }
                 #else
                 .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 400)
                 #endif
@@ -67,9 +69,16 @@ struct MainView: View {
             #endif
         }
         #if os(macOS)
+        // The window's width: the split view itself stays as wide as its columns need, past the window's edges.
+        .frame(minWidth: 0, maxWidth: .infinity)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth = $0 }
-        .onChange(of: windowWidth) { makeRoomForProfile() }
-        .onChange(of: inspectorBot != nil, initial: true) { makeRoomForProfile() }
+        // Once the width settles: mid-tile it jumps between the old and new sizes, and a sidebar shown then grows
+        // the window, which untiles it.
+        .task(id: windowWidth) {
+            guard (try? await Task.sleep(for: .milliseconds(300))) != nil else { return }
+            makeRoomForChat()
+        }
+        .onChange(of: inspectorBot != nil, initial: true) { makeRoomForChat() }
         #endif
         .sheet(isPresented: $router.showingNewChat) { NewChatView() }
         .sheet(item: $router.newSession) { NewSessionSheet(projectId: $0.projectId) }
@@ -83,14 +92,19 @@ struct MainView: View {
     }
 
     #if os(macOS)
-    /// Grok Bot's rule: a profile with no room beside the chat hides the sidebar, which comes back when it closes.
-    private func makeRoomForProfile() {
+    /// Grok Bot's rule: a chat (and profile) with no room beside the sidebar hides it, and it comes back once they
+    /// fit beside it again, when the profile closes or the window widens. Showing it while they don't fit would grow
+    /// the window, and so untile it.
+    private func makeRoomForChat() {
         guard windowWidth > 0 else { return }
-        if inspectorBot == nil {
-            if let columns = columnsBeforeProfile { router.columns = columns }
-            columnsBeforeProfile = nil
-        } else if router.columns != .detailOnly, windowWidth < sidebarWidth + Self.chatMinimum + Self.profileWidth {
-            columnsBeforeProfile = router.columns
+        let fits = windowWidth >= sidebarWidth + Self.chatMinimum + (inspectorBot == nil ? 0 : Self.profileWidth)
+        if let columns = columnsBeforeHiding {
+            if fits {
+                router.columns = columns
+                columnsBeforeHiding = nil
+            }
+        } else if router.columns != .detailOnly, !fits {
+            columnsBeforeHiding = router.columns
             router.columns = .detailOnly
         }
     }

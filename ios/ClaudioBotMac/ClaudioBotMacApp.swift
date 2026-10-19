@@ -16,8 +16,8 @@ struct ClaudioBotMacApp: App {
                     #endif
                     delegate.app.open(url)
                 }
-                // With the inspector the chat column needs about 470pt, so the widest sidebar (400) still fits.
-                .frame(minWidth: 880, minHeight: 520)
+                // Half a 13" screen (735pt) holds the chat and the profile; the sidebar hides when they have no room beside it.
+                .frame(minWidth: 700, minHeight: 520)
         }
         .defaultSize(width: 1180, height: 780)
         .defaultLaunchBehavior(.presented)

@@ -16,8 +16,8 @@ struct ClaudioBotMacApp: App {
                     #endif
                     delegate.app.open(url)
                 }
-                // With the inspector the chat column needs about 470pt, so the widest sidebar (400) still fits.
-                .frame(minWidth: 880, minHeight: 520)
+                // Half a 13" screen (735pt) holds the chat and the profile; the sidebar hides when they have no room beside it.
+                .frame(minWidth: 700, minHeight: 520)
         }
         .defaultSize(width: 1180, height: 780)
         .defaultLaunchBehavior(.presented)
@@ -77,6 +77,11 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     /// Each chat opens in a window of its own, so the View menu has no Show Tab Bar.
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
+        #if DEBUG
+        // A bare `-demo` takes the next `-key` as its value, which leaves that key's value looking like a file to
+        // open, and a launch that opens files presents no window.
+        UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": "NO"])
+        #endif
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

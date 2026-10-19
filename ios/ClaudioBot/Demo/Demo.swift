@@ -173,12 +173,19 @@ enum Demo {
             var decided = card
             decided.answer = .chose(choice)
             store.apply(.message(botId: botId, message: .permission(id: id, at: at, card: decided)))
+            settleCard(botId, store: store)
             return
         case let .answer(botId, messageId, option):
             guard case let .question(id, at, card)? = store.conversations[botId]?[messageId] else { return }
             var answered = card
             answered.answer = .option(option)
             store.apply(.message(botId: botId, message: .question(id: id, at: at, card: answered)))
+            settleCard(botId, store: store)
+            return
+        case let .open(botId):
+            guard var bot = store.bots[botId], bot.unread > 0 else { return }
+            bot.unread = 0
+            store.apply(.bot(bot))
             return
         case let .commands(botId):
             store.apply(.commands(botId: botId, commands: commands))
@@ -235,16 +242,29 @@ enum Demo {
         store.apply(.message(botId: botId, message: .user(id: MessageID(UUID().uuidString), at: .now, text: text, attachments: [], mentions: mentions)))
         if bot.isGroup { return answerInGroup(bot, mentions: mentions, store: store) }
         bot.status = .working
+        bot.lastAt = .now
         store.apply(.bot(bot))
         Task {
             try? await Task.sleep(for: .seconds(1))
             store.apply(.activity(botId: botId, agentId: nil, text: "Reading CHANGELOG.md", at: .now))
             try? await Task.sleep(for: .seconds(3))
             store.apply(.activity(botId: botId, agentId: nil, text: nil, at: .now))
-            store.apply(.message(botId: botId, message: say(UUID().uuidString, .now, "On it. I'll check it against main and report back with anything that blocks a merge.")))
+            let reply = "On it. I'll check it against main and report back with anything that blocks a merge."
+            store.apply(.message(botId: botId, message: say(UUID().uuidString, .now, reply)))
+            guard var bot = store.bots[botId] else { return }
             bot.status = .idle
+            bot.preview = reply
+            bot.lastAt = .now
             store.apply(.bot(bot))
         }
+    }
+
+    /// The bridge sends the bot again once its open card is answered: no question, and no longer awaiting approval.
+    private static func settleCard(_ botId: BotID, store: AppStore) {
+        guard var bot = store.bots[botId] else { return }
+        bot.question = nil
+        if bot.status == .awaitingApproval { bot.status = .idle }
+        store.apply(.bot(bot))
     }
 
     /// The first member the user mentioned, or the first member, types for a moment and answers in the group.

@@ -42,7 +42,7 @@ struct WebhookTokenSection: View {
         } label: {
             HStack {
                 Label("Make a new token", systemImage: "key.fill")
-                    .font(.system(size: 16))
+                    .font(.ui(size: 16))
                     .foregroundStyle(.white)
                 Spacer()
             }
@@ -61,7 +61,7 @@ struct WebhookTokenSection: View {
             field("Test it in Terminal on your Mac", Self.curl(fresh))
             Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16)
             Button("Done") { store.dismissWebhookToken() }
-                .font(.system(size: 16, weight: .semibold))
+                .font(.ui(size: 16, weight: .semibold))
                 .foregroundStyle(AvatarColor.teal.color)
                 .frame(maxWidth: .infinity)
                 .padding(16)
@@ -71,9 +71,9 @@ struct WebhookTokenSection: View {
     private func field(_ title: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.system(size: 13)).foregroundStyle(Theme.tertiary)
+                Text(title).font(.ui(size: 13)).foregroundStyle(Theme.tertiary)
                 Text(value)
-                    .font(.system(size: 14, design: .monospaced))
+                    .font(.ui(size: 14, design: .monospaced))
                     .foregroundStyle(.white)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -84,7 +84,7 @@ struct WebhookTokenSection: View {
                 copied = title
             } label: {
                 Label(copied == title ? "Copied" : "Copy", systemImage: copied == title ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.ui(size: 14, weight: .medium))
             }
             .buttonStyle(.bordered)
             .tint(.white)

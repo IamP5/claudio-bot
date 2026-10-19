@@ -28,7 +28,7 @@ struct GroupAvatar: View {
         ZStack {
             switch avatars.count {
             case 0:
-                Image(systemName: "person.2.fill").font(.system(size: size * 0.4)).foregroundStyle(Theme.secondary)
+                Image(systemName: "person.2.fill").font(.ui(size: size * 0.4)).foregroundStyle(Theme.secondary)
             case 1:
                 AvatarView(avatar: avatars[0], size: size)
             case 2:
@@ -74,7 +74,7 @@ struct MemberBubble: View {
             VStack(alignment: .leading, spacing: 4) {
                 if opensRun {
                     Text(sender?.name ?? "A deleted bot")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.ui(size: 13, weight: .semibold))
                         .foregroundStyle(sender?.avatar.color.accent ?? Theme.secondary)
                         .padding(.leading, 4)
                 }
@@ -104,7 +104,7 @@ struct NewGroupView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 TextField(picked.count < 2 ? "Group name" : suggested, text: $name)
-                    .font(.system(size: 17))
+                    .font(.ui(size: 17))
                     .padding(.horizontal, 16)
                     .padding(.vertical, 14)
                     .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -156,10 +156,10 @@ struct BotChecklist: View {
             } label: {
                 HStack(spacing: 12) {
                     AvatarView(avatar: bot.avatar, size: 30)
-                    Text(bot.name).font(.system(size: 16)).foregroundStyle(.white)
+                    Text(bot.name).font(.ui(size: 16)).foregroundStyle(.white)
                     Spacer()
                     Image(systemName: on ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 21))
+                        .font(.ui(size: 21))
                         .foregroundStyle(on ? Color.white : Theme.tertiary)
                 }
                 .padding(.horizontal, 16)
@@ -197,9 +197,9 @@ struct GroupDetails: View {
                             HStack(spacing: 12) {
                                 AvatarView(avatar: member.avatar, size: 34)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(member.name).font(.system(size: 16)).foregroundStyle(.white)
+                                    Text(member.name).font(.ui(size: 16)).foregroundStyle(.white)
                                     if let title = member.title {
-                                        Text(title).font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                                        Text(title).font(.ui(size: 13)).foregroundStyle(Theme.secondary)
                                     }
                                 }
                                 Spacer(minLength: 0)
@@ -209,7 +209,7 @@ struct GroupDetails: View {
                         .buttonStyle(.plain)
                         if editable {
                             Button { set(group.members.filter { $0 != member.id }) } label: {
-                                Image(systemName: "minus.circle.fill").font(.system(size: 20)).foregroundStyle(Theme.danger)
+                                Image(systemName: "minus.circle.fill").font(.ui(size: 20)).foregroundStyle(Theme.danger)
                             }
                             .buttonStyle(.plain)
                             .disabled(group.members.count <= GroupRules.members.lowerBound)
@@ -224,7 +224,7 @@ struct GroupDetails: View {
                     Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16)
                     Button { adding = true } label: {
                         Label("Add members", systemImage: "plus")
-                            .font(.system(size: 16))
+                            .font(.ui(size: 16))
                             .foregroundStyle(Theme.link)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(16)
@@ -237,7 +237,7 @@ struct GroupDetails: View {
             if editable {
                 Button(role: .destructive) { deleting = true } label: {
                     Text("Delete Group")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.ui(size: 16, weight: .semibold))
                         .foregroundStyle(Theme.danger)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 15)

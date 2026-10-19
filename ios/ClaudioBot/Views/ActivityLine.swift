@@ -24,7 +24,7 @@ struct ActivityLine: View {
             } icon: {
                 Image(systemName: "ellipsis").symbolEffect(.variableColor.iterative)
             }
-            .font(.system(size: 13))
+            .font(.ui(size: 13))
             .foregroundStyle(Theme.tertiary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 6)

@@ -24,7 +24,7 @@ struct NewChatView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 }
-                .font(.system(size: 16))
+                .font(.ui(size: 16))
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
                 Divider().overlay(Theme.hairline)
@@ -34,7 +34,7 @@ struct NewChatView: View {
                         if query.isEmpty {
                             row {
                                 Image(systemName: "plus")
-                                    .font(.system(size: 15, weight: .medium))
+                                    .font(.ui(size: 15, weight: .medium))
                                     .foregroundStyle(Theme.secondary)
                                     .frame(width: 30, height: 30)
                                     .background(Theme.raised, in: Circle())
@@ -46,7 +46,7 @@ struct NewChatView: View {
                             if store.has(.groups) {
                                 row {
                                         Image(systemName: "person.2")
-                                            .font(.system(size: 13, weight: .medium))
+                                            .font(.ui(size: 13, weight: .medium))
                                             .foregroundStyle(Theme.secondary)
                                             .frame(width: 30, height: 30)
                                             .background(Theme.raised, in: Circle())
@@ -98,7 +98,7 @@ struct NewChatView: View {
             label()
             Spacer()
         }
-        .font(.system(size: 16))
+        .font(.ui(size: 16))
         .foregroundStyle(.white)
         .padding(.horizontal, 10)
         .padding(.vertical, 9)

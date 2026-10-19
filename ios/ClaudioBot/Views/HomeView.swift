@@ -247,17 +247,17 @@ struct BotRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(bot.name)
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.ui(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .layoutPriority(1)
                     BotStatusChip(status: bot.status)
                     Spacer(minLength: 8)
                     if bot.pinned {
-                        Image(systemName: "pin.fill").font(.system(size: 10)).foregroundStyle(Theme.tertiary)
+                        Image(systemName: "pin.fill").font(.ui(size: 10)).foregroundStyle(Theme.tertiary)
                     }
                     Text(TimeLabel.home(bot.lastAt))
-                        .font(.system(size: 13))
+                        .font(.ui(size: 13))
                         .foregroundStyle(Theme.tertiary)
                         .lineLimit(1)
                         .fixedSize()
@@ -272,7 +272,7 @@ struct BotRow: View {
                             Text(display.preview)
                         }
                     }
-                    .font(.system(size: 14))
+                    .font(.ui(size: 14))
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
                     Spacer(minLength: 4)
@@ -398,7 +398,7 @@ struct InitialsItem: ToolbarContent {
     private var button: some View {
         Button(action: action) {
             Text(Initials.of(name.isEmpty ? "Me" : name))
-                .font(.system(size: 13, weight: .semibold))
+                .font(.ui(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 36, height: 36)
                 // On iOS 26 the toolbar's glass is the circle, matching search and + beside it.
@@ -408,7 +408,7 @@ struct InitialsItem: ToolbarContent {
                 .overlay(alignment: .topTrailing) {
                     if proposals > 0 {
                         Text("\(proposals)")
-                            .font(.system(size: 11, weight: .bold).monospacedDigit())
+                            .font(.ui(size: 11, weight: .bold).monospacedDigit())
                             .foregroundStyle(.black)
                             .padding(.horizontal, 5)
                             .frame(minWidth: 18, minHeight: 18)

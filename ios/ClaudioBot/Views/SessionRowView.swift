@@ -76,7 +76,7 @@ struct OriginBadge: View {
                 AvatarView(avatar: avatar, size: size)
             } else {
                 Image(systemName: Self.symbol(origin))
-                    .font(.system(size: size * 0.68, weight: .regular))
+                    .font(.ui(size: size * 0.68, weight: .regular))
                     .foregroundStyle(Theme.tertiary)
             }
         }
@@ -118,7 +118,7 @@ struct SessionMarkView: View {
                 Color.clear
             }
         }
-        .font(.system(size: size, weight: .semibold))
+        .font(.ui(size: size, weight: .semibold))
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }

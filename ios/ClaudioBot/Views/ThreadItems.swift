@@ -23,7 +23,7 @@ struct ThreadRowView: View, Equatable {
                 SessionUserBubble(text: text, from: from, queued: queued, botName: botName)
             case let .assistant(id, _, text):
                 RenderedMarkdownView(markdown: model.rendered(id, text))
-                    .font(.system(size: 16))
+                    .font(.ui(size: 16))
                     .foregroundStyle(.white)
                     .fixedSize(horizontal: false, vertical: true)
             case let .thinking(_, _, text, ms):
@@ -70,7 +70,7 @@ struct SessionUserBubble: View {
                 HStack(spacing: 0) {
                     Spacer(minLength: 48)
                     Text(MarkdownText.inline(text))
-                        .font(.system(size: 16))
+                        .font(.ui(size: 16))
                         .foregroundStyle(.white)
                         .textSelection(.enabled)
                         .padding(.horizontal, 14)
@@ -415,7 +415,7 @@ struct PlanCard: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(state == .proposed ? Theme.attention : Theme.secondary)
             RenderedMarkdownView(markdown: markdown)
-                .font(.system(size: 15))
+                .font(.ui(size: 15))
                 .foregroundStyle(state == .proposed ? .white : Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             switch state {
@@ -462,7 +462,7 @@ struct PlanCard: View {
                 if sent == choice { ProgressView().controlSize(.mini) }
                 Text(title)
             }
-            .font(.system(size: 15, weight: .semibold))
+            .font(.ui(size: 15, weight: .semibold))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 11)
             .foregroundStyle(primary ? Color.black : .white)
@@ -509,7 +509,7 @@ struct AskCard: View {
                         client.send(.sessionAnswer(sessionId: sessionId, cardId: cardId, answers: nil))
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.system(size: 15, weight: .medium))
+                            .font(.ui(size: 15, weight: .medium))
                             .foregroundStyle(Theme.tertiary)
                             .frame(width: 44, height: 44)
                             .contentShape(Rectangle())
@@ -543,7 +543,7 @@ struct AskCard: View {
                     .foregroundStyle(Theme.tertiary)
             }
             Text(q.question)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.ui(size: 17, weight: .semibold))
                 .foregroundStyle(open ? .white : Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if open {
@@ -588,7 +588,7 @@ struct AskCard: View {
                             if sent { ProgressView().controlSize(.mini) }
                             Text(questions.count == 1 ? "Send answer" : "Send answers")
                         }
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.ui(size: 15, weight: .semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 11)
                         .foregroundStyle(.black)
@@ -642,7 +642,7 @@ private struct AskOptionRow: View {
         HStack(alignment: .top, spacing: 12) {
             if multi {
                 Image(systemName: picked ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 19))
+                    .font(.ui(size: 19))
                     .foregroundStyle(picked ? .white : Theme.tertiary)
                     .frame(width: 22, height: 22)
             } else {
@@ -650,7 +650,7 @@ private struct AskOptionRow: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(option.label)
-                    .font(.system(size: 16))
+                    .font(.ui(size: 16))
                     .foregroundStyle(.white)
                 if !option.description.isEmpty {
                     Text(option.description)
@@ -706,7 +706,7 @@ struct StreamingTail: View {
     var body: some View {
         if live.itemId != nil, !live.text.isEmpty {
             Text(live.text)
-                .font(.system(size: 16))
+                .font(.ui(size: 16))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 14)

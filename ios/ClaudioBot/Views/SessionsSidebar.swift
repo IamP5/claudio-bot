@@ -142,7 +142,7 @@ struct SessionsSidebar: View {
         } else {
             VStack(spacing: 14) {
                 Image(systemName: "chevron.left.forwardslash.chevron.right")
-                    .font(.system(size: 30, weight: .light))
+                    .font(.ui(size: 30, weight: .light))
                     .foregroundStyle(Theme.tertiary)
                 Text("No Claude Code sessions on this Mac yet")
                     .font(.headline)

@@ -16,7 +16,7 @@ struct ChatRowView: View {
         switch row {
         case .separator(let date):
             Text(TimeLabel.separator(date))
-                .font(.system(size: 13))
+                .font(.ui(size: 13))
                 .foregroundStyle(Theme.tertiary)
                 .frame(maxWidth: .infinity)
         case .message(let message):
@@ -52,7 +52,7 @@ struct BotBubble: View {
     var body: some View {
         HStack(spacing: 0) {
             MarkdownText(text: text, members: members)
-                .font(.system(size: 17))
+                .font(.ui(size: 17))
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 14)
@@ -102,7 +102,7 @@ struct UserBubble: View {
                 }
                 if !text.isEmpty {
                     Text(attributed)
-                        .font(.system(size: 17))
+                        .font(.ui(size: 17))
                         .tint(color.onAccent)
                 }
             }
@@ -157,7 +157,7 @@ private struct QuestionCardBody: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
                 Text(card.question)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.ui(size: 17, weight: .semibold))
                     .foregroundStyle(answer == nil ? .white : Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
@@ -166,7 +166,7 @@ private struct QuestionCardBody: View {
                         client.send(.dismiss(botId: botId, messageId: messageId))
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.system(size: 15, weight: .medium))
+                            .font(.ui(size: 15, weight: .medium))
                             .foregroundStyle(Theme.tertiary)
                             .frame(width: 28, height: 28)
                     }
@@ -239,25 +239,25 @@ private struct PermissionCardBody: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: "hand.raised.fill")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.ui(size: 14, weight: .semibold))
                     .foregroundStyle(answer == nil ? Theme.attention : Theme.tertiary)
                 Text(card.label)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.ui(size: 17, weight: .semibold))
                     .foregroundStyle(answer == nil ? .white : Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if case .agent(_, let title) = card.from {
                 Label(title, systemImage: "gearshape.fill")
-                    .font(.system(size: 13))
+                    .font(.ui(size: 13))
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text(card.tool)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.ui(size: 12, weight: .medium))
                     .foregroundStyle(Theme.tertiary)
                 Text(card.detail)
-                    .font(.system(size: 15, design: .monospaced))
+                    .font(.ui(size: 15, design: .monospaced))
                     .foregroundStyle(answer == nil ? .white : Theme.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -272,7 +272,7 @@ private struct PermissionCardBody: View {
             case nil:
                 buttons
                 Text("Always allows \(card.always).")
-                    .font(.system(size: 13))
+                    .font(.ui(size: 13))
                     .foregroundStyle(Theme.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
                 ExpiryLine(expiresAt: card.expiresAt)
@@ -322,7 +322,7 @@ private struct PermissionCardBody: View {
                 if sent == choice { ProgressView().controlSize(.mini) }
                 Text(choice.button)
             }
-            .font(.system(size: 15, weight: .semibold))
+            .font(.ui(size: 15, weight: .semibold))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 11)
             .foregroundStyle(foreground(choice))
@@ -359,7 +359,7 @@ private struct ExpiryLine: View {
 
     var body: some View {
         Text("Expires in \(Text(expiresAt, style: .relative))")
-            .font(.system(size: 13))
+            .font(.ui(size: 13))
             .foregroundStyle(Theme.tertiary)
     }
 }
@@ -387,12 +387,12 @@ private struct OptionRow: View {
                 LetterBadge(index: index)
             }
             Text(text)
-                .font(.system(size: 17))
+                .font(.ui(size: 17))
                 .foregroundStyle(chosen == nil ? .white : Theme.secondary)
                 .multilineTextAlignment(.leading)
             Spacer(minLength: 0)
             if chosen != nil {
-                Image(systemName: "checkmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(AvatarColor.green.color)
+                Image(systemName: "checkmark").font(.ui(size: 14, weight: .semibold)).foregroundStyle(AvatarColor.green.color)
             }
         }
         .padding(.horizontal, 12)
@@ -421,7 +421,7 @@ struct EventLineView: View {
                 case .chip(let peer): Text("\(line)\(Self.chip(peer))")
                 }
             }
-            .font(.system(size: 13))
+            .font(.ui(size: 13))
             .foregroundStyle(Theme.tertiary)
             .multilineTextAlignment(.center)
             .frame(maxWidth: .infinity)

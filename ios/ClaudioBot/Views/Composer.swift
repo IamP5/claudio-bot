@@ -139,7 +139,7 @@ struct Composer: View {
             Button { pickingFiles = true } label: { Label("Choose File", systemImage: "folder") }
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 19, weight: .medium))
+                .font(.ui(size: 19, weight: .medium))
                 .foregroundStyle(.white)
                 .frame(width: Self.field, height: Self.field)
                 .glass(in: Circle(), interactive: true)
@@ -171,7 +171,7 @@ struct Composer: View {
             }
         } label: {
             Image(systemName: dictation.isRecording ? "mic.fill" : "mic")
-                .font(.system(size: 17))
+                .font(.ui(size: 17))
                 .foregroundStyle(dictation.isRecording ? bot.avatar.color.accent : Theme.secondary)
                 .symbolEffect(.pulse, isActive: dictation.isRecording)
                 .frame(width: Self.control, height: Self.control)
@@ -186,7 +186,7 @@ struct Composer: View {
             if showsStop { stop() } else { send() }
         } label: {
             Image(systemName: showsStop ? "stop.fill" : "arrow.up")
-                .font(.system(size: showsStop ? 14 : 16, weight: .bold))
+                .font(.ui(size: showsStop ? 14 : 16, weight: .bold))
                 .contentTransition(.symbolEffect(.replace))
                 .foregroundStyle(bot.avatar.color.onAccent)
                 .frame(width: Self.control + 10, height: Self.control)

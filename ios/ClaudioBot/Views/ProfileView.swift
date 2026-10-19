@@ -83,14 +83,14 @@ struct ProfileView: View {
     private func nameCard(_ bot: Bot) -> some View {
         VStack(spacing: 0) {
             TextField("Name", text: $name)
-                .font(.system(size: 22, weight: .bold))
+                .font(.ui(size: 22, weight: .bold))
                 .multilineTextAlignment(.center)
                 .focused($editing)
                 .submitLabel(.done)
                 .padding(.vertical, 16)
             Rectangle().fill(Theme.hairline).frame(height: 1).padding(.horizontal, 16)
             TextField("Add a label", text: $label)
-                .font(.system(size: 16))
+                .font(.ui(size: 16))
                 .foregroundStyle(Theme.secondary)
                 .multilineTextAlignment(.center)
                 .focused($editing)
@@ -118,7 +118,7 @@ struct ProfileView: View {
                 } label: {
                     VStack(spacing: 8) {
                         Text(item.rawValue)
-                            .font(.system(size: 16, weight: tab == item ? .semibold : .regular))
+                            .font(.ui(size: 16, weight: tab == item ? .semibold : .regular))
                             .foregroundStyle(tab == item ? .white : Theme.tertiary)
                         ZStack {
                             Rectangle().fill(.clear)
@@ -164,14 +164,14 @@ struct CardSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 14))
+                .font(.ui(size: 14))
                 .foregroundStyle(Theme.tertiary)
                 .padding(.horizontal, 16)
             VStack(spacing: 0) { content }
                 .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             if let footer {
                 Text(footer)
-                    .font(.system(size: 13))
+                    .font(.ui(size: 13))
                     .foregroundStyle(Theme.tertiary)
                     .padding(.horizontal, 16)
             }
@@ -184,7 +184,7 @@ struct Placeholder: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 15))
+            .font(.ui(size: 15))
             .foregroundStyle(Theme.tertiary)
             .multilineTextAlignment(.center)
             .frame(maxWidth: .infinity)
@@ -232,13 +232,13 @@ private struct InfoTab: View {
                         Button { router.path.append(.routine(bot.id, routine.id)) } label: {
                             HStack(spacing: 8) {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(routine.name).font(.system(size: 16)).foregroundStyle(.white)
+                                    Text(routine.name).font(.ui(size: 16)).foregroundStyle(.white)
                                     Text(routine.enabled ? routine.describe : "Paused")
-                                        .font(.system(size: 13))
+                                        .font(.ui(size: 13))
                                         .foregroundStyle(Theme.secondary)
                                 }
                                 Spacer(minLength: 0)
-                                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.tertiary)
+                                Image(systemName: "chevron.right").font(.ui(size: 13, weight: .semibold)).foregroundStyle(Theme.tertiary)
                             }
                             .contentShape(Rectangle())
                         }
@@ -306,7 +306,7 @@ struct AvatarPicker: View {
 
             Rectangle().fill(Theme.hairline).frame(height: 1).padding(.horizontal, 16)
             Button("Restore default") { set(.standard) }
-                .font(.system(size: 16))
+                .font(.ui(size: 16))
                 .foregroundStyle(Theme.link)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(16)
@@ -363,12 +363,12 @@ private struct LibraryTab: View {
                                 Button { router.path.append(.file(botId, path: file.path)) } label: {
                                     HStack(spacing: 12) {
                                         Image(systemName: FileView.symbol(for: file.path))
-                                            .font(.system(size: 18))
+                                            .font(.ui(size: 18))
                                             .foregroundStyle(Theme.secondary)
                                             .frame(width: 24)
-                                        Text((file.path as NSString).lastPathComponent).font(.system(size: 16)).foregroundStyle(.white).lineLimit(1)
+                                        Text((file.path as NSString).lastPathComponent).font(.ui(size: 16)).foregroundStyle(.white).lineLimit(1)
                                         Spacer()
-                                        Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.tertiary)
+                                        Image(systemName: "chevron.right").font(.ui(size: 13, weight: .semibold)).foregroundStyle(Theme.tertiary)
                                     }
                                     .padding(.horizontal, 16)
                                     .padding(.vertical, 14)
@@ -402,20 +402,20 @@ private struct AgentsTab: View {
                         Button { router.path.append(.exchange(agent.id)) } label: {
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack(alignment: .firstTextBaseline) {
-                                    Text(agent.title).font(.system(size: 16, weight: .medium)).foregroundStyle(.white).lineLimit(2)
+                                    Text(agent.title).font(.ui(size: 16, weight: .medium)).foregroundStyle(.white).lineLimit(2)
                                     Spacer(minLength: 8)
-                                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.tertiary)
+                                    Image(systemName: "chevron.right").font(.ui(size: 13, weight: .semibold)).foregroundStyle(Theme.tertiary)
                                 }
                                 HStack(spacing: 8) {
                                     AgentStatusPill(status: agent.status)
                                     Label(agent.projectName, systemImage: agent.where == .cloud ? "cloud" : "laptopcomputer")
-                                        .font(.system(size: 13))
+                                        .font(.ui(size: 13))
                                         .foregroundStyle(Theme.secondary)
                                         .lineLimit(1)
                                     Spacer(minLength: 0)
                                     if let url = agent.url {
                                         Button("Open in Claude") { openURL(url) }
-                                            .font(.system(size: 13, weight: .semibold))
+                                            .font(.ui(size: 13, weight: .semibold))
                                             .foregroundStyle(Theme.link)
                                     }
                                 }
@@ -449,20 +449,20 @@ private struct LinksTab: View {
                         Button { openURL(link.url) } label: {
                             HStack(spacing: 14) {
                                 Image(systemName: Self.symbol(for: link.host))
-                                    .font(.system(size: 16, weight: .semibold))
+                                    .font(.ui(size: 16, weight: .semibold))
                                     .foregroundStyle(.black)
                                     .frame(width: 30, height: 30)
                                     .background(.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(link.host).font(.system(size: 16, weight: .medium)).foregroundStyle(.white)
+                                    Text(link.host).font(.ui(size: 16, weight: .medium)).foregroundStyle(.white)
                                     Text(link.url.absoluteString)
-                                        .font(.system(size: 13))
+                                        .font(.ui(size: 13))
                                         .foregroundStyle(Theme.secondary)
                                         .lineLimit(2)
                                         .multilineTextAlignment(.leading)
                                 }
                                 Spacer(minLength: 8)
-                                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.tertiary)
+                                Image(systemName: "chevron.right").font(.ui(size: 13, weight: .semibold)).foregroundStyle(Theme.tertiary)
                             }
                             .padding(.horizontal, 16)
                             .padding(.vertical, 12)

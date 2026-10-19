@@ -298,7 +298,7 @@ struct AttentionBadge: View {
     var body: some View {
         Circle()
             .fill(AvatarColor.amber.color)
-            .overlay(Image(systemName: "star.fill").font(.system(size: size * 0.5, weight: .bold)).foregroundStyle(.white))
+            .overlay(Image(systemName: "star.fill").font(.ui(size: size * 0.5, weight: .bold)).foregroundStyle(.white))
             .frame(width: size, height: size)
             .background(Circle().fill(Theme.background).padding(-size * 0.14))
     }

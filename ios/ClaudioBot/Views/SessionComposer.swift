@@ -74,7 +74,7 @@ struct SessionComposer: View {
     @ViewBuilder
     private var sendButton: some View {
         let label = Image(systemName: showsStop ? "stop.fill" : "arrow.up")
-            .font(.system(size: showsStop ? 14 : 16, weight: .bold))
+            .font(.ui(size: showsStop ? 14 : 16, weight: .bold))
             .contentTransition(.symbolEffect(.replace))
             .foregroundStyle(.black)
             .frame(width: Composer.control + 10, height: Composer.control)

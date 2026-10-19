@@ -46,10 +46,10 @@ struct SpendWarning: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(Self.text(bot, spend, cap: cap), systemImage: "gauge.with.dots.needle.67percent")
-                .font(.system(size: 14))
+                .font(.ui(size: 14))
                 .foregroundStyle(.white)
             Button("Change the cap", action: onChangeCap)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.ui(size: 14, weight: .semibold))
                 .foregroundStyle(Theme.attention)
         }
         .padding(14)
@@ -68,14 +68,14 @@ struct ProposedFactCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("\(bot.name) wants to remember", systemImage: "brain")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.ui(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.secondary)
             Text(fact.text)
-                .font(.system(size: 16))
+                .font(.ui(size: 16))
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
             Text("Only \(bot.name) uses it until you confirm. Then every Bot knows it.")
-                .font(.system(size: 13))
+                .font(.ui(size: 13))
                 .foregroundStyle(Theme.tertiary)
             HStack(spacing: 8) {
                 Button("Confirm") { client.send(.confirmFact(factId: fact.id)) }
@@ -85,7 +85,7 @@ struct ProposedFactCard: View {
                 Button("Forget", role: .destructive) { client.send(.forgetFact(factId: fact.id)) }
                     .buttonStyle(.bordered)
             }
-            .font(.system(size: 14, weight: .semibold))
+            .font(.ui(size: 14, weight: .semibold))
             .controlSize(.small)
         }
         .padding(14)

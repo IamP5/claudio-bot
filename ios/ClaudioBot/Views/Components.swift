@@ -185,7 +185,7 @@ struct LetterBadge: View {
 
     var body: some View {
         Text(String(UnicodeScalar(UInt8(65 + index % 26))))
-            .font(.system(size: 12, weight: .medium))
+            .font(.ui(size: 12, weight: .medium))
             .foregroundStyle(ink)
             .frame(width: 22, height: 22)
             .background(fill, in: RoundedRectangle(cornerRadius: 5, style: .continuous))

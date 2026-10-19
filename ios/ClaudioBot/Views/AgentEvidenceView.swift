@@ -71,7 +71,7 @@ struct AgentEvidenceSection: View {
                     Text("The folder goes away. The branch \(row.branch) keeps every commit. The bridge refuses while the folder holds uncommitted work or ignored files such as .env; build folders like node_modules go with it. The agent cannot continue after this.")
                 }
             }
-            .font(.system(size: 14))
+            .font(.ui(size: 14))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
             .background(Theme.bubble, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -97,10 +97,10 @@ struct AgentEvidenceSection: View {
                     .foregroundStyle(.white)
                 }
                 Text("Read from git \(summary.checkedAt, style: .relative) ago")
-                    .font(.system(size: 12))
+                    .font(.ui(size: 12))
                     .foregroundStyle(Theme.tertiary)
             }
-            .font(.system(size: 14))
+            .font(.ui(size: 14))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
             .background(Theme.bubble, in: RoundedRectangle(cornerRadius: 16, style: .continuous))

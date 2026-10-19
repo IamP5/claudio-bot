@@ -64,8 +64,8 @@ struct ConnectorsSection: View {
     private func row(_ connector: Connector) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(connector.name).font(.system(size: 16)).foregroundStyle(.white)
-                Text(Self.detail(connector)).font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                Text(connector.name).font(.ui(size: 16)).foregroundStyle(.white)
+                Text(Self.detail(connector)).font(.ui(size: 13)).foregroundStyle(Theme.secondary)
             }
             Spacer(minLength: 0)
             Toggle(connector.name, isOn: Binding(

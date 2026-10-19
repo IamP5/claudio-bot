@@ -32,7 +32,7 @@ struct FileView: View {
             ScrollView {
                 Group {
                     if file.mime == "text/markdown" || path.hasSuffix(".md") {
-                        MarkdownText(text: text).font(.system(size: 16))
+                        MarkdownText(text: text).font(.ui(size: 16))
                     } else {
                         Text(text).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
                     }

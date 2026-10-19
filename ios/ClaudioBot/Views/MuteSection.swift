@@ -13,7 +13,7 @@ struct MuteSection: View {
                     get: { bot.muted },
                     set: { client.send(.updateBot(botId: bot.id, patch: BotPatch(muted: $0))) }
                 ))
-                .font(.system(size: 16))
+                .font(.ui(size: 16))
                 .foregroundStyle(.white)
                 .tint(AvatarColor.teal.color)
                 .padding(.horizontal, 16)

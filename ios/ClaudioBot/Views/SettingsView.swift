@@ -219,7 +219,7 @@ struct PairAnotherView: View {
                 .padding(14)
                 .background(Color.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             Text(code.code)
-                .font(.system(size: 34, weight: .semibold, design: .monospaced))
+                .font(.ui(size: 34, weight: .semibold, design: .monospaced))
                 .textSelection(.enabled)
             Text("Expires in \(Text(code.expiresAt, style: .relative))")
                 .font(.footnote)

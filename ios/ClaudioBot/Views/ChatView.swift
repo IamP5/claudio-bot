@@ -51,7 +51,7 @@ struct ChatView: View {
                         ActivityLine(botId: botId)
                     case .unavailable:
                         Text("Claude Code could not start on your Mac. Your messages wait, and the bridge keeps trying.")
-                            .font(.system(size: 13))
+                            .font(.ui(size: 13))
                             .foregroundStyle(Theme.tertiary)
                             .multilineTextAlignment(.center)
                             .frame(maxWidth: .infinity)
@@ -59,7 +59,7 @@ struct ChatView: View {
                             .padding(.top, 14)
                     case .parked:
                         Text("Parked. It waits for the usage limit or today's spending cap to reset.")
-                            .font(.system(size: 13))
+                            .font(.ui(size: 13))
                             .foregroundStyle(Theme.tertiary)
                             .multilineTextAlignment(.center)
                             .frame(maxWidth: .infinity)
@@ -228,7 +228,7 @@ struct HeaderPill: View {
         HStack(spacing: 8) {
             BotAvatar(bot: bot, size: 26, motion: bot.motion)
             Text(bot.name)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.ui(size: 17, weight: .semibold))
                 .foregroundStyle(.white)
                 .lineLimit(1)
             BotStatusChip(status: bot.status)
@@ -267,7 +267,7 @@ struct JumpToLatestButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "arrow.down")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.ui(size: 16, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 40, height: 40)
                 .glass(in: Circle(), interactive: true)

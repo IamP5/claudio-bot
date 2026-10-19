@@ -184,6 +184,7 @@ struct MacCommands: Commands {
     let chrome: MacChrome
     @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.router) private var router
+    @FocusedValue(\.sidebarSearch) private var search
 
     private var context: MacContext {
         MacContext(app: app, local: local, chrome: chrome, router: router) { [openWindow] in
@@ -195,6 +196,14 @@ struct MacCommands: Commands {
     var body: some Commands {
         SidebarCommands()
         CommandGroup(replacing: .newItem) { buttons(.file) }
+        CommandGroup(after: .textEditing) {
+            Button("Find…") {
+                if let router, router.columns == .detailOnly { router.columns = .all }
+                search?.focus()
+            }
+            .keyboardShortcut("f")
+            .disabled(search == nil)
+        }
         CommandGroup(before: .sidebar) {
             buttons(.view)
             Divider()

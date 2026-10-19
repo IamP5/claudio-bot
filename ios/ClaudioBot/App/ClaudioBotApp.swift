@@ -60,6 +60,8 @@ final class Router {
     var sidebar: SidebarMode {
         didSet { if hasSidebar { UserDefaults.standard.set(sidebar.rawValue, forKey: Self.sidebarKey) } }
     }
+    /// Whether the sidebar shows beside the chat. Find opens it, so it lives here rather than in the view.
+    var columns: NavigationSplitViewVisibility = .automatic
     /// Screens pushed on top of the chat.
     var path: [Route] = []
     var showingNewChat = false
@@ -259,7 +261,10 @@ struct RootView: View {
             }
         }
         .overlay(alignment: .top) { ErrorToast() }
+        #if os(iOS)
+        // The Mac keeps the system accent, which draws the sidebar's selection.
         .tint(.white)
+        #endif
         .viewing(router)
         .onChange(of: store.created) { _, created in
             if let ref = router.pendingCreate, let bot = created[ref] {

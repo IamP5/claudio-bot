@@ -5,11 +5,6 @@ struct MainView: View {
     @Environment(AppStore.self) private var store
     @Environment(Router.self) private var router
     @Environment(\.horizontalSizeClass) private var sizeClass
-    #if DEBUG
-    @State private var visibility: NavigationSplitViewVisibility = Demo.showsAllColumns ? .all : .automatic
-    #else
-    @State private var visibility: NavigationSplitViewVisibility = .automatic
-    #endif
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Whether each bot has an open question. A bot that gains one buzzes; bots arriving in a snapshot do not.
@@ -25,9 +20,13 @@ struct MainView: View {
 
     var body: some View {
         @Bindable var router = router
-        NavigationSplitView(columnVisibility: $visibility) {
+        NavigationSplitView(columnVisibility: $router.columns) {
             SidebarRoot()
+                #if os(macOS)
+                .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 400)
+                #else
                 .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 400)
+                #endif
         } detail: {
             #if os(macOS)
             // The profile pushes onto the chat's stack, so it gets no stack of its own: a second stack in the
@@ -103,8 +102,8 @@ struct DetailStack: View {
             router.sidebar == .sessions ? "No session selected" : "No chat selected",
             systemImage: router.sidebar == .sessions ? "chevron.left.forwardslash.chevron.right" : "bubble.left.and.bubble.right",
             description: Text(router.sidebar == .sessions
-                ? "Pick a session, or tap + to start one in a project."
-                : "Pick a bot, or tap + to start a chat.")
+                ? "Pick a session, or \(ThisDevice.tapVerb) + to start one in a project."
+                : "Pick a bot, or \(ThisDevice.tapVerb) + to start a chat.")
         )
         .foregroundStyle(Theme.secondary)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

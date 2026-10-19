@@ -50,6 +50,7 @@ enum Demo {
         }
 
         router.sidebar = .bots
+        if showsAllColumns { router.columns = .all }
         switch screen {
         case "newchat": router.showingNewChat = true
         case "usage", "usagehot", "usageoff": router.showingUsage = true

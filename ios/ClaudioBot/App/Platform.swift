@@ -25,6 +25,15 @@ enum ThisDevice {
         #endif
     }
 
+    /// "Pick a bot, or tap + to start a chat."
+    static var tapVerb: String {
+        #if os(iOS)
+        "tap"
+        #else
+        "click"
+        #endif
+    }
+
     /// Sent with POST /pair and shown in every device list.
     @MainActor static var pairingName: String {
         #if os(iOS)

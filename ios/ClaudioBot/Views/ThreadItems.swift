@@ -35,9 +35,9 @@ struct ThreadRowView: View, Equatable {
             case let .plan(id, _, text, state, cardId):
                 PlanCard(sessionId: sessionId, markdown: model.rendered(id, text), state: state, cardId: cardId)
             case let .permission(_, _, permission):
-                PermissionCardView(messageId: permission.cardId, card: permission.card) {
+                PermissionCardView(messageId: permission.cardId, card: permission.card, decision: {
                     .sessionDecide(sessionId: sessionId, cardId: permission.cardId, choice: $0)
-                }
+                }, fillsColumn: true)
             case let .ask(_, _, questions, answers, cardId):
                 AskCard(sessionId: sessionId, questions: questions, answers: answers, cardId: cardId)
             case let .notice(_, _, text, tone):
@@ -49,6 +49,15 @@ struct ThreadRowView: View, Equatable {
             }
         }
     }
+}
+
+/// The least height of a clickable row: a fingertip on iPhone, a pointer's regular control on a Mac.
+enum HitTarget {
+    #if os(macOS)
+    static let minHeight: CGFloat = 28
+    #else
+    static let minHeight: CGFloat = 44
+    #endif
 }
 
 struct SessionUserBubble: View {
@@ -71,12 +80,12 @@ struct SessionUserBubble: View {
                     Spacer(minLength: 48)
                     Text(MarkdownText.inline(text))
                         .font(.ui(size: 16))
+                        .bubbleText()
                         .foregroundStyle(.white)
                         .textSelection(.enabled)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
+                        .padding(Bubble.padding)
                         .background {
-                            let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            let shape = Bubble.shape
                             if queued {
                                 shape.strokeBorder(Color.white.opacity(0.28), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
                             } else {
@@ -103,12 +112,17 @@ struct FoldRow: View {
     let expanded: Bool
     let toggle: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var steps: [ToolStep] {
         items.flatMap { item -> [ToolStep] in if case .work(_, _, let steps) = item { steps } else { [] } }
     }
 
     var body: some View {
-        Button(action: toggle) {
+        // The folded rows are rows of the list, so the list's rows move and fade with this transaction.
+        Button {
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) { toggle() }
+        } label: {
             HStack(spacing: 8) {
                 Image(systemName: "square.stack.3d.up")
                     .font(.footnote)
@@ -125,7 +139,7 @@ struct FoldRow: View {
                     .rotationEffect(.degrees(expanded ? 90 : 0))
             }
             .padding(.vertical, 8)
-            .frame(minHeight: 44)
+            .frame(minHeight: HitTarget.minHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -139,6 +153,7 @@ struct ThinkingRow: View {
     let text: String
     let ms: Int?
     @State private var open = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var title: String {
         guard let ms else { return "Thought" }
@@ -149,7 +164,7 @@ struct ThinkingRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
-                withAnimation(.snappy(duration: 0.2)) { open.toggle() }
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { open.toggle() }
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "brain").font(.footnote)
@@ -159,7 +174,7 @@ struct ThinkingRow: View {
                         .rotationEffect(.degrees(open ? 90 : 0))
                 }
                 .foregroundStyle(Theme.tertiary)
-                .frame(minHeight: 44)
+                .frame(minHeight: HitTarget.minHeight)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -181,13 +196,14 @@ struct WorkRunRow: View {
     let steps: [ToolStep]
     let onFullOutput: (ToolStep) -> Void
     @State private var open = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var running: ToolStep? { steps.last { $0.state == .running } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.snappy(duration: 0.2)) { open.toggle() }
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { open.toggle() }
             } label: {
                 header
             }
@@ -252,7 +268,7 @@ struct WorkRunRow: View {
                 .rotationEffect(.degrees(open ? 90 : 0))
         }
         .padding(.vertical, 8)
-        .frame(minHeight: 44)
+        .frame(minHeight: HitTarget.minHeight)
         .contentShape(Rectangle())
     }
 }
@@ -299,7 +315,7 @@ struct ToolStepRow: View {
                     Button("Full output") { onFullOutput(step) }
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.link)
-                        .frame(minHeight: 44)
+                        .frame(minHeight: HitTarget.minHeight)
                 }
                 .padding(.leading, 26)
             }
@@ -511,11 +527,12 @@ struct AskCard: View {
                         Image(systemName: "xmark")
                             .font(.ui(size: 15, weight: .medium))
                             .foregroundStyle(Theme.tertiary)
-                            .frame(width: 44, height: 44)
+                            .frame(width: HitTarget.minHeight, height: HitTarget.minHeight)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .disabled(sent)
+                    .help("Dismiss Question")
                     .accessibilityLabel("Dismiss question")
                 }
             }
@@ -537,10 +554,16 @@ struct AskCard: View {
     private func question(_ q: AskQuestion) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             if !q.header.isEmpty {
+                #if os(macOS)
+                Text(q.header)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.tertiary)
+                #else
                 Text(q.header.uppercased())
                     .font(.caption2.weight(.semibold))
                     .tracking(0.6)
                     .foregroundStyle(Theme.tertiary)
+                #endif
             }
             Text(q.question)
                 .font(.ui(size: 17, weight: .semibold))
@@ -663,7 +686,7 @@ private struct AskOptionRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .frame(minHeight: 44)
+        .frame(minHeight: HitTarget.minHeight)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(picked ? .isSelected : [])

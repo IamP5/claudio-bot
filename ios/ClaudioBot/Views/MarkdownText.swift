@@ -65,6 +65,8 @@ struct MarkdownText: View {
     let text: String
     /// A group's members, whose "@name" reads bold in their color. Code blocks keep their text as written.
     var members: [Bot] = []
+    /// False hugs the text, for a bubble that should be no wider than what it says.
+    var fillsWidth = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -86,7 +88,7 @@ struct MarkdownText: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
     }
 
     private func inline(_ s: String) -> AttributedString {

@@ -13,20 +13,23 @@ import Testing
     }
 
     private func mount(
-        _ field: Field, onReturn: @escaping () -> Bool = { false }, submits: Bool = true
+        _ field: Field, maxLines: Int? = nil, onReturn: @escaping () -> Bool = { false }, submits: Bool = true
     ) throws -> (NSWindow, NSTextView) {
         let view = PromptTextView(
             draft: Binding(get: { field.draft }, set: { field.draft = $0 }),
             caret: Binding(get: { field.caret }, set: { field.caret = $0 }),
-            placeholder: "Message", tokenColor: { _ in .orange }, onReturn: onReturn,
+            placeholder: "Message", maxLines: maxLines, tokenColor: { _ in .orange }, onReturn: onReturn,
             onSubmit: submits ? {
                 field.sent.append(field.draft.text)
                 field.draft = ComposerDraft()
                 field.caret = 0
             } : nil
         )
+        // The composer's shape: a field as wide as its row that sizes its own height, pinned to the top.
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         let window = NSWindow(
-            contentRect: CGRect(x: 0, y: 0, width: 360, height: 200), styleMask: [.titled], backing: .buffered, defer: false
+            contentRect: CGRect(x: 0, y: 0, width: 360, height: 400), styleMask: [.titled], backing: .buffered, defer: false
         )
         window.contentView = NSHostingView(rootView: view)
         window.contentView?.layoutSubtreeIfNeeded()
@@ -125,4 +128,93 @@ import Testing
         settle(window)
         #expect(field.draft.text == "say \"hi\" -- now\n")
     }
+
+    @Test func aLongDraftWrapsAtTheFieldsWidthGrowsToItsMaxLinesThenScrolls() throws {
+        let field = Field()
+        let (window, text) = try mount(field, maxLines: 4)
+        let scroll = try #require(text.enclosingScrollView)
+        let layout = try #require(text.layoutManager)
+        let container = try #require(text.textContainer)
+        let font = try #require(text.font)
+        let line = layout.defaultLineHeight(for: font)
+        let lines = { () -> Int in
+            var count = 0
+            layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: container)) { _, _, _, _, _ in count += 1 }
+            return count
+        }
+        settle(window)
+        #expect(abs(scroll.frame.height - line) < 1, "an empty field is one line tall")
+
+        text.insertText(String(repeating: "wrap me ", count: 12), replacementRange: text.selectedRange())
+        // SwiftUI measures with probe proposals of other widths. None of them may stick to the field.
+        _ = window.contentView?.fittingSize
+        settle(window)
+        #expect(scroll.frame.width > 300, "the field fills its row")
+        #expect(abs(container.size.width - scroll.contentSize.width) < 1, "text wraps at the width the field shows")
+        #expect(layout.usedRect(for: container).width > scroll.contentSize.width * 0.8, "lines run across the whole field")
+        #expect(lines() >= 2 && lines() <= 4)
+        #expect(abs(scroll.frame.height - CGFloat(lines()) * line) < 1, "the field grows to show every line")
+
+        text.insertText(String(repeating: "and more ", count: 40), replacementRange: text.selectedRange())
+        _ = window.contentView?.fittingSize
+        settle(window)
+        #expect(lines() > 4)
+        #expect(abs(scroll.frame.height - 4 * line) < 1, "past its max lines the field stops growing")
+        #expect(text.frame.height > scroll.frame.height + line, "and the rest scrolls")
+        #expect(scroll.contentView.bounds.maxY >= text.frame.height - 1, "the end of the draft, where the caret is, stays in view")
+        #expect(abs(container.size.width - scroll.contentSize.width) < 1)
+    }
+
+    @Test func anAutofocusedFieldTakesTheKeyboardWhenItsWindowShows() throws {
+        let field = Field()
+        let view = PromptTextView(
+            draft: Binding(get: { field.draft }, set: { field.draft = $0 }),
+            caret: Binding(get: { field.caret }, set: { field.caret = $0 }),
+            placeholder: "Message", autofocus: true
+        )
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 360, height: 200), styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView = NSHostingView(rootView: view)
+        settle(window)
+        let content = try #require(window.contentView)
+        let text = try #require(Self.textView(in: content))
+        #expect(window.firstResponder === text)
+    }
+
+    @Test func pastedFilesAndALoneImageBecomeAttachmentsWhileTextStillPastes() throws {
+        let field = Field()
+        let (_, text) = try mount(field)
+        let prompt = try #require(text as? PromptNSTextView)
+        var files: [URL] = []
+        var images: [Data] = []
+        prompt.onAttachFiles = { files += $0 }
+        prompt.onAttachImage = { images.append($0) }
+        let board = NSPasteboard(name: NSPasteboard.Name("PromptTextViewMacTests.\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+
+        let file = URL(fileURLWithPath: "/tmp/notes.txt")
+        board.clearContents()
+        board.writeObjects([file as NSURL])
+        #expect(text.readSelection(from: board))
+        #expect(files == [file])
+        #expect(text.string.isEmpty, "a file attaches instead of pasting its path")
+
+        let png = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        )?.representation(using: .png, properties: [:]))
+        board.clearContents()
+        board.setData(png, forType: .png)
+        #expect(text.readSelection(from: board))
+        #expect(images == [png])
+
+        board.clearContents()
+        board.setString("hello", forType: .string)
+        board.setData(png, forType: .png)
+        #expect(text.readSelection(from: board))
+        #expect(images.count == 1, "text beside an image pastes as text")
+        #expect(field.draft.text == "hello")
+    }
 }
+

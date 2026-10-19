@@ -143,6 +143,10 @@ struct SessionThreadView: View {
                 .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.8)))
             }
         }
+        // Following the bottom would push an opened group's steps up and off screen. It opens in place instead.
+        .onChange(of: model.expanded) { old, new in
+            if !new.subtracting(old).isEmpty { followsBottom = false }
+        }
         .onChange(of: model.loadingEarlier) { _, loading in
             guard !loading, let anchor = pageAnchor else { return }
             pageAnchor = nil

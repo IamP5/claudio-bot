@@ -16,7 +16,7 @@ struct RoutineView: View {
                         header(routine)
                         CardSection(title: "Prompt") {
                             Text(routine.prompt)
-                                .font(.system(size: 15))
+                                .font(.ui(size: 15))
                                 .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(16)
@@ -43,28 +43,33 @@ struct RoutineView: View {
 
     private func header(_ routine: Routine) -> some View {
         VStack(spacing: 0) {
-            Toggle(isOn: Binding(
-                get: { routine.enabled },
-                set: { client.send(.setRoutine(botId: botId, routineId: routineId, enabled: $0)) }
-            )) {
+            // Label and switch laid out by hand: outside a Form a Mac toggle is a checkbox beside its label.
+            HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(routine.describe).font(.system(size: 16)).foregroundStyle(.white)
+                    Text(routine.describe).font(.ui(size: 16)).foregroundStyle(.white)
                     if !routine.schedule.isEmpty {
-                        Text(routine.schedule).font(.system(size: 13, design: .monospaced)).foregroundStyle(Theme.tertiary)
+                        Text(routine.schedule).font(.ui(size: 13, design: .monospaced)).foregroundStyle(Theme.tertiary)
                     }
                 }
+                Spacer(minLength: 0)
+                Toggle(routine.describe, isOn: Binding(
+                    get: { routine.enabled },
+                    set: { client.send(.setRoutine(botId: botId, routineId: routineId, enabled: $0)) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(AvatarColor.teal.color)
             }
-            .tint(AvatarColor.teal.color)
             .padding(16)
             Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16)
             HStack {
-                Text("Next run").font(.system(size: 16)).foregroundStyle(.white)
+                Text("Next run").font(.ui(size: 16)).foregroundStyle(.white)
                 Spacer()
-                Text(Self.nextRun(routine)).font(.system(size: 15)).foregroundStyle(Theme.secondary)
+                Text(Self.nextRun(routine)).font(.ui(size: 15)).foregroundStyle(Theme.secondary)
             }
             .padding(16)
         }
-        .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(Theme.card, in: ProfileMetrics.card)
     }
 
     static func nextRun(_ routine: Routine) -> String {
@@ -94,7 +99,7 @@ struct RoutineView: View {
             client.send(.runRoutine(botId: botId, routineId: routineId))
         } label: {
             Label(running ? "Running…" : "Run now", systemImage: "play.fill")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.ui(size: 16, weight: .semibold))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
                 .background(Color.white, in: Capsule())
@@ -135,13 +140,13 @@ private struct RunRow: View {
                 }
                 Spacer(minLength: 0)
                 Text(TimeLabel.separator(run.at))
-                    .font(.system(size: 13))
+                    .font(.ui(size: 13))
                     .foregroundStyle(Theme.tertiary)
                     .lineLimit(1)
             }
             if let note = run.note {
                 Text(note)
-                    .font(.system(size: 14))
+                    .font(.ui(size: 14))
                     .foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

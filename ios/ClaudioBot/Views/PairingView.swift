@@ -1,5 +1,7 @@
 import SwiftUI
+#if os(iOS)
 import VisionKit
+#endif
 
 struct PairingView: View {
     @Environment(AppModel.self) private var app
@@ -7,13 +9,21 @@ struct PairingView: View {
     @State private var urlText = ""
     @State private var code = ""
     @State private var scanning = false
+    @State private var link = ""
 
     private var flow: PairingFlow { app.pairingFlow ?? PairingFlow() }
+
+    #if os(macOS)
+    private static let pairedPeer = "device", unpairedSymbol = "laptopcomputer.slash"
+    #else
+    private static let pairedPeer = "phone", unpairedSymbol = "iphone.slash"
+    #endif
 
     var body: some View {
         ScrollView {
             VStack(spacing: 28) {
                 header
+                #if os(iOS)
                 Button {
                     scanning = true
                 } label: {
@@ -26,6 +36,9 @@ struct PairingView: View {
                 .foregroundStyle(.black)
                 .controlSize(.large)
                 .disabled(flow.isPairing)
+                #else
+                linkForm
+                #endif
 
                 HStack {
                     VStack { Divider() }
@@ -42,21 +55,22 @@ struct PairingView: View {
         .scrollDismissesKeyboard(.interactively)
         .background(Theme.background)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { app.cancelPairing() }
-                    .disabled(flow.isPairing)
-            }
-        }
-        .sheet(isPresented: $scanning) {
-            QRScannerSheet { payload in
-                scanning = false
-                switch URL(string: payload).flatMap(DeepLink.init(url:)) {
-                case .pair(let invite): app.propose(invite)
-                case .outdatedBridge: app.showPairingFailure(DeepLink.outdatedBridgeMessage)
-                default: app.showPairingFailure("That QR code is not a ClaudioBot pairing code.")
+            // Only the sheet over a paired app has something to cancel back to.
+            if client.pairing != nil {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { app.cancelPairing() }
+                        .disabled(flow.isPairing)
                 }
             }
         }
+        #if os(iOS)
+        .sheet(isPresented: $scanning) {
+            QRScannerSheet { payload in
+                scanning = false
+                propose(payload, notAPairing: "That QR code is not a ClaudioBot pairing code.")
+            }
+        }
+        #endif
         // Dismissal goes through the buttons only, so a dismissal can never race the Pair action.
         .alert(
             flow.confirming?.confirmation(replacing: client.pairing).title ?? "",
@@ -81,17 +95,49 @@ struct PairingView: View {
                 .padding(.top, 24)
             Text("Pair with your Mac")
                 .font(.largeTitle.bold())
-            Text("Your bots live on your Mac. Run `bun run start` in the bridge folder there. It prints a QR code and a pairing code. A phone that is already paired can show one too, under Settings.")
+            Text("Your bots live on your Mac. Run `bun run start` in the bridge folder there. It prints a QR code and a pairing code. A \(Self.pairedPeer) that is already paired can show one too, under Settings.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             if let reason = client.unpairedReason {
-                Label(reason, systemImage: "iphone.slash")
+                Label(reason, systemImage: Self.unpairedSymbol)
                     .font(.footnote)
                     .foregroundStyle(Theme.attention)
                     .multilineTextAlignment(.center)
             }
         }
+    }
+
+    private func propose(_ payload: String, notAPairing: String) {
+        switch URL(string: payload.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap(DeepLink.init(url:)) {
+        case .pair(let invite): app.propose(invite)
+        case .outdatedBridge: app.showPairingFailure(DeepLink.outdatedBridgeMessage)
+        default: app.showPairingFailure(notAPairing)
+        }
+    }
+
+    /// The Mac has no camera to scan with, so the QR's link is pasted instead.
+    private var linkForm: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Pairing link").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                TextField("claudiobot://pair?url=…&code=…", text: $link)
+                    .autocorrectionDisabled()
+                    .fieldStyle()
+                    .onSubmit(openLink)
+                Button("Open", action: openLink)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.white)
+                    .foregroundStyle(.black)
+                    .controlSize(.large)
+                    .disabled(flow.isPairing || link.isEmpty)
+            }
+        }
+    }
+
+    private func openLink() {
+        guard !link.isEmpty else { return }
+        propose(link, notAPairing: "That is not a ClaudioBot pairing link. It starts with claudiobot://pair.")
     }
 
     private var manualForm: some View {
@@ -148,6 +194,7 @@ private extension View {
     }
 }
 
+#if os(iOS)
 struct QRScannerSheet: View {
     let onScan: (String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -220,3 +267,4 @@ private struct QRScanner: UIViewControllerRepresentable {
         }
     }
 }
+#endif

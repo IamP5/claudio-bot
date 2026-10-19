@@ -7,6 +7,12 @@ struct MemorySection: View {
     @Environment(BridgeClient.self) private var client
     @State private var editing: FactDraft?
 
+    #if os(macOS)
+    private static let howToEdit = "Click a fact to edit it, or Control-click it to forget it."
+    #else
+    private static let howToEdit = "Tap a fact to edit it, swipe to forget it."
+    #endif
+
     var body: some View {
         if store.has(.memory) {
             Section {
@@ -19,6 +25,12 @@ struct MemorySection: View {
                         if fact.confirmed {
                             Button { editing = FactDraft(fact) } label: { FactRow(fact: fact) }
                                 .buttonStyle(.plain)
+                                #if os(macOS)
+                                .contextMenu {
+                                    Button("Edit…") { editing = FactDraft(fact) }
+                                    Button("Forget", role: .destructive) { client.send(.forgetFact(factId: fact.id)) }
+                                }
+                                #endif
                         } else {
                             ProposedFactRow(
                                 fact: fact,
@@ -39,7 +51,7 @@ struct MemorySection: View {
             } header: {
                 Text("Memory")
             } footer: {
-                Text("What bots know about you. A fact a bot remembers stays with that bot until you confirm it; then every bot knows it. Tap a fact to edit it, swipe to forget it. They live in USER.md on your Mac.")
+                Text("What bots know about you. A fact a bot remembers stays with that bot until you confirm it; then every bot knows it. \(Self.howToEdit) They live in USER.md on your Mac.")
             }
             .task(id: store.connection.summary) { client.send(.memory) }
             .sheet(item: $editing) { draft in
@@ -119,33 +131,57 @@ private struct FactEditor: View {
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var canSave: Bool { !trimmed.isEmpty && trimmed.count <= FactDraft.maxChars && trimmed != draft.text }
 
+    private var title: String { draft.factId == nil ? "New fact" : "Edit fact" }
+
+    private func save() {
+        onSave(trimmed)
+        dismiss()
+    }
+
     var body: some View {
+        #if os(macOS)
+        MacSheet(title: title) {
+            form
+                .formStyle(.grouped)
+                .textFieldStyle(.automatic)
+        } buttons: {
+            Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+            Button("Save", action: save)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canSave)
+        }
+        .frame(width: 440, height: 300)
+        #else
         NavigationStack {
-            Form {
-                Section {
-                    TextField("Prefers short answers", text: $text, axis: .vertical)
-                        .lineLimit(2...6)
-                } footer: {
-                    Text("\(trimmed.count)/\(FactDraft.maxChars). Every bot reads this. Never put passwords or keys here.")
-                        .foregroundStyle(trimmed.count > FactDraft.maxChars ? Theme.danger : Theme.secondary)
-                }
-            }
-            .scrollContentBackground(.hidden)
-            .background(Theme.background)
-            .navigationTitle(draft.factId == nil ? "New fact" : "Edit fact")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        onSave(trimmed)
-                        dismiss()
+            form
+                .scrollContentBackground(.hidden)
+                .background(Theme.background)
+                .navigationTitle(title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save", action: save).disabled(!canSave)
                     }
-                    .disabled(!canSave)
                 }
-            }
-            .onAppear { text = draft.text }
         }
         .presentationDetents([.medium])
+        #endif
+    }
+
+    private var form: some View {
+        Form {
+            Section {
+                TextField("Prefers short answers", text: $text, axis: .vertical)
+                    .lineLimit(2...6)
+                    #if os(macOS)
+                    .labelsHidden()
+                    #endif
+            } footer: {
+                Text("\(trimmed.count)/\(FactDraft.maxChars). Every bot reads this. Never put passwords or keys here.")
+                    .foregroundStyle(trimmed.count > FactDraft.maxChars ? Theme.danger : Theme.secondary)
+            }
+        }
+        .onAppear { text = draft.text }
     }
 }

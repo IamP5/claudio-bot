@@ -78,7 +78,7 @@ private struct MentionRow: View {
                 Text("Bot").foregroundStyle(Theme.tertiary)
             case .connector(let connector):
                 Image(systemName: "puzzlepiece.extension.fill")
-                    .font(.system(size: 13))
+                    .font(.ui(size: 13))
                     .foregroundStyle(Theme.secondary)
                     .frame(width: 26, height: 26)
                     .background(Theme.letter, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
@@ -88,7 +88,7 @@ private struct MentionRow: View {
                 Text("Plugin").foregroundStyle(Theme.tertiary)
             }
         }
-        .font(.system(size: 16))
+        .font(.ui(size: 16))
         .accessibilityElement(children: .combine)
     }
 }
@@ -101,19 +101,19 @@ private struct CommandRow: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
                 Text("/\(Text(parts.plugin.map { "\($0):" } ?? "").foregroundStyle(Theme.tertiary))\(parts.command)")
-                    .font(.system(size: 15, weight: .medium, design: .monospaced))
+                    .font(.ui(size: 15, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                 if !command.argumentHint.isEmpty {
                     Text(command.argumentHint)
-                        .font(.system(size: 14, design: .monospaced))
+                        .font(.ui(size: 14, design: .monospaced))
                         .foregroundStyle(Theme.tertiary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 if command.source == .builtin {
                     Text("Built-in")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.ui(size: 11, weight: .semibold))
                         .foregroundStyle(Theme.secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -122,7 +122,7 @@ private struct CommandRow: View {
             }
             if !command.description.isEmpty {
                 Text(command.description)
-                    .font(.system(size: 13))
+                    .font(.ui(size: 13))
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)

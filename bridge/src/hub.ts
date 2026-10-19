@@ -146,7 +146,7 @@ type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; carded: bool
 type Pushes = { pushed: { id: MessageId; at: number } | null; last: MessageId | null };
 
 /** What hello advertises: the FEATURES this bridge serves. Each new one joins when the hub implements it. */
-const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups"];
+const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups", "presence"];
 
 /** A client request about one chat: a bot's, or a group's. */
 type ChatRequest = Extract<ClientMessage, { botId: BotId }>;
@@ -1122,6 +1122,7 @@ export function createHub(deps: HubDeps): Hub {
       case "devices":
       case "revoke_device":
       case "pair_code":
+      case "presence":
         return error("This bridge cannot manage devices yet.");
       case "refresh_usage":
         return usage ? [{ type: "usage", usage: await usage.refresh() }] : error("This bridge does not read plan usage.");

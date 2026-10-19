@@ -1,4 +1,5 @@
 import SwiftUI
+#if os(iOS)
 import UIKit
 
 @main
@@ -20,6 +21,7 @@ struct ClaudioBotApp: App {
         .onChange(of: scenePhase) { _, phase in app.scenePhaseChanged(phase) }
     }
 }
+#endif
 
 enum Route: Hashable {
     case profile(BotID, tab: ProfileView.Tab = .info)
@@ -30,7 +32,7 @@ enum Route: Hashable {
     case routine(BotID, RoutineID)
 }
 
-enum Selection: Hashable, Sendable {
+enum Selection: Hashable, Codable, Sendable {
     case bot(BotID)
     case session(SessionID)
 
@@ -53,9 +55,13 @@ final class Router {
     static let sidebarKey = "sidebarMode"
 
     var selection: Selection?
-    var sidebar: SidebarMode = SidebarMode(rawValue: UserDefaults.standard.string(forKey: Router.sidebarKey) ?? "") ?? .bots {
-        didSet { UserDefaults.standard.set(sidebar.rawValue, forKey: Self.sidebarKey) }
+    /// Whether this window has the sidebar. A Mac window opened for one chat or session has none.
+    let hasSidebar: Bool
+    var sidebar: SidebarMode {
+        didSet { if hasSidebar { UserDefaults.standard.set(sidebar.rawValue, forKey: Self.sidebarKey) } }
     }
+    /// Whether the sidebar shows beside the chat. Find opens it, so it lives here rather than in the view.
+    var columns: NavigationSplitViewVisibility = .automatic
     /// Screens pushed on top of the chat.
     var path: [Route] = []
     var showingNewChat = false
@@ -68,9 +74,26 @@ final class Router {
     var pendingCreate: String?
     var pendingSessionCreate: String?
 
+    /// The main window's router, with the sidebar it had last time.
+    init() {
+        hasSidebar = true
+        sidebar = SidebarMode(rawValue: UserDefaults.standard.string(forKey: Router.sidebarKey) ?? "") ?? .bots
+    }
+
+    /// A window for one chat or session, without a sidebar.
+    init(showing selection: Selection) {
+        hasSidebar = false
+        sidebar = selection.session == nil ? .bots : .sessions
+        self.selection = selection
+    }
+
     /// The list is watched while it shows, and while a thread is open: its header reads the row.
     var watchesSessions: Bool {
-        sidebar == .sessions || selection?.session != nil
+        (hasSidebar && sidebar == .sessions) || selection?.session != nil
+    }
+
+    var viewing: Viewing {
+        Viewing(bot: selection?.bot, session: selection?.session, sessionsList: watchesSessions)
     }
 
     func open(_ bot: BotID) {
@@ -102,14 +125,16 @@ final class AppModel {
     /// The pairing in progress. While paired, a flow shows the pairing sheet; while unpaired the pairing screen is always up.
     private(set) var pairingFlow: PairingFlow?
     @ObservationIgnored let notifier = Notifier()
+    #if os(iOS)
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    #endif
 
     init() {
-        let client = BridgeClient(store: store, deviceName: UIDevice.current.name)
+        let client = BridgeClient(store: store, deviceName: ThisDevice.pairingName)
         self.client = client
         let notifier = notifier
         let router = router
-        client.onAlerts = { notifier.post($0, viewing: client.openBot) }
+        client.onAlerts = { notifier.post($0, viewing: client.onScreen.bots) }
         client.onForget = { notifier.clearAll() }
         notifier.onOpenBot = { router.open($0) }
         notifier.onAnswer = { bot, message, option in
@@ -188,6 +213,7 @@ final class AppModel {
 
     func scenePhaseChanged(_ phase: ScenePhase) {
         switch phase {
+        #if os(iOS)
         case .background:
             // Keeps the socket alive for the short grace period iOS allows, so an answer
             // tapped on a notification still reaches the Mac.
@@ -195,20 +221,25 @@ final class AppModel {
             backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "bridge") { [weak self] in
                 MainActor.assumeIsolated { self?.endBackgroundTask() }
             }
+        #endif
         case .active:
+            #if os(iOS)
             endBackgroundTask()
+            #endif
             client.reconnectNow()
-            if let open = client.openBot { notifier.clear(bot: open) }
+            client.onScreen.bots.forEach { notifier.clear(bot: $0) }
         default:
             break
         }
     }
 
+    #if os(iOS)
     private func endBackgroundTask() {
         guard backgroundTask != .invalid else { return }
         UIApplication.shared.endBackgroundTask(backgroundTask)
         backgroundTask = .invalid
     }
+    #endif
 }
 
 struct RootView: View {
@@ -230,12 +261,11 @@ struct RootView: View {
             }
         }
         .overlay(alignment: .top) { ErrorToast() }
+        #if os(iOS)
+        // The Mac keeps the system accent, which draws the sidebar's selection.
         .tint(.white)
-        .onChange(of: router.selection, initial: true) { _, selection in
-            client.openBot = selection?.bot
-            client.openSession = selection?.session
-        }
-        .onChange(of: router.watchesSessions, initial: true) { _, watches in client.watchingSessions = watches }
+        #endif
+        .viewing(router)
         .onChange(of: store.created) { _, created in
             if let ref = router.pendingCreate, let bot = created[ref] {
                 router.pendingCreate = nil
@@ -248,5 +278,25 @@ struct RootView: View {
                 router.open(.session(session))
             }
         }
+    }
+}
+
+extension View {
+    /// Holds a viewing lease for this window while it is open, kept to what `router` shows.
+    func viewing(_ router: Router) -> some View {
+        modifier(ViewingLeaseHolder(router: router))
+    }
+}
+
+private struct ViewingLeaseHolder: ViewModifier {
+    let router: Router
+    @State private var lease = ViewingLease()
+    @Environment(BridgeClient.self) private var client
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { client.view(router.viewing, as: lease) }
+            .onChange(of: router.viewing) { _, viewing in client.view(viewing, as: lease) }
+            .onDisappear { client.view(nil, as: lease) }
     }
 }

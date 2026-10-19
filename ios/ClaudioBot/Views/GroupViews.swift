@@ -28,7 +28,7 @@ struct GroupAvatar: View {
         ZStack {
             switch avatars.count {
             case 0:
-                Image(systemName: "person.2.fill").font(.system(size: size * 0.4)).foregroundStyle(Theme.secondary)
+                Image(systemName: "person.2.fill").font(.ui(size: size * 0.4)).foregroundStyle(Theme.secondary)
             case 1:
                 AvatarView(avatar: avatars[0], size: size)
             case 2:
@@ -74,7 +74,7 @@ struct MemberBubble: View {
             VStack(alignment: .leading, spacing: 4) {
                 if opensRun {
                     Text(sender?.name ?? "A deleted bot")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.ui(size: 13, weight: .semibold))
                         .foregroundStyle(sender?.avatar.color.accent ?? Theme.secondary)
                         .padding(.leading, 4)
                 }
@@ -86,9 +86,13 @@ struct MemberBubble: View {
 
 /// "Create group chat": pick 2 to 8 bots and name the group. The chat opens once the bridge made it.
 struct NewGroupView: View {
+    /// On a Mac the sheet swaps pages instead of pushing, so the page offers its own way back.
+    var back: (() -> Void)?
+
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
     @Environment(Router.self) private var router
+    @Environment(\.dismiss) private var dismiss
     #if DEBUG
     @State private var picked: [BotID] = Demo.groupPick ?? []
     #else
@@ -101,10 +105,35 @@ struct NewGroupView: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        MacSheet(title: "New group", back: back) {
+            Form {
+                Section {
+                    TextField("Group name", text: $name, prompt: Text(picked.count < 2 ? "Group name" : suggested))
+                        .labelsHidden()
+                        .textFieldStyle(.plain)
+                        .focusEffectDisabled()
+                }
+                Section {
+                    BotChecklist(picked: $picked, limit: GroupRules.members.upperBound)
+                } header: {
+                    Text("Members")
+                } footer: {
+                    Text("Pick 2 to 8 bots.")
+                }
+            }
+            .formStyle(.grouped)
+        } buttons: {
+            Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+            Button("Create", action: create)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!GroupRules.members.contains(picked.count))
+        }
+        #else
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 TextField(picked.count < 2 ? "Group name" : suggested, text: $name)
-                    .font(.system(size: 17))
+                    .font(.ui(size: 17))
                     .padding(.horizontal, 16)
                     .padding(.vertical, 14)
                     .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -124,6 +153,7 @@ struct NewGroupView: View {
                     .disabled(!GroupRules.members.contains(picked.count))
             }
         }
+        #endif
     }
 
     private func create() {
@@ -148,6 +178,23 @@ struct BotChecklist: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        // Form rows with checkboxes: the Form draws the separators.
+        ForEach(bots) { bot in
+            let on = picked.contains(bot.id)
+            Toggle(isOn: Binding(
+                get: { on },
+                set: { if $0 { if picked.count < limit { picked.append(bot.id) } } else { picked.removeAll { $0 == bot.id } } }
+            )) {
+                HStack(spacing: 10) {
+                    AvatarView(avatar: bot.avatar, size: 24)
+                    Text(bot.name)
+                }
+            }
+            .toggleStyle(.checkbox)
+            .disabled(!on && picked.count >= limit)
+        }
+        #else
         ForEach(Array(bots.enumerated()), id: \.element.id) { index, bot in
             if index > 0 { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 58) }
             let on = picked.contains(bot.id)
@@ -156,10 +203,10 @@ struct BotChecklist: View {
             } label: {
                 HStack(spacing: 12) {
                     AvatarView(avatar: bot.avatar, size: 30)
-                    Text(bot.name).font(.system(size: 16)).foregroundStyle(.white)
+                    Text(bot.name).font(.ui(size: 16)).foregroundStyle(.white)
                     Spacer()
                     Image(systemName: on ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 21))
+                        .font(.ui(size: 21))
                         .foregroundStyle(on ? Color.white : Theme.tertiary)
                 }
                 .padding(.horizontal, 16)
@@ -170,6 +217,7 @@ struct BotChecklist: View {
             .buttonStyle(.plain)
             .accessibilityAddTraits(on ? .isSelected : [])
         }
+        #endif
     }
 }
 
@@ -188,7 +236,7 @@ struct GroupDetails: View {
 
     var body: some View {
         let members = store.members(of: group)
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: ProfileMetrics.sectionSpacing) {
             CardSection(title: "Members", footer: editable ? "A group keeps at least 2 bots." : nil) {
                 ForEach(Array(members.enumerated()), id: \.element.id) { index, member in
                     if index > 0 { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 62) }
@@ -197,9 +245,9 @@ struct GroupDetails: View {
                             HStack(spacing: 12) {
                                 AvatarView(avatar: member.avatar, size: 34)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(member.name).font(.system(size: 16)).foregroundStyle(.white)
+                                    Text(member.name).font(.ui(size: 16)).foregroundStyle(.white)
                                     if let title = member.title {
-                                        Text(title).font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                                        Text(title).font(.ui(size: 13)).foregroundStyle(Theme.secondary)
                                     }
                                 }
                                 Spacer(minLength: 0)
@@ -209,12 +257,13 @@ struct GroupDetails: View {
                         .buttonStyle(.plain)
                         if editable {
                             Button { set(group.members.filter { $0 != member.id }) } label: {
-                                Image(systemName: "minus.circle.fill").font(.system(size: 20)).foregroundStyle(Theme.danger)
+                                Image(systemName: "minus.circle.fill").font(.ui(size: 20)).foregroundStyle(Theme.danger)
                             }
                             .buttonStyle(.plain)
                             .disabled(group.members.count <= GroupRules.members.lowerBound)
                             .opacity(group.members.count <= GroupRules.members.lowerBound ? 0.35 : 1)
                             .accessibilityLabel("Remove \(member.name)")
+                            .help("Remove \(member.name)")
                         }
                     }
                     .padding(.horizontal, 16)
@@ -224,7 +273,7 @@ struct GroupDetails: View {
                     Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16)
                     Button { adding = true } label: {
                         Label("Add members", systemImage: "plus")
-                            .font(.system(size: 16))
+                            .font(.ui(size: 16))
                             .foregroundStyle(Theme.link)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(16)
@@ -237,11 +286,11 @@ struct GroupDetails: View {
             if editable {
                 Button(role: .destructive) { deleting = true } label: {
                     Text("Delete Group")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.ui(size: 16, weight: .semibold))
                         .foregroundStyle(Theme.danger)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 15)
-                        .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .background(Theme.card, in: RoundedRectangle(cornerRadius: ProfileMetrics.buttonRadius, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
@@ -270,7 +319,28 @@ private struct AddMembersView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var picked: [BotID] = []
 
+    private func add() {
+        client.send(.updateBot(botId: group.id, patch: BotPatch(members: group.members + picked)))
+        dismiss()
+    }
+
     var body: some View {
+        #if os(macOS)
+        MacSheet(title: "Add members") {
+            Form {
+                Section("Bots") {
+                    BotChecklist(picked: $picked, limit: GroupRules.members.upperBound - group.members.count, excluded: Set(group.members))
+                }
+            }
+            .formStyle(.grouped)
+        } buttons: {
+            Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+            Button("Add", action: add)
+                .keyboardShortcut(.defaultAction)
+                .disabled(picked.isEmpty)
+        }
+        .frame(width: 400, height: 460)
+        #else
         NavigationStack {
             ScrollView {
                 CardSection(title: "Bots") {
@@ -286,15 +356,13 @@ private struct AddMembersView: View {
                     Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
-                        client.send(.updateBot(botId: group.id, patch: BotPatch(members: group.members + picked)))
-                        dismiss()
-                    }
-                    .fontWeight(.semibold)
-                    .disabled(picked.isEmpty)
+                    Button("Add", action: add)
+                        .fontWeight(.semibold)
+                        .disabled(picked.isEmpty)
                 }
             }
         }
         .presentationBackground(Theme.background)
+        #endif
     }
 }

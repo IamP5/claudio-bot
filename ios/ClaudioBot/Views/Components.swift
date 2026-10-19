@@ -23,14 +23,23 @@ struct StatusDot: View {
     }
 }
 
-/// Shrinks a touch while pressed, the way system controls answer a finger. Reduce Motion dims instead of scaling.
+/// Shrinks a touch while pressed, the way system controls answer a finger. Reduce Motion dims instead of scaling, and
+/// so does a Mac, whose buttons darken under a click rather than shrink.
 struct PressableStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private var dims: Bool {
+        #if os(macOS)
+        true
+        #else
+        reduceMotion
+        #endif
+    }
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
-            .opacity(configuration.isPressed && reduceMotion ? 0.7 : 1)
+            .scaleEffect(configuration.isPressed && !dims ? 0.96 : 1)
+            .opacity(configuration.isPressed && dims ? 0.7 : 1)
             .animation(.easeOut(duration: configuration.isPressed ? 0.08 : 0.18), value: configuration.isPressed)
     }
 }
@@ -175,6 +184,16 @@ extension View {
             background(Theme.raised.opacity(0.92), in: shape)
         }
     }
+
+    /// Sibling glass shapes sample one shared layer, so they read as one surface and blend where they meet.
+    @ViewBuilder
+    func glassGroup(spacing: CGFloat? = nil) -> some View {
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: spacing) { self }
+        } else {
+            self
+        }
+    }
 }
 
 /// The lettered square in front of a question option.
@@ -183,12 +202,20 @@ struct LetterBadge: View {
     var fill: Color = .white.opacity(0.08)
     var ink: Color = Theme.tertiary
 
+    #if os(macOS)
+    private static let side: CGFloat = 24
+    private static let radius: CGFloat = 6
+    #else
+    private static let side: CGFloat = 22
+    private static let radius: CGFloat = 5
+    #endif
+
     var body: some View {
         Text(String(UnicodeScalar(UInt8(65 + index % 26))))
-            .font(.system(size: 12, weight: .medium))
+            .font(.ui(size: 12, weight: .medium))
             .foregroundStyle(ink)
-            .frame(width: 22, height: 22)
-            .background(fill, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .frame(width: Self.side, height: Self.side)
+            .background(fill, in: RoundedRectangle(cornerRadius: Self.radius, style: .continuous))
     }
 }
 
@@ -239,5 +266,21 @@ struct StatusPill: View {
         .padding(.vertical, 4)
         .foregroundStyle(color)
         .background(color.opacity(0.16), in: Capsule())
+    }
+}
+
+/// On the Mac, opens a chat or session in a window of its own. Elsewhere it shows nothing.
+struct OpenInNewWindowButton: View {
+    let selection: Selection
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        #if os(macOS)
+        Button {
+            openWindow(value: selection)
+        } label: {
+            Label("Open in New Window", systemImage: "macwindow.badge.plus")
+        }
+        #endif
     }
 }

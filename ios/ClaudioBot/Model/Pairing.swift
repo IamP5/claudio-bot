@@ -118,6 +118,20 @@ struct PairInvite: Equatable, Sendable {
     }
 }
 
+extension PairCode {
+    /// What another device scans: every address the bridge listed, best first, minus the loopback ones only this
+    /// computer reaches. A bridge that lists none (one from before pair_code carried URLs) falls back to the address
+    /// this app pairs at. nil when nothing is left that another device could reach.
+    func invite(fallingBackTo own: URL?) -> PairInvite? {
+        let listed = (urls ?? []).compactMap { try? PairInvite.bridgeURL($0) }.filter { !$0.isLoopback }
+        var seen = Set<URL>()
+        let addresses = (listed.isEmpty ? [own].compactMap { $0 }.filter { !$0.isLoopback } : listed)
+            .filter { seen.insert($0).inserted }
+        guard let first = addresses.first else { return nil }
+        return PairInvite(url: first, code: code, fallbacks: Array(addresses.dropFirst()))
+    }
+}
+
 struct PairingConfirmation: Equatable, Sendable {
     let title: String
     let detail: String?
@@ -180,6 +194,14 @@ extension URL {
         components.path = components.path.hasSuffix("/ws") ? String(components.path.dropLast(2)) + name : "/" + name
         components.query = nil
         return components.url!
+    }
+
+    /// localhost, 127.0.0.0/8 or ::1.
+    var isLoopback: Bool {
+        guard let host = host(percentEncoded: false)?.lowercased() else { return false }
+        if host == "localhost" || host == "::1" { return true }
+        let octets = host.split(separator: ".", omittingEmptySubsequences: false)
+        return octets.count == 4 && octets.allSatisfy { UInt8($0) != nil } && octets[0] == "127"
     }
 
     /// host:port, the part of the address a person recognizes their Mac by.
@@ -372,19 +394,43 @@ struct PairingVault: Sendable {
     let service: String
     private static let account = "bridge"
 
-    static let app = PairingVault(service: "dev.claudiobot.app.pairing")
+    /// A Debug build takes `-pairingVault <service>`, so a check pairs with a throwaway bridge and leaves the
+    /// app's own pairing alone.
+    static let app: PairingVault = {
+        #if DEBUG
+        if let service = UserDefaults.standard.string(forKey: "pairingVault") { return PairingVault(service: service) }
+        #endif
+        return PairingVault(service: "dev.claudiobot.app.pairing")
+    }()
 
     struct SaveFailed: LocalizedError {
         let status: OSStatus
 
-        var errorDescription: String? { "This iPhone could not save the pairing to its Keychain (error \(status))." }
+        var errorDescription: String? { "This \(ThisDevice.noun) could not save the pairing to its Keychain (error \(status))." }
     }
 
     private var query: [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: service,
-         kSecAttrAccount as String: Self.account]
+        var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                    kSecAttrService as String: service,
+                                    kSecAttrAccount as String: Self.account]
+        #if os(macOS)
+        if Self.dataProtection { query[kSecUseDataProtectionKeychain as String] = true }
+        #endif
+        return query
     }
+
+    #if os(macOS)
+    /// The data protection keychain needs an app signed with a team. A build signed to run locally gets
+    /// errSecMissingEntitlement there, so it keeps the pairing in the login keychain instead.
+    private static let dataProtection: Bool = {
+        let probe: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                    kSecAttrService as String: "dev.claudiobot.keychain-probe",
+                                    kSecUseDataProtectionKeychain as String: true]
+        let status = SecItemAdd(probe.merging([kSecValueData as String: Data()]) { $1 } as CFDictionary, nil)
+        SecItemDelete(probe as CFDictionary)
+        return status != errSecMissingEntitlement
+    }()
+    #endif
 
     func load() -> Pairing? {
         var q = query
@@ -429,5 +475,20 @@ extension Data {
             index = next
         }
         self.init(bytes)
+    }
+}
+
+/// Notices a device that paired while the pairing code is up: one missing from the first list heard after it went up.
+struct NewDeviceWatch: Sendable {
+    private var baseline: Set<DeviceID>?
+
+    /// Whether `devices` holds a device the first list did not.
+    mutating func heard(_ devices: [Device]) -> Bool {
+        let ids = Set(devices.map(\.id))
+        guard let baseline else {
+            baseline = ids
+            return false
+        }
+        return !ids.isSubset(of: baseline)
     }
 }

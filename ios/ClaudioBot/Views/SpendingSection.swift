@@ -49,10 +49,10 @@ struct SpendingSection: View {
     private func today(_ spend: Spend) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Today").font(.system(size: 16)).foregroundStyle(.white)
+                Text("Today").font(.ui(size: 16)).foregroundStyle(.white)
                 Spacer()
                 Text(spend.text)
-                    .font(.system(size: 15).monospacedDigit())
+                    .font(.ui(size: 15).monospacedDigit())
                     .foregroundStyle(spend.nearLimit ? Theme.attention : Theme.secondary)
             }
             if let fraction = spend.fraction {
@@ -76,10 +76,10 @@ struct SpendingSection: View {
             }
         } label: {
             HStack {
-                Text("Daily cap").font(.system(size: 16)).foregroundStyle(.white)
+                Text("Daily cap").font(.ui(size: 16)).foregroundStyle(.white)
                 Spacer()
-                Text(Self.capLabel(bot)).font(.system(size: 15)).foregroundStyle(Theme.secondary)
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.tertiary)
+                Text(Self.capLabel(bot)).font(.ui(size: 15)).foregroundStyle(Theme.secondary)
+                Image(systemName: "chevron.up.chevron.down").font(.ui(size: 12, weight: .semibold)).foregroundStyle(Theme.tertiary)
             }
             .padding(16)
             .contentShape(Rectangle())

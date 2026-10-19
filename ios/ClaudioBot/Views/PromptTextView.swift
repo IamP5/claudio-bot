@@ -15,6 +15,11 @@ struct PromptTextView: View {
     /// Return while a menu is open picks its row. Answering true keeps the newline out.
     var onReturn: () -> Bool = { false }
     var onEscape: () -> Void = {}
+    /// Return sends on the Mac twin. A phone's Return adds a newline, so it is unused here.
+    var onSubmit: (() -> Void)? = nil
+    /// Pasted and dropped files and images attach on the Mac twin. A phone attaches through the + menu.
+    var onAttachFiles: (([URL]) -> Void)? = nil
+    var onAttachImage: ((Data) -> Void)? = nil
 
     var body: some View {
         Representable(
@@ -22,12 +27,14 @@ struct PromptTextView: View {
             tokenColor: tokenColor, onReturn: onReturn, onEscape: onEscape
         )
         .overlay(alignment: .topLeading) {
-            if draft.text.isEmpty {
-                Text(placeholder)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .allowsHitTesting(false)
-            }
+            // Hidden with no animation, so a menu opening on the first "@" never fades it under the typed text.
+            Text(placeholder)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .opacity(draft.text.isEmpty ? 1 : 0)
+                .animation(nil, value: draft.text.isEmpty)
+                .accessibilityHidden(!draft.text.isEmpty)
+                .allowsHitTesting(false)
         }
     }
 }

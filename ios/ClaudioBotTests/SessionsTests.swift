@@ -322,6 +322,22 @@ private func invalidates(_ read: () -> Void, by change: () -> Void) -> Bool {
         #expect(threads[SessionID("f")] != nil, "a snapshot is a reply to a watch, so it opens the thread")
     }
 
+    @Test func threadsOnScreenAreNeverEvictedHoweverOldOrMany() {
+        let threads = SessionThreads()
+        threads.keep([SessionID("a")])
+        for id in ["a", "b", "c", "d", "e"] { threads.open(SessionID(id)) }
+        #expect(Set(threads.models.keys.map(\.rawValue)) == ["a", "c", "d", "e"], "b goes, not a, which a window shows")
+
+        let five: Set<SessionID> = [SessionID("a"), SessionID("c"), SessionID("d"), SessionID("e"), SessionID("f")]
+        threads.keep(five)
+        threads.open(SessionID("f"))
+        #expect(threads.models.count == 5, "five windows keep five threads, past the capacity")
+
+        threads.keep(five.subtracting([SessionID("a")]))
+        #expect(threads[SessionID("a")] == nil, "once off screen, the oldest goes")
+        #expect(threads.models.count == 4)
+    }
+
     @Test func theNewSessionModelsComeFromTheLastThreadThatOfferedAny() {
         let threads = SessionThreads()
         var phone = controls

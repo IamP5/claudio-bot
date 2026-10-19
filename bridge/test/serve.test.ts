@@ -6,6 +6,7 @@ import { createDevices, type Devices, type PairCode } from "../src/devices";
 import { legacyToken } from "../src/legacy";
 import type { BotId, ClientMessage, DeviceId, Message, MessageId, PairResponse, ServerMessage, SessionId, SessionsChannelFrame, StreamPosition, ThreadChannelFrame } from "../src/protocol";
 import { MAX_FRAME_BYTES, PAIR_FAILURE_WINDOW_MS, PAIR_FAILURES_PER_ADDRESS, serve, threadTopic } from "../src/serve";
+import { createPush } from "../src/push";
 import { createSaver, loadWorld } from "../src/store";
 import { createStream } from "../src/stream";
 
@@ -20,6 +21,8 @@ function tempHome(legacy?: string) {
   if (legacy !== undefined) writeFileSync(join(home, "token"), `${legacy}\n`);
   return home;
 }
+
+const URLS = ["ws://mac.tail1234.ts.net:7878/ws", "ws://192.168.1.20:7878/ws"];
 
 /** What main.ts does at start, against a temp home, with a fake hub and a clock the test moves. */
 function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m: ClientMessage) => ServerMessage[] | Promise<ServerMessage[]>; greeting?: ServerMessage[] } = {}) {
@@ -53,6 +56,7 @@ function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m
     now: () => now,
     port: 0,
     hostname: "127.0.0.1",
+    offer: () => ({ ...devices.newCode(), urls: URLS }),
   });
   let stopped = false;
   const stop = () => {
@@ -261,7 +265,7 @@ test("one address gets a limited number of failed pairings, then waits out the w
   expect((await postPair(b, b.devices.newCode().code)).status).toBe(200);
 });
 
-test("the legacy phone cannot hand out pairing codes; a paired phone can", async () => {
+test("the legacy phone cannot hand out pairing codes; a paired phone can, with every address of the bridge", async () => {
   const b = boot(tempHome("shared"));
   const old = connect(b, { query: "?token=shared" });
   await old.next("hello");
@@ -273,7 +277,41 @@ test("the legacy phone cannot hand out pairing codes; a paired phone can", async
   const owner = connect(b, { bearer: phone.token });
   await owner.next("hello");
   owner.send({ type: "pair_code" });
-  expect(await owner.next("pair_code")).toEqual({ type: "pair_code", code: expect.stringMatching(/^\w{4}-\w{4}$/), expiresAt: expect.any(String) });
+  const offered = await owner.next("pair_code");
+  expect(offered).toEqual({ type: "pair_code", code: expect.stringMatching(/^\w{4}-\w{4}$/), expiresAt: expect.any(String), urls: URLS });
+  expect((await postPair(b, offered.code, "second")).status).toBe(200);
+});
+
+test("an unattended socket does not hold back a push; an attended one, or one that never said, does", async () => {
+  const b = boot(tempHome());
+  const sent: unknown[] = [];
+  const push = createPush({
+    world: loadWorld(tempHome()).world,
+    persist: () => {},
+    sender: async (n) => void sent.push(n),
+    liveUntil: () => b.transport.liveUntil(),
+    now: b.now,
+    log: () => {},
+  });
+  const bot = { id: "b_1" as BotId, name: "Claudio" };
+  const mac = connect(b, { bearer: (await pairPhone(b, "mac")).token, query: "?protocol=3" });
+  await mac.next("hello");
+  expect(push.notify(bot, "card", "m_1" as MessageId)).toBe(false);
+
+  mac.send({ type: "presence", attended: false });
+  await until(() => b.transport.live() === 0, "the unattended socket to stop counting");
+  expect(push.notify(bot, "card", "m_2" as MessageId)).toBe(true);
+
+  const phone = connect(b, { bearer: (await pairPhone(b, "phone")).token, query: "?protocol=3" });
+  await phone.next("hello");
+  expect(push.notify(bot, "card", "m_3" as MessageId)).toBe(false);
+
+  mac.send({ type: "presence", attended: true });
+  phone.raw.close();
+  await until(() => b.transport.live() === 1, "only the attended mac");
+  expect(push.notify(bot, "card", "m_4" as MessageId)).toBe(false);
+  expect(sent).toHaveLength(1);
+  expect(mac.inbox.some((m) => m.type === "error")).toBe(false);
 });
 
 test("the legacy phone may revoke only itself", async () => {

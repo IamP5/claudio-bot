@@ -25,7 +25,13 @@ struct SidebarRoot: View {
                     Text("Sessions").tag(SidebarMode.sessions)
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
+                #if os(macOS)
+                .controlSize(.small)
+                .padding(.horizontal, 12)
+                #else
                 .padding(.horizontal, 16)
+                #endif
                 .padding(.bottom, 8)
             }
         }
@@ -56,9 +62,11 @@ struct SessionsSidebar: View {
         let sections = index.loaded ? index.sections(query) : []
         List(selection: $router.selection) {
             banners
+            #if os(iOS)
             if searching {
                 searchField.plainRow(insets: EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             }
+            #endif
             if store.lacks(.sessions) {
                 UpdateBridgeNote()
                     .plainRow()
@@ -74,7 +82,7 @@ struct SessionsSidebar: View {
                     SessionsSkeleton()
                 }
             } else {
-                FilterChips(query: $query, counts: index.counts, hidden: index.hiddenCount)
+                FilterChips(query: $query.animation(reduceMotion ? nil : .snappy(duration: 0.25)), counts: counts(for: query), hidden: index.hiddenCount)
                     .plainRow(insets: EdgeInsets(top: 0, leading: 0, bottom: 2, trailing: 0))
                 if sections.isEmpty {
                     emptyState
@@ -84,11 +92,20 @@ struct SessionsSidebar: View {
                 }
             }
         }
+        #if os(macOS)
+        // The sidebar style draws the only selection, sizes rows to the system's sidebar, and leaves the glass uncovered.
+        .listStyle(.sidebar)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: sections.map(\.id))
+        .searchable(text: $query.text, placement: .sidebar, prompt: "Search Sessions")
+        .searchFocused($searchFocused)
+        .focusedSceneValue(\.sidebarSearch, SidebarSearch { searchFocused = true })
+        #else
         .listStyle(.plain)
         .environment(\.defaultMinListRowHeight, 44)
         .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: sections.map(\.id))
         .scrollContentBackground(.hidden)
         .background(Theme.background)
+        #endif
         .environment(\.defaultMinListHeaderHeight, 0)
         .listSectionSpacing(6)
         .refreshable { await refresh() }
@@ -141,7 +158,7 @@ struct SessionsSidebar: View {
         } else {
             VStack(spacing: 14) {
                 Image(systemName: "chevron.left.forwardslash.chevron.right")
-                    .font(.system(size: 30, weight: .light))
+                    .font(.ui(size: 30, weight: .light))
                     .foregroundStyle(Theme.tertiary)
                 Text("No Claude Code sessions on this Mac yet")
                     .font(.headline)
@@ -211,12 +228,16 @@ struct SessionsSidebar: View {
             .equatable()
             .tag(Selection.session(row.id))
         .listRowSeparator(.hidden)
+        #if os(macOS)
+        .sidebarHover(selected: router.selection == .session(row.id))
+        #else
         .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 16))
         .listRowBackground(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(router.selection == .session(row.id) ? Theme.card : .clear)
                 .padding(.horizontal, 8)
         )
+        #endif
         .swipeActions(edge: .trailing) {
             Button {
                 client.send(.sessionSet(sessionId: row.id, patch: SessionPatch(hidden: !row.hidden)))
@@ -239,11 +260,14 @@ struct SessionsSidebar: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(SessionText.spoken(row, project: index.project(of: row)?.name, botName: bot?.name))
         .accessibilityAddTraits(.isButton)
+        // Ignoring the children drops the list's own press, so pressing the row selects it here.
+        .accessibilityAction { router.selection = .session(row.id) }
         .accessibilityActions { actions(for: row) }
     }
 
     @ViewBuilder
     private func menu(for row: SessionRow) -> some View {
+        OpenInNewWindowButton(selection: .session(row.id))
         Button {
             newTitle = row.title
             renaming = row
@@ -268,10 +292,11 @@ struct SessionsSidebar: View {
             Link(destination: pr.url) { Label("Open PR #\(pr.number)", systemImage: "arrow.triangle.pull") }
         }
         Button {
-            UIPasteboard.general.string = row.id.rawValue
+            Clipboard.copy(row.id.rawValue)
         } label: {
             Label("Copy Session ID", systemImage: "doc.on.doc")
         }
+        if let project = index.project(of: row) { LocalPathMenu(path: project.path) }
         Divider()
         Button {
             client.send(.sessionSet(sessionId: row.id, patch: SessionPatch(hidden: !row.hidden)))
@@ -299,12 +324,12 @@ struct SessionsSidebar: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        InitialsItem(name: store.userName, proposals: store.proposedFacts.count) { router.showingSettings = true }
-        if store.has(.usage) {
-            ToolbarItem(placement: .principal) {
-                SessionUsageButton(usage: store.usage) { router.showingUsage = true }
-            }
+        SidebarAccountItems(name: store.userName, proposals: store.proposedFacts.count, usage: store.usage, hasUsage: store.has(.usage)) {
+            router.showingSettings = true
+        } showUsage: {
+            router.showingUsage = true
         }
+        #if os(iOS)
         ToolbarItem(placement: .topBarTrailing) {
             Button {
                 withAnimation { searching.toggle() }
@@ -315,6 +340,7 @@ struct SessionsSidebar: View {
             }
             .accessibilityLabel("Search sessions")
         }
+        #endif
         ToolbarSpacerIfAvailable()
         ToolbarItem(placement: .topBarTrailing) {
             Button { router.newSession = NewSessionRequest(projectId: nil) } label: {
@@ -322,9 +348,23 @@ struct SessionsSidebar: View {
             }
             .disabled(!store.has(.sessions) || index.projects.isEmpty)
             .accessibilityLabel("New session")
+            .help("New Session")
         }
     }
 
+    /// What each filter would show for the current search, so the counts drop as the search narrows the list.
+    private func counts(for query: SessionQuery) -> [SessionFilter: Int] {
+        guard !query.needle.isEmpty else { return index.counts }
+        return Dictionary(uniqueKeysWithValues: SessionFilter.allCases.map { filter in
+            var narrowed = query
+            narrowed.filter = filter
+            narrowed.showHidden = false
+            let shown = SessionIndex.sections(rows: index.rows, projects: index.projects, query: narrowed)
+            return (filter, shown.reduce(0) { $0 + $1.trees.count })
+        })
+    }
+
+    #if os(iOS)
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(Theme.tertiary)
@@ -343,6 +383,7 @@ struct SessionsSidebar: View {
         .padding(.vertical, 9)
         .background(Theme.card, in: Capsule())
     }
+    #endif
 
     private func refresh() async {
         let before = index.updatedAt
@@ -359,6 +400,10 @@ struct ProjectHeader: View {
     let count: Int
     let onNew: () -> Void
 
+    #if os(macOS)
+    @State private var hovering = false
+    #endif
+
     var body: some View {
         HStack(spacing: 6) {
             Text(project.name)
@@ -369,6 +414,16 @@ struct ProjectHeader: View {
                 .font(.footnote.monospacedDigit())
                 .foregroundStyle(Theme.tertiary)
             Spacer(minLength: 8)
+            #if os(macOS)
+            // Shown under the pointer, as the Finder sidebar shows its section controls.
+            Button(action: onNew) {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.borderless)
+            .help("New Session in \(project.name)")
+            .accessibilityLabel("New session in \(project.name)")
+            .opacity(hovering ? 1 : 0)
+            #else
             Button(action: onNew) {
                 Image(systemName: "plus")
                     .font(.footnote.weight(.medium))
@@ -378,8 +433,16 @@ struct ProjectHeader: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("New session in \(project.name)")
+            #endif
         }
+        #if os(macOS)
+        .contentShape(Rectangle())
+        .onHover { inside in
+            withAnimation(.easeOut(duration: 0.14)) { hovering = inside }
+        }
+        #else
         .padding(.leading, 4)
+        #endif
         .textCase(nil)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(project.name), \(count) \(count == 1 ? "session" : "sessions")")
@@ -392,6 +455,57 @@ struct FilterChips: View {
     let hidden: Int
 
     var body: some View {
+        #if os(macOS)
+        menu
+        #else
+        chips
+        #endif
+    }
+
+    #if os(macOS)
+    /// A strip of chips scrolls out of a narrow sidebar, so the Mac picks the filter from a menu and keeps a
+    /// shortcut to what needs the user in view.
+    private var menu: some View {
+        let needsYou = counts[.needsYou, default: 0]
+        return HStack(spacing: 8) {
+            Menu {
+                Picker("Show", selection: $query.filter) {
+                    ForEach(SessionFilter.allCases, id: \.self) { filter in
+                        let count = counts[filter, default: 0]
+                        Text(filter == .all || count == 0 ? Self.title(filter) : "\(Self.title(filter)) (\(count))").tag(filter)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+                if hidden > 0 {
+                    Divider()
+                    Toggle("Show Hidden (\(hidden))", isOn: $query.showHidden)
+                }
+            } label: {
+                Label(query.filter == .all ? "All Sessions" : Self.title(query.filter), systemImage: "line.3.horizontal.decrease")
+            }
+            .menuStyle(.button)
+            .buttonStyle(.borderless)
+            .fixedSize()
+            .help("Filter Sessions")
+            Spacer(minLength: 0)
+            if needsYou > 0 && query.filter != .needsYou {
+                Button("\(needsYou) \(needsYou == 1 ? "needs" : "need") you") { query.filter = .needsYou }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(Theme.attention)
+                    .help("Show Sessions That Need You")
+            }
+        }
+        .font(.subheadline)
+        .controlSize(.small)
+    }
+
+    private static func title(_ filter: SessionFilter) -> String {
+        filter == .needsYou ? "Needs You" : filter.title
+    }
+    #endif
+
+    private var chips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(SessionFilter.allCases, id: \.self) { filter in
@@ -498,8 +612,14 @@ struct SessionsSkeleton: View {
 }
 
 extension View {
+    /// On the Mac the sidebar's own insets stay, so banners, the filter and rows share one leading edge.
     func plainRow(insets: EdgeInsets = EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16)) -> some View {
-        listRowInsets(insets)
+        #if os(macOS)
+        let rowInsets: EdgeInsets? = nil
+        #else
+        let rowInsets: EdgeInsets? = insets
+        #endif
+        return listRowInsets(rowInsets)
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
             .selectionDisabled()

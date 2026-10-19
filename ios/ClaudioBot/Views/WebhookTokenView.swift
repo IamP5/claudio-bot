@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 /// A webhook routine's token: make or rotate it, then show it once. Shown when the bridge lists .webhooks.
 struct WebhookTokenSection: View {
@@ -18,7 +17,7 @@ struct WebhookTokenSection: View {
         if Self.shows(routine, features: store.features) {
             CardSection(
                 title: "Webhook",
-                footer: "Programs on your Mac POST to this address with the token; it does not answer from the phone or the network. The Mac keeps only a hash of the token, so it is shown once, and a new one replaces the old."
+                footer: "Programs on your Mac POST to this address with the token; it does not answer from other devices or the network. The Mac keeps only a hash of the token, so it is shown once, and a new one replaces the old."
             ) {
                 if let fresh = store.webhookToken, fresh.routineId == routine.id {
                     reveal(fresh)
@@ -43,7 +42,7 @@ struct WebhookTokenSection: View {
         } label: {
             HStack {
                 Label("Make a new token", systemImage: "key.fill")
-                    .font(.system(size: 16))
+                    .font(.ui(size: 16))
                     .foregroundStyle(.white)
                 Spacer()
             }
@@ -62,7 +61,7 @@ struct WebhookTokenSection: View {
             field("Test it in Terminal on your Mac", Self.curl(fresh))
             Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16)
             Button("Done") { store.dismissWebhookToken() }
-                .font(.system(size: 16, weight: .semibold))
+                .font(.ui(size: 16, weight: .semibold))
                 .foregroundStyle(AvatarColor.teal.color)
                 .frame(maxWidth: .infinity)
                 .padding(16)
@@ -72,20 +71,20 @@ struct WebhookTokenSection: View {
     private func field(_ title: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.system(size: 13)).foregroundStyle(Theme.tertiary)
+                Text(title).font(.ui(size: 13)).foregroundStyle(Theme.tertiary)
                 Text(value)
-                    .font(.system(size: 14, design: .monospaced))
+                    .font(.ui(size: 14, design: .monospaced))
                     .foregroundStyle(.white)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
             Button {
-                UIPasteboard.general.string = value
+                Clipboard.copy(value)
                 copied = title
             } label: {
                 Label(copied == title ? "Copied" : "Copy", systemImage: copied == title ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.ui(size: 14, weight: .medium))
             }
             .buttonStyle(.bordered)
             .tint(.white)

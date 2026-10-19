@@ -22,35 +22,53 @@ struct SessionComposer: View {
     private var showsStop: Bool { working && !hasText && canStop }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let controls { controlsRow(controls) }
-            if canSend || controls == nil {
-                field
-            } else {
-                Label(controls?.reason ?? "This session can't take a message now.", systemImage: "lock")
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.secondary)
-                    .frame(maxWidth: .infinity, minHeight: Composer.field, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .glass(
-                        in: RoundedRectangle(
-                            cornerRadius: Composer.control / 2 + Composer.inset, style: .continuous)
-                    )
-                    .accessibilityElement(children: .combine)
+        glassGroup {
+            VStack(alignment: .leading, spacing: 8) {
+                if let controls { controlsRow(controls) }
+                if canSend || controls == nil {
+                    field
+                } else {
+                    Label(controls?.reason ?? "This session can't take a message now.", systemImage: "lock")
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.secondary)
+                        .frame(maxWidth: .infinity, minHeight: Composer.field, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .glass(
+                            in: RoundedRectangle(
+                                cornerRadius: Composer.control / 2 + Composer.inset, style: .continuous)
+                        )
+                        .accessibilityElement(children: .combine)
+                }
             }
         }
+        #if os(macOS)
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, 16)
+        #else
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
+        #endif
         .sensoryFeedback(.impact(weight: .light), trigger: sends)
         .sensoryFeedback(.impact(weight: .medium), trigger: stops)
+    }
+
+    /// On the Mac the chips and the field sample the backdrop together, so they read as one control group.
+    @ViewBuilder
+    private func glassGroup(@ViewBuilder _ content: () -> some View) -> some View {
+        #if os(macOS)
+        GlassEffectContainer(spacing: 8, content: content)
+        #else
+        content()
+        #endif
     }
 
     private var field: some View {
         HStack(alignment: .bottom, spacing: 6) {
             PromptTextView(
                 draft: $draft, caret: $caret, placeholder: working ? "Queue a message" : "Message Claude",
-                maxLines: 6
+                maxLines: 6, onSubmit: { send(interrupt: false) }
             )
             .padding(.vertical, 8)
             .frame(minHeight: Composer.field)
@@ -74,10 +92,10 @@ struct SessionComposer: View {
     @ViewBuilder
     private var sendButton: some View {
         let label = Image(systemName: showsStop ? "stop.fill" : "arrow.up")
-            .font(.system(size: showsStop ? 14 : 16, weight: .bold))
+            .font(.ui(size: showsStop ? 14 : 16, weight: .bold))
             .contentTransition(.symbolEffect(.replace))
             .foregroundStyle(.black)
-            .frame(width: Composer.control + 10, height: Composer.control)
+            .frame(width: Composer.sendWidth, height: Composer.control)
             .background(Color.white, in: Capsule())
         if working && hasText && canStop {
             Menu {
@@ -98,6 +116,7 @@ struct SessionComposer: View {
             }
             .accessibilityLabel("Queue message")
             .accessibilityHint("Sends when the current turn ends. Hold for Stop and send.")
+            .help("Send After This Turn. Click and hold for Stop and Send.")
             .accessibilityAction(named: "Stop and send") { send(interrupt: true) }
         } else {
             Button {
@@ -107,12 +126,13 @@ struct SessionComposer: View {
             }
             .buttonStyle(.pressable)
             .accessibilityLabel(showsStop ? "Stop" : "Send")
+            .help(showsStop ? "Stop" : "Send")
         }
     }
 
     private func controlsRow(_ controls: SessionControls) -> some View {
         HStack(spacing: 8) {
-            ScrollView(.horizontal, showsIndicators: false) {
+            chipsScroller {
                 HStack(spacing: 8) {
                     if !controls.models.isEmpty {
                         Menu {
@@ -131,7 +151,9 @@ struct SessionComposer: View {
                         } label: {
                             chip(Self.modelLabel(controls), symbol: "cpu")
                         }
+                        .chipMenu()
                         .accessibilityLabel("Model, \(Self.modelLabel(controls))")
+                        .help("Model")
                     }
                     if !controls.modes.isEmpty {
                         Menu {
@@ -151,7 +173,9 @@ struct SessionComposer: View {
                         } label: {
                             chip(SessionText.mode(controls.mode), symbol: SessionText.modeSymbol(controls.mode))
                         }
+                        .chipMenu()
                         .accessibilityLabel("Mode, \(SessionText.mode(controls.mode))")
+                        .help("Permission Mode")
                     }
                     if controls.queued > 0 {
                         chip("\(controls.queued) queued", symbol: "clock", tint: Theme.secondary)
@@ -166,6 +190,16 @@ struct SessionComposer: View {
         }
     }
 
+    /// A phone scrolls the chips sideways. A Mac window has the room, so the row lays out flat.
+    @ViewBuilder
+    private func chipsScroller(@ViewBuilder _ content: () -> some View) -> some View {
+        #if os(macOS)
+        content().frame(maxWidth: .infinity, alignment: .leading)
+        #else
+        ScrollView(.horizontal, showsIndicators: false, content: content)
+        #endif
+    }
+
     private func chip(_ title: String, symbol: String, tint: Color = .white) -> some View {
         HStack(spacing: 5) {
             Image(systemName: symbol).font(.caption)
@@ -175,7 +209,11 @@ struct SessionComposer: View {
         }
         .foregroundStyle(tint)
         .padding(.horizontal, 11)
+        #if os(macOS)
+        .frame(minHeight: 28)
+        #else
         .frame(minHeight: 32)
+        #endif
         .glass(in: Capsule(), interactive: true)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
@@ -233,13 +271,18 @@ struct NewSessionSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Project") {
+                Section {
                     Picker("Project", selection: $project) {
                         ForEach(store.sessions.orderedProjects) { project in
                             Text(project.name).tag(Optional(project.id))
                         }
                     }
                     .pickerStyle(.navigationLink)
+                } header: {
+                    // A Mac form labels the picker in its row, so a header would say "Project" twice.
+                    #if os(iOS)
+                    Text("Project")
+                    #endif
                 }
                 Section {
                     PromptTextView(
@@ -263,7 +306,9 @@ struct NewSessionSheet: View {
                         }
                     }
                     Toggle("Work in a new worktree", isOn: $worktree)
+                        #if os(iOS)
                         .tint(AvatarColor.green.color)
+                        #endif
                 } footer: {
                     Text(
                         worktree
@@ -271,8 +316,12 @@ struct NewSessionSheet: View {
                             : "Claude works in the project's folder, on the branch checked out there.")
                 }
             }
+            #if os(macOS)
+            .formStyle(.grouped)
+            #else
             .scrollContentBackground(.hidden)
             .background(Theme.background)
+            #endif
             .navigationTitle("New Session")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -281,11 +330,14 @@ struct NewSessionSheet: View {
                     if starting {
                         ProgressView()
                     } else {
-                        Button("Start", action: start).disabled(!canStart)
+                        Button(Self.startTitle, action: start).disabled(!canStart)
                     }
                 }
             }
         }
+        #if os(macOS)
+        .frame(minWidth: 480, idealWidth: 520, minHeight: 420, idealHeight: 460)
+        #endif
         .onAppear { project = projectId ?? store.sessions.orderedProjects.first?.id }
         // A refused create comes back as an error frame, so the sheet lets the user try again.
         .onChange(of: store.lastError) {
@@ -296,6 +348,12 @@ struct NewSessionSheet: View {
         }
         .interactiveDismissDisabled(starting)
     }
+
+    #if os(macOS)
+    private static let startTitle = "Create"
+    #else
+    private static let startTitle = "Start"
+    #endif
 
     private func start() {
         guard let project, canStart else { return }
@@ -308,5 +366,17 @@ struct NewSessionSheet: View {
                 text: draft.text.trimmingCharacters(in: .whitespacesAndNewlines),
                 model: model, mode: mode, isolate: worktree ? .worktree : .inPlace
             ))
+    }
+}
+
+private extension View {
+    /// A Mac menu otherwise draws its own bezel and arrow around a chip that already has both.
+    @ViewBuilder
+    func chipMenu() -> some View {
+        #if os(macOS)
+        menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+        #else
+        self
+        #endif
     }
 }

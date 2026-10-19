@@ -23,7 +23,7 @@ struct ThreadRowView: View, Equatable {
                 SessionUserBubble(text: text, from: from, queued: queued, botName: botName)
             case let .assistant(id, _, text):
                 RenderedMarkdownView(markdown: model.rendered(id, text))
-                    .font(.system(size: 16))
+                    .font(.ui(size: 16))
                     .foregroundStyle(.white)
                     .fixedSize(horizontal: false, vertical: true)
             case let .thinking(_, _, text, ms):
@@ -35,9 +35,9 @@ struct ThreadRowView: View, Equatable {
             case let .plan(id, _, text, state, cardId):
                 PlanCard(sessionId: sessionId, markdown: model.rendered(id, text), state: state, cardId: cardId)
             case let .permission(_, _, permission):
-                PermissionCardView(messageId: permission.cardId, card: permission.card) {
+                PermissionCardView(messageId: permission.cardId, card: permission.card, decision: {
                     .sessionDecide(sessionId: sessionId, cardId: permission.cardId, choice: $0)
-                }
+                }, fillsColumn: true)
             case let .ask(_, _, questions, answers, cardId):
                 AskCard(sessionId: sessionId, questions: questions, answers: answers, cardId: cardId)
             case let .notice(_, _, text, tone):
@@ -49,6 +49,15 @@ struct ThreadRowView: View, Equatable {
             }
         }
     }
+}
+
+/// The least height of a clickable row: a fingertip on iPhone, a pointer's regular control on a Mac.
+enum HitTarget {
+    #if os(macOS)
+    static let minHeight: CGFloat = 28
+    #else
+    static let minHeight: CGFloat = 44
+    #endif
 }
 
 struct SessionUserBubble: View {
@@ -70,13 +79,13 @@ struct SessionUserBubble: View {
                 HStack(spacing: 0) {
                     Spacer(minLength: 48)
                     Text(MarkdownText.inline(text))
-                        .font(.system(size: 16))
+                        .font(.ui(size: 16))
+                        .bubbleText()
                         .foregroundStyle(.white)
                         .textSelection(.enabled)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
+                        .padding(Bubble.padding)
                         .background {
-                            let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            let shape = Bubble.shape
                             if queued {
                                 shape.strokeBorder(Color.white.opacity(0.28), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
                             } else {
@@ -103,12 +112,17 @@ struct FoldRow: View {
     let expanded: Bool
     let toggle: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var steps: [ToolStep] {
         items.flatMap { item -> [ToolStep] in if case .work(_, _, let steps) = item { steps } else { [] } }
     }
 
     var body: some View {
-        Button(action: toggle) {
+        // The folded rows are rows of the list, so the list's rows move and fade with this transaction.
+        Button {
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) { toggle() }
+        } label: {
             HStack(spacing: 8) {
                 Image(systemName: "square.stack.3d.up")
                     .font(.footnote)
@@ -125,7 +139,7 @@ struct FoldRow: View {
                     .rotationEffect(.degrees(expanded ? 90 : 0))
             }
             .padding(.vertical, 8)
-            .frame(minHeight: 44)
+            .frame(minHeight: HitTarget.minHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -139,6 +153,7 @@ struct ThinkingRow: View {
     let text: String
     let ms: Int?
     @State private var open = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var title: String {
         guard let ms else { return "Thought" }
@@ -149,7 +164,7 @@ struct ThinkingRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
-                withAnimation(.snappy(duration: 0.2)) { open.toggle() }
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { open.toggle() }
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "brain").font(.footnote)
@@ -159,7 +174,7 @@ struct ThinkingRow: View {
                         .rotationEffect(.degrees(open ? 90 : 0))
                 }
                 .foregroundStyle(Theme.tertiary)
-                .frame(minHeight: 44)
+                .frame(minHeight: HitTarget.minHeight)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -181,13 +196,14 @@ struct WorkRunRow: View {
     let steps: [ToolStep]
     let onFullOutput: (ToolStep) -> Void
     @State private var open = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var running: ToolStep? { steps.last { $0.state == .running } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.snappy(duration: 0.2)) { open.toggle() }
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { open.toggle() }
             } label: {
                 header
             }
@@ -252,7 +268,7 @@ struct WorkRunRow: View {
                 .rotationEffect(.degrees(open ? 90 : 0))
         }
         .padding(.vertical, 8)
-        .frame(minHeight: 44)
+        .frame(minHeight: HitTarget.minHeight)
         .contentShape(Rectangle())
     }
 }
@@ -299,7 +315,7 @@ struct ToolStepRow: View {
                     Button("Full output") { onFullOutput(step) }
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.link)
-                        .frame(minHeight: 44)
+                        .frame(minHeight: HitTarget.minHeight)
                 }
                 .padding(.leading, 26)
             }
@@ -415,7 +431,7 @@ struct PlanCard: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(state == .proposed ? Theme.attention : Theme.secondary)
             RenderedMarkdownView(markdown: markdown)
-                .font(.system(size: 15))
+                .font(.ui(size: 15))
                 .foregroundStyle(state == .proposed ? .white : Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             switch state {
@@ -462,7 +478,7 @@ struct PlanCard: View {
                 if sent == choice { ProgressView().controlSize(.mini) }
                 Text(title)
             }
-            .font(.system(size: 15, weight: .semibold))
+            .font(.ui(size: 15, weight: .semibold))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 11)
             .foregroundStyle(primary ? Color.black : .white)
@@ -509,13 +525,14 @@ struct AskCard: View {
                         client.send(.sessionAnswer(sessionId: sessionId, cardId: cardId, answers: nil))
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.system(size: 15, weight: .medium))
+                            .font(.ui(size: 15, weight: .medium))
                             .foregroundStyle(Theme.tertiary)
-                            .frame(width: 44, height: 44)
+                            .frame(width: HitTarget.minHeight, height: HitTarget.minHeight)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .disabled(sent)
+                    .help("Dismiss Question")
                     .accessibilityLabel("Dismiss question")
                 }
             }
@@ -537,13 +554,19 @@ struct AskCard: View {
     private func question(_ q: AskQuestion) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             if !q.header.isEmpty {
+                #if os(macOS)
+                Text(q.header)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.tertiary)
+                #else
                 Text(q.header.uppercased())
                     .font(.caption2.weight(.semibold))
                     .tracking(0.6)
                     .foregroundStyle(Theme.tertiary)
+                #endif
             }
             Text(q.question)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.ui(size: 17, weight: .semibold))
                 .foregroundStyle(open ? .white : Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if open {
@@ -588,7 +611,7 @@ struct AskCard: View {
                             if sent { ProgressView().controlSize(.mini) }
                             Text(questions.count == 1 ? "Send answer" : "Send answers")
                         }
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.ui(size: 15, weight: .semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 11)
                         .foregroundStyle(.black)
@@ -642,7 +665,7 @@ private struct AskOptionRow: View {
         HStack(alignment: .top, spacing: 12) {
             if multi {
                 Image(systemName: picked ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 19))
+                    .font(.ui(size: 19))
                     .foregroundStyle(picked ? .white : Theme.tertiary)
                     .frame(width: 22, height: 22)
             } else {
@@ -650,7 +673,7 @@ private struct AskOptionRow: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(option.label)
-                    .font(.system(size: 16))
+                    .font(.ui(size: 16))
                     .foregroundStyle(.white)
                 if !option.description.isEmpty {
                     Text(option.description)
@@ -663,7 +686,7 @@ private struct AskOptionRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .frame(minHeight: 44)
+        .frame(minHeight: HitTarget.minHeight)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(picked ? .isSelected : [])
@@ -706,7 +729,7 @@ struct StreamingTail: View {
     var body: some View {
         if live.itemId != nil, !live.text.isEmpty {
             Text(live.text)
-                .font(.system(size: 16))
+                .font(.ui(size: 16))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 14)

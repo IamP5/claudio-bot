@@ -130,6 +130,8 @@ final class AppStore {
     private(set) var pendingDecisions: [MessageID: PermissionChoice] = [:]
     /// The phones paired with this Mac, once Settings asked for them.
     private(set) var devices: [Device]?
+    /// Device lists heard, so a view sees every reply, even one that repeats the list.
+    private(set) var devicesHeard = 0
     /// The newest code for pairing another phone.
     private(set) var pairCode: PairCode?
     /// From the last hello. Empty for a bridge from before features.
@@ -346,6 +348,7 @@ final class AppStore {
 
         case let .devices(devices):
             self.devices = devices
+            devicesHeard += 1
             return []
 
         case let .pairCode(code):
@@ -437,6 +440,13 @@ final class AppStore {
     /// name when it remembered the fact, so there a proposal from before a rename shows only in Settings.
     func proposedFacts(by bot: Bot) -> [Fact] {
         proposedFacts.filter { $0.proposerBotId.map { $0 == bot.id } ?? ($0.by == bot.name) }
+    }
+
+    /// What waits on the user, for the Dock badge and the menu bar: each bot's open question and open permission
+    /// card, and each listed session that needs you. Hidden sessions count only once the user looks for them.
+    var waitingOnYou: Int {
+        let cards = bots.values.reduce(0) { $0 + ($1.question != nil ? 1 : 0) + ($1.status == .awaitingApproval ? 1 : 0) }
+        return cards + sessions.rows.values.filter { $0.needsYou && !$0.hidden }.count
     }
 
     /// The open question card, newest first, if any.

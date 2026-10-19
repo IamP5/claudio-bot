@@ -421,7 +421,10 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(devices?.map(\.legacy) == [false, true])
         #expect(devices?.last?.lastSeenAt == nil)
         let code = frames.compactMap { if case .pairCode(let c) = $0.message { c } else { nil } }.first
-        #expect(code == PairCode(code: "K7QD-M2XP", expiresAt: Date(timeIntervalSince1970: 1_792_152_600)))
+        #expect(code == PairCode(
+            code: "K7QD-M2XP", expiresAt: Date(timeIntervalSince1970: 1_792_152_600),
+            urls: ["ws://mac.tail1234.ts.net:7878/ws", "ws://Mac.local:7878/ws", "ws://192.168.1.20:7878/ws"]
+        ))
     }
 
     @Test func anUnknownPermissionAnswerStillClosesTheCard() throws {
@@ -467,7 +470,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(AgentStatus.allCases.map(\.rawValue) == ["working", "waiting", "failed", "in_cloud", "awaiting_approval", "parked", "unavailable", "capped"])
         #expect(Feature.allCases.map(\.rawValue) == [
             "memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend",
-            "mentions", "commands", "exchanges", "groups", "usage", "sessions",
+            "mentions", "commands", "exchanges", "groups", "usage", "sessions", "presence",
         ])
         #expect(SessionOrigin.allCases.map(\.rawValue) == ["phone", "agent", "desktop", "terminal", "sdk", "cloud"])
         #expect(SessionStatus.allCases.map(\.rawValue) == ["idle", "working", "awaiting_approval", "awaiting_input", "failed", "parked", "unavailable"])
@@ -619,6 +622,32 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(PairInvite(link: unusableFirst) == PairInvite(url: socket, code: "X"))
         let noneUsable = URL(string: "claudiobot://pair?url=http%3A%2F%2Fevil.com&url=ws%3A%2F%2Fhost%3A7878%2Fsocket&code=X")!
         #expect(PairInvite(link: noneUsable) == nil)
+    }
+
+    @Test(arguments: [
+        // The bridge's addresses, minus the loopback ones, whatever this app pairs at.
+        (["ws://mac.tail1.ts.net:7878/ws", "ws://127.0.0.1:7878/ws", "ws://10.0.0.20:7878/ws"], "ws://127.0.0.1:7878/ws",
+         ["ws://mac.tail1.ts.net:7878/ws", "ws://10.0.0.20:7878/ws"]),
+        (["ws://[::1]:7878/ws", "ws://localhost:7878/ws", "ws://mac.local:7878/ws"], "ws://10.0.0.20:7878/ws", ["ws://mac.local:7878/ws"]),
+        // A bridge that listed none, or only loopback ones, falls back to this app's own address.
+        ([], "ws://10.0.0.20:7878/ws", ["ws://10.0.0.20:7878/ws"]),
+        (["ws://127.0.0.1:7878/ws"], "ws://mac.tail1.ts.net:7878/ws", ["ws://mac.tail1.ts.net:7878/ws"]),
+        // ... unless that is loopback too: nothing another device could reach.
+        (["ws://127.0.0.1:7878/ws"], "ws://127.0.0.1:7878/ws", []),
+        ([], nil, []),
+        // 127.example is a name, not the loopback network.
+        (["ws://127.example:7878/ws"], nil, ["ws://127.example:7878/ws"]),
+    ] as [([String], String?, [String])])
+    func aPairCodeInviteCarriesEveryAddressAnotherDeviceCanReach(urls: [String], own: String?, expected: [String]) {
+        let invite = PairCode(code: "K7QD-M2XP", expiresAt: .now, urls: urls).invite(fallingBackTo: own.flatMap(URL.init(string:)))
+        #expect(invite?.addresses.map(\.absoluteString) ?? [] == expected)
+        if let invite { #expect(invite.code == "K7QD-M2XP") }
+    }
+
+    @Test func aPairCodeFromBeforeUrlsDecodesWithNone() throws {
+        let old = try decode(ServerMessage.self, #"{"type":"pair_code","code":"K7QD-M2XP","expiresAt":"2026-10-16T12:10:00.000Z"}"#)
+        guard case .pairCode(let code) = old else { Issue.record("not pair_code"); return }
+        #expect(code.urls == nil)
     }
 
     @Test func theConfirmationListsTheOtherAddressesItWillTry() {

@@ -17,3 +17,24 @@ enum Theme {
     static let attention = AvatarColor.amber.color
     static let danger = AvatarColor.red.color
 }
+
+extension Font {
+    /// The app's type scale, written in iPhone points. A Mac reads at 13pt body, so each size maps to its Mac
+    /// counterpart from the Grok Bot reference (message 14, row name 14, preview and event lines 13).
+    static func ui(size: CGFloat, weight: Weight = .regular, design: Design = .default) -> Font {
+        .system(size: macSize(size), weight: weight, design: design)
+    }
+
+    private static func macSize(_ size: CGFloat) -> CGFloat {
+        #if os(macOS)
+        switch size {
+        case ...13: size
+        case ..<15: 13
+        case ..<18: 14
+        default: (size * 0.8).rounded()
+        }
+        #else
+        size
+        #endif
+    }
+}

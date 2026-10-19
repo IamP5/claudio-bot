@@ -22,7 +22,7 @@ export type FactId = string & { readonly __brand: "FactId" };
  */
 export const FEATURES = [
   "memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend",
-  "mentions", "commands", "exchanges", "groups", "usage", "sessions",
+  "mentions", "commands", "exchanges", "groups", "usage", "sessions", "presence",
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 
@@ -564,8 +564,7 @@ export type ServerMessage =
   // content is null when the file is not text or is over 1 MB. data is base64 for images up to 10 MB.
   | { type: "file"; botId: BotId; path: string; mime: string; content: string | null; data: string | null }
   | { type: "devices"; devices: Device[] }
-  // A one-time code another phone can pair with, valid until expiresAt.
-  | { type: "pair_code"; code: string; expiresAt: string }
+  | ({ type: "pair_code" } & PairOffer)
   // What a bot or one of its agents is doing right now ("Reading hub.ts"). text null: it stopped. Live sockets only:
   // never sequenced, never replayed, never pushed.
   | { type: "activity"; botId: BotId; agentId: AgentId | null; text: string | null; at: string }
@@ -642,9 +641,18 @@ export type ClientMessage =
   // Transport messages: the socket layer answers these, because they need the socket's own device.
   | { type: "devices" }
   | { type: "revoke_device"; deviceId: DeviceId }
-  | { type: "pair_code" };
+  | { type: "pair_code" }
+  // Feature "presence". attended false: nobody is looking at this app, so its socket does not hold back a push. A
+  // socket that never sends one counts as attended.
+  | { type: "presence"; attended: boolean };
 
-export type TransportMessage = Extract<ClientMessage, { type: "devices" | "revoke_device" | "pair_code" }>;
+export type TransportMessage = Extract<ClientMessage, { type: "devices" | "revoke_device" | "pair_code" | "presence" }>;
+
+/**
+ * A one-time code another device can pair with, valid until expiresAt, with the bridge's socket URLs best first: what
+ * a claudiobot://pair link carries.
+ */
+export type PairOffer = { code: string; expiresAt: string; urls: string[] };
 
 // HTTP, outside the socket. POST /pair with a one-time code returns this device's own token.
 // The socket then authenticates with Authorization: Bearer <token>.

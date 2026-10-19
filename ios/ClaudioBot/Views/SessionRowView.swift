@@ -50,9 +50,15 @@ struct SessionRowView: View, Equatable {
                 }
             }
         }
+        #if os(macOS)
+        // A sidebar row on the Mac, sized for the pointer rather than a finger.
+        .padding(.vertical, 5)
+        .padding(.leading, CGFloat(depth) * indent)
+        #else
         .padding(.vertical, accessible ? 10 : 11)
         .padding(.leading, CGFloat(depth) * indent)
         .frame(minHeight: 44)
+        #endif
         .overlay(alignment: .leading) {
             if depth > 0 {
                 IndentGuide(isLast: isLast)
@@ -76,7 +82,7 @@ struct OriginBadge: View {
                 AvatarView(avatar: avatar, size: size)
             } else {
                 Image(systemName: Self.symbol(origin))
-                    .font(.system(size: size * 0.68, weight: .regular))
+                    .font(.ui(size: size * 0.68, weight: .regular))
                     .foregroundStyle(Theme.tertiary)
             }
         }
@@ -118,7 +124,7 @@ struct SessionMarkView: View {
                 Color.clear
             }
         }
-        .font(.system(size: size, weight: .semibold))
+        .font(.ui(size: size, weight: .semibold))
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }

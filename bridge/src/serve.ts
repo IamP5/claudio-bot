@@ -7,6 +7,7 @@ import {
   isSessionRequest,
   type ClientMessage,
   type DeviceId,
+  type PairOffer,
   type ServerMessage,
   type SessionId,
   type SessionsChannelFrame,
@@ -39,13 +40,15 @@ const IDLE_TIMEOUT_S = 60;
 /**
  * limited: the protocol 2 shared token, or an app that did not announce protocol 3 (see `refusal`). threads: the
  * sessions this socket watches, so its close unwatches them. turns: the socket's requests run one at a time in the
- * order sent, so an answer never overtakes the one asked before it.
+ * order sent, so an answer never overtakes the one asked before it. attended: the app's last presence, true until it
+ * sends one.
  */
 type SocketData = {
   deviceId: DeviceId;
   protocol: 2 | 3;
   resume: { epoch: string; after: number } | null;
   heardAt: number;
+  attended: boolean;
   limited: boolean;
   threads: Set<SessionId>;
   turns: Promise<void>;
@@ -61,6 +64,8 @@ export type ServeDeps = {
   now: () => Date;
   port: number;
   hostname?: string;
+  /** The one way a code is minted for another device: pair_code here and the control socket both call it. */
+  offer: () => PairOffer;
 };
 
 export type Transport = {
@@ -76,7 +81,7 @@ export type Transport = {
   signal(message: SessionsChannelFrame, topic: "sessions"): void;
   signal(message: ThreadChannelFrame, topic: ThreadTopic): void;
   watchers(sessionId: SessionId): number;
-  /** Open authenticated sockets heard from within LIVE_WINDOW_MS. */
+  /** Open authenticated sockets heard from within LIVE_WINDOW_MS whose app is attended. */
   live(): number;
   /** When the last of those goes quiet, or null when none is live. */
   liveUntil(): Date | null;
@@ -106,7 +111,8 @@ function subscribe(ws: Socket, m: ClientMessage) {
   }
 }
 
-const isTransport = (m: ClientMessage): m is TransportMessage => m.type === "devices" || m.type === "revoke_device" || m.type === "pair_code";
+const isTransport = (m: ClientMessage): m is TransportMessage =>
+  m.type === "devices" || m.type === "revoke_device" || m.type === "pair_code" || m.type === "presence";
 
 /**
  * What a socket may not send. A protocol 2 socket sends no session request: channel frames reach every subscriber
@@ -150,7 +156,7 @@ export function serve(deps: ServeDeps): Transport {
   const heard = (ws: Socket) => {
     ws.data.heardAt = deps.now().getTime();
   };
-  const quietAt = () => [...sockets.values()].flatMap((set) => [...set].map((ws) => ws.data.heardAt + LIVE_WINDOW_MS));
+  const quietAt = () => [...sockets.values()].flatMap((set) => [...set].filter((ws) => ws.data.attended).map((ws) => ws.data.heardAt + LIVE_WINDOW_MS));
 
   const send = (ws: Socket, message: ServerMessage) => {
     const frame = ws.data.protocol === 3 ? message : forProtocol2(message);
@@ -166,7 +172,10 @@ export function serve(deps: ServeDeps): Transport {
         if (devices.list(self).find((d) => d.current)?.legacy) {
           return [{ type: "error", message: "This phone still uses the old shared token. Pair it with a code from the Mac before it can pair others." }];
         }
-        return [{ type: "pair_code", ...devices.newCode() }];
+        return [{ type: "pair_code", ...deps.offer() }];
+      case "presence":
+        ws.data.attended = message.attended;
+        return [];
       case "revoke_device": {
         const target = devices.list(null).find((d) => d.id === message.deviceId);
         if (!target) return [{ type: "error", message: "That device is not paired." }];
@@ -232,7 +241,7 @@ export function serve(deps: ServeDeps): Transport {
         // The ring holds protocol 3 frames, and a protocol 2 app never asks to resume.
         const resume = epoch && protocol === 3 ? { epoch, after: Number(url.searchParams.get("after") ?? NaN) } : null;
         const limited = protocol === 2 || devices.list(null).some((d) => d.id === deviceId && d.legacy);
-        if (server.upgrade(req, { data: { deviceId, protocol, resume, heardAt: deps.now().getTime(), limited, threads: new Set(), turns: Promise.resolve() } })) return;
+        if (server.upgrade(req, { data: { deviceId, protocol, resume, heardAt: deps.now().getTime(), attended: true, limited, threads: new Set(), turns: Promise.resolve() } })) return;
         return new Response("Expected a WebSocket upgrade", { status: 426 });
       }
       return new Response("Not found", { status: 404 });

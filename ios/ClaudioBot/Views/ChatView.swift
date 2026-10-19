@@ -22,7 +22,7 @@ struct ChatView: View {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                         let opensRun = Timeline.opensRun(rows, at: index)
                         ChatRowView(row: row, bot: bot, onPeer: open, onExchange: openExchange, opensRun: opensRun)
-                            .padding(.top, index == 0 ? 8 : opensRun ? 14 : Self.gap(between: rows[index - 1], and: row))
+                            .padding(.top, index == 0 ? 8 : opensRun ? Self.senderGap : Self.gap(between: rows[index - 1], and: row))
                             .transition(arrival)
                     }
                     ForEach(store.proposedFacts(by: bot)) { fact in
@@ -51,7 +51,7 @@ struct ChatView: View {
                         ActivityLine(botId: botId)
                     case .unavailable:
                         Text("Claude Code could not start on your Mac. Your messages wait, and the bridge keeps trying.")
-                            .font(.system(size: 13))
+                            .font(.ui(size: 13))
                             .foregroundStyle(Theme.tertiary)
                             .multilineTextAlignment(.center)
                             .frame(maxWidth: .infinity)
@@ -59,7 +59,7 @@ struct ChatView: View {
                             .padding(.top, 14)
                     case .parked:
                         Text("Parked. It waits for the usage limit or today's spending cap to reset.")
-                            .font(.system(size: 13))
+                            .font(.ui(size: 13))
                             .foregroundStyle(Theme.tertiary)
                             .multilineTextAlignment(.center)
                             .frame(maxWidth: .infinity)
@@ -73,7 +73,7 @@ struct ChatView: View {
                 .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.25), value: bot.status)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 12)
-                .frame(maxWidth: 760)
+                .frame(maxWidth: Self.readableWidth)
                 .frame(maxWidth: .infinity)
             }
             .scrollPosition($position)
@@ -100,6 +100,7 @@ struct ChatView: View {
                 }
             }
             .scrollDismissesKeyboard(.immediately)
+            #if os(iOS)
             // Opening the keyboard is starting a reply, so the newest message rides up with it from wherever the
             // list was. Moving a scrolled-up list by the keyboard's height can't be done reliably mid-transition.
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
@@ -110,22 +111,47 @@ struct ChatView: View {
             .simultaneousGesture(TapGesture().onEnded {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             })
+            #endif
             .background(Theme.background)
-            .safeAreaInset(edge: .top) {
+            .topBar {
                 if OfflineBar.shows(store.connection) {
                     OfflineBar(state: store.connection)
-                        .frame(maxWidth: 760)
+                        .frame(maxWidth: Self.readableWidth)
                 }
             }
             .composerBar {
                 Composer(bot: bot, openQuestion: store.openQuestion(in: botId) != nil) {
                     followsBottom = true
-                    withAnimation { position.scrollTo(edge: .bottom) }
+                    if reduceMotion {
+                        position.scrollTo(edge: .bottom)
+                    } else {
+                        withAnimation { position.scrollTo(edge: .bottom) }
+                    }
                 }
-                    .frame(maxWidth: 760)
+                    .frame(maxWidth: Self.readableWidth)
             }
             .navigationBarTitleDisplayMode(.inline)
+            #if os(macOS)
+            // Names the window in the Window menu and Mission Control. The toolbar shows the pill, not this title.
+            .navigationTitle(bot.name)
+            #endif
             .toolbar {
+                #if os(macOS)
+                // The pill brings its own glass, so the toolbar's shared glass behind it would double it.
+                ToolbarItem(placement: .principal) {
+                    Button(action: openProfile) { HeaderPill(bot: bot) }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(bot.name), view profile")
+                        .help("Show \(bot.name)'s Profile")
+                }
+                .sharedBackgroundVisibility(.hidden)
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: openProfile) {
+                        Label(router.showingInspector ? "Hide Profile" : "Show Profile", systemImage: "sidebar.trailing")
+                    }
+                    .help(router.showingInspector ? "Hide Profile" : "Show Profile")
+                }
+                #else
                 ToolbarItem(placement: .principal) {
                     Button(action: openProfile) { HeaderPill(bot: bot) }
                         .buttonStyle(.plain)
@@ -139,6 +165,7 @@ struct ChatView: View {
                     }
                     .accessibilityLabel("More")
                 }
+                #endif
             }
             // The "/" menu and the connectors the "@" menu offers. A group has neither: its members answer.
             .task(id: store.has(.commands)) {
@@ -177,13 +204,22 @@ struct ChatView: View {
         geometry.contentSize.height + geometry.contentInsets.bottom - geometry.visibleRect.maxY
     }
 
+    /// The transcript's column with its 16 pt gutters. A Mac window is wider, so its column grows to 960.
+    #if os(macOS)
+    static let readableWidth: CGFloat = 960 + 32
+    private static let senderGap: CGFloat = 16
+    #else
+    static let readableWidth: CGFloat = 760
+    private static let senderGap: CGFloat = 14
+    #endif
+
     /// Bubbles in a run sit close together; anything else gets air around it.
     private static func gap(between previous: ChatRow, and row: ChatRow) -> CGFloat {
         switch (previous, row) {
         case (.message(.bot), .message(.bot)), (.message(.user), .message(.user)): 4
         case (.separator, _): 10
         case (_, .separator): 22
-        default: 14
+        default: senderGap
         }
     }
 
@@ -222,19 +258,33 @@ struct ChatView: View {
 struct HeaderPill: View {
     let bot: Bot
 
+    #if os(macOS)
+    private static let avatar: CGFloat = 22
+    private static let height: CGFloat = 40
+    private static let weight = Font.Weight.medium
+    /// Clickable glass answers the pointer, the way the toolbar's own buttons do.
+    private static let interactive = true
+    #else
+    private static let interactive = false
+    private static let avatar: CGFloat = 26
+    private static let height: CGFloat = 38
+    private static let weight = Font.Weight.semibold
+    #endif
+
     var body: some View {
         HStack(spacing: 8) {
-            BotAvatar(bot: bot, size: 26, motion: bot.motion)
+            BotAvatar(bot: bot, size: Self.avatar, motion: bot.motion)
             Text(bot.name)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.ui(size: 17, weight: Self.weight))
                 .foregroundStyle(.white)
                 .lineLimit(1)
             BotStatusChip(status: bot.status)
         }
-        .padding(.leading, 6)
+        .padding(.leading, (Self.height - Self.avatar) / 2)
         .padding(.trailing, 14)
-        .padding(.vertical, 6)
-        .glass(in: Capsule())
+        .frame(height: Self.height)
+        .glass(in: Capsule(), interactive: Self.interactive)
+        .contentShape(Capsule())
     }
 }
 
@@ -265,7 +315,7 @@ struct JumpToLatestButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "arrow.down")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.ui(size: 16, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 40, height: 40)
                 .glass(in: Circle(), interactive: true)
@@ -273,6 +323,7 @@ struct JumpToLatestButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.pressable)
+        .help("Jump to Latest")
         .accessibilityLabel("Jump to latest message")
         .accessibilityIdentifier("jumpToLatest")
     }

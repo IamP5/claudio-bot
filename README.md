@@ -115,6 +115,8 @@ The bridge prints every address it answers on, best first, and the QR code carri
 
 **Another phone.** On a paired phone, open Settings and tap **Pair another device**. It shows a new one-time code and its QR code, and the bridge keeps running. Without a paired phone at hand, run `bun run claudiobot pair` on the Mac (or `bun run start -- --pair` when it is not a service). It stops the service and runs the bridge in the terminal, printing a fresh code and QR code until a phone pairs or you press Ctrl-C. Your bots and routines pause meanwhile, and the service starts again afterwards.
 
+**A program on the Mac itself.** While it runs, the bridge listens on a unix socket, `<home>/run/control.sock` (folder 0700, socket 0600, so only your macOS user can open it). `curl --unix-socket ~/.claudiobot/run/control.sock -X POST http://localhost/pair-code` returns `{code, expiresAt, urls}`, a code like the one Pair another device shows, with every address. Redeem it at `POST /pair` as a phone would. The bridge logs `local pair code minted`, never the code. This is how the Mac app pairs itself.
+
 **A lost phone.** From any other paired phone, open Settings and tap **Revoke** beside the lost one. Its token stops working at once. With no other phone, run `bun run claudiobot pair` and pair a new phone, then revoke the lost one from it. To keep the bridge running after you close the terminal, see [Run as a service](#run-as-a-service).
 
 **3. Put a bot to work**

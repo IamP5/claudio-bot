@@ -56,18 +56,18 @@ struct SkillsSection: View {
     private func row(_ skill: Skill) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(skill.name).font(.system(size: 16)).foregroundStyle(.white)
+                Text(skill.name).font(.ui(size: 16)).foregroundStyle(.white)
                 Text(skill.description)
-                    .font(.system(size: 13))
+                    .font(.ui(size: 13))
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(2)
                 Text("Saved \(skill.updatedAt.formatted(.relative(presentation: .named)))")
-                    .font(.system(size: 12))
+                    .font(.ui(size: 12))
                     .foregroundStyle(Theme.tertiary)
             }
             Spacer(minLength: 0)
             Button { deleting = skill } label: {
-                Image(systemName: "trash").font(.system(size: 15)).foregroundStyle(Theme.secondary)
+                Image(systemName: "trash").font(.ui(size: 15)).foregroundStyle(Theme.secondary)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Delete \(skill.name)")

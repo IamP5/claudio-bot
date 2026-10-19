@@ -305,7 +305,7 @@ enum SessionText {
     static func mirror(_ pref: MirrorPref) -> String {
         switch pref {
         case .auto: "Automatically"
-        case .tap: "When I tap"
+        case .tap: "When I \(ThisDevice.tapVerb)"
         case .never: "Never"
         case .unknown(let raw): raw
         }

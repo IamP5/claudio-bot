@@ -1,6 +1,7 @@
 #!/bin/sh
-# Usage: ios/scripts/make-icon.sh [out.png]
-# Renders the app icon from ClaudioBot/Views/Brand.swift, the same drawing the launch splash uses.
+# Usage: ios/scripts/make-icon.sh [--mac] [out.png]
+# Renders the app icon from ClaudioBot/Views/Brand.swift, the same drawing the launch splash uses. --mac draws it
+# on the macOS rounded tile.
 set -eu
 root="$(cd "$(dirname "$0")/.." && pwd)"
 bin="${TMPDIR:-/tmp}/claudiobot-brand-icon"

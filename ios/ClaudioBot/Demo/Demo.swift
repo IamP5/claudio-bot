@@ -32,7 +32,7 @@ enum Demo {
         let features: [Feature] = switch screen {
         case "live": [.activity]
         case "oldbridge": []
-        default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions]
+        default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions, .memory, .mute, .skills, .spend]
         }
         store.apply(.hello(Hello(protocol: oldBridge ? 2 : Wire.protocolVersion, features: features, machine: "MacBook Pro", userName: "Alex", bots: bots)))
         if !oldBridge { store.apply(.usage(usage(screen))) }
@@ -183,6 +183,12 @@ enum Demo {
         case let .commands(botId):
             store.apply(.commands(botId: botId, commands: commands))
             return
+        case .memory:
+            store.apply(.memory(facts))
+            return
+        case let .skills(botId):
+            store.apply(.skills(botId: botId, skills: botId == BotID("engineer") ? skills : []))
+            return
         case let .connectors(botId):
             store.apply(.connectors(botId: botId, connectors: connectors))
             return
@@ -208,6 +214,11 @@ enum Demo {
             if let pinned = patch.pinned { bot.pinned = pinned }
             if let hidden = patch.hidden { bot.hidden = hidden }
             if let members = patch.members { bot.members = members }
+            if let muted = patch.muted { bot.muted = muted }
+            if let cap = patch.dailyCapUsd {
+                bot.dailyCapUsd = cap
+                bot.capUsd = cap
+            }
             store.apply(.bot(bot))
             return
         case let .deleteBot(botId, _):
@@ -265,12 +276,12 @@ enum Demo {
     private static func bot(
         _ id: String, _ name: String, _ shape: AvatarShape, _ color: AvatarColor, last: Date,
         preview: String, unread: Int = 0, question: String? = nil, status: BotStatus = .idle,
-        pinned: Bool = false, routines: [Routine] = []
+        pinned: Bool = false, routines: [Routine] = [], spent: Double = 0, cap: Double? = nil
     ) -> Bot {
         Bot(
             id: BotID(id), name: name, title: nil, avatar: Avatar(shape: shape, color: color), pinned: pinned, hidden: false,
             status: status, unread: unread, question: question, preview: preview, lastAt: last,
-            createdAt: at(30, 9, 0), routines: routines
+            createdAt: at(30, 9, 0), routines: routines, dailyCapUsd: cap, spentTodayUsd: spent, capUsd: cap
         )
     }
 
@@ -304,24 +315,45 @@ enum Demo {
         ])
     }
 
-    static let devices: [Device] = [
-        Device(id: DeviceID("d1"), name: "Alex's iPhone", createdAt: at(30, 9, 0), lastSeenAt: .now, legacy: false, current: true),
-        Device(id: DeviceID("d2"), name: "Alex's iPad", createdAt: at(12, 9, 0), lastSeenAt: at(1, 21, 4), legacy: false, current: false),
+    /// The current device is the one the demo runs on.
+    static let devices: [Device] = {
+        #if os(macOS)
+        let this = "ClaudioBot on Alex's MacBook Pro", other = "Alex's iPhone"
+        #else
+        let this = "Alex's iPhone", other = "ClaudioBot on Alex's MacBook Pro"
+        #endif
+        return [
+            Device(id: DeviceID("d1"), name: this, createdAt: at(30, 9, 0), lastSeenAt: .now, legacy: false, current: true),
+            Device(id: DeviceID("d2"), name: "Alex's iPad", createdAt: at(12, 9, 0), lastSeenAt: at(1, 21, 4), legacy: false, current: false),
+            Device(id: DeviceID("d3"), name: other, createdAt: at(20, 9, 0), lastSeenAt: at(0, 8, 12), legacy: false, current: false),
+        ]
+    }()
+
+    static let facts: [Fact] = [
+        Fact(id: FactID("f1"), text: "Works on acme/web, a Next.js storefront.", at: at(20, 10, 0), by: "you"),
+        Fact(id: FactID("f2"), text: "Prefers small PRs that each pass CI on their own.", at: at(12, 9, 30), by: "engineer"),
+        Fact(id: FactID("f3"), text: "Releases ship on Fridays after 4 PM.", at: at(2, 16, 5), by: "release captain",
+             confirmed: false, proposerBotId: BotID("release")),
+    ]
+
+    static let skills: [Skill] = [
+        Skill(name: "smoke-tests", description: "Add and run checkout smoke tests in the headless browser.", updatedAt: at(5, 11, 0)),
+        Skill(name: "flaky-triage", description: "Rerun a failing test three times, then mark it skipped and say why.", updatedAt: at(1, 17, 20)),
     ]
 
     static let bots: [Bot] = [
         bot("news", "news digest", .pentagon, .teal, last: at(1, 7, 31),
             preview: "Morning, Alex. Here's what changed overnight.", unread: 1,
-            routines: [routine("r1", "morning-digest", "30 7 * * 1-5", "Weekdays at 7:30 AM", runs: digestRuns)]),
+            routines: [routine("r1", "morning-digest", "30 7 * * 1-5", "Weekdays at 7:30 AM", runs: digestRuns)], spent: 0.21),
         bot("claude", "Claudio Bot", .circle, .white, last: at(2, 15, 9),
-            preview: "Want me to merge any of these now?", question: "Want me to merge any of these now?"),
+            preview: "Want me to merge any of these now?", question: "Want me to merge any of these now?", spent: 1.84),
         bot("release", "release captain", .drop, .purple, last: at(3, 16, 4),
             preview: "v2.4.0 is tagged and the changelog is up.",
             question: "Push to the default branch: git push origin main", status: .awaitingApproval,
             routines: [routine("r2", "release-train", "0 16 * * 5", "Fridays at 4:00 PM")]),
         bot("engineer", "engineer", .hexagon, .orange, last: ago(minutes: 2),
             preview: "The checkout smoke tests are in PR #148.", status: .working,
-            routines: [routine("r3", "ci-upkeep", "30 8 * * 1-5", "Weekdays at 8:30 AM")]),
+            routines: [routine("r3", "ci-upkeep", "30 8 * * 1-5", "Weekdays at 8:30 AM")], spent: 6.4, cap: 10),
         bot("standup", "standup notes", .star4, .blue, last: at(8, 9, 2),
             preview: "Yesterday: 3 PRs merged, 1 bug filed, release on track.", status: .parked),
         bot("maker", "bot maker", .flower, .pink, last: at(9, 18, 40),

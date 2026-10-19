@@ -35,9 +35,17 @@ struct Composer: View {
 
     static let uploadLimit = 10 << 20
     /// The mic, Send and Stop sit inside the field with the same inset on every side. A one-line field is then 44 pt,
-    /// the minimum touch target, and its corners stay concentric with theirs.
+    /// the minimum touch target, and its corners stay concentric with theirs. A Mac's pointer needs less, so there
+    /// the circles are 28 pt and + moves inside the field.
+    #if os(macOS)
+    static let control: CGFloat = 28
+    static let inset: CGFloat = 8
+    private static let sendWidth = control
+    #else
     static let control: CGFloat = 36
     static let inset: CGFloat = 4
+    private static let sendWidth = control + 10
+    #endif
     static let field = control + 2 * inset
 
     private var placeholder: String {
@@ -63,6 +71,15 @@ struct Composer: View {
         reduceMotion ? .opacity : .scale(scale: 0.5).combined(with: .opacity)
     }
 
+    private var menuTransition: AnyTransition {
+        if reduceMotion { return .opacity }
+        #if os(macOS)
+        return .opacity.combined(with: .scale(scale: 0.97, anchor: .bottom))
+        #else
+        return .opacity.combined(with: .offset(y: 6))
+        #endif
+    }
+
     private var menu: ComposerMenu? {
         let menu = ComposerMenu.at(
             caret, in: draft, chat: bot, features: store.features, bots: Array(store.bots.values),
@@ -73,37 +90,64 @@ struct Composer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let menu {
-                ComposerMenuView(menu: menu, onMention: { pick($0, in: menu) }, onCommand: { pick($0, in: menu) })
-                    .transition(.opacity.combined(with: .offset(y: 6)))
-            }
+            #if os(iOS)
+            menuView
+            #endif
             if !uploads.isEmpty { pendingUploads }
             if let note = problem ?? dictation.failure {
                 Text(note).font(.footnote).foregroundStyle(AvatarColor.amber.color).padding(.horizontal, 8)
             }
             HStack(alignment: .bottom, spacing: 10) {
+                #if os(iOS)
                 if !bot.isGroup { attachMenu }
+                #endif
                 HStack(alignment: .bottom, spacing: 6) {
+                    #if os(macOS)
+                    if !bot.isGroup { attachMenu.padding(.bottom, Self.inset) }
+                    #endif
                     PromptTextView(
-                        draft: $draft, caret: $caret, placeholder: placeholder, maxLines: 6,
-                        tokenColor: tokenColor, onReturn: pickFirst, onEscape: closeMenu, onSubmit: send
+                        draft: $draft, caret: $caret, placeholder: placeholder, maxLines: 6, autofocus: Self.focusesOnOpen,
+                        tokenColor: tokenColor, onReturn: pickFirst, onEscape: closeMenu, onSubmit: send,
+                        onAttachFiles: attachFiles, onAttachImage: attachImage
                     )
                         .padding(.vertical, 8)
                         .frame(minHeight: Self.field)
-                        .padding(.leading, 16)
+                        .padding(.leading, fieldLeading)
                     if showsMic { micButton.transition(swap) }
                     if canSend || showsStop { sendButton.transition(swap) }
                 }
+                .padding(.leading, bot.isGroup ? 0 : Self.attachInset)
                 .padding(.trailing, Self.inset)
                 .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.25, extraBounce: 0.12), value: showsMic)
                 .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.25, extraBounce: 0.12), value: canSend || showsStop)
                 .glass(in: RoundedRectangle(cornerRadius: Self.control / 2 + Self.inset, style: .continuous))
+                #if os(macOS)
+                .dropDestination(for: URL.self) { urls, _ in
+                    let files = urls.filter(\.isFileURL)
+                    guard !bot.isGroup, !files.isEmpty else { return false }
+                    addFiles(.success(files))
+                    return true
+                }
+                #endif
             }
+            .glassGroup(spacing: 10)
         }
+        #if os(macOS)
+        // The menu floats over the transcript instead of growing the bar, so the list above it never moves.
+        .overlay(alignment: .top) {
+            menuView
+                .alignmentGuide(.top) { $0[.bottom] + 8 }
+                .animation(.easeOut(duration: 0.15), value: menu?.trigger.kind)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 16)
+        #else
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
-        .animation(.snappy(duration: 0.2), value: menu?.trigger.kind)
+        .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.2), value: menu?.trigger.kind)
+        #endif
         .onChange(of: draft.trigger(caret: caret)?.range.location) { _, location in
             if location != closedMenuAt { closedMenuAt = nil }
         }
@@ -129,6 +173,24 @@ struct Composer: View {
         .onDisappear { dictation.stop() }
     }
 
+    @ViewBuilder private var menuView: some View {
+        if let menu {
+            ComposerMenuView(menu: menu, onMention: { pick($0, in: menu) }, onCommand: { pick($0, in: menu) })
+                .transition(menuTransition)
+        }
+    }
+
+    #if os(macOS)
+    /// A Mac chat opens ready to type.
+    private static let focusesOnOpen = true
+    private static let attachInset = inset
+    private var fieldLeading: CGFloat { bot.isGroup ? 16 : 2 }
+    #else
+    private static let focusesOnOpen = false
+    private static let attachInset: CGFloat = 0
+    private let fieldLeading: CGFloat = 16
+    #endif
+
     private var attachMenu: some View {
         Menu {
             Button { pickingPhotos = true } label: { Label("Photo Library", systemImage: "photo.on.rectangle") }
@@ -138,20 +200,31 @@ struct Composer: View {
             #endif
             Button { pickingFiles = true } label: { Label("Choose File", systemImage: "folder") }
         } label: {
+            #if os(macOS)
+            Image(systemName: "plus")
+                .font(.ui(size: 17, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: Self.control, height: Self.control)
+                .background(Theme.raised, in: Circle())
+                .contentShape(Circle())
+            #else
             Image(systemName: "plus")
                 .font(.ui(size: 19, weight: .medium))
                 .foregroundStyle(.white)
                 .frame(width: Self.field, height: Self.field)
                 .glass(in: Circle(), interactive: true)
                 .contentShape(Circle())
+            #endif
         }
         #if os(macOS)
         // A Mac menu otherwise draws its own bezel and arrow around the round button.
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
+        .fixedSize()
         #endif
         .accessibilityLabel("Attach")
+        .help("Attach a Photo or File")
     }
 
     private var micButton: some View {
@@ -175,10 +248,15 @@ struct Composer: View {
                 .foregroundStyle(dictation.isRecording ? bot.avatar.color.accent : Theme.secondary)
                 .symbolEffect(.pulse, isActive: dictation.isRecording)
                 .frame(width: Self.control, height: Self.control)
+                #if os(macOS)
+                .background(Theme.raised, in: Circle())
+                .contentShape(Circle())
+                #endif
         }
         .buttonStyle(.plain)
         .padding(.bottom, Self.inset)
         .accessibilityLabel(dictation.isRecording ? "Stop dictation" : "Dictate")
+        .help(dictation.isRecording ? "Stop Dictation" : "Dictate")
     }
 
     private var sendButton: some View {
@@ -189,13 +267,17 @@ struct Composer: View {
                 .font(.ui(size: showsStop ? 14 : 16, weight: .bold))
                 .contentTransition(.symbolEffect(.replace))
                 .foregroundStyle(bot.avatar.color.onAccent)
-                .frame(width: Self.control + 10, height: Self.control)
+                .frame(width: Self.sendWidth, height: Self.control)
                 .background(bot.avatar.color.accent, in: Capsule())
         }
         .buttonStyle(.pressable)
         .sensoryFeedback(.impact(weight: .light), trigger: sends)
         .sensoryFeedback(.impact(weight: .medium), trigger: stops)
         .padding(.bottom, Self.inset)
+        #if os(macOS)
+        .keyboardShortcut(showsStop ? KeyboardShortcut(".", modifiers: .command) : nil)
+        #endif
+        .help(showsStop ? "Stop (⌘.)" : "Send (Return)")
         .accessibilityLabel(showsStop ? "Stop" : "Send")
         .accessibilityIdentifier(showsStop ? "stop" : "send")
     }
@@ -276,6 +358,23 @@ struct Composer: View {
         }
         problem = nil
         uploads.append(upload)
+    }
+
+    private var attachFiles: (([URL]) -> Void)? {
+        guard !bot.isGroup else { return nil }
+        return { urls in addFiles(.success(urls)) }
+    }
+
+    private var attachImage: ((Data) -> Void)? {
+        guard !bot.isGroup else { return nil }
+        return { data in addImage(data) }
+    }
+
+    /// A pasted image, such as a screenshot, goes up as a JPEG like a picked photo.
+    private func addImage(_ data: Data) {
+        guard let jpeg = PlatformImage.jpeg(from: data) else { return }
+        let name = "image-\(Int(Date.now.timeIntervalSince1970)).jpg"
+        add(Upload(name: name, mime: "image/jpeg", data: jpeg.base64EncodedString()), size: jpeg.count)
     }
 
     private func addPhotos(_ items: [PhotosPickerItem]) async {

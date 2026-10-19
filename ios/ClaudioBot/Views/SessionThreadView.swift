@@ -40,6 +40,13 @@ struct SessionThreadView: View {
 
     private var row: SessionRow? { store.sessions.rows[sessionId] }
 
+    /// The transcript, banners and composer share one centered column.
+    #if os(macOS)
+    static let column: CGFloat = 960
+    #else
+    static let column: CGFloat = 760
+    #endif
+
     var body: some View {
         Group {
             if let model = store.threads[sessionId] {
@@ -83,6 +90,7 @@ struct SessionThreadView: View {
     private func thread(_ model: ThreadModel) -> some View {
         let botName = row?.agent.flatMap { store.bots[$0.botId]?.name }
         let rows = model.rows
+        let openCard = Self.openCard(model.items)
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if model.before != nil {
@@ -95,15 +103,22 @@ struct SessionThreadView: View {
                         .padding(.top, index == 0 ? 12 : Self.gap(between: rows[index - 1], and: row))
                 }
                 // Under a card that waits on the user, "Working" would say the opposite of what is happening.
-                StreamingTail(live: model.live, working: (model.controls?.working ?? false) && Self.openCard(model.items) == nil)
+                StreamingTail(live: model.live, working: (model.controls?.working ?? false) && openCard == nil)
             }
+            // An answered card collapses with its own animation. Moving the rows and the Working line in the same
+            // transaction keeps them from snapping over the card while it shrinks.
+            .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: openCard?.id)
             .padding(.horizontal, 16)
             .padding(.bottom, 16)
-            .frame(maxWidth: 760)
+            .frame(maxWidth: Self.column)
             .frame(maxWidth: .infinity)
         }
         .scrollPosition($position)
         .defaultScrollAnchor(.bottom)
+        #if os(macOS)
+        // The chips and the field float apart. A hard edge keeps the transcript from showing between them.
+        .scrollEdgeEffectStyle(.hard, for: .bottom)
+        #endif
         .onScrollPhaseChange { _, phase, context in
             switch phase {
             case .interacting: followsBottom = false
@@ -140,9 +155,9 @@ struct SessionThreadView: View {
                 followsBottom = true
                 withAnimation(reduceMotion ? nil : .snappy(duration: 0.3)) { position.scrollTo(edge: .bottom) }
             }
-            .frame(maxWidth: 760)
+            .frame(maxWidth: Self.column)
         }
-        .onChange(of: Self.openCard(model.items)) { old, new in
+        .onChange(of: openCard) { old, new in
             if let new, new.id != old?.id { AccessibilityNotification.Announcement(new.announcement).post() }
         }
     }
@@ -150,9 +165,9 @@ struct SessionThreadView: View {
     @ViewBuilder
     private func banner(_ model: ThreadModel) -> some View {
         if OfflineBar.shows(store.connection) {
-            OfflineBar(state: store.connection).frame(maxWidth: 760)
+            OfflineBar(state: store.connection).frame(maxWidth: Self.column)
         } else if let banner = ThreadBanner.of(row: row, controls: model.controls) {
-            HolderBanner(banner: banner).frame(maxWidth: 760)
+            HolderBanner(banner: banner).frame(maxWidth: Self.column)
         }
     }
 
@@ -194,6 +209,7 @@ struct SessionThreadView: View {
                 Image(systemName: "ellipsis")
             }
             .accessibilityLabel("More")
+            .help("More")
         }
     }
 
@@ -274,8 +290,13 @@ struct ThreadHeader: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 5)
+        #if os(macOS)
+        // The toolbar item already sits on the toolbar's glass.
+        .frame(maxWidth: 360)
+        #else
         .frame(maxWidth: 260)
         .glass(in: Capsule())
+        #endif
         .accessibilityElement(children: .combine)
     }
 }
@@ -373,6 +394,9 @@ struct ToolOutputSheet: View {
                 }
             }
         }
+        #if os(macOS)
+        .frame(minWidth: 640, idealWidth: 760, minHeight: 420, idealHeight: 560)
+        #endif
         .task { client.send(.sessionTool(sessionId: sessionId, toolUseId: step.id)) }
     }
 }
@@ -389,7 +413,7 @@ struct ThreadSkeleton: View {
             RoundedRectangle(cornerRadius: 6).fill(Theme.card).frame(width: 180, height: 14)
         }
         .padding(16)
-        .frame(maxWidth: 760, maxHeight: .infinity)
+        .frame(maxWidth: SessionThreadView.column, maxHeight: .infinity)
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Loading the session")

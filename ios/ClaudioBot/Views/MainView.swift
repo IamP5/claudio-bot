@@ -53,12 +53,13 @@ struct MainView: View {
                     }
                 }
             #else
-            // A plain column rather than .inspector: on iPad portrait the inspector covers and dims the chat.
+            // A plain column rather than .inspector: on iPad portrait the inspector covers and dims the chat. Like the
+            // Mac's inspector, it gets no stack of its own: the profile pushes onto the chat's.
             HStack(spacing: 0) {
                 DetailStack()
                 if let id = inspectorBot {
                     Rectangle().fill(Theme.hairline).frame(width: 1).ignoresSafeArea()
-                    NavigationStack { ProfileView(botId: id) }
+                    ProfileView(botId: id)
                         .frame(width: 380)
                         .transition(reduceMotion ? .opacity : .move(edge: .trailing))
                 }

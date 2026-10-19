@@ -17,31 +17,75 @@ struct PromptTextView: View {
     var onEscape: () -> Void = {}
     /// What a plain Return does when no menu took it. Without one, Return adds a newline.
     var onSubmit: (() -> Void)? = nil
+    /// Files pasted or dropped on the field. Without it they paste as their paths.
+    var onAttachFiles: (([URL]) -> Void)? = nil
+    /// An image pasted with no text beside it, such as a screenshot. Without it the paste is ignored.
+    var onAttachImage: ((Data) -> Void)? = nil
 
     var body: some View {
         Representable(
             draft: $draft, caret: $caret, minLines: minLines, maxLines: maxLines, autofocus: autofocus,
-            tokenColor: tokenColor, onReturn: onReturn, onEscape: onEscape, onSubmit: onSubmit
+            tokenColor: tokenColor, onReturn: onReturn, onEscape: onEscape, onSubmit: onSubmit,
+            onAttachFiles: onAttachFiles, onAttachImage: onAttachImage
         )
         .overlay(alignment: .topLeading) {
-            if draft.text.isEmpty {
-                Text(placeholder)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .allowsHitTesting(false)
-            }
+            // Hidden with no animation, so a menu opening on the first "@" never fades it under the typed text.
+            Text(placeholder)
+                .font(Font(Representable.font))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .opacity(draft.text.isEmpty ? 1 : 0)
+                .animation(nil, value: draft.text.isEmpty)
+                .accessibilityHidden(!draft.text.isEmpty)
+                .allowsHitTesting(false)
         }
     }
 }
 
-/// Remembers the modifiers of the key being handled, so Return can tell ⇧↩ and ⌥↩ from a plain Return.
+/// Remembers the modifiers of the key being handled, so Return can tell ⇧↩ and ⌥↩ from a plain Return. Files and
+/// images pasted or dropped on it become attachments.
 final class PromptNSTextView: NSTextView {
     private(set) var keyModifiers: NSEvent.ModifierFlags = []
+    var onAttachFiles: (([URL]) -> Void)?
+    var onAttachImage: ((Data) -> Void)?
+    /// Set before the view has a window: it takes the keyboard once it lands in one.
+    var focusOnWindow = false
 
     override func keyDown(with event: NSEvent) {
         keyModifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         defer { keyModifiers = [] }
         super.keyDown(with: event)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard focusOnWindow, let window else { return }
+        focusOnWindow = false
+        window.makeFirstResponder(self)
+    }
+
+    override func readSelection(from pasteboard: NSPasteboard) -> Bool {
+        attach(from: pasteboard) || super.readSelection(from: pasteboard)
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        attach(from: sender.draggingPasteboard) || super.performDragOperation(sender)
+    }
+
+    /// Text on the pasteboard pastes as text, even beside an image of it, the way rich editors copy.
+    func attach(from pasteboard: NSPasteboard) -> Bool {
+        if let onAttachFiles,
+           let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           !urls.isEmpty {
+            onAttachFiles(urls)
+            return true
+        }
+        if let onAttachImage, pasteboard.string(forType: .string) == nil,
+           let image = pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff) {
+            onAttachImage(image)
+            return true
+        }
+        return false
     }
 }
 
@@ -55,11 +99,16 @@ private struct Representable: NSViewRepresentable {
     let onReturn: () -> Bool
     let onEscape: () -> Void
     let onSubmit: (() -> Void)?
+    let onAttachFiles: (([URL]) -> Void)?
+    let onAttachImage: ((Data) -> Void)?
 
-    static var font: NSFont { .preferredFont(forTextStyle: .body) }
+    /// The size the transcript's bubbles draw at on the Mac, so a sent message keeps the size it was typed in.
+    static var font: NSFont { .systemFont(ofSize: 14) }
 
     func makeNSView(context: Context) -> NSScrollView {
         let view = PromptNSTextView(usingTextLayoutManager: false)
+        view.minSize = .zero
+        view.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         view.isVerticallyResizable = true
         view.isHorizontallyResizable = false
         view.autoresizingMask = [.width]
@@ -67,7 +116,8 @@ private struct Representable: NSViewRepresentable {
         let scroll = NSScrollView()
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
-        scroll.hasVerticalScroller = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
         scroll.documentView = view
         view.delegate = context.coordinator
         view.font = Self.font
@@ -87,13 +137,16 @@ private struct Representable: NSViewRepresentable {
         view.isGrammarCheckingEnabled = false
         view.smartInsertDeleteEnabled = false
         view.insertionPointColor = .labelColor
-        if autofocus { DispatchQueue.main.async { view.window?.makeFirstResponder(view) } }
+        view.focusOnWindow = autofocus
         return scroll
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
-        guard let view = scroll.documentView as? NSTextView, !view.hasMarkedText() else { return }
+        guard let view = scroll.documentView as? PromptNSTextView else { return }
+        view.onAttachFiles = onAttachFiles
+        view.onAttachImage = onAttachImage
+        guard !view.hasMarkedText() else { return }
         context.coordinator.applying = true
         defer { context.coordinator.applying = false }
         if view.string != draft.text {
@@ -103,18 +156,27 @@ private struct Representable: NSViewRepresentable {
         context.coordinator.restyle(view)
     }
 
+    /// Measures on a copy of the text. SwiftUI also proposes widths it only probes, so laying out the live container
+    /// at them would leave the text wrapping at a width the field never takes. The live container tracks the view.
     func sizeThatFits(_ proposal: ProposedViewSize, nsView scroll: NSScrollView, context: Context) -> CGSize? {
-        guard let width = proposal.width, let view = scroll.documentView as? NSTextView,
-              let layout = view.layoutManager, let container = view.textContainer
+        guard let width = proposal.width, width.isFinite, let view = scroll.documentView as? NSTextView,
+              let line = view.layoutManager?.defaultLineHeight(for: Self.font)
         else { return nil }
-        container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
-        layout.ensureLayout(for: container)
-        let line = layout.defaultLineHeight(for: Self.font)
-        let content = max(layout.usedRect(for: container).height, line)
+        let content = max(Self.height(of: view.attributedString(), width: width), line)
         let upper = maxLines.map { CGFloat($0) * line } ?? .greatestFiniteMagnitude
         let height = min(max(content, CGFloat(minLines) * line), upper)
-        scroll.hasVerticalScroller = content > upper
         return CGSize(width: width, height: height.rounded(.up))
+    }
+
+    static func height(of text: NSAttributedString, width: CGFloat) -> CGFloat {
+        let storage = NSTextStorage(attributedString: text)
+        let layout = NSLayoutManager()
+        storage.addLayoutManager(layout)
+        let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        layout.ensureLayout(for: container)
+        return layout.usedRect(for: container).height
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }

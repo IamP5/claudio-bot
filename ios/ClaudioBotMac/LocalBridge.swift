@@ -242,6 +242,8 @@ final class LocalBridge {
     private(set) var installOutput: String?
     /// The repository this app was built from, when it holds the bridge.
     let builtCheckout: URL?
+    /// A demo shows sample bots and leaves this Mac's service alone: it never probes, starts or stops it.
+    let isDemo: Bool
 
     @ObservationIgnored private let location: ServiceLocation
     @ObservationIgnored private var probe: Probe?
@@ -249,8 +251,9 @@ final class LocalBridge {
     @ObservationIgnored private var demand = 0
     @ObservationIgnored private let log = Logger(subsystem: "dev.claudiobot.mac", category: "local-bridge")
 
-    init(location: ServiceLocation = .current, builtCheckout: URL? = LocalBridge.checkoutFromInfoPlist()) {
+    init(location: ServiceLocation = .current, builtCheckout: URL? = LocalBridge.checkoutFromInfoPlist(), isDemo: Bool = false) {
         self.location = location
+        self.isDemo = isDemo
         self.builtCheckout = builtCheckout.flatMap { Self.holdsBridge($0) ? $0 : nil }
         config = ServiceConfig(location: location, plist: nil)
     }
@@ -292,7 +295,7 @@ final class LocalBridge {
     }()
 
     func refresh() async {
-        guard !Self.hostsTests else { return }
+        guard !Self.hostsTests, !isDemo else { return }
         let plistData = try? Data(contentsOf: location.plist)
         let plist = plistData.flatMap(InstalledPlist.init(data:))
         let config = ServiceConfig(location: location, plist: plist)
@@ -425,7 +428,7 @@ final class LocalBridge {
     }
 
     private func perform(_ action: Action, _ body: () async -> String?) async {
-        guard self.action == nil else { return }
+        guard self.action == nil, !isDemo else { return }
         self.action = action
         problem = nil
         problem = await body()

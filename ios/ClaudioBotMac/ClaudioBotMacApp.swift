@@ -33,6 +33,7 @@ struct ClaudioBotMacApp: App {
             }
         }
         .defaultSize(width: 760, height: 780)
+        .defaultWindowPlacement { _, context in onScreen(width: 760, height: 780, context) }
         .windowResizability(.contentMinSize)
         // Its New Window item would open an empty one.
         .commandsRemoved()
@@ -42,12 +43,19 @@ struct ClaudioBotMacApp: App {
                 .shared(delegate)
                 .frame(width: 560, height: 640)
         }
+        .defaultWindowPlacement { _, context in onScreen(width: 560, height: 640, context) }
 
         MenuBarExtra("ClaudioBot", systemImage: "bubble.left.and.text.bubble.right") {
             MenuBarContent()
                 .shared(delegate)
         }
         .menuBarExtraStyle(.menu)
+    }
+
+    /// Centered on the display and no larger than it, so a new window never opens with its bottom off screen.
+    private func onScreen(width: CGFloat, height: CGFloat, _ context: WindowPlacementContext) -> WindowPlacement {
+        let visible = context.defaultDisplay.visibleRect.size
+        return WindowPlacement(.center, size: CGSize(width: min(width, visible.width), height: min(height, visible.height)))
     }
 }
 
@@ -56,10 +64,19 @@ struct ClaudioBotMacApp: App {
 @MainActor
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
     let app = AppModel()
+    #if DEBUG
+    let local = LocalBridge(isDemo: Demo.isEnabled)
+    #else
     let local = LocalBridge()
+    #endif
     let chrome = MacChrome()
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// Each chat opens in a window of its own, so the View menu has no Show Tab Bar.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let client = app.client
@@ -91,6 +108,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 /// iPad layout: list selection, and the profile in an inspector beside the chat.
 private struct MacRoot: View {
     @State private var anotherMac = false
+    @State private var height: CGFloat = 780
     @AppStorage(Editor.preferenceKey) private var editor = ""
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
@@ -119,6 +137,8 @@ private struct MacRoot: View {
         .textFieldStyle(.plain)
         // The bot pill in the chat's toolbar names the window; a title beside it would say it twice.
         .toolbar(removing: .title)
+        .focusedSceneValue(\.router, router)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         // After a revoke the app is back at the welcome screen, and pairs again only on a click.
         .onChange(of: store.connection == .unpaired) { _, unpaired in if unpaired { anotherMac = false } }
         // The phone's Settings sheet is the Settings window here.
@@ -128,8 +148,9 @@ private struct MacRoot: View {
             openSettings()
         }
         .sheet(isPresented: $chrome.pairingIPhone) {
+            // A sheet taller than the window runs off its bottom, and its Done button with it.
             PairAnotherView()
-                .frame(width: 440, height: 600)
+                .frame(width: 440, height: min(600, max(360, height - 80)))
         }
         #if DEBUG
         .modifier(DebugConfirmPairing())
@@ -142,6 +163,7 @@ private struct MacRoot: View {
 /// own, so what it pushes and opens stays in it.
 private struct SelectionWindow: View {
     @State private var router: Router
+    @Environment(AppStore.self) private var store
 
     init(selection: Selection) {
         _router = State(initialValue: Router(showing: selection))
@@ -155,8 +177,19 @@ private struct SelectionWindow: View {
             // No column beside the chat, so the profile is pushed over it.
             .environment(\.horizontalSizeClass, .compact)
             .textFieldStyle(.plain)
+            // The header names the chat; the title still names the window in the Window menu and Mission Control.
+            .navigationTitle(title)
             .toolbar(removing: .title)
+            .focusedSceneValue(\.router, router)
             .sheet(isPresented: $router.showingUsage) { PlanUsageView() }
+    }
+
+    private var title: String {
+        switch router.selection {
+        case .bot(let id): store.bots[id]?.name ?? "ClaudioBot"
+        case .session(let id): store.sessions.rows[id]?.title ?? "ClaudioBot"
+        case nil: "ClaudioBot"
+        }
     }
 }
 

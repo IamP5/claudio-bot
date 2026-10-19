@@ -173,42 +173,52 @@ struct BridgeSettings: View {
 
     var body: some View {
         Form {
-            Section("Your bots run on") {
-                LabeledContent("Place", value: place)
-                if BridgePlace(client.pairing) == .otherMac {
-                    Button("Use This Mac Instead") { Task { _ = await local.useThisMac(client) } }
-                        .disabled(!local.state.selfPairs || local.action != nil)
+            if local.isDemo {
+                Section {
+                    LabeledContent("Place", value: "Sample bots")
+                } header: {
+                    Text("Your bots run on")
+                } footer: {
+                    Text("Demo mode shows sample bots and leaves the bridge on this Mac alone.")
                 }
-                Button("Connect to Another Mac…") {
-                    app.beginPairing()
-                    openWindow(id: "main")
+            } else {
+                Section("Your bots run on") {
+                    LabeledContent("Place", value: place)
+                    if BridgePlace(client.pairing) == .otherMac {
+                        Button("Use This Mac Instead") { Task { _ = await local.useThisMac(client) } }
+                            .disabled(!local.state.selfPairs || local.action != nil)
+                    }
+                    Button("Connect to Another Mac…") {
+                        app.beginPairing()
+                        openWindow(id: "main")
+                    }
+                    .disabled(store.connection == .unpaired)
                 }
-                .disabled(store.connection == .unpaired)
-            }
 
-            Section {
-                LabeledContent("Status", value: local.state.summary)
-                LocalBridgeControls()
-                HStack {
-                    Button("Start") { Task { await local.start() } }
-                        .disabled(!local.state.canStart || local.action != nil)
-                    Button("Stop…") { confirmingStop = true }
-                        .disabled(!local.state.canStop || local.action != nil)
-                    Button("Restart") { Task { await local.restart() } }
-                        .disabled(!local.state.canRestart || local.action != nil)
-                    Spacer()
-                    Button("Show Log") { local.showLog() }
+                Section {
+                    LabeledContent("Status", value: local.state.summary)
+                    LocalBridgeControls()
+                    HStack {
+                        Button("Start") { Task { await local.start() } }
+                            .disabled(!local.state.canStart || local.action != nil)
+                        Button("Stop…") { confirmingStop = true }
+                            .disabled(!local.state.canStop || local.action != nil)
+                        Button("Restart") { Task { await local.restart() } }
+                            .disabled(!local.state.canRestart || local.action != nil)
+                        Spacer()
+                        Button("Show Log") { local.showLog() }
+                    }
+                    LabeledContent("Service", value: local.config.label)
+                    LabeledContent("Address", value: local.config.socketURL.absoluteString)
+                    LabeledContent("Home", value: local.config.home.path(percentEncoded: false))
+                    if let checkout = local.checkout {
+                        LabeledContent("Checkout", value: checkout.path(percentEncoded: false))
+                    }
+                } header: {
+                    Text("Bridge on this Mac")
+                } footer: {
+                    Text("launchd runs the bridge, so your bots keep working after you quit ClaudioBot.")
                 }
-                LabeledContent("Service", value: local.config.label)
-                LabeledContent("Address", value: local.config.socketURL.absoluteString)
-                LabeledContent("Home", value: local.config.home.path(percentEncoded: false))
-                if let checkout = local.checkout {
-                    LabeledContent("Checkout", value: checkout.path(percentEncoded: false))
-                }
-            } header: {
-                Text("Bridge on this Mac")
-            } footer: {
-                Text("launchd runs the bridge, so your bots keep working after you quit ClaudioBot.")
             }
 
             Section {

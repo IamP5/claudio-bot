@@ -5,12 +5,17 @@ import SwiftUI
 @Observable
 @MainActor
 final class MacChrome {
-    /// The Pair iPhone sheet over the main window.
+    /// The Pair Another Device sheet over the main window.
     var pairingIPhone = false
     #if DEBUG
     /// A window `claudiobot://debug/window` asked for, opened by the main window as Open in New Window would.
     var debugWindow: Selection?
     #endif
+}
+
+extension FocusedValues {
+    /// The router of the key window, so a command acts on the window in front.
+    @Entry var router: Router?
 }
 
 /// What a command reads and drives. Commands hold no state of their own.
@@ -19,18 +24,44 @@ struct MacContext {
     let app: AppModel
     let local: LocalBridge
     let chrome: MacChrome
+    /// The key window's router, else the main window's.
+    let router: Router
     let openMain: () -> Void
+
+    init(app: AppModel, local: LocalBridge, chrome: MacChrome, router: Router? = nil, openMain: @escaping () -> Void) {
+        self.app = app
+        self.local = local
+        self.chrome = chrome
+        self.router = router ?? app.router
+        self.openMain = openMain
+    }
 
     var store: AppStore { app.store }
     var paired: Bool { store.connection != .unpaired }
-    /// The Bridge menu manages this Mac's service, so it stands down while the app is paired with another Mac.
-    var managesLocal: Bool { BridgePlace(app.client.pairing) != .otherMac }
+    /// The Bridge menu manages this Mac's service, so it stands down while the app is paired with another Mac, and in
+    /// a demo.
+    var managesLocal: Bool { BridgePlace(app.client.pairing) != .otherMac && !local.isDemo }
+
+    /// The main window shows the profile in its inspector; a window for one chat pushes it over the chat.
+    var showsProfile: Bool {
+        if router.hasSidebar { return router.showingInspector }
+        if case .profile = router.path.last { return true }
+        return false
+    }
+
+    /// The bot `step` rows away from the open one in the sidebar's list, wrapping around.
+    func bot(_ step: Int) -> BotID? {
+        let bots = store.homeBots.map(\.id)
+        guard !bots.isEmpty else { return nil }
+        guard let at = router.selection?.bot.flatMap(bots.firstIndex(of:)) else { return step > 0 ? bots.first : bots.last }
+        return bots[(at + step + bots.count) % bots.count]
+    }
 }
 
 /// Every menu command, once. The menus, the menu bar extra and Debug checks all go through this list.
 enum MacCommand: String, CaseIterable, Identifiable {
     case newChat, newSession, pairIPhone
-    case bots, sessions, profile, planUsage, refresh
+    case bots, sessions, previousChat, nextChat, profile, planUsage, refresh
     case startBridge, stopBridge, restartBridge, showLog
 
     enum Menu { case file, view, bridge }
@@ -40,7 +71,7 @@ enum MacCommand: String, CaseIterable, Identifiable {
     var menu: Menu {
         switch self {
         case .newChat, .newSession, .pairIPhone: .file
-        case .bots, .sessions, .profile, .planUsage, .refresh: .view
+        case .bots, .sessions, .previousChat, .nextChat, .profile, .planUsage, .refresh: .view
         case .startBridge, .stopBridge, .restartBridge, .showLog: .bridge
         }
     }
@@ -49,10 +80,12 @@ enum MacCommand: String, CaseIterable, Identifiable {
         switch self {
         case .newChat: "New Chat"
         case .newSession: "New Session…"
-        case .pairIPhone: "Pair iPhone…"
+        case .pairIPhone: "Pair Another Device…"
         case .bots: "Bots"
         case .sessions: "Sessions"
-        case .profile: c.app.router.showingInspector ? "Hide Profile" : "Show Profile"
+        case .previousChat: "Previous Chat"
+        case .nextChat: "Next Chat"
+        case .profile: c.showsProfile ? "Hide Profile" : "Show Profile"
         case .planUsage: "Plan Usage"
         case .refresh: "Refresh"
         case .startBridge: "Start Bridge"
@@ -69,6 +102,9 @@ enum MacCommand: String, CaseIterable, Identifiable {
         case .pairIPhone: KeyboardShortcut("p", modifiers: [.command, .shift])
         case .bots: KeyboardShortcut("1")
         case .sessions: KeyboardShortcut("2")
+        // Messages' keys for the next and previous conversation.
+        case .previousChat: KeyboardShortcut(.tab, modifiers: [.control, .shift])
+        case .nextChat: KeyboardShortcut(.tab, modifiers: .control)
         case .profile: KeyboardShortcut("i", modifiers: [.command, .option])
         case .planUsage: KeyboardShortcut("u", modifiers: [.command, .shift])
         case .refresh: KeyboardShortcut("r")
@@ -82,8 +118,9 @@ enum MacCommand: String, CaseIterable, Identifiable {
         case .newChat, .bots, .refresh: return c.paired
         case .newSession: return c.paired && c.store.has(.sessions)
         case .sessions: return c.paired && !c.store.lacks(.sessions)
+        case .previousChat, .nextChat: return c.paired && c.router.hasSidebar && c.router.sidebar == .bots && c.bot(1) != nil
         case .pairIPhone: return c.store.machine != nil && c.store.bridgeManagesDevices
-        case .profile: return c.app.router.selection?.bot != nil
+        case .profile: return c.router.selection?.bot != nil
         case .planUsage: return c.store.has(.usage)
         case .startBridge: return c.managesLocal && idle && c.local.state.canStart
         case .stopBridge: return c.managesLocal && idle && c.local.state.canStop
@@ -93,23 +130,33 @@ enum MacCommand: String, CaseIterable, Identifiable {
     }
 
     @MainActor func perform(_ c: MacContext) {
-        let router = c.app.router
+        let main = c.app.router
+        let router = c.router
         switch self {
         case .newChat:
             c.openMain()
-            router.showingNewChat = true
+            main.showingNewChat = true
         case .newSession:
             c.openMain()
-            router.newSession = NewSessionRequest()
+            main.newSession = NewSessionRequest()
         case .pairIPhone:
             c.openMain()
             c.chrome.pairingIPhone = true
-        case .bots: router.sidebar = .bots
-        case .sessions: router.sidebar = .sessions
-        case .profile: router.showingInspector.toggle()
+        case .bots: main.sidebar = .bots
+        case .sessions: main.sidebar = .sessions
+        case .previousChat: if let bot = c.bot(-1) { router.open(bot) }
+        case .nextChat: if let bot = c.bot(1) { router.open(bot) }
+        case .profile:
+            if router.hasSidebar {
+                router.showingInspector.toggle()
+            } else if c.showsProfile {
+                router.path.removeLast()
+            } else if let bot = router.selection?.bot {
+                router.path.append(.profile(bot))
+            }
         case .planUsage:
             c.openMain()
-            router.showingUsage = true
+            main.showingUsage = true
         case .refresh:
             c.app.client.reconnectNow()
             if router.watchesSessions { c.app.client.refreshSessions() }
@@ -136,9 +183,10 @@ struct MacCommands: Commands {
     let local: LocalBridge
     let chrome: MacChrome
     @Environment(\.openWindow) private var openWindow
+    @FocusedValue(\.router) private var router
 
     private var context: MacContext {
-        MacContext(app: app, local: local, chrome: chrome) { [openWindow] in
+        MacContext(app: app, local: local, chrome: chrome, router: router) { [openWindow] in
             openWindow(id: "main")
             NSApp.activate()
         }

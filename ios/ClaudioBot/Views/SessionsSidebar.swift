@@ -49,6 +49,7 @@ struct SessionsSidebar: View {
     @State private var searching = false
     @FocusState private var searchFocused: Bool
     @State private var limits: [ProjectID: Int] = [:]
+    @AppStorage("collapsedProjects") private var collapsed = CollapsedProjects()
     @State private var renaming: SessionRow?
     @State private var newTitle = ""
     /// One clock for every row's age. Rows compare their age text, so only those that changed redraw.
@@ -187,39 +188,58 @@ struct SessionsSidebar: View {
         }
     }
 
+    /// A search or filter shows every match, so a narrowed list drops the fold.
     @ViewBuilder
     private func projectSection(_ section: ProjectSection) -> some View {
-        let limit = query.isNarrowed ? section.trees.count : limits[section.id, default: Self.pageSize]
-        let shown = section.trees.prefix(limit)
-        Section {
-            ForEach(shown) { tree in
-                sessionRow(tree.row)
-                ForEach(tree.descendants, id: \.row.id) { child in
-                    sessionRow(child.row, depth: child.depth, isLast: child.isLast)
-                }
-            }
-            if section.trees.count > limit {
-                Button {
-                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) {
-                        limits[section.id] = limit + Self.moreStep
-                    }
-                } label: {
-                    Text("Show more")
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.tertiary)
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Show \(min(Self.moreStep, section.trees.count - limit)) more in \(section.project.name)")
-                .plainRow(insets: EdgeInsets(top: 0, leading: 20, bottom: 4, trailing: 16))
-            }
-        } header: {
-            ProjectHeader(project: section.project, count: section.trees.count) {
-                router.newSession = NewSessionRequest(projectId: section.project.id)
+        let header = ProjectHeader(project: section.project, count: section.trees.count, expanded: query.isNarrowed ? nil : expanded(section.id)) {
+            router.newSession = NewSessionRequest(projectId: section.project.id)
+        }
+        Group {
+            if query.isNarrowed {
+                Section { sectionRows(section) } header: { header }
+            } else {
+                Section(isExpanded: expanded(section.id)) { sectionRows(section) } header: { header }
             }
         }
         .listSectionSeparator(.hidden)
+    }
+
+    private func expanded(_ id: ProjectID) -> Binding<Bool> {
+        Binding {
+            !collapsed.ids.contains(id)
+        } set: { open in
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) {
+                if open { collapsed.ids.remove(id) } else { collapsed.ids.insert(id) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sectionRows(_ section: ProjectSection) -> some View {
+        let limit = query.isNarrowed ? section.trees.count : limits[section.id, default: Self.pageSize]
+        let shown = section.trees.prefix(limit)
+        ForEach(shown) { tree in
+            sessionRow(tree.row)
+            ForEach(tree.descendants, id: \.row.id) { child in
+                sessionRow(child.row, depth: child.depth, isLast: child.isLast)
+            }
+        }
+        if section.trees.count > limit {
+            Button {
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) {
+                    limits[section.id] = limit + Self.moreStep
+                }
+            } label: {
+                Text("Show more")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.tertiary)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Show \(min(Self.moreStep, section.trees.count - limit)) more in \(section.project.name)")
+            .plainRow(insets: EdgeInsets(top: 0, leading: 20, bottom: 4, trailing: 16))
+        }
     }
 
     private func sessionRow(_ row: SessionRow, depth: Int = 0, isLast: Bool = false) -> some View {
@@ -398,6 +418,8 @@ struct SessionsSidebar: View {
 struct ProjectHeader: View {
     let project: SessionProject
     let count: Int
+    /// Nil while the list is narrowed, when the section can't fold.
+    var expanded: Binding<Bool>?
     let onNew: () -> Void
 
     #if os(macOS)
@@ -406,14 +428,37 @@ struct ProjectHeader: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(project.name)
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(Theme.secondary)
-                .lineLimit(1)
-            Text("\(count)")
-                .font(.footnote.monospacedDigit())
-                .foregroundStyle(Theme.tertiary)
-            Spacer(minLength: 8)
+            Button {
+                expanded?.wrappedValue.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    #if os(iOS)
+                    // The plain list draws no disclosure of its own, so the header carries the chevron.
+                    if let expanded {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Theme.tertiary)
+                            .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
+                    }
+                    #endif
+                    Text(project.name)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(Theme.secondary)
+                        .lineLimit(1)
+                    Text("\(count)")
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(Theme.tertiary)
+                    Spacer(minLength: 8)
+                }
+                #if os(iOS)
+                .frame(minHeight: 44)
+                #endif
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(expanded == nil)
+            .accessibilityLabel("\(project.name), \(count) \(count == 1 ? "session" : "sessions")")
+            .accessibilityValue(expanded.map { $0.wrappedValue ? "Expanded" : "Collapsed" } ?? "")
             #if os(macOS)
             // Shown under the pointer, as the Finder sidebar shows its section controls.
             Button(action: onNew) {
@@ -445,7 +490,6 @@ struct ProjectHeader: View {
         #endif
         .textCase(nil)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(project.name), \(count) \(count == 1 ? "session" : "sessions")")
     }
 }
 
@@ -624,4 +668,17 @@ extension View {
             .listRowSeparator(.hidden)
             .selectionDisabled()
     }
+}
+
+/// The projects folded shut in the sessions sidebar, kept across launches as Claude Code keeps its sidebar.
+struct CollapsedProjects: RawRepresentable, Equatable {
+    var ids: Set<ProjectID> = []
+
+    init() {}
+
+    init(rawValue: String) {
+        ids = Set(rawValue.split(separator: "\n").map { ProjectID(String($0)) })
+    }
+
+    var rawValue: String { ids.map(\.rawValue).sorted().joined(separator: "\n") }
 }

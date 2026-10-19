@@ -17,8 +17,17 @@ struct HomeView: View {
         deleting.flatMap { Deletion($0, details: store.details[$0.id], detailsLate: detailsLate) }
     }
 
+    /// On the Mac the search field always shows, so a query in it is what searching means.
+    private var isSearching: Bool {
+        #if os(macOS)
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        #else
+        searching
+        #endif
+    }
+
     private var bots: [Bot] {
-        searching ? store.bots(matching: query) : store.homeBots
+        isSearching ? store.bots(matching: query) : store.homeBots
     }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -40,25 +49,31 @@ struct HomeView: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
+            #if os(iOS)
             if searching {
                 searchField
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
+            #endif
             ForEach(bots) { bot in
                 BotRow(bot: bot)
                     .tag(Selection.bot(bot.id))
                     .listRowSeparator(.hidden)
+                    #if os(macOS)
+                    .sidebarHover(selected: router.selection == .bot(bot.id))
+                    #else
                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                     .listRowBackground(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .fill(router.selection == .bot(bot.id) ? Theme.card : .clear)
                             .padding(.horizontal, 6)
                     )
+                    #endif
                     .contextMenu { menu(for: bot) }
             }
             if bots.isEmpty && store.machine != nil {
-                Text(searching ? "No bots match." : "No bots yet. Tap + to make one.")
+                Text(isSearching ? "No bots match." : Self.emptyText)
                     .font(.subheadline)
                     .foregroundStyle(Theme.tertiary)
                     .frame(maxWidth: .infinity)
@@ -67,10 +82,19 @@ struct HomeView: View {
                     .listRowSeparator(.hidden)
             }
         }
+        #if os(macOS)
+        // The sidebar style draws the only selection, and leaves the column's glass uncovered.
+        .listStyle(.sidebar)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: bots.map(\.id))
+        .searchable(text: $query, placement: .sidebar, prompt: "Search")
+        .searchFocused($searchFocused)
+        .focusedSceneValue(\.sidebarSearch, SidebarSearch { searchFocused = true })
+        #else
         .listStyle(.plain)
         .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: bots.map(\.id))
         .scrollContentBackground(.hidden)
         .background(Theme.background)
+        #endif
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
@@ -151,14 +175,22 @@ struct HomeView: View {
         }
     }
 
+    static var emptyText: String {
+        #if os(macOS)
+        "No bots yet. Click + to make one."
+        #else
+        "No bots yet. Tap + to make one."
+        #endif
+    }
+
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        InitialsItem(name: store.userName, proposals: store.proposedFacts.count) { router.showingSettings = true }
-        if store.has(.usage) {
-            ToolbarItem(placement: .principal) {
-                SessionUsageButton(usage: store.usage) { router.showingUsage = true }
-            }
+        SidebarAccountItems(name: store.userName, proposals: store.proposedFacts.count, usage: store.usage, hasUsage: store.has(.usage)) {
+            router.showingSettings = true
+        } showUsage: {
+            router.showingUsage = true
         }
+        #if os(iOS)
         ToolbarItem(placement: .topBarTrailing) {
             Button {
                 withAnimation { searching.toggle() }
@@ -169,15 +201,18 @@ struct HomeView: View {
             }
             .accessibilityLabel("Search")
         }
+        #endif
         ToolbarSpacerIfAvailable()
         ToolbarItem(placement: .topBarTrailing) {
             Button { router.showingNewChat = true } label: {
                 Image(systemName: "plus")
             }
             .accessibilityLabel("New chat")
+            .help("New Chat")
         }
     }
 
+    #if os(iOS)
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(Theme.tertiary)
@@ -195,6 +230,7 @@ struct HomeView: View {
         .padding(.vertical, 9)
         .background(Theme.card, in: Capsule())
     }
+    #endif
 
     @ViewBuilder
     private func menu(for bot: Bot) -> some View {
@@ -220,7 +256,7 @@ struct HomeView: View {
         Button {
             client.send(.updateBot(botId: bot.id, patch: BotPatch(hidden: !bot.hidden)))
         } label: {
-            Label(bot.hidden ? "Show in sidebar" : "Hide from sidebar", systemImage: bot.hidden ? "eye" : "eye.slash")
+            Label(bot.hidden ? "Show in Sidebar" : "Hide from Sidebar", systemImage: bot.hidden ? "eye" : "eye.slash")
         }
         Button(role: .destructive) {
             detailsLate = false
@@ -239,19 +275,30 @@ struct BotRow: View {
     @Environment(AppStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    #if os(macOS)
+    /// Grok's sidebar row: a 36 avatar and a 54 tall row, with the name in regular weight.
+    private static let avatar: CGFloat = 36, gap: CGFloat = 8, lineGap: CGFloat = 2, inset: CGFloat = 9
+    private static let nameWeight: Font.Weight = .regular
+    #else
+    private static let avatar: CGFloat = 46, gap: CGFloat = 14, lineGap: CGFloat = 4, inset: CGFloat = 16
+    private static let nameWeight: Font.Weight = .semibold
+    #endif
+
     var body: some View {
         let display = RowDisplay(bot)
         let activity = bot.status == .working ? ActivityLine.text(in: store, botId: bot.id) : nil
-        HStack(spacing: 14) {
-            BotAvatar(bot: bot, size: 46, needsAttention: display.needsAttention, motion: bot.motion)
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: Self.gap) {
+            BotAvatar(bot: bot, size: Self.avatar, needsAttention: display.needsAttention, motion: bot.motion)
+            VStack(alignment: .leading, spacing: Self.lineGap) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(bot.name)
-                        .font(.ui(size: 16, weight: .semibold))
+                        .font(.ui(size: 16, weight: Self.nameWeight))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .layoutPriority(1)
+                    #if os(iOS)
                     BotStatusChip(status: bot.status)
+                    #endif
                     Spacer(minLength: 8)
                     if bot.pinned {
                         Image(systemName: "pin.fill").font(.ui(size: 10)).foregroundStyle(Theme.tertiary)
@@ -263,15 +310,7 @@ struct BotRow: View {
                         .fixedSize()
                 }
                 HStack(spacing: 6) {
-                    Group {
-                        if let activity {
-                            Text(activity).italic()
-                        } else if display.previewIsQuestion {
-                            Text(Image(systemName: "list.bullet.rectangle")) + Text(" ") + Text(display.preview)
-                        } else {
-                            Text(display.preview)
-                        }
-                    }
+                    preview(display, activity: activity)
                     .font(.ui(size: 14))
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
@@ -283,13 +322,41 @@ struct BotRow: View {
                 }
             }
         }
-        .padding(.vertical, 16)
+        .padding(.vertical, Self.inset)
         .animation(.snappy(duration: 0.2), value: display.unreadDot)
         .animation(.snappy(duration: 0.2), value: display.needsAttention)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityValue(display.unreadDot ? "Unread" : "")
     }
+
+    private func preview(_ display: RowDisplay, activity: String?) -> Text {
+        let text = if let activity {
+            Text(activity).italic()
+        } else if display.previewIsQuestion {
+            Text(Image(systemName: "list.bullet.rectangle")) + Text(" ") + Text(display.preview)
+        } else {
+            Text(display.preview)
+        }
+        #if os(macOS)
+        // A sidebar row is too narrow for a pill beside the name, so the status leads the preview line.
+        if let chip = bot.status.chip {
+            return Text(chip).fontWeight(.medium).foregroundStyle(Self.chipColor(bot.status)) + Text(" · ") + text
+        }
+        #endif
+        return text
+    }
+
+    #if os(macOS)
+    /// BotStatusChip's colors.
+    private static func chipColor(_ status: BotStatus) -> Color {
+        switch status {
+        case .awaitingApproval: Theme.attention
+        case .unavailable: AvatarColor.red.color
+        default: Theme.secondary
+        }
+    }
+    #endif
 }
 
 struct ConnectionBanner: View {
@@ -314,9 +381,7 @@ struct ConnectionBanner: View {
                     .foregroundStyle(Theme.secondary)
                 HStack(spacing: 8) {
                     Button("Edit address") { editingAddress = true }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.white)
-                        .foregroundStyle(.black)
+                        .bannerProminent()
                     Button("Pair again") { app.beginPairing() }
                         .buttonStyle(.bordered)
                 }
@@ -348,9 +413,7 @@ struct UnrecognizedBanner: View {
                 .foregroundStyle(Theme.secondary)
             HStack(spacing: 8) {
                 Button("Pair again") { app.beginPairing() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.white)
-                    .foregroundStyle(.black)
+                    .bannerProminent()
                 Button("Retry") { client.retry() }
                     .buttonStyle(.bordered)
             }
@@ -381,6 +444,50 @@ struct UpdateBanner: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+private extension View {
+    /// The banner's main button: a white pill on iOS, the app's accent on the Mac like any default button.
+    func bannerProminent() -> some View {
+        #if os(macOS)
+        buttonStyle(.borderedProminent).tint(.accentColor)
+        #else
+        buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
+        #endif
+    }
+}
+
+/// The account and the plan usage, at the head of either sidebar. On iOS the usage is the centered title.
+/// On the Mac, Settings lives in the app menu and nothing may claim the window's one centered slot, so the initials
+/// show only while proposed facts wait for review, and the usage sits with the sidebar's other buttons.
+struct SidebarAccountItems: ToolbarContent {
+    let name: String
+    let proposals: Int
+    let usage: PlanUsage?
+    let hasUsage: Bool
+    let showSettings: () -> Void
+    let showUsage: () -> Void
+
+    var body: some ToolbarContent {
+        #if os(macOS)
+        if proposals > 0 {
+            InitialsItem(name: name, proposals: proposals, action: showSettings)
+        }
+        if hasUsage {
+            ToolbarItem(placement: .primaryAction) {
+                SessionUsageButton(usage: usage, action: showUsage)
+                    .help("Plan Usage")
+            }
+        }
+        #else
+        InitialsItem(name: name, proposals: proposals, action: showSettings)
+        if hasUsage {
+            ToolbarItem(placement: .principal) {
+                SessionUsageButton(usage: usage, action: showUsage)
+            }
+        }
+        #endif
     }
 }
 
@@ -420,8 +527,44 @@ struct InitialsItem: ToolbarContent {
         .buttonStyle(.plain)
         .accessibilityLabel("Settings")
         .accessibilityValue(proposals > 0 ? "\(proposals) to review in Memory" : "")
+        .help(proposals > 0 ? "Review \(proposals) proposed \(proposals == 1 ? "fact" : "facts") in Settings" : "Settings")
     }
 }
+
+#if os(macOS)
+/// Puts the cursor in the search field of the sidebar on screen, for the Find command.
+struct SidebarSearch {
+    let focus: () -> Void
+}
+
+extension FocusedValues {
+    @Entry var sidebarSearch: SidebarSearch?
+}
+
+/// The system draws a sidebar row's selection but nothing under the pointer, so an unselected row gets a quiet fill.
+private struct SidebarHover: ViewModifier {
+    let selected: Bool
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                withAnimation(.easeOut(duration: 0.14)) { hovering = inside }
+            }
+            .listRowBackground(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.primary.opacity(hovering && !selected ? 0.06 : 0))
+                    .padding(.horizontal, 10)
+            )
+    }
+}
+
+extension View {
+    func sidebarHover(selected: Bool) -> some View {
+        modifier(SidebarHover(selected: selected))
+    }
+}
+#endif
 
 /// Splits the search and + buttons into two glass circles on iOS 26.
 struct ToolbarSpacerIfAvailable: ToolbarContent {

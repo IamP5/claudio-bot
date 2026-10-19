@@ -50,9 +50,15 @@ struct SessionRowView: View, Equatable {
                 }
             }
         }
+        #if os(macOS)
+        // A sidebar row on the Mac, sized for the pointer rather than a finger.
+        .padding(.vertical, 5)
+        .padding(.leading, CGFloat(depth) * indent)
+        #else
         .padding(.vertical, accessible ? 10 : 11)
         .padding(.leading, CGFloat(depth) * indent)
         .frame(minHeight: 44)
+        #endif
         .overlay(alignment: .leading) {
             if depth > 0 {
                 IndentGuide(isLast: isLast)

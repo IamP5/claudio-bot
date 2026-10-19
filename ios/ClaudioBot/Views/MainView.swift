@@ -6,6 +6,16 @@ struct MainView: View {
     @Environment(Router.self) private var router
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #if os(macOS)
+    @State private var windowWidth: CGFloat = 0
+    @State private var sidebarWidth: CGFloat = 0
+    /// The sidebar's visibility before the profile hid it to make room, to give back when the profile closes.
+    @State private var columnsBeforeProfile: NavigationSplitViewVisibility?
+    /// The split view lays the chat out no narrower than this beside an inspector (measured), and opening the
+    /// profile neither grows the window nor hides the sidebar on its own: the columns run past the window's edges.
+    private static let chatMinimum: CGFloat = 470
+    private static let profileWidth: CGFloat = 320
+    #endif
 
     /// Whether each bot has an open question. A bot that gains one buzzes; bots arriving in a snapshot do not.
     private var asking: [BotID: Bool] {
@@ -24,6 +34,7 @@ struct MainView: View {
             SidebarRoot()
                 #if os(macOS)
                 .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 400)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { sidebarWidth = $0 }
                 #else
                 .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 400)
                 #endif
@@ -55,6 +66,11 @@ struct MainView: View {
             .animation(.snappy, value: inspectorBot)
             #endif
         }
+        #if os(macOS)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth = $0 }
+        .onChange(of: windowWidth) { makeRoomForProfile() }
+        .onChange(of: inspectorBot != nil, initial: true) { makeRoomForProfile() }
+        #endif
         .sheet(isPresented: $router.showingNewChat) { NewChatView() }
         .sheet(item: $router.newSession) { NewSessionSheet(projectId: $0.projectId) }
         #if os(iOS)
@@ -65,6 +81,20 @@ struct MainView: View {
             new.contains { id, asks in asks && old[id] == false }
         }
     }
+
+    #if os(macOS)
+    /// Grok Bot's rule: a profile with no room beside the chat hides the sidebar, which comes back when it closes.
+    private func makeRoomForProfile() {
+        guard windowWidth > 0 else { return }
+        if inspectorBot == nil {
+            if let columns = columnsBeforeProfile { router.columns = columns }
+            columnsBeforeProfile = nil
+        } else if router.columns != .detailOnly, windowWidth < sidebarWidth + Self.chatMinimum + Self.profileWidth {
+            columnsBeforeProfile = router.columns
+            router.columns = .detailOnly
+        }
+    }
+    #endif
 }
 
 /// The chat or session a window shows, with the screens pushed over it. The main window puts it beside the sidebar;

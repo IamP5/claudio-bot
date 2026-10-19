@@ -3,7 +3,8 @@ import Foundation
 
 /// `-demo` fills the store with sample bots through the reducer, without a bridge.
 /// `-demoScreen home|newchat|chat|profile|links|library|file|agent|digest|engineer|factory|pair|settings|routine|approval`
-/// opens a screen directly for screenshots. `mention|chip|command` open a chat with the composer mid-sentence, and
+/// opens a screen directly for screenshots, and `engineerprofile` engineer's chat with the profile beside it.
+/// `mention|chip|command` open a chat with the composer mid-sentence, and
 /// `group|groupprofile|newgroup|botexchange` the group and bot exchange screens. `usage` opens Plan usage over the bot list,
 /// `usagehot` with the session near its limit and `usageoff` with no plan limits to read. The pairing and connection states have their own:
 /// `pairconfirm|outdated` (unpaired), `confirm|unrecognized|error|oldbridge` (paired). Sessions: `sessions` (the sidebar),
@@ -58,6 +59,9 @@ enum Demo {
             router.showingInspector = true
         case "digest": router.selection = .bot(BotID("news"))
         case "engineer": router.selection = .bot(BotID("engineer"))
+        case "engineerprofile":
+            router.selection = .bot(BotID("engineer"))
+            router.showingInspector = true
         case "factory": router.selection = .bot(BotID("maker"))
         case "profile":
             router.selection = .bot(BotID("claude"))

@@ -88,11 +88,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 }
 
 /// Unpaired: the welcome screen, or the shared pairing form for another Mac. Paired: the shared RootView with the
-/// iPad layout (list selection, the profile in a column beside the chat). A window too narrow for that column gets
-/// the iPhone layout instead, where the profile is pushed over the chat.
+/// iPad layout: list selection, and the profile in an inspector beside the chat.
 private struct MacRoot: View {
-    static let profileColumnWidth: CGFloat = 1100
-    @State private var wide = true
     @State private var anotherMac = false
     @AppStorage(Editor.preferenceKey) private var editor = ""
     @Environment(AppStore.self) private var store
@@ -117,12 +114,11 @@ private struct MacRoot: View {
                     }
             }
         }
-        .environment(\.horizontalSizeClass, wide ? .regular : .compact)
+        .environment(\.horizontalSizeClass, .regular)
         .environment(\.localOpener, BridgePlace(client.pairing) == .thisMac ? LocalOpener.installed(editor: Editor.preferred(editor)) : nil)
         .textFieldStyle(.plain)
         // The bot pill in the chat's toolbar names the window; a title beside it would say it twice.
         .toolbar(removing: .title)
-        .onGeometryChange(for: Bool.self) { $0.size.width >= Self.profileColumnWidth } action: { wide = $0 }
         // After a revoke the app is back at the welcome screen, and pairs again only on a click.
         .onChange(of: store.connection == .unpaired) { _, unpaired in if unpaired { anotherMac = false } }
         // The phone's Settings sheet is the Settings window here.

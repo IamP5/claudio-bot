@@ -17,7 +17,7 @@ struct MainView: View {
         store.bots.mapValues { $0.question != nil }
     }
 
-    /// iPad only, and only beside a bot's chat. On iPhone the profile is pushed instead.
+    /// Mac and iPad only, and only beside a bot's chat. On iPhone the profile is pushed instead.
     private var inspectorBot: BotID? {
         guard sizeClass == .regular, router.showingInspector, let bot = router.selection?.bot, store.bots[bot] != nil else { return nil }
         return bot
@@ -29,6 +29,17 @@ struct MainView: View {
             SidebarRoot()
                 .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 400)
         } detail: {
+            #if os(macOS)
+            // The profile pushes onto the chat's stack, so it gets no stack of its own: a second stack in the
+            // detail column makes SwiftUI compare the two stacks' paths on the next push, and that traps.
+            DetailStack()
+                .inspector(isPresented: Binding(get: { inspectorBot != nil }, set: { router.showingInspector = $0 })) {
+                    if let id = inspectorBot {
+                        ProfileView(botId: id)
+                            .inspectorColumnWidth(min: 280, ideal: 320, max: 440)
+                    }
+                }
+            #else
             // A plain column rather than .inspector: on iPad portrait the inspector covers and dims the chat.
             HStack(spacing: 0) {
                 DetailStack()
@@ -40,6 +51,7 @@ struct MainView: View {
                 }
             }
             .animation(.snappy, value: inspectorBot)
+            #endif
         }
         .sheet(isPresented: $router.showingNewChat) { NewChatView() }
         .sheet(item: $router.newSession) { NewSessionSheet(projectId: $0.projectId) }

@@ -77,6 +77,11 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     /// Each chat opens in a window of its own, so the View menu has no Show Tab Bar.
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
+        #if DEBUG
+        // A bare `-demo` takes the next `-key` as its value, which leaves that key's value looking like a file to
+        // open, and a launch that opens files presents no window.
+        UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": "NO"])
+        #endif
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

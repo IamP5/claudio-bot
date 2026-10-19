@@ -35,6 +35,9 @@ struct MainView: View {
                 .inspector(isPresented: Binding(get: { inspectorBot != nil }, set: { router.showingInspector = $0 })) {
                     if let id = inspectorBot {
                         ProfileView(botId: id)
+                            // The inspector has a toolbar of its own, so the profile's Pin and Hide menu belongs in
+                            // it, as it does when the profile is pushed.
+                            .environment(\.horizontalSizeClass, .compact)
                             .inspectorColumnWidth(min: 280, ideal: 320, max: 440)
                     }
                 }

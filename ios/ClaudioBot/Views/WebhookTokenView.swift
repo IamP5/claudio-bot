@@ -17,7 +17,7 @@ struct WebhookTokenSection: View {
         if Self.shows(routine, features: store.features) {
             CardSection(
                 title: "Webhook",
-                footer: "Programs on your Mac POST to this address with the token; it does not answer from the phone or the network. The Mac keeps only a hash of the token, so it is shown once, and a new one replaces the old."
+                footer: "Programs on your Mac POST to this address with the token; it does not answer from other devices or the network. The Mac keeps only a hash of the token, so it is shown once, and a new one replaces the old."
             ) {
                 if let fresh = store.webhookToken, fresh.routineId == routine.id {
                     reveal(fresh)

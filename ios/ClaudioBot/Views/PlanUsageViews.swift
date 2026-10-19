@@ -87,7 +87,11 @@ struct PlanUsageSection: View {
                 }
             }
             .disabled(refreshing || store.machine == nil)
+            #if os(macOS)
+            .buttonStyle(.borderless)
+            #endif
             .accessibilityLabel("Refresh plan usage")
+            .help("Refresh Plan Usage")
         }
     }
 
@@ -155,6 +159,7 @@ struct SessionUsageButton: View {
         .buttonStyle(.plain)
         .accessibilityLabel(usage?.session.map { UsageText.spoken($0, now: .now) } ?? "Plan usage")
         .accessibilityHint("Shows your plan's usage limits")
+        .help("Plan Usage")
     }
 
     private var isStale: Bool {
@@ -179,6 +184,18 @@ struct PlanUsageView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        #if os(macOS)
+        MacSheet(title: "Plan usage") {
+            Form {
+                PlanUsageSection(title: "Limits")
+            }
+            .formStyle(.grouped)
+        } buttons: {
+            Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+        }
+        // One fixed size, so the sheet does not jump as the rows load.
+        .frame(width: 420, height: 460)
+        #else
         NavigationStack {
             Form {
                 PlanUsageSection(title: "Limits")
@@ -193,5 +210,6 @@ struct PlanUsageView: View {
             }
         }
         .presentationDetents([.medium, .large])
+        #endif
     }
 }

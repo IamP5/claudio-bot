@@ -15,38 +15,69 @@ struct EditAddressView: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        MacSheet(title: "Bridge address") {
+            form
+                .formStyle(.grouped)
+                .textFieldStyle(.automatic)
+        } buttons: {
+            if trying { ProgressView().controlSize(.small) }
+            Button("Cancel") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .disabled(trying)
+            Button("Connect", action: connect)
+                .keyboardShortcut(.defaultAction)
+                .disabled(isLegacy || trying)
+        }
+        .frame(width: 460, height: 280)
+        .interactiveDismissDisabled(trying)
+        #else
         NavigationStack {
-            Form {
-                Section {
-                    TextField("ws://mac.tailnet.ts.net:7878/ws", text: $text)
-                        .font(.body.monospaced())
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                } footer: {
-                    Text(failure ?? (isLegacy ? Pairing.AddressChange.legacy.localizedDescription : nil) ?? "Your Mac prints its addresses when the bridge starts, and claudiobot doctor shows its Tailscale address. A *.ts.net name works from anywhere your phone runs Tailscale.")
-                        .foregroundStyle(failure == nil && !isLegacy ? Theme.secondary : Theme.danger)
-                }
-            }
-            .scrollContentBackground(.hidden)
-            .background(Theme.background)
-            .navigationTitle("Bridge address")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(trying) }
-                ToolbarItem(placement: .confirmationAction) {
-                    if trying {
-                        ProgressView()
-                    } else {
-                        Button("Connect", action: connect).disabled(isLegacy)
+            form
+                .scrollContentBackground(.hidden)
+                .background(Theme.background)
+                .navigationTitle("Bridge address")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(trying) }
+                    ToolbarItem(placement: .confirmationAction) {
+                        if trying {
+                            ProgressView()
+                        } else {
+                            Button("Connect", action: connect).disabled(isLegacy)
+                        }
                     }
                 }
-            }
-            .onAppear { text = client.pairing?.url.absoluteString ?? "" }
         }
         .presentationDetents([.medium])
         .interactiveDismissDisabled(trying)
+        #endif
     }
+
+    private var form: some View {
+        Form {
+            Section {
+                TextField("ws://mac.tailnet.ts.net:7878/ws", text: $text)
+                    .font(.body.monospaced())
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    #if os(macOS)
+                    .labelsHidden()
+                    #endif
+            } footer: {
+                Text(failure ?? (isLegacy ? Pairing.AddressChange.legacy.localizedDescription : nil) ?? Self.hint)
+                    .foregroundStyle(failure == nil && !isLegacy ? Theme.secondary : Theme.danger)
+            }
+        }
+        .onAppear { text = client.pairing?.url.absoluteString ?? "" }
+    }
+
+    #if os(macOS)
+    private static let hint = "The bridge's Mac prints its addresses when the bridge starts, and claudiobot doctor shows its Tailscale address. A *.ts.net name works from anywhere this Mac runs Tailscale."
+    #else
+    private static let hint = "Your Mac prints its addresses when the bridge starts, and claudiobot doctor shows its Tailscale address. A *.ts.net name works from anywhere your phone runs Tailscale."
+    #endif
 
     private func connect() {
         let url: URL

@@ -25,13 +25,8 @@ struct ProfileView: View {
     var body: some View {
         if let bot = store.bots[botId] {
             ScrollView {
-                VStack(spacing: 20) {
-                    BotAvatar(bot: bot, size: 96, needsAttention: bot.question != nil, motion: bot.motion)
-                        .id(bot.avatar)
-                        .transition(reduceMotion ? .opacity : .scale(scale: 0.85).combined(with: .opacity))
-                        .animation(.snappy(duration: 0.25), value: bot.avatar)
-                        .padding(.top, 8)
-                    nameCard(bot)
+                VStack(spacing: ProfileMetrics.stackSpacing) {
+                    header(bot)
                     if bot.isGroup {
                         GroupDetails(group: bot)
                     } else {
@@ -45,12 +40,16 @@ struct ProfileView: View {
                 .frame(maxWidth: .infinity)
             }
             .scrollDismissesKeyboard(.interactively)
+            #if os(macOS)
+            // The window's toolbar floats over the inspector column; a hard edge keeps scrolled rows from showing through it.
+            .scrollEdgeEffectStyle(.hard, for: .top)
+            #endif
             .background(Theme.background)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // On iPad the profile sits beside the chat, whose own menu already fills this slot.
                 if sizeClass == .compact {
-                    ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarItem(placement: Self.menuPlacement) {
                         Menu {
                             Button {
                                 client.send(.updateBot(botId: botId, patch: BotPatch(pinned: !bot.pinned)))
@@ -60,12 +59,13 @@ struct ProfileView: View {
                             Button {
                                 client.send(.updateBot(botId: botId, patch: BotPatch(hidden: !bot.hidden)))
                             } label: {
-                                Label(bot.hidden ? "Show in sidebar" : "Hide from sidebar", systemImage: bot.hidden ? "eye" : "eye.slash")
+                                Label(bot.hidden ? Self.showLabel : Self.hideLabel, systemImage: bot.hidden ? "eye" : "eye.slash")
                             }
                         } label: {
                             Image(systemName: "ellipsis")
                         }
                         .accessibilityLabel("More")
+                        .help("More")
                     }
                 }
             }
@@ -77,6 +77,57 @@ struct ProfileView: View {
             .onChange(of: bot.name) { _, new in if !editing { name = new } }
             .onChange(of: bot.title) { _, new in if !editing { label = new ?? "" } }
             .onChange(of: editing) { _, now in if !now { commit(bot) } }
+        }
+    }
+
+    #if os(macOS)
+    /// Trailing, where the chat keeps its own menu. `.primaryAction` would put it beside Back.
+    private static let menuPlacement = ToolbarItemPlacement.automatic
+    private static let showLabel = "Show in Sidebar", hideLabel = "Hide from Sidebar"
+    #else
+    private static let menuPlacement = ToolbarItemPlacement.topBarTrailing
+    private static let showLabel = "Show in sidebar", hideLabel = "Hide from sidebar"
+    #endif
+
+    /// The old look leaves and the new one arrives inside a container that animates, so the two cross instead of
+    /// swapping in one frame.
+    private func avatar(_ bot: Bot) -> some View {
+        ZStack {
+            BotAvatar(bot: bot, size: ProfileMetrics.avatar, needsAttention: bot.question != nil, motion: bot.motion)
+                .id(bot.avatar)
+                .transition(reduceMotion ? .opacity : .scale(scale: 0.85).combined(with: .opacity))
+        }
+        .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.25), value: bot.avatar)
+    }
+
+    #if os(macOS)
+    /// Grok Bot's details header: the avatar, then the name and label as quiet fields that edit in place.
+    private func header(_ bot: Bot) -> some View {
+        VStack(spacing: 0) {
+            avatar(bot)
+            TextField("Name", text: $name)
+                .font(.title2.weight(.semibold))
+                .multilineTextAlignment(.center)
+                .textFieldStyle(.plain)
+                .focusEffectDisabled()
+                .focused($editing)
+                .padding(.top, 10)
+            TextField("Add a label", text: $label)
+                .font(.callout)
+                .foregroundStyle(Theme.tertiary)
+                .multilineTextAlignment(.center)
+                .textFieldStyle(.plain)
+                .focusEffectDisabled()
+                .focused($editing)
+                .padding(.top, 2)
+        }
+        .padding(.top, 16)
+    }
+    #else
+    private func header(_ bot: Bot) -> some View {
+        VStack(spacing: 20) {
+            avatar(bot).padding(.top, 8)
+            nameCard(bot)
         }
     }
 
@@ -99,6 +150,7 @@ struct ProfileView: View {
         }
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
+    #endif
 
     private func commit(_ bot: Bot) {
         let newName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -110,11 +162,39 @@ struct ProfileView: View {
         if patch != BotPatch() { client.send(.updateBot(botId: botId, patch: patch)) }
     }
 
+    #if os(macOS)
+    /// Text tabs with a pill behind the selected one, as in Grok Bot's details pane. Every label keeps one weight, so
+    /// selecting a tab never shifts the others. Only the pill moves; the content swaps at once.
+    private var tabBar: some View {
+        HStack(spacing: 2) {
+            ForEach(Tab.allCases, id: \.self) { item in
+                Button { tab = item } label: {
+                    Text(item.rawValue)
+                        .font(.ui(size: 16))
+                        .foregroundStyle(tab == item ? .white : Theme.secondary)
+                        .padding(.horizontal, 12)
+                        .frame(height: 26)
+                        .background {
+                            if tab == item {
+                                Capsule().fill(Theme.card).matchedGeometryEffect(id: "pill", in: tabs)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(tab == item ? .isSelected : [])
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 4)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: tab)
+    }
+    #else
     private var tabBar: some View {
         HStack(spacing: 24) {
             ForEach(Tab.allCases, id: \.self) { item in
                 Button {
-                    withAnimation(.snappy(duration: 0.25)) { tab = item }
+                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) { tab = item }
                 } label: {
                     VStack(spacing: 8) {
                         Text(item.rawValue)
@@ -139,6 +219,7 @@ struct ProfileView: View {
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
         .sensoryFeedback(.selection, trigger: tab)
     }
+    #endif
 
     @ViewBuilder
     private func content(_ bot: Bot) -> some View {
@@ -156,6 +237,29 @@ struct ProfileView: View {
     }
 }
 
+/// The profile's measurements: an iPhone page, or on a Mac the narrow inspector column of Grok Bot's details pane.
+enum ProfileMetrics {
+    #if os(macOS)
+    static let avatar: CGFloat = 64
+    static let stackSpacing: CGFloat = 16
+    static let sectionSpacing: CGFloat = 20
+    static let cardRadius: CGFloat = 12
+    static let buttonRadius: CGFloat = 12
+    static let labelInset: CGFloat = 12
+    static let labelColor = Theme.secondary
+    #else
+    static let avatar: CGFloat = 96
+    static let stackSpacing: CGFloat = 20
+    static let sectionSpacing: CGFloat = 24
+    static let cardRadius: CGFloat = 22
+    static let buttonRadius: CGFloat = 18
+    static let labelInset: CGFloat = 16
+    static let labelColor = Theme.tertiary
+    #endif
+
+    static var card: RoundedRectangle { RoundedRectangle(cornerRadius: cardRadius, style: .continuous) }
+}
+
 struct CardSection<Content: View>: View {
     let title: String
     var footer: String?
@@ -165,15 +269,15 @@ struct CardSection<Content: View>: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.ui(size: 14))
-                .foregroundStyle(Theme.tertiary)
-                .padding(.horizontal, 16)
+                .foregroundStyle(ProfileMetrics.labelColor)
+                .padding(.horizontal, ProfileMetrics.labelInset)
             VStack(spacing: 0) { content }
-                .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .background(Theme.card, in: ProfileMetrics.card)
             if let footer {
                 Text(footer)
                     .font(.ui(size: 13))
                     .foregroundStyle(Theme.tertiary)
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, ProfileMetrics.labelInset)
             }
         }
     }
@@ -205,7 +309,7 @@ private struct InfoTab: View {
     @Environment(Router.self) private var router
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: ProfileMetrics.sectionSpacing) {
             // A bot without routines leads with its look, the way the reference does.
             if bot.routines.isEmpty {
                 character
@@ -248,6 +352,7 @@ private struct InfoTab: View {
                             set: { client.send(.setRoutine(botId: bot.id, routineId: routine.id, enabled: $0)) }
                         ))
                         .labelsHidden()
+                        .toggleStyle(.switch)
                         .tint(AvatarColor.teal.color)
                     }
                     .padding(.horizontal, 16)
@@ -272,48 +377,103 @@ struct AvatarPicker: View {
         client.send(.updateBot(botId: bot.id, patch: BotPatch(avatar: avatar)))
     }
 
+    /// Five shapes and six colors to a row. On a Mac they fit the inspector at its narrowest, 280 wide.
+    private enum Size {
+        #if os(macOS)
+        static let shapeCell: CGFloat = 46, shape: CGFloat = 32, colorCell: CGFloat = 38, color: CGFloat = 24
+        static let inset: CGFloat = 8, top: CGFloat = 14, colorsVertical: CGFloat = 16
+        #else
+        static let shapeCell: CGFloat = 64, shape: CGFloat = 40, colorCell: CGFloat = 54, color: CGFloat = 30
+        static let inset: CGFloat = 12, top: CGFloat = 18, colorsVertical: CGFloat = 22
+        #endif
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            CenteredRows(AvatarShape.allCases, perRow: 5, cell: 64, spacing: 8) { shape in
-                    Button { set(Avatar(shape: shape, color: bot.avatar.color)) } label: {
-                        AvatarBody(shape: shape)
-                            .fill(bot.avatar.color.color)
-                            .frame(width: 40, height: 40)
-                            .padding(5)
-                            .overlay(Circle().strokeBorder(bot.avatar.shape == shape ? Theme.secondary : .clear, lineWidth: 2).padding(-2))
-                    }
-                    .buttonStyle(.pressable)
-                    .accessibilityLabel(shape.rawValue)
-                    .accessibilityAddTraits(bot.avatar.shape == shape ? .isSelected : [])
+            CenteredRows(AvatarShape.allCases, perRow: 5, cell: Size.shapeCell, spacing: 8) { shape in
+                Swatch(name: shape.spokenName, selected: bot.avatar.shape == shape, ringOutset: 2) {
+                    set(Avatar(shape: shape, color: bot.avatar.color))
+                } label: {
+                    AvatarBody(shape: shape)
+                        .fill(bot.avatar.color.color)
+                        .frame(width: Size.shape, height: Size.shape)
+                        .padding(5)
+                }
             }
-            .padding(.top, 18)
-            .padding(.horizontal, 12)
+            .padding(.top, Size.top)
+            .padding(.horizontal, Size.inset)
 
-            CenteredRows(AvatarColor.allCases, perRow: 6, cell: 54, spacing: 8) { color in
-                    Button { set(Avatar(shape: bot.avatar.shape, color: color)) } label: {
-                        Circle()
-                            .fill(color.color)
-                            .frame(width: 30, height: 30)
-                            .padding(4)
-                            .overlay(Circle().strokeBorder(bot.avatar.color == color ? Theme.secondary : .clear, lineWidth: 2))
-                    }
-                    .buttonStyle(.pressable)
-                    .accessibilityLabel(color.rawValue)
-                    .accessibilityAddTraits(bot.avatar.color == color ? .isSelected : [])
+            CenteredRows(AvatarColor.allCases, perRow: 6, cell: Size.colorCell, spacing: 8) { color in
+                Swatch(name: color.rawValue.capitalized, selected: bot.avatar.color == color) {
+                    set(Avatar(shape: bot.avatar.shape, color: color))
+                } label: {
+                    Circle()
+                        .fill(color.color)
+                        .frame(width: Size.color, height: Size.color)
+                        .padding(4)
+                }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 22)
+            .padding(.horizontal, Size.inset)
+            .padding(.vertical, Size.colorsVertical)
 
             Rectangle().fill(Theme.hairline).frame(height: 1).padding(.horizontal, 16)
-            Button("Restore default") { set(.standard) }
-                .font(.ui(size: 16))
-                .foregroundStyle(Theme.link)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
-                .disabled(bot.avatar == .standard)
+            restore
         }
         .animation(.snappy(duration: 0.2), value: bot.avatar)
         .sensoryFeedback(.selection, trigger: bot.avatar)
+    }
+
+    private var restore: some View {
+        Button("Restore default") { set(.standard) }
+            .font(.ui(size: 16))
+            .foregroundStyle(Theme.link)
+            #if os(macOS)
+            // A plain link-colored label, centered under the centered grid, not a tinted button.
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity)
+            .padding(12)
+            #else
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            #endif
+            .disabled(bot.avatar == .standard)
+    }
+}
+
+/// One shape or color in the picker: a ring when chosen, a fainter one under the pointer, and its name as a tooltip.
+private struct Swatch<Label: View>: View {
+    let name: String
+    let selected: Bool
+    var ringOutset: CGFloat = 0
+    let action: () -> Void
+    @ViewBuilder let label: Label
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            label.overlay(
+                Circle()
+                    .strokeBorder(selected ? Theme.secondary : hovering ? Theme.tertiary.opacity(0.6) : .clear, lineWidth: 2)
+                    .padding(-ringOutset)
+            )
+        }
+        .buttonStyle(.pressable)
+        .onHover { hovering = $0 }
+        .help(name)
+        .accessibilityLabel(name)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+private extension AvatarShape {
+    /// What VoiceOver and the tooltip say, rather than the wire name ("star4").
+    var spokenName: String {
+        switch self {
+        case .star4: "Four-point star"
+        case .star6: "Six-point star"
+        case .drop: "Teardrop"
+        default: rawValue.capitalized
+        }
     }
 }
 
@@ -426,7 +586,7 @@ private struct AgentsTab: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .background(Theme.card, in: ProfileMetrics.card)
             }
         } else {
             Loading()
@@ -471,7 +631,7 @@ private struct LinksTab: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .background(Theme.card, in: ProfileMetrics.card)
             }
         } else {
             Loading()

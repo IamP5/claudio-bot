@@ -13,6 +13,12 @@ struct PairingView: View {
 
     private var flow: PairingFlow { app.pairingFlow ?? PairingFlow() }
 
+    #if os(macOS)
+    private static let pairedPeer = "device", unpairedSymbol = "laptopcomputer.slash"
+    #else
+    private static let pairedPeer = "phone", unpairedSymbol = "iphone.slash"
+    #endif
+
     var body: some View {
         ScrollView {
             VStack(spacing: 28) {
@@ -89,12 +95,12 @@ struct PairingView: View {
                 .padding(.top, 24)
             Text("Pair with your Mac")
                 .font(.largeTitle.bold())
-            Text("Your bots live on your Mac. Run `bun run start` in the bridge folder there. It prints a QR code and a pairing code. A phone that is already paired can show one too, under Settings.")
+            Text("Your bots live on your Mac. Run `bun run start` in the bridge folder there. It prints a QR code and a pairing code. A \(Self.pairedPeer) that is already paired can show one too, under Settings.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             if let reason = client.unpairedReason {
-                Label(reason, systemImage: "iphone.slash")
+                Label(reason, systemImage: Self.unpairedSymbol)
                     .font(.footnote)
                     .foregroundStyle(Theme.attention)
                     .multilineTextAlignment(.center)

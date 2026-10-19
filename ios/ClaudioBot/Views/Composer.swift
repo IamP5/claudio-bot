@@ -40,11 +40,11 @@ struct Composer: View {
     #if os(macOS)
     static let control: CGFloat = 28
     static let inset: CGFloat = 8
-    private static let sendWidth = control
+    static let sendWidth = control
     #else
     static let control: CGFloat = 36
     static let inset: CGFloat = 4
-    private static let sendWidth = control + 10
+    static let sendWidth = control + 10
     #endif
     static let field = control + 2 * inset
 

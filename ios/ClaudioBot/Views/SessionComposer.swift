@@ -95,7 +95,7 @@ struct SessionComposer: View {
             .font(.ui(size: showsStop ? 14 : 16, weight: .bold))
             .contentTransition(.symbolEffect(.replace))
             .foregroundStyle(.black)
-            .frame(width: Composer.control + 10, height: Composer.control)
+            .frame(width: Composer.sendWidth, height: Composer.control)
             .background(Color.white, in: Capsule())
         if working && hasText && canStop {
             Menu {

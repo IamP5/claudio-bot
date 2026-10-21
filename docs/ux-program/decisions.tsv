@@ -34,3 +34,5 @@ ts	decision	why
 2026-10-21T09:41:50Z	G7: folded approval cards stop growing at Dynamic Type AX2; the open card scales fully and VoiceOver still reads the command	three folded cards at AX5 push running work off screen, which is finding 077
 2026-10-21T09:41:50Z	G7: "Show the step" tints the held step, not the whole work row	a work row can hold eight steps; tinting the row does not point at the call
 2026-10-21T09:41:50Z	agents use the runner, xcrun simctl and demo launch args for simulator input, never the iOS Simulator MCP tool	that tool asks the user for device access, which blocks an unattended run
+2026-10-21T09:48:37Z	G4: a subagent blocked on an approval card is never marked quiet; a background command is quiet only when the whole session is quiet	approval waits are on the user, not stuck; background commands send no progress, so their own start time would flag every long sleep
+2026-10-21T09:48:37Z	G4: the failure cause gets its own line under the work-run header; live steps stay visible while the header is collapsed	a long cause wraps without pushing counts and clock off screen; every running agent stays labelled (F-SES-080)

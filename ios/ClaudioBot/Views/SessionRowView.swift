@@ -219,8 +219,8 @@ struct PullRequestChip: View {
     }
 }
 
-/// Only a failed copy to the Claude app shows on the row. A pending one is on its way and needs nothing from the
-/// user, and a glyph for it read as work in progress on a session at rest.
+/// Only a failed copy to the Claude app shows on the row, as a word in the attention color. A pending copy needs
+/// nothing from the user, so the row shows nothing for it.
 struct MirrorGlyph: View {
     let mirror: SessionMirror
 

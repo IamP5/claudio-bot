@@ -314,6 +314,17 @@ private func working(_ id: String, since minutesAgo: Double, lastAt lastMinutesA
         #expect(order(index) == ["a", "b"])
     }
 
+    @Test func aHoldLeftBehindByAListThatLeftMidScrollEndsWhenItComesBack() {
+        let index = SessionIndex()
+        index.apply(.list(projects: [project("p1", "demo")], rows: [row("a", minutesAgo: 1), working("b", since: 3)], mirror: .auto), at: at)
+        index.holdOrder(true)
+        index.resort()
+        var asks = row("a", minutesAgo: 0, status: .awaitingInput)
+        asks.lastAt = at
+        index.apply(.changed(rows: [asks], removed: [], projects: []), at: at)
+        #expect(order(index) == ["a", "b"], "after a resort, a status change moves its row again")
+    }
+
     @Test func aListComingOnScreenIsSortedAfresh() {
         let index = SessionIndex()
         index.apply(.list(projects: [project("p1", "demo")], rows: [row("a", minutesAgo: 5), row("b", minutesAgo: 1)], mirror: .auto), at: at)
@@ -349,9 +360,10 @@ private func working(_ id: String, since minutesAgo: Double, lastAt lastMinutesA
     @Test func theProjectHeaderCountsEveryRowAndWhatRunsOrWaits() {
         let rows = [row("a"), row("b", parent: "a"), row("c", status: .working), row("d", status: .working), row("e", status: .awaitingApproval)]
         let tally = SectionTally(rows)
-        #expect(tally.shown(.live) == "5 · 2 working · 1 needs you")
-        #expect(tally.spoken(.live) == "5 sessions, 2 working, 1 needs you")
-        #expect(tally.shown(.asOf(at)) == "5 · 1 needs you", "offline the working count is left out")
+        let nbsp = "\u{00A0}"
+        #expect(tally.shown(.live) == "5 · 2\(nbsp)working · 1\(nbsp)needs\(nbsp)you", "a wrapped header never splits a count from its words")
+        #expect(tally.spoken(.live) == "5 sessions, 2\(nbsp)working, 1\(nbsp)needs\(nbsp)you")
+        #expect(tally.shown(.asOf(at)) == "5 · 1\(nbsp)needs\(nbsp)you", "offline the working count is left out")
         #expect(SectionTally([row("a")]).spoken(.live) == "1 session")
     }
 

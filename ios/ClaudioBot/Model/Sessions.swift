@@ -74,12 +74,13 @@ struct SectionTally: Equatable, Sendable {
         needsYou = rows.count(where: \.needsYou)
     }
 
-    /// Offline the working count is a guess, so it is left out, as the Working chip leaves out its count.
+    /// Offline the working count is a guess, so it is left out, as the Working chip leaves out its count. Each phrase
+    /// holds together with no-break spaces, so a wrapped header never splits "4 working".
     private func parts(_ freshness: ListFreshness) -> [String] {
         [
             freshness == .live && working > 0 ? "\(working) working" : nil,
             needsYou > 0 ? "\(needsYou) \(needsYou == 1 ? "needs" : "need") you" : nil,
-        ].compactMap { $0 }
+        ].compactMap { $0?.replacingOccurrences(of: " ", with: "\u{00A0}") }
     }
 
     /// "12 · 4 working · 1 needs you"
@@ -200,8 +201,9 @@ final class SessionIndex {
         if !hold { reorder { $0.settle(rows) } }
     }
 
-    /// For a list coming on screen, when no row can move under the user.
+    /// For a list coming on screen, when no row can move under the user. A hold the last showing left behind ends here.
     func resort() {
+        holding = false
         reorder { $0.resort(rows) }
     }
 

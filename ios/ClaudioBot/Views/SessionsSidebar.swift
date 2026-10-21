@@ -160,6 +160,8 @@ struct SessionsSidebar: View {
             now = .now
             index.resort()
         }
+        // A list that leaves mid-fling never sees its scroll come to rest.
+        .onDisappear { index.holdOrder(false) }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             now = .now

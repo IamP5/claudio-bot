@@ -3,7 +3,6 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { SDKMessage, Settings } from "@anthropic-ai/claude-agent-sdk";
 import { createActivity } from "./activity";
-import { createAgents } from "./agents";
 import { strictMcp, type UsageRead } from "./claudeCode";
 import { createClock, type Tickable } from "./clock";
 import { commandOf, createCommands, probeCommands, slashName } from "./commands";
@@ -14,7 +13,7 @@ import type { Homes } from "./home";
 import { createLedger, localDay } from "./ledger";
 import { createMemory, writeAtomic } from "./memory";
 import type { Scope } from "./policy";
-import { findProject, projectFolders, projectRoots, type Project } from "./projects";
+import { projectFolders, projectRoots, type Project } from "./projects";
 import {
   PROTOCOL,
   isSessionRequest,
@@ -42,7 +41,10 @@ import type { Push } from "./push";
 import type { Result } from "./result";
 import { gitDirsOf, sandboxFor } from "./sandbox";
 import { scopeFor, type MachineProfile } from "./machine/profile";
-import { newAgentId } from "./machine/wire";
+import { createLocalMachine, createMachines } from "./machine/machines";
+import { placeAgent } from "./machine/place";
+import { createAgentRuntime } from "./machine/runtime";
+import { newAgentId, newIntentId, type Applied } from "./machine/wire";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { createSessions, type Sessions, type SessionsEnv } from "./sessions";
 import { transcriptExists } from "./transcript";
@@ -430,7 +432,7 @@ export function createHub(deps: HubDeps): Hub {
   }
 
   const sessionOf = (actor: Actor): Session | null =>
-    actor.kind === "bot" ? (brains.get(actor.botId) ?? null) : agents.session(actor.agentId);
+    actor.kind === "bot" ? (brains.get(actor.botId) ?? null) : localAgents.session(actor.agentId);
 
   const initiatorNow = (bot: BotRecord): Initiator => brains.get(bot.id)?.current?.initiator ?? system;
 
@@ -454,7 +456,7 @@ export function createHub(deps: HubDeps): Hub {
     const rec = world.agents.get(actor.agentId);
     if (!rec) return;
     deps.log(`envelope ${rec.agent.id} ${input.text.split("\n")[0]}`);
-    agents.deliver(rec, input);
+    localAgents.deliver(rec, input);
   }
 
   /** quiet: the turn called routine_no_update and asked nothing. */
@@ -557,7 +559,7 @@ export function createHub(deps: HubDeps): Hub {
   /** The bot's and its agents' live queries close at their next chance, so the next ones open with fresh options. */
   function reopenFor(botId: BotId, which: "agents" | "all") {
     if (which === "all") brains.get(botId)?.reopen();
-    for (const rec of world.agents.values()) if (rec.agent.botId === botId) agents.session(rec.agent.id)?.reopen();
+    for (const rec of world.agents.values()) if (rec.agent.botId === botId) localAgents.session(rec.agent.id)?.reopen();
   }
 
   const activity = createActivity({ signal: deps.signal, now: clockNow });
@@ -756,7 +758,7 @@ export function createHub(deps: HubDeps): Hub {
         return;
       }
       const rec = world.agents.get(actor.agentId);
-      if (rec) agents.notice(rec, text);
+      if (rec) localAgents.notice(rec, text);
     },
     denied: (actor) => sessionOf(actor)?.denied(),
     notify(bot, reason, id) {
@@ -764,7 +766,7 @@ export function createHub(deps: HubDeps): Hub {
       // The gate posts a card before it records it as open, so the bot frame say() sent did not count it yet.
       if (reason === "card") changed(bot);
     },
-    trusted: (root) => agents.trusted(root),
+    trusted: (root) => localAgents.trusted(root),
     persist: deps.persist,
     auditDir: join(root, "audit"),
     userName,
@@ -782,7 +784,7 @@ export function createHub(deps: HubDeps): Hub {
     now: clockNow,
   });
 
-  const agents = createAgents({
+  const runtime = createAgentRuntime({
     world,
     profile: deps.profile,
     userName,
@@ -811,23 +813,48 @@ export function createHub(deps: HubDeps): Hub {
     idle: (actor) => activity.clear(actor),
     persist: deps.persist,
     now,
-    changed(rec) {
-      trim(rec.messages, archiveOf(rec.agent.botId, rec.agent.id), () => false);
-      deps.broadcast({ type: "agent", agent: agentView(rec.agent), messages: rec.messages });
-      deps.persist();
-      sessions?.agentChanged(rec);
-      poke();
-    },
-    reported(rec, text, by) {
-      const bot = world.bots.get(rec.agent.botId);
-      if (!bot) return;
-      exchange(bot, agentPeer(rec.agent), "received");
-      deliver(botActor(bot.id), { from: "agent", title: rec.agent.title, agentId: rec.agent.id, text, hops: hopsOf(by), origin: rootOf(by) });
-    },
-    note(rec, text) {
-      const bot = world.bots.get(rec.agent.botId);
-      if (bot) note(bot, `{0}: ${text}`, [agentPeer(rec.agent)]);
-    },
+    scan: deps.scan,
+    answer: (botId, cardId, reply) => gate.answer(botId, cardId, reply),
+  });
+  /** The gate's wiring, the clock and boot: what reaches agents in this process only. Commands go through machines. */
+  const localAgents = runtime.local;
+  const machines = createMachines(createLocalMachine(runtime, deps.profile));
+
+  // The runtime shares this World, so each event's record is the one in world.agents.
+  runtime.subscribe((e) => {
+    switch (e.kind) {
+      case "agent": {
+        const rec = world.agents.get(e.agent.id);
+        if (!rec) return;
+        trim(rec.messages, archiveOf(rec.agent.botId, rec.agent.id), () => false);
+        deps.broadcast({ type: "agent", agent: agentView(rec.agent), messages: rec.messages });
+        deps.persist();
+        sessions?.agentChanged(rec);
+        poke();
+        return;
+      }
+      case "report": {
+        const bot = world.bots.get(e.botId);
+        const rec = world.agents.get(e.agentId);
+        if (!bot || !rec) return;
+        exchange(bot, agentPeer(rec.agent), "received");
+        deliver(botActor(bot.id), { from: "agent", title: rec.agent.title, agentId: rec.agent.id, text: e.text, hops: hopsOf(e.by), origin: rootOf(e.by) });
+        return;
+      }
+      case "note": {
+        const bot = world.bots.get(e.botId);
+        const rec = world.agents.get(e.agentId);
+        if (bot && rec) note(bot, `{0}: ${e.text}`, [agentPeer(rec.agent)]);
+        return;
+      }
+      // The local machine shares the hub's gate and ledger, so its cards and usage are already here.
+      case "card":
+      case "usage":
+      case "profile":
+      case "refused":
+      case "snapshot":
+        return;
+    }
   });
 
   /** What the floors protect for a session the phone drives in cwd: the same private paths as for an agent. */
@@ -846,7 +873,8 @@ export function createHub(deps: HubDeps): Hub {
         userName,
         bridgeHome: deps.profile.bridgeHome,
         roots: projectRoots().filter(existsSync).map((r) => realpathSync(r)),
-        agents,
+        agents: localAgents,
+        send: (intent) => machines.self().send(intent),
         decideGate: (botId, cardId, choice) => gate.answer(botId as BotId, cardId, { kind: "permission", choice }),
         ledger,
         claude: deps.claude,
@@ -862,7 +890,7 @@ export function createHub(deps: HubDeps): Hub {
   const connectors = createConnectors({ world, live: (id) => brains.get(id)?.mcp() ?? null, reopen: reopenFor, persist: deps.persist, log: deps.log });
   const webhooks = createWebhooks({ world, scheduler, port: deps.webhookPort, now: clockNow, log: deps.log });
 
-  const allSessions = () => [...brains.values(), ...agents.sessions()];
+  const allSessions = () => [...brains.values(), ...localAgents.sessions()];
   const turns: Tickable = {
     tick: (at) => allSessions().forEach((s) => s.tick(at)),
     nextDeadline: () => earliest(allSessions().map((s) => s.nextDeadline())),
@@ -895,22 +923,42 @@ export function createHub(deps: HubDeps): Hub {
     ask: (botId, a) => gate.ask(botId, a),
 
     async startAgent(botId, a) {
-      const scanned = await deps.scan();
       const bot = owned(botId);
-      const project = findProject(scanned, a.project);
-      if (!project) return `No project "${a.project}". Call list_projects for the names.`;
-      if (a.where === "cloud" && !project.githubRepo) return `${project.name} has no GitHub remote, so start it with where "mac".`;
       const slash = a.slash?.trim().replace(/^\//, "") ?? null;
       if (slash !== null) {
         if (a.where === "cloud") return "slash works for mac agents only. Start it with where \"mac\", or put the request in the prompt.";
         if (slashName(`/${slash}`) !== slash) return "slash is one skill or command name, without spaces, such as code-review.";
         if (commands.hidden(botId, slash)) return `/${slash} changes or ends a Claude Code session, so an agent is not started with it.`;
       }
-      const rec = await agents.start(botId, { ...a, id: newAgentId(), slash, project, botName: bot.name, initiator: initiatorNow(bot), budgetUsd: null });
-      exchange(bot, agentPeer(rec.agent), "sent");
-      if (rec.agent.where === "mac") return `Started agent ${rec.agent.id} on ${project.name}. It reports back to you when its turn ends.`;
-      if (rec.agent.status === "failed") return `The cloud agent failed to start: ${rec.messages.at(-1)?.text}`;
-      return `Started cloud agent ${rec.agent.id}: ${rec.agent.url}\nCloud agents do not report back. Tell ${userName} to follow the link.`;
+      const placed = placeAgent({
+        asked: null,
+        self: machines.self().id,
+        project: a.project,
+        machines: machines.list().map((m) => ({ id: m.id, online: m.status().online, profile: m.profile() })),
+      });
+      if (!placed.ok) return placed.reason;
+      const agentId = newAgentId();
+      const applied = await machines.of(placed.machine)!.send({
+        kind: "agent.start",
+        intentId: newIntentId(),
+        agentId,
+        bot: { id: bot.id, name: bot.name, dailyCapUsd: bot.dailyCapUsd, connectorsOff: [...bot.connectorsOff] },
+        title: a.title,
+        prompt: a.prompt,
+        project: placed.project,
+        where: a.where,
+        isolate: a.isolate,
+        budgetUsd: null,
+        slash,
+        initiator: initiatorNow(bot),
+      });
+      if (!applied.ok) {
+        // The bot may have been deleted while the machine read its projects: that is the tool's error, as owned() makes it.
+        owned(botId);
+        return applied.reason;
+      }
+      exchange(bot, { kind: "agent", id: agentId, title: a.title }, "sent");
+      return applied.reply ?? "";
     },
 
     async messageAgent(botId, a) {
@@ -918,7 +966,8 @@ export function createHub(deps: HubDeps): Hub {
       const rec = world.agents.get(a.agentId as AgentId);
       if (!rec || rec.agent.botId !== botId) return `No agent ${a.agentId} of yours.`;
       exchange(bot, agentPeer(rec.agent), "sent");
-      return agents.message(rec, a.text, initiatorNow(bot));
+      const applied = await machines.self().send({ kind: "agent.message", intentId: newIntentId(), agentId: rec.agent.id, text: a.text, initiator: initiatorNow(bot) });
+      return applied.ok ? (applied.reply ?? "") : applied.reason;
     },
 
     async listProjects() {
@@ -1022,6 +1071,7 @@ export function createHub(deps: HubDeps): Hub {
 
   const error = (message: string): ServerMessage[] => [{ type: "error", message }];
   const replyTo = (r: Result): ServerMessage[] => (r.ok ? [] : error(r.error));
+  const answered = (a: Applied): ServerMessage[] => (a.ok ? [] : error(a.reason));
   const done = (failure: string | null): ServerMessage[] => (failure === null ? [] : error(failure));
 
   /** A deleted bot leaves every group it was in. A group left with too few stays, and says so. */
@@ -1120,15 +1170,10 @@ export function createHub(deps: HubDeps): Hub {
         const rec = world.agents.get(message.agentId);
         return rec ? [{ type: "agent", agent: agentView(rec.agent), messages: rec.messages }] : error("Unknown agent");
       }
-      case "stop_agent": {
-        const rec = world.agents.get(message.agentId);
-        if (!rec) return error("Unknown agent");
-        return (await agents.stop(rec)) ? [] : error("Nothing is running.");
-      }
-      case "remove_worktree": {
-        const rec = world.agents.get(message.agentId);
-        return rec ? replyTo(await agents.removeWorktree(rec)) : error("Unknown agent");
-      }
+      case "stop_agent":
+        return answered(await machines.self().send({ kind: "agent.stop", intentId: newIntentId(), agentId: message.agentId }));
+      case "remove_worktree":
+        return answered(await machines.self().send({ kind: "agent.removeWorktree", intentId: newIntentId(), agentId: message.agentId }));
       case "memory":
         return [{ type: "memory", facts: memory.facts() }];
       case "set_fact":
@@ -1186,7 +1231,7 @@ export function createHub(deps: HubDeps): Hub {
         // A raised cap may lift a daily-cap park at once instead of at the next tick.
         if (message.patch.dailyCapUsd !== undefined) {
           brains.get(bot.id)?.recheck();
-          for (const rec of world.agents.values()) if (rec.agent.botId === bot.id) agents.session(rec.agent.id)?.recheck();
+          for (const rec of world.agents.values()) if (rec.agent.botId === bot.id) localAgents.session(rec.agent.id)?.recheck();
         }
         return [];
       case "mark_unread":
@@ -1203,7 +1248,7 @@ export function createHub(deps: HubDeps): Hub {
         readings.delete(bot.id);
         sending.delete(bot.id);
         commands.forget(bot.id);
-        agents.stopFor(bot.id);
+        localAgents.stopFor(bot.id);
         // Before the agents go: the gate finds the agents' grants through them.
         gate.forgetBot(bot.id);
         const doomed = [...world.agents.values()].filter((rec) => rec.agent.botId === bot.id).map((rec) => rec.agent.id);
@@ -1297,7 +1342,7 @@ export function createHub(deps: HubDeps): Hub {
       for (const bot of world.bots.values()) {
         if (bot.session.pending.length > 0 || bot.session.lifecycle.kind !== "idle") brain(bot);
       }
-      agents.resume();
+      localAgents.resume();
       sessions?.resume();
       webhooks.start();
       void sessions?.start().catch((e) => deps.log(`sessions: the index could not start: ${errorText(e)}`));
@@ -1313,7 +1358,7 @@ export function createHub(deps: HubDeps): Hub {
       webhooks.stop();
       sessions?.stop();
       for (const session of brains.values()) session.close();
-      for (const bot of world.bots.values()) agents.stopFor(bot.id);
+      for (const bot of world.bots.values()) localAgents.stopFor(bot.id);
     },
   };
 }

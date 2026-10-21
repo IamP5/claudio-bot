@@ -2,11 +2,13 @@ import { renameSession, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
-import type { Agents } from "./agents";
 import { createCatalog, type Driven } from "./catalog";
 import type { ClaudeApps } from "./claudeApps";
 import type { Tickable } from "./clock";
 import type { Ledger } from "./ledger";
+import type { Machine } from "./machine/machines";
+import type { LocalAgents } from "./machine/runtime";
+import { newIntentId } from "./machine/wire";
 import { createOwn, newDrive, type OwnDeps } from "./own";
 import type { Scope } from "./policy";
 import { createProjects } from "./projects";
@@ -60,7 +62,10 @@ export type SessionsDeps = SessionsEnv & {
   bridgeHome: string;
   /** The project roots, by realpath: a session under a temp folder lists only when it is under one of these. */
   roots: string[];
-  agents: Pick<Agents, "session" | "direct" | "stop" | "message">;
+  /** The live sessions of the agents in this process, for a thread's status. */
+  agents: Pick<LocalAgents, "session">;
+  /** An intent to the machine that runs the agent: the user's turn, a stop, or a cloud agent's follow-up. */
+  send: Machine["send"];
   /** The gate's answer to one of its cards: an agent's permission card, decided from the agent's thread. */
   decideGate(botId: string, cardId: MessageId, choice: PermissionChoice): Result;
   ledger: Ledger;
@@ -394,12 +399,14 @@ export function createSessions(deps: SessionsDeps): Sessions {
     const w = driverOf(m.sessionId);
     switch (w.kind) {
       case "agent": {
-        if (m.interrupt) await deps.agents.stop(w.rec);
-        const refusal = deps.agents.direct(w.rec, m.text, m.clientId);
-        return refusal === null ? [] : error(refusal);
+        const agentId = w.rec.agent.id;
+        if (m.interrupt) await deps.send({ kind: "agent.stop", intentId: newIntentId(), agentId });
+        const applied = await deps.send({ kind: "agent.direct", intentId: newIntentId(), agentId, text: m.text, clientId: m.clientId });
+        return applied.ok ? [] : error(applied.reason);
       }
       case "cloud": {
-        const said = await deps.agents.message(w.rec, m.text, { kind: "user" });
+        const applied = await deps.send({ kind: "agent.message", intentId: newIntentId(), agentId: w.rec.agent.id, text: m.text, initiator: { kind: "user" } });
+        const said = applied.ok ? (applied.reply ?? "") : applied.reason;
         return said.startsWith("Sent") ? [] : error(said);
       }
       case "own":
@@ -414,7 +421,12 @@ export function createSessions(deps: SessionsDeps): Sessions {
   async function stopTurn(id: SessionId): Promise<ServerMessage[]> {
     const w = driverOf(id);
     if (w.kind === "cloud") return error("A cloud session runs on claude.ai; stop it there.");
-    const stopped = w.kind === "agent" ? await deps.agents.stop(w.rec) : w.kind === "own" ? await drivers.stop(w.rec) : false;
+    const stopped =
+      w.kind === "agent"
+        ? (await deps.send({ kind: "agent.stop", intentId: newIntentId(), agentId: w.rec.agent.id })).ok
+        : w.kind === "own"
+          ? await drivers.stop(w.rec)
+          : false;
     return stopped ? [] : error("Nothing is running.");
   }
 

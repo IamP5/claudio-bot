@@ -63,11 +63,12 @@ function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
     userName: "Alex",
     bridgeHome: join(base, "home"),
     roots: [base],
-    agents: {
-      session: () => null,
-      direct: (rec, text, clientId) => (directs.push({ agentId: rec.agent.id, text, clientId }), null),
-      stop: async () => true,
-      message: async (rec, text) => (directs.push({ agentId: rec.agent.id, text, clientId: "cloud" }), "Sent to the cloud session."),
+    agents: { session: () => null },
+    send: async (i) => {
+      if (i.kind === "agent.direct") directs.push({ agentId: i.agentId, text: i.text, clientId: i.clientId });
+      if (i.kind !== "agent.message") return { ok: true };
+      directs.push({ agentId: i.agentId, text: i.text, clientId: "cloud" });
+      return { ok: true, reply: "Sent to the cloud session." };
     },
     decideGate: (botId, cardId, choice) => (gateDecisions.push({ botId, cardId, choice }), { ok: true }),
     ledger: { add() {}, headroom: () => ({ ok: true, capReached: false }), budgetLeft: () => null, dailyLeft: () => null },

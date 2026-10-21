@@ -150,7 +150,7 @@ type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; tail: Bubble
 type Pushes = { pushed: { id: MessageId; at: number } | null; last: MessageId | null };
 
 /** What hello advertises: the FEATURES this bridge serves. Each new one joins when the hub implements it. */
-const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups", "presence", "session_tasks"];
+const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups", "presence", "session_tasks", "session_unqueue"];
 
 /** A client request about one chat: a bot's, or a group's. */
 type ChatRequest = Extract<ClientMessage, { botId: BotId }>;
@@ -1180,7 +1180,7 @@ export function createHub(deps: HubDeps): Hub {
       case "decide":
         return replyTo(gate.answer(bot.id, message.messageId, { kind: "permission", choice: message.choice }));
       case "stop":
-        return (await brains.get(bot.id)?.interrupt()) ? [] : error("Nothing is running.");
+        return (await brains.get(bot.id)?.interrupt())?.ran ? [] : error("Nothing is running.");
       case "update_bot":
         if (message.patch.members !== undefined) return error("Only a group has members.");
         if (message.patch.name !== undefined && !nameOk(message.patch.name)) return error(BAD_NAME);

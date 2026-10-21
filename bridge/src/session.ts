@@ -188,6 +188,8 @@ export type Event =
   /** What held the queue head's start has gone: a start waiting out its retry goes now. */
   | { kind: "retry" }
   | { kind: "stop" }
+  /** The user withdrew a queued message before it ran. */
+  | { kind: "unqueue"; clientId: string }
   /** Deadlines are due, or a hold may have lifted: a daily-cap park re-checks headroom on every tick. */
   | { kind: "tick" }
   | { kind: "recover" };
@@ -197,7 +199,7 @@ export type Effect =
   | { kind: "end"; pending: Pending; end: TurnEnd }
   | { kind: "interrupt" }
   | { kind: "kill" }
-  | { kind: "note"; text: string };
+  | { kind: "note"; text: string; reason?: NoticeReason };
 
 /** Lives in memory only; a restart starts from freshMemo(). */
 type Memo = {
@@ -481,6 +483,17 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
       }
       break;
     }
+    case "unqueue": {
+      const inFlight = turnOf(s.lifecycle)?.pending;
+      const i = s.pending.findIndex((p) => p.clientId === ev.clientId && p.id !== inFlight);
+      if (i === -1) break;
+      const p = s.pending.splice(i, 1)[0]!;
+      // A held head that goes takes its hold with it; pump holds the next one again if it must.
+      if (i === 0 && (s.lifecycle.kind === "backoff" || s.lifecycle.kind === "parked")) s.lifecycle = { kind: "idle" };
+      end(p, { kind: "dropped" });
+      pump();
+      break;
+    }
     case "tick": {
       if (c.parkedUntil !== null && due(c.parkedUntil)) c.parkedUntil = null;
       const life = s.lifecycle;
@@ -627,11 +640,14 @@ export type Session = Tickable & {
    * Stop: working → stopping, where the gate denies every call; the next result, or the 15 s deadline, ends the turn
    * as stopped. A head waiting in backoff ends as stopped at once. Queued routine fires and bot messages are dropped,
    * with one notice; everything else queued still runs after the stopped turn ends, or when the park lifts. Every
-   * background task of the live query is stopped. Resolves false only when nothing runs, in the background included,
-   * and nothing waits. target "turn" leaves the background tasks running; {task} stops that one task alone and
-   * resolves false when it is not live or Claude Code refuses.
+   * background task of the live query is stopped, and each stop waits up to STOP_TASK_WAIT_MS for Claude Code to take
+   * it. target "turn" leaves the background tasks running; {task} stops that one task alone. ran is false only when
+   * nothing it names runs or waits; refused lists the tasks Claude Code refused to stop, late those it has not
+   * confirmed within the wait.
    */
-  interrupt(target?: StopTarget): Promise<boolean>;
+  interrupt(target?: StopTarget): Promise<StopReport>;
+  /** Withdraws the queued envelope the phone sent under clientId, before it runs. False when none waits. */
+  unqueue(clientId: string): boolean;
   /** What runs on the live query: the foreground turn, a wake turn included, and Claude Code's tasks. */
   activity(): Activity;
   /** The ledger's answer may have changed (update_bot set dailyCapUsd): a daily-cap park asks headroom again now. */
@@ -656,6 +672,21 @@ export type Session = Tickable & {
   readonly current: Pending | null;
   readonly lifecycle: Owned<Lifecycle>;
 };
+
+export type StopReport = { ran: boolean; refused: TaskId[]; late: TaskId[] };
+
+function within<T>(p: Promise<T>, ms: number, late: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(late), ms);
+    void p.then((v) => {
+      clearTimeout(timer);
+      resolve(v);
+    });
+  });
+}
+
+/** How long a Stop waits for Claude Code to stop one task before it reports the task as not stopped. */
+export const STOP_TASK_WAIT_MS = 5_000;
 
 export type SessionSpec = {
   actor: Driver;
@@ -955,7 +986,7 @@ export function createSession(spec: SessionSpec): Session {
       case "kill":
         return closeLive();
       case "note":
-        return guard("note", () => spec.note(e.text));
+        return guard("note", () => spec.note(e.text, e.reason));
     }
   }
 
@@ -1266,7 +1297,8 @@ export function createSession(spec: SessionSpec): Session {
     }
     const turn = answers(m, l) ? current() : null;
     const was = activityKey();
-    if (m.type === "system" && m.subtype === "init") l.cli = { kind: "running", wake: l.ours === true && wakeAhead(l.cli), at: heardAt };
+    // A wake turn keeps the start it was announced with, so a Stop aimed at it still names it once it runs.
+    if (m.type === "system" && m.subtype === "init") l.cli = { kind: "running", wake: l.ours === true && wakeAhead(l.cli), at: l.cli.kind === "due" && l.cli.shown ? l.cli.at : heardAt };
     // Claude Code wakes for a background task that ended or that the bridge stopped, not for one it stopped itself.
     else if (m.type === "system" && m.subtype === "task_notification" && wakes(l.tasks, m.task_id as TaskId, m.status)) {
       l.cli = l.cli.kind === "running" ? { ...l.cli, wake: true } : { kind: "due", until: heardAt + WAKE_WAIT_MS, at: l.cli.kind === "due" ? l.cli.at : heardAt, shown: true };
@@ -1350,7 +1382,7 @@ export function createSession(spec: SessionSpec): Session {
   let recovered: Effect[] | null = transition({ kind: "recover" }, clock());
   const lost = spec.state.background ?? [];
   if (lost.length > 0) {
-    recovered.push({ kind: "note", text: restartStoppedNote(spec.name?.() ?? "Claude Code", lost) });
+    recovered.push({ kind: "note", text: restartStoppedNote(spec.name?.() ?? "Claude Code", lost), reason: "restart" });
     remember([]);
   }
   function tellRecovered() {
@@ -1375,10 +1407,19 @@ export function createSession(spec: SessionSpec): Session {
       dispatch({ kind: "denied" });
     },
     async interrupt(target = "all") {
-      if (closed) return false;
+      const none: StopReport = { ran: false, refused: [], late: [] };
+      if (closed) return none;
       const l = live;
-      if (typeof target === "object") return l !== null && liveTasks(l.tasks).some((t) => t.id === target.task) && stopTask(l, target.task);
-      const stops = (l && target === "all" ? l.background : []).map((t) => stopTask(l!, t.id as TaskId));
+      const stopOne = async (id: TaskId) => ({ id, took: await within<boolean | null>(stopTask(l!, id), STOP_TASK_WAIT_MS, null) });
+      const report = async (ran: boolean, stops: ReturnType<typeof stopOne>[]): Promise<StopReport> => {
+        const done = await Promise.all(stops);
+        return { ran, refused: done.filter((s) => s.took === false).map((s) => s.id), late: done.filter((s) => s.took === null).map((s) => s.id) };
+      };
+      if (typeof target === "object") {
+        if (l === null || !liveTasks(l.tasks).some((t) => t.id === target.task)) return none;
+        return report(true, [stopOne(target.task)]);
+      }
+      const stops = (l && target === "all" ? l.background : []).map((t) => stopOne(t.id as TaskId));
       // A wake turn, running or announced, has no lifecycle turn to stop; only the query can interrupt it.
       const woken = l !== null && l.cli.kind !== "idle" && turnOf(spec.state.lifecycle as Lifecycle) === null;
       if (woken) {
@@ -1390,11 +1431,15 @@ export function createSession(spec: SessionSpec): Session {
       }
       const kind = spec.state.lifecycle.kind;
       const running = kind === "working" || kind === "stopping" || kind === "backoff";
-      if (running || spec.state.pending.length > 0) {
-        dispatch({ kind: "stop" });
-        return true;
-      }
-      return (await Promise.all(stops)).some(Boolean) || woken;
+      const waits = running || spec.state.pending.length > 0;
+      if (waits) dispatch({ kind: "stop" });
+      return report(waits || woken || stops.length > 0, stops);
+    },
+    unqueue(clientId) {
+      const inFlight = turnOf(spec.state.lifecycle as Lifecycle)?.pending;
+      if (closed || !spec.state.pending.some((p) => p.clientId === clientId && p.id !== inFlight)) return false;
+      dispatch({ kind: "unqueue", clientId });
+      return true;
     },
     recheck() {
       dispatch({ kind: "tick" });

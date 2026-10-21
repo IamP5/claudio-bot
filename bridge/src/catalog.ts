@@ -12,7 +12,7 @@ import type { AgentRecord, World } from "./world";
 // diffs go to the sockets watching the list at most every 500 ms.
 
 /** What the bridge's writer says of a session: its status, and while something runs, the row's run fields. */
-export type Driven = { status: SessionStatus; working: boolean } & Pick<SessionRow, "since" | "running" | "activity">;
+export type Driven = { status: SessionStatus; working: boolean } & Pick<SessionRow, "since" | "running" | "activity" | "outcome">;
 
 export type CatalogDeps = {
   projectsDir: string;
@@ -150,6 +150,7 @@ export function createCatalog(deps: CatalogDeps): Catalog {
         ...(driven?.since !== undefined && { since: driven.since }),
         ...(driven?.running !== undefined && { running: driven.running }),
         ...(driven?.activity !== undefined && { activity: driven.activity }),
+        ...(driven?.outcome !== undefined && { outcome: driven.outcome }),
       });
       const p = projects.get(project.id) ?? { id: project.id, name: project.name, path: project.root, githubRepo: project.githubRepo, lastAt: null, canCloud: false };
       if (p.lastAt === null || iso(lastAt) > p.lastAt) p.lastAt = iso(lastAt);

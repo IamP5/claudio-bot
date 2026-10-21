@@ -169,8 +169,9 @@ export type Message =
       detail: string;
       // What "Always" would allow from now on, in words, so that button never surprises.
       always: string;
-      // stopped: the user stopped the session while the card was open, so the call never ran.
-      answer: PermissionChoice | "expired" | "stopped" | null;
+      // stopped: the user stopped the session while the card was open, so the call never ran. closed: Claude Code
+      // exited while it waited, so the call never ran. The app shows an answer it does not know as closed.
+      answer: PermissionChoice | "expired" | "stopped" | "closed" | null;
       expiresAt: string;
     }
   // A run of messages between this bot and one peer, grouped while nothing else is said.
@@ -672,11 +673,12 @@ export type ServerMessage =
 export type PushState = { state: "on" } | { state: "off" } | { state: "failing"; error: string; at: string };
 
 /**
- * The session request an error answers: a stop, a send (its clientId), a full-output fetch (its toolUseId) or a create
- * (its ref). The app treats an unknown kind as no subject.
+ * The session request an error answers: a stop, a send (its clientId), a full-output fetch (its toolUseId), a create
+ * (its ref) or a model or mode change Claude Code refused. The app treats an unknown kind as no subject.
  */
 export type ErrorAbout =
   | { kind: "stop"; sessionId: SessionId }
+  | { kind: "set"; sessionId: SessionId }
   | { kind: "send"; sessionId: SessionId; clientId: string }
   | { kind: "tool"; sessionId: SessionId; toolUseId: string }
   | { kind: "create"; ref: string };

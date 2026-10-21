@@ -206,18 +206,21 @@ type SessionControls = { /* as before */ turn?: { startedAt: string; wake: boole
 type SessionRow = { /* as before */ since?: string; running?: { agents: number; commands: number }; activity?: string;
   outcome?: { kind: "finished" | "failed" | "stopped" | "lost"; text: string; at: string } };
 // SessionItem: permission + stepId?, subagent?; notice + reason?: "stop" | "task" | "restart" | "failure" | "approval"
-// PermissionMessage.answer + "stopped"
+// PermissionMessage.answer + "stopped" (the user stopped what asked) + "closed" (Claude Code exited while it waited)
 // Client: session_stop + target?: "all" | "turn" | { task: TaskId }, turnStartedAt?; session_unqueue { sessionId, clientId }
 // Server: hello + push?; push_state { push: PushState } (a live signal, like usage); error + about?: ErrorAbout
 type PushState = { state: "on" } | { state: "off" } | { state: "failing"; error: string; at: string };
-type ErrorAbout = { kind: "stop"; sessionId } | { kind: "send"; sessionId; clientId } | { kind: "tool"; sessionId; toolUseId } | { kind: "create"; ref };
+type ErrorAbout = { kind: "stop"; sessionId } | { kind: "set"; sessionId } | { kind: "send"; sessionId; clientId } | { kind: "tool"; sessionId; toolUseId } | { kind: "create"; ref };
 ```
 
 Rules:
 - Steps come from the transcript, so they survive a reopen or a restart. Tasks come from the live SDK stream and exist only while a bridge-driven query runs. The app joins them by `SessionTask.stepId` = `ToolStep.id`.
 - With `session_tasks`, `controls.working` means something runs (a turn, a wake turn, or a live task), and Stop follows it. `controls.turn` says whether a turn runs, and queue-versus-send follows it. Without the feature, `working` is the turn alone and `turn` is never sent.
 - A failed full-output fetch is an `error` with `about: { kind: "tool" }`. `session_tool_output.output` stays a string, so an older app never meets a `null` there.
-- Until a bridge serves `session_tasks`, a `session_stop` aimed at `"turn"` or a task is refused with an error, and `session_unqueue` is refused the same way.
+- Until a bridge serves `session_tasks`, a `session_stop` aimed at `"turn"` or a task is refused with an error. `session_unqueue` is its own feature: a bridge without it refuses the request. A second withdrawal of the same message says it was already withdrawn, and both errors carry `about: { kind: "send" }`.
+- How a run ends is recorded on the session's drive in `state.json` with `persist("now")`, so it outlives a bridge restart: `outcome` and `endedTurn` (the row's ending, until a turn of another envelope starts a new run), `cut` (when work was cut off, kept across sends), `stoppedSteps` (the steps of tasks the user stopped), the bridge's own `notices` (the newest 10) and `kept` (prompts of turns that ended without a reply, shown until the transcript has their words). Notices and kept prompts sit where their time falls in a snapshot. Stop closes the turn's open cards as `"stopped"` at once, and a subagent's once Claude Code takes its task's stop. It posts a `reason: "stop"` notice that names what stopped, what Claude Code refused to stop and what it has not confirmed yet; a late stop is named when the task ends. A stop that stopped nothing is no outcome.
+- A transcript step that started before `cut.at` and still reads running reads `cut.state` with `cut.cause` once no turn from before the cut runs: `error` after Claude Code exited, `stopped` after a stop of everything or a bridge restart. Once the session rests (no turn, no task, no other Claude Code busy on it), any step still running reads `stopped`, "It ended without a result". A task the live query still runs keeps its step running.
+- A `session_set` that Claude Code refuses changes nothing the controls report, and answers with `error` and `about: { kind: "set" }`.
 
 ## 4. Bridge modules
 
@@ -298,7 +301,7 @@ export type Own = {
 
 ### 4.3 Runtime decisions
 
-- **One long-lived streaming-input query per driven session.** `session.ts` already is that: a durable inbox, one message per turn, Stop, background-task tracking and idle close. Own sessions reuse it whole, with `idleMs = 10 min` (agents keep 15). Follow-ups **queue**. "Stop and send" (`interrupt: true`) is Stop plus queue, because Stop keeps the user's queued messages. True steering (`priority: "now"` mid-turn) is deferred until a recorded transcript shows how its uuid echoes interact with `session.ts`'s turn matching. Today one message per turn is a guarded invariant.
+- **One long-lived streaming-input query per driven session.** `session.ts` already is that: a durable inbox, one message per turn, Stop, background-task tracking and idle close. Own sessions reuse it whole, with `idleMs = 10 min` (agents keep 15). Follow-ups **queue**. "Stop and send" (`interrupt: true`) stops the turn alone, then queues; background tasks keep running, and Stop keeps the user's queued messages. True steering (`priority: "now"` mid-turn) is deferred until a recorded transcript shows how its uuid echoes interact with `session.ts`'s turn matching. Today one message per turn is a guarded invariant.
 - **Approvals for own sessions are native.** `canUseTool` parks a promise tied to `signal` and posts a `permission` item: once, always (= allow plus the SDK's `suggestions` scoped `session`), deny, never (= deny plus interrupt). `AskUserQuestion` becomes an `ask` item, answered with `updatedInput {questions, answers}`. `ExitPlanMode` becomes a `plan` item: approve → allow + `setPermissionMode(modeBefore)`; reject → deny with "keep planning". A PreToolUse hook applies **only the policy floors**, deny-only. The phone is a remote surface, and the floors are what it must never be talked into. There is no bridge sandbox and no risk table: these are the user's own sessions and must behave as they do in the desktop app. The same id may be continued there, so two regimes on one transcript would be the real surprise. Cards are saved with `persist("now")` when opened, and expire after 2 h (deny + notice). At boot, every open card becomes `expired`, because the query that waited on it died with the bridge.
 - **Agent sessions keep the gate.** The phone's `direct` turn is `initiator: user`, so the agent's attended column applies, inside its sandbox. Its cards stay gate cards. `threads.ts` projects `world.gate.open` cards for the agent into the thread, and the user can answer in either place, first answer wins, as today.
 - **Ledger.** Own sessions write rows with `botId: null` and no cap. Feature 1's plan usage frame is the guard, and the composer shows its chip.

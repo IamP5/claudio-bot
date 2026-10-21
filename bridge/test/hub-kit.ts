@@ -64,8 +64,11 @@ export class FakeQuery {
   readonly stoppedTasks: string[] = [];
   /** Claude Code refuses to stop a task, as when it already ended. */
   refuseStop = false;
+  /** Claude Code takes a stop only when the test lets it go, as a stopped process that resumes late. */
+  holdStop: Promise<void> | null = null;
   async stopTask(id: string) {
     if (this.refuseStop) throw new Error(`no task ${id}`);
+    if (this.holdStop) await this.holdStop;
     this.stoppedTasks.push(id);
   }
   async mcpServerStatus() {
@@ -77,7 +80,10 @@ export class FakeQuery {
   async toggleMcpServer(name: string, enabled: boolean) {
     this.toggles.push(`${name} ${enabled}`);
   }
+  /** Claude Code refuses a mode change. */
+  refuseModes = false;
   async setPermissionMode(mode: string) {
+    if (this.refuseModes) throw new Error(`cannot switch to ${mode}`);
     this.controls.push(`mode ${mode}`);
   }
   async setModel(model?: string) {
@@ -97,6 +103,12 @@ export class FakeQuery {
     this.done = true;
     this.wake?.();
   }
+  private died: Error | null = null;
+  /** Claude Code's process dies under the query, so its stream throws once the queued messages are read. */
+  crash(message: string) {
+    this.died = new Error(message);
+    this.wake?.();
+  }
   async *[Symbol.asyncIterator]() {
     for (;;) {
       const next = this.queue.shift();
@@ -104,6 +116,7 @@ export class FakeQuery {
         yield next;
         continue;
       }
+      if (this.died) throw this.died;
       if (this.done) return;
       await new Promise<void>((resolve) => (this.wake = resolve));
       this.wake = null;

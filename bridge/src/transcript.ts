@@ -755,7 +755,7 @@ const SUMMARY = /^([A-Z][\w ]* ")([\s\S]*?)(" (?:finished|completed|failed|was|i
  * Claude Code quotes a task's description in its summary, and a background command's is the raw command when the model
  * gave none. The quote is masked as prose only when it is the model's own description, whole; what follows it is error text.
  */
-function maskSummary(summary: string, description: string | null): string {
+export function maskSummary(summary: string, description: string | null): string {
   const m = summary.match(SUMMARY);
   if (!m) return maskSecrets(summary);
   return m[1]! + (description !== null && words(m[2]!) === words(description) ? maskProse(m[2]!) : maskSecrets(m[2]!)) + maskSecrets(m[3]!);

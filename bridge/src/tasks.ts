@@ -1,6 +1,7 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { MessageId, SessionControls, SessionRow, SessionTask, TaskId, ToolStep } from "./protocol";
 import { displayName, maskSecrets } from "./text";
+import type { Cut } from "./world";
 
 // The work Claude Code runs on one live query besides the turn: subagents and commands, foreground and background,
 // read from its task stream. background_tasks_changed is the level for background work and wins over the edges
@@ -272,8 +273,12 @@ export function rowRun(a: Activity, card: string | null, call: CallLabel): Pick<
   };
 }
 
-/** How the bridge's live view changes a transcript step: waiting on a card, still running, started when approved. */
-export type StepPatch = { state?: "waiting" | "running"; startedAt?: string };
+/**
+ * How the bridge's live view changes a transcript step: waiting on a card, still running, started when approved.
+ * ended: how a call that reads running, or ok, really ended: the user stopped its task, or denied a call its subagent
+ * asked for.
+ */
+export type StepPatch = { state?: "waiting" | "running"; startedAt?: string; ended?: { state: "stopped" | "denied"; cause: string } };
 
 /**
  * Steps whose work still runs, each live task's own call and the calls of the subagents above it, with the patch that
@@ -294,6 +299,15 @@ export function runningSteps(a: Activity): Map<string, StepPatch> {
 
 /** A transcript step as shown: a waiting card only over a call that reads running, a live task never over a failure. */
 export function patchStep(step: ToolStep, p: StepPatch): ToolStep {
+  if (p.state === undefined && p.ended && step.state === (p.ended.state === "stopped" ? "running" : "ok")) return { ...step, state: p.ended.state, cause: p.ended.cause };
   const state = p.state === "waiting" ? (step.state === "running" ? "waiting" : step.state) : p.state === "running" && step.state === "ok" ? "running" : step.state;
   return { ...step, state, ...(p.startedAt !== undefined && { startedAt: p.startedAt }), ...(state === "running" && step.state === "ok" && { output: null }) };
+}
+
+/** A transcript step as shown once its work was cut off: one that still reads running takes the first cut after its start. */
+export function cutStep(step: ToolStep, cuts: readonly Cut[]): ToolStep {
+  const started = step.startedAt;
+  if (step.state !== "running" || started === undefined) return step;
+  const cut = cuts.filter((c) => started <= c.at).sort((a, b) => a.at.localeCompare(b.at))[0];
+  return cut ? { ...step, state: cut.state, cause: cut.cause, endedAt: step.endedAt ?? cut.at } : step;
 }

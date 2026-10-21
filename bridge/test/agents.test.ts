@@ -1,3 +1,4 @@
+import { profileOf } from "../src/machine/profile";
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -100,6 +101,7 @@ function harness(
   };
   const agents = createAgents({
     world,
+    profile: profileOf({ env: {}, platform: "darwin", name: "Mac", homedir: "/Users/alex", username: "alex" }),
     userName: "Alex",
     model: "claude-sonnet-5-5",
     ledger,

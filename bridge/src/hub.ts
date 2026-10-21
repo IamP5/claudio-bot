@@ -783,6 +783,7 @@ export function createHub(deps: HubDeps): Hub {
 
   const agents = createAgents({
     world,
+    profile: deps.profile,
     userName,
     model: deps.model,
     ledger,

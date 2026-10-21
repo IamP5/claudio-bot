@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var revoking: Device?
     @State private var pairingAnother = false
     @State private var editingAddress = false
+    @State private var addingMachine = false
 
     var body: some View {
         #if os(macOS)
@@ -45,6 +46,8 @@ struct SettingsView: View {
                 }
                 LabeledContent("Bots", value: "\(store.bots.count)")
             }
+
+            MachinesSection { addingMachine = true }
 
             PlanUsageSection()
 
@@ -119,6 +122,12 @@ struct SettingsView: View {
                 #endif
         }
         .sheet(isPresented: $editingAddress) { EditAddressView() }
+        .sheet(isPresented: $addingMachine) {
+            AddMachineView()
+                #if os(macOS)
+                .frame(width: 520, height: 460)
+                #endif
+        }
     }
 
     private var devices: some View {

@@ -190,6 +190,16 @@ final class AppStore {
         id.flatMap { id in machines.first { $0.id == id } }
     }
 
+    /// The name on a machine chip, only when the world has several machines to tell apart.
+    func chipName(_ id: MachineID?) -> String? {
+        hasSeveralMachines ? machine(id)?.name : nil
+    }
+
+    /// A cloud agent runs on claude.ai, so it wears no machine chip even though a machine started it.
+    func chipName(for agent: Agent) -> String? {
+        agent.where == .cloud ? nil : chipName(agent.machine)
+    }
+
     /// Paired devices, pairing codes and Bearer tokens arrived with protocol 3.
     var bridgeManagesDevices: Bool {
         (bridgeProtocol ?? 0) >= 3

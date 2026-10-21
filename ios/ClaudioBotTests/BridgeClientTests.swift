@@ -585,6 +585,28 @@ private func scratchVault() -> PairingVault {
         client.stop()
     }
 
+    @Test func aSocketStillDeliveringFramesIsKeptWhenItsPongIsLate() async throws {
+        let bridge = try FakeBridge(onOpen: { socket in
+            socket.send(hello())
+            socket.goSilent()
+        })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        var timing = quick
+        timing.ping = .milliseconds(200)
+        timing.pong = .milliseconds(300)
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: timing)
+        client.start(pairing)
+        try await eventually("the hello") { client.store.machine != nil }
+
+        for seq in 1...12 {
+            bridge.sockets[0].send(broadcast(seq))
+            try await Task.sleep(for: .milliseconds(100))
+        }
+
+        #expect(bridge.upgrades.count == 1)
+        client.stop()
+    }
+
     @Test func aBridgeThatAcceptsTheSocketButNeverSaysHelloIsTriedAgain() async throws {
         let bridge = try FakeBridge()
         let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))

@@ -286,15 +286,17 @@ final class BridgeClient {
         socket?.cancel(with: .goingAway, reason: nil)
     }
 
-    /// Pings `ws`. A pong that misses `deadline` means the socket died without the phone being told.
+    /// Pings `ws`. With neither the pong nor any frame by `deadline`, the socket died without the phone being told.
+    /// A frame counts because a pong queued behind a busy stream arrives late on a live socket.
     private func probe(_ ws: URLSessionWebSocketTask, within deadline: Duration) {
         let answered = OSAllocatedUnfairLock(initialState: false)
+        let sentAt = Date.now
         ws.sendPing { error in
             if error == nil { answered.withLock { $0 = true } }
         }
         Task { [weak self] in
             try? await Task.sleep(for: deadline)
-            guard let self, socket === ws, !answered.withLock({ $0 }) else { return }
+            guard let self, socket === ws, !answered.withLock({ $0 }), heardAt <= sentAt else { return }
             log.info("no pong within \(deadline); connecting again")
             reconnect()
         }
@@ -454,7 +456,7 @@ final class BridgeClient {
         let watchdog = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(timing.quiet / 9))
-                self?.checkQuiet()
+                if !Task.isCancelled { self?.checkQuiet() }
             }
         }
         defer {

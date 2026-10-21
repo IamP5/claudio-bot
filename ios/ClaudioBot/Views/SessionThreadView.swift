@@ -35,6 +35,8 @@ struct SessionThreadView: View {
     /// The row on top when an earlier page was asked for. Once the page lands above it, the list scrolls back to it,
     /// so reading continues where it was.
     @State private var pageAnchor: ItemID?
+    /// The step a card's "Show the step" scrolled to, tinted for a moment so the eye lands on it.
+    @State private var revealed: HeldStep?
     @State private var renaming = false
     @State private var newTitle = ""
 
@@ -119,6 +121,8 @@ struct SessionThreadView: View {
             .frame(maxWidth: Self.column)
             .frame(maxWidth: .infinity)
         }
+        .environment(\.revealStep) { reveal($0, in: model) }
+        .environment(\.revealedStep, revealed?.step.id)
         .scrollPosition($position)
         .defaultScrollAnchor(.bottom)
         #if os(macOS)
@@ -133,7 +137,12 @@ struct SessionThreadView: View {
             }
         }
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height + $0.contentInsets.bottom } action: { _, _ in
-            if followsBottom { position.scrollTo(edge: .bottom) }
+            if followsBottom {
+                position.scrollTo(edge: .bottom)
+            } else if let revealed {
+                // The run opens over a pass or two at large text sizes, and the bottom anchor moves the rows each time.
+                position.scrollTo(id: revealed.step.id, anchor: .center)
+            }
         }
         .onScrollGeometryChange(for: Bool.self) { Self.bottomGap($0) > 200 } action: { _, far in
             withAnimation(.easeOut(duration: 0.2)) { showsJump = far }
@@ -227,6 +236,24 @@ struct SessionThreadView: View {
         guard let cursor = model.requestEarlier() else { return }
         pageAnchor = model.rows.first?.id
         client.send(.sessionPage(sessionId: sessionId, before: cursor))
+    }
+
+    /// Opens the fold that hides the step's work run and marks the step, which opens the run. On the next pass it scrolls
+    /// to the step, and again whenever the rows grow while the step is marked. The mark fades after two seconds.
+    private func reveal(_ held: HeldStep, in model: ThreadModel) {
+        let fold = model.rows.first { row in
+            if case let .fold(_, items, false) = row { items.contains { $0.id == held.row } } else { false }
+        }
+        if let fold { model.toggle(fold: fold.id) }
+        followsBottom = false
+        revealed = held
+        DispatchQueue.main.async {
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.35)) { position.scrollTo(id: held.step.id, anchor: .center) }
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            if revealed == held { withAnimation(.easeOut(duration: 0.4)) { revealed = nil } }
+        }
     }
 
     private static func bottomGap(_ geometry: ScrollGeometry) -> CGFloat {

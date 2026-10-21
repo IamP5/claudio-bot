@@ -281,6 +281,63 @@ extension PermissionChoice {
     var allows: Bool { self == .once || self == .always }
 }
 
+/// What a closed permission card says happened. A green check only when the call was allowed and nothing cut it short.
+/// short: the same in a few words, for the one line an answered card folds to.
+struct PermissionOutcome: Equatable {
+    enum Tone: Equatable { case allowed, refused, failed, ended }
+
+    let short: String
+    let text: String
+    let tone: Tone
+
+    var glyph: String {
+        switch tone {
+        case .allowed: "checkmark.circle.fill"
+        case .refused: "xmark.circle.fill"
+        case .failed: "exclamationmark.circle.fill"
+        case .ended: "stop.circle"
+        }
+    }
+}
+
+extension PermissionAnswer {
+    /// step: the call the card held back, in a session's thread. Its end can undo what "Allowed" promised.
+    func outcome(step: ToolStep? = nil) -> PermissionOutcome {
+        switch self {
+        case .chose(let choice) where choice.allows:
+            switch step?.state {
+            case .stopped?:
+                PermissionOutcome(
+                    short: "\(choice.outcome), then stopped",
+                    text: "\(choice.outcome). \(step?.cause ?? "Stopped") before it finished.", tone: .ended
+                )
+            case .error?:
+                PermissionOutcome(short: "\(choice.outcome), then failed", text: "\(choice.outcome). It failed.", tone: .failed)
+            default:
+                PermissionOutcome(short: choice.outcome, text: choice.outcome, tone: .allowed)
+            }
+        case .chose(let choice):
+            PermissionOutcome(short: choice.outcome, text: choice.outcome, tone: .refused)
+        case .expired:
+            PermissionOutcome(short: "Expired", text: "Expired. It did not run.", tone: .ended)
+        case .stopped:
+            PermissionOutcome(short: "Stopped by you", text: "Stopped by you. It did not run.", tone: .ended)
+        case .closed:
+            PermissionOutcome(short: "Closed", text: "Closed. It did not run.", tone: .ended)
+        }
+    }
+}
+
+extension SessionPermission {
+    /// "sleeper two wants to run Bash" when a subagent asked, else the card's own label.
+    var title: String {
+        subagent.map { "\($0) wants to run \(card.tool)" } ?? card.label
+    }
+
+    /// Who asked, in the one line a folded card keeps: the subagent, or the tool when the main thread asked.
+    var asker: String { subagent ?? card.tool }
+}
+
 extension RunStatus {
     var title: String {
         switch self {

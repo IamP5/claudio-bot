@@ -370,6 +370,9 @@ extension EnvironmentValues {
     @Entry var revealStep: (@MainActor @Sendable (HeldStep) -> Void)? = nil
     /// The step id "Show the step" marked. Its work run opens and tints it.
     @Entry var revealedStep: String? = nil
+    /// Stops a session's thread following its bottom, so a card that opens grows down from where it was tapped instead
+    /// of pushing its header off the top.
+    @Entry var opensInPlace: (@MainActor @Sendable () -> Void)? = nil
 }
 
 /// A permission card in a session's thread. It names the subagent that asked and links to the step it holds back.
@@ -381,6 +384,7 @@ struct SessionPermissionCard: View {
 
     @State private var opened = false
     @Environment(\.revealStep) private var revealStep
+    @Environment(\.opensInPlace) private var opensInPlace
 
     var body: some View {
         let card = permission.card
@@ -388,7 +392,10 @@ struct SessionPermissionCard: View {
         TimelineView(.deadline(card.expiresAt)) { _ in
             Settling(card.answer(at: .now)) { answer in
                 if let answer, !opened {
-                    ClosedApprovalRow(permission: permission, outcome: answer.outcome(step: held?.step)) { opened = true }
+                    ClosedApprovalRow(permission: permission, outcome: answer.outcome(step: held?.step)) {
+                        opensInPlace?()
+                        opened = true
+                    }
                 } else {
                     PermissionCardBody(
                         messageId: permission.cardId, card: card, title: permission.title, answer: answer,
@@ -404,8 +411,8 @@ struct SessionPermissionCard: View {
     }
 }
 
-/// An answered card folded to its outcome and command: "sleeper two · Allowed once" over "perl -e 'sleep 30'". At the
-/// accessibility sizes the command and the chevron wait for a tap, and the text stops growing at the second
+/// An answered card folded to its outcome and command: "sleeper two · Allowed once" over "perl -e 'sleep 30'", or
+/// "Bash · Allowed once" when the main thread asked. At the accessibility sizes the command and the chevron wait for a tap, and the text stops growing at the second
 /// accessibility size: past that, three folded cards alone fill the screen and push the running work off it.
 private struct ClosedApprovalRow: View {
     let permission: SessionPermission
@@ -419,7 +426,7 @@ private struct ClosedApprovalRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 glyph
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(permission.subagent.map { "\($0) · " } ?? "")\(outcome.short)")
+                    Text("\(permission.asker) · \(outcome.short)")
                         .foregroundStyle(Theme.secondary)
                         .lineLimit(3)
                     if !typeSize.isAccessibilitySize {
@@ -442,6 +449,7 @@ private struct ClosedApprovalRow: View {
         .buttonStyle(.pressable)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isButton)
         .accessibilityLabel([permission.title, outcome.text, permission.card.detail].map { $0.hasSuffix(".") ? String($0.dropLast()) : $0 }.joined(separator: ". "))
         .accessibilityValue("Collapsed")
         .accessibilityHint("Shows the whole request")

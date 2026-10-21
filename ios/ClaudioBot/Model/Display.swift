@@ -333,6 +333,9 @@ extension SessionPermission {
     var title: String {
         subagent.map { "\($0) wants to run \(card.tool)" } ?? card.label
     }
+
+    /// Who asked, in the one line a folded card keeps: the subagent, or the tool when the main thread asked.
+    var asker: String { subagent ?? card.tool }
 }
 
 extension RunStatus {

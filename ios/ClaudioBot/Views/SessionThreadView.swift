@@ -123,8 +123,12 @@ struct SessionThreadView: View {
         }
         .environment(\.revealStep) { reveal($0, in: model) }
         .environment(\.revealedStep, revealed?.step.id)
+        .environment(\.opensInPlace) { followsBottom = false }
         .scrollPosition($position)
-        .defaultScrollAnchor(.bottom)
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .defaultScrollAnchor(.bottom, for: .alignment)
+        // Off the bottom, a row that grows keeps its top where it was: an opened card's header stays under the finger.
+        .defaultScrollAnchor(followsBottom ? .bottom : .top, for: .sizeChanges)
         #if os(macOS)
         // The chips and the field float apart. A hard edge keeps the transcript from showing between them.
         .scrollEdgeEffectStyle(.hard, for: .bottom)

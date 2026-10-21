@@ -33,6 +33,7 @@ private func step(_ state: ToolStepState, cause: String? = nil) -> ToolStep {
         let items = try runningThread()
         let card = try permission("m23", in: items)
         #expect(card.title == "sleeper two wants to run Bash")
+        #expect(card.asker == "sleeper two")
 
         let held = try #require(HeldStep.find(card.stepId, in: items))
         #expect(held.row == ItemID("toolu_01Ac1"))
@@ -50,7 +51,9 @@ private func step(_ state: ToolStepState, cause: String? = nil) -> ToolStep {
             from: nil, tool: "Bash", label: "Delete node_modules and reinstall", detail: "rm -rf node_modules",
             always: "rm -rf node_modules", answer: nil, expiresAt: .now
         )
-        #expect(SessionPermission(cardId: MessageID("c"), at: .now, card: card).title == "Delete node_modules and reinstall")
+        let permission = SessionPermission(cardId: MessageID("c"), at: .now, card: card)
+        #expect(permission.title == "Delete node_modules and reinstall")
+        #expect(permission.asker == "Bash")
     }
 
     @Test func aCardStoppedBeforeAnyoneAnsweredSaysSoAndIsNotGreen() throws {

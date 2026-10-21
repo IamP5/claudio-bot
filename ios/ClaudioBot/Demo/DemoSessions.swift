@@ -174,8 +174,8 @@ enum DemoSessions {
         ]
     }
 
-    /// Four subagents, each asking to run a command: one allowed, one allowed and then stopped, one stopped before
-    /// anyone answered, and one still waiting.
+    /// The main thread writes a note, then four subagents each ask to run a command: one allowed, one allowed and then
+    /// stopped, one stopped before anyone answered, and one still waiting.
     static func sleeperItems() -> [SessionItem] {
         func sleeper(_ n: Int, _ name: String, _ state: ToolStepState, cause: String? = nil) -> ToolStep {
             ToolStep(id: "sl-a\(n)", tool: "Agent", label: name, state: state, diff: nil, output: nil, detail: "general-purpose",
@@ -195,6 +195,12 @@ enum DemoSessions {
         }
         return [
             user("sl-u1", 2, "Start three subagents. Each one runs perl -e 'sleep 30' and reports back."),
+            .permission(id: ItemID("sl-p0"), at: ago(1.9), permission: SessionPermission(
+                cardId: MessageID("card-sleeper-0"), at: ago(1.9), card: PermissionCard(
+                    from: nil, tool: "Write", label: "Write notes/sleepers.md", detail: "notes/sleepers.md",
+                    always: "edits in solta-o-som, for this session", answer: .chose(.once), expiresAt: .now + 2 * 3600
+                )
+            )),
             work("sl-w1", 1.8, [
                 sleeper(1, "sleeper one", .running), sleeper(2, "sleeper two", .running),
                 sleeper(3, "sleeper three", .stopped, cause: "Stopped by you"), sleeper(4, "sleeper four", .stopped, cause: "Stopped by you"),

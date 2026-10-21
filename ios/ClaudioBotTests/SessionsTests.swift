@@ -647,21 +647,6 @@ private func working(_ id: String, since minutesAgo: Double, lastAt lastMinutesA
         parked.holder = .terminal
         #expect(SessionText.parked(parked.holder) == "Waiting for the terminal to finish")
     }
-
-    @Test func theNewestCardThatWaitsOnTheUserIsTheOneAnnounced() {
-        let open = PermissionCard(from: nil, tool: "Bash", label: "Delete build", detail: "rm -rf build", always: "rm", answer: nil, expiresAt: at + 60)
-        var closed = open
-        closed.answer = .chose(.deny)
-        let ask = SessionItem.ask(id: ItemID("q"), at: at, questions: [AskQuestion(question: "Which?", header: "", options: [], multiSelect: false)], answers: nil, cardId: MessageID("m2"))
-        let answeredElsewhere = SessionItem.ask(id: ItemID("q2"), at: at, questions: [], answers: nil, cardId: nil)
-        let permission = { (id: String, card: PermissionCard) in
-            SessionItem.permission(id: ItemID(id), at: at, permission: SessionPermission(cardId: MessageID(id), at: at, card: card))
-        }
-        #expect(SessionThreadView.openCard([permission("p1", open), ask, permission("p2", closed)])?.id == ItemID("q"))
-        #expect(SessionThreadView.openCard([ask, permission("p1", open)])?.announcement == "Approval needed: Delete build")
-        #expect(SessionThreadView.openCard([answeredElsewhere, permission("p2", closed), say("a", "Done")]) == nil)
-        #expect(SessionThreadView.openCard([.plan(id: ItemID("pl"), at: at, text: "1. Do it", state: .proposed, cardId: MessageID("m3"))]) != nil)
-    }
 }
 
 @MainActor

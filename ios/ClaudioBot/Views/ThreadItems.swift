@@ -817,10 +817,9 @@ struct CompactionDivider: View {
     }
 }
 
-/// The only view that reads the live text, so a delta redraws this and nothing else.
+/// The only view that reads the live text, so a delta redraws this and nothing else. What runs is the status line's.
 struct StreamingTail: View {
     let live: LiveText
-    let working: Bool
 
     var body: some View {
         if live.itemId != nil, !live.text.isEmpty {
@@ -829,17 +828,8 @@ struct StreamingTail: View {
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 14)
-                .accessibilityLabel("Writing: \(live.text)")
-        } else if working {
-            HStack(spacing: 8) {
-                WorkingRing(size: 12)
-                Text("Working…")
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.secondary)
-                    .shimmering()
-            }
-            .padding(.top, 14)
-            .accessibilityElement(children: .combine)
+                // A label of the growing text would be read again on every delta. The reply reads in full once it lands.
+                .accessibilityLabel("Claude is replying")
         }
     }
 }

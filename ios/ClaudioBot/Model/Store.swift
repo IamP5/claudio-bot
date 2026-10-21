@@ -136,6 +136,9 @@ final class AppStore {
     private(set) var devices: [Device]?
     /// Device lists heard, so a view sees every reply, even one that repeats the list.
     private(set) var devicesHeard = 0
+    /// When the bridge's last frame was applied, by this device's clock. A screen that loses the Mac shows what it
+    /// knew then. Not observed: it changes with every frame, and only a change of connection asks for it.
+    @ObservationIgnored private(set) var heardAt: Date?
     /// The newest code for pairing another phone.
     private(set) var pairCode: PairCode?
     /// From the last hello. Empty for a bridge from before features.
@@ -271,7 +274,8 @@ final class AppStore {
 
     /// The reducer. Returns what the user should be notified about.
     @discardableResult
-    func apply(_ msg: ServerMessage) -> [Alert] {
+    func apply(_ msg: ServerMessage, at now: Date = .now) -> [Alert] {
+        heardAt = now
         switch msg {
         case let .hello(hello):
             connection = .connected(machine: hello.machine)

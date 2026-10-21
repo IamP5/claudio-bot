@@ -97,3 +97,12 @@ test("the mirror is saved 0600 and read back; a file that does not parse starts 
   expect(createMirror({ path, log: (l) => logs.push(l) }).agents()).toEqual([]);
   expect(logs[0]).toContain("starts empty");
 });
+
+test("a snapshot's shortened thread keeps the older messages the mirror already had", () => {
+  const state: MirrorState = { machines: {} };
+  const m = (i: number) => ({ id: `m${i}` as MessageId, at: `2026-10-21T12:00:${String(i).padStart(2, "0")}.000Z`, from: "agent" as const, text: `${i}` });
+  reduce(state, MAC, ev({ kind: "agent", agent: agent("a1"), messages: [m(1), m(2), m(3)] }));
+  const change = reduce(state, MAC, ev({ kind: "snapshot", agents: [{ agent: agent("a1", "waiting"), messages: [m(3), m(4)] }], openCards: [] }));
+  expect(change?.agents[0]!.messages.map((x) => x.text)).toEqual(["1", "2", "3", "4"]);
+  expect(state.machines[MAC]!.agents["a1" as AgentId]!.messages.map((x) => x.text)).toEqual(["1", "2", "3", "4"]);
+});

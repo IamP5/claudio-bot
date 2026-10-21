@@ -47,6 +47,8 @@ export type AgentRuntime = {
 };
 
 const UNKNOWN_AGENT = "Unknown agent";
+/** Each agent's newest messages in a snapshot, so one frame holds every agent; its agent events carry the whole thread. */
+export const SNAPSHOT_MESSAGES = 200;
 
 const ok: Applied = { ok: true };
 const refuse = (reason: string): Applied => ({ ok: false, reason });
@@ -107,7 +109,7 @@ export function createAgentRuntime(deps: RuntimeDeps): AgentRuntime {
   }
 
   function snapshot(): EventBody {
-    const mirror = [...deps.world.agents.values()].map((r) => ({ agent: r.agent, messages: [...r.messages] }));
+    const mirror = [...deps.world.agents.values()].map((r) => ({ agent: r.agent, messages: r.messages.slice(-SNAPSHOT_MESSAGES) }));
     const openCards = deps.world.gate.open.flatMap((c) => {
       if (c.actor.kind !== "agent") return [];
       const message = deps.world.bots.get(c.actor.botId)?.messages.find((m) => m.id === c.cardId);

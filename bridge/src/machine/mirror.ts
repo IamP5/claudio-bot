@@ -20,6 +20,14 @@ export type MirrorChange = { agents: Mirrored[]; cards: { botId: BotId; message:
 
 const isCard = (m: Message): m is Card => m.kind === "permission" || m.kind === "question";
 
+/** A snapshot sends only a thread's newest messages: the ones the mirror had from before them stay. */
+function withOlder(known: readonly AgentMessage[], newest: readonly AgentMessage[]): AgentMessage[] {
+  const first = newest[0];
+  if (!first) return [...known];
+  const sent = new Set(newest.map((m) => m.id));
+  return [...known.filter((m) => !sent.has(m.id) && m.at <= first.at), ...newest];
+}
+
 /** Folds one event into the state, in place. null: the event is not about agents or cards. */
 export function reduce(state: MirrorState, machine: MachineId, e: Event): MirrorChange | null {
   const slice = (state.machines[machine] ??= { agents: {}, cards: {} });
@@ -34,12 +42,13 @@ export function reduce(state: MirrorState, machine: MachineId, e: Event): Mirror
       return { agents: [], cards: [{ botId: e.botId, message: e.message }], closed: [] };
     }
     case "snapshot": {
-      slice.agents = Object.fromEntries(e.agents.map((a) => [a.agent.id, a]));
+      const agents = e.agents.map((a) => ({ agent: a.agent, messages: withOlder(slice.agents[a.agent.id]?.messages ?? [], a.messages) }));
+      slice.agents = Object.fromEntries(agents.map((a) => [a.agent.id, a]));
       const open = e.openCards.flatMap((c) => (isCard(c.message) && isOpenCard(c.message) ? [{ botId: c.botId, message: c.message }] : []));
       const held = new Set<string>(open.map((c) => c.message.id));
       const closed = Object.entries(slice.cards).flatMap(([cardId, botId]) => (held.has(cardId) ? [] : [{ botId, cardId: cardId as MessageId }]));
       slice.cards = Object.fromEntries(open.map((c) => [c.message.id, c.botId]));
-      return { agents: e.agents.map((a) => ({ machine, ...a })), cards: open, closed };
+      return { agents: agents.map((a) => ({ machine, ...a })), cards: open, closed };
     }
     default:
       return null;

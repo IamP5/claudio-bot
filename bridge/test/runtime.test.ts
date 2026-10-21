@@ -166,6 +166,21 @@ test("events count up from 1 and events(after) returns only what came after", as
   expect(all.at(-1)).toMatchObject({ kind: "snapshot", agents: [{ agent: { title: "Fix tests" } }], openCards: [] });
 });
 
+test("a snapshot carries each agent's newest 200 messages, so a long thread never makes it too big for a frame", async () => {
+  const h = runtime();
+  const start = startOf();
+  await h.rt.apply(start);
+  const rec = h.world.agents.get(start.agentId)!;
+  for (let i = 0; i < 500; i++) rec.messages.push({ id: `m${i}` as never, at: AT, from: "agent", text: `line ${i}` });
+  await h.rt.apply({ kind: "snapshot", intentId: newIntentId() });
+  const snapshot = h.rt.events(0).at(-1);
+  if (snapshot?.kind !== "snapshot") throw new Error("no snapshot");
+  const sent = snapshot.agents[0]!.messages;
+  expect(sent).toHaveLength(200);
+  expect(sent.at(-1)).toMatchObject({ text: "line 499" });
+  expect(rec.messages.length).toBeGreaterThan(500);
+});
+
 function machineDir() {
   const dir = mkdtempSync(join(tmpdir(), "claudiobot-journal-"));
   dirs.push(dir);

@@ -12,3 +12,4 @@
 - G8 follow-ups (from fix-round verify): saved heads restart with size 0 after a bridge start, costing one full transcript read per active session after an upgrade; a loss from an overtaken snapshot during a repair does not reset the timed retry; card vs transcript exact-millisecond ties can still differ between resumed and fresh views.
 - Settings (area 5, from G15): the pairing code countdown in SettingsView.swift uses TimelineView(.deadline), which G15 found never fires while the view sits still; check in the Settings audit.
 - Protocol (from G15): bot trust cards are detected by the tool name string "Claude Code settings"; add a card kind field on the wire.
+- Cards (from G15): a decision lost in a reconnect and answered later on another device is still announced as this phone's answer; the store cannot tell landed from lost. Needs a bridge ack per decision (G11 territory).

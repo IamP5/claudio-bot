@@ -14,4 +14,4 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-21T14:42:39Z	owner	G8	ux/sessions-g8-order-sync	merged #17 (2-lane verify + fix-round verify PASS; merge result 331 iOS + 2563 bridge pass)	6h	wave 4, after G1 G3 G4
 2026-10-21T17:20:21Z	owner	G5	ux/sessions-g5-status-slot	running	6h	wave after G7
 2026-10-21T17:20:21Z	owner	G12	ux/sessions-g12-list	pr-open #18; verifier ISSUES (S7.7 judge tautological), round sent	5h	wave after G7
-2026-10-21T17:20:21Z	owner	G15	ux/sessions-g15-card-copy	pr-open #19; verifier: release log prints commands (MUST), round sent	4h	wave after G7
+2026-10-21T17:20:21Z	owner	G15	ux/sessions-g15-card-copy	merged #19 (verified aa73056; fix round 3a08224 reviewed by root)	4h	wave after G7

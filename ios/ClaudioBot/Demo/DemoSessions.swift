@@ -13,6 +13,9 @@ enum DemoSessions {
     static let sleepers = SessionID("5e2c8a14-9b3d-4f6e-8a1c-3d7b9e2f4a60")
     /// The approvalsanswered screen: sleeper two's card is answered too, so every card is folded.
     static var sleepersAnswered = false
+    /// The approvalsexpiring screen sets sleeper two's deadline once, so it expires while the thread is open however often
+    /// the thread is rebuilt.
+    static var sleeperTwoDeadline: Date?
 
     static let soltaOSom = ProjectID("3f9a1c7e2b4d6a80")
     static let claudioBot = ProjectID("9c2e5b7a1d3f4e60")
@@ -143,7 +146,7 @@ enum DemoSessions {
             work("w3", 2.4, [step("w3", "Bash", "Run du -sh node_modules", output: "412M\tnode_modules")]),
             .permission(id: ItemID("p1"), at: ago(1), permission: SessionPermission(cardId: MessageID("card-fade"), at: ago(1), card: PermissionCard(
                 from: nil, tool: "Bash", label: "Delete node_modules and reinstall", detail: "rm -rf node_modules && bun install",
-                always: "rm -rf node_modules in solta-o-som, for this session", answer: nil, expiresAt: .now + 2 * 3600
+                always: "Bash: rm -rf node_modules · bun install", answer: nil, expiresAt: .now + 2 * 3600
             ))),
         ]
     }
@@ -188,8 +191,8 @@ enum DemoSessions {
         func card(_ n: Int, _ name: String, _ command: String, _ answer: PermissionAnswer?) -> SessionItem {
             .permission(id: ItemID("sl-p\(n)"), at: ago(1.6), permission: SessionPermission(
                 cardId: MessageID("card-sleeper-\(n)"), at: ago(1.6), card: PermissionCard(
-                    from: nil, tool: "Bash", label: "Bash", detail: command, always: "perl in solta-o-som, for this session",
-                    answer: answer, expiresAt: .now + 2 * 3600
+                    from: nil, tool: "Bash", label: "Bash", detail: command, always: "Bash: \(command)",
+                    answer: answer, expiresAt: (n == 2 ? sleeperTwoDeadline : nil) ?? .now + 2 * 3600
                 ), stepId: "sl-b\(n)", subagent: name
             ))
         }
@@ -198,7 +201,7 @@ enum DemoSessions {
             .permission(id: ItemID("sl-p0"), at: ago(1.9), permission: SessionPermission(
                 cardId: MessageID("card-sleeper-0"), at: ago(1.9), card: PermissionCard(
                     from: nil, tool: "Write", label: "Write notes/sleepers.md", detail: "notes/sleepers.md",
-                    always: "edits in solta-o-som, for this session", answer: .chose(.once), expiresAt: .now + 2 * 3600
+                    always: "Write", answer: .chose(.once), expiresAt: .now + 2 * 3600
                 )
             )),
             work("sl-w1", 1.8, [
@@ -420,7 +423,12 @@ enum DemoSessions {
         case let .sessionStop(id, _, _):
             var c = store.threads[id]?.controls ?? controls()
             c.working = false
-            items(store, id, [], controls: c)
+            let closed = (store.threads[id]?.items ?? []).compactMap { item -> SessionItem? in
+                guard case .permission(let itemId, let at, var permission) = item, permission.card.answer == nil else { return nil }
+                permission.card.answer = .stopped
+                return .permission(id: itemId, at: at, permission: permission)
+            }
+            items(store, id, closed, controls: c)
             update(store, id) { $0.status = .idle }
         case let .sessionDecide(id, cardId, choice):
             decide(cardId, choice, in: id, store: store)
@@ -458,6 +466,11 @@ enum DemoSessions {
             return false
         }
         return true
+    }
+
+    /// The approvalselsewhere screen: another device denies sleeper two's card while the thread is open.
+    static func denyElsewhere(store: AppStore) {
+        decide(MessageID("card-sleeper-2"), .deny, in: sleepers, store: store)
     }
 
     private static func decide(_ cardId: MessageID, _ choice: PermissionChoice, in id: SessionID, store: AppStore) {

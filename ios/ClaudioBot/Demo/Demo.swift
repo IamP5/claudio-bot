@@ -10,7 +10,8 @@ import Foundation
 /// `usagehot` with the session near its limit and `usageoff` with no plan limits to read. The pairing and connection states have their own:
 /// `pairconfirm|outdated` (unpaired), `confirm|unrecognized|error|oldbridge` (paired). Sessions: `sessions` (the sidebar),
 /// `thread` (work runs and a permission card), `workrun` (subagents running, one failed, a background command), `ask`,
-/// `plan`, `approvals` (subagents' cards, open and answered), `approvalsanswered` (all answered), `streaming`, `cloud`,
+/// `plan`, `approvals` (subagents' cards, open and answered), `approvalsanswered` (all answered), `approvalsexpiring` (the open
+/// card expires 20 s in), `approvalselsewhere` (another device denies it 15 s in), `streaming`, `cloud`,
 /// `longthread` (500 items), `newsession`,
 /// `sessionsempty` and `sessionsoffline`.
 @MainActor
@@ -137,6 +138,15 @@ enum Demo {
         case "ask": router.open(.session(DemoSessions.sidebar))
         case "plan": router.open(.session(DemoSessions.playlist))
         case "approvals": router.open(.session(DemoSessions.sleepers))
+        case "approvalsexpiring":
+            DemoSessions.sleeperTwoDeadline = .now + 20
+            router.open(.session(DemoSessions.sleepers))
+        case "approvalselsewhere":
+            router.open(.session(DemoSessions.sleepers))
+            Task {
+                try? await Task.sleep(for: .seconds(15))
+                DemoSessions.denyElsewhere(store: store)
+            }
         case "approvalsanswered":
             DemoSessions.sleepersAnswered = true
             router.open(.session(DemoSessions.sleepers))
@@ -491,7 +501,7 @@ enum Demo {
             me("l3", ago(minutes: 6), "Push the changelog fix straight to main."),
             .permission(id: MessageID("l4"), at: ago(minutes: 5), card: PermissionCard(
                 from: nil, tool: "Bash", label: "Push to the default branch", detail: "git push origin main",
-                always: "git push to main or master from release captain", answer: nil, expiresAt: .now + 100 * 60
+                always: "Push to the default branch, without asking, in turns you start", answer: nil, expiresAt: .now + 100 * 60
             )),
         ]),
         ("standup", [

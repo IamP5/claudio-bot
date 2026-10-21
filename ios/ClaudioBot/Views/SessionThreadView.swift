@@ -49,13 +49,17 @@ struct SessionThreadView: View {
     @State private var offlineShown = false
     /// Set when the open card's deadline passes, so the status stops counting it.
     @State private var cardClock = Date.now
-    @State private var announcer = Announcer()
-    /// The status last spoken for, and the last card spoken.
-    @State private var announced: ThreadStatus?
-    @State private var announcedOnce = false
-    @State private var heardCard: ItemID?
+    @State private var announcer: Announcer
+    @State private var statuses: StatusAnnouncer
     /// A tall window: an iPad in portrait, where the split view hides the list.
     @State private var tall = false
+
+    init(sessionId: SessionID) {
+        self.sessionId = sessionId
+        let announcer = Announcer()
+        _announcer = State(initialValue: announcer)
+        _statuses = State(initialValue: StatusAnnouncer { announcer.post($0, first: $1) })
+    }
 
     private var row: SessionRow? { store.sessions.rows[sessionId] }
 
@@ -219,8 +223,9 @@ struct SessionThreadView: View {
         .composerBar {
             VStack(spacing: 6) {
                 if let status {
-                    ThreadStatusLine(status: status, cause: cause, retrying: reach == .retrying, onTap: tap(status)) {
-                        Task { lastRetryFailed = !(await ConnectionBanner.retry(client)) }
+                    // A hanging attempt would hold Retry until its greeting deadline, so Retry starts a new one.
+                    ThreadStatusLine(status: status, cause: cause, onTap: tap(status)) {
+                        Task { lastRetryFailed = !(await ConnectionBanner.retry(client, restartingAttempt: true)) }
                     }
                     .padding(.horizontal, 16)
                     .transition(.opacity)
@@ -241,17 +246,7 @@ struct SessionThreadView: View {
             try? await Task.sleep(for: .seconds(at.timeIntervalSinceNow))
             if !Task.isCancelled { cardClock = .now }
         }
-        // A status is spoken once it has held for half a second, so a run whose end and outcome land in separate frames
-        // is spoken as how it ended, not as "finished" first.
-        .task(id: ThreadAnnouncement.key(status)) {
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled else { return }
-            let first = !announcedOnce
-            if let text = ThreadAnnouncement.of(from: announced, to: status, first: first, heard: heardCard) { announcer.post(text, first: first) }
-            if case .needsYou(let card) = status { heardCard = card.id }
-            announced = status
-            announcedOnce = true
-        }
+        .onChange(of: ThreadAnnouncement.key(status), initial: true) { statuses.update(status) }
         .onChange(of: banner) { _, new in
             if let new { announcer.post(new.spoken) }
         }
@@ -445,7 +440,6 @@ struct ThreadStatusLine: View {
     let status: ThreadStatus
     /// The connection copy the Sessions banner uses.
     let cause: String
-    let retrying: Bool
     let onTap: (() -> Void)?
     let onRetry: () -> Void
 
@@ -496,7 +490,6 @@ struct ThreadStatusLine: View {
                     .font(.footnote.weight(.semibold))
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .disabled(retrying)
                     .accessibilityLabel("Retry connecting to your Mac")
             } else if onTap != nil {
                 Image(systemName: "chevron.right")

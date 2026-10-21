@@ -179,7 +179,19 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
         #expect(ThreadAnnouncement.of(from: working, to: .ended(failed)) == "Claude Code stopped unexpectedly (terminated by signal SIGKILL). Send a message to start it again.")
         let stopped = SessionOutcome(kind: .stopped, text: "Stopped by you: the turn", at: at)
         #expect(ThreadAnnouncement.of(from: working, to: .ended(stopped)) == "Stopped by you: the turn")
-        #expect(ThreadAnnouncement.of(from: .needsYou(card), to: .ended(stopped)) == "Stopped by you: the turn")
+        #expect(ThreadAnnouncement.of(from: .needsYou(card), to: .ended(failed)) == ThreadStatus.outcome(failed))
+        #expect(ThreadAnnouncement.of(from: nil, to: .ended(failed)) == ThreadStatus.outcome(failed), "an outcome that lands after the rest is still spoken")
+    }
+
+    @Test func aStopThatClosesTheOpenCardIsSpokenOnceByTheCard() {
+        let stopped = SessionOutcome(kind: .stopped, text: "Stopped by you: the turn", at: at)
+        #expect(ThreadAnnouncement.of(from: .needsYou(card), to: .ended(stopped)) == nil)
+    }
+
+    @Test func anOutcomeThatEndsWithAPeriodGetsNoSecondOne() {
+        let lost = SessionOutcome(kind: .lost, text: "Background shell command didn't finish before the previous session ended in background.", at: at)
+        #expect(ThreadStatus.outcome(lost) == "Background shell command didn't finish before the previous session ended in background. Send a message to start it again.")
+        #expect(ThreadStatus.outcome(failed) == "Claude Code stopped unexpectedly (terminated by signal SIGKILL). Send a message to start it again.")
     }
 
     @Test func backgroundWorkIsSpokenWhenTheTurnEndsAndWhenItFinishes() {
@@ -261,5 +273,58 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
         var agent = task("a1", .agent, "starter", background: false, started: at - 43)
         agent.progress = TaskProgress(tools: 7, last: "Read", at: at)
         #expect(BackgroundWorkSheet.status(agent, now: at, owner: nil) == "Subagent · 43s · 7 tools, last Read")
+    }
+}
+
+@MainActor
+@Suite struct StatusAnnouncerTests {
+    private let working = ThreadStatus.working(since: at, tasks: [])
+
+    private func announcer(_ spoken: @escaping (String) -> Void) -> StatusAnnouncer {
+        StatusAnnouncer(settle: .milliseconds(50), rest: .milliseconds(400)) { text, _ in spoken(text) }
+    }
+
+    @Test func aFailureWhoseRowLandsLateIsSpokenAsAFailureAndNeverAsFinished() async throws {
+        var spoken: [String] = []
+        let statuses = announcer { spoken.append($0) }
+        statuses.update(working)
+        try await Task.sleep(for: .milliseconds(150))
+        statuses.update(nil)
+        try await Task.sleep(for: .milliseconds(160))
+        statuses.update(.ended(failed))
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(spoken == [ThreadStatus.outcome(failed)])
+    }
+
+    @Test func aRunThatRestsWithNoOutcomeIsSpokenFinishedOnceTheRowHadItsChance() async throws {
+        var spoken: [String] = []
+        let statuses = announcer { spoken.append($0) }
+        statuses.update(working)
+        try await Task.sleep(for: .milliseconds(150))
+        statuses.update(nil)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(spoken.isEmpty, "the rest waits for the row")
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(spoken == ["Claude finished."])
+    }
+}
+
+@MainActor
+@Suite struct ThreadRetryTests {
+    @Test func retryFromTheThreadRestartsAnAttemptThatHangs() async throws {
+        let hello = #"{"type":"hello","protocol":3,"machine":"Mac","userName":"Alex","bots":[],"epoch":"e1","seq":0,"resumed":false}"#
+        let bridge = try FakeBridge(onUpgrade: { _ in .accept }, onOpen: { socket in if socket.index > 0 { socket.send(hello) } })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let timing = BridgeClient.Timing(greeting: .seconds(30), reply: .seconds(1), legacyRetry: .milliseconds(300))
+        let client = BridgeClient(store: AppStore(), vault: PairingVault(service: "dev.claudiobot.tests.\(UUID().uuidString)"), timing: timing)
+        client.start(pairing)
+        for _ in 0..<50 where bridge.upgrades.isEmpty { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(client.store.connection == .connecting, "the first socket opens and the bridge never says hello")
+
+        let started = ContinuousClock.now
+        #expect(await client.retryNowAndWait(within: .seconds(5), restartingAttempt: true))
+        #expect(ContinuousClock.now - started < .seconds(5), "a new attempt, not the 30 s greeting deadline")
+        #expect(bridge.upgrades.count == 2)
+        client.stop()
     }
 }

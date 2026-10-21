@@ -172,7 +172,7 @@ enum ThreadStatus: Equatable, Sendable {
     /// A run that failed or was cut off says how to go on.
     static func outcome(_ outcome: SessionOutcome) -> String {
         switch outcome.kind {
-        case .failed, .lost: outcome.text + ". Send a message to start it again."
+        case .failed, .lost: outcome.text + (outcome.text.hasSuffix(".") ? "" : ".") + " Send a message to start it again."
         case .stopped, .finished, .unknown: outcome.text
         }
     }
@@ -216,12 +216,15 @@ enum ThreadAnnouncement {
         }
         guard !first, old != new else { return nil }
         switch old {
-        case .offline, .quiet, nil:
+        case .offline, .quiet, .ended:
             return nil
-        case .needsYou:
+        case nil:
+            // The row brings the outcome after the thread's frame put it at rest, later than StatusAnnouncer waited.
             if case .ended(let outcome) = new { return ThreadStatus.outcome(outcome) }
             return nil
-        case .ended:
+        case .needsYou:
+            // Stop closes the open card, and the card says so itself (ChatItems announcesClose).
+            if case .ended(let outcome) = new, outcome.kind != .stopped { return ThreadStatus.outcome(outcome) }
             return nil
         case let .working(_, was), let .background(_, was):
             switch new {
@@ -250,6 +253,50 @@ enum ThreadAnnouncement {
 
     private static func labels(_ tasks: [SessionTask]) -> String {
         tasks.map(\.label).joined(separator: ", ")
+    }
+}
+
+/// Decides when a thread's status is spoken. A status is spoken once it has held for `settle`. A run that comes to
+/// rest waits `rest` instead: its outcome comes on the Sessions row, which the bridge coalesces on a 500 ms timer, so
+/// speaking at rest any sooner would call a failed run finished.
+@MainActor
+final class StatusAnnouncer {
+    private let settle: Duration
+    private let rest: Duration
+    /// The text, and whether the thread just opened.
+    private let speak: (String, Bool) -> Void
+    private var spoken: ThreadStatus?
+    private var once = false
+    private var heardCard: ItemID?
+    private var pending: Task<Void, Never>?
+
+    init(settle: Duration = .milliseconds(500), rest: Duration = .milliseconds(1500), speak: @escaping (String, Bool) -> Void) {
+        self.settle = settle
+        self.rest = rest
+        self.speak = speak
+    }
+
+    /// Call when the status's announcement key changes. What it replaces before it settles is never spoken.
+    func update(_ status: ThreadStatus?) {
+        pending?.cancel()
+        let busy = switch spoken {
+        case .working, .background: true
+        default: false
+        }
+        let wait = status == nil && busy ? rest : settle
+        pending = Task { [weak self] in
+            try? await Task.sleep(for: wait)
+            guard !Task.isCancelled else { return }
+            self?.land(status)
+        }
+    }
+
+    private func land(_ status: ThreadStatus?) {
+        let first = !once
+        if let text = ThreadAnnouncement.of(from: spoken, to: status, first: first, heard: heardCard) { speak(text, first) }
+        if case .needsYou(let card) = status { heardCard = card.id }
+        spoken = status
+        once = true
     }
 }
 

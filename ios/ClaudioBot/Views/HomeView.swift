@@ -385,8 +385,8 @@ struct ConnectionBanner: View {
         }
     }
 
-    static func retry(_ client: BridgeClient) async -> Bool {
-        let answered = await client.retryNowAndWait()
+    static func retry(_ client: BridgeClient, restartingAttempt: Bool = false) async -> Bool {
+        let answered = await client.retryNowAndWait(restartingAttempt: restartingAttempt)
         if !answered { AccessibilityNotification.Announcement("Still no answer from your Mac.").post() }
         return answered
     }

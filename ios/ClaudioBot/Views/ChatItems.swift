@@ -1,4 +1,6 @@
+#if DEBUG
 import OSLog
+#endif
 import SwiftUI
 
 struct ChatRowView: View {
@@ -346,7 +348,6 @@ struct PermissionCardView: View {
     let decision: (PermissionChoice) -> ClientMessage
 
     @AccessibilityFocusState private var focus: CardFocus?
-    @State private var sentHere = false
 
     var body: some View {
         AtDeadline(card.expiresAt) { now in
@@ -354,10 +355,10 @@ struct PermissionCardView: View {
             Settling(answer) { answer in
                 PermissionCardBody(
                     messageId: messageId, card: card, title: card.label, scope: scope, answer: answer, decision: decision,
-                    focus: $focus, onSend: { sentHere = true }
+                    focus: $focus
                 )
             }
-            .announcesClose(card: card, answer: answer, here: sentHere, focus: $focus)
+            .announcesClose(messageId, card: card, answer: answer, focus: $focus)
         }
     }
 }
@@ -396,7 +397,6 @@ struct SessionPermissionCard: View {
     @State private var pendingReveal: HeldStep?
     @Environment(\.revealStep) private var revealStep
     @AccessibilityFocusState private var focus: CardFocus?
-    @State private var sentHere = false
 
     var body: some View {
         let card = permission.card
@@ -410,7 +410,7 @@ struct SessionPermissionCard: View {
                     full(answer: nil, held: held)
                 }
             }
-            .announcesClose(card: card, answer: answer, step: held?.step, here: sentHere, focus: $focus)
+            .announcesClose(permission.cardId, card: card, answer: answer, step: held?.step, focus: $focus)
         }
         .sheet(isPresented: $sheet, onDismiss: {
             if let pendingReveal { revealStep?(pendingReveal) }
@@ -437,7 +437,7 @@ struct SessionPermissionCard: View {
         return PermissionCardBody(
             messageId: permission.cardId, card: permission.card, title: permission.title, scope: .session, answer: answer,
             decision: { .sessionDecide(sessionId: sessionId, cardId: permission.cardId, choice: $0) },
-            focus: $focus, onSend: { sentHere = true },
+            focus: $focus,
             step: held?.step, fillsColumn: true,
             reveal: held.flatMap { held in reveal.map { reveal in { reveal(held) } } },
             close: close
@@ -517,27 +517,30 @@ enum CardFocus: Hashable {
     case outcome
 }
 
+#if DEBUG
 private let a11yLog = Logger(subsystem: "dev.claudiobot.app", category: "a11y")
+#endif
 
 extension View {
     /// Speaks an open card closing, whatever closed it: this phone's choice once the bridge confirms it, another
     /// device, Stop, or its deadline passing. A VoiceOver user on one of its choices is moved to the outcome, since the
-    /// choices are gone. here: this phone sent a choice for the card.
+    /// choices are gone.
     func announcesClose(
-        card: PermissionCard, answer: PermissionAnswer?, step: ToolStep? = nil, here: Bool,
+        _ cardId: MessageID, card: PermissionCard, answer: PermissionAnswer?, step: ToolStep? = nil,
         focus: AccessibilityFocusState<CardFocus?>.Binding
     ) -> some View {
-        modifier(CloseAnnouncer(card: card, answer: answer, step: step, here: here, focus: focus))
+        modifier(CloseAnnouncer(cardId: cardId, card: card, answer: answer, step: step, focus: focus))
     }
 }
 
 private struct CloseAnnouncer: ViewModifier {
+    let cardId: MessageID
     let card: PermissionCard
     let answer: PermissionAnswer?
     let step: ToolStep?
-    let here: Bool
     let focus: AccessibilityFocusState<CardFocus?>.Binding
 
+    @Environment(AppStore.self) private var store
     @State private var onChoice = false
 
     func body(content: Content) -> some View {
@@ -547,11 +550,14 @@ private struct CloseAnnouncer: ViewModifier {
             }
             .onChange(of: answer) { old, new in
                 guard old == nil, let new else { return }
-                let said = new.announcement(card: card, step: step, here: here)
+                let said = new.announcement(card: card, step: step, here: store.decidedHere.contains(cardId))
                 var text = AttributedString(said)
                 text.accessibilitySpeechAnnouncementPriority = .high
                 AccessibilityNotification.Announcement(text).post()
+                #if DEBUG
+                // Debug builds only: the command can carry a secret, and the demo checks read this line.
                 a11yLog.debug("announced \(said, privacy: .public)")
+                #endif
                 guard onChoice else { return }
                 Task {
                     // The outcome fades in after the choices fade out (Card.swap); focus set before it exists is lost.
@@ -570,7 +576,6 @@ private struct PermissionCardBody: View {
     let answer: PermissionAnswer?
     let decision: (PermissionChoice) -> ClientMessage
     let focus: AccessibilityFocusState<CardFocus?>.Binding
-    let onSend: () -> Void
     var step: ToolStep?
     var fillsColumn = false
     var reveal: (() -> Void)?
@@ -584,7 +589,6 @@ private struct PermissionCardBody: View {
     private var sent: PermissionChoice? { store.pendingDecisions[messageId] }
 
     private func send(_ choice: PermissionChoice) {
-        onSend()
         client.send(decision(choice))
         AccessibilityNotification.Announcement("\(choice.button), sending").post()
     }

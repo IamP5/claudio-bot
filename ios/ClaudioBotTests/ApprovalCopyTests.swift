@@ -11,7 +11,7 @@ private func card(
 
 @Suite struct ApprovalCopyTests {
     @Test func everyChoiceSaysWhatItDoesInEachPlace() {
-        let scopes: [ApprovalScope] = [.session, .bot(name: "release captain"), .trust]
+        let scopes: [ApprovalScope] = [.session, .bot(name: "release captain", asker: "release captain"), .trust]
         for scope in scopes {
             let lines = PermissionChoice.allCases.map { $0.consequence(scope) }
             #expect(lines.allSatisfy { !$0.isEmpty })
@@ -21,15 +21,25 @@ private func card(
 
     @Test func neverStopsTheTurnInASessionAndRefusesForGoodInABotChat() {
         #expect(PermissionChoice.never.consequence(.session) == "Skips it and stops the turn.")
-        #expect(PermissionChoice.never.consequence(.bot(name: "release captain")) == "Skips it and refuses it for release captain from now on.")
+        #expect(PermissionChoice.never.consequence(.bot(name: "release captain", asker: "release captain")) == "Skips it and refuses it for release captain from now on.")
         #expect(PermissionChoice.deny.consequence(.session) == "Skips it. Claude carries on and may ask again.")
-        #expect(PermissionChoice.deny.consequence(.bot(name: "release captain")) == "Skips it and tells release captain not to try it.")
+        #expect(PermissionChoice.deny.consequence(.bot(name: "release captain", asker: "release captain")) == "Skips it and tells release captain not to try it.")
     }
 
     @Test func theScopeLineSaysHowLongAlwaysLastsBeforeItListsTheRules() {
-        #expect(card().scopeLine(.session) == "For the rest of this session, Always allow covers Bash: perl -e 'sleep 45' · echo late *")
+        #expect(card().scopeLine(.session) == "For the rest of this session, Always allow covers Bash: perl -e 'sleep 45' · echo late *.")
         let bot = card(always: "Push to the default branch, without asking, in turns you start")
-        #expect(bot.scopeLine(.bot(name: "release captain")) == "From now on, Always allow covers Push to the default branch, without asking, in turns you start.")
+        #expect(bot.scopeLine(.bot(name: "release captain", asker: "release captain")) == "From now on, Always allow covers Push to the default branch, without asking, in turns you start.")
+    }
+
+    @Test func anAgentsCardTellsTheAgentAboutDenyAndRefusesNeverForItsBot() {
+        let fromAgent = PermissionCard(
+            from: .agent(id: AgentID("a1"), title: "builder"), tool: "Bash", label: "Bash", detail: "make",
+            always: "", answer: nil, expiresAt: .now + 3600
+        )
+        let scope = ApprovalScope.chat(fromAgent, bot: "release captain")
+        #expect(PermissionChoice.deny.consequence(scope) == "Skips it and tells builder not to try it.")
+        #expect(PermissionChoice.never.consequence(scope) == "Skips it and refuses it for release captain from now on.")
     }
 
     @Test func aCardWithNoAlwaysTextOffersNoAlways() {
@@ -42,9 +52,12 @@ private func card(
     @Test func aTrustCardTalksAboutSettingsNotACall() {
         let trust = card(tool: "Claude Code settings", detail: ".claude/settings.json in /repo", always: "Agents in repo load its own Claude Code settings, hooks and MCP servers, from now on")
         #expect(ApprovalScope.chat(trust, bot: "release captain") == .trust)
-        #expect(ApprovalScope.chat(card(), bot: "release captain") == .bot(name: "release captain"))
+        #expect(ApprovalScope.chat(card(), bot: "release captain") == .bot(name: "release captain", asker: "release captain"))
         #expect(PermissionChoice.once.consequence(.trust) == "Trusts it for this agent only.")
         #expect(PermissionChoice.never.consequence(.trust) == "Keeps every agent in this repo on empty settings.")
+        let settings = card(tool: "Claude Code settings", detail: ".claude/settings.json in /repo", always: "x")
+        #expect(PermissionAnswer.expired.announcement(card: settings, here: false) == "Expired. Nothing was trusted: .claude/settings.json in /repo")
+        #expect(PermissionAnswer.chose(.once).announcement(card: settings, here: true) == "Allowed once. Trusted: .claude/settings.json in /repo")
     }
 
     @Test func eachButtonIsSpokenWithItsToolAndCommand() {
@@ -78,5 +91,29 @@ private func card(
         let step = ToolStep(id: "s", tool: "Bash", label: "Run perl", state: .stopped, diff: nil, output: nil, cause: "Stopped by you")
         let said = PermissionAnswer.chose(.once).announcement(card: card(detail: "perl -e 'sleep 30'"), step: step, here: true)
         #expect(said == "Allowed once. Stopped by you before it finished. Bash: perl -e 'sleep 30'")
+    }
+}
+
+@MainActor
+@Suite struct DecidedHereTests {
+    private func store() -> AppStore {
+        let store = AppStore()
+        store.apply(.hello(Hello(protocol: 3, machine: "Mac", userName: "Alex", bots: [])))
+        return store
+    }
+
+    @Test func aDecisionSentHereIsRememberedPastAReconnect() {
+        let store = store()
+        store.decisionSent(.once, for: MessageID("c1"))
+        store.apply(.hello(Hello(protocol: 3, machine: "Mac", userName: "Alex", bots: [])))
+        #expect(store.decidedHere.contains(MessageID("c1")))
+        #expect(!store.decidedHere.contains(MessageID("c2")))
+    }
+
+    @Test func aDecisionTheSocketRefusedIsNotThisPhones() {
+        let store = store()
+        store.decisionSent(.deny, for: MessageID("c1"))
+        store.decisionFailed(for: MessageID("c1"))
+        #expect(!store.decidedHere.contains(MessageID("c1")))
     }
 }

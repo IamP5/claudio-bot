@@ -129,6 +129,9 @@ final class AppStore {
     private(set) var bridgeProtocol: Int?
     /// Decisions sent and not yet echoed back by their card, so a second tap cannot send another.
     private(set) var pendingDecisions: [MessageID: PermissionChoice] = [:]
+    /// Cards this phone sent a decision for that the socket did not refuse. It outlives the card's view and a
+    /// reconnect, so a card closing is announced as this phone's answer or another device's.
+    private(set) var decidedHere: Set<MessageID> = []
     /// The phones paired with this Mac, once Settings asked for them.
     private(set) var devices: [Device]?
     /// Device lists heard, so a view sees every reply, even one that repeats the list.
@@ -194,6 +197,7 @@ final class AppStore {
             protocolMismatch = nil
             bridgeProtocol = nil
             pendingDecisions = [:]
+            decidedHere = []
             devices = nil
             pairCode = nil
             features = []
@@ -245,11 +249,13 @@ final class AppStore {
 
     func decisionSent(_ choice: PermissionChoice, for card: MessageID) {
         pendingDecisions[card] = choice
+        decidedHere.insert(card)
     }
 
     /// The socket refused the frame, so the buttons come back.
     func decisionFailed(for card: MessageID) {
         pendingDecisions[card] = nil
+        decidedHere.remove(card)
         lastError = ErrorNotice(message: "Your decision did not reach your Mac. Try again.")
     }
 

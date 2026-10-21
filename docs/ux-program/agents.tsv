@@ -7,5 +7,5 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-21T07:43:52Z	owner	G2	ux/sessions-g2-live-work	pr-open #13 8d77ef1, 3-lane swarm verifying	6h	wave 2
 2026-10-21T07:43:52Z	owner	G4	ux/sessions-g4-work-run	merged #8 (verified 29dfed7; fix round 503f446 reviewed by root)	4h	wave 2
 2026-10-21T07:43:52Z	owner	G7	ux/sessions-g7-approval-cards	pr-open #7 c34e7da (fix round), verifying scroll change	4h	wave 2
-2026-10-21T08:00:26Z	owner	G10	ux/sessions-g10-offline-list	pr-open #12 46880bc, verifying	4h	wave 2
+2026-10-21T08:00:26Z	owner	G10	ux/sessions-g10-offline-list	merged #12 (verified PASS at 46880bc)	4h	wave 2
 2026-10-21T10:12:06Z	owner	R1	ux/runner-build-isolation	pr-open #11; verifier ISSUES (stamp ignores content, prune, launch gap), fix-forward sent	3h	per-tree app builds + stamp check + SIGINT cleanup

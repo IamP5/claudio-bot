@@ -1,1 +1,4 @@
 - Runner: an interrupted scenario run (SIGINT) leaves its bridge running; cleanup runs only on the normal path. Seen during G14. Fix: run control-claudio cleanup from the exit handler.
+- Sessions (P2, from G10 verify): at accessibility-extra-extra-extra-large, the offline banner over a list that already has rows takes about 80% of the screen; no session row is visible above the fold. Buttons stay reachable. Consider collapsing the banner to one line plus buttons when rows exist.
+- macOS tests: the ClaudioBotMac test runner hangs before connecting in agent environments ("test runner hung before establishing connection"); builds succeed. Needs a look at the Mac test host setup.
+- Runner: after a bridge is stopped by pid, `control-claudio cleanup` leaves the sessions' foreground tool processes alive (their command line names no run folder, only their cwd). Match by cwd under the run folder too.

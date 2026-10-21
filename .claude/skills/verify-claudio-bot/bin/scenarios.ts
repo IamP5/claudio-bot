@@ -312,7 +312,7 @@ const atRest = (name: string) => (ev: Ev) => mark(ev, `${name}-started`) !== und
 /** The main transcript's last exchange is Claude Code's final reply of a turn. */
 const endsTurn = (lines: TranscriptLine[]) => {
   const l = lines.findLast((x) => x.type === "user" || x.type === "assistant");
-  return l?.type === "assistant" && (l.message as { stop_reason?: unknown } | undefined)?.stop_reason === "end_turn";
+  return l !== undefined && finalReply(l);
 };
 /**
  * The turn that started background work ended, while that work may still run: the transcript has the turn's final
@@ -323,6 +323,41 @@ const turnEnded = (name: string) => (ev: Ev) => {
   if (mark(ev, `${name}-started`) === undefined || !s || !endsTurn(ev.transcript(name).main)) return false;
   return Array.isArray(s.controls?.tasks) ? s.controls?.turn == null : !isWorking(s);
 };
+
+const finalReply = (l: TranscriptLine) => l.type === "assistant" && (l.message as { stop_reason?: unknown } | undefined)?.stop_reason === "end_turn";
+/** Working with no task listed: only a turn can be running, and Claude Code writes its turns to the transcript. */
+const taskless = (s: Snap) => s.controls?.working === true && Array.isArray(s.controls.tasks) && s.controls.tasks.length === 0;
+
+/** After a turn's final reply, until Claude Code writes again, the session reads working only while a task runs. */
+const noPhantomWork = (id: string, name: string): RubricItem => ({
+  id,
+  tell: "state",
+  lane: "protocol",
+  text: "After a turn's final reply, the session does not read working while nothing runs.",
+  pass: "After each final reply in the main transcript, until its next line, no stretch longer than 5 s reads controls.working true with no task listed.",
+  fail: "The session reads working, with Stop, for more than 5 s while no task runs and Claude Code writes nothing.",
+  check: (ev) => {
+    const lines = ev.transcript(name).main.filter((l) => (l.type === "user" || l.type === "assistant") && l.timestamp);
+    let worst = { ms: 0, at: 0 };
+    lines.forEach((l, i) => {
+      if (!finalReply(l)) return;
+      const from = ev.atOf(l.timestamp!);
+      const to = i + 1 < lines.length ? ev.atOf(lines[i + 1]!.timestamp!) : ev.now();
+      const xs = during(ev, name, from, to).filter((x) => x.controls);
+      for (let j = 0; j < xs.length; j++) {
+        if (!taskless(xs[j]!)) continue;
+        let k = j;
+        while (k + 1 < xs.length && taskless(xs[k + 1]!)) k++;
+        const start = Math.max(xs[j]!.at, from);
+        const stop = k + 1 < xs.length ? xs[k + 1]!.at : to;
+        if (stop - start > worst.ms) worst = { ms: stop - start, at: start };
+        j = k;
+      }
+    });
+    const s = (ms: number) => Math.round(ms / 100) / 10;
+    return worst.ms <= 5_000 ? ok(`longest taskless working stretch after a reply: ${s(worst.ms)} s`) : no(`working with no task for ${s(worst.ms)} s from +${s(worst.at)} s`);
+  },
+});
 
 /** Once the session's work has ended, it rests, so the busy row and Stop go away. */
 const comesToRest = (id: string, name: string, from: string, what: string): RubricItem => ({
@@ -553,6 +588,7 @@ const S2: Scenario = {
     { do: "ps", pattern: "sleep 45", as: "bg2-before-stop-and-send" },
     { do: "send", name: "s2", text: "Reply with one word: ok.", interrupt: true, mark: "stop-and-send" },
     { do: "until", mark: "bg2-done", what: "bg2.txt to appear", timeoutS: 90, optional: true, test: (ev) => ev.exists("bg2.txt") },
+    { do: "until", mark: "s2-rest", what: "the session to rest", timeoutS: 90, optional: true, test: atRest("s2") },
   ],
   pre: [
     created("s2"),
@@ -598,6 +634,7 @@ const S2: Scenario = {
     },
     noAckOutput("S2.10", ["s2"]),
     comesToRest("S2.11", "s2", "bg-done", "the background command and the turn it woke"),
+    noPhantomWork("S2.12", "s2"),
   ],
 };
 
@@ -630,6 +667,7 @@ const S3: Scenario = {
     { do: "screenshot", shot: "thread-after" },
     { do: "return", name: "s3" },
     { do: "sleep", s: 3 },
+    { do: "until", mark: "s3-rest", what: "the session to rest", timeoutS: 90, optional: true, test: atRest("s3") },
   ],
   pre: [
     { what: "with --sim, the app on the leased simulator paired with the run's bridge", check: (ev) => (!ev.sim ? ok("protocol lane: the runner is the phone") : ev.paired ? ok("paired") : no("not paired within --pair-wait (see runner.md)")) },
@@ -675,6 +713,7 @@ const S3: Scenario = {
     review("S3.6", "state", "While the app is away (Settings in front), a notification says the work finished.", "Notification banner or badge.", "Nothing.", ["while-away"]),
     review("S3.7", "state", "Back in the app, the thread shows the result, with no stale running indicator.", "Done state and the reply.", "Still running, or stale.", ["thread-after"]),
     noAckOutput("S3.8", ["s3"]),
+    comesToRest("S3.9", "s3", "bg-done", "the background command and the turn it woke"),
   ],
 };
 
@@ -693,7 +732,7 @@ const S4: Scenario = {
       do: "create",
       name: "s4",
       prompt:
-        'In one message, launch 2 subagents in parallel with the Agent tool. The first: subagent_type "no-such-agent-type", description "broken helper", prompt "Say hi." The second: subagent_type general-purpose, model haiku, description "long sleeper", prompt "Run exactly this Bash command in the foreground: perl -e \'sleep 45\' && echo late > late.txt . Then reply done." Use exactly these values even if one looks wrong. Then reply with one line saying what happened.',
+        'In one message, launch 2 subagents in parallel with the Agent tool, both with run_in_background false. The first: subagent_type "no-such-agent-type", description "broken helper", prompt "Say hi." The second: subagent_type general-purpose, model haiku, description "long sleeper", prompt "Run exactly this Bash command in the foreground: perl -e \'sleep 45\' && echo late > late.txt . Then reply done." Use exactly these values even if one looks wrong. Then reply with one line saying what happened.',
     },
     started("s4"),
     { do: "open-thread", name: "s4" },
@@ -1268,7 +1307,7 @@ const S8: Scenario = {
       do: "create",
       name: "s8",
       prompt:
-        'Launch one subagent with the Agent tool: subagent_type general-purpose, model haiku, description "starter". Its prompt: "Use the Bash tool with run_in_background set to true to run exactly: sleep 60 && echo nested-done > nested.txt . Do not wait for it. Reply with one line: started." After the subagent returns, reply with one line: subagent returned. Do not wait for the background command and do not check on it.',
+        'Launch one subagent with the Agent tool: subagent_type general-purpose, model haiku, run_in_background true, description "starter". Its prompt: "Use the Bash tool with run_in_background set to true to run exactly: sleep 60 && echo nested-done > nested.txt . Do not wait for it. Reply with one line: started." After the subagent returns, reply with one line: subagent returned. Do not wait for the background command and do not check on it.',
     },
     started("s8"),
     { do: "until", mark: "s8-ended", what: "the parent turn to end", timeoutS: 180, test: turnEnded("s8") },
@@ -1340,6 +1379,7 @@ const S8: Scenario = {
     },
     noAckOutput("S8.8", ["s8"]),
     comesToRest("S8.9", "s8", "bg-done", "the background command and the turn it woke"),
+    noPhantomWork("S8.10", "s8"),
   ],
 };
 
@@ -1391,7 +1431,7 @@ const S8fg: Scenario = {
       pass: "A state reads not working within 5 s of the main transcript's final reply.",
       fail: "The session reads working, with Stop, for more than 5 s after the reply while nothing runs.",
       check: (ev) => {
-        const reply = ev.transcript("s8").main.findLast((l) => l.type === "assistant" && (l.message as { stop_reason?: unknown } | undefined)?.stop_reason === "end_turn");
+        const reply = ev.transcript("s8").main.findLast(finalReply);
         if (!reply?.timestamp) return no("not judged: no final reply in the transcript");
         const at = ev.atOf(reply.timestamp);
         const rest = during(ev, "s8", at, Infinity).find((s) => !isWorking(s));

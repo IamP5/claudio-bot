@@ -134,6 +134,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Sample the Mac's processes matching `sleep 45` in the seed project as `bg2-before-stop-and-send`.
 - Send in `s2` with Stop and send (interrupt): "Reply with one word: ok."; mark `stop-and-send`.
 - Wait up to 90 s for bg2.txt to appear; mark `bg2-done` (optional).
+- Wait up to 90 s for the session to rest; mark `s2-rest` (optional).
 
 **Preconditions** (any failure fails the scenario):
 
@@ -157,6 +158,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S2.9 | stop | protocol | "Stop and send" stops the turn, not the background command the session started earlier. | A second background command (sleep 45, then bg2.txt) seen running before a send with interrupt still writes bg2.txt. | bg2.txt never appears: Stop and send killed the background command with the turn. |
 | S2.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
 | S2.11 | state | protocol | Once its work is over (the background command and the turn it woke), the session comes to rest. | Within 60 s of mark bg-done, a state reads not working: the row not busy and controls.working false. | The session still reads working 60 s after its work ended, so the busy row and Stop never go away. |
+| S2.12 | state | protocol | After a turn's final reply, the session does not read working while nothing runs. | After each final reply in the main transcript, until its next line, no stretch longer than 5 s reads controls.working true with no task listed. | The session reads working, with Stop, for more than 5 s while no task runs and Claude Code writes nothing. |
 
 ## S3 Background work finishes while the app is in the background
 
@@ -187,6 +189,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Screenshot `thread-after` (simulator lane).
 - Reopen `s3`'s thread from the position the phone held (watch_session with after).
 - Wait 3 s.
+- Wait up to 90 s for the session to rest; mark `s3-rest` (optional).
 
 **Preconditions** (any failure fails the scenario):
 
@@ -208,6 +211,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S3.6 | state | simulator (while-away) | While the app is away (Settings in front), a notification says the work finished. | Notification banner or badge. | Nothing. |
 | S3.7 | state | simulator (thread-after) | Back in the app, the thread shows the result, with no stale running indicator. | Done state and the reply. | Still running, or stale. |
 | S3.8 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S3.9 | state | protocol | Once its work is over (the background command and the turn it woke), the session comes to rest. | Within 60 s of mark bg-done, a state reads not working: the row not busy and controls.working false. | The session still reads working 60 s after its work ended, so the busy row and Stop never go away. |
 
 ## S4 A subagent fails, and the user stops one from the phone
 
@@ -221,7 +225,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 **Setup.**
 
-- New session `s4` in demo (haiku, mode default): "In one message, launch 2 subagents in parallel with the Agent tool. The first: subagent_type "no-such-agent-type", description "broken helper", prompt "Say hi." The second: subagent_type general-purpose, model haiku, description "long sleeper", prompt "Run exactly this Bash command in the foreground: perl -e 'sleep 45' && echo late > late.txt . Then reply done." Use exactly these values even if one looks wrong. Then reply with one line saying what happened."
+- New session `s4` in demo (haiku, mode default): "In one message, launch 2 subagents in parallel with the Agent tool, both with run_in_background false. The first: subagent_type "no-such-agent-type", description "broken helper", prompt "Say hi." The second: subagent_type general-purpose, model haiku, description "long sleeper", prompt "Run exactly this Bash command in the foreground: perl -e 'sleep 45' && echo late > late.txt . Then reply done." Use exactly these values even if one looks wrong. Then reply with one line saying what happened."
 - Wait up to 90 s for s4's turn to start; mark `s4-started`.
 - Open `s4`'s thread: in the app by claudiobot://session/<id> (simulator lane), or watch it again if the phone had left it (protocol lane).
 - Wait up to 150 s for the sleeper's perl sleep 45 to run on the Mac; mark `sleeper-running`.
@@ -416,7 +420,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 **Setup.**
 
-- New session `s8` in demo (haiku, mode default): "Launch one subagent with the Agent tool: subagent_type general-purpose, model haiku, description "starter". Its prompt: "Use the Bash tool with run_in_background set to true to run exactly: sleep 60 && echo nested-done > nested.txt . Do not wait for it. Reply with one line: started." After the subagent returns, reply with one line: subagent returned. Do not wait for the background command and do not check on it."
+- New session `s8` in demo (haiku, mode default): "Launch one subagent with the Agent tool: subagent_type general-purpose, model haiku, run_in_background true, description "starter". Its prompt: "Use the Bash tool with run_in_background set to true to run exactly: sleep 60 && echo nested-done > nested.txt . Do not wait for it. Reply with one line: started." After the subagent returns, reply with one line: subagent returned. Do not wait for the background command and do not check on it."
 - Wait up to 90 s for s8's turn to start; mark `s8-started`.
 - Wait up to 180 s for the parent turn to end; mark `s8-ended`.
 - Leave `s8`'s thread for the list (unwatch_session; the bridge counts it as a visit, and a watched thread is never unread).
@@ -459,6 +463,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S8.7 | what | protocol | When Claude Code kills the subagent's background command, the thread names the command and the subagent that started it. | If nested.txt never appeared, a notice after the parent turn names the command ("sleep 60" or "nested") and its owner ("starter"). | The command was killed and no notice names both it and its owner. |
 | S8.8 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
 | S8.9 | state | protocol | Once its work is over (the background command and the turn it woke), the session comes to rest. | Within 60 s of mark bg-done, a state reads not working: the row not busy and controls.working false. | The session still reads working 60 s after its work ended, so the busy row and Stop never go away. |
+| S8.10 | state | protocol | After a turn's final reply, the session does not read working while nothing runs. | After each final reply in the main transcript, until its next line, no stretch longer than 5 s reads controls.working true with no task listed. | The session reads working, with Stop, for more than 5 s while no task runs and Claude Code writes nothing. |
 
 ## S8fg A subagent the session waits for starts a background task and returns
 

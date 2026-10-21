@@ -29,7 +29,8 @@ struct ThreadRowView: View, Equatable {
             case let .thinking(_, _, text, ms):
                 ThinkingRow(text: text, ms: ms)
             case let .work(_, _, steps):
-                WorkRunRow(steps: steps, onFullOutput: onFullOutput)
+                // Only a live run reads the controls, so a heartbeat redraws the work still running and nothing else.
+                WorkRunRow(run: WorkRun(steps: steps, controls: steps.contains { $0.state.isLive } ? model.controls : nil), onFullOutput: onFullOutput)
             case let .todo(_, _, todos):
                 TodoCard(todos: todos)
             case let .plan(id, _, text, state, cardId):
@@ -118,6 +119,8 @@ struct FoldRow: View {
         items.flatMap { item -> [ToolStep] in if case .work(_, _, let steps) = item { steps } else { [] } }
     }
 
+    private var failed: Int { WorkSummary.errors(steps) }
+
     var body: some View {
         // The folded rows are rows of the list, so the list's rows move and fade with this transaction.
         Button {
@@ -127,10 +130,17 @@ struct FoldRow: View {
                 Image(systemName: "square.stack.3d.up")
                     .font(.footnote)
                     .foregroundStyle(Theme.tertiary)
-                Text(WorkSummary.fold(items))
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.secondary)
-                    .multilineTextAlignment(.leading)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(WorkSummary.fold(items))
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.secondary)
+                    if failed > 0 {
+                        Label("\(failed) failed", systemImage: "xmark.circle.fill")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Theme.danger)
+                    }
+                }
+                .multilineTextAlignment(.leading)
                 if let diff = WorkSummary.diff(steps) { DiffStat(added: diff.added, removed: diff.removed) }
                 Spacer(minLength: 4)
                 Image(systemName: "chevron.right")
@@ -143,7 +153,7 @@ struct FoldRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(WorkSummary.fold(items))
+        .accessibilityLabel(WorkSummary.fold(items) + (failed > 0 ? ", \(failed) failed" : ""))
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
         .accessibilityHint(expanded ? "Hides these steps" : "Shows these steps")
     }
@@ -192,29 +202,53 @@ struct ThinkingRow: View {
     }
 }
 
+extension EnvironmentValues {
+    /// Set while the run state may be out of date, to when it was last known true. Timers stop there and live marks
+    /// dim, so a silent or unreachable Mac never shows a clock still ticking.
+    @Entry var runStateStale: Date? = nil
+}
+
+/// A work item: a header that says what runs, what failed and for how long, then its steps. While the run is live its
+/// running and waiting steps stay in view; the rest open on tap. One clock ticks per run, never one per step.
 struct WorkRunRow: View {
-    let steps: [ToolStep]
+    let run: WorkRun
     let onFullOutput: (ToolStep) -> Void
     @State private var open = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var running: ToolStep? { steps.last { $0.state == .running } }
+    @Environment(\.runStateStale) private var staleAt
+    @State private var onScreen = true
+    @ScaledMetric(relativeTo: .subheadline) private var slot: CGFloat = 20
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        Group {
+            if onScreen, staleAt == nil, run.ticks {
+                TimelineView(.periodic(from: run.since ?? .now, by: 1)) { context in
+                    content(now: context.date)
+                }
+            } else {
+                content(now: staleAt ?? .now)
+            }
+        }
+        .onScrollVisibilityChange { onScreen = $0 }
+    }
+
+    private func content(now: Date) -> some View {
+        let shown = open ? run.steps : run.live
+        return VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { open.toggle() }
             } label: {
-                header
+                header(now: now)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(summary)
+            .accessibilityLabel(run.spoken(now: now))
             .accessibilityValue(open ? "Expanded" : "Collapsed")
-            if open {
+            .accessibilityHint(open ? "Hides the finished steps" : "Shows every step")
+            if !shown.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(steps) { step in
-                        ToolStepRow(step: step, onFullOutput: onFullOutput)
-                        if step.id != steps.last?.id { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 34) }
+                    ForEach(shown) { step in
+                        ToolStepRow(step: step, run: run, now: now, onFullOutput: onFullOutput)
+                        if step.id != shown.last?.id { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 34) }
                     }
                 }
                 .padding(.vertical, 4)
@@ -224,48 +258,41 @@ struct WorkRunRow: View {
         }
     }
 
-    private var summary: String {
-        if let running { return running.label }
-        let errors = WorkSummary.errors(steps)
-        return WorkSummary.text(steps) + (errors > 0 ? ", \(errors) failed" : "")
-    }
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            if running != nil {
-                WorkingRing(size: 12)
-                    .frame(width: 16)
-            } else {
-                Image(systemName: "wrench.and.screwdriver")
-                    .font(.footnote)
-                    .foregroundStyle(Theme.tertiary)
-                    .frame(width: 16)
-            }
+    private func header(now: Date) -> some View {
+        let busy = run.isRunning && staleAt == nil
+        let line = Text(run.headline() + (run.since.map { " · " + RunClock.short(now.timeIntervalSince($0)) } ?? ""))
+            .font(.subheadline)
+            .monospacedDigit()
+            .foregroundStyle(Theme.secondary)
+        return HStack(alignment: .top, spacing: 8) {
             Group {
-                if let running {
-                    Text(running.label).shimmering()
+                if busy {
+                    WorkingRing(size: slot * 0.6)
+                } else if run.isRunning {
+                    Image(systemName: "circle.dotted").font(.footnote).foregroundStyle(Theme.tertiary)
+                } else if run.isLive {
+                    Image(systemName: "hand.raised").font(.footnote).foregroundStyle(Theme.attention)
                 } else {
-                    Text(WorkSummary.text(steps))
+                    Image(systemName: "wrench.and.screwdriver").font(.footnote).foregroundStyle(Theme.tertiary)
                 }
             }
-            .font(.subheadline)
-            .foregroundStyle(Theme.secondary)
-            .lineLimit(2)
-            .multilineTextAlignment(.leading)
-            if let diff = WorkSummary.diff(steps) { DiffStat(added: diff.added, removed: diff.removed) }
-            let errors = WorkSummary.errors(steps)
-            if errors > 0 {
-                Label("\(errors) failed", systemImage: "xmark.circle.fill")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(Theme.danger)
-                    .labelStyle(.titleAndIcon)
-                    .fixedSize()
+            .frame(width: slot, height: slot)
+            VStack(alignment: .leading, spacing: 3) {
+                if busy { line.shimmering() } else { line }
+                if let failure = run.failure {
+                    Label(failure, systemImage: "xmark.circle.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Theme.danger)
+                }
             }
-            Spacer(minLength: 4)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if !run.isLive, let diff = WorkSummary.diff(run.steps) { DiffStat(added: diff.added, removed: diff.removed) }
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Theme.tertiary)
                 .rotationEffect(.degrees(open ? 90 : 0))
+                .frame(height: slot)
         }
         .padding(.vertical, 8)
         .frame(minHeight: HitTarget.minHeight)
@@ -275,7 +302,15 @@ struct WorkRunRow: View {
 
 struct ToolStepRow: View {
     let step: ToolStep
+    let run: WorkRun
+    let now: Date
     let onFullOutput: (ToolStep) -> Void
+    @Environment(\.runStateStale) private var staleAt
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .footnote) private var slot: CGFloat = 16
+
+    /// At accessibility sizes the tool glyph goes, so the step's words get the whole width.
+    private var indent: CGFloat { typeSize.isAccessibilitySize ? 0 : slot + 10 }
 
     static func symbol(_ tool: String) -> String {
         switch tool {
@@ -292,19 +327,9 @@ struct ToolStepRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: Self.symbol(step.tool))
-                    .font(.footnote)
-                    .foregroundStyle(Theme.tertiary)
-                    .frame(width: 16)
-                Text(step.label)
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundStyle(step.state == .denied ? Theme.tertiary : .white)
-                    .lineLimit(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if let diff = step.diff { DiffStat(added: diff.added, removed: diff.removed) }
-                StepState(state: step.state)
-            }
+            summary
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(spoken)
             if let output = step.output, !output.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(Self.tail(output))
@@ -317,12 +342,64 @@ struct ToolStepRow: View {
                         .foregroundStyle(Theme.link)
                         .frame(minHeight: HitTarget.minHeight)
                 }
-                .padding(.leading, 26)
+                .padding(.leading, indent)
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .accessibilityElement(children: .combine)
+    }
+
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                if !typeSize.isAccessibilitySize {
+                    Image(systemName: Self.symbol(step.tool))
+                        .font(.footnote)
+                        .foregroundStyle(Theme.tertiary)
+                        .frame(width: slot)
+                }
+                Text(step.label)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(step.state == .denied || step.state == .stopped ? Theme.tertiary : .white)
+                    .lineLimit(step.state.isLive ? nil : 3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let diff = step.diff { DiffStat(added: diff.added, removed: diff.removed) }
+                StepState(state: step.state, stale: staleAt != nil)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                if let detail = step.detail, !detail.isEmpty, detail != step.label {
+                    Text(detail)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(Theme.secondary)
+                        .lineLimit(3)
+                }
+                Text(run.status(step, now: now).joined(separator: " · "))
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(step.state == .waiting || run.task(for: step)?.waiting != nil ? Theme.attention : Theme.tertiary)
+                if step.state == .error || step.state == .denied, let cause = step.cause {
+                    Text(cause)
+                        .font(.caption)
+                        .foregroundStyle(Theme.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.leading, indent)
+        }
+    }
+
+    private var spoken: String {
+        var parts = [step.label] + run.status(step, now: now, spoken: true)
+        if let detail = step.detail, !detail.isEmpty, detail != step.label {
+            switch step.tool {
+            case "Bash": parts.append("command: " + detail)
+            case "Task", "Agent": parts.append("subagent type: " + detail)
+            default: parts.append(detail)
+            }
+        }
+        if step.state == .error || step.state == .denied, let cause = step.cause { parts.append(cause) }
+        if let diff = step.diff { parts.append("\(diff.added) lines added, \(diff.removed) removed") }
+        return parts.joined(separator: ", ")
     }
 
     /// The last 6 lines: where a test run or a build says how it went.
@@ -332,22 +409,31 @@ struct ToolStepRow: View {
     }
 }
 
+/// A step's state as a glyph. The word goes in the step's status line, which VoiceOver reads.
 private struct StepState: View {
     let state: ToolStepState
+    let stale: Bool
 
     var body: some View {
         switch state {
         case .running:
-            ProgressView().controlSize(.mini).accessibilityLabel("Running")
-        case .error:
-            Image(systemName: "xmark.circle.fill").font(.footnote).foregroundStyle(Theme.danger).accessibilityLabel("Failed")
-        case .denied:
-            Image(systemName: "nosign").font(.footnote).foregroundStyle(Theme.attention).accessibilityLabel("Denied")
+            if stale {
+                Image(systemName: "circle.dotted").font(.footnote).foregroundStyle(Theme.tertiary)
+            } else {
+                WorkingRing(size: 11)
+                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] }
+            }
         case .waiting:
-            Label("Waiting for approval", systemImage: "hand.raised").font(.caption).foregroundStyle(Theme.attention)
+            Image(systemName: "hand.raised").font(.footnote).foregroundStyle(Theme.attention)
+        case .ok:
+            Image(systemName: "checkmark.circle").font(.footnote).foregroundStyle(Theme.tertiary)
+        case .error:
+            Image(systemName: "xmark.circle.fill").font(.footnote).foregroundStyle(Theme.danger)
+        case .denied:
+            Image(systemName: "nosign").font(.footnote).foregroundStyle(Theme.attention)
         case .stopped:
-            Label("Stopped", systemImage: "stop.circle").font(.caption).foregroundStyle(Theme.secondary)
-        case .ok, .unknown:
+            Image(systemName: "stop.circle").font(.footnote).foregroundStyle(Theme.secondary)
+        case .unknown:
             EmptyView()
         }
     }

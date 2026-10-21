@@ -9,7 +9,8 @@ import Foundation
 /// `group|groupprofile|newgroup|botexchange` the group and bot exchange screens. `usage` opens Plan usage over the bot list,
 /// `usagehot` with the session near its limit and `usageoff` with no plan limits to read. The pairing and connection states have their own:
 /// `pairconfirm|outdated` (unpaired), `confirm|unrecognized|error|oldbridge` (paired). Sessions: `sessions` (the sidebar),
-/// `thread` (work runs and a permission card), `ask`, `plan`, `streaming`, `cloud`, `longthread` (500 items), `newsession`,
+/// `thread` (work runs and a permission card), `workrun` (subagents running, one failed, a background command), `ask`,
+/// `plan`, `streaming`, `cloud`, `longthread` (500 items), `newsession`,
 /// `sessionsempty` and `sessionsoffline`.
 @MainActor
 enum Demo {
@@ -131,6 +132,7 @@ enum Demo {
         case "oldbridge": router.showingSettings = true
         case "sessions", "sessionsempty": router.sidebar = .sessions
         case "thread": router.open(.session(DemoSessions.fade))
+        case "workrun": router.open(.session(DemoSessions.audit))
         case "ask": router.open(.session(DemoSessions.sidebar))
         case "plan": router.open(.session(DemoSessions.playlist))
         case "streaming": router.open(.session(DemoSessions.parity))

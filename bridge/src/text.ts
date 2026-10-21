@@ -39,7 +39,10 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
 ];
 /** A keyword (any `[\w-]*` prefix allowed, so AWS_SECRET_ACCESS_KEY= and MY_TOKEN= match) then its value after = or :. */
-const KEYED_SECRET = /(\b(?:Bearer|Basic|token)\s+|\b[\w-]*(?:password|passwd|pwd|secret|token|access[_-]?key|api[_-]?key|client[_-]?secret)["']?\s*[=:]\s*["']?)([^\s"'&,;]{3,})/gi;
+const ASSIGNED = String.raw`\b[\w-]*(?:password|passwd|pwd|secret|token|access[_-]?key|api[_-]?key|client[_-]?secret)["']?\s*[=:]\s*["']?`;
+/** A credential spoken in a header or a command line: "Bearer <value>". In prose the word after "token" is a word. */
+const SPOKEN = String.raw`\b(?:Bearer|Basic|token)\s+`;
+const keyed = (lead: string) => new RegExp(`(${lead})([^\\s"'&,;]{3,})`, "gi");
 /** A URL's user:password, curl's -u user:pass, and mysql's -p<password>. The value is masked; the user is kept. */
 const URL_CREDENTIAL = /(:\/\/[^\s:/@]+:)([^\s@/]+)(@)/g;
 const CURL_USER = /((?:-u|--user)\s+[^\s:]+:)(\S+)/g;
@@ -49,16 +52,27 @@ const LONG_RUN = /[A-Za-z0-9+_=-]{32,}/g;
 
 const masked = (n: number) => `«redacted:${n} chars»`;
 
-/** Secret-shaped substrings become «redacted:N chars». Keyed rules run first so a keyed value is masked once, not twice. */
-export function maskSecrets(text: string): string {
-  let out = text;
-  out = out.replace(KEYED_SECRET, (_, lead: string, value: string) => lead + masked(value.length));
-  out = out.replace(URL_CREDENTIAL, (_, lead: string, value: string, tail: string) => lead + masked(value.length) + tail);
-  out = out.replace(CURL_USER, (_, lead: string, value: string) => lead + masked(value.length));
-  out = out.replace(MYSQL_PASSWORD, (_, pre: string, flag: string, value: string) => pre + flag + masked(value.length));
-  for (const p of SECRET_PATTERNS) out = out.replace(p, (m) => masked(m.length));
-  return out.replace(LONG_RUN, (m) => (/[a-z]/.test(m) && /[A-Z]/.test(m) && /[0-9]/.test(m) ? masked(m.length) : m));
-}
+type Rule = readonly [RegExp, (match: string, ...groups: string[]) => string];
+const maskValue = (_: string, lead: string, value: string) => lead + masked(value.length);
+const URL_RULE: Rule = [URL_CREDENTIAL, (_, lead, value, tail) => lead + masked(value.length) + tail];
+const SHAPES: readonly Rule[] = [
+  ...SECRET_PATTERNS.map((p): Rule => [p, (m) => masked(m.length)]),
+  [LONG_RUN, (m) => (/[a-z]/.test(m) && /[A-Z]/.test(m) && /[0-9]/.test(m) ? masked(m.length) : m)],
+];
+// Keyed rules run first so a keyed value is masked once, not twice.
+const SECRET_RULES: readonly Rule[] = [[keyed(`${SPOKEN}|${ASSIGNED}`), maskValue], URL_RULE, [CURL_USER, maskValue], [MYSQL_PASSWORD, (_, pre, flag, value) => pre + flag + masked(value.length)], ...SHAPES];
+const PROSE_RULES: readonly Rule[] = [[keyed(ASSIGNED), maskValue], URL_RULE, ...SHAPES];
+
+const applying = (rules: readonly Rule[]) => (text: string) => rules.reduce((out, [re, to]) => out.replace(re, to), text);
+
+/** Secret-shaped substrings of a command, an output or a log become «redacted:N chars». */
+export const maskSecrets = applying(SECRET_RULES);
+
+/**
+ * maskSecrets for words a model wrote about a call (a description, a summary): assignments and key shapes are masked,
+ * but not the word after "token", "Basic" or "Bearer", which in prose is an ordinary word.
+ */
+export const maskProse = applying(PROSE_RULES);
 
 export const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}… (${s.length - n} more chars)`);
 const CLIP = 4096;

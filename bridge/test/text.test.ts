@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { displayName, hasHiddenCharacters, maskSecrets, redact } from "../src/text";
+import { displayName, hasHiddenCharacters, maskProse, maskSecrets, redact } from "../src/text";
 
 describe("displayName", () => {
   test.each([
@@ -23,6 +23,21 @@ describe("maskSecrets", () => {
   test("masks a key in Claude Code's stderr but keeps a commit SHA", () => {
     const out = maskSecrets("auth failed for sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx at 3f2a9c1e5b7d4a6f8e0c2b4d6f8a0c2e4b6d8f0a");
     expect(out).toBe("auth failed for «redacted:37 chars» at 3f2a9c1e5b7d4a6f8e0c2b4d6f8a0c2e4b6d8f0a");
+  });
+
+  test("masks a header's bearer value", () => {
+    expect(maskSecrets("curl -H 'Authorization: Bearer tok123456'")).not.toContain("tok123456");
+  });
+});
+
+describe("maskProse", () => {
+  test("keeps the word after token, Basic or Bearer in a description", () => {
+    for (const s of ["Check token refresh handling", "Basic setup of the app", "Bearer of bad news"]) expect(maskProse(s)).toBe(s);
+  });
+
+  test("masks an assignment and a key shape", () => {
+    expect(maskProse("Retry with token=abc123")).toBe("Retry with token=«redacted:6 chars»");
+    expect(maskProse("Use ghp_abcdefghijklmnopqrstuvwxyz0123456789 to push")).toBe("Use «redacted:40 chars» to push");
   });
 });
 

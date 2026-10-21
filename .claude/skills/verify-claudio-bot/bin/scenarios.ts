@@ -1341,31 +1341,43 @@ const S7: Scenario = {
       tell: "how-many",
       lane: "protocol",
       text: "The list keeps its order while the user reads it: rows move only when a status changes.",
-      pass: "Ordering the rows as the app does (newest lastAt first), the order changes only in list frames that also change a row's status.",
-      fail: "The order changes in a frame where no status changed (a title rewrite, a bare transcript write).",
+      pass: "Ordering the rows as the app does (ListOrder in ios/ClaudioBot/Model/Sessions.swift: needs you, then working by run start, then the rest by newest lastAt, and a row is placed again only when it changes between those three), the order changes only in list frames that also change a row's status, and then only rows whose status changed move.",
+      fail: "The order changes in a frame where no status changed (a title rewrite, a bare transcript write), or a row whose status did not change moves.",
       check: (ev) => {
         const names = new Set(s7names);
         const rows = new Map<string, Row>();
-        let order = "";
+        const places = new Map<string, { rank: number; at: string }>();
+        const rank = (r: Row) => (r.status === "awaiting_approval" || r.status === "awaiting_input" ? 0 : r.status === "working" ? 1 : 2);
+        const settle = (n: string, r: Row) => {
+          if (places.get(n)?.rank !== rank(r)) places.set(n, { rank: rank(r), at: rank(r) === 1 ? (r.since ?? r.lastAt) : r.lastAt });
+        };
+        const appOrder = (known: Set<string>) =>
+          [...known].sort((a, b) => {
+            const x = places.get(a)!, y = places.get(b)!;
+            return x.rank - y.rank || y.at.localeCompare(x.at) || a.localeCompare(b);
+          });
         let reorders = 0;
         let statusChanges = 0;
         const bad: string[] = [];
         const frames = new Map<number, Snap[]>();
         for (const s of ev.history) if (names.has(s.name) && s.row) frames.set(s.frame, [...(frames.get(s.frame) ?? []), s]);
         for (const xs of frames.values()) {
-          const changed = xs.filter((s) => rows.has(s.name) && rows.get(s.name)!.status !== s.row!.status).length;
+          const changed = new Set(xs.filter((s) => rows.has(s.name) && rows.get(s.name)!.status !== s.row!.status).map((s) => s.name));
           const known = new Set(rows.keys());
-          for (const s of xs) rows.set(s.name, s.row!);
-          statusChanges += changed;
-          const next = [...rows].filter(([n]) => known.has(n)).sort(([a, x], [b, y]) => y.lastAt.localeCompare(x.lastAt) || a.localeCompare(b)).map(([n]) => n).join(",");
-          const before = order.split(",").filter((n) => known.has(n)).join(",");
-          if (before && next !== before) {
-            reorders++;
-            if (!changed) bad.push(`+${(xs[0]!.at / 1000).toFixed(1)}s`);
+          const before = appOrder(known);
+          for (const s of xs) {
+            rows.set(s.name, s.row!);
+            settle(s.name, s.row!);
           }
-          order = [...rows].sort(([a, x], [b, y]) => y.lastAt.localeCompare(x.lastAt) || a.localeCompare(b)).map(([n]) => n).join(",");
+          statusChanges += changed.size;
+          const next = appOrder(known);
+          if (next.join() === before.join()) continue;
+          reorders++;
+          const kept = (order: string[]) => order.filter((n) => !changed.has(n)).join();
+          if (!changed.size) bad.push(`+${(xs[0]!.at / 1000).toFixed(1)}s`);
+          else if (kept(before) !== kept(next)) bad.push(`+${(xs[0]!.at / 1000).toFixed(1)}s (a row that kept its status moved)`);
         }
-        return bad.length ? no(`${bad.length} of ${reorders} reorders came with no status change, at ${bad.slice(0, 6).join(", ")}; ${statusChanges} status changes in all`) : ok(`${reorders} reorders, each with a status change (${statusChanges} status changes)`);
+        return bad.length ? no(`${bad.length} of ${reorders} reorders moved rows with no status change, at ${bad.slice(0, 6).join(", ")}; ${statusChanges} status changes in all`) : ok(`${reorders} reorders, each moving only rows whose status changed (${statusChanges} status changes)`);
       },
     },
     noAckOutput("S7.8", s7names),

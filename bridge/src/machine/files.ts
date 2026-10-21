@@ -1,4 +1,4 @@
-import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 // The machine's own files: keys, the registry, the outbox. Each is 0600 in a 0700 folder.
@@ -30,10 +30,13 @@ export function writePrivate(path: string, text: string) {
   }
 }
 
-/** Appends one line. A process killed mid-append leaves at most a torn last line, which readLines skips. */
+/**
+ * Appends one line. A process killed mid-append leaves at most a torn last line, which readLines skips. A symlink is
+ * refused, as readPrivate does.
+ */
 export function appendLine(path: string, line: string) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const fd = openSync(path, "a", 0o600);
+  const fd = openSync(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
   try {
     writeFileSync(fd, `${line}\n`);
   } finally {

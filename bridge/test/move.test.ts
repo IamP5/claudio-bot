@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDevices } from "../src/devices";
@@ -350,6 +350,23 @@ describe("export, import, finish", () => {
     expect(finishMove({ home: mac, ...MAC }, moveId)).toEqual({ kind: "already" });
     expect(finishMove({ home: mac, ...MAC }, "mv_nope")).toEqual({ kind: "unknown" });
     expect(exportWorld({ home: mac, ...MAC })).toEqual({ kind: "empty" });
+  });
+
+  test.each([
+    ["a bot's folder", "bots/b_scout"],
+    ["a folder inside a bot's home", "bots/b_scout/library"],
+    ["the bots folder itself", "bots"],
+  ])("import refuses to write through %s that is a symlink, and nothing lands where it points", (_, link) => {
+    const mac = freshHome();
+    const omarchy = freshHome();
+    seedMac(mac);
+    seedOmarchy(omarchy);
+    const outside = mkdtempSync(join(tmpdir(), "claudiobot-outside-"));
+    roots.push(outside);
+    mkdirSync(join(omarchy, link, ".."), { recursive: true });
+    symlinkSync(outside, join(omarchy, link));
+    expect(() => importWorld({ home: omarchy, ...OMARCHY }, exported(mac))).toThrow(/symlink/);
+    expect(readdirSync(outside)).toEqual([]);
   });
 
   test.each([

@@ -1,5 +1,5 @@
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, normalize, relative, resolve } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join, normalize, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import { createHomes } from "./home";
 import { lockHome } from "./lock";
@@ -207,8 +207,27 @@ function allowedPath(path: string, bots: ReadonlySet<string>): boolean {
   return m !== null && bots.has(m[1]!);
 }
 
+/**
+ * The folders from the home down to the file's, made one at a time. A symlink on the way is refused: it could point
+ * the write anywhere, and the bundle's paths are checked only as text.
+ */
+function folderUnder(home: string, relDir: string): string {
+  let dir = home;
+  for (const part of relDir === "." ? [] : relDir.split("/")) {
+    dir = join(dir, part);
+    const stat = lstatSync(dir, { throwIfNoEntry: false });
+    if (stat?.isSymbolicLink()) throw new Error(`${dir} is a symlink, so nothing from the bundle is written through it`);
+    if (stat && !stat.isDirectory()) throw new Error(`${dir} is in the way: it is not a folder`);
+    if (!stat) mkdirSync(dir, { mode: 0o700 });
+  }
+  const real = realpathSync(dir);
+  const root = realpathSync(home);
+  if (real !== root && !real.startsWith(root + sep)) throw new Error(`${dir} resolves outside ${home}`);
+  return dir;
+}
+
 function landFile(home: string, file: BundleFile) {
-  const path = join(home, file.path);
+  const path = join(folderUnder(home, dirname(file.path)), file.path.split("/").at(-1)!);
   const incoming = Buffer.from(file.data, "base64");
   const existing = lstatSync(path, { throwIfNoEntry: false });
   if (existing && !existing.isFile()) throw new Error(`${path} is in the way: it is not a regular file`);
@@ -217,7 +236,6 @@ function landFile(home: string, file: BundleFile) {
   if (local !== null && file.path === "USER.md") body = mergeFacts(local, incoming.toString("utf8"));
   else if (local !== null && file.path.endsWith(".jsonl")) body = unionLines(local, incoming.toString("utf8"));
   if (local !== null && Buffer.from(body).equals(Buffer.from(local))) return;
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   writeAtomic(path, body);
 }
 

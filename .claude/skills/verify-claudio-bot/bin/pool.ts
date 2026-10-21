@@ -1,7 +1,7 @@
 // The simulator pool for scenario runs: three cloned iPhones, a per-device lease, and the only code that boots them.
 // A lease is a directory leases/<device>/ made with mkdir (atomic), holding owner.json and a heartbeat file the holder
 // touches; a heartbeat older than STALE_MS marks the lease reclaimable. Nothing here touches a device outside POOL.
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BASE, REPO } from "./control-claudio";
 
@@ -265,58 +265,162 @@ export function simctl(lease: Lease, ...a: string[]) {
   return run(["xcrun", "simctl", a[0]!, lease.udid, ...a.slice(1)]);
 }
 
-const BUILD = join(BASE, "ios-build");
-export const APP = join(BUILD, "Build/Products/Debug-iphonesimulator/ClaudioBot.app");
+const BUILDS = join(BASE, "ios-build");
+const KEEP_BUILDS = 3;
+const STAMP_DIR = /^[0-9a-f]{40}(\+[0-9a-f]+)?$/;
 
-/**
- * Builds the Debug app for the simulator once per ios/ tree: the stamp is the tree's hash plus any uncommitted change
- * under ios/. A build lock keeps concurrent runs from building twice; the others wait for it.
- */
-export async function buildApp(): Promise<string> {
+/** One ios/ tree's Debug build, in its own derived-data folder ios-build/<stamp>/ that no other tree writes. */
+export type Build = { stamp: string; dir: string; app: string };
+
+/** The ios/ tree's hash, plus a hash of the content of any uncommitted change under ios/, untracked files included. */
+export function treeStamp() {
   const tree = run(["git", "-C", REPO, "rev-parse", "HEAD:ios"]).out;
-  const dirty = run(["git", "-C", REPO, "status", "--porcelain", "--", "ios"]).out;
-  const stamp = `${tree}${dirty ? `+${Bun.hash(dirty).toString(16)}` : ""}`;
-  const stampFile = join(BUILD, "stamp");
-  const lock = join(BASE, "ios-build.lock");
-  mkdirSync(BUILD, { recursive: true });
-  for (;;) {
-    if (existsSync(APP) && existsSync(stampFile) && readFileSync(stampFile, "utf8") === stamp) return APP;
-    try {
-      mkdirSync(lock);
-      break;
-    } catch {
-      if (Date.now() - statSync(lock).mtimeMs > 30 * 60_000) rmSync(lock, { recursive: true, force: true });
-      await Bun.sleep(5000);
-    }
+  const diff = Bun.spawnSync(["git", "-C", REPO, "diff", "HEAD", "--binary", "--", "ios"], { stdout: "pipe" }).stdout;
+  const untracked = run(["git", "-C", REPO, "ls-files", "-o", "--exclude-standard", "-z", "--", "ios"]).out.split("\0").filter(Boolean);
+  if (!diff.length && !untracked.length) return tree;
+  const h = new Bun.CryptoHasher("sha256").update(diff);
+  for (const f of untracked.sort()) {
+    const p = join(REPO, f);
+    const st = lstatSync(p);
+    // A symlink counts by its target; a directory git lists whole (a nested repository) counts by its path only.
+    h.update(`\0${f}\0`).update(st.isSymbolicLink() ? `link:${readlinkSync(p)}` : st.isFile() ? readFileSync(p) : "dir");
   }
+  return `${tree}+${h.digest("hex").slice(0, 16)}`;
+}
+
+const users = (stamp: string) => join(BUILDS, `${stamp}.users`);
+const alive = (pid: number) => {
   try {
-    log(`building the iOS app (stamp ${stamp.slice(0, 12)}) into ${BUILD}`);
-    const p = Bun.spawnSync(
-      ["xcodebuild", "-project", join(REPO, "ios/ClaudioBot.xcodeproj"), "-scheme", "ClaudioBot", "-configuration", "Debug", "-destination", "generic/platform=iOS Simulator", "-derivedDataPath", BUILD, "build"],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    writeFileSync(join(BUILD, "build.log"), p.stdout.toString() + p.stderr.toString());
-    if (p.exitCode !== 0) throw new Error(`xcodebuild failed; log ${join(BUILD, "build.log")}`);
-    writeFileSync(stampFile, stamp);
-    log(`built ${APP}`);
-    return APP;
-  } finally {
-    rmSync(lock, { recursive: true, force: true });
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+const marked = new Set<string>();
+/** Marks a build as used by this process until it exits, so no other run prunes it while this one waits for a lease. */
+function markInUse(stamp: string) {
+  if (marked.has(stamp)) return;
+  marked.add(stamp);
+  const f = join(users(stamp), String(process.pid));
+  mkdirSync(users(stamp), { recursive: true });
+  writeFileSync(f, new Date().toISOString());
+  process.on("exit", () => rmSync(f, { force: true }));
+}
+/** A build is in use while a live process holds a marker for it; markers of dead pids are ignored. */
+const inUse = (stamp: string) => {
+  try {
+    return readdirSync(users(stamp)).some((pid) => alive(Number(pid)));
+  } catch {
+    return false;
+  }
+};
+
+const buildFor = (stamp: string): Build => {
+  const dir = join(BUILDS, stamp);
+  return { stamp, dir, app: join(dir, "Build/Products/Debug-iphonesimulator/ClaudioBot.app") };
+};
+/** The stamp a finished build in b.dir carries, or null while it is missing or building. */
+const builtStamp = (b: Build) => {
+  try {
+    return existsSync(b.app) ? readFileSync(join(b.dir, "stamp"), "utf8") : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Keeps the KEEP_BUILDS most recently used builds, and never removes one that is building or in use by a live run. */
+function pruneBuilds() {
+  const used = (n: string) => {
+    try {
+      return statSync(join(BUILDS, n, "stamp")).mtimeMs;
+    } catch {
+      return 0;
+    }
+  };
+  const stamps = readdirSync(BUILDS).filter((n) => STAMP_DIR.test(n)).sort((a, b) => used(b) - used(a));
+  for (const n of stamps.slice(KEEP_BUILDS)) {
+    if (existsSync(join(BUILDS, `${n}.lock`)) || inUse(n)) continue;
+    rmSync(join(BUILDS, n), { recursive: true, force: true });
+    rmSync(users(n), { recursive: true, force: true });
+    log(`pruned the iOS build ${n.slice(0, 12)}`);
   }
 }
 
 /**
- * Installs and launches the app on a leased, booted device. Debug launch arguments: -pairingVault keeps a throwaway
- * pairing per device, -pairingAutoConfirm confirms a pairing link without the tap simctl cannot make, and -sidebarMode
- * opens on the Sessions list.
+ * Builds the Debug app for the simulator once per ios/ tree, into that tree's own folder, so a run that waits for a
+ * lease still installs its own tree's app however many other trees build meanwhile. A lock per stamp keeps concurrent
+ * runs of one tree from building twice; the others wait for it.
  */
-export function installAndLaunch(lease: Lease, app: string, extra: string[] = []) {
-  const i = simctl(lease, "install", app);
+export async function buildApp(): Promise<Build> {
+  const b = buildFor(treeStamp());
+  const lock = `${b.dir}.lock`;
+  mkdirSync(BUILDS, { recursive: true });
+  markInUse(b.stamp);
+  for (;;) {
+    if (builtStamp(b) === b.stamp) {
+      const now = new Date();
+      utimesSync(join(b.dir, "stamp"), now, now);
+      return b;
+    }
+    try {
+      mkdirSync(lock);
+      break;
+    } catch {
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > 30 * 60_000) rmSync(lock, { recursive: true, force: true });
+      } catch {}
+      await Bun.sleep(5000);
+    }
+  }
+  try {
+    log(`building the iOS app (stamp ${b.stamp}) into ${b.dir}`);
+    rmSync(join(b.dir, "stamp"), { force: true });
+    mkdirSync(b.dir, { recursive: true });
+    const p = Bun.spawnSync(
+      ["xcodebuild", "-project", join(REPO, "ios/ClaudioBot.xcodeproj"), "-scheme", "ClaudioBot", "-configuration", "Debug", "-destination", "generic/platform=iOS Simulator", "-derivedDataPath", b.dir, "build"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    writeFileSync(join(b.dir, "build.log"), p.stdout.toString() + p.stderr.toString());
+    if (p.exitCode !== 0) throw new Error(`xcodebuild failed; log ${join(b.dir, "build.log")}`);
+    writeFileSync(join(b.dir, "stamp"), b.stamp);
+    log(`built ${b.app}`);
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+  pruneBuilds();
+  return b;
+}
+
+/** A digest of every file in an app bundle, by relative path and content. */
+function bundleDigest(app: string) {
+  const files = (readdirSync(app, { recursive: true }) as string[]).filter((f) => statSync(join(app, f)).isFile()).sort();
+  const h = new Bun.CryptoHasher("sha256");
+  for (const f of files) h.update(f).update(readFileSync(join(app, f)));
+  return h.digest("hex");
+}
+
+/**
+ * Installs and launches the app on a leased, booted device, and throws unless the bundle the device then holds is the
+ * build of the expected stamp. Debug launch arguments: -pairingVault keeps a throwaway pairing per device,
+ * -pairingAutoConfirm confirms a pairing link without the tap simctl cannot make, and -sidebarMode opens on the
+ * Sessions list.
+ */
+export function installAndLaunch(lease: Lease, build: Build, extra: string[] = []) {
+  const found = builtStamp(build);
+  if (found !== build.stamp) throw new Error(`refusing to install: ${build.dir} holds ${found ? `stamp ${found}` : "no finished build"}, not ${build.stamp}`);
+  const want = bundleDigest(build.app);
+  const i = simctl(lease, "install", build.app);
   if (!i.ok) throw new Error(`install on ${lease.device}: ${i.err}`);
+  const container = simctl(lease, "get_app_container", BUNDLE, "app");
+  if (!container.ok) throw new Error(`app container on ${lease.device}: ${container.err}`);
+  const got = bundleDigest(container.out);
+  if (got !== want) throw new Error(`the app on ${lease.device} is not the build of stamp ${build.stamp}: bundle ${got.slice(0, 12)}, built ${want.slice(0, 12)}`);
   simctl(lease, "terminate", BUNDLE);
   const l = simctl(lease, "launch", BUNDLE, "-pairingVault", `claudiobot-ux-${lease.device}`, "-pairingAutoConfirm", "YES", "-sidebarMode", "sessions", ...extra);
   if (!l.ok) throw new Error(`launch on ${lease.device}: ${l.err}`);
-  log(`installed and launched ${BUNDLE} on ${lease.device}`);
+  log(`installed stamp ${build.stamp} (bundle ${got.slice(0, 12)}) and launched ${BUNDLE} on ${lease.device}`);
+  return got;
 }
 
 export const leaseDirs = () => (existsSync(LEASES) ? readdirSync(LEASES).filter((n) => isPool(n)) : []);

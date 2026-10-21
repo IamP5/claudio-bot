@@ -9,6 +9,7 @@ enum DemoSessions {
     static let parity = SessionID("4f1a8c3e-7b2d-4e9a-b5c6-1d8e3f7a2b90")
     static let catalog = SessionID("7d3e1b9c-2a4f-4c8e-9b1d-6e5f3a2c8d70")
     static let changelog = SessionID("session_01Hq7vXk3mRt9wYpL2nB5cDe")
+    static let audit = SessionID("5a9c3e71-1b4d-4f2a-8e6c-3d7b9f1a2c50")
 
     static let soltaOSom = ProjectID("3f9a1c7e2b4d6a80")
     static let claudioBot = ProjectID("9c2e5b7a1d3f4e60")
@@ -59,6 +60,7 @@ enum DemoSessions {
 
         row(sidebar, claudioBot, "Sessions sidebar for iOS", origin: .desktop, minutes: 4, status: .awaitingInput, holder: .desktop,
             branch: "feat/sessions-ios", pr: (52, .open)),
+        row(audit, claudioBot, "Audit the session code in parallel", origin: .phone, minutes: 0.5, status: .working, holder: .claudio, branch: "main"),
         row(catalog, claudioBot, "Close all emulators", origin: .terminal, minutes: 35, branch: "main"),
         row(id(21), claudioBot, "Grokbot UI/UX polish", origin: .agent, minutes: 75, unread: true,
             agent: SessionAgentLink(botId: BotID("claude"), agentId: AgentID("a2")), branch: "claudio/polish", worktree: true, pr: (49, .open)),
@@ -201,6 +203,63 @@ enum DemoSessions {
         ]
     }
 
+    private static func secondsAgo(_ seconds: Double) -> Date { .now - seconds }
+
+    /// Three subagents in flight: one busy, one quiet for over a minute, one blocked on approval for its command. A
+    /// background command one of them started, a helper that failed at once, and a finished run with a failed write.
+    /// The approval card itself is left out, so the whole run fits on one screen.
+    static func auditItems() -> [SessionItem] {
+        let agent = { (id: String, label: String, started: Double) in
+            ToolStep(id: id, tool: "Agent", label: label, state: .running, diff: nil, output: nil, detail: "general-purpose",
+                     startedAt: secondsAgo(started), background: true)
+        }
+        return [
+            user("au-u1", 4, "Audit the session code with three agents in parallel, and fix the summary count first."),
+            think("au-t1", 3.9, "Fix the count, then fan out one agent per file.", ms: 1800),
+            work("au-w1", 3.8, [
+                ToolStep(id: "au-r1", tool: "Read", label: "Read ios/ClaudioBot/Model/Threads.swift", state: .ok, diff: nil, output: nil,
+                         startedAt: secondsAgo(228), endedAt: secondsAgo(227)),
+                ToolStep(id: "au-e1", tool: "Edit", label: "Edit ios/ClaudioBot/Model/Threads.swift", state: .ok,
+                         diff: ToolDiff(path: "ios/ClaudioBot/Model/Threads.swift", added: 6, removed: 2), output: nil,
+                         startedAt: secondsAgo(220), endedAt: secondsAgo(219)),
+                ToolStep(id: "au-e2", tool: "Write", label: "Write ios/ClaudioBotTests/ThreadWorkTests.swift", state: .error,
+                         diff: ToolDiff(path: "ios/ClaudioBotTests/ThreadWorkTests.swift", added: 40, removed: 0), output: nil,
+                         startedAt: secondsAgo(212), endedAt: secondsAgo(211), cause: "File has not been read yet. Read it first before writing to it."),
+                ToolStep(id: "au-b0", tool: "Bash", label: "Run the thread tests", state: .ok, diff: nil, output: " 12 pass\n 0 fail",
+                         detail: "xcodebuild test -only-testing:ClaudioBotTests/ThreadWorkTests", startedAt: secondsAgo(205), endedAt: secondsAgo(163)),
+            ]),
+            say("au-m1", 2.7, "The count is fixed. Starting one agent per file."),
+            work("au-w2", 2.2, [
+                agent("au-a1", "Audit session.ts for stale working flags", 127),
+                agent("au-a2", "Audit threads.ts for overlay order", 126),
+                agent("au-a3", "Audit catalog.ts for row status", 126),
+                ToolStep(id: "au-a4", tool: "Agent", label: "broken helper", state: .error, diff: nil, output: nil, detail: "no-such-agent-type",
+                         startedAt: secondsAgo(126), endedAt: secondsAgo(125), cause: "Agent type 'no-such-agent-type' not found"),
+                ToolStep(id: "au-b1", tool: "Bash", label: "Run in background: sleep 75", state: .running, diff: nil, output: nil, detail: "sleep 75",
+                         startedAt: secondsAgo(41), background: true, owner: "au-a1"),
+                ToolStep(id: "au-b2", tool: "Bash", label: "Remove the build folder", state: .waiting, diff: nil, output: nil, detail: "rm -rf build",
+                         owner: "au-a3"),
+            ]),
+        ]
+    }
+
+    static func auditControls() -> SessionControls {
+        let task = { (id: String, step: String, kind: SessionTaskKind, label: String, started: Double, owner: String?, tools: Int?, last: String?, quiet: Double, waiting: MessageID?) in
+            SessionTask(id: TaskID(id), stepId: step, kind: kind, label: label, background: true, startedAt: secondsAgo(started), owner: owner,
+                        progress: tools.map { TaskProgress(tools: $0, last: last, at: secondsAgo(quiet)) }, waiting: waiting)
+        }
+        var c = controls(working: true)
+        c.turn = SessionTurn(startedAt: ISO8601DateFormatter().string(from: secondsAgo(240)), wake: false)
+        c.heardAt = secondsAgo(2)
+        c.tasks = [
+            task("t-a1", "au-a1", .agent, "Audit session.ts for stale working flags", 127, nil, 7, "Read", 4, nil),
+            task("t-a2", "au-a2", .agent, "Audit threads.ts for overlay order", 126, nil, 3, "Bash", 95, nil),
+            task("t-a3", "au-a3", .agent, "Audit catalog.ts for row status", 126, nil, 2, "Bash", 30, MessageID("card-audit")),
+            task("t-b1", "au-b1", .command, "sleep 75", 41, "au-a1", nil, nil, 0, nil),
+        ]
+        return c
+    }
+
     static func cloudItems() -> [SessionItem] {
         [
             user("c-u1", 150, "Add a CHANGELOG.md that follows Keep a Changelog, from the git history."),
@@ -243,6 +302,8 @@ enum DemoSessions {
                 epoch: "demo", rev: 1, items: cloudItems(), before: nil,
                 controls: controls(working: true, canSend: false, reason: "This session runs on claude.ai."), live: nil
             )
+        case audit:
+            return SessionSnapshot(epoch: "demo", rev: 1, items: auditItems(), before: nil, controls: auditControls(), live: nil)
         case catalog:
             let items = catalogItems()
             return SessionSnapshot(epoch: "demo", rev: 1, items: Array(items.suffix(120)), before: Cursor("demo-page"), controls: controls(), live: nil)

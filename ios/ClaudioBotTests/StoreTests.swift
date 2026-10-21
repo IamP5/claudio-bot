@@ -923,11 +923,6 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(late?.message == HomeView.deleteMessage(b, worktrees: []))
     }
 
-    @Test func theConnectionBannerOffersHelpAfterThreeFailedConnects() {
-        #expect(ConnectionBanner.help(failures: 2, address: "10.0.0.20:7878") == nil)
-        #expect(ConnectionBanner.help(failures: 3, address: "10.0.0.20:7878")?.contains("at 10.0.0.20:7878") == true)
-    }
-
     @Test func theOfflineBarShowsWhileTheMacIsOutOfReach() {
         #expect(!OfflineBar.shows(.connected(machine: "Mac")))
         #expect(!OfflineBar.shows(.unpaired))

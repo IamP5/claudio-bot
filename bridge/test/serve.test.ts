@@ -404,6 +404,22 @@ test("session channels reach only the sockets watching them, until they unwatch 
   expect(list.inbox).toEqual([]);
 });
 
+test("no frame carries half a character: a lone surrogate goes out as U+FFFD, on replies, broadcasts and channels alike", async () => {
+  const half = "Refactor the screen \ud83d";
+  const b = boot(tempHome(), { replies: (m) => (m.type === "watch_sessions" ? [{ type: "error", message: half }] : []) });
+  const { token } = await pairPhone(b);
+  const c = connect(b, { bearer: token, query: "?protocol=3" });
+  await c.next("hello");
+  const texts: string[] = [];
+  c.raw.addEventListener("message", (e) => texts.push(String(e.data)));
+  c.send({ type: "watch_sessions" });
+  await until(() => texts.length === 1, "the reply");
+  b.transport.signal({ type: "session_rows", rows: [], removed: [half as SessionId], projects: [] }, "sessions");
+  b.transport.publish({ type: "bot_removed", botId: half as BotId });
+  await until(() => texts.length === 3, "the channel frame and the broadcast");
+  expect(texts.map((t) => [t.isWellFormed(), t.includes("\\ud83d"), t.includes("Refactor the screen �")])).toEqual(Array(3).fill([true, false, true]));
+});
+
 test("a socket's requests are handled and answered in the order it sent them, even when an earlier one is slow", async () => {
   const b = boot(tempHome(), {
     replies: async (m) => {

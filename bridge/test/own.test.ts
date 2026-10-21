@@ -1261,3 +1261,76 @@ describe("how a run ends", () => {
     expect(alwaysText([])).toBe("this");
   });
 });
+
+describe("the thread's order and how soon it shows", () => {
+  const reply = (text: string) => ({ type: "assistant", message: { role: "assistant", id: `msg_${crypto.randomUUID()}`, content: [{ type: "text", text }] } });
+  const prompted = (text: string) => ({ type: "user", message: { role: "user", content: text } });
+  const shown = async (n: number) => (await snapshot(ASK)).items.slice(-n).map((i) => (i.kind === "user" || i.kind === "assistant" ? i.text : i.kind));
+  const created = async (ref: string, text: string) => {
+    const project = ((await handle({ type: "watch_sessions" }))[0] as Extract<ServerMessage, { type: "sessions" }>).projects.find((p) => p.path === repo)!;
+    const [made] = await handle({ type: "session_create", ref, projectId: project.id, text, model: null, mode: "default", isolate: "none" });
+    await flush();
+    return (made as Extract<ServerMessage, { type: "session_created" }>).sessionId;
+  };
+
+  test("an answered card stays where it was raised, above the reply that came after it, also after a restart", async () => {
+    await start();
+    await send("List it");
+    const q = queries[0]!;
+    clock += 1_000;
+    const allowed = asked(q, "Bash", { command: "ls" }, { toolUseID: "toolu_ls" });
+    await flush();
+    const card = (await snapshot(ASK)).items.find((i) => i.kind === "permission") as Extract<SessionItem, { kind: "permission" }>;
+    clock += 1_000;
+    await handle({ type: "session_decide", sessionId: ASK, cardId: card.card.id, choice: "once" });
+    await allowed;
+    clock += 1_000;
+    await transcribe(resultEntry("toolu_ls", "a.txt"), reply("Listed."));
+    expect(await shown(3)).toEqual(["work", "permission", "Listed."]);
+    q.emit(result(0.01, { session_id: ASK }));
+    await flush();
+    sessions.stop();
+    await start();
+    expect(await shown(3)).toEqual(["work", "permission", "Listed."]);
+  });
+
+  test("a message queued behind a turn shows after everything, then where its turn starts once Claude Code takes it", async () => {
+    await start();
+    await send("First");
+    clock += 10_000;
+    await send("Second", "c_2");
+    clock += 10_000;
+    await transcribe(prompted("First"), reply("One."));
+    expect(await shown(3)).toEqual(["First", "One.", "Second"]);
+    clock += 10_000;
+    queries[0]!.emit(result(0.01, { session_id: ASK }));
+    await flush();
+    expect((await snapshot(ASK)).items.at(-1)).toMatchObject({ id: "c_2", queued: false, at: new Date(clock).toISOString() });
+    expect(await shown(3)).toEqual(["First", "One.", "Second"]);
+  });
+
+  test("a session the phone started shows what Claude Code writes before the index has read it, and its prompt leaves only with Claude Code's copy", async () => {
+    await start({ folders: () => [repo] });
+    const id = await created("r1", "Run ls");
+    await snapshot(id);
+    thread.length = 0;
+    const user = crypto.randomUUID();
+    const lines = [
+      { parentUuid: null, type: "user", uuid: user, message: { role: "user", content: "Run ls" } },
+      { parentUuid: user, type: "assistant", uuid: crypto.randomUUID(), message: { role: "assistant", id: "msg_ls", content: [{ type: "tool_use", id: "toolu_new", name: "Bash", input: { command: "ls" } }] } },
+    ];
+    writeFileSync(join(folder, `${id}.jsonl`), lines.map((l) => `${JSON.stringify({ isSidechain: false, cwd: repo, sessionId: id, timestamp: new Date(clock).toISOString(), ...l })}\n`).join(""));
+    queries[0]!.emit(result(0.01, { session_id: id }));
+    const frames = () => thread.flatMap(({ frame }) => (frame.type === "session_items" ? [frame] : []));
+    for (let i = 0; i < 200 && !frames().some((f) => f.removed.includes("r1" as never)); i++) await Bun.sleep(5);
+    expect(frames().find((f) => f.removed.includes("r1" as never))?.items).toContainEqual(expect.objectContaining({ kind: "user", id: user, text: "Run ls" }));
+    expect(frames().flatMap((f) => f.items).flatMap((i) => (i.kind === "work" ? i.steps : []))).toContainEqual(expect.objectContaining({ id: "toolu_new" }));
+  });
+
+  test("a new session's row cuts a long prompt on a whole character, so its frame is always readable", async () => {
+    await start({ folders: () => [repo] });
+    const id = await created("r2", `${"x".repeat(79)}\u{1F600} then reply ok`);
+    const title = (await rowOf(id)).title;
+    expect([title.isWellFormed(), Array.from(title).length, title.at(-1)]).toEqual([true, 80, "…"]);
+  });
+});

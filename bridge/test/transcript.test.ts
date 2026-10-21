@@ -71,6 +71,26 @@ describe("heads", () => {
     expect(asked).toBe(1);
   });
 
+  test("a session's last activity is its last prompt, reply or tool result; a title or bookkeeping line written later is not", async () => {
+    const heads = createHeads({ projectsDir: projects });
+    await heads.scan();
+    const file = fileOf("own-ask");
+    const before = readFileSync(file, "utf8");
+    const lines = before.trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
+    const leaf = lines.findLast((l) => l.type === "assistant" || l.type === "user")!;
+    const id = IDS["own-ask"];
+    try {
+      const replied = "2026-10-21T10:00:00.000Z";
+      appendFileSync(file, `${JSON.stringify({ parentUuid: leaf.uuid, isSidechain: false, type: "assistant", uuid: "a-late", timestamp: replied, sessionId: id, cwd: "<cwd>", message: { role: "assistant", id: "msg_late", content: [{ type: "text", text: "Done." }] } })}\n`);
+      expect(await heads.refresh(file)).toMatchObject({ lastAt: Date.parse(replied), lastRole: "assistant" });
+      appendFileSync(file, `${JSON.stringify({ type: "queue-operation", operation: "enqueue", timestamp: "2026-10-21T10:00:30.000Z", sessionId: id })}\n`);
+      appendFileSync(file, `${JSON.stringify({ type: "custom-title", customTitle: "Renamed", sessionId: id })}\n`);
+      expect(await heads.refresh(file)).toMatchObject({ title: "Renamed", lastAt: Date.parse(replied), lastRole: "assistant" });
+    } finally {
+      writeFileSync(file, before);
+    }
+  });
+
   test("a head read that fails keeps what was known", async () => {
     const heads = createHeads({ projectsDir: projects, sdk: { ...sdkReaders, getSessionInfo: async () => { throw new Error("busy"); } } });
     const known = (await heads.scan()).find((h) => h.id === IDS["own-ask"])!;
@@ -504,6 +524,13 @@ describe("step outcomes", () => {
     expect(step.output).toEndWith("make: *** [all] Error 2");
     expect(step.output!.length).toBeLessThanOrEqual(2048 + 3);
     expect(step.cause).toBe(`Exit code 2: ${"x".repeat(186)}…`);
+  });
+
+  test("a command that printed nothing has no output, not Claude Code's stand-in line", () => {
+    const silent = { ...answer("t1", "(Bash completed with no output)"), toolResult: { stdout: "", stderr: "", interrupted: false } };
+    expect(stepsOf(project([prompt("go"), call("t1", "Bash", { command: "sleep 1" }), silent], ctx).items)[0]).toMatchObject({ state: "ok", output: null });
+    expect(settled("(Bash completed with no output)", false)).toMatchObject({ state: "ok", output: null });
+    expect(settled("hi", false)).toMatchObject({ state: "ok", output: "hi" });
   });
 
   test("the bridge's Stop is a stop, and a permission denial keeps its first line as its cause", () => {

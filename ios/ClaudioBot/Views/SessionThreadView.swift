@@ -137,7 +137,12 @@ struct SessionThreadView: View {
             }
         }
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height + $0.contentInsets.bottom } action: { _, _ in
-            if followsBottom { position.scrollTo(edge: .bottom) }
+            if followsBottom {
+                position.scrollTo(edge: .bottom)
+            } else if let revealed {
+                // The run opens over a pass or two at large text sizes, and the bottom anchor moves the rows each time.
+                position.scrollTo(id: revealed.step.id, anchor: .center)
+            }
         }
         .onScrollGeometryChange(for: Bool.self) { Self.bottomGap($0) > 200 } action: { _, far in
             withAnimation(.easeOut(duration: 0.2)) { showsJump = far }
@@ -233,8 +238,8 @@ struct SessionThreadView: View {
         client.send(.sessionPage(sessionId: sessionId, before: cursor))
     }
 
-    /// Opens the fold that hides the step's work run and marks the step, which opens the run. On the next pass, once the
-    /// run has laid out its steps, it scrolls to the step and the mark fades after two seconds.
+    /// Opens the fold that hides the step's work run and marks the step, which opens the run. On the next pass it scrolls
+    /// to the step, and again whenever the rows grow while the step is marked. The mark fades after two seconds.
     private func reveal(_ held: HeldStep, in model: ThreadModel) {
         let fold = model.rows.first { row in
             if case let .fold(_, items, false) = row { items.contains { $0.id == held.row } } else { false }

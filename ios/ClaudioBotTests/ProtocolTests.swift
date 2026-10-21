@@ -575,6 +575,11 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(try fixtures.contains(jsonObject(Wire.encoder().encode(ClientMessage.machineCode))))
     }
 
+    @Test func removeMachineSendsTheMachineId() throws {
+        let json = try jsonObject(Wire.encoder().encode(ClientMessage.removeMachine(machineId: MachineID("m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b"))))
+        #expect(json == ["type": "remove_machine", "machineId": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b"])
+    }
+
     @Test func aProjectFromABridgeWithoutMachinesNamesNoneAndEncodesNone() throws {
         let old = try decode(SessionProject.self, #"{"id":"p1","name":"n","path":"/p","githubRepo":null,"lastAt":null,"canCloud":false}"#)
         #expect(old.machine == nil)

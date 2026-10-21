@@ -2483,6 +2483,8 @@ enum ClientMessage: Codable, Hashable, Sendable {
     case pairCode
     /// Feature machines: a one-time code another computer enrolls with as a machine of this home.
     case machineCode
+    /// Feature machines: forgets an enrolled machine. Answered with a machines frame.
+    case removeMachine(machineId: MachineID)
     /// Feature presence. false: nobody is looking at this app, so its socket does not hold back phone pushes.
     case presence(attended: Bool)
     /// Reads the plan's usage now. Answered with a usage frame.
@@ -2521,7 +2523,7 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case type, ref, botId, text, uploads, messageId, option, choice, patch, routineId, enabled, agentId, path, deviceId
         case clientId, factId, name, force, mentions, peer, members
         case sessionId, after, before, interrupt, cardId, answers, projectId, model, mode, isolate, toolUseId, mirror
-        case attended, machine
+        case attended, machine, machineId
     }
 
     init(from decoder: Decoder) throws {
@@ -2576,6 +2578,7 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case "revoke_device": self = .revokeDevice(deviceId: try c.decode(DeviceID.self, forKey: .deviceId))
         case "pair_code": self = .pairCode
         case "machine_code": self = .machineCode
+        case "remove_machine": self = .removeMachine(machineId: try c.decode(MachineID.self, forKey: .machineId))
         case "presence": self = .presence(attended: try c.decode(Bool.self, forKey: .attended))
         case "refresh_usage": self = .refreshUsage
         case "watch_sessions": self = .watchSessions
@@ -2730,6 +2733,9 @@ enum ClientMessage: Codable, Hashable, Sendable {
             try c.encode("pair_code", forKey: .type)
         case .machineCode:
             try c.encode("machine_code", forKey: .type)
+        case let .removeMachine(machineId):
+            try c.encode("remove_machine", forKey: .type)
+            try c.encode(machineId, forKey: .machineId)
         case let .presence(attended):
             try c.encode("presence", forKey: .type)
             try c.encode(attended, forKey: .attended)

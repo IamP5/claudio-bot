@@ -669,6 +669,41 @@ private func unknowns(in message: ServerMessage) -> [String] {
 
 @Suite struct PairingTests {
     private let socket = URL(string: "ws://10.0.0.20:7878/ws")!
+    private let tailnet = URL(string: "ws://omarchy.tail1234.ts.net:7878/ws")!
+
+    @Test func aPairingSavedBeforeWorldsReadsAsItsOneAddressAndNoWorld() throws {
+        let saved = #"{"url":"ws://10.0.0.20:7878/ws","token":"t1","deviceId":"d1"}"#
+        let pairing = try JSONDecoder().decode(Pairing.self, from: Data(saved.utf8))
+        #expect(pairing.url == socket && pairing.urls == [socket] && pairing.world == nil)
+        #expect(pairing.credential == .device(DeviceID("d1"), token: "t1"))
+        let legacy = try JSONDecoder().decode(Pairing.self, from: Data(#"{"url":"ws://10.0.0.20:7878/ws","token":"shared"}"#.utf8))
+        #expect(legacy.urls == [socket] && legacy.credential == .legacy(token: "shared"))
+
+        let world = Pairing(url: socket, credential: pairing.credential, urls: [tailnet, socket], world: WorldID("w1"))
+        #expect(try JSONDecoder().decode(Pairing.self, from: JSONEncoder().encode(world)) == world)
+    }
+
+    @Test func aPairingKeepsTheAddressInUseAmongTheWorldsAddresses() {
+        let pairing = Pairing(url: socket, credential: .legacy(token: "t"), urls: [tailnet])
+        #expect(pairing.urls == [socket, tailnet])
+        let moved = pairing.at(tailnet)
+        #expect(moved.url == tailnet && moved.urls == [socket, tailnet])
+        let typed = URL(string: "ws://mac.local:7878/ws")!
+        #expect(moved.at(typed).urls == [socket, tailnet, typed])
+    }
+
+    @Test func theSameWorldAtAnotherAddressIsTheSameWorldAndAnotherWorldIsNot() {
+        let home = Pairing(url: socket, credential: .legacy(token: "t"), world: WorldID("w1"))
+        #expect(home.sameWorld(as: Pairing(url: tailnet, credential: .legacy(token: "t"), world: WorldID("w1"))))
+        #expect(!home.sameWorld(as: Pairing(url: socket, credential: .legacy(token: "t"), world: WorldID("w2"))))
+    }
+
+    @Test func withoutAWorldOnEitherSideTheAddressesDecide() {
+        let old = Pairing(url: socket, credential: .legacy(token: "t"))
+        #expect(old.sameWorld(as: Pairing(url: socket, credential: .legacy(token: "t"), world: WorldID("w1"))))
+        #expect(old.sameWorld(as: Pairing(url: tailnet, credential: .legacy(token: "t"), urls: [socket])))
+        #expect(!old.sameWorld(as: Pairing(url: tailnet, credential: .legacy(token: "t"))))
+    }
 
     @Test func pairLinkParsesTheAddressAndCode() {
         let link = URL(string: "claudiobot://pair?url=ws%3A%2F%2F10.0.0.20%3A7878%2Fws&code=k7qd-m2xp")!

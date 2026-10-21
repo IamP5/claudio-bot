@@ -220,8 +220,36 @@ struct Pairing: Equatable, Sendable {
         case legacy(token: String)
     }
 
+    /// The address in use: the one that last answered.
     let url: URL
+    /// Every address of the world's home from its pair link, best first. Always holds `url`.
+    let urls: [URL]
     let credential: Credential
+    /// The world of bots these addresses reach, once its home said hello with one. Nil for a bridge without machines.
+    let world: WorldID?
+
+    init(url: URL, credential: Credential, urls: [URL] = [], world: WorldID? = nil) {
+        self.url = url
+        self.urls = urls.contains(url) ? urls : [url] + urls
+        self.credential = credential
+        self.world = world
+    }
+
+    /// The same pairing at another of its addresses. One the link did not list joins the end of the list.
+    func at(_ address: URL) -> Pairing {
+        Pairing(url: address, credential: credential, urls: urls.contains(address) ? urls : urls + [address], world: world)
+    }
+
+    func entering(_ world: WorldID?) -> Pairing {
+        Pairing(url: url, credential: credential, urls: urls, world: world)
+    }
+
+    /// Whether `other` reaches the same world of bots, so what the app holds still applies. A bridge without machines
+    /// names no world, and there the addresses decide, as they did before worlds.
+    func sameWorld(as other: Pairing) -> Bool {
+        if let world, let theirs = other.world { return world == theirs }
+        return !Set(urls).isDisjoint(with: other.urls)
+    }
 
     enum Failure: LocalizedError {
         case unreachable(String), rejected(String), notABridge, silent
@@ -242,7 +270,8 @@ struct Pairing: Equatable, Sendable {
         var failure = Failure.unreachable("")
         for address in invite.addresses {
             do throws(Failure) {
-                return try await redeem(at: invite.at(address), deviceName: deviceName, session: session)
+                let paired = try await redeem(at: invite.at(address), deviceName: deviceName, session: session)
+                return Pairing(url: paired.url, credential: paired.credential, urls: invite.addresses)
             } catch {
                 guard case .unreachable = error else { throw error }
                 failure = error
@@ -321,7 +350,8 @@ struct Pairing: Equatable, Sendable {
     }
 
     /// Opens one socket and waits for the bridge's hello, so a new pairing replaces the old one only once it works.
-    func greet(within timeout: Duration, session: URLSession = .shared) async throws(Failure) {
+    @discardableResult
+    func greet(within timeout: Duration, session: URLSession = .shared) async throws(Failure) -> Hello {
         let ws = session.webSocketTask(with: socketRequest())
         ws.resume()
         let timer = Task {
@@ -343,7 +373,8 @@ struct Pairing: Equatable, Sendable {
         case .data(let bytes): bytes
         @unknown default: Data()
         }
-        guard case .hello? = try? Wire.decoder().decode(ServerFrame.self, from: data).message else { throw .notABridge }
+        guard case .hello(let hello)? = try? Wire.decoder().decode(ServerFrame.self, from: data).message else { throw .notABridge }
+        return hello
     }
 
     /// The socket request: the protocol this app speaks, where to resume the stream, and the credential.
@@ -361,24 +392,32 @@ struct Pairing: Equatable, Sendable {
     }
 }
 
-// Stored as {url, token, deviceId}. A pairing saved by an older build has no deviceId, which is what marks it legacy.
+// Stored as {url, urls, token, deviceId, world}. A pairing saved by an older build has no deviceId, which is what marks
+// it legacy, and one saved before worlds has neither urls nor world, so its one address is its only endpoint.
 extension Pairing: Codable {
-    private enum CodingKeys: String, CodingKey { case url, token, deviceId }
+    private enum CodingKeys: String, CodingKey { case url, urls, token, deviceId, world }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        url = try c.decode(URL.self, forKey: .url)
         let token = try c.decode(String.self, forKey: .token)
-        credential = if let id = try c.decodeIfPresent(DeviceID.self, forKey: .deviceId) {
+        let credential: Credential = if let id = try c.decodeIfPresent(DeviceID.self, forKey: .deviceId) {
             .device(id, token: token)
         } else {
             .legacy(token: token)
         }
+        self.init(
+            url: try c.decode(URL.self, forKey: .url),
+            credential: credential,
+            urls: try c.decodeIfPresent([URL].self, forKey: .urls) ?? [],
+            world: try c.decodeIfPresent(WorldID.self, forKey: .world)
+        )
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(url, forKey: .url)
+        try c.encode(urls, forKey: .urls)
+        try c.encodeIfPresent(world, forKey: .world)
         switch credential {
         case let .device(id, token):
             try c.encode(token, forKey: .token)

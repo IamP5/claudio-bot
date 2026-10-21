@@ -10,7 +10,8 @@ import { createLedger } from "../src/ledger";
 import type { BotId, Message } from "../src/protocol";
 import { inputOf, notices } from "../src/prompts";
 import { emptyWorld, newBot, post, type Actor, type AgentRecord, type World } from "../src/world";
-import { FakeQuery, cleanup, flush, result, roots, runBash } from "./hub-kit";
+import { PRIVATE } from "../src/private";
+import { FakeQuery, cleanup, flush, result, roots, runBash, testProfile } from "./hub-kit";
 
 // Phase 0 of docs/handoff-machines.md: a machine bridge holds no real bots, only a stand-in BotRecord per bot whose
 // agents run there. The real gate, agents and ledger run against it the way the hub wires them.
@@ -44,7 +45,7 @@ function machine() {
   const recOf = (actor: Actor): AgentRecord | undefined => (actor.kind === "agent" ? world.agents.get(actor.agentId) : undefined);
   const gate = createGate({
     world,
-    scopeOf: () => ({ bridgeHome: join(root, ".claudiobot"), own: project, userMd: null, homedir: root }),
+    scopeOf: () => ({ bridgeHome: join(root, ".claudiobot"), own: project, userMd: null, homedir: root, private: PRIVATE.darwin }),
     turnOf(actor) {
       const session = actor.kind === "agent" ? agents.session(actor.agentId) : null;
       return session?.current ? { initiator: session.current.initiator, stopping: session.lifecycle.kind === "stopping" } : null;
@@ -70,6 +71,7 @@ function machine() {
   });
   const agents = createAgents({
     world,
+    profile: testProfile(root),
     userName: "Alex",
     model: undefined,
     ledger,

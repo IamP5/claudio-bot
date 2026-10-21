@@ -451,8 +451,18 @@ export function createThreads(deps: ThreadsDeps): Threads {
     async watch(id, after) {
       const s = await load(id);
       s.usedAt = Date.now();
-      await s.queue;
-      return (after && replay(s, after)) ?? snapshot(s);
+      // The reply travels back through the hub and the socket in microtasks; holding the thread's queue for one turn of
+      // the event loop keeps any later frame of this thread behind it on the wire.
+      return new Promise<ServerMessage[]>((resolve, reject) => {
+        void serial(s, () => {
+          try {
+            resolve((after && replay(s, after)) ?? snapshot(s));
+          } catch (e) {
+            reject(e);
+          }
+          return new Promise<void>((done) => setImmediate(done));
+        });
+      });
     },
 
     async page(id, before) {

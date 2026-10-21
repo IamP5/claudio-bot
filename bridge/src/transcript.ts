@@ -297,7 +297,8 @@ type Cached = { head: Head; facts: Facts & { size: number } };
 export function createHeads(opts: { projectsDir: string; sdk?: SdkReaders; seed?: readonly Head[]; exclude?: (cwd: string) => boolean }) {
   const sdk = opts.sdk ?? sdkReaders;
   const cache = new Map<string, Cached>();
-  for (const head of opts.seed ?? []) if (!opts.exclude?.(head.cwd)) cache.set(head.file, { head, facts: { ...head, cwd: head.cwd, size: head.size, spokeAt: head.lastAt } });
+  // A saved head's lastAt may be a file time from an older bridge, so its facts are read from the start on its next change.
+  for (const head of opts.seed ?? []) if (!opts.exclude?.(head.cwd)) cache.set(head.file, { head, facts: { ...head, cwd: head.cwd, size: 0, spokeAt: null } });
 
   const fresh = (c: Cached | undefined, f: TranscriptFile) => c !== undefined && c.head.size === f.size && c.head.mtimeMs === f.mtimeMs;
 
@@ -728,8 +729,7 @@ function classifyResult(tool: string, text: string, toolResult: unknown, isError
     null;
   if (task !== null) return { kind: "launched", task };
   if (AGENT_TOOLS.has(tool)) return { kind: "ok", ...handBack(text, toolResult) };
-  const silent = text === "" || NO_OUTPUT.test(text) || (tool === "Bash" && r.stdout === "" && r.stderr === "");
-  return { kind: "ok", output: silent ? null : text };
+  return { kind: "ok", output: text === "" || NO_OUTPUT.test(text) ? null : text };
 }
 
 /** One <task-notification> block: Claude Code's word that a background task stopped. */

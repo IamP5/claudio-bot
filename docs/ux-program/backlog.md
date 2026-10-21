@@ -9,3 +9,4 @@
 - Chat (area 2, from G16): ChatView and ExchangeView use the same bottom-pinned LazyVStack; a very tall bot message at AX5 may hang like F-SES-170. Check in the Chat audit.
 - Swipe check (from G16 verify): if the app crashes during a swipe, no process is found and CPU averages 0, so a short swipe time passes. Fail when the app process is gone.
 - Runner (from G8 verify): the S6.6 after-resume-2 screenshot is taken ~0.5 s after the runner's own phone resumes and can catch the app mid-backoff; wait for the app's own re-watch (the S6b tap shows it) before the shot.
+- G8 follow-ups (from fix-round verify): saved heads restart with size 0 after a bridge start, costing one full transcript read per active session after an upgrade; a loss from an overtaken snapshot during a repair does not reset the timed retry; card vs transcript exact-millisecond ties can still differ between resumed and fresh views.

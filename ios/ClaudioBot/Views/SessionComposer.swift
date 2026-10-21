@@ -209,20 +209,24 @@ struct SessionComposer: View {
         .background(filled ? Color.white.opacity(dimmed ? 0.35 : 1) : Theme.raised, in: Capsule())
     }
 
+    /// At accessibility sizes Dismiss goes under the words, so they keep the row's width.
     private func noteLine(_ note: ComposerNote) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            switch note {
-            case .error:
-                Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.danger)
-            case .stopping, .changing:
-                ProgressView().controlSize(.mini)
-            case .unconfirmed:
-                Image(systemName: "questionmark.circle").foregroundStyle(Theme.attention)
+        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
+        return layout {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                switch note {
+                case .error:
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.danger)
+                case .stopping, .changing:
+                    ProgressView().controlSize(.mini)
+                case .unconfirmed:
+                    Image(systemName: "questionmark.circle").foregroundStyle(Theme.attention)
+                }
+                Text(note.text)
+                    .foregroundStyle(note.isError ? Theme.danger : Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Text(note.text)
-                .foregroundStyle(note.isError ? Theme.danger : Theme.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
             if case .error(let error) = note {
                 Button("Dismiss") { store.dismissSessionError(error, in: sessionId) }
                     .font(.footnote.weight(.semibold))
@@ -230,6 +234,8 @@ struct SessionComposer: View {
             }
         }
         .font(.footnote)
+        // Past this size the line alone would take the screen and push the field out of it.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility3)
         .padding(.horizontal, 16)
         .accessibilityElement(children: .contain)
         .accessibilityRepresentation {

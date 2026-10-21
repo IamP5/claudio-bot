@@ -3,6 +3,7 @@ import { homeHears, homeOpens, type LinkState } from "./link";
 import type { Machine, Sent } from "./machines";
 import type { Registry } from "./registry";
 import type { SessionClientMessage } from "../protocol";
+import { errorText } from "../text";
 import { newIntentId, parseMachineFrame, type Event, type HomeFrame, type IntentId, type MachineId, type ProfileView, type Seq, type SessionReply, type SessionSignal } from "./wire";
 
 // The home's end of every machine's link (GET /link): the handshake, the remote Machine each enrolled machine is, its
@@ -57,6 +58,8 @@ const APPLY_MS = 120_000;
 const ASK_MS = 30_000;
 /** Events in a burst share one registry save and one ack. */
 const FLUSH_MS = 50;
+/** Events whose effect on the home is not the same when heard twice: a turn for a bot, a charge, a line, a push. */
+const ONCE: ReadonlySet<Event["kind"]> = new Set(["report", "note", "usage", "reminder", "sessionCard"]);
 
 export function createLinks(deps: { identity: Identity; registry: Registry; log: (line: string) => void; now: () => Date; applyMs?: number; askMs?: number }): Links {
   const { registry, log } = deps;
@@ -115,6 +118,15 @@ export function createLinks(deps: { identity: Identity; registry: Registry; log:
     } else {
       if (e.seq !== last + 1) log(`link: ${nameOf(peer)} skipped from event ${last} to ${e.seq}`);
       handled.set(peer, e.seq);
+      // Saved before anyone acts on it: a crash after a report reached its bot, or a row its ledger, must not hear it
+      // again in the replay. A crash between this save and the act loses that one event instead.
+      if (ONCE.has(e.kind)) {
+        try {
+          registry.update(peer, { ackedSeq: e.seq });
+        } catch (err) {
+          log(`link: could not save ${nameOf(peer)}'s event ${e.seq} as handled, so a crash now would replay it: ${errorText(err)}`);
+        }
+      }
       if (e.kind === "profile") session.profile = e.profile;
       log(`link: ${nameOf(peer)} event ${e.seq} ${e.kind}`);
       for (const f of eventSubscribers) f(peer, e);

@@ -18,7 +18,7 @@ const at = "2026-10-21T12:00:00.000Z";
 const HISTORY_KEEP = 1000;
 const HISTORY_SLACK = 100;
 
-function machine(persist: () => void = () => {}) {
+function machine(persist: (urgency?: "now") => void = () => {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-node-")));
   // The projects sit outside the bridge home, which the floors keep every agent out of.
   const code = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-code-")));
@@ -169,4 +169,18 @@ test("a card's reminder on the machine goes to the home as a reminder event, onc
   m.node.gate.tick(new Date());
   m.node.gate.tick(new Date());
   expect(m.events.filter((e) => e.kind === "reminder")).toMatchObject([{ botId: B1, cardId: card.message.id }]);
+});
+
+test("a machine saves its world at once when an agent reports, so a restart does not run the turn again and report twice", async () => {
+  const calls: string[] = [];
+  const m = machine((urgency) => calls.push(urgency ?? "soon"));
+  m.node.runtime.subscribe((e) => calls.push(`event ${e.kind}`));
+  await m.node.runtime.apply(start({ name: "Ana", dailyCapUsd: null, connectorsOff: [] }));
+  await flush();
+  m.queries[0]!.emit(result(0.1));
+  await flush();
+  await flush();
+  const report = calls.indexOf("event report");
+  expect(report).toBeGreaterThan(0);
+  expect(calls[report - 1]).toBe("now");
 });

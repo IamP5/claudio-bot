@@ -259,7 +259,10 @@ export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "row
   });
 
   // The home saves an agent's record on each of its events; here nothing else would, so a restart would find it stale.
+  // A report is saved at once: the outbox already holds it, and a restart that found its turn unfinished would run it
+  // again and report twice.
   node.runtime.subscribe((e) => {
+    if (e.kind === "report") return deps.persist("now");
     if (e.kind !== "agent") return;
     const rec = world.agents.get(e.agent.id);
     if (rec) trimThread(rec.messages, archiveOf(rec.agent.id), () => false, deps.log);

@@ -352,3 +352,33 @@ test("a 4005 close before the link is live does not stop the machine dialing: on
   dialers.push(dialer);
   await until("dialing on after each refusal", () => dials >= 3);
 });
+
+test("the home saves an event's seq before it acts on it, so after a crash before the batched ack the machine's replay is not heard twice", () => {
+  const pair = enrolledPair();
+  const dir = tmp();
+  const registry = createRegistry({ bridgeHome: dir, now: () => new Date() });
+  registry.enroll({ id: pair.mac.machineId, name: "MacBook", publicKey: pair.mac.publicKey });
+  const report = (seq: number) => JSON.stringify({ t: "event", event: { seq, at: new Date().toISOString(), kind: "report", agentId: "a1", botId: "b1", text: "Pushed.", by: { kind: "user" } } });
+
+  function boot() {
+    const links = createLinks({ identity: pair.home, registry: createRegistry({ bridgeHome: dir, now: () => new Date() }), log: () => {}, now: () => new Date() });
+    const heard: number[] = [];
+    links.onEvent((_, e) => heard.push(e.seq));
+    const sent: string[] = [];
+    const session = links.open({ send: (t) => sent.push(t), close: () => {} });
+    const hello = machineHears({ kind: "connecting" }, JSON.parse(sent[0]!) as HomeFrame, pair.machine, () => ({ profile, lastSeq: 1 }));
+    if (hello.kind !== "hello") throw new Error("no hello");
+    links.message(session, JSON.stringify(hello.send));
+    return { links, session, heard };
+  }
+
+  const first = boot();
+  first.links.message(first.session, report(1));
+  expect(first.heard).toEqual([1]);
+  // Killed here: no close, no flush of the batched ack.
+  const second = boot();
+  second.links.message(second.session, report(1));
+  expect(second.heard).toEqual([]);
+  first.links.closed(first.session);
+  second.links.closed(second.session);
+});

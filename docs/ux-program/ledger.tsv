@@ -1,0 +1,19 @@
+step	area	status	ts	note
+0	all	in_progress	2026-10-21T02:35:02Z	scenario runner, pool devices, leases
+1	all	todo		reference study -> patterns.md
+2	sessions	todo		audit rounds
+3	sessions	todo		fix PRs
+4	sessions	todo		rerun audit on main
+2	chat	todo		
+3	chat	todo		
+4	chat	todo		
+2	home	todo		
+3	home	todo		
+4	home	todo		
+2	pairing	todo		
+3	pairing	todo		
+4	pairing	todo		
+2	settings	todo		
+3	settings	todo		
+4	settings	todo		
+exit	all	todo		final cross-area audit

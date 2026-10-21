@@ -1,3 +1,4 @@
+import type { MachineId } from "../src/machine/wire";
 import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1603,6 +1604,7 @@ test("boot carries on when USER.md cannot be created, and says why in the log", 
   const homes = createHomes(root);
   const logs: string[] = [];
   const hub = createHub({
+    machineId: "m_test" as MachineId,
     profile: testProfile(root),
     userName: "Alex",
     world,

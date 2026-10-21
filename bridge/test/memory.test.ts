@@ -1,3 +1,4 @@
+import type { MachineId } from "../src/machine/wire";
 import { testProfile } from "./hub-kit";
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -486,6 +487,7 @@ test("hub: remember in a user turn has no card, stays with that bot, and reaches
     [OTHER, []],
   ]);
   const hub = createHub({
+    machineId: "m_test" as MachineId,
     profile: testProfile(root),
     userName: "Alex",
     world,

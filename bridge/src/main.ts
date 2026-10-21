@@ -9,6 +9,7 @@ import { readPlanUsage, strictMcp } from "./claudeCode";
 import { createDevices, type PairCode } from "./devices";
 import { createHomes } from "./home";
 import { createHub } from "./hub";
+import { loadIdentity } from "./machine/identity";
 import { platformOf, profileOf } from "./machine/profile";
 import { legacyToken } from "./legacy";
 import { lockHome } from "./lock";
@@ -105,6 +106,7 @@ const profile = profileOf({
   username: userInfo().username,
   bridgeHome: realpathSync(home),
 });
+const identity = loadIdentity(home, machine);
 const { world, firstRun } = loadWorld(home);
 const saver = createSaver(world, home, 250, log);
 const devices = createDevices({ world, persist: saver.schedule, now, announce });
@@ -124,6 +126,7 @@ const stream = createStream();
 
 const hub = createHub({
   profile,
+  machineId: identity.machineId,
   userName: await firstName(),
   world,
   homes: createHomes(home),

@@ -1,3 +1,4 @@
+import type { MachineId } from "../src/machine/wire";
 import { setSystemTime } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
@@ -150,6 +151,7 @@ export function hubOver(
   const attempts: PushCall[] = [];
   const queries: FakeQuery[] = [];
   const hub = createHub({
+    machineId: "m_test" as MachineId,
     profile: testProfile(root),
     userName: "Alex",
     world,

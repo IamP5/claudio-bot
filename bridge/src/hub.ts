@@ -44,7 +44,7 @@ import { createLocalMachine, createMachines } from "./machine/machines";
 import { placeAgent } from "./machine/place";
 import { memoryJournal } from "./machine/journal";
 import { createNode, settingsFor, trimThread } from "./machine/node";
-import { newAgentId, newIntentId, type Applied } from "./machine/wire";
+import { newAgentId, newIntentId, type Applied, type MachineId } from "./machine/wire";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { createSessions, type Sessions, type SessionsEnv } from "./sessions";
 import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
@@ -111,6 +111,8 @@ export type Hub = {
 
 export type HubDeps = {
   profile: MachineProfile;
+  /** This bridge's own machine id, from machine.json. */
+  machineId: MachineId;
   userName: string;
   world: World;
   homes: Homes;
@@ -745,7 +747,7 @@ export function createHub(deps: HubDeps): Hub {
 
   /** The gate's wiring, the clock and boot: what reaches agents in this process only. Commands go through machines. */
   const localAgents = runtime.local;
-  const machines = createMachines(createLocalMachine(runtime, deps.profile));
+  const machines = createMachines(createLocalMachine(deps.machineId, runtime, deps.profile));
 
   // The runtime shares this World, so each event's record is the one in world.agents.
   runtime.subscribe((e) => {

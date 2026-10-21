@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { SELF } from "../src/machine/machines";
 import { placeAgent, type PlaceInput, type Placement } from "../src/machine/place";
 import type { MachineId } from "../src/machine/wire";
 
-const OMARCHY = SELF;
+const OMARCHY = "m_omarchy" as MachineId;
+const SELF = OMARCHY;
 const MAC = "m_mac" as MachineId;
 const home = { id: OMARCHY, online: true, profile: { name: "Omarchy" } };
 const mac = { id: MAC, online: true, profile: { name: "Mac" } };

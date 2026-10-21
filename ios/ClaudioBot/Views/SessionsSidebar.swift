@@ -65,6 +65,8 @@ struct SessionsElsewhere: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            // A summary above the bot list: past AX2 it would push the bots off screen.
+            .dynamicTypeSize(...DynamicTypeSize.accessibility2)
             .accessibilityLabel((["Sessions"] + parts).joined(separator: ", "))
             .accessibilityHint("Shows the Sessions list")
         }

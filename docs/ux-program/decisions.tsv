@@ -24,3 +24,6 @@ ts	decision	why
 2026-10-21T07:30:32Z	G0: ErrorAbout and PushState are discriminated unions	a create error has no session; failing push always carries error and time
 2026-10-21T07:30:32Z	G0: a stopped card reads as dismissed to protocol 2 apps and as closed in bot chat until G7 sets wording	expired would claim nobody answered in time
 2026-10-21T07:30:32Z	G0: unserved partial stops and session_unqueue are refused with an error until G2/G3 serve them	silent ignore would lie about the stop
+2026-10-21T07:42:36Z	G9: on background the app both unwatches threads and sends presence(false)	makes work finished while away mark the row unread with no bridge change, and marks seen when the user leaves
+2026-10-21T07:42:36Z	G9: under 10 s away the app pings with a 2 s deadline, at 10 s or more it reconnects; first reply after connect has a 10 s deadline	fast return stays seamless, a dead socket is replaced quickly, a frozen Mac no longer hangs 60 s
+2026-10-21T07:42:36Z	G9: retryNow() replaces retry() and reconnectNow()	one entry point; all callers migrated in the same PR

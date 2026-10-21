@@ -19,3 +19,4 @@
 - swipe-check (from G5 verify): every CPU sample is empty because XCUITest ends the app when the test finishes, so the CPU-after half of the gate measures nothing; sample during the swipe or keep the app alive.
 - Bridge posts "Stopped by you: the turn …" before the turn has actually ended when Claude Code is paused (found by G6 owner; honesty, Sessions).
 - With no Claude Code process running, a model change stores any model id unchecked and the next send fails on it; the app's menu can't send a bad id (found by G6 owner).
+- Offline Send is spoken as "Sent." though the frame only went to the outbox (G6 verifier; G11 territory).

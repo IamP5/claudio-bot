@@ -118,3 +118,29 @@ The icon and the splash both come from `Views/Brand.swift`. `scripts/make-icon.s
 The icon came out of a swarm. Four ideation lenses (flag geometry, landmarks and culture, nature, Brazilian design history) proposed 20 concepts. Six were drafted three ways each: Calçadão, Jabuticaba, Losango, Bem-te-vi, Joia wink and Bulcão tiles. All 18 are in `icon-concepts.png`, each at full size and at 60 px. The user chose Losango v3.
 
 The splash is a table of timed `SplashPhase` steps. The bot springs in (0.45 s, bounce 0.4), blinks at 0.5 s, glances at 0.6 s, zooms through from 0.95 s and fades from 1.0 s. The overlay is gone at 1.3 s. Under Reduce Motion it fades in, holds, and crossfades out by 0.8 s. The launch screen's color, `LaunchBackground` (0x111111), matches the splash's first frame, so the hand-off doesn't flash. `splash-motion.png` is 100 ms per frame from a recording of a cold launch. Its exit peaks at 68 of 255 mean luminance for one frame. `splash-reduce-motion.png` shows the Reduce Motion path.
+
+## Paced bubble reveal (20 October 2026)
+
+The bridge can deliver several messages in one tick: a turn's held bubbles at its end, the text before a question card, or a catch-up after a reconnect. The chat inserted them all at once while "Typing…" shrank away, and the list snapped down by their full height.
+
+### Shipped
+
+- `Reveal` in `Model/Display.swift` tracks which timeline rows are still waiting, by row id, in beats. A separator lands with the message after it.
+- The first timeline a chat shows, and a history that arrives in an empty chat, appear at once with no animation.
+- A single new message appears at once, as before. A burst shows its first message at once and the rest 180 ms apart, each with the existing fade and 8 pt rise. Rows that arrive mid-reveal join the queue. A removed row leaves it.
+- A message the user sent, Send and jump to latest show everything at once. So does a backlog of more than six messages, so a long catch-up doesn't take seconds.
+- "Typing…" stays until the last waiting bubble lands, even when the turn already ended.
+- Under Reduce Motion nothing waits. The bubbles fade in together.
+- New content now glides the list down with a 250 ms `.snappy` scroll instead of a snap. Inset changes (the keyboard, a taller composer) still snap, because they already animate.
+- A new bubble's fade starts 100 ms late, so the rows below it slide out of the way first and "Typing…" never draws through it.
+- `-demoScreen burst` has Claudio Bot work for 2 s, then post three bubbles in one tick and go idle.
+
+### Verification
+
+- `xcodebuild -scheme ClaudioBot -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test` on iOS 26.2: "Test run with 267 tests in 32 suites passed". `RevealTests` covers bursts, single messages, user rows, flushes, repeats, removals, separators and long backlogs.
+- `xcodebuild -scheme ClaudioBotMac -destination 'platform=macOS' test`: "Test run with 283 tests in 34 suites passed".
+- `burst-reveal.png` is 33 ms per frame from a recording of `burst`, taken after the delayed fade. The bubbles fade in from about +133, +367 and +567 ms, each below the point "Typing…" has already left. "Typing…" fades out before the third bubble appears, and the list settles by about +650 ms. With the old snapping scroll the list jumped about 110 pt in one frame. Now it moves over about 130 ms.
+- `burst-reveal-reduce-motion.png`: all three bubbles fade in together over about 130 ms while "Typing…" fades out.
+- A Maestro flow on `chat` (open the keyboard, send, wait for the reply) still follows the bottom above the keyboard.
+- Before the delayed fade, the typing row slid down through each fading bubble for two or three frames. The delayed fade removed it.
+- Not seen: a real bridge burst, the reveal running in the Mac app, and a reconnect catch-up.

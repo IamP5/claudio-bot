@@ -94,6 +94,73 @@ enum Timeline {
     }
 }
 
+/// Paces a burst of new rows so they land one at a time. The bridge can deliver several messages in one tick (a
+/// turn's held bubbles, a catch-up), and inserting them all at once reads as a jump.
+struct Reveal: Equatable {
+    /// Every row id the chat has taken in, shown or waiting. Until the chat has rows, whatever arrives shows at once.
+    private var known: Set<String>?
+    /// Rows still waiting, a beat at a time, oldest first. A separator lands with the message after it.
+    private(set) var pending: [[String]] = []
+
+    var isCaughtUp: Bool { pending.isEmpty }
+
+    /// A longer backlog, such as a catch-up after a long time offline, shows at once rather than taking seconds.
+    static let longest = 6
+
+    /// Takes in the current timeline. A lone new message, one the user sent, or `flush` shows everything at once. A burst
+    /// shows its first beat at once and the rest wait for `step()`. Applying the same rows twice changes nothing.
+    mutating func update(_ rows: [ChatRow], flush: Bool = false) {
+        let ids = Set(rows.map(\.id))
+        guard let seen = known, !seen.isEmpty else {
+            known = ids
+            return
+        }
+        let fresh = rows.filter { !seen.contains($0.id) }
+        known = ids
+        let wasCaughtUp = isCaughtUp
+        let beats = Self.beats(fresh)
+        pending = pending.map { $0.filter(ids.contains) }.filter { !$0.isEmpty } + beats
+        if flush || beats.count > Self.longest || fresh.contains(where: \.isFromUser) {
+            pending = []
+        } else if wasCaughtUp, !pending.isEmpty {
+            pending.removeFirst()
+        }
+    }
+
+    mutating func step() {
+        if !pending.isEmpty { pending.removeFirst() }
+    }
+
+    mutating func flush() {
+        pending = []
+    }
+
+    func visible(_ rows: [ChatRow]) -> [ChatRow] {
+        let waiting = Set(pending.joined())
+        return waiting.isEmpty ? rows : rows.filter { !waiting.contains($0.id) }
+    }
+
+    private static func beats(_ rows: [ChatRow]) -> [[String]] {
+        var beats: [[String]] = []
+        var beat: [String] = []
+        for row in rows {
+            beat.append(row.id)
+            if case .message = row {
+                beats.append(beat)
+                beat = []
+            }
+        }
+        if !beat.isEmpty { beats.append(beat) }
+        return beats
+    }
+}
+
+extension ChatRow {
+    var isFromUser: Bool {
+        if case .message(.user) = self { true } else { false }
+    }
+}
+
 enum TimeLabel {
     /// Home row time: "12:14 AM" today, "Yesterday", a weekday within the week, then "Oct 9".
     static func home(_ date: Date, now: Date = .now, calendar: Calendar = .current) -> String {

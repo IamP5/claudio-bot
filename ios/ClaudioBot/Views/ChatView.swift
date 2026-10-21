@@ -13,10 +13,15 @@ struct ChatView: View {
     /// Whether the newest message is far enough below the screen to offer a way back down.
     @State private var showsJump = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var reveal = Reveal()
 
     var body: some View {
         if let bot = store.bots[botId] {
-            let rows = Timeline.rows(store.conversations[botId]?.messages ?? [])
+            let timeline = Timeline.rows(store.conversations[botId]?.messages ?? [])
+            let paced = paced(timeline)
+            let rows = paced.visible(timeline)
+            // Typing stays up until the last held bubble lands, even if the turn already ended.
+            let typing = bot.status == .working || !paced.isCaughtUp
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
@@ -35,19 +40,21 @@ struct ChatView: View {
                     }
                     let working = GroupRules.typists(store.members(of: bot), line: ActivityLine.text(in: store, botId: botId))
                     // A group types through its members, so the row names the ones at work on it.
-                    if bot.isGroup && bot.status == .working {
+                    if bot.isGroup && typing {
                         TypingRow(
                             avatars: working.isEmpty ? store.members(of: bot).prefix(1).map(\.avatar) : working.map(\.avatar),
                             text: GroupRules.typing(working.map(\.name))
                         )
                         .padding(.top, 14)
-                        .transition(typing)
+                        .transition(typingTransition)
+                    }
+                    if typing && !bot.isGroup {
+                        TypingRow(avatars: [bot.avatar])
+                            .padding(.top, 14)
+                            .transition(typingTransition)
                     }
                     switch bot.status {
                     case .working where !bot.isGroup:
-                        TypingRow(avatars: [bot.avatar])
-                            .padding(.top, 14)
-                            .transition(typing)
                         ActivityLine(botId: botId)
                     case .unavailable:
                         Text("Claude Code could not start on your Mac. Your messages wait, and the bridge keeps trying.")
@@ -71,12 +78,19 @@ struct ChatView: View {
                 }
                 .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.25), value: rows.count)
                 .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.25), value: bot.status)
+                .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.25), value: typing)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 12)
                 .frame(maxWidth: Self.readableWidth)
                 .frame(maxWidth: .infinity)
             }
             .scrollPosition($position)
+            .onChange(of: timeline.map(\.id), initial: true) { reveal.update(timeline, flush: reduceMotion) }
+            .task(id: reveal.pending.first) {
+                guard !reveal.isCaughtUp else { return }
+                do { try await Task.sleep(for: Self.beat) } catch { return }
+                reveal.step()
+            }
             .defaultScrollAnchor(.bottom)
             .onScrollPhaseChange { _, phase, context in
                 switch phase {
@@ -85,7 +99,13 @@ struct ChatView: View {
                 default: break
                 }
             }
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height + $0.contentInsets.bottom } action: { _, _ in
+            // New content glides the list up with the bubble's own fade. An inset change (the keyboard, a taller
+            // composer) already animates, so the list snaps to keep up with it.
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, _ in
+                guard followsBottom else { return }
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) { position.scrollTo(edge: .bottom) }
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.bottom } action: { _, _ in
                 if followsBottom { position.scrollTo(edge: .bottom) }
             }
             .onScrollGeometryChange(for: Bool.self) { Self.bottomGap($0) > 200 } action: { _, far in
@@ -121,6 +141,7 @@ struct ChatView: View {
             }
             .composerBar {
                 Composer(bot: bot, openQuestion: store.openQuestion(in: botId) != nil) {
+                    reveal.flush()
                     followsBottom = true
                     if reduceMotion {
                         position.scrollTo(edge: .bottom)
@@ -179,11 +200,25 @@ struct ChatView: View {
 
     /// New rows fade up a few points; under Reduce Motion they only fade.
     private var arrival: AnyTransition {
-        reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 8))
+        // The fade waits for the rows below to slide out of the way, so the typing row never draws through it.
+        reduceMotion ? .opacity : .asymmetric(
+            insertion: .opacity.animation(.easeOut(duration: 0.2).delay(0.1)).combined(with: .offset(y: 8)),
+            removal: .opacity
+        )
     }
 
+    /// The reveal with this render's rows taken in, so a frame never draws a row the pacer is about to hold back.
+    private func paced(_ timeline: [ChatRow]) -> Reveal {
+        var next = reveal
+        next.update(timeline, flush: reduceMotion)
+        return next
+    }
+
+    /// Time between the bubbles of a burst.
+    private static let beat = Duration.milliseconds(180)
+
     /// The typing avatar pops in from its corner and shrinks back into it when the turn ends.
-    private var typing: AnyTransition {
+    private var typingTransition: AnyTransition {
         if reduceMotion { return .opacity }
         return .asymmetric(
             insertion: .scale(scale: 0.5, anchor: .bottomLeading).combined(with: .opacity),
@@ -192,6 +227,7 @@ struct ChatView: View {
     }
 
     private func jumpToLatest() {
+        reveal.flush()
         followsBottom = true
         if reduceMotion {
             position.scrollTo(edge: .bottom)

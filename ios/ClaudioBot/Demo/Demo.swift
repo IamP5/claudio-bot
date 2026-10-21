@@ -3,7 +3,8 @@ import Foundation
 
 /// `-demo` fills the store with sample bots through the reducer, without a bridge.
 /// `-demoScreen home|newchat|chat|profile|links|library|file|agent|digest|engineer|factory|pair|settings|routine|approval`
-/// opens a screen directly for screenshots, and `engineerprofile` engineer's chat with the profile beside it.
+/// opens a screen directly for screenshots, and `engineerprofile` engineer's chat with the profile beside it. `burst` has
+/// a bot finish a turn with three bubbles at once.
 /// `mention|chip|command` open a chat with the composer mid-sentence, and
 /// `group|groupprofile|newgroup|botexchange` the group and bot exchange screens. `usage` opens Plan usage over the bot list,
 /// `usagehot` with the session near its limit and `usageoff` with no plan limits to read. The pairing and connection states have their own:
@@ -80,6 +81,27 @@ enum Demo {
             router.selection = .bot(BotID("news"))
             router.path = [.routine(BotID("news"), RoutineID("r1"))]
         case "approval", "live": router.selection = .bot(BotID("release"))
+        case "burst":
+            // The bot works, then three bubbles land in one tick as the turn ends, the way the bridge releases held ones.
+            router.selection = .bot(BotID("claude"))
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                guard var bot = store.bots[BotID("claude")] else { return }
+                bot.status = .working
+                store.apply(.bot(bot))
+                try? await Task.sleep(for: .seconds(2))
+                let replies = [
+                    "Checked the stack against main. Two of the three PRs are ready.",
+                    "#141 still fails the checkout smoke test on Safari, so I left it out.",
+                    "Want me to merge #142 and #143 now?",
+                ]
+                for reply in replies {
+                    store.apply(.message(botId: bot.id, message: say(UUID().uuidString, .now, reply)))
+                }
+                bot.status = .idle
+                bot.preview = replies[2]
+                store.apply(.bot(bot))
+            }
         case "mention", "chip", "command": router.selection = .bot(BotID("claude"))
         case "group": router.selection = .bot(BotID("crew"))
         case "groupprofile":

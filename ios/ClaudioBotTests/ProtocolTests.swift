@@ -91,7 +91,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         case .work(_, _, let steps): return steps.compactMap { if case .unknown(let raw) = $0.state { "step state \(raw)" } else { nil } }
         case .todo(_, _, let todos): return todos.compactMap { if case .unknown(let raw) = $0.state { "todo state \(raw)" } else { nil } }
         case .plan(_, _, _, let state, _): return if case .unknown(let raw) = state { ["plan state \(raw)"] } else { [] }
-        case .permission(_, _, let p): return if case .closed(let raw) = p.card.answer { ["permission answer \(raw)"] } else { [] }
+        case .permission(_, _, let p): return if case .unknown(let raw) = p.card.answer { ["permission answer \(raw)"] } else { [] }
         case .ask(_, _, _, let answers, _): return if case .closed(let raw) = answers { ["ask answers \(raw)"] } else { [] }
         case .notice(_, _, _, let tone, let reason):
             var found: [String] = []
@@ -105,7 +105,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         switch message {
         case .unknown(_, _, let kind): ["message kind \(kind)"]
         case .user(_, _, _, _, _, let mentions): mentions.compactMap { if case .unknown(let kind) = $0 { "mention kind \(kind)" } else { nil } }
-        case .permission(_, _, let card): if case .closed(let raw) = card.answer { ["permission answer \(raw)"] } else { [] }
+        case .permission(_, _, let card): if case .unknown(let raw) = card.answer { ["permission answer \(raw)"] } else { [] }
         default: []
         }
     }
@@ -332,9 +332,10 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(steps[4].usage == ToolUsage(tools: 4, ms: 31000) && steps[4].cause == "Stopped by you")
 
         let cards = items.compactMap { if case .permission(_, _, let p) = $0 { p } else { nil } }
-        #expect(cards.map(\.stepId) == ["toolu_01Ac2", "toolu_01Ac6"])
-        #expect(cards.map(\.subagent) == ["sleeper two", "sleeper one"])
-        #expect(cards.map(\.card.answer) == [nil, .stopped])
+        #expect(cards.map(\.stepId) == ["toolu_01Ac2", "toolu_01Ac6", "toolu_01Ac7"])
+        #expect(cards.map(\.subagent) == ["sleeper two", "sleeper one", nil])
+        #expect(cards.map(\.card.answer) == [nil, .stopped, .closed])
+        #expect(cards[2].card.answer?.outcome().short == "Closed", "a card Claude Code abandoned reads closed, not expired")
         let reasons = items.compactMap { if case let .notice(_, _, _, _, reason) = $0 { reason } else { nil } }
         #expect(reasons == [.task, .stop])
 
@@ -351,7 +352,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         let abouts = frames.compactMap { if case .error(_, let about?) = $0 { about } else { nil } }
         let agent = SessionID("6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31")
         #expect(abouts == [
-            .stop(sessionId: agent), .send(sessionId: agent, clientId: "c_4d2a"), .tool(sessionId: agent, toolUseId: "toolu_01Ab5"), .create(ref: "s1"),
+            .stop(sessionId: agent), .set(sessionId: agent), .send(sessionId: agent, clientId: "c_4d2a"), .tool(sessionId: agent, toolUseId: "toolu_01Ab5"), .create(ref: "s1"),
         ])
         let plain = frames.compactMap { if case let .error(message, nil) = $0 { message } else { nil } }
         #expect(plain == ["Unknown bot"])
@@ -390,7 +391,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(try decode(NoticeReason.self, #""compact""#) == .unknown("compact"))
         #expect(try decode(PushState.self, #"{"state":"snoozed"}"#) == .unknown("snoozed"))
         #expect(try decode(ErrorAbout.self, #"{"kind":"decide","sessionId":"s1"}"#) == .unknown("decide"))
-        #expect(try decode(PermissionAnswer.self, #""withdrawn""#) == .closed("withdrawn"))
+        #expect(try decode(PermissionAnswer.self, #""withdrawn""#) == .unknown("withdrawn"))
     }
 
     @Test func theSessionRequestsTheAppBuildsAreTheFixtureFrames() throws {
@@ -540,7 +541,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
     @Test func anUnknownPermissionAnswerStillClosesTheCard() throws {
         let json = #"{"kind":"permission","id":"m1","at":"2026-10-16T12:00:00.000Z","from":null,"tool":"Bash","label":"l","detail":"d","always":"a","answer":"withdrawn","expiresAt":"2026-10-16T13:00:00.000Z"}"#
         guard case .permission(_, _, let card) = try decode(Message.self, json) else { Issue.record("not permission"); return }
-        #expect(card.answer == .closed("withdrawn"))
+        #expect(card.answer == .unknown("withdrawn"))
     }
 
     @Test func unknownMessageTypeDecodesInsteadOfThrowing() throws {

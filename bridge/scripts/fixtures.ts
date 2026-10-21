@@ -129,6 +129,7 @@ const runItems = [
   ] },
   { kind: "permission", id: "m23", at: later, card: { ...permission, id: "m23", label: "Bash", detail: "rm -rf build", always: "rm -rf build in solta-o-som, for this session" }, stepId: "toolu_01Ac2", subagent: "sleeper two" },
   { kind: "permission", id: "m24", at: later, card: { ...permission, id: "m24", label: "Bash", detail: "sleep 30", always: "sleep in solta-o-som, for this session", answer: "stopped" }, stepId: "toolu_01Ac6", subagent: "sleeper one" },
+  { kind: "permission", id: "m25", at: later, card: { ...permission, id: "m25", label: "Bash", detail: "sleep 45", always: "sleep in solta-o-som", answer: "closed" }, stepId: "toolu_01Ac7" },
   { kind: "notice", id: "n_2", at: later, text: "Background command \"sleep 75\" completed (exit code 0)", tone: "info", reason: "task" },
   { kind: "notice", id: "n_3", at: later, text: "Stopped by Alex: the turn and 1 agent", tone: "info", reason: "stop" },
 ] satisfies Wire<SessionItem>[];
@@ -262,6 +263,7 @@ export const server = [
   { type: "push_state", push: { state: "failing", error: "The push server answered 500", at: later } },
   { type: "push_state", push: { state: "off" } },
   { type: "error", message: "Nothing is running.", about: { kind: "stop", sessionId: agentSession } },
+  { type: "error", message: "Claude Code kept the mode Ask before edits: the session is busy.", about: { kind: "set", sessionId: agentSession } },
   { type: "error", message: "That session is gone.", about: { kind: "send", sessionId: agentSession, clientId: "c_4d2a" } },
   { type: "error", message: "That output is no longer on the Mac.", about: { kind: "tool", sessionId: agentSession, toolUseId: "toolu_01Ab5" } },
   { type: "error", message: "That project is gone.", about: { kind: "create", ref: "s1" } },

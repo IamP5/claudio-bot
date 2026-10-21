@@ -323,6 +323,8 @@ extension PermissionAnswer {
         case .stopped:
             PermissionOutcome(short: "Stopped by you", text: "Stopped by you. It did not run.", tone: .ended)
         case .closed:
+            PermissionOutcome(short: "Closed", text: "Closed when Claude Code stopped. It did not run.", tone: .ended)
+        case .unknown:
             PermissionOutcome(short: "Closed", text: "Closed. It did not run.", tone: .ended)
         }
     }

@@ -533,6 +533,11 @@ describe("step outcomes", () => {
     expect(settled("hi", false)).toMatchObject({ state: "ok", output: "hi" });
   });
 
+  test("a Claude app session's Bash result keeps its output even though toolUseResult's stdout and stderr are empty", () => {
+    const desktop = { ...answer("t1", "a.txt\nb.txt"), toolResult: { stdout: "", stderr: "", interrupted: false, isImage: false, noOutputExpected: false } };
+    expect(stepsOf(project([prompt("go"), call("t1", "Bash", { command: "ls" }), desktop], ctx).items)[0]).toMatchObject({ state: "ok", output: "a.txt\nb.txt" });
+  });
+
   test("the bridge's Stop is a stop, and a permission denial keeps its first line as its cause", () => {
     expect(settled("Alex pressed Stop. This call did not run, and nothing more runs this turn. End your turn now.", true)).toMatchObject({ state: "stopped", cause: "Stopped by you", output: null });
     expect(settled("Permission to use Bash has been denied.", true)).toMatchObject({ state: "denied", cause: "Permission to use Bash has been denied.", output: null });

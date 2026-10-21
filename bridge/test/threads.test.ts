@@ -74,6 +74,24 @@ test("a thread lists the bridge's items by their time, and a message Claude Code
   expect(snap.items.map((i) => i.id)).toEqual(["c_sent", "m_card", "n_late", "n_same", "c_queued"] as ItemId[]);
 });
 
+test("a watch's reply goes out before any later frame of its thread, however the thread's own work interleaves with it", async () => {
+  const at = () => new Date().toISOString();
+  overlay = [];
+  await threads.watch(ORDER, null);
+  for (let ticks = 0; ticks < 30; ticks++) {
+    frames.length = 0;
+    const newerFirst = threads.watch(ORDER, null).then((r) => {
+      const rev = (r[0] as Extract<ServerMessage, { type: "session" }>).rev;
+      return frames.filter((f) => f.type === "session_items" && f.rev > rev).length;
+    });
+    for (let i = 0; i < ticks; i++) await Promise.resolve();
+    overlay = [...overlay, { kind: "notice", id: `n${ticks}` as ItemId, at: at(), text: "x", tone: "info" }];
+    threads.refresh(ORDER);
+    expect(await newerFirst).toBe(0);
+    await Bun.sleep(1);
+  }
+});
+
 test("the activity line and turn output read assistant messages only, never a stream event", () => {
   expect(activityOf(text(0, "Running tests"))).toBeNull();
   expect(activityOf(block(0, "tool_use"))).toBeNull();

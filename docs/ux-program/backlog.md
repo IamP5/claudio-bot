@@ -4,3 +4,4 @@
 - Runner: after a bridge is stopped by pid, `control-claudio cleanup` leaves the sessions' foreground tool processes alive (their command line names no run folder, only their cwd). Match by cwd under the run folder too.
 - Bridge masking (pre-existing on main, from G1 verify): `--api-key plainsecretvalue` / `--password plainsecretvalue` (space-separated flags), quoted values with spaces (`SECRET="my long secret"`), URL passwords containing `/` or `@`, and values after a line continuation are not masked. Rules `ASSIGNED` and `URL_CREDENTIAL` in bridge/src/text.ts. Repro: G1 round-3 verifier's mask.ts.
 - Bridge (G3): a user Stop that ends a background agent after its turn already ended yields only a task notice with reason `task`; S4.5 expects reason `stop`.
+- Runner rubric (S4.9): the 2 s phone-latency limit flakes about half the time with no bridge change; decide whether to judge a median of several samples rather than one.

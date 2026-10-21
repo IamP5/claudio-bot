@@ -3,7 +3,7 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-21T07:10:09Z	owner	G9	ux/sessions-g9-connection	merged #5 (verified PASS at a9c25e5; merge result 294 iOS tests pass)	4h	app connection state
 2026-10-21T07:10:09Z	owner	G14	ux/sessions-g14-runner	merged #6 (verified at a6849c0 rubric PASS; fix round 135d083 reviewed by root)	3h	runner fixes
 2026-10-21T07:10:09Z	audit	sessions run 2	-	resumed from cache in new session (wf_b624bbd3-ea3): rounds 4-5 dry, skeptics pending	5h	workflow wf_b624bbd3-ea3
-2026-10-21T07:43:52Z	owner	G1	ux/sessions-g1-step-truth	pr-open #9 c406487 (round 4), verifying vs main	4h	wave 2
+2026-10-21T07:43:52Z	owner	G1	ux/sessions-g1-step-truth	pr-open #9; round-4 verifier ISSUES (truncated quote fragment, near-equal desc), round 5 sent	4h	wave 2
 2026-10-21T07:43:52Z	owner	G2	ux/sessions-g2-live-work	pr-open #13 8d77ef1, 3-lane swarm verifying	6h	wave 2
 2026-10-21T07:43:52Z	owner	G4	ux/sessions-g4-work-run	merged #8 (verified 29dfed7; fix round 503f446 reviewed by root)	4h	wave 2
 2026-10-21T07:43:52Z	owner	G7	ux/sessions-g7-approval-cards	pr-open #7; fix-round verifier ISSUES (AX4/5 tap regression), round 3 sent	4h	wave 2

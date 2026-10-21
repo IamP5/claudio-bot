@@ -569,7 +569,9 @@ export function createSessions(deps: SessionsDeps): Sessions {
         case "session_send":
           return send(m);
         case "session_stop":
-          return stopTurn(m.sessionId);
+          return m.target === undefined || m.target === "all" ? stopTurn(m.sessionId) : error("This bridge cannot stop part of a session yet.");
+        case "session_unqueue":
+          return error("This bridge cannot withdraw a queued message yet.");
         case "session_decide":
           return decide(m);
         case "session_answer": {

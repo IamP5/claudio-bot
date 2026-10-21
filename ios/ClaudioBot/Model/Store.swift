@@ -375,7 +375,7 @@ final class AppStore {
             webhookToken = token
             return []
 
-        case let .error(message):
+        case let .error(message, _):
             lastError = ErrorNotice(message: message)
             return []
 
@@ -403,7 +403,7 @@ final class AppStore {
             sessions.recordCreated(ref: ref, sessionId: sessionId)
             return []
 
-        case .unknown:
+        case .pushState, .unknown:
             return []
         }
     }

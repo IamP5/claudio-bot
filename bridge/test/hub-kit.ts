@@ -151,7 +151,7 @@ export function hubOver(
     model: undefined,
     scan: opts.scan ?? (async () => []),
     broadcast: (m) => frames.push(m),
-    signal: (s) => (s.type === "activity" ? signals.push(s) : usage.push(s.usage)),
+    signal: (s) => (s.type === "activity" ? signals.push(s) : s.type === "usage" ? usage.push(s.usage) : undefined),
     usage: opts.usage,
     ...(opts.sessions && { sessions: opts.sessions }),
     webhookPort: null,

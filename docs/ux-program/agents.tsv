@@ -4,9 +4,10 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-21T07:10:09Z	owner	G14	ux/sessions-g14-runner	merged #6 (verified at a6849c0 rubric PASS; fix round 135d083 reviewed by root)	3h	runner fixes
 2026-10-21T07:10:09Z	audit	sessions run 2	-	done: run 2 skeptics finished (wf_7a61ddd1-4f5), 32 survivors filed	5h	workflow wf_b624bbd3-ea3
 2026-10-21T07:43:52Z	owner	G1	ux/sessions-g1-step-truth	merged #9 (5 verify rounds; round 5 strictly-stricter masking reviewed by root)	4h	wave 2
-2026-10-21T07:43:52Z	owner	G2	ux/sessions-g2-live-work	pr-open #13 6bc064f (round 3), verifying	6h	wave 2
+2026-10-21T07:43:52Z	owner	G2	ux/sessions-g2-live-work	merged #13 (3-lane swarm + 2 fix-round verifiers; PASS at 6bc064f)	6h	wave 2
 2026-10-21T07:43:52Z	owner	G4	ux/sessions-g4-work-run	merged #8 (verified 29dfed7; fix round 503f446 reviewed by root)	4h	wave 2
 2026-10-21T07:43:52Z	owner	G7	ux/sessions-g7-approval-cards	pr-open #7 dd4755b (sheet at all sizes); waiting on G16 to prove AX5	4h	wave 2
 2026-10-21T08:00:26Z	owner	G10	ux/sessions-g10-offline-list	merged #12 (verified PASS at 46880bc)	4h	wave 2
 2026-10-21T10:12:06Z	owner	R1	ux/runner-build-isolation	merged #11 (rounds 1-2 verified; round 3 safety gates reviewed by root)	3h	per-tree app builds + stamp check + SIGINT cleanup
 2026-10-21T12:14:11Z	owner	G16	ux/sessions-g16-ax5-hang	running	4h	P0 F-SES-170 AX5 thread hang
+2026-10-21T12:50:31Z	owner	G3	ux/sessions-g3-run-endings	running	6h	wave 3, after G2

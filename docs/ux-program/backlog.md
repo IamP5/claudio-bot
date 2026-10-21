@@ -5,3 +5,4 @@
 - Runner rubric (S4.9): the 2 s phone-latency limit flakes about half the time with no bridge change; decide whether to judge a median of several samples rather than one.
 - Runner coverage (from G2 sim verify): no scenario photographs the Sessions row while work runs, and S1b's mid-run shot shows the bottom of the thread (permission cards) so the work-run header with three steps is off screen. Add a list screenshot mid-run and scroll the thread to the work run before S1b.8.
 - Composer at accessibility sizes (from G2 sim verify): at AX5 the composer drops the "Ask before edits" chip, clips "Haiku" and truncates the placeholder to "Queue a me…" (G6 territory).
+- Runner rubric (S2.12, S8.10): noPhantomWork measures only to the next user/assistant transcript line; a real wake turn whose first line lands more than 5 s after its init could read as phantom work. Watch for flakes.

@@ -1,7 +1,7 @@
 import { createAgents, type Agents } from "../agents";
 import type { CardReply } from "../gate";
 import { findProject, type Project } from "../projects";
-import type { AgentId, BotId, Message, MessageId } from "../protocol";
+import type { AgentId, BotId, MessageId } from "../protocol";
 import type { AgentRecord } from "../world";
 import type { Journal } from "./journal";
 import type { Applied, BotStandIn, Event, EventBody, Intent, IntentId, Seq } from "./wire";
@@ -36,8 +36,11 @@ export type AgentRuntime = {
   lastSeq(): Seq;
   /** The home handled every event through seq, so the journal may drop them. */
   ack(seq: Seq): void;
-  /** A message the gate posted on a stand-in, for the home's mirror of the bot's chat. */
-  card(botId: BotId, message: Message): void;
+  /**
+   * An event from outside the agents: a message the gate posted on a stand-in, for the home's mirror of the bot's chat,
+   * or this machine's profile at boot.
+   */
+  emit(body: Extract<EventBody, { kind: "card" | "profile" }>): void;
   /** Called with each event as it is emitted, in order. Returns the unsubscribe. */
   subscribe(f: (e: Event) => void): () => void;
   local: LocalAgents;
@@ -164,7 +167,7 @@ export function createAgentRuntime(deps: RuntimeDeps): AgentRuntime {
     events: (after) => journal.after(after),
     lastSeq: () => journal.seq(),
     ack: (seq) => journal.ack(seq),
-    card: (botId, message) => emit({ kind: "card", botId, message }),
+    emit,
     subscribe(f) {
       subscribers.add(f);
       return () => void subscribers.delete(f);

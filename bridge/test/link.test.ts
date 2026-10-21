@@ -180,10 +180,12 @@ test("an enrolled machine comes online, answers an intent over the link, and goe
   expect(live(m.dialer.state())).toBe("live");
   expect(h.links.machines()[0]!.profile()).toMatchObject({ platform: "linux", access: { full: true, sandbox: false } });
 
+  // The home asks for a snapshot as the machine comes online, then this test asks for another.
+  await until("the first snapshot", () => h.seen.length === 1);
   expect(await h.links.machines()[0]!.send({ kind: "snapshot", intentId: newIntentId() })).toEqual({ ok: true, reply: "snapshot" });
-  await until("the snapshot event", () => h.seen.length === 1);
-  expect(h.seen).toEqual([`${pair.mac.machineId} 1 snapshot`]);
-  await until("the ack saved", () => registry.get(pair.mac.machineId)!.ackedSeq === 1);
+  await until("the second snapshot", () => h.seen.length === 2);
+  expect(h.seen).toEqual([`${pair.mac.machineId} 1 snapshot`, `${pair.mac.machineId} 2 snapshot`]);
+  await until("the ack saved", () => registry.get(pair.mac.machineId)!.ackedSeq === 2);
 
   m.dialer.stop();
   await until("offline", () => !h.links.machines()[0]!.status().online);
@@ -199,27 +201,48 @@ test("events emitted while the link is down, or sent and never acked before a ki
   const h = homeServer(pair.home, registry);
   const journal = tmp();
 
+  const notes = () => h.seen.filter((x) => x.endsWith("note")).length;
+  const note = (r: MiniRuntime, text: string) => r.emit({ kind: "note", agentId: "a1" as never, botId: "b1" as never, text });
+
   const first = machineAt(h.url, pair, journal);
   await until("online", () => h.links.machines()[0]!.status().online);
-  first.runtime.emit({ kind: "note", agentId: "a1" as never, botId: "b1" as never, text: "one" });
-  await until("event 1 acked", () => registry.get(pair.mac.machineId)!.ackedSeq === 1);
+  note(first.runtime, "one");
+  await until("note one acked", () => registry.get(pair.mac.machineId)!.ackedSeq === first.runtime.lastSeq());
   first.dialer.stop();
   await until("offline", () => !h.links.machines()[0]!.status().online);
 
   // Down: the machine keeps working and its events wait in its journal.
-  first.runtime.emit({ kind: "note", agentId: "a1" as never, botId: "b1" as never, text: "two" });
-  first.runtime.emit({ kind: "note", agentId: "a1" as never, botId: "b1" as never, text: "three" });
+  note(first.runtime, "two");
+  note(first.runtime, "three");
 
   const second = machineAt(h.url, pair, journal);
-  await until("events 2 and 3 acked", () => registry.get(pair.mac.machineId)!.ackedSeq === 3);
-  second.runtime.emit({ kind: "note", agentId: "a1" as never, botId: "b1" as never, text: "four" });
-  await until("event 4", () => h.seen.length === 4);
-  // Killed before the home's ack reached it: its journal still holds event 4. The new link starts after what the home
-  // handled, so event 4 is not heard again.
+  await until("notes two and three", () => notes() === 3);
+  note(second.runtime, "four");
+  await until("note four", () => notes() === 4);
+  // Gone before the home's ack reached it: its journal still holds note four. The new link starts after what the home
+  // handled, so note four is not heard again.
+  second.dialer.stop();
   machineAt(h.url, pair, journal);
   await until("the third link", () => h.log.filter((l) => l.includes("online, replaying after event")).length === 3);
+  await until("the third snapshot", () => h.seen.filter((x) => x.endsWith("snapshot")).length === 3);
   await Bun.sleep(100);
-  expect(h.seen.map((s) => s.split(" ").slice(1).join(" "))).toEqual(["1 note", "2 note", "3 note", "4 note"]);
+  const seqs = h.seen.map((x) => Number(x.split(" ")[1]));
+  expect(seqs).toEqual(seqs.map((_, i) => i + 1));
+  expect(h.seen.map((x) => x.split(" ")[2])).toEqual(["snapshot", "note", "note", "note", "snapshot", "note", "snapshot"]);
+});
+
+test("a second bridge with the same machine identity takes the link, and the first stops dialing instead of taking it back", async () => {
+  const pair = enrolledPair();
+  const registry = createRegistry({ bridgeHome: tmp(), now: () => new Date() });
+  registry.enroll({ id: pair.mac.machineId, name: "MacBook", publicKey: pair.mac.publicKey });
+  const h = homeServer(pair.home, registry);
+  const first = machineAt(h.url, pair, tmp());
+  await until("online", () => h.links.machines()[0]!.status().online);
+  const second = machineAt(h.url, pair, tmp());
+  await until("the first gave way", () => first.log.some((l) => l.includes("stops dialing")));
+  await Bun.sleep(200);
+  expect([first.dialer.state().kind, second.dialer.state().kind]).toEqual(["closed", "live"]);
+  expect(h.log.filter((l) => l.includes("online, replaying"))).toHaveLength(2);
 });
 
 test("an event the home already handled, sent again on a live link, is dropped", () => {

@@ -2,7 +2,7 @@ import type { Identity } from "./identity";
 import { homeHears, homeOpens, type LinkState } from "./link";
 import type { Machine } from "./machines";
 import type { Registry } from "./registry";
-import { parseMachineFrame, type Applied, type Event, type HomeFrame, type IntentId, type MachineId, type ProfileView, type Seq } from "./wire";
+import { newIntentId, parseMachineFrame, type Applied, type Event, type HomeFrame, type IntentId, type MachineId, type ProfileView, type Seq } from "./wire";
 
 // The home's end of every machine's link (GET /link): the handshake, the remote Machine each enrolled machine is, its
 // events in, and acks out once the registry has saved them.
@@ -181,7 +181,10 @@ export function createLinks(deps: { identity: Identity; registry: Registry; log:
           send(session, step.send);
           registry.update(peer, { profile: step.hello.profile, lastSeenAt: session.since, ackedSeq: step.ackedSeq });
           log(`link: ${nameOf(peer)} online, replaying after event ${step.ackedSeq} of ${step.hello.lastSeq}`);
-          return changed();
+          changed();
+          // Its agents and open cards as they are now, after the replay, so the home's view of it starts current.
+          void remote(peer).send({ kind: "snapshot", intentId: newIntentId() });
+          return;
         }
         case "frame": {
           const frame = step.frame;

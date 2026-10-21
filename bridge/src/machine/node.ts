@@ -222,7 +222,7 @@ export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "obs
         post(bot, message);
         trimThread(bot.messages, archiveOf(bot.id), isOpenCard, deps.log);
         deps.persist();
-        node.runtime.card(bot.id, message);
+        node.runtime.emit({ kind: "card", botId: bot.id, message });
       },
       // A stand-in's cards are its agents', so their answers and notices go to the agents; nothing reaches a bot here.
       deliver: (botId) => deps.log(`machine: dropped an envelope for bot ${botId}, which runs on the home`),

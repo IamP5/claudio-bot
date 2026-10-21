@@ -1,6 +1,7 @@
 import { errorText } from "../text";
 import type { HomeRef, Identity } from "./identity";
 import { machineHears, type LinkState } from "./link";
+import { LINK_REPLACED } from "./links";
 import type { AgentRuntime } from "./runtime";
 import { parseHomeFrame, type Event, type MachineFrame, type ProfileView } from "./wire";
 
@@ -125,7 +126,15 @@ export function dialHub(deps: {
     }
     socket = s;
     s.onmessage = (e) => hear(s, String(e.data));
-    s.onclose = (e) => drop(s, e.reason || `closed with code ${e.code}`);
+    s.onclose = (e) => {
+      // Another bridge with this machine's identity linked after this one: two would take the link from each other
+      // forever, so the older one gives way.
+      if (e.code === LINK_REPLACED && socket === s) {
+        stopped = true;
+        log(`link: another bridge with this machine's identity linked to ${home.name}, so this one stops dialing. Run one bridge per machine.json.`);
+      }
+      drop(s, e.reason || `closed with code ${e.code}`);
+    };
     s.onerror = () => {};
   }
 

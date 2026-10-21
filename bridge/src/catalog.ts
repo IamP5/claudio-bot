@@ -106,7 +106,7 @@ export function createCatalog(deps: CatalogDeps): Catalog {
     const ids = new Set<SessionId>([...heads.keys(), ...agents.keys(), ...drafts.keys()]);
     const projects = new Map<string, SessionProject>();
     const rows: SessionRow[] = [];
-    for (const seed of seeds) projects.set(seed.id, { id: seed.id, name: seed.name, path: seed.root, githubRepo: seed.githubRepo, lastAt: null, canCloud: false });
+    for (const seed of seeds) projects.set(seed.id, { id: seed.id, machine: deps.machine, name: seed.name, path: seed.root, githubRepo: seed.githubRepo, lastAt: null, canCloud: false });
     for (const id of ids) {
       const head = heads.get(id) ?? null;
       const rec = agents.get(id) ?? null;
@@ -144,7 +144,7 @@ export function createCatalog(deps: CatalogDeps): Catalog {
         createdAt: iso(createdAt),
         lastAt: iso(lastAt),
       });
-      const p = projects.get(project.id) ?? { id: project.id, name: project.name, path: project.root, githubRepo: project.githubRepo, lastAt: null, canCloud: false };
+      const p = projects.get(project.id) ?? { id: project.id, machine: deps.machine, name: project.name, path: project.root, githubRepo: project.githubRepo, lastAt: null, canCloud: false };
       if (p.lastAt === null || iso(lastAt) > p.lastAt) p.lastAt = iso(lastAt);
       projects.set(project.id, p);
     }

@@ -43,7 +43,7 @@ const row = (id: SessionId, machine: MachineId = MAC): SessionRow => ({
   createdAt: at,
   lastAt: at,
 });
-const project: SessionProject = { id: P, name: "shop", path: "/Users/alex/code/shop", githubRepo: null, lastAt: at, canCloud: false };
+const project: SessionProject = { id: P, machine: MAC, name: "shop", path: "/Users/alex/code/shop", githubRepo: null, lastAt: at, canCloud: false };
 const listOf = (...rows: SessionRow[]): Extract<SessionReply, { type: "sessions" }> => ({ type: "sessions", rows, projects: [project], mirror: "auto" });
 
 test("a machine's rows are re-stamped with the machine their link names, removed when its next list drops them, and the home wins an id both list", () => {
@@ -168,6 +168,20 @@ test("the Sessions tab lists the home's rows and each machine's, by machine, for
     [S1, MAC],
   ]);
   expect(frames[0]?.type === "sessions" && frames[0].projects.map((p) => p.name)).toContain("shop");
+});
+
+test("each project names its machine: the home's own, and a machine's as its link says, whatever the machine claims", async () => {
+  const world = emptyWorld();
+  world.sessions.set(S2, { id: S2, hidden: false, visitedAt: null, own: newDrive({ id: S2, cwd: "/tmp/x", created: true, at, model: null, mode: null, prompt: "Draft" }) });
+  const m = setup(world);
+  m.answers((a) => (a.type === "watch_sessions" ? [{ ...listOf(row(S1)), projects: [{ ...project, machine: "m_lies" as MachineId }] }] : []));
+  await m.flip(true);
+  expect(m.list.at(-1)?.projects).toEqual([project]);
+  const [frame] = await m.ask({ type: "watch_sessions" });
+  if (frame?.type !== "sessions") throw new Error("no sessions frame");
+  expect(frame.projects.find((p) => p.id === P)?.machine).toBe(MAC);
+  expect(frame.projects.filter((p) => p.id !== P).map((p) => p.machine)).toEqual(frame.projects.filter((p) => p.id !== P).map(() => HOME));
+  expect(frame.projects.length).toBeGreaterThan(1);
 });
 
 test("an offline machine's rows stay as last known", async () => {

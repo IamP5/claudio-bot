@@ -53,7 +53,7 @@ export function createRemoteSessions(deps: { home: (id: SessionId) => boolean })
       s.claimed.delete(r.id);
     }
     const gone = removed.filter((id) => s.rows.delete(id) && !deps.home(id));
-    const own = projects.filter((p) => !projectElsewhere(machine, p.id));
+    const own = projects.filter((p) => !projectElsewhere(machine, p.id)).map((p) => ({ ...p, machine }));
     for (const p of own) s.projects.set(p.id, p);
     return { type: "session_rows", rows: upserts, removed: gone, projects: own };
   }

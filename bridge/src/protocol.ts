@@ -365,11 +365,12 @@ export const PHONE_MODES = ["default", "acceptEdits", "plan", "dontAsk", "auto"]
 export type PhoneMode = (typeof PHONE_MODES)[number];
 
 /**
- * A project: a git repository's main checkout, which every worktree of it joins. name: the GitHub repo name when the
- * remote is on GitHub ("solta-o-som" for ~/Dev/projects/br-soundless), else the folder name. lastAt: the newest
- * lastAt of its sessions, null when it has none. canCloud: reserved for phone-started cloud sessions, false in v1.
+ * A project: a git repository's main checkout, which every worktree of it joins. machine: the machine whose disk holds
+ * it, where a session_create for it runs. name: the GitHub repo name when the remote is on GitHub ("solta-o-som" for
+ * ~/Dev/projects/br-soundless), else the folder name. lastAt: the newest lastAt of its sessions, null when it has none.
+ * canCloud: reserved for phone-started cloud sessions, false in v1.
  */
-export type SessionProject = { id: ProjectId; name: string; path: string; githubRepo: string | null; lastAt: string | null; canCloud: boolean };
+export type SessionProject = { id: ProjectId; machine: MachineId; name: string; path: string; githubRepo: string | null; lastAt: string | null; canCloud: boolean };
 
 /** state null: the transcript names the PR without its state. */
 export type SessionPr = { number: number; url: string; state: "open" | "merged" | "closed" | null };

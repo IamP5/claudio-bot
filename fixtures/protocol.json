@@ -1314,6 +1314,7 @@
       "projects": [
         {
           "id": "3f9a1c7e2b4d6a80",
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
           "name": "solta-o-som",
           "path": "/Users/alex/Dev/projects/br-soundless",
           "githubRepo": "IamP5/solta-o-som",
@@ -1322,6 +1323,7 @@
         },
         {
           "id": "9c2e5b7a1d3f4e60",
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
           "name": "claudio-bot",
           "path": "/Users/alex/Dev/projects/claudio-bot",
           "githubRepo": "alex/claudio-bot",
@@ -1460,6 +1462,7 @@
       "projects": [
         {
           "id": "3f9a1c7e2b4d6a80",
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
           "name": "solta-o-som",
           "path": "/Users/alex/Dev/projects/br-soundless",
           "githubRepo": "IamP5/solta-o-som",

@@ -54,10 +54,10 @@ const agent: Wire<AgentView> = {
 // Sessions: solta-o-som (the GitHub name of ~/Dev/projects/br-soundless) holds an agent's session and one from the
 // Claude app; claudio-bot holds a cloud agent's.
 const solta: Wire<SessionProject> = {
-  id: "3f9a1c7e2b4d6a80", name: "solta-o-som", path: "/Users/alex/Dev/projects/br-soundless", githubRepo: "IamP5/solta-o-som", lastAt: later, canCloud: false,
+  id: "3f9a1c7e2b4d6a80", machine: HOME, name: "solta-o-som", path: "/Users/alex/Dev/projects/br-soundless", githubRepo: "IamP5/solta-o-som", lastAt: later, canCloud: false,
 };
 const claudio: Wire<SessionProject> = {
-  id: "9c2e5b7a1d3f4e60", name: "claudio-bot", path: "/Users/alex/Dev/projects/claudio-bot", githubRepo: "alex/claudio-bot", lastAt: at, canCloud: false,
+  id: "9c2e5b7a1d3f4e60", machine: HOME, name: "claudio-bot", path: "/Users/alex/Dev/projects/claudio-bot", githubRepo: "alex/claudio-bot", lastAt: at, canCloud: false,
 };
 const agentSession = "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31";
 const agentRow: Wire<SessionRow> = {

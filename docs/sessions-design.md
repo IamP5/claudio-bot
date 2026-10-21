@@ -51,7 +51,7 @@ const rec = { …, session: { ...emptySession(newSessionId()) } };   // options(
 
 | Fact | Source (only writer) | Read by |
 |---|---|---|
-| session exists, cwd, createdAt, lastAt, title (`custom-title` > `ai-title` > first prompt), branch (last `gitBranch`), PR (`pr-link`), first/last `entrypoint`, last `permissionMode` | the transcript (Claude Code) | `transcript.ts` only |
+| session exists, cwd, createdAt, lastAt (the newest prompt, reply or tool result, never a title or bookkeeping line), title (`custom-title` > `ai-title` > first prompt), branch (last `gitBranch`), PR (`pr-link`), first/last `entrypoint`, last `permissionMode` | the transcript (Claude Code) | `transcript.ts` only |
 | who is live on it, busy/idle | `~/.claude/sessions/<pid>.json` (Claude Code), minus the bridge's own child pids | `claudeApps.ts` |
 | listed in the desktop app, archived there, `spawnedFrom` parent | desktop store `claude-code-sessions/**/local_*.json`, read only | `claudeApps.ts` |
 | bot agent link | `AgentRecord.session.id` (agents.ts / session.ts) | catalog join |
@@ -185,7 +185,9 @@ export type Cursor = string & { readonly __brand: "Cursor" };   // opaque: byte 
 ```
 
 Rules:
-- `rev` counts per session within a bridge `epoch`.
+- `rev` counts per session within a bridge `epoch`, one per `session_items` frame, with no gaps. A live frame is the next rev or the same one again. Only the reply to a `watch_session` from a position may jump ahead. Anything else means the app lost a frame. It then forgets its position and watches again with `after: null`, at once, for a snapshot. A thread frame the app cannot decode counts the same way, and a `session_rows` frame it cannot decode makes it watch the list again. A repair whose own reply is lost waits for the next ordinary watch, so an unreadable reply never loops.
+- One order for every item, in every view: by `at`, except a `user` item with `queued: true`, which follows everything. Items at the same place keep the order they arrived in. The bridge sorts snapshots and pages this way (`threads.ts` `ordered()`), and the app inserts each upsert at its place, so live, resumed and fresh views list the same items in the same order. An answered card stays at the time it was raised. A message Claude Code took carries its turn's start time until the transcript's copy replaces it, in the same frame.
+- Every frame goes through one serializer (`stream.ts` `wire()`) that turns a lone surrogate into U+FFFD, so no frame is undecodable for that reason.
 - `session_items` upserts by `id`, so replaying an upsert is a no-op.
 - `session_delta` applies only when `offset` equals the client's current text length. Otherwise the client drops it and waits for the upsert, so a lost delta can only delay text, never corrupt it.
 - `session_decide` on a card the gate owns is routed to `gate.answer(botId, cardId)`. The client sends one verb whatever owns the card.

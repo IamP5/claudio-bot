@@ -3,11 +3,12 @@
 // phone would see, and judges the scenario's rubric. With --sim it also leases a pool simulator (pool.ts), installs the
 // app, pairs it with the run's bridge when someone taps Pair, and takes the scenario's screenshots.
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createServer, connect as tcp, type Server, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { BASE, connect, frameLine, ownProject, slug, spent, type Frame, type Project, type Row, type Run } from "./control-claudio";
 import * as pool from "./pool";
-import { SCENARIOS, type Action, type Controls, type Ev, type Item, type Resume, type Scenario, type Snap } from "./scenarios";
+import { SCENARIOS, type Action, type Controls, type Drop, type Ev, type Item, type Resume, type Scenario, type Snap } from "./scenarios";
 
 const CONTROL = join(import.meta.dir, "control-claudio.ts");
 const args = process.argv.slice(2);
@@ -23,6 +24,63 @@ class PreconditionFailed extends Error {}
 
 type Thread = { items: Map<string, Item>; controls: Controls | null; epoch: string | null; rev: number };
 
+/**
+ * A TCP relay in front of the bridge. The phone and the app reach the bridge through it, so the runner can cut them off
+ * the way a network does: `close` ends every connection and refuses new ones; `half-open` passes nothing either way
+ * and closes nothing, so neither side hears a close, as when a phone loses signal or is suspended.
+ */
+class Relay {
+  private server: Server | null = null;
+  private live = new Set<{ down: Socket; up: Socket; dead: boolean }>();
+  private cut: Drop | null = null;
+  port = 0;
+
+  constructor(private bridgePort: number) {}
+
+  async start() {
+    this.server = createServer((down) => {
+      if (this.cut === "close") return void down.destroy();
+      const p = { down, up: tcp(this.bridgePort, "127.0.0.1"), dead: false };
+      this.live.add(p);
+      const end = () => {
+        if (p.dead) return;
+        this.live.delete(p);
+        p.down.destroy();
+        p.up.destroy();
+      };
+      for (const s of [p.down, p.up]) s.on("close", end).on("error", end);
+      if (this.cut === "half-open") return this.silence(p);
+      p.down.pipe(p.up);
+      p.up.pipe(p.down);
+    });
+    await new Promise<void>((ok) => this.server!.listen(0, "127.0.0.1", ok));
+    this.port = (this.server.address() as { port: number }).port;
+  }
+
+  drop(how: Drop) {
+    this.cut = how;
+    for (const p of this.live) how === "close" ? (p.down.destroy(), p.up.destroy()) : this.silence(p);
+  }
+
+  restore() {
+    this.cut = null;
+  }
+
+  private silence(p: { down: Socket; up: Socket; dead: boolean }) {
+    p.dead = true;
+    this.live.delete(p);
+    p.down.unpipe(p.up);
+    p.up.unpipe(p.down);
+    // Read and discard, so each kernel keeps acknowledging and no side sees an error or a close.
+    for (const s of [p.down, p.up]) s.on("data", () => {}).resume();
+  }
+
+  close() {
+    for (const p of this.live) (p.down.destroy(), p.up.destroy());
+    this.server?.close();
+  }
+}
+
 /** The phone: one socket like the app's, a reducer over the scenario's own sessions, and the record of both. */
 class Phone {
   c: Awaited<ReturnType<typeof connect>> | null = null;
@@ -36,25 +94,38 @@ class Phone {
   away = new Set<string>();
   onReply: ((sid: string, type: string) => void) | null = null;
   lastList: Row[] = [];
+  /** The stream position the app keeps across reconnects: the bridge's epoch and the last broadcast seq. */
+  cursor: { epoch: string; seq: number } | null = null;
+  /** What the user sent while the phone was offline; the app sends it after the next hello. */
+  outbox: Frame[] = [];
+  /** Seconds the user takes to allow a card. */
+  holdS = 0;
+  private frameNo = 0;
 
   constructor(
     private run: Run,
     private ev: Ev,
     private out: string,
     private attended: boolean,
+    private relay: Relay,
   ) {}
 
-  private record(dir: "in" | "out", name: string, f: Frame) {
+  private record(dir: "in" | "out" | "held", name: string, f: Frame) {
     const at = this.ev.now();
     appendFileSync(join(this.out, "timeline.jsonl"), JSON.stringify({ at, dir, name, frame: f }) + "\n");
-    if (name !== "list" || dir === "out") appendFileSync(join(this.out, "threads.txt"), `+${(at / 1000).toFixed(1)}s ${dir === "out" ? ">>" : "<<"} ${name} ${dir === "out" ? JSON.stringify(f) : frameLine(f, true)}\n`);
+    if (name !== "list" || dir !== "in") appendFileSync(join(this.out, "threads.txt"), `+${(at / 1000).toFixed(1)}s ${dir === "in" ? "<<" : dir === "out" ? ">>" : ">> (held offline)"} ${name} ${dir === "in" ? frameLine(f, true) : JSON.stringify(f)}\n`);
   }
 
   send(m: Frame) {
-    if (!this.c) throw new Error(`the phone is offline; cannot send ${m.type}`);
     const sid = m.sessionId as string | undefined;
-    if (sid && this.names.has(sid)) this.record("out", this.names.get(sid)!, m);
-    if (m.type === "session_create") this.record("out", String(m.ref), m);
+    const name = sid && this.names.has(sid) ? this.names.get(sid)! : m.type === "session_create" ? String(m.ref) : null;
+    if (!this.c) {
+      if (m.type !== "session_send") throw new Error(`the phone is offline; cannot send ${m.type}`);
+      this.outbox.push(m);
+      if (name) this.record("held", name, m);
+      return;
+    }
+    if (name) this.record("out", name, m);
     this.c.send(m);
   }
 
@@ -66,10 +137,16 @@ class Phone {
 
   private snap(sid: string) {
     const t = this.thread(sid);
-    this.ev.history.push({ at: this.ev.now(), name: this.names.get(sid)!, row: this.rows.get(sid) ?? null, controls: t.controls, items: [...t.items.values()] });
+    this.ev.history.push({ at: this.ev.now(), frame: this.frameNo, name: this.names.get(sid)!, row: this.rows.get(sid) ?? null, controls: t.controls, items: [...t.items.values()] });
   }
 
   private apply(f: Frame) {
+    this.frameNo++;
+    if (f.type === "hello") {
+      if (!(f.resumed === true && f.epoch === this.cursor?.epoch)) this.cursor = { epoch: f.epoch as string, seq: f.seq as number };
+      return;
+    }
+    if (typeof f.seq === "number" && this.cursor) this.cursor.seq = f.seq;
     if (f.type === "sessions" || f.type === "session_rows") {
       if (f.type === "sessions") for (const p of f.projects as Project[]) if (ownProject(this.run, p)) (this.ownProjects.add(p.id), p.name === "demo" && (this.demo = p));
       const mine = (f.rows as Row[]).filter((r) => this.ownProjects.has(r.projectId));
@@ -115,29 +192,43 @@ class Phone {
     } else return;
     this.onReply?.(sid, f.type);
     this.snap(sid);
-    // The user taps Allow once on every card the scenario's sessions raise; each tap is in the timeline.
+    // The user taps Allow once on every card the scenario's sessions raise, after holdS; each tap is in the timeline.
     for (const i of t.items.values())
       if (i.kind === "permission" && i.card && i.card.answer === null && !this.decided.has(i.card.id)) {
-        this.decided.add(i.card.id);
-        this.send({ type: "session_decide", sessionId: sid, cardId: i.card.id, choice: "once" });
+        const cardId = i.card.id;
+        this.decided.add(cardId);
+        const tap = () => this.c && this.send({ type: "session_decide", sessionId: sid, cardId, choice: "once" });
+        if (this.holdS > 0) setTimeout(tap, this.holdS * 1000);
+        else tap();
       }
   }
 
-  async open(resume: boolean) {
-    this.c = await connect(this.run);
-    const c = this.c;
+  /**
+   * Connects through the relay as the app does: with resume, from the stream position it holds. Then the Sessions list,
+   * `listed` (the list is in, no thread watched yet), each thread it had open, and what the user sent offline.
+   */
+  async open(resume: boolean, listed?: () => void) {
+    const c = await connect(this.run, { port: this.relay.port, resume: resume && this.cursor ? { epoch: this.cursor.epoch, after: this.cursor.seq } : null });
+    this.c = c;
+    // Frames that came with the hello (a replay) arrived before this handler; the reducer takes them first.
+    const early = c.frames.slice();
     const inner = c.ws.onmessage;
     c.ws.onmessage = (e) => {
       inner?.call(c.ws, e);
       this.apply(JSON.parse(String(e.data)) as Frame);
     };
+    for (const f of early) this.apply(f);
     // With the simulator, the app is the phone the user looks at; this socket only watches, so it must not hold back pushes.
     if (!this.attended) c.send({ type: "presence", attended: false });
     const at = c.frames.length;
     c.send({ type: "watch_sessions" });
     await until(() => c.frames.slice(at).some((f) => f.type === "sessions"), "the sessions frame", 60);
     if (!this.demo) throw new Error("the run's demo project is not listed");
+    listed?.();
     for (const [sid] of this.names) if (!this.away.has(sid)) this.watch(sid, resume);
+    for (const m of this.outbox.splice(0)) this.send(m);
+    const hello = early.find((f) => f.type === "hello")!;
+    return { resumed: hello.resumed === true, replayed: early.filter((f) => typeof f.seq === "number").length };
   }
 
   watch(sid: string, resume: boolean) {
@@ -146,9 +237,13 @@ class Phone {
     this.send({ type: "watch_session", sessionId: sid, after: resume && t.epoch ? { epoch: t.epoch, rev: t.rev } : null });
   }
 
+  /** The app drops its socket: a clean close, or, after a half-open cut, a socket it gives up on without a word. */
   drop() {
-    this.c?.close();
+    const c = this.c;
     this.c = null;
+    if (!c) return;
+    c.ws.onmessage = null;
+    c.close();
   }
 
   async request(m: Frame, type: string, timeoutS = 10): Promise<Frame> {
@@ -181,8 +276,10 @@ function sh(argv: string[], logFile?: string) {
 }
 
 type Outcome = "judged" | "precondition-failed" | "error";
+/** simctl ui settings for a leased device during a run: Dynamic Type and appearance. Reset to large and light at the end. */
+type Ui = { contentSize?: string; appearance?: string };
 
-async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promise<Outcome> {
+async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui): Promise<Outcome> {
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
   const out = resolve(flag("out") ?? join(BASE, "scenarios", sc.id, `${stamp}${sim ? "-sim" : ""}`));
   mkdirSync(join(out, "screenshots"), { recursive: true });
@@ -226,8 +323,20 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
     exists: (rel: string) => !!phone?.demo && existsSync(join(phone.demo.path, rel)),
     pushes: () => (run && existsSync(join(run.dir, "pushes.jsonl")) ? readFileSync(join(run.dir, "pushes.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []),
     atOf: (iso: string) => Date.parse(iso) - t0,
+    procs: (pattern: string) => {
+      const root = phone?.demo?.path;
+      if (!root) return [];
+      const pids = sh(["pgrep", "-f", pattern]).out.split("\n").filter(Boolean).map(Number).filter((pid) => pid !== process.pid);
+      return pids.flatMap((pid) => {
+        const cwd = sh(["lsof", "-a", "-p", String(pid), "-d", "cwd", "-Fn"]).out.split("\n").find((l) => l.startsWith("n"))?.slice(1) ?? "";
+        return cwd === root || cwd.startsWith(`${root}/`) ? [`${pid} ${sh(["ps", "-p", String(pid), "-o", "command="]).out.trim()}`] : [];
+      });
+    },
+    samples: {},
   };
   let phone: Phone | null = null;
+  let relay: Relay | null = null;
+  let app: string | null = null;
   const markNow = (m: string) => {
     ev.marks[m] = ev.now();
     log(`mark ${m} at +${(ev.marks[m]! / 1000).toFixed(1)}s`);
@@ -235,12 +344,15 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
 
   try {
     if (sc.needsSimulator && !sim) throw new PreconditionFailed(`${sc.id} needs the simulator: run it with --sim`);
-    const app = sim ? await pool.buildApp() : null;
+    app = sim ? await pool.buildApp() : null;
     if (sim) {
       lease = await pool.acquire(`scenario ${sc.id} pid ${process.pid}`);
       held = pool.holdForProcess(lease);
       report.device = lease.device;
       pool.boot(lease);
+      if (ui.contentSize) pool.simctl(lease, "ui", "content_size", ui.contentSize);
+      if (ui.appearance) pool.simctl(lease, "ui", "appearance", ui.appearance);
+      if (ui.contentSize || ui.appearance) report.ui = ui;
     }
     const launched = sh(["bun", CONTROL, "launch", "--model", "haiku"], join(out, "launch.log"));
     const runId = launched.out.match(/READY run=(\S+)/)?.[1];
@@ -248,8 +360,11 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
     run = JSON.parse(readFileSync(join(BASE, "runs", runId, "run.json"), "utf8")) as Run;
     report.run = runId;
     report.build = run.rev;
-    log(`bridge run ${runId} on :${run.port}`);
-    phone = new Phone(run, ev, out, !sim);
+    relay = new Relay(run.port);
+    await relay.start();
+    log(`bridge run ${runId} on :${run.port}; the phone${sim ? " and the app" : ""} reach it through the relay on :${relay.port}`);
+    phone = new Phone(run, ev, out, !sim, relay);
+    phone.holdS = sc.holdCardsS ?? 0;
     await phone.open(false);
 
     if (sim && lease && app) {
@@ -257,7 +372,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
       await Bun.sleep(3000);
       const before = ((await phone.request({ type: "devices" }, "devices")).devices as unknown[]).length;
       const offer = await phone.request({ type: "pair_code" }, "pair_code");
-      const link = `claudiobot://pair?url=${encodeURIComponent(`ws://127.0.0.1:${run.port}/ws`)}&code=${offer.code}`;
+      const link = `claudiobot://pair?url=${encodeURIComponent(`ws://127.0.0.1:${relay.port}/ws`)}&code=${offer.code}`;
       pool.simctl(lease, "openurl", link);
       await Bun.sleep(3000);
       shots["pair-link"] = pool.screenshot(lease, join(out, "screenshots", "pair-link.png"));
@@ -289,6 +404,10 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
         p.watch(sid, false);
         return;
       }
+      case "send":
+        p.send({ type: "session_send", sessionId: ev.ids[a.name]!, text: a.text, clientId: `runner-${crypto.randomUUID()}`, interrupt: a.interrupt ?? false });
+        if (a.mark) markNow(a.mark);
+        return;
       case "until":
         try {
           await until(() => a.test(ev), a.what, a.timeoutS);
@@ -312,17 +431,24 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
       case "return":
         return p.watch(ev.ids[a.name]!, true);
       case "reconnect": {
-        p.drop();
+        const how = a.how ?? "close";
+        relay!.drop(how);
+        // A closed socket is noticed at once; a half-open one looks alive, so a send goes into it and is lost.
+        if (how === "close") p.drop();
         markNow(`${a.mark}-dropped`);
+        if (a.send) p.send({ type: "session_send", sessionId: ev.ids[a.send.name]!, text: a.send.text, clientId: `runner-${crypto.randomUUID()}`, interrupt: false });
         if (a.until) await until(() => a.until!.test(ev), a.until.what, a.until.timeoutS);
         await Bun.sleep(a.afterS * 1000);
+        relay!.restore();
+        p.drop();
         const replies = new Map<string, string>();
-        p.onReply = (sid, type) => replies.has(sid) || replies.set(sid, type);
-        await p.open(true);
+        const stream = await p.open(true, () => (p.onReply = (sid, type) => replies.has(sid) || replies.set(sid, type)));
+        log(`reconnected after a ${how} drop: hello resumed ${stream.resumed}, ${stream.replayed} frames replayed`);
         await until(() => replies.size === p.names.size - p.away.size, "a resume reply for every watched thread", 30);
         p.onReply = null;
         await Bun.sleep(1500);
         markNow(a.mark);
+        if (a.compare === false) return;
         for (const [sid, name] of p.names) {
           if (p.away.has(sid)) continue;
           const fresh = await connect(run!);
@@ -331,7 +457,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
           const snap = await until(() => fresh.frames.slice(at).find((f) => f.type === "session" && f.sessionId === sid), `a fresh snapshot of ${name}`, 30);
           fresh.close();
           const t = p.threads.get(sid)!;
-          ev.resumes.push({ mark: a.mark, reply: replies.get(sid)!, resumed: [...t.items.values()], fresh: snap.items as Item[], resumedControls: t.controls, rows: p.lastList });
+          ev.resumes.push({ mark: a.mark, how, ...stream, reply: replies.get(sid)!, items: [...t.items.values()], fresh: snap.items as Item[], resumedControls: t.controls, rows: p.lastList });
           log(`${name} resumed with ${replies.get(sid)}: ${t.items.size} items; a fresh open has ${(snap.items as Item[]).length}`);
         }
         return;
@@ -341,15 +467,48 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
         shots[a.shot] = pool.screenshot(lease, join(out, "screenshots", `${a.shot}.png`));
         log(`screenshot ${a.shot}`);
         return;
-      case "open-thread":
-        if (!lease) return void skipped.push(`open-thread ${a.name}`);
-        pool.simctl(lease, "openurl", `claudiobot://session/${ev.ids[a.name]}`);
-        return;
+      case "open-thread": {
+        const sid = ev.ids[a.name]!;
+        if (!lease) return void (p.away.has(sid) && p.watch(sid, true));
+        pool.simctl(lease, "openurl", `claudiobot://session/${sid}`);
+        return Bun.sleep(3000);
+      }
+      case "show-list":
+        if (!lease || !app) return;
+        // The app has no link to the list; relaunched with -sidebarMode sessions it opens there and unwatches the thread.
+        pool.installAndLaunch(lease, app);
+        return Bun.sleep(4000);
       case "app":
-        if (!lease) return void skipped.push(`app ${a.to}`);
-        if (a.to === "background") pool.simctl(lease, "launch", "com.apple.Preferences");
-        else pool.simctl(lease, "launch", pool.BUNDLE);
+        if (lease) pool.simctl(lease, "launch", a.to === "background" ? "com.apple.Preferences" : pool.BUNDLE);
+        else if (a.to === "background") relay!.drop("half-open");
+        else {
+          relay!.restore();
+          p.drop();
+          await p.open(true, () => markNow(`${a.mark}-list`));
+        }
         return markNow(a.mark);
+      case "ps":
+        ev.samples[a.as] = ev.procs(a.pattern);
+        log(`ps ${a.as}: ${ev.samples[a.as]!.join(" | ") || "none"}`);
+        return;
+      case "kill-claude": {
+        const sid = ev.ids[a.name]!;
+        const found = sh(["pgrep", "-f", sid]).out.split("\n").filter(Boolean).map(Number).filter((pid) => pid !== process.pid);
+        const lines = found.map((pid) => `${pid} ${sh(["ps", "-p", String(pid), "-o", "command="]).out.trim()}`).filter((l) => /(^|\/)claude$/.test(l.split(" ")[1] ?? ""));
+        if (!lines.length) throw new PreconditionFailed(`no Claude Code process names session ${sid}`);
+        for (const l of lines) process.kill(Number(l.split(" ")[0]), "SIGKILL");
+        ev.samples["kill-claude"] = lines;
+        log(`SIGKILL ${lines.join(" | ").slice(0, 200)}`);
+        return markNow(a.mark);
+      }
+      case "restart-bridge": {
+        p.drop();
+        const r = sh(["bun", CONTROL, "restart", "--run", run!.id], join(out, "restart.log"));
+        if (!r.ok) throw new Error(`bridge restart failed; see ${join(out, "restart.log")}`);
+        run = JSON.parse(readFileSync(join(run!.dir, "run.json"), "utf8")) as Run;
+        await p.open(true);
+        return markNow(a.mark);
+      }
     }
   }
 
@@ -383,6 +542,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
     preconditions: pre,
     rubric,
     skipped,
+    processes: ev.samples,
     screenshots: Object.fromEntries(Object.entries(shots).map(([k, v]) => [k, v.replace(`${out}/`, "")])),
   });
   if (phone?.demo) {
@@ -390,9 +550,14 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
     if (existsSync(dir)) cpSync(dir, join(out, "transcripts"), { recursive: true });
   }
   phone?.drop();
+  relay?.close();
   if (run) {
     const c = sh(["bun", CONTROL, "cleanup", "--run", run.id], join(out, "cleanup.log"));
     report.bridgeEvidence = c.out.match(/evidence kept at (\S+?):/)?.[1] ?? null;
+  }
+  if (lease && (ui.contentSize || ui.appearance)) {
+    pool.simctl(lease, "ui", "content_size", "large");
+    pool.simctl(lease, "ui", "appearance", "light");
   }
   held?.release("scenario done");
   writeFileSync(join(out, "report.json"), JSON.stringify(report, null, 2));
@@ -438,6 +603,8 @@ function reportMarkdown(sc: Scenario, r: Record<string, unknown>) {
     "",
     `marks (s): ${JSON.stringify(r.marks)}`,
     "",
+    ...Object.entries(r.processes as Record<string, string[]>).map(([k, v]) => `processes ${k}: ${v.join(" | ") || "none"}`),
+    "",
   ].join("\n");
 }
 
@@ -465,6 +632,8 @@ function describe(a: Action): string {
   switch (a.do) {
     case "create":
       return `New session \`${a.name}\` in demo (haiku, mode ${a.mode ?? "default"}): "${a.prompt.replace(/\n/g, " ")}"`;
+    case "send":
+      return `Send in \`${a.name}\`${a.interrupt ? " with Stop and send (interrupt)" : ""}: "${a.text.replace(/\n/g, " ")}"${a.mark ? `; mark \`${a.mark}\`` : ""}.`;
     case "until":
       return `Wait up to ${a.timeoutS} s for ${a.what}; mark \`${a.mark}\`${a.optional ? " (optional)" : ""}.`;
     case "stop":
@@ -478,13 +647,21 @@ function describe(a: Action): string {
     case "return":
       return `Reopen \`${a.name}\`'s thread from the position the phone held (watch_session with after).`;
     case "reconnect":
-      return `Drop the socket${a.until ? `, wait for ${a.until.what}` : ""}, wait ${a.afterS} s, reconnect and resume each thread from its last position; compare with a fresh open. Mark \`${a.mark}\`.`;
+      return `The network drops the phone${a.how === "half-open" ? " half-open (nothing passes, no close on either side)" : " (the socket closes)"}${a.send ? `; the user sends in \`${a.send.name}\` meanwhile: "${a.send.text.replace(/\n/g, " ")}"` : ""}${a.until ? `; wait for ${a.until.what}` : ""}; wait ${a.afterS} s, reconnect with the stream position (epoch, after) and resume each thread from its last position${a.compare === false ? "" : "; compare each with a fresh open"}. Mark \`${a.mark}\`.`;
     case "screenshot":
       return `Screenshot \`${a.shot}\` (simulator lane).`;
     case "open-thread":
-      return `Open \`${a.name}\`'s thread in the app (claudiobot://session/<id>).`;
+      return `Open \`${a.name}\`'s thread: in the app by claudiobot://session/<id> (simulator lane), or watch it again if the phone had left it (protocol lane).`;
+    case "show-list":
+      return "The app goes back to the Sessions list (simulator lane: relaunched on the list).";
     case "app":
-      return `Send the app to the ${a.to}${a.to === "background" ? " (launch Settings over it)" : " (launch it again)"}; mark \`${a.mark}\`.`;
+      return `Send the app to the ${a.to}${a.to === "background" ? " (simulator: Settings over it; protocol: the socket goes half-open)" : " (simulator: launch it again; protocol: reconnect and resume, mark `" + a.mark + "-list` when the list arrives)"}; mark \`${a.mark}\`.`;
+    case "ps":
+      return `Sample the Mac's processes matching \`${a.pattern}\` in the seed project as \`${a.as}\`.`;
+    case "kill-claude":
+      return `SIGKILL the Claude Code process of \`${a.name}\`; mark \`${a.mark}\`.`;
+    case "restart-bridge":
+      return `Restart the bridge on the same port and home; the phone reconnects. Mark \`${a.mark}\`.`;
   }
 }
 
@@ -499,10 +676,12 @@ async function main() {
     case "run": {
       const sim = flag("sim", true) === "true";
       const pairWaitS = Number(flag("pair-wait") ?? 120);
-      const ids = (args[0] ?? die("usage: run <id>[,<id>…] [--sim] [--pair-wait s] [--out dir]")).split(",");
+      const ui: Ui = { contentSize: flag("content-size"), appearance: flag("appearance") };
+      if ((ui.contentSize || ui.appearance) && !sim) die("--content-size and --appearance need --sim");
+      const ids = (args[0] ?? die("usage: run <id>[,<id>…] [--sim] [--pair-wait s] [--content-size size] [--appearance dark|light] [--out dir]")).split(",");
       const scs = ids.map((id) => SCENARIOS.find((s) => s.id.toLowerCase() === id.toLowerCase()) ?? die(`no scenario ${id}`));
       const outcomes: Outcome[] = [];
-      for (const sc of scs) outcomes.push(await runScenario(sc, sim, pairWaitS));
+      for (const sc of scs) outcomes.push(await runScenario(sc, sim, pairWaitS, ui));
       return outcomes.includes("error") ? 1 : outcomes.includes("precondition-failed") ? 2 : 0;
     }
     case "pool":
@@ -551,7 +730,7 @@ async function main() {
       return 0;
     }
     default:
-      console.log(`scenario.ts list | doc <area> | run <id>[,<id>…] [--sim] [--pair-wait s] [--out dir]
+      console.log(`scenario.ts list | doc <area> | run <id>[,<id>…] [--sim] [--pair-wait s] [--content-size size] [--appearance dark|light] [--out dir]
   pool ensure|status | lease acquire [--label L] [--wait s] [--boot] | lease heartbeat|boot|release <device> --token T | lease status
   sim-build | sim-job [--label L] [--hold s]
 See ../runner.md (docs/ux-program/runner.md).`);

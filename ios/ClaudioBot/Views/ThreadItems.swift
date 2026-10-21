@@ -112,6 +112,7 @@ struct FoldRow: View {
     let toggle: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var steps: [ToolStep] {
         items.flatMap { item -> [ToolStep] in if case .work(_, _, let steps) = item { steps } else { [] } }
@@ -124,10 +125,14 @@ struct FoldRow: View {
         Button {
             withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) { toggle() }
         } label: {
+            let stacked = typeSize.isAccessibilitySize
+            let diff = WorkSummary.diff(steps)
             HStack(spacing: 8) {
-                Image(systemName: "square.stack.3d.up")
-                    .font(.footnote)
-                    .foregroundStyle(Theme.tertiary)
+                if !stacked {
+                    Image(systemName: "square.stack.3d.up")
+                        .font(.footnote)
+                        .foregroundStyle(Theme.tertiary)
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(WorkSummary.fold(items))
                         .font(.subheadline)
@@ -137,9 +142,10 @@ struct FoldRow: View {
                             .font(.caption.weight(.medium))
                             .foregroundStyle(Theme.danger)
                     }
+                    if stacked, let diff { DiffStat(added: diff.added, removed: diff.removed) }
                 }
                 .multilineTextAlignment(.leading)
-                if let diff = WorkSummary.diff(steps) { DiffStat(added: diff.added, removed: diff.removed) }
+                if !stacked, let diff { DiffStat(added: diff.added, removed: diff.removed) }
                 Spacer(minLength: 4)
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
@@ -214,6 +220,7 @@ struct WorkRunRow: View {
     @State private var open = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.runStateStale) private var staleAt
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var onScreen = true
     @ScaledMetric(relativeTo: .subheadline) private var slot: CGFloat = 20
     @Environment(\.revealedStep) private var revealedStep
@@ -228,7 +235,8 @@ struct WorkRunRow: View {
                 content(now: staleAt ?? .now)
             }
         }
-        .onScrollVisibilityChange { onScreen = $0 }
+        // Any part on screen counts. At the default half, a run taller than twice the screen never counts as visible.
+        .onScrollVisibilityChange(threshold: 0.01) { onScreen = $0 }
         .onChange(of: revealedStep, initial: true) { _, id in
             if let id, run.steps.contains(where: { $0.id == id }) { open = true }
         }
@@ -268,19 +276,25 @@ struct WorkRunRow: View {
             .font(.subheadline)
             .monospacedDigit()
             .foregroundStyle(Theme.secondary)
+        let diff = run.isLive ? nil : WorkSummary.diff(run.steps)
+        // At accessibility sizes the words get the row's width: beside the glyph and the diff they wrapped a word a line.
+        // The headline's state word and its clock still say whether it runs.
+        let stacked = typeSize.isAccessibilitySize
         return HStack(alignment: .top, spacing: 8) {
-            Group {
-                if busy {
-                    WorkingRing(size: slot * 0.6)
-                } else if run.isRunning {
-                    Image(systemName: "circle.dotted").font(.footnote).foregroundStyle(Theme.tertiary)
-                } else if run.isLive {
-                    Image(systemName: "hand.raised").font(.footnote).foregroundStyle(Theme.attention)
-                } else {
-                    Image(systemName: "wrench.and.screwdriver").font(.footnote).foregroundStyle(Theme.tertiary)
+            if !stacked {
+                Group {
+                    if busy {
+                        WorkingRing(size: slot * 0.6)
+                    } else if run.isRunning {
+                        Image(systemName: "circle.dotted").font(.footnote).foregroundStyle(Theme.tertiary)
+                    } else if run.isLive {
+                        Image(systemName: "hand.raised").font(.footnote).foregroundStyle(Theme.attention)
+                    } else {
+                        Image(systemName: "wrench.and.screwdriver").font(.footnote).foregroundStyle(Theme.tertiary)
+                    }
                 }
+                .frame(width: slot, height: slot)
             }
-            .frame(width: slot, height: slot)
             VStack(alignment: .leading, spacing: 3) {
                 if busy { line.shimmering() } else { line }
                 if let failure = run.failure {
@@ -288,10 +302,11 @@ struct WorkRunRow: View {
                         .font(.caption.weight(.medium))
                         .foregroundStyle(Theme.danger)
                 }
+                if stacked, let diff { DiffStat(added: diff.added, removed: diff.removed) }
             }
             .multilineTextAlignment(.leading)
             .frame(maxWidth: .infinity, alignment: .leading)
-            if !run.isLive, let diff = WorkSummary.diff(run.steps) { DiffStat(added: diff.added, removed: diff.removed) }
+            if !stacked, let diff { DiffStat(added: diff.added, removed: diff.removed) }
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Theme.tertiary)

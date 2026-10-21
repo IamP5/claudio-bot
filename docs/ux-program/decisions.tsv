@@ -27,3 +27,5 @@ ts	decision	why
 2026-10-21T07:42:36Z	G9: on background the app both unwatches threads and sends presence(false)	makes work finished while away mark the row unread with no bridge change, and marks seen when the user leaves
 2026-10-21T07:42:36Z	G9: under 10 s away the app pings with a 2 s deadline, at 10 s or more it reconnects; first reply after connect has a 10 s deadline	fast return stays seamless, a dead socket is replaced quickly, a frozen Mac no longer hangs 60 s
 2026-10-21T07:42:36Z	G9: retryNow() replaces retry() and reconnectNow()	one entry point; all callers migrated in the same PR
+2026-10-21T08:41:31Z	G14 fix round (135d083) verified by root diff review instead of a fresh full verifier	the round was a 21-line change to exit-path reset and pgrep scoping, with the owner's SIGINT proof; a full swarm runs only for new behavior
+2026-10-21T08:41:31Z	lease-proof rerun is deferred to a quiet pool; the G14 rerun showed its own five jobs never exceeded 3 booted and reclaim passed, but other agents held devices at the end	the proof asserts all pool devices shut down at the end, which only holds when no other agent leases

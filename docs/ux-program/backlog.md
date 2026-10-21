@@ -16,3 +16,4 @@
 - Runner launch flake: "the run's demo project is not listed" right after launch, seen by G8, G12 and G16 verifiers; passes on retry. The bridge can list projects before it has scanned the seed roots; launch should wait for the demo project.
 - Runner (S7.6 with the list probe): the 1/s XCUITest probe adds simulator load; S7.6 worst lag rose to 1.6 s once at AX5 (limit 1.5 s) vs 0.3-0.6 s without the probe. Run the probe only during the phase S7.7 judges, or measure S7.6 in a probe-free run.
 - Runner (S7.9): cannot catch a missing fold exemption alone when ranking already lifts working rows; add a variant with more working rows than fit above the fold.
+- swipe-check (from G5 verify): every CPU sample is empty because XCUITest ends the app when the test finishes, so the CPU-after half of the gate measures nothing; sample during the swipe or keep the app alive.

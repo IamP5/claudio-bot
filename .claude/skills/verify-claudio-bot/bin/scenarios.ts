@@ -307,9 +307,40 @@ const notices = (ev: Ev, name: string, from = 0) => [...new Map(snaps(ev, name, 
 
 const created = (name: string): Precondition => ({ what: `session ${name} was created`, check: (ev) => (ev.ids[name] ? ok(ev.ids[name]!) : no("no session_created")) });
 const fileMade = (rel: string): Precondition => ({ what: `${rel} exists in the seed project`, check: (ev) => (ev.exists(rel) ? ok("present") : no("missing")) });
-/** A bridge that serves session_tasks says whether a turn runs in controls.turn; working also covers background work. */
-const turnRuns = (s: Snap) => (Array.isArray(s.controls?.tasks) ? s.controls?.turn != null : isWorking(s));
-const turnEnded = (name: string) => (ev: Ev) => mark(ev, `${name}-started`) !== undefined && !turnRuns(last(ev, name) ?? ({ controls: null, row: null } as Snap));
+/** The session rests: nothing it runs, foreground or background, still reads working. */
+const atRest = (name: string) => (ev: Ev) => mark(ev, `${name}-started`) !== undefined && !isWorking(last(ev, name) ?? ({ controls: null, row: null } as Snap));
+/** The main transcript's last exchange is Claude Code's final reply of a turn. */
+const endsTurn = (lines: TranscriptLine[]) => {
+  const l = lines.findLast((x) => x.type === "user" || x.type === "assistant");
+  return l?.type === "assistant" && (l.message as { stop_reason?: unknown } | undefined)?.stop_reason === "end_turn";
+};
+/**
+ * The turn that started background work ended, while that work may still run: the transcript has the turn's final
+ * reply, and controls.turn says no turn runs (a bridge without session_tasks says so only through working).
+ */
+const turnEnded = (name: string) => (ev: Ev) => {
+  const s = last(ev, name);
+  if (mark(ev, `${name}-started`) === undefined || !s || !endsTurn(ev.transcript(name).main)) return false;
+  return Array.isArray(s.controls?.tasks) ? s.controls?.turn == null : !isWorking(s);
+};
+
+/** Once the session's work has ended, it rests, so the busy row and Stop go away. */
+const comesToRest = (id: string, name: string, from: string, what: string): RubricItem => ({
+  id,
+  tell: "state",
+  lane: "protocol",
+  text: `Once its work is over (${what}), the session comes to rest.`,
+  pass: `Within 60 s of mark ${from}, a state reads not working: the row not busy and controls.working false.`,
+  fail: "The session still reads working 60 s after its work ended, so the busy row and Stop never go away.",
+  check: (ev) => {
+    const at = mark(ev, from);
+    if (at === undefined) return needMarks(ev, from)!;
+    const rest = snaps(ev, name, at).find((s) => !isWorking(s));
+    if (!rest) return no(`still working at the end of the run, ${Math.round((ev.now() - at) / 1000)} s later`);
+    const s = Math.round((rest.at - at) / 1000);
+    return rest.at - at <= 60_000 ? ok(`at rest ${s} s later`) : no(`at rest only ${s} s later`);
+  },
+});
 const replied = (s: Snap | undefined) => !!s?.items.some((i) => i.kind === "assistant");
 const started = (name: string): Action => ({ do: "until", mark: `${name}-started`, what: `${name}'s turn to start`, timeoutS: 90, test: (ev) => snaps(ev, name).some((s) => isWorking(s) || replied(s)) });
 
@@ -377,7 +408,7 @@ const fanOut = (id: "S1" | "S1b", background: boolean): Scenario => {
       },
       // The parent promises "all done" when it launches them, so only a line that is exactly the reply counts.
       { do: "until", mark: "all-done", what: 'the "all done" reply', timeoutS: 180, test: (ev) => !!last(ev, n)?.items.some((i) => i.kind === "assistant" && /^\W*all done\W*$/im.test(i.text ?? "")) },
-      { do: "until", mark: `${n}-ended`, what: "the turn to end", timeoutS: 120, test: turnEnded(n) },
+      { do: "until", mark: `${n}-ended`, what: "the turn to end", timeoutS: 120, test: atRest(n) },
       { do: "screenshot", shot: "done" },
     ],
     pre: [
@@ -566,6 +597,7 @@ const S2: Scenario = {
       },
     },
     noAckOutput("S2.10", ["s2"]),
+    comesToRest("S2.11", "s2", "bg-done", "the background command and the turn it woke"),
   ],
 };
 
@@ -820,7 +852,7 @@ const S5: Scenario = {
     { do: "sleep", s: 60 },
     { do: "screenshot", shot: "at-90s" },
     { do: "until", mark: "call-done", what: "the sleep step to end", timeoutS: 120, test: (ev) => snaps(ev, "s5").some((s) => stepsOf(s).some((x) => x.tool === "Bash" && x.state === "ok")) },
-    { do: "until", mark: "s5-ended", what: "the turn to end", timeoutS: 60, test: turnEnded("s5") },
+    { do: "until", mark: "s5-ended", what: "the turn to end", timeoutS: 60, test: atRest("s5") },
   ],
   pre: [
     created("s5"),
@@ -939,7 +971,7 @@ const S6: Scenario = {
     { do: "reconnect", afterS: 15, mark: "resume-1" },
     { do: "screenshot", shot: "after-resume-1" },
     { do: "reconnect", how: "half-open", afterS: 15, mark: "resume-2", until: { what: "s6.txt and the end of the turn while offline", timeoutS: 120, test: (ev) => ev.exists("s6.txt") } },
-    { do: "until", mark: "s6-ended", what: "the turn to end", timeoutS: 60, test: turnEnded("s6") },
+    { do: "until", mark: "s6-ended", what: "the turn to end", timeoutS: 60, test: atRest("s6") },
     { do: "screenshot", shot: "after-resume-2" },
     {
       do: "reconnect",
@@ -1241,6 +1273,7 @@ const S8: Scenario = {
     started("s8"),
     { do: "until", mark: "s8-ended", what: "the parent turn to end", timeoutS: 180, test: turnEnded("s8") },
     ...awayAndBack("s8", "nested.txt", true),
+    { do: "until", mark: "s8-rest", what: "the session to rest", timeoutS: 90, optional: true, test: atRest("s8") },
   ],
   pre: [
     created("s8"),
@@ -1306,7 +1339,69 @@ const S8: Scenario = {
       },
     },
     noAckOutput("S8.8", ["s8"]),
+    comesToRest("S8.9", "s8", "bg-done", "the background command and the turn it woke"),
   ],
 };
 
-export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S4, S5, S6, S7, S8];
+const S8fg: Scenario = {
+  id: "S8fg",
+  area: "sessions",
+  title: "A subagent the session waits for starts a background task and returns",
+  needsSimulator: false,
+  journey: [
+    "The user's session starts a subagent and waits for it; the subagent starts a background command and returns at once.",
+    "Claude Code stops that command when the subagent returns, and the turn ends.",
+    "They must learn that the command was stopped, what it was and what started it, and see the session at rest.",
+  ],
+  setup: [
+    {
+      do: "create",
+      name: "s8",
+      prompt:
+        'Launch one subagent with the Agent tool: subagent_type general-purpose, model haiku, run_in_background false, description "starter". Its prompt: "Use the Bash tool with run_in_background set to true to run exactly: sleep 60 && echo nested-done > nested.txt . Do not wait for it. Reply with one line: started." After the subagent returns, reply with one line: subagent returned. Do not wait for the background command and do not check on it.',
+    },
+    started("s8"),
+    { do: "until", mark: "s8-ended", what: "the session to rest", timeoutS: 180, test: atRest("s8") },
+    { do: "until", mark: "late-window-over", what: "the 60 s the command would have run to pass", timeoutS: 90, test: (ev) => ev.now() > (mark(ev, "s8-started") ?? Infinity) + 75_000 },
+  ],
+  pre: [
+    created("s8"),
+    { what: "the subagent ran Bash with run_in_background", check: (ev) => (bgBash(ev.transcript("s8").subagents).length ? ok("yes") : no("no background Bash in a subagent transcript")) },
+    { what: "Claude Code stopped the command: nested.txt never appeared", check: (ev) => (ev.exists("nested.txt") ? no("nested.txt appeared, so the command was not stopped") : ok("absent")) },
+  ],
+  rubric: [
+    {
+      id: "S8fg.1",
+      tell: "what",
+      lane: "protocol",
+      text: "When Claude Code stops the subagent's background command, the thread names the command and the subagent that started it.",
+      pass: 'A notice names the command ("sleep 60" or "nested") and its owner ("starter").',
+      fail: "No notice names both, so the command vanished without a word. Assistant prose does not count.",
+      check: (ev) => {
+        const all = notices(ev, "s8");
+        const hit = all.find((i) => /sleep 60|nested/i.test(i.text ?? "") && /starter/i.test(i.text ?? ""));
+        return hit ? ok(`notice "${(hit.text ?? "").slice(0, 100)}"`) : no(all.length ? `no notice names both; notices: ${all.map((i) => `"${(i.text ?? "").slice(0, 60)}"`).join("; ")}` : "no notice");
+      },
+    },
+    {
+      id: "S8fg.2",
+      tell: "stop",
+      lane: "protocol",
+      text: "Once the turn's final reply is written, nothing runs, so the session rests at once and Stop goes away.",
+      pass: "A state reads not working within 5 s of the main transcript's final reply.",
+      fail: "The session reads working, with Stop, for more than 5 s after the reply while nothing runs.",
+      check: (ev) => {
+        const reply = ev.transcript("s8").main.findLast((l) => l.type === "assistant" && (l.message as { stop_reason?: unknown } | undefined)?.stop_reason === "end_turn");
+        if (!reply?.timestamp) return no("not judged: no final reply in the transcript");
+        const at = ev.atOf(reply.timestamp);
+        const rest = during(ev, "s8", at, Infinity).find((s) => !isWorking(s));
+        if (!rest) return no("still working at the end of the run");
+        const s = Math.max(0, Math.round((rest.at - at) / 100) / 10);
+        return rest.at - at <= 5_000 ? ok(`at rest ${s} s after the reply`) : no(`at rest only ${s} s after the reply`);
+      },
+    },
+    noAckOutput("S8fg.3", ["s8"]),
+  ],
+};
+
+export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S4, S5, S6, S7, S8, S8fg];

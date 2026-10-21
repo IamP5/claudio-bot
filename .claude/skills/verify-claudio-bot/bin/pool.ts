@@ -334,7 +334,7 @@ export async function buildApp(): Promise<Build> {
     }
   }
   try {
-    log(`building the iOS app (stamp ${b.stamp.slice(0, 12)}) into ${b.dir}`);
+    log(`building the iOS app (stamp ${b.stamp}) into ${b.dir}`);
     rmSync(join(b.dir, "stamp"), { force: true });
     mkdirSync(b.dir, { recursive: true });
     const p = Bun.spawnSync(
@@ -379,7 +379,7 @@ export function installAndLaunch(lease: Lease, build: Build, extra: string[] = [
   simctl(lease, "terminate", BUNDLE);
   const l = simctl(lease, "launch", BUNDLE, "-pairingVault", `claudiobot-ux-${lease.device}`, "-pairingAutoConfirm", "YES", "-sidebarMode", "sessions", ...extra);
   if (!l.ok) throw new Error(`launch on ${lease.device}: ${l.err}`);
-  log(`installed stamp ${build.stamp.slice(0, 12)} (bundle ${got.slice(0, 12)}) and launched ${BUNDLE} on ${lease.device}`);
+  log(`installed stamp ${build.stamp} (bundle ${got.slice(0, 12)}) and launched ${BUNDLE} on ${lease.device}`);
   return got;
 }
 

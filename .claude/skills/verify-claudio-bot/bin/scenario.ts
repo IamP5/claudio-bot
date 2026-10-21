@@ -605,7 +605,7 @@ function reportMarkdown(sc: Scenario, r: Record<string, unknown>) {
   return [
     `# ${sc.id} ${sc.title}`,
     "",
-    `outcome **${r.outcome}**${r.failure ? ` (${r.failure})` : ""}; lane ${r.lane}${r.device ? ` on ${r.device}` : ""}${r.app ? ` app ${(r.app as { stamp: string }).stamp.slice(0, 12)}` : ""}; run ${r.run ?? "-"} build ${String(r.build ?? "").slice(0, 10)}; ${r.durationS} s; $${r.spentUsd}`,
+    `outcome **${r.outcome}**${r.failure ? ` (${r.failure})` : ""}; lane ${r.lane}${r.device ? ` on ${r.device}` : ""}${r.app ? ` app ${(r.app as { stamp: string }).stamp}` : ""}; run ${r.run ?? "-"} build ${String(r.build ?? "").slice(0, 10)}; ${r.durationS} s; $${r.spentUsd}`,
     `rubric: ${count("pass")} pass, ${count("fail")} fail, ${count("review")} review, ${count("not-judged")} not judged, ${count("skipped")} skipped`,
     "",
     "## Preconditions",

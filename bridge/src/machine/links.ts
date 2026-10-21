@@ -267,11 +267,12 @@ export function createLinks(deps: { identity: Identity; registry: Registry; log:
     enrolled: changed,
     remove(machine) {
       const session = live.get(machine);
+      const name = nameOf(machine);
       const removed = registry.remove(machine);
       handled.delete(machine);
       if (session) close(session, LINK_REMOVED, "removed from the home");
       if (removed) {
-        log(`link: ${machine} removed`);
+        log(`link: ${name} removed`);
         changed();
       }
       return removed;

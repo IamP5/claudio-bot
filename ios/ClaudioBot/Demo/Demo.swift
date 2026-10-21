@@ -14,6 +14,7 @@ import Foundation
 /// card expires 20 s in), `approvalselsewhere` (another device denies it 15 s in), `streaming`, `cloud`,
 /// `longthread` (500 items), `newsession`, `background` (the turn over, a subagent and its command still running),
 /// `threadoffline` (the Mac lost after the thread loaded), `threadwaiting` (a thread opened with the Mac out of reach),
+/// `composerdraft`, `composerrefused`, `composermode`, `composerqueued`, `stoppedearly` (DemoSessions.stageComposer),
 /// `sessionsempty` and `sessionsoffline`.
 @MainActor
 enum Demo {
@@ -37,7 +38,7 @@ enum Demo {
         let features: [Feature] = switch screen {
         case "live": [.activity]
         case "oldbridge": []
-        default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions, .memory, .mute, .skills, .spend, .sessionTasks]
+        default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions, .memory, .mute, .skills, .spend, .sessionTasks, .sessionUnqueue]
         }
         store.apply(.hello(Hello(protocol: oldBridge ? 2 : Wire.protocolVersion, features: features, machine: "MacBook Pro", userName: "Alex", bots: bots)))
         if !oldBridge { store.apply(.usage(usage(screen))) }
@@ -172,6 +173,9 @@ enum Demo {
         case "threadwaiting":
             store.setConnection(.disconnected(retryAt: .now + 25))
             router.open(.session(DemoSessions.audit))
+        case "composerdraft", "composerrefused", "composermode", "composerqueued", "stoppedearly":
+            router.open(.session(DemoSessions.audit))
+            DemoSessions.stageComposer(screen ?? "", in: store)
         default: break
         }
     }

@@ -401,6 +401,39 @@ enum DemoSessions {
         }
     }
 
+    /// The composer's states over the audit thread, once its snapshot is in: a draft typed while work runs (`composerdraft`),
+    /// a stop Claude Code refused (`composerrefused`), a mode change it refused (`composermode`), a queued message
+    /// (`composerqueued`), and a prompt a stop cut off before Claude answered (`stoppedearly`).
+    static func stageComposer(_ screen: String, in store: AppStore) {
+        Task {
+            try? await Task.sleep(for: .seconds(1))
+            guard let model = store.threads[audit], var c = model.controls else { return }
+            switch screen {
+            case "composerdraft":
+                model.draft = ComposerDraft(text: "Also check the fade test")
+            case "composerrefused":
+                store.sessionRequestSent(.sessionStop(sessionId: audit, target: .all, turnStartedAt: c.turn?.startedAt))
+                store.apply(.error(message: "Claude Code did not stop sleep 75.", about: .stop(sessionId: audit)))
+            case "composermode":
+                store.sessionRequestSent(.sessionSet(sessionId: audit, patch: SessionPatch(mode: .acceptEdits)))
+                store.apply(.error(message: "Claude Code did not take the change: the session is busy.", about: .set(sessionId: audit)))
+            case "composerqueued":
+                c.queued = 1
+                items(store, audit, [.user(id: ItemID("demo-queued"), at: .now, text: "Then open a PR with the fixes", from: .user, queued: true)], controls: c)
+            case "stoppedearly":
+                c.working = false
+                c.turn = nil
+                c.tasks = []
+                items(store, audit, [
+                    .user(id: ItemID("demo-early"), at: .now - 4, text: "Rename **every** `fadeOut` call to `fade(.out)`", from: .user, queued: false),
+                    .notice(id: ItemID("demo-early-stop"), at: .now - 3, text: "Stopped by you before Claude replied.", tone: .info, reason: .stop),
+                ], controls: c)
+            default:
+                break
+            }
+        }
+    }
+
     private static func update(_ store: AppStore, _ id: SessionID, _ change: (inout SessionRow) -> Void) {
         guard var row = store.sessions.rows[id] else { return }
         change(&row)
@@ -477,6 +510,10 @@ enum DemoSessions {
                 if let mode = patch.mode { c.mode = mode }
                 items(store, id, [], controls: c)
             }
+        case let .sessionUnqueue(id, clientId):
+            guard var c = store.threads[id]?.controls else { break }
+            c.queued = max(0, c.queued - 1)
+            items(store, id, [], removed: [ItemID(clientId)], controls: c)
         case let .sessionOpenDesktop(id):
             update(store, id) { $0.mirror = .imported }
         case let .sessionTool(id, toolUseId):

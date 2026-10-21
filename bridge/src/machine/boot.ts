@@ -113,7 +113,14 @@ export function bootMachine(deps: {
   node.boot();
   sessions.resume();
   clock.start();
-  void sessions.start().catch((e) => log(`sessions: the index could not start: ${errorText(e)}`));
+  void sessions
+    .start()
+    .then(async () => {
+      // The home lists this machine as it links, which may be before the index was read: every row goes again.
+      const [list] = await sessions.handle({ type: "watch_sessions" });
+      if (list?.type === "sessions") dialer.signal({ type: "session_rows", rows: list.rows, removed: [], projects: list.projects });
+    })
+    .catch((e) => log(`sessions: the index could not start: ${errorText(e)}`));
 
   console.log(`claudiobot machine "${identity.name}" of "${identity.home.name}" (${identity.home.url})`);
   console.log(`  health on :${health.port}`);

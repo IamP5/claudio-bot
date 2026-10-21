@@ -764,4 +764,107 @@ private func scratchVault() -> PairingVault {
         #expect(!client.store.connection.quiet, "a thread at rest is allowed to be silent")
         client.stop()
     }
+
+    @Test func aThreadThatMissesARevIsWatchedAgainAtOnceAndEndsAsAFreshOpenShowsIt() async throws {
+        let fresh = thread(rev: 4, [askedLs, ranLs("ok"), listed], working: false)
+        let watched = OSAllocatedUnfairLock(initialState: 0)
+        let bridge = try FakeBridge(
+            onOpen: { $0.send(threadsHello) },
+            onText: { socket, text in
+                guard text.contains(#""type":"watch_session""#) else { return }
+                if watched.withLock({ $0 += 1; return $0 }) > 1 { return socket.send(fresh) }
+                socket.send(thread(rev: 1, [askedLs], working: true))
+                socket.send(changes(rev: 2, [ranLs("running")]))
+                socket.send(changes(rev: 4, [listed]))
+            }
+        )
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        client.view(Viewing(session: SessionID("s1")), as: ViewingLease())
+        client.start(pairing)
+
+        try await eventually("the second watch") { bridge.watches.count == 2 }
+        #expect(bridge.watches[1].contains(#""after":null"#), "rev 3 never came, so the app asks for a snapshot")
+        try await eventually("the snapshot") { client.store.threads[SessionID("s1")]?.position?.rev == 4 }
+        let expected = try Wire.decoder().decode(ServerFrame.self, from: Data(fresh.utf8))
+        guard case let .thread(_, .snapshot(snapshot)) = expected.message else { throw CocoaError(.coderReadCorrupt) }
+        #expect(client.store.threads[SessionID("s1")]?.items == snapshot.items)
+        #expect(bridge.upgrades.count == 1, "the socket stays up")
+        client.stop()
+    }
+
+    @Test func aRepairWhoseReplyNeverComesIsAskedOnceMoreAfterAWhile() async throws {
+        let watched = OSAllocatedUnfairLock(initialState: 0)
+        let bridge = try FakeBridge(
+            onOpen: { $0.send(threadsHello) },
+            onText: { socket, text in
+                guard text.contains(#""type":"watch_session""#) else { return }
+                switch watched.withLock({ $0 += 1; return $0 }) {
+                case 1:
+                    socket.send(thread(rev: 1, [askedLs], working: true))
+                    socket.send(changes(rev: 3, [listed]))
+                case 2: break
+                default: socket.send(thread(rev: 3, [askedLs, listed], working: false))
+                }
+            }
+        )
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        var timing = quick
+        timing.repairWait = .milliseconds(300)
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: timing)
+        client.view(Viewing(session: SessionID("s1")), as: ViewingLease())
+        client.start(pairing)
+
+        try await eventually("the repair's snapshot") { client.store.threads[SessionID("s1")]?.position?.rev == 3 }
+        #expect(bridge.watches.count == 3)
+        #expect(bridge.watches[2].contains(#""after":null"#))
+        try await Task.sleep(for: .milliseconds(700))
+        #expect(bridge.watches.count == 3, "one retry, no more")
+        client.stop()
+    }
+
+    @Test func aThreadOrListFrameTheAppCannotReadIsWatchedAgainOnTheSameSocket() async throws {
+        let halfEmoji = #"{"type":"session_items","sessionId":"s1","rev":2,"items":[{"kind":"assistant","id":"r1","at":"2026-10-21T10:00:05.000Z","text":"Done \ud83d"}],"removed":[],"controls":null}"#
+        let halfRow = #"{"type":"session_rows","rows":[{"id":"s9","title":"Refactor \ud83d"}],"removed":[],"projects":[]}"#
+        let watched = OSAllocatedUnfairLock(initialState: 0)
+        let bridge = try FakeBridge(
+            onOpen: { $0.send(threadsHello) },
+            onText: { socket, text in
+                if text.contains(#""type":"watch_sessions""#) {
+                    socket.send(#"{"type":"sessions","projects":[],"rows":[],"mirror":"auto"}"#)
+                    if watched.withLock({ $0 }) == 0 { socket.send(halfRow) }
+                }
+                guard text.contains(#""type":"watch_session""#) else { return }
+                if watched.withLock({ $0 += 1; return $0 }) > 1 { return socket.send(thread(rev: 2, [askedLs, listed], working: false)) }
+                socket.send(thread(rev: 1, [askedLs], working: true))
+                socket.send(halfEmoji)
+            }
+        )
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        client.view(Viewing(session: SessionID("s1"), sessionsList: true), as: ViewingLease())
+        client.start(pairing)
+
+        try await eventually("the thread watched again") { bridge.watches.count == 2 }
+        #expect(bridge.watches[1].contains(#""after":null"#))
+        try await eventually("its snapshot") { client.store.threads[SessionID("s1")]?.items.count == 2 }
+        try await eventually("the list watched again") { bridge.texts.filter { $0.contains(#""type":"watch_sessions""#) }.count == 2 }
+        #expect(bridge.upgrades.count == 1)
+        client.stop()
+    }
+}
+
+private let askedLs = #"{"kind":"user","id":"u1","at":"2026-10-21T10:00:00.000Z","text":"Run ls","from":"user","queued":false}"#
+private let listed = #"{"kind":"assistant","id":"r1","at":"2026-10-21T10:00:05.000Z","text":"Listed."}"#
+
+private func ranLs(_ state: String) -> String {
+    #"{"kind":"work","id":"toolu_1","at":"2026-10-21T10:00:01.000Z","steps":[{"id":"toolu_1","tool":"Bash","label":"Run ls","state":"\#(state)","diff":null,"output":null}]}"#
+}
+
+private func thread(rev: Int, _ items: [String], working: Bool) -> String {
+    #"{"type":"session","sessionId":"s1","epoch":"e_1","rev":\#(rev),"items":[\#(items.joined(separator: ","))],"before":null,"live":null,"controls":\#(controls(working: working))}"#
+}
+
+private func changes(rev: Int, _ items: [String]) -> String {
+    #"{"type":"session_items","sessionId":"s1","rev":\#(rev),"items":[\#(items.joined(separator: ","))],"removed":[],"controls":null}"#
 }

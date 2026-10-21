@@ -18,6 +18,7 @@ export type Head = {
   mtimeMs: number;
   cwd: string;
   createdAt: number;
+  /** The newest prompt, reply or tool result; the file's own time only when it has none yet. */
   lastAt: number;
   /** The custom title, else Claude Code's own summary or the first prompt, as the SDK picks it. */
   title: string;
@@ -124,8 +125,8 @@ function linesOf(text: string, cut: boolean): string[] {
   return lines;
 }
 
-type Facts = Pick<Head, "firstEntry" | "lastEntry" | "pr" | "mode" | "model" | "lastRole"> & { cwd: string | null };
-const noFacts = (): Facts => ({ firstEntry: null, lastEntry: null, pr: null, mode: null, model: null, lastRole: null, cwd: null });
+type Facts = Pick<Head, "firstEntry" | "lastEntry" | "pr" | "mode" | "model" | "lastRole"> & { cwd: string | null; spokeAt: number | null };
+const noFacts = (): Facts => ({ firstEntry: null, lastEntry: null, pr: null, mode: null, model: null, lastRole: null, cwd: null, spokeAt: null });
 
 const isMode = (v: unknown): v is PermissionMode => typeof v === "string" && (PERMISSION_MODES as readonly string[]).includes(v);
 
@@ -137,6 +138,10 @@ function isToolResult(message: unknown): boolean {
 /** Folds the facts of these lines, oldest first, onto what is known: a later line wins. */
 function scan(lines: readonly string[], into: Facts): Facts {
   const f = { ...into };
+  const spoke = (o: Record<string, unknown>) => {
+    const at = Date.parse(str(o.timestamp) ?? "");
+    if (!Number.isNaN(at)) f.spokeAt = Math.max(f.spokeAt ?? at, at);
+  };
   for (const line of lines) {
     // Most lines name none of these, and the big ones (tool results, request blobs) are skipped unparsed.
     if (!/"(type|entrypoint)":/.test(line)) continue;
@@ -159,12 +164,14 @@ function scan(lines: readonly string[], into: Facts): Facts {
         if (o.isSidechain === true || o.isMeta === true) break;
         if (isMode(o.permissionMode)) f.mode = o.permissionMode;
         f.lastRole = isToolResult(o.message) ? "assistant" : "user";
+        spoke(o);
         break;
       case "assistant": {
         if (o.isSidechain === true) break;
         const model = isRecord(o.message) ? str(o.message.model) : null;
         if (model !== null && model !== "<synthetic>") f.model = model;
         f.lastRole = "assistant";
+        spoke(o);
         break;
       }
     }
@@ -201,7 +208,7 @@ function headOf(info: SDKSessionInfo, file: { path: string; size: number; mtimeM
     mtimeMs: file.mtimeMs,
     cwd,
     createdAt: info.createdAt ?? file.mtimeMs,
-    lastAt: Math.max(info.lastModified, file.mtimeMs),
+    lastAt: facts.spokeAt ?? Math.max(info.lastModified, file.mtimeMs),
     title: (info.customTitle ?? info.summary).trim() || "Untitled session",
     // "HEAD": a detached checkout, or a folder outside git.
     branch: info.gitBranch && info.gitBranch !== "HEAD" ? info.gitBranch : null,
@@ -290,7 +297,8 @@ type Cached = { head: Head; facts: Facts & { size: number } };
 export function createHeads(opts: { projectsDir: string; sdk?: SdkReaders; seed?: readonly Head[]; exclude?: (cwd: string) => boolean }) {
   const sdk = opts.sdk ?? sdkReaders;
   const cache = new Map<string, Cached>();
-  for (const head of opts.seed ?? []) if (!opts.exclude?.(head.cwd)) cache.set(head.file, { head, facts: { ...head, cwd: head.cwd, size: head.size } });
+  // A saved head's lastAt may be a file time from an older bridge, so its facts are read from the start on its next change.
+  for (const head of opts.seed ?? []) if (!opts.exclude?.(head.cwd)) cache.set(head.file, { head, facts: { ...head, cwd: head.cwd, size: 0, spokeAt: null } });
 
   const fresh = (c: Cached | undefined, f: TranscriptFile) => c !== undefined && c.head.size === f.size && c.head.mtimeMs === f.mtimeMs;
 
@@ -659,6 +667,8 @@ const DENIED = /^(Permission to use|<tool_use_error>Blocked|.*\bIt did not run\b
 const ASYNC_AGENT = /^Async agent launched successfully\./;
 const AGENT_ID = /^agentId: ([\w-]+)/m;
 const BACKGROUND_COMMAND = /^Command running in background with ID: ([\w-]+)/;
+/** Claude Code's stand-in for a call that printed nothing: "(Bash completed with no output)". */
+const NO_OUTPUT = /^\(\w+ completed with no output\)$/;
 const HAND_BACK = /^\[Subagent hand-back\][^\n]*\n/;
 /** The usage block that ends a hand-back or a notification; the report or result before it may quote one. */
 const USAGE_BLOCK = /\n?<usage>((?:(?!<usage>)[\s\S])*)<\/usage>\s*$/;
@@ -719,7 +729,7 @@ function classifyResult(tool: string, text: string, toolResult: unknown, isError
     null;
   if (task !== null) return { kind: "launched", task };
   if (AGENT_TOOLS.has(tool)) return { kind: "ok", ...handBack(text, toolResult) };
-  return { kind: "ok", output: text === "" ? null : text };
+  return { kind: "ok", output: text === "" || NO_OUTPUT.test(text) ? null : text };
 }
 
 /** One <task-notification> block: Claude Code's word that a background task stopped. */

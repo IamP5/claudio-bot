@@ -361,8 +361,21 @@ final class ThreadModel {
     /// Full tool outputs the user asked for, by tool_use id.
     private(set) var toolOutputs: [String: String] = [:]
     let live = LiveText()
+    @ObservationIgnored private(set) var lost = false
     @ObservationIgnored private var index: [ItemID: Int] = [:]
     @ObservationIgnored private var markdown: [ItemID: (text: String, value: RenderedMarkdown)] = [:]
+    /// A watch from a position is out: its reply may jump ahead to any later rev.
+    @ObservationIgnored private var replying = false
+    /// A watch for a lost frame is out. Until its snapshot lands, another loss waits for the one timed retry or the next
+    /// watch instead, so a reply the app cannot read never makes it ask again and again.
+    @ObservationIgnored private var repairing = false
+    @ObservationIgnored private var retried = false
+    /// The newest rev applied since the last watch. A snapshot older than it would erase what that frame brought.
+    @ObservationIgnored private var newestRev: Int?
+    /// The order each item was first seen in, which is also the bridge's order among items at the same time.
+    @ObservationIgnored private var arrival: [ItemID: Int] = [:]
+    @ObservationIgnored private var firstArrival = 0
+    @ObservationIgnored private var lastArrival = 0
 
     init(id: SessionID) {
         self.id = id
@@ -373,17 +386,35 @@ final class ThreadModel {
     func apply(_ frame: ThreadFrame) -> [MessageID] {
         switch frame {
         case .snapshot(let snapshot):
+            if let newestRev, newestRev > snapshot.rev {
+                forget(again: true)
+                return []
+            }
             replace(snapshot.items)
             before = snapshot.before
             controls = snapshot.controls
             position = snapshot.position
+            newestRev = snapshot.rev
             phase = .ready
             loadingEarlier = false
+            replying = false
+            repairing = false
+            retried = false
             live.seed(snapshot.live)
             relayout()
             return Self.settled(snapshot.items)
 
         case let .items(rev, items, removed, controls):
+            // The bridge's revs follow on: the next one, or the same state again.
+            if let position {
+                guard rev == position.rev + 1 || rev == position.rev || (replying && rev > position.rev) else {
+                    lose()
+                    return []
+                }
+                self.position = ThreadPosition(epoch: position.epoch, rev: rev)
+            }
+            replying = false
+            newestRev = max(newestRev ?? rev, rev)
             for item in items {
                 upsert(item)
                 live.drop(item.id)
@@ -391,10 +422,10 @@ final class ThreadModel {
             if !removed.isEmpty {
                 let gone = Set(removed)
                 self.items.removeAll { gone.contains($0.id) }
+                for id in removed { arrival[id] = nil }
                 reindex()
             }
             if let controls { self.controls = controls }
-            if let position { self.position = ThreadPosition(epoch: position.epoch, rev: rev) }
             if phase == .loading, self.position != nil { phase = .ready }
             relayout()
             return Self.settled(items)
@@ -406,8 +437,13 @@ final class ThreadModel {
             return []
 
         case let .page(items, before):
+            // Older by position: a page item at the same time as one already shown goes above it.
             let older = items.filter { index[$0.id] == nil }
-            self.items.insert(contentsOf: older, at: 0)
+            for item in older.reversed() {
+                firstArrival -= 1
+                arrival[item.id] = firstArrival
+            }
+            self.items = (older + self.items).sorted { place($0) < place($1) }
             reindex()
             self.before = before
             loadingEarlier = false
@@ -429,7 +465,37 @@ final class ThreadModel {
     /// any streaming text from offset 0.
     func willWatch() -> ThreadPosition? {
         live.clear()
-        return phase == .ready ? position : nil
+        let from = phase == .ready ? position : nil
+        replying = from != nil
+        newestRev = nil
+        return from
+    }
+
+    /// A frame for this thread was lost or could not be read. The thread forgets its position, so the next watch asks
+    /// for a snapshot, and wants that watch at once unless one for an earlier loss is still out.
+    func lose() {
+        forget(again: !repairing)
+    }
+
+    /// A watch sent for a lost frame whose snapshot never came is sent once more, and only once.
+    func retryRepair() -> Bool {
+        guard repairing, !retried else { return false }
+        retried = true
+        return true
+    }
+
+    private func forget(again: Bool) {
+        position = nil
+        replying = false
+        if again { lost = true }
+    }
+
+    /// Whether the thread wants watching again now; asking marks the watch as sent.
+    func takeLost() -> Bool {
+        guard lost else { return false }
+        lost = false
+        repairing = true
+        return true
     }
 
     /// The user's message, shown queued at once under the clientId the bridge keeps until the transcript replaces it.
@@ -461,16 +527,38 @@ final class ThreadModel {
     private func replace(_ items: [SessionItem]) {
         self.items = []
         index = [:]
+        arrival = [:]
+        firstArrival = 0
+        lastArrival = 0
         for item in items { upsert(item) }
     }
 
+    /// Where an item sits, as bridge/src/threads.ts ordered() puts it: by time, a message Claude Code has not taken yet
+    /// after everything, and items at one time in the order they were first seen, as the bridge's stable sort keeps
+    /// them. Snapshot, page, replay and live frames all land in this one order.
+    private func place(_ item: SessionItem) -> (Int, Date, Int) {
+        let waits = if case .user(_, _, _, _, true) = item { 1 } else { 0 }
+        return (waits, item.at, arrival[item.id] ?? 0)
+    }
+
     private func upsert(_ item: SessionItem) {
-        if let at = index[item.id] {
-            if items[at] != item { items[at] = item }
-        } else {
-            index[item.id] = items.count
-            items.append(item)
+        guard let at = index[item.id] else {
+            lastArrival += 1
+            arrival[item.id] = lastArrival
+            return insert(item)
         }
+        guard items[at] != item else { return }
+        guard place(items[at]) != place(item) else { items[at] = item; return }
+        items.remove(at: at)
+        reindex()
+        insert(item)
+    }
+
+    private func insert(_ item: SessionItem) {
+        let key = place(item)
+        let slot = items.lastIndex { place($0) < key }.map { $0 + 1 } ?? 0
+        items.insert(item, at: slot)
+        if slot == items.count - 1 { index[item.id] = slot } else { reindex() }
     }
 
     private func reindex() {
@@ -536,6 +624,17 @@ final class SessionThreads {
 
     func willWatch(_ id: SessionID) -> ThreadPosition? {
         models[id]?.willWatch()
+    }
+
+    func lose(_ id: SessionID) {
+        models[id]?.lose()
+    }
+
+    /// The threads that lost a frame and want watching again now.
+    func takeLost() -> [SessionID] {
+        var ids: [SessionID] = []
+        for (id, model) in models where model.takeLost() { ids.append(id) }
+        return ids.sorted { $0.rawValue < $1.rawValue }
     }
 
     /// Frames for a thread the app no longer keeps are dropped, except a snapshot, which is a reply to a watch.

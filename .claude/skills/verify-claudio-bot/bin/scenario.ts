@@ -34,12 +34,90 @@ function cleanupBridge() {
 process.on("exit", cleanupBridge);
 for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]] as const) process.on(sig, () => process.exit(code));
 
-type Thread = { items: Map<string, Item>; controls: Controls | null; epoch: string | null; rev: number };
+/** seen: the order each item was first seen in. */
+type Thread = { items: Map<string, Item>; seen: Map<string, number>; controls: Controls | null; epoch: string | null; rev: number };
+
+/**
+ * An item put where the app's ThreadModel puts it (the order bridge/src/threads.ts ordered() gives a snapshot): by
+ * time, a message Claude Code has not taken yet after everything, and items at one time in the order first seen.
+ */
+function land(t: Thread, item: Item) {
+  if (!t.seen.has(item.id)) t.seen.set(item.id, t.seen.size);
+  const place = (i: Item) => `${i.kind === "user" && i.queued === true ? 1 : 0}${i.at}`;
+  const before = (a: Item, b: Item) => place(a) < place(b) || (place(a) === place(b) && t.seen.get(a.id)! < t.seen.get(b.id)!);
+  const old = t.items.get(item.id);
+  if (old && place(old) === place(item)) return void t.items.set(item.id, item);
+  const rest = [...t.items.values()].filter((i) => i.id !== item.id);
+  let slot = rest.length;
+  while (slot > 0 && before(item, rest[slot - 1]!)) slot--;
+  rest.splice(slot, 0, item);
+  t.items = new Map(rest.map((i) => [i.id, i]));
+}
+
+/**
+ * One direction of a WebSocket connection, split after its HTTP upgrade into whole frames: each frame's bytes, and its
+ * text when it is a single uncompressed text frame (unmasked when the client sent it).
+ */
+function wsFrames(onFrame: (raw: Buffer, text: string | null) => void) {
+  let buf = Buffer.alloc(0);
+  let upgraded = false;
+  return (chunk: Buffer) => {
+    buf = Buffer.concat([buf, chunk]);
+    // CFNetwork keeps the connection of POST /pair alive and upgrades it later, so plain HTTP may come first.
+    while (!upgraded) {
+      const end = buf.indexOf("\r\n\r\n");
+      if (end === -1) return;
+      const head = buf.subarray(0, end).toString("latin1");
+      const size = end + 4 + Number(head.match(/^content-length:\s*(\d+)/im)?.[1] ?? 0);
+      if (buf.length < size) return;
+      onFrame(Buffer.from(buf.subarray(0, size)), null);
+      buf = buf.subarray(size);
+      upgraded = /^HTTP\/1\.1 101/.test(head) || (/^GET /.test(head) && /^upgrade:\s*websocket/im.test(head));
+    }
+    for (;;) {
+      if (buf.length < 2) return;
+      let len = buf[1]! & 0x7f;
+      let off = 2;
+      if (len === 126) {
+        if (buf.length < 4) return;
+        len = buf.readUInt16BE(2);
+        off = 4;
+      } else if (len === 127) {
+        if (buf.length < 10) return;
+        len = Number(buf.readBigUInt64BE(2));
+        off = 10;
+      }
+      const mask = buf[1]! & 0x80 ? Buffer.from(buf.subarray(off, off + 4)) : null;
+      if (mask) off += 4;
+      if (buf.length < off + len) return;
+      const raw = Buffer.from(buf.subarray(0, off + len));
+      buf = buf.subarray(off + len);
+      let text: string | null = null;
+      if ((raw[0]! & 0xcf) === 0x81) {
+        const body = Buffer.from(raw.subarray(off));
+        if (mask) for (let i = 0; i < body.length; i++) body[i]! ^= mask[i % 4]!;
+        text = body.toString("utf8");
+      }
+      onFrame(raw, text);
+    }
+  };
+}
+
+const parsed = (text: string | null): Frame | null => {
+  try {
+    return text === null ? null : (JSON.parse(text) as Frame);
+  } catch {
+    return null;
+  }
+};
+
+type Tap = { lose(f: Frame): boolean; seen(dir: "in" | "out" | "lost", f: Frame): void };
 
 /**
  * A TCP relay in front of the bridge. The phone and the app reach the bridge through it, so the runner can cut them off
  * the way a network does: `close` ends every connection and refuses new ones; `half-open` passes nothing either way
- * and closes nothing, so neither side hears a close, as when a phone loses signal or is suspended.
+ * and closes nothing, so neither side hears a close, as when a phone loses signal or is suspended. With a tap, the
+ * app's connection is read frame by frame, so one frame can be lost on its way to the app.
  */
 class Relay {
   private server: Server | null = null;
@@ -47,6 +125,7 @@ class Relay {
   private silenced = new Set<{ down: Socket; up: Socket; dead: boolean }>();
   private cut: Drop | null = null;
   port = 0;
+  tap: Tap | null = null;
 
   constructor(private bridgePort: number) {}
 
@@ -63,6 +142,7 @@ class Relay {
       };
       for (const s of [p.down, p.up]) s.on("close", end).on("error", end);
       if (this.cut === "half-open") return this.silence(p);
+      if (this.tap) return this.read(p, this.tap);
       p.down.pipe(p.up);
       p.up.pipe(p.down);
     });
@@ -77,6 +157,32 @@ class Relay {
 
   restore() {
     this.cut = null;
+  }
+
+  /** The app's connection (its upgrade comes from CFNetwork; the runner's phone is Bun) is read frame by frame; others pass as they are. */
+  private read(p: { down: Socket; up: Socket; dead: boolean }, tap: Tap) {
+    let app: boolean | null = null;
+    const toApp = wsFrames((raw, text) => {
+      const f = parsed(text);
+      if (f && tap.lose(f)) return tap.seen("lost", f);
+      if (f) tap.seen("in", f);
+      p.down.write(raw);
+    });
+    const fromApp = wsFrames((_, text) => {
+      const f = parsed(text);
+      if (f) tap.seen("out", f);
+    });
+    p.down.on("data", (chunk: Buffer) => {
+      if (!this.live.has(p)) return;
+      app ??= /^user-agent:.*cfnetwork/im.test(chunk.toString("latin1"));
+      p.up.write(chunk);
+      if (app) fromApp(chunk);
+    });
+    p.up.on("data", (chunk: Buffer) => {
+      if (!this.live.has(p)) return;
+      if (app) toApp(chunk);
+      else p.down.write(chunk);
+    });
   }
 
   private silence(p: { down: Socket; up: Socket; dead: boolean }) {
@@ -145,7 +251,7 @@ class Phone {
 
   private thread(sid: string) {
     let t = this.threads.get(sid);
-    if (!t) this.threads.set(sid, (t = { items: new Map(), controls: null, epoch: null, rev: 0 }));
+    if (!t) this.threads.set(sid, (t = { items: new Map(), seen: new Map(), controls: null, epoch: null, rev: 0 }));
     return t;
   }
 
@@ -194,12 +300,14 @@ class Phone {
     this.ev.frameTimes.push({ at: this.ev.now(), name, type: f.type });
     const t = this.thread(sid);
     if (f.type === "session") {
-      t.items = new Map((f.items as Item[]).map((i) => [i.id, i]));
+      t.items = new Map();
+      t.seen = new Map();
+      for (const i of f.items as Item[]) land(t, i);
       t.controls = f.controls as Controls;
       t.epoch = f.epoch as string;
       t.rev = f.rev as number;
     } else if (f.type === "session_items") {
-      for (const i of f.items as Item[]) t.items.set(i.id, i);
+      for (const i of f.items as Item[]) land(t, i);
       for (const id of f.removed as string[]) t.items.delete(id);
       if (f.controls) t.controls = f.controls as Controls;
       t.rev = f.rev as number;
@@ -347,9 +455,11 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
       });
     },
     samples: {},
+    app: [],
   };
   let phone: Phone | null = null;
   let relay: Relay | null = null;
+  let losing: ((f: Frame) => boolean) | null = null;
   let app: pool.Build | null = null;
   const markNow = (m: string) => {
     ev.marks[m] = ev.now();
@@ -389,6 +499,17 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
     report.run = runId;
     report.build = run.rev;
     relay = new Relay(run.port);
+    if (sim && sc.tapApp)
+      relay.tap = {
+        lose: (f) => losing?.(f) ?? false,
+        seen(dir, f) {
+          const sid = f.sessionId as string | undefined;
+          if (!sid || f.type === "session_delta" || !Object.values(ev.ids).includes(sid)) return;
+          const at = ev.now();
+          ev.app.push({ at, dir, frame: f });
+          appendFileSync(join(out, "timeline.jsonl"), JSON.stringify({ at, dir: `app-${dir}`, name: "app", frame: f }) + "\n");
+        },
+      };
     await relay.start();
     log(`bridge run ${runId} on :${run.port}; the phone${sim ? " and the app" : ""} reach it through the relay on :${relay.port}`);
     phone = new Phone(run, ev, out, !sim, relay);
@@ -527,6 +648,15 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
         for (const l of lines) process.kill(Number(l.split(" ")[0]), "SIGKILL");
         ev.samples["kill-claude"] = lines;
         log(`SIGKILL ${lines.join(" | ").slice(0, 200)}`);
+        return markNow(a.mark);
+      }
+      case "lose-frame": {
+        if (!relay?.tap) throw new PreconditionFailed("lose-frame needs --sim and a scenario that taps the app's socket");
+        const sid = ev.ids[a.name]!;
+        let gone = false;
+        losing = (f) => !gone && f.sessionId === sid && a.test(f) && (gone = true);
+        await until(() => gone, a.what, a.timeoutS);
+        losing = null;
         return markNow(a.mark);
       }
       case "restart-bridge": {
@@ -683,6 +813,8 @@ function describe(a: Action): string {
       return `SIGKILL the Claude Code process of \`${a.name}\`; mark \`${a.mark}\`.`;
     case "restart-bridge":
       return `Restart the bridge on the same port and home; the phone reconnects. Mark \`${a.mark}\`.`;
+    case "lose-frame":
+      return `The relay loses ${a.what} on its way to the app (simulator lane), within ${a.timeoutS} s. Mark \`${a.mark}\`.`;
   }
 }
 

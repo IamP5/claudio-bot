@@ -81,6 +81,8 @@ final class BridgeClient {
         var quiet: TimeInterval = 45
         /// Network changes this close together count as one.
         var settle: Duration = .milliseconds(500)
+        /// A watch sent for a lost thread frame with no snapshot back by then is sent once more.
+        var repairWait: Duration = .seconds(5)
     }
 
     enum Ending: Equatable, Sendable { case greeted, failed, revoked, unrecognized }
@@ -444,6 +446,46 @@ final class BridgeClient {
         return (try? JSONDecoder().decode(Stamp.self, from: data))?.seq
     }
 
+    /// The type and session of a frame the decoder refused whole, read from its text: a lone surrogate anywhere in
+    /// it fails the JSON parser for the entire frame.
+    nonisolated static func stamp(in data: Data) -> (type: String, sessionId: SessionID?)? {
+        let text = String(decoding: data, as: UTF8.self)
+        func field(_ key: String) -> String? {
+            guard let start = text.range(of: "\"\(key)\":\"")?.upperBound, let end = text[start...].firstIndex(of: "\"") else { return nil }
+            return String(text[start..<end])
+        }
+        return field("type").map { ($0, field("sessionId").map { SessionID($0) }) }
+    }
+
+    /// What an unsequenced frame the app could not read carried is lost with it. A thread's loss makes that thread
+    /// watch again from a snapshot; a lost list diff makes the list watch again, which answers the whole list.
+    private func recover(from data: Data, on ws: URLSessionWebSocketTask) {
+        guard let stamp = Self.stamp(in: data) else { return }
+        switch stamp.type {
+        case "session", "session_items", "session_page":
+            if let id = stamp.sessionId { store.threads.lose(id) }
+            rewatchLost(on: ws)
+        case "session_rows":
+            if onScreen.sessionsList { transmit(.watchSessions, on: ws) }
+        default:
+            break
+        }
+    }
+
+    private func rewatchLost(on ws: URLSessionWebSocketTask) {
+        let ids = store.threads.takeLost().filter { awaySince == nil && onScreen.sessions.contains($0) }
+        guard !ids.isEmpty else { return }
+        for id in ids {
+            log.info("thread \(id.rawValue) lost a frame; watching it again")
+            watchThread(id, on: ws)
+        }
+        Task { [weak self, wait = timing.repairWait] in
+            try? await Task.sleep(for: wait)
+            guard let self, socket === ws, awaySince == nil else { return }
+            for id in ids where onScreen.sessions.contains(id) && store.threads[id]?.retryRepair() == true { watchThread(id, on: ws) }
+        }
+    }
+
     /// Runs one socket until it closes, or until the stream shows a gap.
     private func session(_ pairing: Pairing) async -> Ending {
         let ws = URLSession.shared.webSocketTask(with: pairing.socketRequest(resumingFrom: cursor))
@@ -500,6 +542,7 @@ final class BridgeClient {
             } catch {
                 log.error("undecodable frame: \(error)")
                 if cursor.skipped(seq: Self.seq(in: data)) == .broken { break }
+                recover(from: data, on: ws)
                 continue
             }
             guard cursor.observe(frame) == .inOrder else {
@@ -535,6 +578,8 @@ final class BridgeClient {
                 transmit(.open(botId: bot.id), on: ws)
             case .pairCode(let code):
                 answerPairCode(code)
+            case .thread:
+                rewatchLost(on: ws)
             default:
                 break
             }

@@ -1,7 +1,7 @@
 // The scenario registry: each scenario is data (setup actions, preconditions, rubric items) read by scenario.ts.
 // A precondition is what the scenario must produce to be judged at all; a rubric item is what the user must be able
 // to tell. A failed precondition fails the scenario; a failed rubric item is a finding.
-import type { Row } from "./control-claudio";
+import type { Frame, Row } from "./control-claudio";
 
 export type Step = { id: string; tool: string; label: string; state: string; output: string | null; [k: string]: unknown };
 export type Item = { kind: string; id: string; at: string; text?: string; steps?: Step[]; card?: { id: string; answer: unknown; label: string; detail: string }; tone?: string; [k: string]: unknown };
@@ -36,6 +36,8 @@ export type Ev = {
   procs(pattern: string): string[];
   /** Process samples the scenario took (action ps), by label; written to the report. */
   samples: Record<string, string[]>;
+  /** With --sim and tapApp: the frames about the scenario's sessions on the app's own socket, as the relay saw them. */
+  app: { at: number; dir: "in" | "out" | "lost"; frame: Frame }[];
 };
 
 export type Action =
@@ -68,7 +70,9 @@ export type Action =
   /** SIGKILLs the Claude Code process that runs the session, as a crash would. */
   | { do: "kill-claude"; name: string; mark: string }
   /** Restarts the bridge on the same port and home; the phone reconnects as the app does. */
-  | { do: "restart-bridge"; mark: string };
+  | { do: "restart-bridge"; mark: string }
+  /** With --sim and tapApp, the next frame for the session that passes test is lost on its way to the app, as a flaky link or an unreadable frame loses it. */
+  | { do: "lose-frame"; name: string; mark: string; what: string; timeoutS: number; test: (f: Frame) => boolean };
 
 export type Tell = "what" | "how-many" | "how-long" | "state" | "stop";
 export type Verdict = { ok: boolean; why: string };
@@ -97,6 +101,8 @@ export type Scenario = {
   derive?: (ev: Ev) => Record<string, number>;
   /** Seconds the user takes to tap Allow once on each card; 0 (the default) taps at once. */
   holdCardsS?: number;
+  /** With --sim, the relay reads the app's own socket frame by frame, so lose-frame can lose one on its way to the app. */
+  tapApp?: boolean;
 };
 
 // ---- reading the evidence
@@ -1144,6 +1150,80 @@ const S6: Scenario = {
   ],
 };
 
+const bashDone = (f: Frame) => ((f.items as Item[] | undefined) ?? []).some((i) => (i.steps ?? []).some((x) => x.tool === "Bash" && x.state === "ok"));
+/** The frame lost on its way to the app, and what passed after it, in the order the relay saw them (several can share a millisecond). */
+const lossAndRewatch = (ev: Ev) => {
+  const sid = ev.ids.s6b;
+  const at = ev.app.findIndex((x) => x.dir === "lost" && x.frame.sessionId === sid);
+  const lost = at === -1 ? undefined : ev.app[at];
+  const later = at === -1 ? [] : ev.app.slice(at + 1).filter((x) => x.frame.sessionId === sid);
+  const w = later.findIndex((x) => x.dir === "out" && x.frame.type === "watch_session");
+  const watch = w === -1 ? undefined : later[w];
+  const next = later.find((x) => x.dir === "in" && x.frame.type === "session_items");
+  const snap = w === -1 ? undefined : later.slice(w + 1).find((x) => x.dir === "in" && x.frame.type === "session");
+  return { lost, next, watch, snap };
+};
+
+const S6b: Scenario = {
+  id: "S6b",
+  area: "sessions",
+  title: "A thread frame lost on its way to the app",
+  needsSimulator: true,
+  tapApp: true,
+  journey: [
+    "The user watches a command run in the app. The one frame that says it finished never reaches the phone, as a flaky link or a frame the app cannot read would lose it.",
+    "The app must see the gap in the thread's revs on the next frame, ask for the thread again, and show the command done, as a fresh open would, with nothing for the user to do.",
+  ],
+  setup: [
+    { do: "create", name: "s6b", prompt: "Run exactly this Bash command in the foreground (not in the background): perl -e 'sleep 12' && echo hi > s6b.txt\nThen reply with one line: done." },
+    started("s6b"),
+    { do: "open-thread", name: "s6b" },
+    { do: "until", mark: "call-running", what: "the sleep step to run", timeoutS: 120, test: (ev) => snaps(ev, "s6b").some((s) => stepsOf(s).some((x) => x.tool === "Bash" && x.state === "running")) },
+    { do: "lose-frame", name: "s6b", mark: "lost", what: "the frame that says the command is done", timeoutS: 120, test: (f) => f.type === "session_items" && bashDone(f) },
+    { do: "until", mark: "s6b-ended", what: "the turn to end", timeoutS: 90, test: atRest("s6b") },
+    { do: "sleep", s: 4 },
+    { do: "screenshot", shot: "after-loss" },
+  ],
+  pre: [
+    created("s6b"),
+    { what: "the app was paired", check: (ev) => (ev.paired ? ok("yes") : no("no")) },
+    { what: "one frame was lost on its way to the app", check: (ev) => (lossAndRewatch(ev).lost ? ok(`session_items rev ${lossAndRewatch(ev).lost!.frame.rev}`) : no("nothing was lost")) },
+  ],
+  rubric: [
+    {
+      id: "S6b.1",
+      tell: "state",
+      lane: "protocol",
+      text: "The app notices the lost frame and asks for the thread again, from scratch.",
+      pass: "The app sends watch_session for the session with after null within 2 s of the first thread frame that reached it after the loss.",
+      fail: "The app never watches the thread again, asks to resume from a position past the loss, or waits longer than 2 s.",
+      check: (ev) => {
+        const { lost, next, watch } = lossAndRewatch(ev);
+        if (!lost) return no("not judged: nothing was lost");
+        if (!watch) return no(`the app never watched the thread again${next ? `; rev ${next.frame.rev} reached it` : ""}`);
+        if (watch.frame.after !== null) return no(`it asked to resume after ${JSON.stringify(watch.frame.after)}`);
+        const lag = watch.at - (next?.at ?? lost.at);
+        return lag <= 2000 ? ok(`lost rev ${lost.frame.rev}; rev ${next?.frame.rev} came next; watched again ${(lag / 1000).toFixed(1)} s later, for a snapshot`) : no(`watched again ${(lag / 1000).toFixed(1)} s after the next frame`);
+      },
+    },
+    {
+      id: "S6b.2",
+      tell: "state",
+      lane: "protocol",
+      text: "What the lost frame said reaches the app anyway.",
+      pass: "After that watch, a snapshot of the session reaches the app with the Bash step ok.",
+      fail: "No snapshot reaches the app, or it lacks the finished step.",
+      check: (ev) => {
+        const { watch, snap } = lossAndRewatch(ev);
+        if (!watch) return no("not judged: the app never watched again");
+        if (!snap) return no("no snapshot reached the app");
+        return bashDone(snap.frame) ? ok(`snapshot rev ${snap.frame.rev} with the command done, ${((snap.at - watch.at) / 1000).toFixed(1)} s after the watch`) : no("the snapshot has no finished Bash step");
+      },
+    },
+    review("S6b.3", "state", "The thread on screen shows the command done and the reply, with nothing left running.", "A done step and the reply.", "A step still running after the turn ended, or no reply.", ["after-loss"]),
+  ],
+};
+
 const SLEEPERS = 4;
 const QUICK = 8;
 const s7names = [...Array.from({ length: SLEEPERS }, (_, i) => `s7-sleep-${i + 1}`), ...Array.from({ length: QUICK }, (_, i) => `s7-quick-${i + 1}`)];
@@ -1444,4 +1524,4 @@ const S8fg: Scenario = {
   ],
 };
 
-export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S4, S5, S6, S7, S8, S8fg];
+export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S4, S5, S6, S6b, S7, S8, S8fg];

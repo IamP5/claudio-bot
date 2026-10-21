@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { accessOf, type Access } from "../access";
 import type { Scope } from "../policy";
@@ -114,3 +115,12 @@ export const scopeFor = (p: MachineProfile): MachineScope => ({
   users: { [p.username]: p.homedir, root: p.rootHome },
   full: p.access.full,
 });
+
+/** What the floors protect for a session the phone drives in cwd: the same private paths as for an agent. */
+export function sessionScope(p: MachineProfile, cwd: string): Scope {
+  let own = cwd;
+  try {
+    own = realpathSync(cwd);
+  } catch {}
+  return { ...scopeFor(p), own, userMd: null, full: false };
+}

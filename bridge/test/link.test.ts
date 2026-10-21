@@ -10,7 +10,8 @@ import { createLinks, type LinkSession, type Links } from "../src/machine/links"
 import { profileOf } from "../src/machine/profile";
 import { createRegistry, type Registry } from "../src/machine/registry";
 import type { AgentRuntime } from "../src/machine/runtime";
-import { newIntentId, profileView, type Event, type EventBody, type HomeFrame, type MachineId } from "../src/machine/wire";
+import { newIntentId, profileView, type Event, type EventBody, type HomeFrame, type MachineId, type SessionSignal } from "../src/machine/wire";
+import type { SessionClientMessage, SessionId } from "../src/protocol";
 
 const profile = (() => {
   const view = profileView(profileOf({ env: { CLAUDIOBOT_ACCESS: "full" }, platform: "linux", name: "omarchy", homedir: "/home/alex", username: "alex" }));
@@ -153,13 +154,14 @@ const until = async (what: string, ok: () => boolean) => {
   throw new Error(`timed out waiting for ${what}`);
 };
 
-function machineAt(url: string, pair: ReturnType<typeof enrolledPair>, journalDir: string) {
+function machineAt(url: string, pair: ReturnType<typeof enrolledPair>, journalDir: string, sessions?: Parameters<typeof dialHub>[0]["sessions"]) {
   const runtime = miniRuntime(fileJournal(journalDir, () => {}));
   const log: string[] = [];
   const dialer = dialHub({
     identity: { ...pair.machine, home: { ...pair.machine.home, url } },
     runtime,
     profile,
+    ...(sessions && { sessions }),
     log: (l) => log.push(l),
     backoff: { firstMs: 20, maxMs: 40 },
   });
@@ -192,6 +194,48 @@ test("an enrolled machine comes online, answers an intent over the link, and goe
   expect(changes).toBe(2);
   expect(await h.links.machines()[0]!.send({ kind: "snapshot", intentId: newIntentId() })).toEqual({ ok: false, reason: "MacBook is offline", undelivered: true });
   expect(h.links.machines()[0]!.status().since).toBe(registry.get(pair.mac.machineId)!.lastSeenAt);
+});
+
+test("a phone's session request reaches the machine's sessions over the link and its frames come back; a signal goes the other way; the watched threads end with the link", async () => {
+  const pair = enrolledPair();
+  const registry = createRegistry({ bridgeHome: tmp(), now: () => new Date() });
+  registry.enroll({ id: pair.mac.machineId, name: "MacBook", publicKey: pair.mac.publicKey });
+  const h = homeServer(pair.home, registry);
+  const signals: [MachineId, SessionSignal][] = [];
+  h.links.onSignal((id, f) => signals.push([id, f]));
+  const S = "6f1c2b9e-0d2a-4c1e-9b7a-3e5d4c2b1a00" as SessionId;
+  const asked: SessionClientMessage[] = [];
+  const m = machineAt(h.url, pair, tmp(), {
+    async handle(frame) {
+      asked.push(frame);
+      return frame.type === "session_stop" ? [{ type: "error", message: "Nothing is running." }, { type: "bot_removed", botId: "b1" as never }] : [];
+    },
+  });
+  await until("online", () => h.links.machines()[0]!.status().online);
+
+  expect(await h.links.ask(pair.mac.machineId, { type: "watch_session", sessionId: S, after: null })).toEqual({ ok: true, frames: [] });
+  expect(m.dialer.watched(S)).toBe(true);
+  expect(await h.links.ask(pair.mac.machineId, { type: "session_stop", sessionId: S })).toEqual({ ok: true, frames: [{ type: "error", message: "Nothing is running." }] });
+  expect(asked.map((f) => f.type)).toEqual(["watch_session", "session_stop"]);
+
+  m.dialer.signal({ type: "session_delta", sessionId: S, itemId: "msg_1:0" as never, offset: 0, text: "Run" });
+  await until("the signal", () => signals.length === 1);
+  expect(signals[0]).toEqual([pair.mac.machineId, { type: "session_delta", sessionId: S, itemId: "msg_1:0" as never, offset: 0, text: "Run" }]);
+
+  m.dialer.stop();
+  await until("offline", () => !h.links.machines()[0]!.status().online);
+  expect(m.dialer.watched(S)).toBe(false);
+  expect(await h.links.ask(pair.mac.machineId, { type: "session_stop", sessionId: S })).toEqual({ ok: false, reason: "MacBook is offline" });
+});
+
+test("a machine that serves no sessions refuses an ask in words", async () => {
+  const pair = enrolledPair();
+  const registry = createRegistry({ bridgeHome: tmp(), now: () => new Date() });
+  registry.enroll({ id: pair.mac.machineId, name: "MacBook", publicKey: pair.mac.publicKey });
+  const h = homeServer(pair.home, registry);
+  machineAt(h.url, pair, tmp());
+  await until("online", () => h.links.machines()[0]!.status().online);
+  expect(await h.links.ask(pair.mac.machineId, { type: "watch_sessions" })).toEqual({ ok: true, frames: [{ type: "error", message: "This machine does not serve sessions." }] });
 });
 
 test("events emitted while the link is down, or sent and never acked before a kill, reach the home once after a restart", async () => {

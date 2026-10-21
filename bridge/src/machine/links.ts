@@ -2,7 +2,8 @@ import type { Identity } from "./identity";
 import { homeHears, homeOpens, type LinkState } from "./link";
 import type { Machine, Sent } from "./machines";
 import type { Registry } from "./registry";
-import { newIntentId, parseMachineFrame, type Event, type HomeFrame, type IntentId, type MachineId, type ProfileView, type Seq } from "./wire";
+import type { SessionClientMessage } from "../protocol";
+import { newIntentId, parseMachineFrame, type Event, type HomeFrame, type IntentId, type MachineId, type ProfileView, type Seq, type SessionReply, type SessionSignal } from "./wire";
 
 // The home's end of every machine's link (GET /link): the handshake, the remote Machine each enrolled machine is, its
 // events in, and acks out once the registry has saved them.
@@ -17,9 +18,14 @@ export type LinkSession = {
   since: string;
   /** Intents sent and not yet answered, by id. */
   pending: Map<IntentId, (a: Sent) => void>;
+  /** Session requests sent and not yet answered, by id. */
+  asks: Map<IntentId, (a: Asked) => void>;
   handshake: ReturnType<typeof setTimeout> | null;
   flush: ReturnType<typeof setTimeout> | null;
 };
+
+/** A machine's answer to a phone's session request, or why there is none. */
+export type Asked = { ok: true; frames: SessionReply[] } | { ok: false; reason: string };
 
 export type Links = {
   open(socket: LinkSocket): LinkSession;
@@ -32,6 +38,10 @@ export type Links = {
   onEvent(f: (machine: MachineId, e: Event) => void): void;
   /** A machine came online, went offline or enrolled. */
   onChange(f: () => void): void;
+  /** Sends a phone's session request to a machine and waits for its frames. Never queued: an offline machine refuses. */
+  ask(machine: MachineId, frame: SessionClientMessage): Promise<Asked>;
+  /** Each sessions channel frame a machine sends, as it arrives. */
+  onSignal(f: (machine: MachineId, frame: SessionSignal) => void): void;
   /** After registry.enroll, so the phone sees the new machine. */
   enrolled(): void;
 };
@@ -43,10 +53,12 @@ export const LINK_REPLACED = 4005;
 const HANDSHAKE_MS = 10_000;
 /** How long the home waits for a machine to apply an intent. A start scans the machine's projects and may make a worktree. */
 const APPLY_MS = 120_000;
+/** How long the home waits for a machine's sessions to answer a phone. Opening a long thread reads its transcript. */
+const ASK_MS = 30_000;
 /** Events in a burst share one registry save and one ack. */
 const FLUSH_MS = 50;
 
-export function createLinks(deps: { identity: Identity; registry: Registry; log: (line: string) => void; now: () => Date; applyMs?: number }): Links {
+export function createLinks(deps: { identity: Identity; registry: Registry; log: (line: string) => void; now: () => Date; applyMs?: number; askMs?: number }): Links {
   const { registry, log } = deps;
   const live = new Map<MachineId, LinkSession>();
   /**
@@ -56,6 +68,7 @@ export function createLinks(deps: { identity: Identity; registry: Registry; log:
   const handled = new Map<MachineId, Seq>();
   const handledFrom = (id: MachineId) => Math.max(handled.get(id) ?? 0, registry.get(id)?.ackedSeq ?? 0);
   const eventSubscribers: ((machine: MachineId, e: Event) => void)[] = [];
+  const signalSubscribers: ((machine: MachineId, frame: SessionSignal) => void)[] = [];
   const changeSubscribers: (() => void)[] = [];
   const changed = () => changeSubscribers.forEach((f) => f());
   const nameOf = (id: MachineId) => registry.get(id)?.name ?? id;
@@ -74,6 +87,8 @@ export function createLinks(deps: { identity: Identity; registry: Registry; log:
     save(session, was.peer);
     for (const resolve of session.pending.values()) resolve({ ok: false, reason: `${nameOf(was.peer)} went offline`, undelivered: true });
     session.pending.clear();
+    for (const resolve of session.asks.values()) resolve({ ok: false, reason: `${nameOf(was.peer)} went offline` });
+    session.asks.clear();
     if (live.get(was.peer) === session) {
       live.delete(was.peer);
       log(`link: ${nameOf(was.peer)} offline (${reason})`);
@@ -145,6 +160,7 @@ export function createLinks(deps: { identity: Identity; registry: Registry; log:
         profile: null,
         since: deps.now().toISOString(),
         pending: new Map(),
+        asks: new Map(),
         handshake: null,
         flush: null,
       };
@@ -196,6 +212,14 @@ export function createLinks(deps: { identity: Identity; registry: Registry; log:
               session.pending.delete(frame.intentId);
               return resolve?.(frame.applied);
             }
+            case "reply": {
+              const resolve = session.asks.get(frame.id);
+              session.asks.delete(frame.id);
+              return resolve?.({ ok: true, frames: frame.frames });
+            }
+            case "signal":
+              for (const f of signalSubscribers) f(step.peer, frame.frame);
+              return;
           }
         }
       }
@@ -206,6 +230,23 @@ export function createLinks(deps: { identity: Identity; registry: Registry; log:
     },
 
     machines: () => registry.list().map((r) => remote(r.id)),
+    ask(machine, frame) {
+      const s = live.get(machine);
+      if (!s) return Promise.resolve({ ok: false, reason: `${nameOf(machine)} is offline` });
+      const id = newIntentId();
+      return new Promise<Asked>((resolve) => {
+        const timer = setTimeout(() => {
+          s.asks.delete(id);
+          resolve({ ok: false, reason: `${nameOf(machine)} did not answer` });
+        }, deps.askMs ?? ASK_MS);
+        s.asks.set(id, (a) => {
+          clearTimeout(timer);
+          resolve(a);
+        });
+        send(s, { t: "ask", id, frame });
+      });
+    },
+    onSignal: (f) => void signalSubscribers.push(f),
     onEvent: (f) => void eventSubscribers.push(f),
     onChange: (f) => void changeSubscribers.push(f),
     enrolled: changed,

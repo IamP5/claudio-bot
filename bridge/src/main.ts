@@ -124,8 +124,12 @@ function printAccess() {
   }
 }
 
+// CLAUDIOBOT_DESKTOP_FAKE: a verification run's stand-in for the Claude app, which records imports to that file.
+const claudeApps = () =>
+  process.env.CLAUDIOBOT_DESKTOP_FAKE ? fakeDesktop(createClaudeApps(realAppsDeps(ownPids)), process.env.CLAUDIOBOT_DESKTOP_FAKE) : createClaudeApps(realAppsDeps(ownPids));
+
 if (identity.home !== null) {
-  const running = bootMachine({ home, identity: { ...identity, home: identity.home }, profile, userName, port, claude: { query }, log });
+  const running = bootMachine({ home, identity: { ...identity, home: identity.home }, profile, userName, port, claude: { query }, apps: claudeApps(), log });
   printAccess();
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
@@ -181,10 +185,7 @@ function bootHome() {
     sessions: {
       epoch: stream.epoch,
       projectsDir: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects"),
-      // CLAUDIOBOT_DESKTOP_FAKE: a verification run's stand-in for the Claude app, which records imports to that file.
-      apps: process.env.CLAUDIOBOT_DESKTOP_FAKE
-        ? fakeDesktop(createClaudeApps(realAppsDeps(ownPids)), process.env.CLAUDIOBOT_DESKTOP_FAKE)
-        : createClaudeApps(realAppsDeps(ownPids)),
+      apps: claudeApps(),
       cacheDir: join(home, "cache"),
       signal: { list: (frame) => transport.signal(frame, "sessions"), thread: (id, frame) => transport.signal(frame, threadTopic(id)) },
       watchers: (id) => transport.watchers(id),

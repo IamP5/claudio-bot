@@ -11,7 +11,6 @@ import { chainBudget, createChains, GROUP_SIZE, mentionedIn, membersError, newGr
 import type { Homes } from "./home";
 import { localDay } from "./ledger";
 import { createMemory, writeAtomic } from "./memory";
-import type { Scope } from "./policy";
 import { projectFolders, projectRoots, projectsText, type Project } from "./projects";
 import {
   PROTOCOL,
@@ -43,7 +42,7 @@ import type { CardReply } from "./gate";
 import type { Push } from "./push";
 import type { Result } from "./result";
 import { sandboxFor } from "./sandbox";
-import { scopeFor, type MachineProfile } from "./machine/profile";
+import { sessionScope, type MachineProfile } from "./machine/profile";
 import type { Links } from "./machine/links";
 import { createLocalMachine, createMachines } from "./machine/machines";
 import { createMirror } from "./machine/mirror";
@@ -930,15 +929,6 @@ export function createHub(deps: HubDeps): Hub {
     }
   });
 
-  /** What the floors protect for a session the phone drives in cwd: the same private paths as for an agent. */
-  function scopeIn(cwd: string): Scope {
-    let own = cwd;
-    try {
-      own = realpathSync(cwd);
-    } catch {}
-    return { ...scopeFor(deps.profile), own, userMd: null, full: false };
-  }
-
   const sessions: Sessions | null = deps.sessions
     ? createSessions({
         ...deps.sessions,
@@ -952,7 +942,7 @@ export function createHub(deps: HubDeps): Hub {
         decideGate: (botId, cardId, choice) => gate.answer(botId as BotId, cardId, { kind: "permission", choice }),
         ledger,
         claude: deps.claude,
-        scope: scopeIn,
+        scope: (cwd) => sessionScope(deps.profile, cwd),
         notify: (id, cardId) => void deps.push.notifySession?.(id, cardId),
         folders: () => projectFolders().map((f) => f.path),
         persist: deps.persist,

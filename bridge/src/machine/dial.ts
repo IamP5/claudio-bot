@@ -3,7 +3,8 @@ import type { HomeRef, Identity } from "./identity";
 import { machineHears, type LinkState } from "./link";
 import { LINK_REPLACED } from "./links";
 import type { AgentRuntime } from "./runtime";
-import { parseHomeFrame, type Event, type MachineFrame, type ProfileView } from "./wire";
+import { isSessionFrame, type ServerMessage, type SessionClientMessage, type SessionId } from "../protocol";
+import { parseHomeFrame, type Event, type IntentId, type MachineFrame, type ProfileView, type SessionReply, type SessionSignal } from "./wire";
 
 // The machine's end of the link: it dials its home's /link, proves itself, replays what the home has not acked, then
 // applies intents and streams events until the socket drops, and dials again with backoff. The machine never listens
@@ -19,7 +20,16 @@ export type DialSocket = {
   onerror: (() => void) | null;
 };
 
-export type Dialer = { state(): LinkState; stop(): void };
+export type Dialer = {
+  state(): LinkState;
+  /** A sessions channel frame for the home, sent while the link is live and dropped otherwise. */
+  signal(frame: SessionSignal): void;
+  /** Whether the home watches this session's thread for a phone, over the link that is live now. */
+  watched(id: SessionId): boolean;
+  stop(): void;
+};
+
+const isReply = (f: ServerMessage): f is SessionReply => isSessionFrame(f) || f.type === "error";
 
 export const BACKOFF = { firstMs: 1000, maxMs: 30_000 } as const;
 
@@ -36,6 +46,8 @@ export function dialHub(deps: {
   identity: Identity & { home: HomeRef };
   runtime: Pick<AgentRuntime, "apply" | "events" | "lastSeq" | "ack" | "subscribe">;
   profile: ProfileView;
+  /** This machine's Sessions tab, for the home's asks. Absent: every ask is refused. */
+  sessions?: { handle(m: SessionClientMessage): Promise<ServerMessage[]> };
   log: (line: string) => void;
   connect?: (url: string) => DialSocket;
   backoff?: { firstMs: number; maxMs: number };
@@ -49,6 +61,8 @@ export function dialHub(deps: {
   let delay = backoff.firstMs;
   let retry: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
+  /** The threads the home watches over this link; a new link starts with none, and the home watches again. */
+  const watching = new Set<SessionId>();
 
   const send = (s: DialSocket, frame: MachineFrame) => s.send(JSON.stringify(frame));
 
@@ -60,6 +74,7 @@ export function dialHub(deps: {
   function drop(s: DialSocket, reason: string) {
     if (socket !== s) return;
     socket = null;
+    watching.clear();
     const wasLive = state.kind === "live";
     state = { kind: "closed", reason };
     log(`link: ${wasLive ? "lost" : "could not reach"} ${home.name} (${reason})${stopped ? "" : `, dialing again in ${Math.round(delay / 1000)} s`}`);
@@ -107,9 +122,23 @@ export function dialHub(deps: {
               });
             return;
           }
+          case "ask":
+            return void ask(s, frame.id, frame.frame);
         }
       }
     }
+  }
+
+  async function ask(s: DialSocket, id: IntentId, m: SessionClientMessage) {
+    if (m.type === "watch_session") watching.add(m.sessionId);
+    if (m.type === "unwatch_session") watching.delete(m.sessionId);
+    let frames: SessionReply[];
+    try {
+      frames = deps.sessions ? (await deps.sessions.handle(m)).filter(isReply) : [{ type: "error", message: "This machine does not serve sessions." }];
+    } catch (e) {
+      frames = [{ type: "error", message: `The machine failed to answer: ${errorText(e)}` }];
+    }
+    if (socket === s && state.kind === "live") send(s, { t: "reply", id, frames });
   }
 
   function dial() {
@@ -141,6 +170,10 @@ export function dialHub(deps: {
   dial();
   return {
     state: () => state,
+    signal(frame) {
+      if (state.kind === "live" && socket) send(socket, { t: "signal", frame });
+    },
+    watched: (id) => watching.has(id),
     stop() {
       stopped = true;
       if (retry) clearTimeout(retry);

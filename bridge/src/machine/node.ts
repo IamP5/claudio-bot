@@ -224,7 +224,7 @@ export type MachineNode = Node & {
  * A machine: no bots, only a stand-in per bot that has agents here. A stand-in's chat holds the cards this machine's
  * gate posts, which go to the home as card events; the home pushes and shows them. Nothing a bot does runs here.
  */
-export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "rowed" | "elsewhere" | "observe" | "idle" | "turnDone">): MachineNode {
+export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "rowed" | "elsewhere" | "idle">): MachineNode {
   const { world } = deps;
   /** A stand-in's chat, or an agent's thread. */
   const archiveOf = (id: BotId | AgentId) => join(deps.root, "machine", "history", `${id}.jsonl`);

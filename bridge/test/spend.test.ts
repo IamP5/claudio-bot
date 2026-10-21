@@ -1,3 +1,4 @@
+import { testProfile } from "./hub-kit";
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -50,7 +51,7 @@ function hubWith(rows: UsageRow[]) {
   world.agents.set(CLOUD, agentOf(CLOUD, "cloud"));
   const frames: ServerMessage[] = [];
   const hub = createHub({
-    machine: "Mac",
+    profile: testProfile(root),
     userName: "Alex",
     world,
     homes: createHomes(root),

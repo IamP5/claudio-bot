@@ -1,14 +1,15 @@
-import { mkdirSync } from "node:fs";
-import { homedir, hostname } from "node:os";
+import { mkdirSync, realpathSync } from "node:fs";
+import { homedir, hostname, userInfo } from "node:os";
 import { join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import qrcode from "qrcode-terminal";
-import { accessLine, accessOf } from "./access";
+import { accessLine } from "./access";
 import { bridgeUrls, lanAddresses, pairLink, readNames } from "./address";
 import { readPlanUsage, strictMcp } from "./claudeCode";
 import { createDevices, type PairCode } from "./devices";
 import { createHomes } from "./home";
 import { createHub } from "./hub";
+import { platformOf, profileOf } from "./machine/profile";
 import { legacyToken } from "./legacy";
 import { lockHome } from "./lock";
 import { migrateHome } from "./migrate";
@@ -96,6 +97,14 @@ mkdirSync(home, { recursive: true, mode: 0o700 });
 const port = Number(process.env.CLAUDIOBOT_PORT ?? 7878);
 // The names are read before the bridge listens, so no pair_code can arrive before the addresses it carries.
 const [machine, names] = await Promise.all([machineName(), readNames(run)]);
+const profile = profileOf({
+  env: process.env,
+  platform: platformOf(process.platform),
+  name: machine,
+  homedir: realpathSync(homedir()),
+  username: userInfo().username,
+  bridgeHome: realpathSync(home),
+});
 const { world, firstRun } = loadWorld(home);
 const saver = createSaver(world, home, 250, log);
 const devices = createDevices({ world, persist: saver.schedule, now, announce });
@@ -114,7 +123,7 @@ const push = createPush({
 const stream = createStream();
 
 const hub = createHub({
-  machine,
+  profile,
   userName: await firstName(),
   world,
   homes: createHomes(home),
@@ -169,7 +178,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, shutdown
 
 console.log(`claudiobot bridge on ${machine}`);
 for (const url of urls) console.log(`  ${url}`);
-console.log(accessLine(accessOf(process.env)));
+console.log(accessLine(profile.access));
 
 function announce({ code, expiresAt }: PairCode) {
   const link = pairLink(urls, code);

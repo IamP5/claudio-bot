@@ -1,12 +1,13 @@
 import { setSystemTime } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import type { McpSdkServerConfigWithInstance, Options, query, SDKMessage, SDKUserMessage, SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHomes } from "../src/home";
 import { createHub, type HubDeps } from "../src/hub";
+import { platformOf, profileOf, type MachineProfile } from "../src/machine/profile";
 import type { Project } from "../src/projects";
 import type { BotId, MessageId, PlanUsage, ServerMessage, Signal, StreamPosition } from "../src/protocol";
 import type { Push, PushReason } from "../src/push";
@@ -15,6 +16,17 @@ import { newBot, type BotRecord, type World } from "../src/world";
 // A hub over a fake Claude Code: the queries it opens, the frames and signals it sends, the pushes it makes.
 
 export const roots: string[] = [];
+
+/** This machine with its bridge home at `root`, in the access the test process runs with. */
+export const testProfile = (root: string): MachineProfile =>
+  profileOf({
+    env: process.env,
+    platform: platformOf(process.platform),
+    name: "Mac",
+    homedir: realpathSync(homedir()),
+    username: userInfo().username,
+    bridgeHome: realpathSync(root),
+  });
 /** Clears the fake clock and the temp folders a test made. Each test file calls it from its own afterEach. */
 export function cleanup() {
   setSystemTime();
@@ -138,7 +150,7 @@ export function hubOver(
   const attempts: PushCall[] = [];
   const queries: FakeQuery[] = [];
   const hub = createHub({
-    machine: "Mac",
+    profile: testProfile(root),
     userName: "Alex",
     world,
     homes: {

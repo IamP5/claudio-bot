@@ -14,7 +14,7 @@ import { BREAKER_NOTE } from "../src/session";
 import type { UsageRead } from "../src/claudeCode";
 import { CLAUDIO_TOOLS } from "../src/tools";
 import { emptySession, emptyWorld, type AgentRecord, type BotRecord, type EnvelopeId, type Fingerprint, type GateState, type RoutineRecord, type Signature, type World } from "../src/world";
-import { assistant, at, bot, callTool, cleanup, COMMANDS, flush, hubOver, inAnHour, later, NO_RING, result, roots, runBash, text, toolUse } from "./hub-kit";
+import { assistant, at, bot, callTool, cleanup, COMMANDS, flush, hubOver, inAnHour, later, NO_RING, result, roots, runBash, testProfile, text, toolUse } from "./hub-kit";
 
 afterEach(cleanup);
 
@@ -1603,7 +1603,7 @@ test("boot carries on when USER.md cannot be created, and says why in the log", 
   const homes = createHomes(root);
   const logs: string[] = [];
   const hub = createHub({
-    machine: "Mac",
+    profile: testProfile(root),
     userName: "Alex",
     world,
     homes: { ...homes, ensureUserMd: () => { throw new Error("EACCES: permission denied"); } },

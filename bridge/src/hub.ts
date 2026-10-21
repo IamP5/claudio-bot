@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
-import { homedir, userInfo } from "node:os";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { SDKMessage, Settings } from "@anthropic-ai/claude-agent-sdk";
 import { createActivity } from "./activity";
@@ -8,7 +8,6 @@ import { strictMcp, type UsageRead } from "./claudeCode";
 import { createClock, type Tickable } from "./clock";
 import { commandOf, createCommands, probeCommands, slashName } from "./commands";
 import { connectorSettings, createConnectors } from "./connectors";
-import { accessOf } from "./access";
 import { createGate } from "./gate";
 import { chainBudget, createChains, GROUP_SIZE, mentionedIn, membersError, newGroup, targetsOf, transcript, typingLine } from "./groups";
 import type { Homes } from "./home";
@@ -42,6 +41,7 @@ import { cardReply } from "./protocol2";
 import type { Push } from "./push";
 import type { Result } from "./result";
 import { gitDirsOf, sandboxFor } from "./sandbox";
+import { scopeFor, type MachineProfile } from "./machine/profile";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { createSessions, type Sessions, type SessionsEnv } from "./sessions";
 import { transcriptExists } from "./transcript";
@@ -110,7 +110,7 @@ export type Hub = {
 };
 
 export type HubDeps = {
-  machine: string;
+  profile: MachineProfile;
   userName: string;
   world: World;
   homes: Homes;
@@ -434,15 +434,11 @@ export function createHub(deps: HubDeps): Hub {
   const initiatorNow = (bot: BotRecord): Initiator => brains.get(bot.id)?.current?.initiator ?? system;
 
   function scopeOf(actor: Actor): Scope {
-    const bridgeHome = realpathSync(root);
-    const home = realpathSync(homedir());
-    // So ~name in a command resolves for the user and for root.
-    const users = { [userInfo().username]: home, root: process.platform === "darwin" ? "/var/root" : "/root" };
-    const { full } = accessOf(process.env);
-    if (actor.kind === "bot") return { bridgeHome, own: realpathSync(homes.homeOf(actor.botId)), userMd: join(bridgeHome, "USER.md"), homedir: home, users, full };
+    const machine = scopeFor(deps.profile);
+    if (actor.kind === "bot") return { ...machine, own: realpathSync(homes.homeOf(actor.botId)), userMd: join(machine.bridgeHome, "USER.md") };
     const rec = world.agents.get(actor.agentId);
     if (!rec) throw new Error(`Unknown agent ${actor.agentId}`);
-    return { bridgeHome, own: realpathSync(rec.cwd), userMd: null, homedir: home, users, full };
+    return { ...machine, own: realpathSync(rec.cwd), userMd: null };
   }
 
   function deliver(actor: Actor, e: Envelope) {
@@ -834,13 +830,11 @@ export function createHub(deps: HubDeps): Hub {
 
   /** What the floors protect for a session the phone drives in cwd: the same private paths as for an agent. */
   function scopeIn(cwd: string): Scope {
-    const home = realpathSync(homedir());
-    const users = { [userInfo().username]: home, root: process.platform === "darwin" ? "/var/root" : "/root" };
     let own = cwd;
     try {
       own = realpathSync(cwd);
     } catch {}
-    return { bridgeHome: realpathSync(root), own, userMd: null, homedir: home, users, full: false };
+    return { ...scopeFor(deps.profile), own, userMd: null, full: false };
   }
 
   const sessions: Sessions | null = deps.sessions
@@ -848,7 +842,7 @@ export function createHub(deps: HubDeps): Hub {
         ...deps.sessions,
         world,
         userName,
-        bridgeHome: realpathSync(root),
+        bridgeHome: deps.profile.bridgeHome,
         roots: projectRoots().filter(existsSync).map((r) => realpathSync(r)),
         agents,
         decideGate: (botId, cardId, choice) => gate.answer(botId as BotId, cardId, { kind: "permission", choice }),
@@ -1273,7 +1267,7 @@ export function createHub(deps: HubDeps): Hub {
       protocol: PROTOCOL,
       features: [...SERVED, ...(usage ? (["usage"] as const) : []), ...(sessions ? (["sessions"] as const) : [])],
       ...position,
-      machine: deps.machine,
+      machine: deps.profile.name,
       userName,
       bots: sortBots([...[...world.bots.values()].map(view), ...[...world.groups.values()].map(groupView)]),
     }),

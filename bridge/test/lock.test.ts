@@ -33,6 +33,19 @@ test("a free home is locked with this process's pid and start time, and release 
   expect(readdirSync(dir)).toEqual(["home"]);
 });
 
+test("a machine with no ps (a minimal Linux) still locks its home, by pid alone", () => {
+  const { home, lock } = scratch();
+  const path = process.env.PATH;
+  process.env.PATH = "/nonexistent";
+  try {
+    const held = lockHome(home);
+    expect(held.kind).toBe("held");
+    expect(readFileSync(lock, "utf8")).toBe(`${process.pid}\n`);
+  } finally {
+    process.env.PATH = path;
+  }
+});
+
 test("a lock held by a live process is left alone", () => {
   const { home, lock } = scratch();
   writeFileSync(lock, `${process.ppid}\n`);

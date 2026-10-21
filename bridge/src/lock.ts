@@ -47,12 +47,16 @@ export const pidIn = (body: string) => {
 };
 
 /** When the process started, as `ps -o lstart=` prints it in a time zone (the Mac's when tz is null), or null when ps
- *  cannot tell: no such process, or ps failed. */
+ *  cannot tell: no such process, ps failed, or there is no ps (a minimal Linux without procps). */
 function processStart(pid: number, tz: string | null = "UTC"): string | null {
   const env = tz === null ? process.env : { ...process.env, TZ: tz };
-  const ran = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], { stderr: "ignore", env });
-  const start = ran.exitCode === 0 ? ran.stdout.toString().trim() : "";
-  return start === "" ? null : start;
+  try {
+    const ran = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], { stderr: "ignore", env });
+    const start = ran.exitCode === 0 ? ran.stdout.toString().trim() : "";
+    return start === "" ? null : start;
+  } catch {
+    return null;
+  }
 }
 
 const bodyOf = (pid: number, start: string | null) => (start === null ? `${pid}\n` : `${pid}\n${start}\n`);

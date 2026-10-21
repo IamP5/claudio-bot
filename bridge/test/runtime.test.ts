@@ -153,7 +153,7 @@ test("a mac agent's report is an event, after the record that holds it", async (
 test("events count up from 1 and events(after) returns only what came after", async () => {
   const h = runtime();
   await h.rt.apply(startOf());
-  await h.rt.apply({ kind: "snapshot" });
+  await h.rt.apply({ kind: "snapshot", intentId: newIntentId() });
   const all = h.rt.events(0);
   expect(all.map((e) => e.seq)).toEqual(all.map((_, i) => i + 1));
   expect(h.rt.events(all.length - 1)).toEqual([all.at(-1)!]);

@@ -1,3 +1,4 @@
+import type { HomeFrame, MachineFrame, Intent, EventBody } from "../src/machine/wire";
 import { FEATURES } from "../src/protocol";
 import type {
   AgentView, Bot, Broadcast, ClientMessage, Message, Peer, Routine, ServerMessage, SessionControls, SessionItem, SessionProject, SessionRow,
@@ -283,6 +284,55 @@ export const client = [
   { type: "session_prefs", mirror: "tap" },
 ] satisfies Wire<ClientMessage>[];
 
+// The home-machine link (src/machine/wire.ts), one frame of each kind and every intent and event inside them. The
+// iOS app never reads these.
+const machineProfile = {
+  name: "omarchy", platform: "linux", homedir: "/home/alex", username: "alex", rootHome: "/root", bridgeHome: "/home/alex/.claudiobot",
+  managedMcpPath: "/etc/claude-code/managed-mcp.json",
+  private: { bridge: [".claudiobot"], keys: [".ssh"], browser: [".config/google-chrome"], creds: [".netrc"], personal: [] },
+  caches: [".npm"], pushReadable: [".ssh/*.pub"], tempDirs: ["/tmp"], sandboxNeeds: [], access: { full: true, sandbox: false },
+} as const;
+const fromBot = { kind: "bot", botId: "b1", hops: 1, origin: { kind: "routine", run: { routineId: "r1", runId: "run4" }, manual: false } } as const;
+const agentCard = { ...permission, id: "m30", from: agentPeer };
+// The machine's own record: spend is the ledger's, on whichever side shows it.
+const { spentUsd, budgetUsd, ...bareAgent } = agent;
+export const link = [
+  { t: "challenge", nonce: "9f".repeat(32) },
+  { t: "hello", machineId: "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b", sig: "c2lnbmF0dXJl", nonce: "4e".repeat(32), profile: machineProfile, lastSeq: 12 },
+  { t: "welcome", sig: "c2lnbmF0dXJl", ackedSeq: 9 },
+  {
+    t: "intent",
+    intent: {
+      kind: "agent.start", intentId: "i_1", agentId: "a1", bot: { id: "b1", name: "engineer", dailyCapUsd: 10, connectorsOff: ["gmail"] },
+      title: "Set up verification skill", prompt: "Write the verify skill.", project: { githubRepo: "alex/web", name: "alex/web" },
+      where: "mac", isolate: "worktree", budgetUsd: 5, slash: null, initiator: { kind: "user" },
+    },
+  },
+  { t: "intent", intent: { kind: "agent.message", intentId: "i_2", agentId: "a1", text: "Also cover the login page.", initiator: fromBot } },
+  { t: "intent", intent: { kind: "agent.direct", intentId: "i_3", agentId: "a1", text: "Use port 4000.", clientId: "c9" } },
+  { t: "intent", intent: { kind: "agent.stop", intentId: "i_4", agentId: "a1" } },
+  { t: "intent", intent: { kind: "agent.removeWorktree", intentId: "i_5", agentId: "a1" } },
+  { t: "intent", intent: { kind: "card.answer", intentId: "i_6", botId: "b1", cardId: "m30", reply: { kind: "permission", choice: "once" }, signed: null } },
+  { t: "intent", intent: { kind: "snapshot", intentId: "i_7" } },
+  { t: "ack", seq: 10 },
+  { t: "event", event: { seq: 10, at, kind: "agent", agent: bareAgent, messages: [{ id: "m40", at, from: "bot", text: "Write the verify skill." }] } },
+  { t: "event", event: { seq: 11, at, kind: "report", agentId: "a1", botId: "b1", text: "Done: the skill runs.", by: { kind: "agent", agentId: "a1", hops: 1, origin: { kind: "user" } } } },
+  { t: "event", event: { seq: 12, at, kind: "note", agentId: "a1", botId: "b1", text: "Worktree removed." } },
+  { t: "event", event: { seq: 13, at, kind: "card", botId: "b1", message: agentCard } },
+  {
+    t: "event",
+    event: {
+      seq: 14, at, kind: "usage",
+      row: { at, actor: "agent:a1", botId: "b1", sessionId: "s_1", initiator: { kind: "user" }, cumulativeUsd: 0.4, deltaUsd: 0.25, day: "2026-10-16" },
+    },
+  },
+  { t: "event", event: { seq: 15, at, kind: "profile", profile: machineProfile } },
+  { t: "event", event: { seq: 16, at, kind: "refused", intentId: "i_1", reason: "No project \"web\". Call list_projects for the names." } },
+  { t: "event", event: { seq: 17, at, kind: "snapshot", agents: [], openCards: [{ botId: "b1", message: agentCard }] } },
+  { t: "applied", intentId: "i_1", applied: { ok: true, reply: "Started agent a1 on web. It reports back to you when its turn ends." } },
+  { t: "applied", intentId: "i_4", applied: { ok: false, reason: "Nothing is running." } },
+] satisfies Wire<HomeFrame | MachineFrame>[];
+
 // Compile-time coverage: every server type, client type, message kind and session item kind has a fixture, so the Swift mirror is pinned
 // for all of them. A missing one fails tsc with its name.
 type Kinds<F> = F extends { message: { kind: infer K } } ? K : F extends { messages: (infer M)[] } ? (M extends { kind: infer K } ? K : never) : never;
@@ -292,9 +342,13 @@ const everyClientType: Covered<ClientMessage["type"], (typeof client)[number]["t
 const everyMessageKind: Covered<Message["kind"], Kinds<(typeof server)[number]>> = true;
 type ItemKinds<F> = F extends { items: (infer I)[] } ? (I extends { kind: infer K } ? K : never) : never;
 const everySessionItemKind: Covered<SessionItem["kind"], ItemKinds<(typeof server)[number]>> = true;
-void [everyServerType, everyClientType, everyMessageKind, everySessionItemKind];
+type Frames = (typeof link)[number];
+const everyFrame: Covered<(HomeFrame | MachineFrame)["t"], Frames["t"]> = true;
+const everyIntent: Covered<Intent["kind"], Extract<Frames, { t: "intent" }>["intent"]["kind"]> = true;
+const everyEvent: Covered<EventBody["kind"], Extract<Frames, { t: "event" }>["event"]["kind"]> = true;
+void [everyServerType, everyClientType, everyMessageKind, everySessionItemKind, everyFrame, everyIntent, everyEvent];
 
-export const fixturesJson = () => JSON.stringify({ server, client }, null, 2) + "\n";
+export const fixturesJson = () => JSON.stringify({ server, client, link }, null, 2) + "\n";
 export const fixturesPath = new URL("../../fixtures/protocol.json", import.meta.url);
 
 if (import.meta.main) await Bun.write(fixturesPath, fixturesJson());

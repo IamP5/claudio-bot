@@ -14,6 +14,7 @@ export type RoutineId = string & { readonly __brand: "RoutineId" };
 export type RunId = string & { readonly __brand: "RunId" };
 export type DeviceId = string & { readonly __brand: "DeviceId" };
 export type FactId = string & { readonly __brand: "FactId" };
+export type MachineId = string & { readonly __brand: "MachineId" };
 
 /**
  * What a bridge can do beyond protocol 3's base. hello.features lists the ones this bridge serves, which may be fewer

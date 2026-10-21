@@ -1981,5 +1981,369 @@
       "type": "session_prefs",
       "mirror": "tap"
     }
+  ],
+  "link": [
+    {
+      "t": "challenge",
+      "nonce": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+    },
+    {
+      "t": "hello",
+      "machineId": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+      "sig": "c2lnbmF0dXJl",
+      "nonce": "4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e",
+      "profile": {
+        "name": "omarchy",
+        "platform": "linux",
+        "homedir": "/home/alex",
+        "username": "alex",
+        "rootHome": "/root",
+        "bridgeHome": "/home/alex/.claudiobot",
+        "managedMcpPath": "/etc/claude-code/managed-mcp.json",
+        "private": {
+          "bridge": [
+            ".claudiobot"
+          ],
+          "keys": [
+            ".ssh"
+          ],
+          "browser": [
+            ".config/google-chrome"
+          ],
+          "creds": [
+            ".netrc"
+          ],
+          "personal": []
+        },
+        "caches": [
+          ".npm"
+        ],
+        "pushReadable": [
+          ".ssh/*.pub"
+        ],
+        "tempDirs": [
+          "/tmp"
+        ],
+        "sandboxNeeds": [],
+        "access": {
+          "full": true,
+          "sandbox": false
+        }
+      },
+      "lastSeq": 12
+    },
+    {
+      "t": "welcome",
+      "sig": "c2lnbmF0dXJl",
+      "ackedSeq": 9
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "agent.start",
+        "intentId": "i_1",
+        "agentId": "a1",
+        "bot": {
+          "id": "b1",
+          "name": "engineer",
+          "dailyCapUsd": 10,
+          "connectorsOff": [
+            "gmail"
+          ]
+        },
+        "title": "Set up verification skill",
+        "prompt": "Write the verify skill.",
+        "project": {
+          "githubRepo": "alex/web",
+          "name": "alex/web"
+        },
+        "where": "mac",
+        "isolate": "worktree",
+        "budgetUsd": 5,
+        "slash": null,
+        "initiator": {
+          "kind": "user"
+        }
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "agent.message",
+        "intentId": "i_2",
+        "agentId": "a1",
+        "text": "Also cover the login page.",
+        "initiator": {
+          "kind": "bot",
+          "botId": "b1",
+          "hops": 1,
+          "origin": {
+            "kind": "routine",
+            "run": {
+              "routineId": "r1",
+              "runId": "run4"
+            },
+            "manual": false
+          }
+        }
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "agent.direct",
+        "intentId": "i_3",
+        "agentId": "a1",
+        "text": "Use port 4000.",
+        "clientId": "c9"
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "agent.stop",
+        "intentId": "i_4",
+        "agentId": "a1"
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "agent.removeWorktree",
+        "intentId": "i_5",
+        "agentId": "a1"
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "card.answer",
+        "intentId": "i_6",
+        "botId": "b1",
+        "cardId": "m30",
+        "reply": {
+          "kind": "permission",
+          "choice": "once"
+        },
+        "signed": null
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "snapshot",
+        "intentId": "i_7"
+      }
+    },
+    {
+      "t": "ack",
+      "seq": 10
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 10,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "agent",
+        "agent": {
+          "id": "a1",
+          "botId": "b1",
+          "title": "Set up verification skill",
+          "where": "mac",
+          "projectName": "web",
+          "status": "waiting",
+          "url": null,
+          "createdAt": "2026-10-16T12:00:00.000Z",
+          "updatedAt": "2026-10-16T12:00:00.000Z",
+          "evidence": null,
+          "worktree": null
+        },
+        "messages": [
+          {
+            "id": "m40",
+            "at": "2026-10-16T12:00:00.000Z",
+            "from": "bot",
+            "text": "Write the verify skill."
+          }
+        ]
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 11,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "report",
+        "agentId": "a1",
+        "botId": "b1",
+        "text": "Done: the skill runs.",
+        "by": {
+          "kind": "agent",
+          "agentId": "a1",
+          "hops": 1,
+          "origin": {
+            "kind": "user"
+          }
+        }
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 12,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "note",
+        "agentId": "a1",
+        "botId": "b1",
+        "text": "Worktree removed."
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 13,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "card",
+        "botId": "b1",
+        "message": {
+          "kind": "permission",
+          "id": "m30",
+          "at": "2026-10-16T14:00:00.000Z",
+          "from": {
+            "kind": "agent",
+            "id": "a1",
+            "title": "Set up verification skill"
+          },
+          "tool": "Bash",
+          "label": "Push to the default branch",
+          "detail": "git push origin main",
+          "always": "git push to main or master from engineer",
+          "answer": null,
+          "expiresAt": "2026-10-16T16:00:00.000Z"
+        }
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 14,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "usage",
+        "row": {
+          "at": "2026-10-16T12:00:00.000Z",
+          "actor": "agent:a1",
+          "botId": "b1",
+          "sessionId": "s_1",
+          "initiator": {
+            "kind": "user"
+          },
+          "cumulativeUsd": 0.4,
+          "deltaUsd": 0.25,
+          "day": "2026-10-16"
+        }
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 15,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "profile",
+        "profile": {
+          "name": "omarchy",
+          "platform": "linux",
+          "homedir": "/home/alex",
+          "username": "alex",
+          "rootHome": "/root",
+          "bridgeHome": "/home/alex/.claudiobot",
+          "managedMcpPath": "/etc/claude-code/managed-mcp.json",
+          "private": {
+            "bridge": [
+              ".claudiobot"
+            ],
+            "keys": [
+              ".ssh"
+            ],
+            "browser": [
+              ".config/google-chrome"
+            ],
+            "creds": [
+              ".netrc"
+            ],
+            "personal": []
+          },
+          "caches": [
+            ".npm"
+          ],
+          "pushReadable": [
+            ".ssh/*.pub"
+          ],
+          "tempDirs": [
+            "/tmp"
+          ],
+          "sandboxNeeds": [],
+          "access": {
+            "full": true,
+            "sandbox": false
+          }
+        }
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 16,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "refused",
+        "intentId": "i_1",
+        "reason": "No project \"web\". Call list_projects for the names."
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 17,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "snapshot",
+        "agents": [],
+        "openCards": [
+          {
+            "botId": "b1",
+            "message": {
+              "kind": "permission",
+              "id": "m30",
+              "at": "2026-10-16T14:00:00.000Z",
+              "from": {
+                "kind": "agent",
+                "id": "a1",
+                "title": "Set up verification skill"
+              },
+              "tool": "Bash",
+              "label": "Push to the default branch",
+              "detail": "git push origin main",
+              "always": "git push to main or master from engineer",
+              "answer": null,
+              "expiresAt": "2026-10-16T16:00:00.000Z"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "t": "applied",
+      "intentId": "i_1",
+      "applied": {
+        "ok": true,
+        "reply": "Started agent a1 on web. It reports back to you when its turn ends."
+      }
+    },
+    {
+      "t": "applied",
+      "intentId": "i_4",
+      "applied": {
+        "ok": false,
+        "reason": "Nothing is running."
+      }
+    }
   ]
 }

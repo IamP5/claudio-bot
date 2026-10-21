@@ -34,21 +34,24 @@ function cleanupBridge() {
 process.on("exit", cleanupBridge);
 for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]] as const) process.on(sig, () => process.exit(code));
 
-type Thread = { items: Map<string, Item>; controls: Controls | null; epoch: string | null; rev: number };
+/** seen: the order each item was first seen in. */
+type Thread = { items: Map<string, Item>; seen: Map<string, number>; controls: Controls | null; epoch: string | null; rev: number };
 
 /**
  * An item put where the app's ThreadModel puts it (the order bridge/src/threads.ts ordered() gives a snapshot): by
- * time, a message Claude Code has not taken yet after everything, and after the items already at its place.
+ * time, a message Claude Code has not taken yet after everything, and items at one time in the order first seen.
  */
-function land(items: Map<string, Item>, item: Item): Map<string, Item> {
+function land(t: Thread, item: Item) {
+  if (!t.seen.has(item.id)) t.seen.set(item.id, t.seen.size);
   const place = (i: Item) => `${i.kind === "user" && i.queued === true ? 1 : 0}${i.at}`;
-  const old = items.get(item.id);
-  if (old && place(old) === place(item)) return items.set(item.id, item);
-  const rest = [...items.values()].filter((i) => i.id !== item.id);
+  const before = (a: Item, b: Item) => place(a) < place(b) || (place(a) === place(b) && t.seen.get(a.id)! < t.seen.get(b.id)!);
+  const old = t.items.get(item.id);
+  if (old && place(old) === place(item)) return void t.items.set(item.id, item);
+  const rest = [...t.items.values()].filter((i) => i.id !== item.id);
   let slot = rest.length;
-  while (slot > 0 && place(rest[slot - 1]!) > place(item)) slot--;
+  while (slot > 0 && before(item, rest[slot - 1]!)) slot--;
   rest.splice(slot, 0, item);
-  return new Map(rest.map((i) => [i.id, i]));
+  t.items = new Map(rest.map((i) => [i.id, i]));
 }
 
 /**
@@ -248,7 +251,7 @@ class Phone {
 
   private thread(sid: string) {
     let t = this.threads.get(sid);
-    if (!t) this.threads.set(sid, (t = { items: new Map(), controls: null, epoch: null, rev: 0 }));
+    if (!t) this.threads.set(sid, (t = { items: new Map(), seen: new Map(), controls: null, epoch: null, rev: 0 }));
     return t;
   }
 
@@ -297,12 +300,14 @@ class Phone {
     this.ev.frameTimes.push({ at: this.ev.now(), name, type: f.type });
     const t = this.thread(sid);
     if (f.type === "session") {
-      t.items = (f.items as Item[]).reduce(land, new Map<string, Item>());
+      t.items = new Map();
+      t.seen = new Map();
+      for (const i of f.items as Item[]) land(t, i);
       t.controls = f.controls as Controls;
       t.epoch = f.epoch as string;
       t.rev = f.rev as number;
     } else if (f.type === "session_items") {
-      for (const i of f.items as Item[]) t.items = land(t.items, i);
+      for (const i of f.items as Item[]) land(t, i);
       for (const id of f.removed as string[]) t.items.delete(id);
       if (f.controls) t.controls = f.controls as Controls;
       t.rev = f.rev as number;

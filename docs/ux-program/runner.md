@@ -44,7 +44,7 @@ The phone, and with `--sim` the app, reach the bridge through a TCP relay the ru
 | `screenshot` | simulator lane only |
 | `lose-frame` | with `--sim` and a scenario that sets `tapApp` (S6b): the relay reads the app's own connection (its upgrade comes from CFNetwork) frame by frame and loses the next frame for the session that passes the test. What the app sent and received for the scenario's sessions goes into `ev.app` and the timeline as `app-in`, `app-out` and `app-lost` |
 
-The phone keeps each thread's items in the order the app's `ThreadModel` does (by `at`, a queued message last, ties in arrival order), so a resumed thread compares with a fresh open item for item, in order, as the app would show it.
+The phone keeps each thread's items in the order the app's `ThreadModel` does (by `at`, a queued message last, ties in the order first seen), so a resumed thread compares with a fresh open item for item, in order, as the app would show it.
 
 `bin/latency.ts <evidence dir>...` reads finished runs and prints how late the phone learned what Claude Code had written: a create to its row, a tool call to its step, a failed subagent to its error, a prompt to Claude Code's copy (and any gap where the thread had neither), a thread at rest to its row, and the idle row's `lastAt` against the last reply.
 

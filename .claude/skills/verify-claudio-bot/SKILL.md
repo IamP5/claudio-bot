@@ -34,7 +34,7 @@ It builds nothing (Bun runs `bridge/src/main.ts` directly; run `cd bridge && bun
 3. waits for `pair code:` in the bridge log, redeems it with `POST /pair` like the app, stores the device token in `runs/<id>/token` (0600, never printed);
 4. opens a socket and requires a protocol 3 hello with **Claudio Bot** in it.
 
-Ready is the last line: `READY run=<id> bot="Claudio Bot" id=b_… status=working`. `working` there is the greeting turn the first start begins on its own; `send` waits for it to end. The run id is remembered in `<base>/current`, so later commands need no `--run`. Pass `--run <id>` (or `CLAUDIO_RUN=<id>`) to address another run; `$H runs` lists them.
+As soon as `run.json` is written, launch prints `STARTED run=<id>`, so a caller can clean the run up even if launch fails after that. Ready is the last line: `READY run=<id> bot="Claudio Bot" id=b_… status=working`. `working` there is the greeting turn the first start begins on its own; `send` waits for it to end. The run id is remembered in `<base>/current`, so later commands need no `--run`. Pass `--run <id>` (or `CLAUDIO_RUN=<id>`) to address another run; `$H runs` lists them.
 
 `CLAUDIOBOT_ACCESS` and `CLAUDIOBOT_SANDBOX` pass through from your shell (launch says so), so `CLAUDIOBOT_ACCESS=full $H launch` verifies full access mode. Every other inherited `CLAUDIOBOT_*` is dropped.
 
@@ -97,7 +97,7 @@ Proof standards:
 $H cleanup                     # current run; --run <id> for another; --no-evidence skips the final snapshot
 ```
 
-Takes a `final` evidence snapshot, SIGTERMs the bridge and push sink by the pids in `run.json` (SIGKILL after 10 s), then kills any process whose command line names the run folder (a bot's `claude` child was still running right after the bridge exited in every proof run; cleanup prints and stops each one), warns if a run port still listens, removes this run's transcript folders from `~/.claude/projects/`, and deletes `runs/<id>/`. It prints where the evidence is kept. It never kills by process name and never touches port 7878 or `~/.claudiobot`. After a failed or aborted drive, still run cleanup.
+Takes a `final` evidence snapshot, SIGTERMs the bridge and push sink by the pids in `run.json` (SIGKILL after 10 s), then kills any process whose command line names the run folder or whose working directory is inside it (a session tool such as `sleep 900` names neither the run nor its session, only its cwd; a bot's `claude` child was still running right after the bridge exited in every proof run; cleanup prints and stops each one), warns if a run port still listens, removes this run's transcript folders from `~/.claude/projects/`, and deletes `runs/<id>/`. It prints where the evidence is kept. It never kills by process name and never touches port 7878 or `~/.claudiobot`. After a failed or aborted drive, still run cleanup.
 
 ## Helper reference
 

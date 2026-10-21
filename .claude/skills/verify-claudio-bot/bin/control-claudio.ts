@@ -802,8 +802,16 @@ async function cleanup() {
     if (alive(pid)) process.kill(pid, "SIGKILL");
     console.log(`${what} pid ${pid} stopped`);
   }
-  // Agents, sandboxes and claude children of this run all name the run folder in their command line.
-  const strays = sh(["pgrep", "-f", run.dir]).out.split("\n").filter(Boolean).map(Number).filter((p) => p !== process.pid);
+  // Agents, sandboxes and claude children of this run name the run folder in their command line; the tools sessions
+  // run (a `sleep`, a dev server) often do not, but their working directory is inside it.
+  const named = sh(["pgrep", "-f", run.dir]).out.split("\n").filter(Boolean).map(Number);
+  let pid = 0;
+  const inside: number[] = [];
+  for (const l of sh(["lsof", "-w", "-d", "cwd", "-Fpn"]).out.split("\n")) {
+    if (l.startsWith("p")) pid = Number(l.slice(1));
+    else if (l.startsWith("n") && (l.slice(1) === run.dir || l.slice(1).startsWith(`${run.dir}/`))) inside.push(pid);
+  }
+  const strays = [...new Set([...named, ...inside])].filter((p) => p !== process.pid);
   for (const p of strays) {
     console.log(`stray pid ${p}: ${sh(["ps", "-p", String(p), "-o", "command="]).out.slice(0, 120)}`);
     try {

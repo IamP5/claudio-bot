@@ -27,6 +27,34 @@ private func broadcast(_ seq: Int) -> String {
 
 private let quick = BridgeClient.Timing(greeting: .seconds(1), reply: .seconds(1), legacyRetry: .milliseconds(300))
 
+private let threadsHello = #"{"type":"hello","protocol":3,"features":["sessions","presence"],"machine":"Mac","userName":"Alex","bots":[],"epoch":"e1","seq":0,"resumed":false}"#
+
+private func controls(working: Bool) -> String {
+    #"{"canSend":true,"reason":null,"working":\#(working),"queued":0,"model":null,"models":[],"mode":"default","modes":["default"]}"#
+}
+
+private func snapshot(working: Bool = true) -> String {
+    #"{"type":"session","sessionId":"s1","epoch":"e_1","rev":7,"items":[],"before":null,"live":null,"controls":\#(controls(working: working))}"#
+}
+
+/// A bridge that says hello on every socket and answers every watch of s1 with its snapshot.
+private func threadBridge(snapshot: String = snapshot()) throws -> FakeBridge {
+    try FakeBridge(
+        onOpen: { $0.send(threadsHello) },
+        onText: { socket, text in if text.contains(#""type":"watch_session""#) { socket.send(snapshot) } }
+    )
+}
+
+private extension FakeBridge {
+    var watches: [String] { texts.filter { $0.contains(#""type":"watch_session""#) } }
+}
+
+private extension ConnectionState {
+    var quiet: Bool {
+        if case .connected(_, .some) = self { true } else { false }
+    }
+}
+
 /// Each test gets its own Keychain item, so tests never touch the app's pairing or each other's.
 private func scratchVault() -> PairingVault {
     PairingVault(service: "dev.claudiobot.tests.\(UUID().uuidString)")
@@ -111,7 +139,7 @@ private func scratchVault() -> PairingVault {
         #expect(bridge.upgrades.count == 1, "a refused phone does not keep knocking")
 
         recognized.withLock { $0 = true }
-        client.retry()
+        client.retryNow()
         try await eventually("the hello after retrying") { client.store.machine == "Mac" }
     }
 
@@ -520,5 +548,198 @@ private func scratchVault() -> PairingVault {
         #expect(refusing.pairBodies.count == 1)
         #expect(other.pairBodies.isEmpty)
         #expect(client.pairing == nil)
+    }
+
+    @Test func aSocketWhosePongMissesItsDeadlineIsReplacedAtOnceAndResumes() async throws {
+        let bridge = try FakeBridge(onOpen: { socket in
+            socket.send(hello())
+            if socket.index == 0 { socket.goSilent() }
+        })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        var timing = quick
+        timing.ping = .milliseconds(200)
+        timing.pong = .milliseconds(300)
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: timing)
+        client.start(pairing)
+
+        try await eventually("a new socket after the missed pong", within: .seconds(2)) { bridge.upgrades.count == 2 }
+        #expect(bridge.upgrades[1].query["epoch"] == "e1", "the new socket resumes where the dead one stopped")
+        try await eventually("the hello on the new socket") { client.store.machine != nil }
+        client.stop()
+    }
+
+    @Test func aSocketThatAnswersItsPingsIsKept() async throws {
+        let bridge = try FakeBridge(onOpen: { $0.send(hello()) })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        var timing = quick
+        timing.ping = .milliseconds(100)
+        timing.pong = .milliseconds(300)
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: timing)
+        client.start(pairing)
+        try await eventually("the hello") { client.store.machine != nil }
+
+        try await Task.sleep(for: .milliseconds(1200))
+
+        #expect(bridge.upgrades.count == 1)
+        #expect(client.store.machine == "Mac")
+        client.stop()
+    }
+
+    @Test func aBridgeThatAcceptsTheSocketButNeverSaysHelloIsTriedAgain() async throws {
+        let bridge = try FakeBridge()
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        client.start(pairing)
+
+        try await eventually("a second attempt", within: .seconds(4)) { bridge.upgrades.count == 2 }
+        #expect(client.failures >= 1)
+        client.stop()
+    }
+
+    @Test func retryingNowEndsTheWaitBetweenFailedConnects() async throws {
+        let bridge = try FakeBridge(onUpgrade: { _ in .refuse(status: 503) })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        client.start(pairing)
+        try await eventually("two failed connects", within: .seconds(3)) { bridge.upgrades.count == 2 }
+        try await Task.sleep(for: .milliseconds(100))
+        guard case .disconnected = client.store.connection else { throw TimedOut(what: "the wait before the third connect") }
+
+        client.retryNow()
+
+        try await eventually("the third connect, before the 2 s wait ends", within: .milliseconds(600)) { bridge.upgrades.count == 3 }
+        client.stop()
+    }
+
+    @Test func aNetworkThatComesBackEndsTheWaitAtOnce() async throws {
+        let bridge = try FakeBridge(onUpgrade: { _ in .refuse(status: 503) })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        var timing = quick
+        timing.settle = .milliseconds(50)
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: timing)
+        client.networkChanged(NetworkPath(satisfied: false, interfaces: []))
+        client.start(pairing)
+        try await eventually("two failed connects", within: .seconds(3)) { bridge.upgrades.count == 2 }
+        try await Task.sleep(for: .milliseconds(100))
+
+        client.networkChanged(NetworkPath(satisfied: true, interfaces: ["en0"]))
+
+        try await eventually("a connect as soon as the network settles", within: .milliseconds(600)) { bridge.upgrades.count == 3 }
+        client.stop()
+    }
+
+    @Test func aNetworkPathThatDoesNotChangeLeavesTheWaitAlone() async throws {
+        let bridge = try FakeBridge(onUpgrade: { _ in .refuse(status: 503) })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        var timing = quick
+        timing.settle = .milliseconds(50)
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: timing)
+        let wifi = NetworkPath(satisfied: true, interfaces: ["en0"])
+        client.networkChanged(wifi)
+        client.start(pairing)
+        try await eventually("two failed connects", within: .seconds(3)) { bridge.upgrades.count == 2 }
+        try await Task.sleep(for: .milliseconds(100))
+
+        client.networkChanged(wifi)
+
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(bridge.upgrades.count == 2, "the backoff still holds for a bridge that refuses")
+        client.stop()
+    }
+
+    @Test func leavingTheScreenSaysSoAndStopsWatchingThreadsThenComingBackSoonWatchesThemAgainOnTheSameSocket() async throws {
+        let bridge = try threadBridge()
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        client.view(Viewing(session: SessionID("s1")), as: ViewingLease())
+        client.start(pairing)
+        try await eventually("the snapshot") { client.store.threads[SessionID("s1")]?.controls != nil }
+
+        client.leave()
+
+        try await eventually("presence and the unwatch") {
+            bridge.texts.contains(#"{"attended":false,"type":"presence"}"#) && bridge.texts.contains { $0.contains(#""type":"unwatch_session""#) }
+        }
+
+        client.comeBack()
+
+        try await eventually("the watch again and presence") {
+            bridge.watches.count == 2 && bridge.texts.contains(#"{"attended":true,"type":"presence"}"#)
+        }
+        #expect(bridge.watches[1].contains(#""rev":7"#), "the thread resumes from the snapshot it holds")
+        #expect(bridge.upgrades.count == 1)
+        client.stop()
+    }
+
+    @Test func awayTheAppWatchesNoThreadAfterAReconnectAndComingBackLaterConnectsAgain() async throws {
+        let bridge = try threadBridge()
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        var timing = quick
+        timing.awayBeforeReconnect = 0.2
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: timing)
+        client.view(Viewing(session: SessionID("s1")), as: ViewingLease())
+        client.start(pairing)
+        try await eventually("the snapshot") { client.store.threads[SessionID("s1")]?.controls != nil }
+        client.leave()
+        try await eventually("the unwatch") { bridge.texts.contains { $0.contains(#""type":"unwatch_session""#) } }
+
+        bridge.sockets[0].close(code: 1000)
+        try await eventually("the hello on the second socket", within: .seconds(3)) { bridge.upgrades.count == 2 && client.store.machine != nil }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(bridge.watches.count == 1, "a reconnect while away does not watch the thread")
+
+        client.comeBack()
+
+        try await eventually("a third socket that watches the thread", within: .seconds(2)) { bridge.upgrades.count == 3 && bridge.watches.count == 2 }
+        #expect(bridge.watches[1].contains(#""rev":7"#))
+        client.stop()
+    }
+
+    @Test func comingBackToASocketThatNoLongerAnswersConnectsAgainWithinTheProbe() async throws {
+        let bridge = try threadBridge()
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        var timing = quick
+        timing.probe = .milliseconds(300)
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: timing)
+        client.view(Viewing(session: SessionID("s1")), as: ViewingLease())
+        client.start(pairing)
+        try await eventually("the snapshot") { client.store.threads[SessionID("s1")]?.controls != nil }
+        client.leave()
+        bridge.sockets[0].goSilent()
+
+        client.comeBack()
+
+        try await eventually("a new socket", within: .seconds(1)) { bridge.upgrades.count == 2 }
+        try await eventually("the thread watched on it") { bridge.watches.count == 3 }
+        client.stop()
+    }
+
+    @Test func aWorkingThreadThatHearsNothingMakesTheConnectionQuietUntilTheNextFrame() async throws {
+        let socketOpen = OSAllocatedUnfairLock<FakeBridge.Socket?>(initialState: nil)
+        let bridge = try FakeBridge(
+            onOpen: { socket in
+                socketOpen.withLock { $0 = socket }
+                socket.send(threadsHello)
+            },
+            onText: { socket, text in if text.contains(#""type":"watch_session""#) { socket.send(snapshot(working: true)) } }
+        )
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        var timing = quick
+        timing.quiet = 0.3
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: timing)
+        client.view(Viewing(session: SessionID("s1")), as: ViewingLease())
+        client.start(pairing)
+        try await eventually("the working thread") { client.store.threads[SessionID("s1")]?.controls?.working == true }
+        #expect(!client.store.connection.quiet)
+
+        try await eventually("the quiet connection", within: .seconds(2)) { client.store.connection.quiet }
+        #expect(client.store.machine == "Mac")
+
+        let rest = #"{"type":"session_items","sessionId":"s1","rev":8,"items":[],"removed":[],"controls":\#(controls(working: false))}"#
+        socketOpen.withLock { $0 }?.send(rest)
+        try await eventually("the frame ends the quiet") { !client.store.connection.quiet }
+        try await Task.sleep(for: .milliseconds(700))
+        #expect(!client.store.connection.quiet, "a thread at rest is allowed to be silent")
+        client.stop()
     }
 }

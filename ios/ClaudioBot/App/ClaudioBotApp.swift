@@ -1,3 +1,4 @@
+import Network
 import SwiftUI
 #if os(iOS)
 import UIKit
@@ -125,6 +126,7 @@ final class AppModel {
     /// The pairing in progress. While paired, a flow shows the pairing sheet; while unpaired the pairing screen is always up.
     private(set) var pairingFlow: PairingFlow?
     @ObservationIgnored let notifier = Notifier()
+    @ObservationIgnored private let network = NWPathMonitor()
     #if os(iOS)
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     #endif
@@ -150,6 +152,11 @@ final class AppModel {
         if let pairing = PairingVault.app.load() {
             client.start(pairing)
         }
+        network.pathUpdateHandler = { path in
+            let seen = NetworkPath(satisfied: path.status == .satisfied, interfaces: path.availableInterfaces.map(\.name))
+            MainActor.assumeIsolated { client.networkChanged(seen) }
+        }
+        network.start(queue: .main)
     }
 
     /// Opens the pairing form, for a Mac that no longer recognizes this iPhone.
@@ -219,6 +226,7 @@ final class AppModel {
         switch phase {
         #if os(iOS)
         case .background:
+            client.leave()
             // Keeps the socket alive for the short grace period iOS allows, so an answer
             // tapped on a notification still reaches the Mac.
             guard backgroundTask == .invalid else { return }
@@ -230,7 +238,7 @@ final class AppModel {
             #if os(iOS)
             endBackgroundTask()
             #endif
-            client.reconnectNow()
+            client.comeBack()
             client.onScreen.bots.forEach { notifier.clear(bot: $0) }
         default:
             break

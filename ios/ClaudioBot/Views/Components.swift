@@ -109,7 +109,7 @@ struct ConnectionBadge: View {
     var body: some View {
         HStack(spacing: 6) {
             switch state {
-            case .connected(let machine):
+            case .connected(let machine, _):
                 StatusDot(color: .green)
                 Text(machine)
             case .connecting:

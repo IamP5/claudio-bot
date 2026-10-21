@@ -4,8 +4,9 @@ import Observation
 enum ConnectionState: Equatable, Sendable {
     case unpaired
     case connecting
-    /// Set only by the bridge's hello, so "connected" means the token was accepted.
-    case connected(machine: String)
+    /// Set only by the bridge's hello, so "connected" means the token was accepted. `quietSince` is when the bridge
+    /// last sent anything, set only once that is too long ago while a thread on screen is working; nil otherwise.
+    case connected(machine: String, quietSince: Date? = nil)
     case disconnected(retryAt: Date)
     /// The bridge answered with 401. It may be another server on this network, so the pairing stays until the user acts.
     case unrecognized
@@ -171,7 +172,7 @@ final class AppStore {
     }
 
     var machine: String? {
-        if case .connected(let machine) = connection { machine } else { nil }
+        if case .connected(let machine, _) = connection { machine } else { nil }
     }
 
     /// Paired devices, pairing codes and Bearer tokens arrived with protocol 3.

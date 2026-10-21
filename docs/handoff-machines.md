@@ -100,7 +100,7 @@ then try the real Mac and Omarchy.
 
 ## Status
 
-Done so far: phases 0, 1, 2, 3, 6 and 4, in that order. Phases 5 and 7 are next.
+Done so far: phases 0, 1, 2, 3, 6, 4 and 5, in that order. Phase 7 is next.
 
 - **0. Stand-in spike.** GO. `bridge/test/standin.test.ts` runs the real gate, agents and ledger on a stand-in. The
   decisions.tsv row of 2026-10-21T02:24 records it.
@@ -124,6 +124,36 @@ Done so far: phases 0, 1, 2, 3, 6 and 4, in that order. Phases 5 and 7 are next.
     linked. Evidence: `claudiobot-verify/evidence/20261021-042740-93a5/run1-full-sandbox-off`.
   - Guarded, sandbox on. The same start, card, Allow once, push and report. Evidence:
     `claudiobot-verify/evidence/20261021-043335-b9d9/run2-guarded-sandbox-on`.
+- **5. Sessions tab by machine.** Built from `0ba1ffa` to `14b4793`.
+  - The wire. `ask` carries a phone's `session_*` request to a machine and `reply` brings its frames back. `signal`
+    carries the machine's list and thread channel frames. They are link frames, not intents and events: session
+    frames are live and never replayed, and `session_send` has its own clientId. `sessionCard` (a card in a session
+    the phone drives there) and `reminder` (a gate card's reminder) are events, so the home pushes them once.
+  - The machine. It runs its own `sessions.ts` over its own `~/.claude/projects`. It publishes a thread only while the
+    home watches it over the live link. Once its index is read it sends every row again.
+  - The home. `machine/remoteSessions.ts` keeps each machine's rows in memory only. Rows are re-stamped with the
+    link's machine, and an offline machine's rows stay as last known. A request routes by the machine whose rows hold
+    the session id, and `session_create` routes by its `machine`. The home wins an id both list, as when two bridges
+    on one Mac share `~/.claude`. Thread positions pass through untouched: the epoch and rev are the machine's, and
+    the app sends them back as it got them. When a machine links again, the home lists it afresh and sends a
+    `session` snapshot on each thread a phone still watches. A send, stop or create on an offline machine answers an
+    error that says so, and nothing waits. A decide on a remote agent's card goes through the card path, as from the
+    bot chat.
+  - Two Phase 4 fixes. Deleting a bot drops its queued intents. A remote card's reminder pushes from the home.
+  - Tests. `sessionRouting`, `link`, `wire`, `queue`, `node` and `remote`.
+  - Live runs on one Mac, home and machine Studio:
+    - Full access, sandbox off. `session_create` with `machine` on Studio ran `date > when.txt`. Its card was answered
+      from the phone, and the text streamed back. The tool output came live from Studio, and no file under the home's
+      bridge home held it. The transcript was in Studio's project folder. After a SIGKILL of Studio, its rows stayed,
+      and a send and a stop were refused as offline. After a restart, the open thread got a snapshot, and a
+      `session_send` Bash call raised a card that ran on Studio. Evidence:
+      `claudiobot-verify/evidence/20261021-050026-2dbb/run2-full-sandbox-off`.
+    - Guarded, sandbox on. The same create, card and stream. A bot then started an agent on Studio. The phone opened
+      the agent's session in the Sessions tab and answered its `git push` card there, and the push landed on Studio's
+      origin. Evidence: `claudiobot-verify/evidence/20261021-050135-9b39/run3-guarded-sandbox-on`.
+  - Open for Phase 7. `SessionProject` has no machine, so the phone learns a project's machine from its rows. A
+    `session_create` that names one machine and another machine's project gets "Unknown project" from that machine.
+    `session_prefs` (the Claude app mirror setting) applies to the home only.
 
 ## Traps found during design
 

@@ -621,15 +621,29 @@ describe("step outcomes", () => {
     expect(notices(items)[0]!.text).not.toContain("abcdefghijklmnop");
   });
 
-  test("a summary that quotes the description with its spaces collapsed or cut short stays readable", () => {
+  test("a summary that quotes the description with its spaces collapsed stays readable", () => {
     const description = "Rotate the token for staging and also more words";
-    expect(notices(bgEnded({ command: "./r.sh", description }, 'Background command "Rotate the token  for staging and also more words" failed with exit code 1'))[0]!.text).toBe(
-      'Background command "Rotate the token  for staging and also more words" failed with exit code 1',
-    );
-    expect(notices(bgEnded({ command: "./r.sh", description }, 'Background command "Rotate the token for staging and…" failed with exit code 1'))[0]!.text).toBe(
-      'Background command "Rotate the token for staging and…" failed with exit code 1',
-    );
+    const summary = 'Background command "Rotate the token  for staging and also more words" failed with exit code 1';
+    expect(notices(bgEnded({ command: "./r.sh", description }, summary))[0]!.text).toBe(summary);
   });
+
+  test.each([
+    ["Call API with Bearer abcdefghijklmnop now", "Call API with Bearer abcdefghij…", "abcdefghij"],
+    ["Use Basic abcdefghijklmnop for the call", "Use Basic abcdefg…", "abcdefg"],
+    ["Pass token abc123 to the server", "Pass token abc…", "abc…"],
+  ])("a quote cut short inside a credential is masked as secrets: %s", (description, quote, shown) => {
+    const items = bgEnded({ command: "./x", description }, `Background command "${quote}" completed (exit code 0)`);
+    expect(notices(items)[0]!.text).not.toContain(shown);
+  });
+
+  test.each([" curl -H 'Authorization: Bearer abcdefgh' https://h ", "curl  -H 'Authorization: Bearer abcdefgh'  https://h", "curl -H 'Authorization: Bearer abcdefgh' https://h"])(
+    "a description that is the command up to spaces, or its first line, is masked as the command: %j",
+    (description) => {
+      const command = "curl -H 'Authorization: Bearer abcdefgh' https://h\necho done";
+      const items = bgEnded({ command, description }, `Background command "${description}" failed with exit code 1`);
+      expect(JSON.stringify(items)).not.toContain("abcdefgh'");
+    },
+  );
 
   test("a call's full output masks secrets like its shown output does", () => {
     const dir = mkdtempSync(join(tmpdir(), "full-"));

@@ -550,6 +550,9 @@ const middleCut = (s: string, max: number) => (s.length <= max ? s : `${s.slice(
 
 const AGENT_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
 const AGENT_LABEL_MAX = 120;
+const words = (s: string) => s.replace(/\s+/g, " ").trim();
+/** A Bash description that only repeats the command, or its first line, is the command, not the model's own words. */
+const repeatsCommand = (description: string, command: string | null) => command !== null && [command, command.trim().split("\n")[0]!].some((c) => words(c) === words(description));
 const backgroundLabel = (label: string) => (/\bin (?:the )?background\b/i.test(label) ? label : `Run in background: ${label.replace(/^Run /, "")}`);
 
 /** What a Bash step shows it runs: the command's first 3 lines, each capped, secrets masked. */
@@ -575,7 +578,7 @@ export function stepLabel(tool: string, input: Record<string, unknown>, cwd: str
   switch (tool) {
     case "Bash": {
       const command = str(input.command);
-      const label = description && description !== command ? maskProse(firstLine(description)) : maskSecrets(`Run ${firstLine(command ?? "a command")}`);
+      const label = description && !repeatsCommand(description, command) ? maskProse(firstLine(description)) : maskSecrets(`Run ${firstLine(command ?? "a command")}`);
       return input.run_in_background === true ? backgroundLabel(label) : label;
     }
     case "Agent":
@@ -753,21 +756,15 @@ const SUMMARY = /^([A-Z][\w ]* ")([\s\S]*?)(" (?:finished|completed|failed|was|i
 
 /**
  * Claude Code quotes a task's description in its summary, and a background command's is the raw command when the model
- * gave none. The quote is masked as prose only when it is the model's own description; what follows it is error text.
+ * gave none. The quote is masked as prose only when it is the model's own description, whole; what follows it is error text.
  */
 function maskSummary(summary: string, description: string | null): string {
   const m = summary.match(SUMMARY);
   if (!m) return maskSecrets(summary);
-  return m[1]! + (description !== null && quotes(m[2]!, description) ? maskProse(m[2]!) : maskSecrets(m[2]!)) + maskSecrets(m[3]!);
+  return m[1]! + (description !== null && words(m[2]!) === words(description) ? maskProse(m[2]!) : maskSecrets(m[2]!)) + maskSecrets(m[3]!);
 }
 
-/** Whether a summary's quote is the description, allowing for collapsed spaces and a quote cut short with "…". */
-function quotes(quote: string, description: string): boolean {
-  const words = (s: string) => s.replace(/\s+/g, " ").trim();
-  const q = words(quote);
-  const d = words(description);
-  return q === d || (q.endsWith("…") && q.length > 1 && d.startsWith(q.slice(0, -1).trimEnd()));
-}
+
 
 function noteOutcome(note: TaskNote, summary: string): Outcome {
   switch (note.status) {
@@ -1041,7 +1038,7 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
     tail.work = work.id;
     tail.tools.set(toolId, work.id);
     const description = str(input.description);
-    if (description !== null && description !== command && (name === "Bash" || AGENT_TOOLS.has(name))) tail.descriptions.set(toolId, description);
+    if (description !== null && !repeatsCommand(description, command) && (name === "Bash" || AGENT_TOOLS.has(name))) tail.descriptions.set(toolId, description);
     put(work, true);
   }
 

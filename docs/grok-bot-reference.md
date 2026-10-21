@@ -41,6 +41,7 @@ A flat blob character with two eyes. 13 shapes (circle, cloud, rounded diamond, 
 ### Question card
 
 - A card with the question in bold and lettered options (A, B, C, D). Tapping an option answers it. iPhone adds an X to dismiss without answering.
+- iPhone shows no bubble repeating the question above the card. The Mac app does show a short one.
 - Once answered, the card dims: the question is gray and only the chosen option remains, its letter in the bot color.
 - Typing a free-text reply is allowed while the card is open.
 - Bots ask before risky actions this way ("Should I run the migration in production and start merging?"). Permission is a conversation, not a modal.

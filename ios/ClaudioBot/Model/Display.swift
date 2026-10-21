@@ -79,11 +79,21 @@ enum ChatRow: Identifiable, Equatable {
 enum Timeline {
     static let gap: TimeInterval = 60 * 60
 
-    /// A separator opens the conversation and every gap longer than an hour.
-    static func rows(_ messages: [Message]) -> [ChatRow] {
+    /// The iPhone omits a bubble that only repeats the question card right after it; the Mac shows it, as Grok Bot does.
+    static var hidesRepeatedQuestion: Bool {
+        #if os(macOS)
+        false
+        #else
+        true
+        #endif
+    }
+
+    /// A separator opens the conversation and every gap longer than an hour, counted between shown messages only.
+    static func rows(_ messages: [Message], hidesRepeatedQuestion: Bool = Timeline.hidesRepeatedQuestion) -> [ChatRow] {
         var rows: [ChatRow] = []
         var last: Date?
-        for message in messages {
+        for (index, message) in messages.enumerated() {
+            if hidesRepeatedQuestion, messages.indices.contains(index + 1), repeats(message, messages[index + 1]) { continue }
             if last.map({ message.at.timeIntervalSince($0) > gap }) ?? true {
                 rows.append(.separator(message.at))
             }
@@ -91,6 +101,17 @@ enum Timeline {
             last = message.at
         }
         return rows
+    }
+
+    private static func repeats(_ message: Message, _ next: Message) -> Bool {
+        guard case .bot(_, _, let text, nil) = message, case .question(_, _, let card) = next else { return false }
+        return normalized(text) == normalized(card.question)
+    }
+
+    /// Bots often bold the restated question, so emphasis marks don't count.
+    private static func normalized(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "*_")))
+            .lowercased()
     }
 }
 

@@ -98,7 +98,10 @@ The demo bridge now answers Stop by setting the bot idle, so Stop can be exercis
 - Grok has no status chips on Home rows. Ours carry Awaiting approval and Parked, which the product needs.
 - Grok has a voice-mode button. ClaudioBot has no voice mode yet.
 - The `@` menu sits inside the composer's inset, so opening it lifts the list. Drawing it as an overlay would stop that.
-- Grok on iPhone doesn't repeat the question as a bubble above its card, but the Mac app does.
+
+### Shipped after the audit
+
+- iPhone drops a plain bot bubble that only repeats the question card right after it, as Grok does. The Mac keeps it. The rule lives in `Timeline.rows`, and `static-chat.png` shows the result.
 
 ### Verification
 

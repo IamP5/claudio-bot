@@ -70,6 +70,24 @@ test("a session the machine answered for routes to it before its rows name it", 
   expect(r.idsOf(MAC)).toEqual([NEW]);
 });
 
+test("a session id or project another machine already lists stays that machine's: a second machine cannot take, remove or claim it", () => {
+  const STUDIO = "m_studio" as MachineId;
+  const r = createRemoteSessions({ home: () => false });
+  r.replace(MAC, listOf(row(S1)));
+  const studio = r.replace(STUDIO, listOf(row(S1, STUDIO), row(S2, STUDIO)));
+  expect(studio).toEqual({ type: "session_rows", rows: [row(S2, STUDIO)], removed: [], projects: [] });
+  expect(r.ownerOf(S1)).toBe(MAC);
+  r.claim(STUDIO, S1);
+  expect(r.ownerOf(S1)).toBe(MAC);
+  expect(r.apply(STUDIO, { type: "session_rows", rows: [], removed: [S1], projects: [] }).removed).toEqual([]);
+  expect(r.ownerOf(S1)).toBe(MAC);
+  expect(r.list().rows.map((x) => [x.id, x.machine])).toEqual([
+    [S1, MAC],
+    [S2, STUDIO],
+  ]);
+  expect(r.list().projects).toEqual([project]);
+});
+
 /** A home with the Sessions tab over an empty ~/.claude, and one enrolled machine the test answers for. */
 function setup(world: World = emptyWorld()) {
   const dir = mkdtempSync(join(tmpdir(), "claudiobot-routing-"));

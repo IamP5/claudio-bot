@@ -28,7 +28,10 @@ export type RemoteSessions = {
 
 export const isEmpty = (f: SessionsChannelFrame) => f.rows.length === 0 && f.removed.length === 0 && f.projects.length === 0;
 
-/** home: the home's own list holds the id. The home wins an id both list, as when two bridges share one ~/.claude. */
+/**
+ * home: the home's own list holds the id. The home wins an id both list, as when two bridges share one ~/.claude; among
+ * machines, the first to list a session id or project keeps it.
+ */
 export function createRemoteSessions(deps: { home: (id: SessionId) => boolean }): RemoteSessions {
   const slices = new Map<MachineId, Slice>();
   const sliceOf = (machine: MachineId): Slice => {
@@ -36,8 +39,11 @@ export function createRemoteSessions(deps: { home: (id: SessionId) => boolean })
     if (!s) slices.set(machine, (s = { rows: new Map(), projects: new Map(), claimed: new Set() }));
     return s;
   };
+  /** Another machine listed or claimed it first: that machine keeps it, so a second one cannot take its requests. */
+  const heldElsewhere = (machine: MachineId, id: SessionId) => [...slices].some(([m, s]) => m !== machine && (s.rows.has(id) || s.claimed.has(id)));
+  const projectElsewhere = (machine: MachineId, id: ProjectId) => [...slices].some(([m, s]) => m !== machine && s.projects.has(id));
   /** The machine's own claim about which machine it is is not trusted: the link it came over says. */
-  const stamped = (machine: MachineId, rows: readonly SessionRow[]) => rows.filter((r) => !deps.home(r.id)).map((r) => ({ ...r, machine }));
+  const stamped = (machine: MachineId, rows: readonly SessionRow[]) => rows.filter((r) => !deps.home(r.id) && !heldElsewhere(machine, r.id)).map((r) => ({ ...r, machine }));
 
   function fold(machine: MachineId, rows: readonly SessionRow[], removed: readonly SessionId[], projects: readonly SessionProject[]): SessionsChannelFrame {
     const s = sliceOf(machine);
@@ -47,8 +53,9 @@ export function createRemoteSessions(deps: { home: (id: SessionId) => boolean })
       s.claimed.delete(r.id);
     }
     const gone = removed.filter((id) => s.rows.delete(id) && !deps.home(id));
-    for (const p of projects) s.projects.set(p.id, p);
-    return { type: "session_rows", rows: upserts, removed: gone, projects: [...projects] };
+    const own = projects.filter((p) => !projectElsewhere(machine, p.id));
+    for (const p of own) s.projects.set(p.id, p);
+    return { type: "session_rows", rows: upserts, removed: gone, projects: own };
   }
 
   return {
@@ -70,6 +77,8 @@ export function createRemoteSessions(deps: { home: (id: SessionId) => boolean })
       return fold(machine, frame.rows, [...s.rows.keys()].filter((id) => !listed.has(id)), frame.projects);
     },
     apply: (machine, frame) => fold(machine, frame.rows, frame.removed, frame.projects),
-    claim: (machine, id) => void sliceOf(machine).claimed.add(id),
+    claim(machine, id) {
+      if (!deps.home(id) && !heldElsewhere(machine, id)) sliceOf(machine).claimed.add(id);
+    },
   };
 }

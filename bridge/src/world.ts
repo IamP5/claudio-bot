@@ -440,7 +440,16 @@ export const ownCardId = (c: OwnCard): MessageId => (c.kind === "permission" ? c
 export const ownCardOpen = (c: OwnCard): boolean => (c.kind === "permission" ? c.card.answer === null : c.kind === "ask" ? c.answers === null : c.state === "proposed");
 
 export type OwnCard =
-  | { kind: "permission"; card: PermissionMessage; toolUseId: string; suggestions: unknown[] }
+  | {
+      kind: "permission";
+      card: PermissionMessage;
+      toolUseId: string;
+      suggestions: unknown[];
+      /** The asking subagent: its task id, label and Agent call; absent when the main thread asked. */
+      agent?: { id: string; label: string | null; stepId: string | null };
+      /** When the user allowed it, so the call's run starts there. */
+      allowedAt?: string;
+    }
   | {
       kind: "ask";
       cardId: MessageId;

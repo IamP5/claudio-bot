@@ -61,6 +61,10 @@ export class FakeQuery {
   async interrupt() {
     this.interrupts++;
   }
+  readonly stoppedTasks: string[] = [];
+  async stopTask(id: string) {
+    this.stoppedTasks.push(id);
+  }
   async mcpServerStatus() {
     return [
       { name: "claudio", status: "connected", source: "sdk" },

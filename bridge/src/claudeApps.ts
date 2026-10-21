@@ -5,7 +5,8 @@ import type { SessionId } from "./protocol";
 
 // What the Claude Code CLI and the Claude app say about sessions, read from their own files and never written.
 
-export type Live = { pid: number; sessionId: SessionId; entrypoint: string; kind: string; cwd: string; busy: boolean };
+/** status: the registry's word ("busy", "idle", "waiting"); waitingFor: what a waiting one waits on ("permission prompt"). */
+export type Live = { pid: number; sessionId: SessionId; entrypoint: string; kind: string; cwd: string; status: string; waitingFor: string | null };
 export type DesktopEntry = { localId: string; archived: boolean; parent: SessionId | null; title: string | null };
 export type DesktopState = "absent" | "background" | "front";
 
@@ -90,9 +91,10 @@ function readHolders(deps: AppsDeps, checked: Map<string, { ok: boolean; at: num
       checked.set(key, check);
     }
     if (!check.ok) continue;
-    const live: Live = { pid, sessionId: sessionId as SessionId, entrypoint, kind, cwd, busy: status === "busy" };
+    const live: Live = { pid, sessionId: sessionId as SessionId, entrypoint, kind, cwd, status, waitingFor: str(o.waitingFor) };
     const prior = out.get(live.sessionId);
-    if (prior === undefined || (live.busy && !prior.busy) || (live.busy === prior.busy && live.pid < prior.pid)) out.set(live.sessionId, live);
+    const busy = live.status === "busy", priorBusy = prior?.status === "busy";
+    if (prior === undefined || (busy && !priorBusy) || (busy === priorBusy && live.pid < prior.pid)) out.set(live.sessionId, live);
   }
   return out;
 }

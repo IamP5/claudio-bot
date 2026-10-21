@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CanUseTool, HookCallback, Options, PermissionResult, query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, HookCallback, Options, PermissionResult, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeApps, DesktopEntry, Live } from "../src/claudeApps";
 import { OWN_CARD_TTL_MS } from "../src/own";
 import type { AgentId, BotId, MessageId, ServerMessage, SessionId, SessionItem, SessionRow, TaskId, ThreadChannelFrame } from "../src/protocol";
@@ -126,6 +126,12 @@ const send = async (text: string, clientId = `c_${text}`, id = ASK) => {
 const ask = (q: FakeQuery) => q.options.canUseTool as CanUseTool;
 const call = (q: FakeQuery, tool: string, input: Record<string, unknown>, over: Partial<Parameters<CanUseTool>[2]> = {}) =>
   ask(q)(tool, input, { signal: new AbortController().signal, toolUseID: `toolu_${tool}_${Math.random().toString(36).slice(2, 8)}`, ...over } as Parameters<CanUseTool>[2]);
+/** A main-thread call as Claude Code makes it: written to the transcript, then asked about. */
+const asked = (q: FakeQuery, tool: string, input: Record<string, unknown>, over: Partial<Parameters<CanUseTool>[2]> = {}) => {
+  const toolUseID = over.toolUseID ?? `toolu_${tool}_${Math.random().toString(36).slice(2, 8)}`;
+  write(calledEntry(toolUseID, tool, input));
+  return call(q, tool, input, { ...over, toolUseID });
+};
 const openCard = async (kind: SessionItem["kind"], id?: string) => (await snapshot(ASK)).items.findLast((i) => i.kind === kind && (id === undefined || i.id === id))!;
 
 describe("taking on a session from the phone", () => {
@@ -139,11 +145,10 @@ describe("taking on a session from the phone", () => {
     expect(await rowOf(ASK)).toMatchObject({ status: "working", holder: "claudio", origin: "sdk" });
   });
 
-  test("a stop aimed at part of the run and a withdrawal are refused while the bridge does not serve them, and the turn runs on", async () => {
+  test("a withdrawal is refused while the bridge does not serve it, and a stop for a task that is not running says so", async () => {
     await start();
     await send("Sleep for a minute");
-    expect(await handle({ type: "session_stop", sessionId: ASK, target: "turn" })).toEqual([{ type: "error", message: expect.stringContaining("part of a session") }]);
-    expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk2x9q7" as TaskId } })).toEqual([{ type: "error", message: expect.stringContaining("part of a session") }]);
+    expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk2x9q7" as TaskId } })).toEqual([{ type: "error", message: "That task is not running." }]);
     expect(await handle({ type: "session_unqueue", sessionId: ASK, clientId: "c_Sleep for a minute" })).toEqual([{ type: "error", message: expect.stringContaining("queued message") }]);
     expect(await rowOf(ASK)).toMatchObject({ status: "working" });
     expect(await handle({ type: "session_stop", sessionId: ASK, target: "all" })).toEqual([]);
@@ -162,7 +167,7 @@ describe("taking on a session from the phone", () => {
 
   test("a message queued when the bridge stopped runs once the next start has read the index", async () => {
     await start();
-    holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "cli", kind: "interactive", cwd: repo, busy: true });
+    holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "cli", kind: "interactive", cwd: repo, status: "busy", waitingFor: null });
     await send("Queued before the restart");
     sessions.stop();
     holders.clear();
@@ -196,7 +201,7 @@ describe("taking on a session from the phone", () => {
 
   test("while the Claude app is busy on it the phone may not send, and a queued turn waits rather than runs beside it", async () => {
     await start();
-    holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "claude-desktop", kind: "interactive", cwd: repo, busy: true });
+    holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "claude-desktop", kind: "interactive", cwd: repo, status: "busy", waitingFor: null });
     expect((await snapshot(ASK)).controls).toMatchObject({ canSend: false, reason: "Working in the Claude app." });
     await send("Later");
     expect(queries).toHaveLength(0);
@@ -205,7 +210,7 @@ describe("taking on a session from the phone", () => {
 
   test("the moment the other Claude Code lets go, the waiting turn runs, and the composer never claims it was working", async () => {
     await start();
-    holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "cli", kind: "interactive", cwd: repo, busy: true });
+    holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "cli", kind: "interactive", cwd: repo, status: "busy", waitingFor: null });
     await send("When you can");
     expect((await snapshot(ASK)).controls).toMatchObject({ canSend: false, working: false, reason: "Working in a terminal." });
     expect((await snapshot(ASK)).items.filter((i) => i.kind === "notice")).toEqual([]);
@@ -239,7 +244,7 @@ describe("taking on a session from the phone", () => {
 
   test("a session the phone took on resumes even when its transcript is gone, so it fails rather than starts afresh", async () => {
     await start();
-    holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "cli", kind: "interactive", cwd: repo, busy: true });
+    holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "cli", kind: "interactive", cwd: repo, status: "busy", waitingFor: null });
     await send("Queued");
     rmSync(fileOf(ASK));
     holders.clear();
@@ -274,7 +279,7 @@ describe("what Claude Code asks", () => {
     await start();
     await send("Clean the build");
     const suggestions = [{ type: "addRules" as const, rules: [{ toolName: "Bash", ruleContent: "rm -rf build" }], behavior: "allow" as const, destination: "localSettings" as const }];
-    const answer = call(queries[0]!, "Bash", { command: "rm -rf build" }, { suggestions, title: "Claude wants to run rm -rf build" });
+    const answer = asked(queries[0]!, "Bash", { command: "rm -rf build" }, { suggestions, title: "Claude wants to run rm -rf build" });
     await flush();
     const item = (await openCard("permission")) as Extract<SessionItem, { kind: "permission" }>;
     expect(item.card).toMatchObject({ tool: "Bash", label: "Claude wants to run rm -rf build", detail: "rm -rf build", always: "rm -rf build, for this session", answer: null, from: null });
@@ -288,12 +293,12 @@ describe("what Claude Code asks", () => {
   test("Never denies and stops the turn; a card left two hours is denied as expired", async () => {
     await start();
     await send("Push it");
-    const never = call(queries[0]!, "Bash", { command: "git push --force" });
+    const never = asked(queries[0]!, "Bash", { command: "git push --force" });
     await flush();
     const first = (await openCard("permission")) as Extract<SessionItem, { kind: "permission" }>;
     await handle({ type: "session_decide", sessionId: ASK, cardId: first.card.id, choice: "never" });
     expect(await never).toMatchObject({ behavior: "deny", interrupt: true });
-    const late = call(queries[0]!, "Bash", { command: "make deploy" });
+    const late = asked(queries[0]!, "Bash", { command: "make deploy" });
     await flush();
     clock += OWN_CARD_TTL_MS + 1;
     sessions.tick(new Date(clock));
@@ -351,7 +356,7 @@ describe("what Claude Code asks", () => {
     await start();
     await send("Edit it");
     for (const p of recorded) {
-      const answer = call(queries[0]!, p.tool, p.input);
+      const answer = asked(queries[0]!, p.tool, p.input);
       await flush();
       const card = ((await snapshot(ASK)).items.findLast((i) => i.kind === "permission") as Extract<SessionItem, { kind: "permission" }>).card;
       await handle({ type: "session_decide", sessionId: ASK, cardId: card.id, choice: "once" });
@@ -381,6 +386,270 @@ describe("what Claude Code asks", () => {
     const items = (await snapshot(ASK)).items;
     expect((items.find((i) => i.kind === "permission") as Extract<SessionItem, { kind: "permission" }>).card.answer).toBe("expired");
     expect(items.at(-1)).toMatchObject({ kind: "notice", text: expect.stringContaining("expired") });
+  });
+});
+
+// Claude Code's task frames as CLI 2.1.305 sends them.
+const sys = (subtype: string, fields: object) => ({ type: "system", subtype, uuid: crypto.randomUUID(), session_id: ASK, ...fields }) as unknown as SDKMessage;
+const agentTask = (task_id: string, tool_use_id: string, description: string) => ({ task_id, tool_use_id, description, task_type: "local_agent", subagent_type: "general-purpose", is_backgrounded: true });
+const shellTask = (task_id: string, tool_use_id: string, description: string, parent_task_id?: string) => ({ task_id, tool_use_id, description, task_type: "local_bash", is_backgrounded: true, ...(parent_task_id && { parent_task_id }) });
+const taskStarted = (t: object) => sys("task_started", t);
+const level = (...ts: object[]) => sys("background_tasks_changed", { tasks: ts });
+const completed = (task_id: string) => sys("task_updated", { task_id, patch: { status: "completed", end_time: 0 } });
+const notifiedOf = (task_id: string, tool_use_id: string, status = "completed") => sys("task_notification", { task_id, tool_use_id, status, summary: "done", output_file: "" });
+const wakeInit = () => sys("init", {});
+const progressOf = (task_id: string, tools: number, last: string) => sys("task_progress", { task_id, description: "Running", usage: { total_tokens: 1, tool_uses: tools, duration_ms: 1 }, last_tool_name: last });
+const toolCall = (id: string, name: string, input: object, parent: string | null = null) =>
+  ({ type: "assistant", uuid: crypto.randomUUID(), session_id: ASK, parent_tool_use_id: parent, message: { content: [{ type: "tool_use", id, name, input }] } }) as unknown as SDKMessage;
+const toolResult = (id: string, text: string) =>
+  ({ type: "user", uuid: crypto.randomUUID(), session_id: ASK, parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: text }] } }) as unknown as SDKMessage;
+
+/** Writes main-thread entries after the transcript's leaf, as Claude Code does, without the bridge reading them. */
+function write(...entries: Record<string, unknown>[]) {
+  for (const entry of entries) {
+    const lines = readFileSync(fileOf(ASK), "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
+    const leaf = lines.findLast((l) => typeof l.uuid === "string" && ["user", "assistant", "attachment", "system"].includes(String(l.type)))!;
+    appendFileSync(fileOf(ASK), `${JSON.stringify({ parentUuid: leaf.uuid, isSidechain: false, cwd: repo, sessionId: ASK, timestamp: new Date(clock).toISOString(), uuid: crypto.randomUUID(), ...entry })}\n`);
+  }
+}
+async function transcribe(...entries: Record<string, unknown>[]) {
+  write(...entries);
+  await sessions.sync();
+}
+const calledEntry = (id: string, name: string, input: object) => ({ type: "assistant", message: { role: "assistant", id: `msg_${id}`, content: [{ type: "tool_use", id, name, input }] } });
+const resultEntry = (id: string, text: string) => ({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: text }] } });
+const stepOf = async (id: string) => (await snapshot(ASK)).items.flatMap((i) => (i.kind === "work" ? i.steps : [])).find((s) => s.id === id)!;
+const controlsNow = async () => (await snapshot(ASK)).controls;
+const noticesNow = async () => (await snapshot(ASK)).items.filter((i): i is Extract<SessionItem, { kind: "notice" }> => i.kind === "notice");
+
+describe("live work", () => {
+  test("background subagents keep the session working, with Stop, until the last one and the turns it wakes have ended", async () => {
+    await start();
+    await send("Fan out");
+    const q = queries[0]!;
+    q.emit(taskStarted(agentTask("a1", "toolu_a1", "sleeper one")), level(agentTask("a1", "toolu_a1", "sleeper one")));
+    await flush();
+    clock += 1_000;
+    q.emit(taskStarted(agentTask("a2", "toolu_a2", "sleeper two")), level(agentTask("a1", "toolu_a1", "sleeper one"), agentTask("a2", "toolu_a2", "sleeper two")));
+    q.emit(progressOf("a1", 1, "Bash"), result());
+    await flush();
+    const busy = await controlsNow();
+    expect(busy.working).toBe(true);
+    expect(busy.turn).toBeUndefined();
+    expect(busy.tasks).toEqual([
+      { id: "a1" as TaskId, stepId: "toolu_a1", kind: "agent", label: "sleeper one", background: true, startedAt: "2026-10-18T12:00:00.000Z", owner: null, progress: { tools: 1, last: "Bash", at: "2026-10-18T12:00:01.000Z" }, waiting: null },
+      { id: "a2" as TaskId, stepId: "toolu_a2", kind: "agent", label: "sleeper two", background: true, startedAt: "2026-10-18T12:00:01.000Z", owner: null, progress: null, waiting: null },
+    ]);
+    expect(await rowOf(ASK)).toMatchObject({ status: "working", holder: "claudio", since: "2026-10-18T12:00:00.000Z", running: { agents: 2, commands: 0 }, activity: "Background: sleeper one and 1 more" });
+
+    clock += 30_000;
+    q.emit(completed("a1"), notifiedOf("a1", "toolu_a1"), level(agentTask("a2", "toolu_a2", "sleeper two")), wakeInit());
+    await flush();
+    expect(await controlsNow()).toMatchObject({ working: true, turn: { startedAt: "2026-10-18T12:00:31.000Z", wake: true }, tasks: [{ id: "a2" }] });
+    q.emit(result(), completed("a2"), notifiedOf("a2", "toolu_a2"), level());
+    await flush();
+    expect(await controlsNow()).toMatchObject({ working: true, turn: { wake: true }, tasks: [] });
+    expect((await rowOf(ASK)).status).toBe("working");
+    q.emit(wakeInit(), result());
+    await flush();
+    const rest = await controlsNow();
+    expect([rest.working, rest.turn, rest.tasks]).toEqual([false, undefined, []]);
+    const row = await rowOf(ASK);
+    expect([row.status, row.since, row.running, row.activity]).toEqual(["idle", undefined, undefined, undefined]);
+  });
+
+  test("a background command reads running in the thread and the row, with Stop, until it ends", async () => {
+    await start();
+    await send("Start it");
+    const q = queries[0]!;
+    const input = { command: "sleep 75 && echo bg-done > bg.txt", description: "Sleep 75 seconds then write bg-done marker", run_in_background: true };
+    q.emit(toolCall("toolu_bg", "Bash", input));
+    await flush();
+    expect((await rowOf(ASK)).activity).toBe("Run Sleep 75 seconds then write bg-done marker");
+    q.emit(taskStarted(shellTask("bp4", "toolu_bg", input.description)), level(shellTask("bp4", "toolu_bg", input.description)), toolResult("toolu_bg", "Command running in background with ID: bp4."), result());
+    await transcribe(calledEntry("toolu_bg", "Bash", input), resultEntry("toolu_bg", "Command running in background with ID: bp4."));
+    expect(await stepOf("toolu_bg")).toMatchObject({ state: "running", output: null, startedAt: "2026-10-18T12:00:00.000Z" });
+    expect(await controlsNow()).toMatchObject({ working: true, tasks: [{ id: "bp4", kind: "command", stepId: "toolu_bg", background: true }] });
+    expect(await rowOf(ASK)).toMatchObject({ status: "working", running: { agents: 0, commands: 1 }, activity: "Background: Sleep 75 seconds then write bg-done marker" });
+
+    thread.length = 0;
+    q.emit(completed("bp4"), notifiedOf("bp4", "toolu_bg"), level(), wakeInit(), result());
+    await flush();
+    const frames = thread.flatMap(({ frame }) => (frame.type === "session_items" ? frame.items : []));
+    expect(frames.flatMap((i) => (i.kind === "work" ? i.steps : [])).findLast((s) => s.id === "toolu_bg")?.state).toBe("ok");
+    expect((await controlsNow()).working).toBe(false);
+    expect((await noticesNow()).length).toBe(0);
+  });
+
+  test("a subagent's background command keeps the subagent's step running and names it as owner; killed unannounced, the thread says so", async () => {
+    await start();
+    await send("Start a starter");
+    const q = queries[0]!;
+    const starter = agentTask("a1", "toolu_starter", "starter");
+    const shell = shellTask("b1", "toolu_sleep", "Run delayed write of nested.txt in background", "a1");
+    q.emit(taskStarted(starter), level(starter), toolResult("toolu_starter", "Async agent launched successfully."), result());
+    q.emit(toolCall("toolu_sleep", "Bash", { command: "sleep 60 && echo nested-done > nested.txt", run_in_background: true }, "toolu_starter"));
+    q.emit(level(starter, shell), taskStarted(shell), completed("a1"), notifiedOf("a1", "toolu_starter"), level(shell));
+    await transcribe(calledEntry("toolu_starter", "Agent", { description: "starter", prompt: "go", subagent_type: "general-purpose", run_in_background: true }), resultEntry("toolu_starter", "Async agent launched successfully."));
+    expect(await stepOf("toolu_starter")).toMatchObject({ label: "Agent: starter", state: "running" });
+    expect(await controlsNow()).toMatchObject({ working: true, tasks: [{ id: "b1", kind: "command", owner: "toolu_starter" }] });
+
+    q.emit(wakeInit(), result(), level());
+    await flush();
+    expect((await noticesNow()).map((n) => [n.text, n.reason])).toEqual([
+      ['The background command "sleep 60 && echo nested-done > nested.txt", started by starter, was stopped when starter returned.', "task"],
+    ]);
+    expect(await stepOf("toolu_starter")).toMatchObject({ state: "ok" });
+    expect((await controlsNow()).working).toBe(false);
+  });
+
+  test("a call waits for its card instead of reading running, and runs from the moment it is allowed", async () => {
+    await start();
+    await send("Sleep");
+    const input = { command: "perl -e 'sleep 120'", description: "Sleep two minutes" };
+    await transcribe(calledEntry("toolu_wait", "Bash", input));
+    const answer = call(queries[0]!, "Bash", input, { toolUseID: "toolu_wait" });
+    await flush();
+    expect(await stepOf("toolu_wait")).toMatchObject({ state: "waiting" });
+    const card = (await openCard("permission")) as Extract<SessionItem, { kind: "permission" }>;
+    expect([card.stepId, card.subagent]).toEqual(["toolu_wait", undefined]);
+    expect((await rowOf(ASK)).activity).toBe("Waiting for approval: Bash");
+    clock += 90_000;
+    await handle({ type: "session_decide", sessionId: ASK, cardId: card.card.id, choice: "once" });
+    await answer;
+    expect(await stepOf("toolu_wait")).toMatchObject({ state: "running", startedAt: "2026-10-18T12:01:30.000Z" });
+  });
+
+  test("a card goes out with the waiting step of its call, which Claude Code wrote to the transcript just before asking", async () => {
+    await start();
+    await send("Sleep");
+    await snapshot(ASK);
+    thread.length = 0;
+    const input = { command: "perl -e 'sleep 120'", description: "Sleep two minutes" };
+    write(calledEntry("toolu_wait", "Bash", input));
+    void call(queries[0]!, "Bash", input, { toolUseID: "toolu_wait" });
+    await flush();
+    const first = thread.map(({ frame }) => frame).find((f) => f.type === "session_items" && f.items.some((i) => i.kind === "permission"));
+    const items = first?.type === "session_items" ? first.items : [];
+    expect(items.flatMap((i) => (i.kind === "work" ? i.steps : []))).toMatchObject([{ id: "toolu_wait", state: "waiting" }]);
+  });
+
+  test("a card waits for Claude Code to write its call to the transcript, and goes out alone after 2 s if it never does", async () => {
+    await start();
+    await send("Sleep");
+    await snapshot(ASK);
+    thread.length = 0;
+    const input = { command: "perl -e 'sleep 120'", description: "Sleep two minutes" };
+    void call(queries[0]!, "Bash", input, { toolUseID: "toolu_late" });
+    await flush();
+    expect(thread.some(({ frame }) => frame.type === "session_items" && frame.items.some((i) => i.kind === "permission"))).toBe(false);
+    await transcribe(calledEntry("toolu_late", "Bash", input));
+    const together = thread.map(({ frame }) => frame).find((f) => f.type === "session_items" && f.items.some((i) => i.kind === "permission"));
+    expect(together?.type === "session_items" && together.items.flatMap((i) => (i.kind === "work" ? i.steps : []))).toMatchObject([{ id: "toolu_late", state: "waiting" }]);
+
+    void call(queries[0]!, "Bash", { command: "true" }, { toolUseID: "toolu_never" });
+    await flush();
+    expect((await snapshot(ASK)).items.filter((i) => i.kind === "permission")).toHaveLength(1);
+    clock += 2_000;
+    sessions.tick(new Date(clock));
+    await flush();
+    expect((await snapshot(ASK)).items.filter((i) => i.kind === "permission")).toHaveLength(2);
+  });
+
+  test("a subagent's card names the subagent, holds back its step, and marks its task waiting", async () => {
+    await start();
+    await send("Fan out");
+    const q = queries[0]!;
+    q.emit(taskStarted(agentTask("a2", "toolu_a2", "sleeper two")), level(agentTask("a2", "toolu_a2", "sleeper two")));
+    await flush();
+    void call(q, "Bash", { command: "perl -e 'sleep 30'" }, { toolUseID: "toolu_inner", agentID: "a2" });
+    await flush();
+    const card = (await openCard("permission")) as Extract<SessionItem, { kind: "permission" }>;
+    expect([card.stepId, card.subagent]).toEqual(["toolu_a2", "sleeper two"]);
+    expect((await controlsNow()).tasks).toMatchObject([{ id: "a2", waiting: card.card.id }]);
+  });
+
+  test("a watched thread whose session works hears from the bridge at least every 25 s, even when Claude Code is silent", async () => {
+    await start();
+    await send("Sleep two minutes");
+    await snapshot(ASK);
+    thread.length = 0;
+    clock += 24_000;
+    sessions.tick(new Date(clock));
+    await flush();
+    expect(thread.length).toBe(0);
+    clock += 2_000;
+    sessions.tick(new Date(clock));
+    await flush();
+    expect(thread.map(({ frame }) => frame.type === "session_items" && [frame.items.length, frame.controls?.working])).toEqual([[0, true]]);
+  });
+
+  test("Stop can aim at one task, whose end is then no surprise, and a turn Claude Code started on its own is stopped too", async () => {
+    await start();
+    await send("Fan out");
+    const q = queries[0]!;
+    q.emit(taskStarted(agentTask("a1", "toolu_a1", "sleeper one")), level(agentTask("a1", "toolu_a1", "sleeper one")), result());
+    await flush();
+    expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "a1" as TaskId } })).toEqual([]);
+    expect(q.stoppedTasks).toEqual(["a1"]);
+    q.emit(sys("task_updated", { task_id: "a1", patch: { status: "killed" } }), level(), wakeInit());
+    await flush();
+    expect(await handle({ type: "session_stop", sessionId: ASK })).toEqual([]);
+    expect(q.interrupts).toBe(1);
+    expect(await noticesNow()).toEqual([]);
+  });
+
+  test("Stop between a background task's end and the wake turn it announced brings the session to rest", async () => {
+    await start();
+    await send("Start it");
+    const q = queries[0]!;
+    q.emit(taskStarted(shellTask("bp4", "toolu_bg", "Sleep")), level(shellTask("bp4", "toolu_bg", "Sleep")), result());
+    await flush();
+    q.emit(completed("bp4"), notifiedOf("bp4", "toolu_bg"), level());
+    await flush();
+    expect(await controlsNow()).toMatchObject({ working: true, turn: { wake: true }, tasks: [] });
+    expect(await handle({ type: "session_stop", sessionId: ASK })).toEqual([]);
+    expect(q.interrupts).toBe(1);
+    expect((await controlsNow()).working).toBe(false);
+  });
+
+  test("a turn stopped while its foreground subagent runs comes to rest at once, with no wake turn to wait for", async () => {
+    await start();
+    await send("Fan out");
+    const q = queries[0]!;
+    q.emit(wakeInit(), taskStarted({ ...agentTask("af", "toolu_af", "long sleeper"), is_backgrounded: false }), taskStarted({ ...shellTask("bz", "toolu_bz", "Sleep 45 seconds", "af"), is_backgrounded: false }));
+    await flush();
+    expect(await controlsNow()).toMatchObject({ working: true, tasks: [{ id: "af" }, { id: "bz", owner: "toolu_af" }] });
+    expect(await handle({ type: "session_stop", sessionId: ASK })).toEqual([]);
+    q.emit(notifiedOf("bz", "toolu_bz", "stopped"), sys("task_updated", { task_id: "af", patch: { status: "killed" } }), notifiedOf("af", "toolu_af", "stopped"), result());
+    await flush();
+    expect(await controlsNow()).toMatchObject({ working: false, tasks: [] });
+    expect((await rowOf(ASK)).status).toBe("idle");
+  });
+
+  test("a command task that Claude Code names by its raw command reaches the phone with its secrets masked", async () => {
+    await start();
+    await send("Fetch it");
+    const q = queries[0]!;
+    const command = "curl -H 'Authorization: Bearer sk-ant-api03-abcdefghijklmnop' -u alice:hunter2pass https://example.com && mysql -u root -ptopsecret9 db";
+    const shell = shellTask("bk", "toolu_k", command);
+    q.emit(toolCall("toolu_k", "Bash", { command, run_in_background: true }), taskStarted(shell), level(shell), toolResult("toolu_k", "Command running in background with ID: bk."), result());
+    await flush();
+    const live = JSON.stringify([await controlsNow(), await rowOf(ASK)]);
+    expect(live).toContain("Bearer «redacted");
+    q.emit(level());
+    await flush();
+    const notices = await noticesNow();
+    expect(notices).toHaveLength(1);
+    for (const secret of ["sk-ant-api03", "hunter2pass", "topsecret9"]) expect(JSON.stringify([live, notices])).not.toContain(secret);
+  });
+
+  test("a terminal or Claude app session waiting on its user reads as needing them", async () => {
+    await start();
+    holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "cli", kind: "interactive", cwd: repo, status: "waiting", waitingFor: "permission prompt" });
+    expect((await rowOf(ASK)).status).toBe("awaiting_approval");
+    holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "cli", kind: "interactive", cwd: repo, status: "waiting", waitingFor: "input needed" });
+    expect((await rowOf(ASK)).status).toBe("awaiting_input");
   });
 });
 

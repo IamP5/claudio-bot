@@ -14,9 +14,11 @@ const threads = createThreads({
   head: () => null,
   context: () => ({ cwd: "/x", userName: "Alex", agent: false }),
   overlay: () => [],
+  steps: () => new Map(),
   controls: () => ({ canSend: true, reason: null, working: true, queued: 0, model: null, models: [], mode: "default", modes: [] }),
   publish: (_, f) => frames.push(structuredClone(f)),
   watched: () => true,
+  now: () => new Date(),
   log: () => {},
 });
 

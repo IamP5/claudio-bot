@@ -300,6 +300,7 @@ export function createAgents(deps: {
         turnEnded(rec, pending.initiator, end);
       },
       onChange: () => refresh(rec),
+      onActivity: () => refresh(rec),
       note: (text) => deps.note(rec, text),
       // Its record keeps everything; a follow-up or decision makes a new session that resumes it.
       onDormant() {

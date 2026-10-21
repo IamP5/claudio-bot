@@ -23,14 +23,16 @@ import {
   type SessionItem,
   type SessionsChannelFrame,
   type SessionStatus,
+  type StopTarget,
   type ThreadChannelFrame,
 } from "./protocol";
 import type { Result } from "./result";
 import type { SessionSpec } from "./session";
 import type { Persist } from "./store";
+import { RESTING, rowRun, runControls, runningSteps, runs, type StepPatch } from "./tasks";
 import { errorText } from "./text";
 import { createThreads } from "./threads";
-import { createHeads, folderOf, sdkReaders, statOf, transcriptExists, type Head, type SdkReaders } from "./transcript";
+import { createHeads, folderOf, sdkReaders, statOf, stepLabel, transcriptExists, type Head, type SdkReaders } from "./transcript";
 import { prepareWorkspace } from "./worktree";
 import { own, type AgentRecord, type SessionPrefs, type SessionRecord, type World } from "./world";
 
@@ -198,7 +200,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   /** Why the phone must wait to send: another live Claude Code is busy on the id. */
   function blocked(id: SessionId): string | null {
     const held = deps.apps.holders().get(id);
-    if (!held?.busy) return null;
+    if (held?.status !== "busy") return null;
     return HELD_BY[held.entrypoint] ?? "Another Claude Code is working on this session.";
   }
 
@@ -208,8 +210,10 @@ export function createSessions(deps: SessionsDeps): Sessions {
     if (w.kind === "cloud") return { status: w.rec.agent.status === "failed" ? "failed" : "idle", working: false };
     if (w.kind !== "agent") return null;
     const session = deps.agents.session(w.rec.agent.id);
-    const status: SessionStatus = session?.working ? "working" : session?.parkedFor ? "parked" : AGENT_STATUS[w.rec.agent.status];
-    return { status, working: session?.working ?? false };
+    const a = session?.activity() ?? RESTING;
+    const working = (session?.working ?? false) || runs(a);
+    const status: SessionStatus = working ? "working" : session?.parkedFor ? "parked" : AGENT_STATUS[w.rec.agent.status];
+    return { status, working, ...(working && rowRun(a, null, (c) => stepLabel(c.tool, c.input, w.rec.cwd))) };
   }
 
   function controls(id: SessionId): SessionControls {
@@ -224,14 +228,25 @@ export function createSessions(deps: SessionsDeps): Sessions {
         const pending = w.rec.session.pending.length;
         const life = w.rec.session.lifecycle;
         const busy = life.kind === "working" || life.kind === "stopping" ? 1 : 0;
-        return { canSend: true, reason: null, working: session?.working ?? false, queued: Math.max(0, pending - busy), model: null, models: [], mode: "auto", modes: [] };
+        const a = session?.activity() ?? RESTING;
+        return {
+          canSend: true,
+          reason: null,
+          working: (session?.working ?? false) || runs(a),
+          queued: Math.max(0, pending - busy),
+          model: null,
+          models: [],
+          mode: "auto",
+          modes: [],
+          ...runControls(a, () => null),
+        };
       }
       case "open":
       case "none": {
         const wait = w.kind === "none" ? w.reason : blocked(id);
         const head = catalog.head(id);
         const mode = head?.mode && (PHONE_MODES as readonly string[]).includes(head.mode) ? (head.mode as PhoneMode) : (settingsMode(configDir) ?? "default");
-        return { canSend: wait === null, reason: wait, working: deps.apps.holders().get(id)?.busy ?? false, queued: 0, model: null, models: MODELS_SHOWN, mode, modes: [...PHONE_MODES] };
+        return { canSend: wait === null, reason: wait, working: deps.apps.holders().get(id)?.status === "busy", queued: 0, model: null, models: MODELS_SHOWN, mode, modes: [...PHONE_MODES] };
       }
     }
   }
@@ -261,6 +276,13 @@ export function createSessions(deps: SessionsDeps): Sessions {
   /** A cloud agent's thread is what the bridge said to it and heard back: the bridge never has its transcript. */
   const cloudOverlay = (rec: AgentRecord): SessionItem[] =>
     rec.messages.map((m): SessionItem => (m.from === "bot" ? { kind: "user", id: m.id as string as ItemId, at: m.at, text: m.text, from: "bot", queued: false } : { kind: "assistant", id: m.id as string as ItemId, at: m.at, text: m.text }));
+
+  function steps(id: SessionId): Map<string, StepPatch> {
+    const w = driverOf(id);
+    if (w.kind === "own") return drivers.steps(w.rec);
+    if (w.kind !== "agent") return new Map();
+    return runningSteps(deps.agents.session(w.rec.agent.id)?.activity() ?? RESTING);
+  }
 
   function overlay(id: SessionId): SessionItem[] {
     const w = driverOf(id);
@@ -337,9 +359,11 @@ export function createSessions(deps: SessionsDeps): Sessions {
     head: (id) => catalog.head(id),
     context: (id, head) => ({ cwd: head?.cwd ?? agentOf(id)?.cwd ?? deps.world.sessions.get(id)?.own?.cwd ?? "", userName: deps.userName, agent: agentOf(id) !== null }),
     overlay,
+    steps,
     controls,
     publish: deps.signal.thread,
     watched,
+    now: deps.now,
     log: deps.log,
     sdk,
   });
@@ -411,11 +435,12 @@ export function createSessions(deps: SessionsDeps): Sessions {
     }
   }
 
-  async function stopTurn(id: SessionId): Promise<ServerMessage[]> {
+  async function stop(id: SessionId, target: StopTarget): Promise<ServerMessage[]> {
     const w = driverOf(id);
     if (w.kind === "cloud") return error("A cloud session runs on claude.ai; stop it there.");
-    const stopped = w.kind === "agent" ? await deps.agents.stop(w.rec) : w.kind === "own" ? await drivers.stop(w.rec) : false;
-    return stopped ? [] : error("Nothing is running.");
+    if (w.kind === "agent" && target !== "all") return error("An agent's session stops as a whole.");
+    const stopped = w.kind === "agent" ? await deps.agents.stop(w.rec) : w.kind === "own" ? await drivers.stop(w.rec, target) : false;
+    return stopped ? [] : error(typeof target === "object" ? "That task is not running." : "Nothing is running.");
   }
 
   function decide(m: Extract<SessionClientMessage, { type: "session_decide" }>): ServerMessage[] {
@@ -569,7 +594,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
         case "session_send":
           return send(m);
         case "session_stop":
-          return m.target === undefined || m.target === "all" ? stopTurn(m.sessionId) : error("This bridge cannot stop part of a session yet.");
+          return stop(m.sessionId, m.target ?? "all");
         case "session_unqueue":
           return error("This bridge cannot withdraw a queued message yet.");
         case "session_decide":
@@ -621,6 +646,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
         polledAt = at.getTime();
         awaited();
         void threads.poll();
+        threads.beat();
       }
       if (at.getTime() >= mirrorAt && !mirroring) {
         mirrorAt = at.getTime() + MIRROR_EVERY_MS;

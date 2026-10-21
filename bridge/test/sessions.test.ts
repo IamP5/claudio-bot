@@ -141,7 +141,7 @@ test("the list groups every transcript under its project, with what each row nee
 
 test("a session another Claude Code holds busy shows working in the Claude app", async () => {
   await start();
-  holders.set(ASK, { pid: 1, sessionId: ASK, entrypoint: "claude-desktop", kind: "interactive", cwd: repo, busy: true });
+  holders.set(ASK, { pid: 1, sessionId: ASK, entrypoint: "claude-desktop", kind: "interactive", cwd: repo, status: "busy", waitingFor: null });
   for (const f of changes) f();
   const frame = await until(() => list.find((f) => f.rows.some((r) => r.id === ASK)), "a row diff");
   expect(rowOf(frame.rows, ASK)).toMatchObject({ status: "working", holder: "desktop" });

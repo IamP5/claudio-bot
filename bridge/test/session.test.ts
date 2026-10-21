@@ -1744,6 +1744,9 @@ describe("a conversation Claude Code no longer has", () => {
 
 const tasks = (...ts: { task_id: string; description: string; ambient?: boolean }[]) =>
   ({ type: "system", subtype: "background_tasks_changed", tasks: ts.map((t) => ({ task_type: "local_bash", ...t })), uuid: "bg", session_id: "s_1" }) as unknown as SDKMessage;
+/** A task's status turning completed, which Claude Code sends before the task leaves the background level. */
+const finished = (task_id: string) =>
+  ({ type: "system", subtype: "task_updated", task_id, patch: { status: "completed", end_time: 0 }, uuid: `u_${task_id}`, session_id: "s_1" }) as unknown as SDKMessage;
 const build = { task_id: "t1", description: "npm run build" };
 const lint = { task_id: "t2", description: "npm run lint" };
 /** A frame as Claude Code stamps it with the uuids of the user messages its turn consumed. */
@@ -1818,7 +1821,7 @@ describe("background work", () => {
     const r = h.push("[r]", routine);
     await flush();
     expect([first.closed, h.queries.length, h.session.current?.id as string | undefined]).toEqual([false, 1, r]);
-    first.emit(tasks());
+    first.emit(finished("t1"), tasks());
     await flush();
     expect([first.closed, h.queries.length, h.q().received.map((x) => x.text), h.q().options.maxBudgetUsd]).toEqual([true, 2, ["[r]"], 10]);
     expect(h.notes).toEqual([]);

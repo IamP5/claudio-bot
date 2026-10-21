@@ -8,7 +8,7 @@ import { createMachineNode } from "../src/machine/node";
 import { newAgentId, newIntentId, type Event, type Intent } from "../src/machine/wire";
 import type { AgentId, BotId, Message, MessageId } from "../src/protocol";
 import { emptySession, emptyWorld, newBot, own, type AgentRecord, type MoveId, type MoveRecord } from "../src/world";
-import { FakeQuery, cleanup, flush, result, roots, runBash, testProfile } from "./hub-kit";
+import { FakeQuery, cleanup, flush, later, result, roots, runBash, testProfile } from "./hub-kit";
 
 afterEach(cleanup);
 
@@ -157,4 +157,16 @@ test("a machine saves an agent's record on each of its events, so a restart find
   await flush();
   expect(m.events.findLast((e) => e.kind === "agent")).toMatchObject({ agent: { status: "waiting" } });
   expect(saved.at(-1)).toBe("waiting");
+});
+
+test("a card's reminder on the machine goes to the home as a reminder event, once", async () => {
+  const m = machine();
+  await m.node.runtime.apply(start({ name: "Ana", dailyCapUsd: null, connectorsOff: [] }));
+  await flush();
+  await runBash(m.queries[0]!, "git push origin main");
+  const card = m.events.findLast((e): e is Extract<Event, { kind: "card" }> => e.kind === "card")!;
+  later(61 * 60_000);
+  m.node.gate.tick(new Date());
+  m.node.gate.tick(new Date());
+  expect(m.events.filter((e) => e.kind === "reminder")).toMatchObject([{ botId: B1, cardId: card.message.id }]);
 });

@@ -865,6 +865,12 @@ export function createHub(deps: HubDeps): Hub {
         if (bot && found) note(bot, `{0}: ${e.text}`, [agentPeer(found.agent)]);
         return;
       }
+      case "reminder": {
+        const bot = world.bots.get(e.botId);
+        const card = bot?.messages.find((m) => m.id === e.cardId);
+        if (bot && card && isOpenCard(card)) deps.push.notify(bot, "reminder", e.cardId);
+        return;
+      }
       case "usage": {
         ledger.record(e.row);
         const bot = e.row.botId === null ? undefined : world.bots.get(e.row.botId);

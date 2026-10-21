@@ -251,8 +251,10 @@ export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "row
       // A stand-in's cards are its agents', so their answers and notices go to the agents; nothing reaches a bot here.
       deliver: (botId) => deps.log(`machine: dropped an envelope for bot ${botId}, which runs on the home`),
       notice: () => {},
-      // The home pushes, from the card events.
-      notify: () => {},
+      // The home pushes: a new card from its card event, and a reminder from this one.
+      notify(bot, reason, id) {
+        if (reason === "reminder") node.runtime.emit({ kind: "reminder", botId: bot.id, cardId: id });
+      },
     },
   });
 

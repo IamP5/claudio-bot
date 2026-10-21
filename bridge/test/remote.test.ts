@@ -5,6 +5,7 @@ import { profileOf } from "../src/machine/profile";
 import { profileView, type Event, type EventBody, type Intent, type MachineId } from "../src/machine/wire";
 import { machinesBlock } from "../src/prompts";
 import type { Agent, AgentId, BotId, Message, MessageId } from "../src/protocol";
+import { createPush } from "../src/push";
 import { emptyWorld, type World } from "../src/world";
 import { assistant, bot, callTool, cleanup, flush, hubOver, later, result, text } from "./hub-kit";
 
@@ -247,4 +248,23 @@ test("deleting a bot drops the start still waiting for its offline machine, so n
   r.flip(true);
   await flush();
   expect(r.intents).toEqual([]);
+});
+
+test("a remote card's reminder pushes from the home once, even when its event comes again, and not after the card closed", async () => {
+  const world = emptyWorld();
+  const sent: string[] = [];
+  const push = createPush({ world, persist: () => {}, sender: async (n) => void sent.push(n.text), liveUntil: () => null, now: () => new Date(), log: () => {} });
+  const m = remote();
+  world.bots.set(B, bot("eng"));
+  hubOver(world, { links: m.links, push });
+  m.send({ kind: "card", botId: B, message: card() });
+  m.send({ kind: "reminder", botId: B, cardId: "c_mac1" as MessageId });
+  m.send({ kind: "reminder", botId: B, cardId: "c_mac1" as MessageId });
+  await flush();
+  expect(sent).toEqual(["eng needs you", "eng is still waiting for you"]);
+
+  m.send({ kind: "card", botId: B, message: { ...card("once"), id: "c_mac2" as MessageId } });
+  m.send({ kind: "reminder", botId: B, cardId: "c_mac2" as MessageId });
+  await flush();
+  expect(sent).toHaveLength(2);
 });

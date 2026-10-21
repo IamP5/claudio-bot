@@ -38,9 +38,9 @@ export type AgentRuntime = {
   ack(seq: Seq): void;
   /**
    * An event from outside the agents: a message the gate posted on a stand-in, for the home's mirror of the bot's chat,
-   * a row the ledger charged, or this machine's profile at boot.
+   * a card's reminder, a row the ledger charged, or this machine's profile at boot.
    */
-  emit(body: Extract<EventBody, { kind: "card" | "usage" | "profile" }>): void;
+  emit(body: Extract<EventBody, { kind: "card" | "reminder" | "usage" | "profile" }>): void;
   /** Called with each event as it is emitted, in order. Returns the unsubscribe. */
   subscribe(f: (e: Event) => void): () => void;
   local: LocalAgents;

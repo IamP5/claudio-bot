@@ -79,6 +79,8 @@ export type EventBody =
   | { kind: "note"; agentId: AgentId; botId: BotId; text: string }
   /** A message the machine's gate posted on its stand-in, or the same message again once answered or expired. */
   | { kind: "card"; botId: BotId; message: Message }
+  /** The gate reminds once at half a card's life; only the home pushes, so the reminder rides here. */
+  | { kind: "reminder"; botId: BotId; cardId: MessageId }
   | { kind: "usage"; row: UsageRow }
   | { kind: "profile"; profile: ProfileView }
   | { kind: "refused"; intentId: IntentId; reason: string }
@@ -281,6 +283,7 @@ export const eventSchema: z.ZodType<Event> = z.discriminatedUnion("kind", [
   z.object({ ...stamp, kind: z.literal("report"), agentId, botId: id<BotId>(), text, by: initiator }),
   z.object({ ...stamp, kind: z.literal("note"), agentId, botId: id<BotId>(), text }),
   z.object({ ...stamp, kind: z.literal("card"), botId: id<BotId>(), message: messageSchema }),
+  z.object({ ...stamp, kind: z.literal("reminder"), botId: id<BotId>(), cardId: messageId }),
   z.object({ ...stamp, kind: z.literal("usage"), row: usageRow }),
   z.object({ ...stamp, kind: z.literal("profile"), profile: profileViewSchema }),
   z.object({ ...stamp, kind: z.literal("refused"), intentId, reason: text }),

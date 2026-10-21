@@ -2502,6 +2502,16 @@
       }
     },
     {
+      "t": "event",
+      "event": {
+        "seq": 18,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "reminder",
+        "botId": "b1",
+        "cardId": "m30"
+      }
+    },
+    {
       "t": "applied",
       "intentId": "i_1",
       "applied": {

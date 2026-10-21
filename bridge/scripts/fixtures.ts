@@ -349,6 +349,7 @@ export const link = [
   { t: "event", event: { seq: 15, at, kind: "profile", profile: machineProfile } },
   { t: "event", event: { seq: 16, at, kind: "refused", intentId: "i_1", reason: "No project \"web\". Call list_projects for the names." } },
   { t: "event", event: { seq: 17, at, kind: "snapshot", agents: [], openCards: [{ botId: "b1", message: agentCard }] } },
+  { t: "event", event: { seq: 18, at, kind: "reminder", botId: "b1", cardId: "m30" } },
   { t: "applied", intentId: "i_1", applied: { ok: true, reply: "Started agent a1 on web. It reports back to you when its turn ends." } },
   { t: "applied", intentId: "i_4", applied: { ok: false, reason: "Nothing is running." } },
 ] satisfies Wire<HomeFrame | MachineFrame>[];

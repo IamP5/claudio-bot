@@ -354,6 +354,8 @@ export function finishMove(deps: MoveDeps, moveId: string): Finished {
 
 export type WorldCommandDeps = MoveDeps & { cwd: string; out: (text: string) => void };
 
+const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+
 const WORLD_USAGE = `usage: claudiobot world <export [--out <file>] | import <file> | finish <moveId>>
 
   export  freeze this bridge's bots and write them, with their files, to one bundle
@@ -395,11 +397,11 @@ function exportStep(deps: WorldCommandDeps, out: string | undefined): number {
   const names = bundle.world.bots.map((b) => b.name).join(", ");
   deps.out(
     (result.fresh
-      ? `Froze ${bundle.world.bots.length} bots (${names}). They no longer run, fire routines or push here. Agents stay on this machine.\n`
+      ? `Froze ${count(bundle.world.bots.length, "bot")} (${names}). They no longer run, fire routines or push here. Agents stay on this machine.\n`
       : `These bots were frozen earlier (${names}). This is the same move again.\n`) +
       `Wrote ${path}\n` +
       `Move ${moveId}. The file holds your chats and paired devices, so keep it private and delete it after the import.\n` +
-      (result.left > 0 ? `${result.left} bots made after the freeze stay here. Finish this move, then export again to move them.\n` : "") +
+      (result.left > 0 ? `${count(result.left, "bot")} made after the freeze did not move. Finish this move, then export again to move them.\n` : "") +
       `\nNext:\n` +
       `  1. Copy the file to the new home machine and stop the bridge there.\n` +
       `  2. There, run claudiobot world import <file>, then start the bridge. Your phone's pairing works there too.\n` +
@@ -429,8 +431,8 @@ function importStep(deps: WorldCommandDeps, file: string): number {
       return 0;
     case "imported":
       deps.out(
-        `Imported move ${result.moveId} from ${result.from}: ${result.bots.length} bots (${result.bots.join(", ")}), ` +
-          `${result.routines} routines, ${result.devices} paired devices.\n` +
+        `Imported move ${result.moveId} from ${result.from}: ${count(result.bots.length, "bot")} (${result.bots.join(", ")}), ` +
+          `${count(result.routines, "routine")}, ${count(result.devices, "paired device")}.\n` +
           `Start the bridge. Then, on ${result.from}, run claudiobot world finish ${result.moveId}\n`,
       );
       return 0;
@@ -447,7 +449,7 @@ function finishStep(deps: WorldCommandDeps, moveId: string): number {
       deps.out(`Move ${moveId} was already finished. Nothing changed.\n`);
       return 0;
     case "finished":
-      deps.out(`Finished move ${moveId}. The homes of its ${result.bots} bots went to ${join(deps.home, "trash")}.\n`);
+      deps.out(`Finished move ${moveId}. The homes of its ${count(result.bots, "bot")} went to ${join(deps.home, "trash")}.\n`);
       return 0;
   }
 }

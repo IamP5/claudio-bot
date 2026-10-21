@@ -171,8 +171,12 @@ async function main(argv: string[]): Promise<number> {
         out,
       });
     }
-    case "world":
-      return worldCommand(argv.slice(1), { home: bridgeHome(), machine: profile.name.replace(/\.local$/, ""), now: () => new Date(), cwd: process.cwd(), out });
+    case "world": {
+      // The name main.ts gives the machine, so the moved bot's notice and the next steps say what the hello says.
+      const computer = await exec(["scutil", "--get", "ComputerName"]);
+      const machine = (computer.code === 0 && computer.stdout.trim()) || hostname().replace(/\.local$/, "");
+      return worldCommand(argv.slice(1), { home: bridgeHome(), machine, now: () => new Date(), cwd: process.cwd(), out });
+    }
     default:
       process.stderr.write(USAGE);
       return command === undefined || command === "help" || command === "--help" ? 0 : 2;

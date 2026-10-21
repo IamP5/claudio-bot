@@ -398,7 +398,7 @@ describe("claudiobot world", () => {
     const imported = run(omarchy, cwd, "import", "bundle.json");
     expect(imported).toEqual({
       code: 0,
-      printed: `Imported move ${moveId} from mac: 2 bots (Scout, Mate), 1 routines, 1 paired devices.\nStart the bridge. Then, on mac, run claudiobot world finish ${moveId}\n`,
+      printed: `Imported move ${moveId} from mac: 2 bots (Scout, Mate), 1 routine, 1 paired device.\nStart the bridge. Then, on mac, run claudiobot world finish ${moveId}\n`,
     });
     expect(run(omarchy, cwd, "import", "bundle.json").printed).toBe(`Move ${moveId} was already imported at ${at}. Nothing changed.\n`);
     expect(run(mac, cwd, "import", "bundle.json")).toMatchObject({ code: 1, printed: expect.stringContaining("This bridge exported") });

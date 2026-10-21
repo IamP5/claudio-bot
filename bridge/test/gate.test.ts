@@ -1,3 +1,4 @@
+import { PRIVATE } from "../src/private";
 import type { CanUseTool, HookJSONOutput, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
@@ -51,8 +52,8 @@ function setup(opts: { bridgeName?: string } = {}) {
     world,
     scopeOf: (actor) =>
       actor.kind === "bot"
-        ? { bridgeHome: realpathSync(bridge), own: realpathSync(own), userMd: join(realpathSync(bridge), "USER.md"), homedir: root }
-        : { bridgeHome: realpathSync(bridge), own: root, userMd: null, homedir: root },
+        ? { bridgeHome: realpathSync(bridge), own: realpathSync(own), userMd: join(realpathSync(bridge), "USER.md"), homedir: root, private: PRIVATE.darwin }
+        : { bridgeHome: realpathSync(bridge), own: root, userMd: null, homedir: root, private: PRIVATE.darwin },
     turnOf: () => turn,
     headroom: () => ({ ok: true, capReached: false }),
     say: (b, m) => {

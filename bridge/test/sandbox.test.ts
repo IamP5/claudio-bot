@@ -5,15 +5,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decide, type PolicyContext, type Scope, type ToolCall } from "../src/policy";
 import { PRIVATE } from "../src/private";
-import { AGENT_GIT_ENV, agentGitEnv, gitDirsOf, sandboxFor, sandboxFailure } from "../src/sandbox";
+import { profileOf, type Platform } from "../src/machine/profile";
+import { AGENT_GIT_ENV, agentGitEnv, gitDirsOf, sandboxFor as sandboxOn, sandboxFailure } from "../src/sandbox";
 import type { Actor } from "../src/world";
 
 const HOME = "/Users/u";
+/** The settings for a machine whose environment is `env`, as the bridge builds its profile at boot. */
+const sandboxFor = (actor: Actor, scope: Scope, env: Record<string, string | undefined>, gitDirs: string[] = [], platform: Platform = "darwin") =>
+  sandboxOn(actor, scope, profileOf({ env, platform, name: "test", homedir: scope.homedir, username: "u" }), env, gitDirs);
 const BRIDGE = "/Users/u/.claudiobot";
 const bot: Actor = { kind: "bot", botId: "b_alpha" as any };
 const agent: Actor = { kind: "agent", botId: "b_alpha" as any, agentId: "a_1" as any };
-const botScope: Scope = { bridgeHome: BRIDGE, own: `${BRIDGE}/bots/b_alpha`, userMd: `${BRIDGE}/USER.md`, homedir: HOME };
-const agentScope = (own = "/Users/u/Dev/app"): Scope => ({ bridgeHome: BRIDGE, own, userMd: null, homedir: HOME });
+const botScope: Scope = { bridgeHome: BRIDGE, own: `${BRIDGE}/bots/b_alpha`, userMd: `${BRIDGE}/USER.md`, homedir: HOME, private: PRIVATE.darwin };
+const agentScope = (own = "/Users/u/Dev/app"): Scope => ({ bridgeHome: BRIDGE, own, userMd: null, homedir: HOME, private: PRIVATE.darwin });
 const ENV = { TMPDIR: "/var/folders/ab/cdef/T/", SSH_AUTH_SOCK: "/var/run/com.apple.launchd.X/Listeners", HOME };
 
 // Seatbelt's rules as the sandbox applies them: allowRead wins over denyRead, denyWrite wins over allowWrite. A glob
@@ -396,7 +400,7 @@ test("the gate's floors and the sandbox cover the same private paths", () => {
   const read = (path: string): ToolCall => ({ tool: "Read", input: { file_path: path }, cwd: "/Users/u/Dev/app", toolUseId: "t", subagent: null, mcpServer: null });
   const botBox = sandboxFor(bot, botScope, ENV);
   const agentBox = sandboxFor(agent, agentScope(), ENV);
-  const open = Object.values(PRIVATE)
+  const open = Object.values(PRIVATE.darwin)
     .flat()
     .map((rel) => `${HOME}/${rel}/inner`)
     .filter((p) => decide(read(p), ctx).kind !== "deny" || canRead(botBox, p) || canRead(agentBox, p));
@@ -483,5 +487,53 @@ describe("CLAUDIOBOT_ACCESS and CLAUDIOBOT_SANDBOX", () => {
   test("the git ssh rewrite goes only to sandboxed agents", () => {
     expect(agentGitEnv(ENV)).toEqual(AGENT_GIT_ENV);
     expect(agentGitEnv({ ...ENV, CLAUDIOBOT_ACCESS: "full" })).toEqual({});
+  });
+});
+
+describe("on Linux", () => {
+  const LHOME = "/home/u";
+  const scope = (own = `${LHOME}/code/app`): Scope => ({ bridgeHome: `${LHOME}/.claudiobot`, own, userMd: null, homedir: LHOME, private: PRIVATE.linux });
+  const linuxBox = (env: Record<string, string | undefined> = { TMPDIR: "/tmp", SSH_AUTH_SOCK: "/tmp/ssh-x/agent.1" }) =>
+    sandboxFor(agent, scope(), env, [], "linux");
+  const ctx: PolicyContext = {
+    actor: agent,
+    initiator: { kind: "user" },
+    scope: scope(),
+    rules: [],
+    grants: [],
+    headroom: { ok: true, capReached: false },
+    callsToday: {},
+    connectorsOff: [],
+    now: "2026-10-20T12:00:00.000Z",
+    realpath: (p) => p,
+  };
+  const read = (path: string): ToolCall => ({ tool: "Read", input: { file_path: path }, cwd: `${LHOME}/code/app`, toolUseId: "t", subagent: null, mcpServer: null });
+
+  test("browser profiles, keyrings and keys are refused by the gate and unreadable in the sandbox under guarded", () => {
+    const secret = [
+      ".config/google-chrome/Default/Cookies",
+      ".config/chromium/Default/Login Data",
+      ".mozilla/firefox/abc.default/logins.json",
+      ".local/share/keyrings/login.keyring",
+      ".gnupg/private-keys-v1.d/x.key",
+      ".ssh/id_ed25519",
+    ].map((rel) => `${LHOME}/${rel}`);
+    const box = linuxBox();
+    expect(secret.map((p) => [p, decide(read(p), ctx).kind, canRead(box, p)])).toEqual(secret.map((p) => [p, "deny", false]));
+  });
+
+  test("the agent pushes with its ssh config and public keys, and writes /tmp and its build caches", () => {
+    const box = linuxBox();
+    expect(readsOf(box, [`${LHOME}/.ssh/config`, `${LHOME}/.ssh/id_ed25519.pub`])).toEqual({ [`${LHOME}/.ssh/config`]: true, [`${LHOME}/.ssh/id_ed25519.pub`]: true });
+    expect(writesOf(box, ["/tmp/build/x", `${LHOME}/.cache/go-build/x`, `${LHOME}/Documents/x`])).toEqual({
+      "/tmp/build/x": true,
+      [`${LHOME}/.cache/go-build/x`]: true,
+      [`${LHOME}/Documents/x`]: false,
+    });
+    expect(box.network?.allowUnixSockets).toEqual(["/tmp/ssh-x/agent.1"]);
+  });
+
+  test("full with the sandbox off leaves Bash unsandboxed, so only the gate's floor keeps the bridge home", () => {
+    expect(linuxBox({ CLAUDIOBOT_ACCESS: "full", CLAUDIOBOT_SANDBOX: "off" })).toEqual({ enabled: false });
   });
 });

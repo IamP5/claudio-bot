@@ -2,25 +2,11 @@ import type { SandboxSettings } from "@anthropic-ai/claude-agent-sdk";
 import { accessOf } from "./access";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import type { MachineProfile } from "./machine/profile";
 import type { Scope } from "./policy";
-import { PRIVATE } from "./private";
 import type { Actor } from "./world";
 
 type SandboxEnv = Readonly<Record<string, string | undefined>>;
-
-/** Under the user's home: what no sandboxed command reads, the same paths the gate's floors refuse. */
-const DENIED: readonly string[] = Object.values(PRIVATE).flat();
-
-/**
- * Re-opened inside DENIED for a mac agent, so it can commit and push. ssh and `ssh-keygen -Y sign` load `<key>.pub`
- * and sign through the agent socket, so private keys stay unreadable whatever they are named. The keychain is what
- * git's osxkeychain credential helper reads for an https push; it also lets any sandboxed command of the agent fetch
- * the GitHub https token through that helper.
- */
-const PUSH_READABLE: readonly string[] = [".ssh/config", ".ssh/known_hosts", ".ssh/*.pub", "Library/Keychains"];
-
-/** Under the user's home: build caches a mac agent's package managers and Xcode write. */
-const CACHES: readonly string[] = [".npm", ".bun/install/cache", ".cache", "Library/Caches", "Library/Developer/Xcode/DerivedData"];
 
 /**
  * Under a bot's home: the only folders its Bash commands write. library/ holds what it makes for the user, inbox/ the
@@ -84,7 +70,7 @@ export const AGENT_GIT_ENV: Readonly<Record<string, string>> = {
 export const agentGitEnv = (env: SandboxEnv): Readonly<Record<string, string>> => (accessOf(env).sandbox ? AGENT_GIT_ENV : {});
 
 /**
- * The OS-enforced floor (Seatbelt on macOS) for every Bash call of a bot or a mac agent, and every process it starts.
+ * The OS-enforced floor (Seatbelt on macOS, bubblewrap on Linux) for every Bash call of a bot or a mac agent, and every process it starts.
  * It does not cover Read/Write/Edit/Grep/Glob or WebFetch: the gate's floors cover those tool paths.
  * A bot writes the folders in BOT_WRITABLE but not the files in BOT_LOADED, and the sandbox's own TMPDIR; it reads its home and USER.md and
  * nothing else of the bridge home. USER.md changes only through the bridge (remember, the phone's Memory). A mac agent
@@ -94,11 +80,10 @@ export const agentGitEnv = (env: SandboxEnv): Readonly<Record<string, string>> =
  * CLAUDIOBOT_SANDBOX=off (the default under CLAUDIOBOT_ACCESS=full, see access.ts) turns it off: commands run as the
  * user. Under full access with the sandbox on, the writes stay as below but only the bridge home is unreadable.
  */
-export function sandboxFor(actor: Actor, scope: Scope, env: SandboxEnv, gitDirs: readonly string[] = []): SandboxSettings {
-  const access = accessOf(env);
-  if (!access.sandbox) return { enabled: false };
+export function sandboxFor(actor: Actor, scope: Scope, machine: MachineProfile, env: SandboxEnv, gitDirs: readonly string[] = []): SandboxSettings {
+  if (!machine.access.sandbox) return { enabled: false };
   const home = (rel: string) => join(scope.homedir, rel);
-  const denyRead = access.full ? [scope.bridgeHome] : [scope.bridgeHome, ...DENIED.map(home)];
+  const denyRead = machine.access.full ? [scope.bridgeHome] : [scope.bridgeHome, ...Object.values(scope.private).flat().map(home)];
   const bridgeVars = Object.keys(env).filter((k) => /^CLAUD(IO|E)BOT_/.test(k)).sort();
   const common = {
     enabled: true,
@@ -130,29 +115,16 @@ export function sandboxFor(actor: Actor, scope: Scope, env: SandboxEnv, gitDirs:
     ...common,
     ...(gh ? { enableWeakerNetworkIsolation: true } : {}),
     filesystem: {
-      allowWrite: [scope.own, ...gitDirs, ...userTempDirs(env), ...CACHES.map(home)],
+      allowWrite: [scope.own, ...gitDirs, ...machine.tempDirs, ...machine.caches.map(home)],
       denyWrite: [...AGENT_LOADED.map((f) => join(scope.own, f)), ...gitDirs.flatMap((d) => GIT_RUNS.map((f) => join(d, f)))],
       denyRead,
-      allowRead: [...PUSH_READABLE, ...(gh ? [".config/gh"] : [])].map(home),
+      allowRead: [...machine.pushReadable, ...(gh ? [".config/gh"] : [])].map(home),
     },
-    network: { ...domains, ...(env.SSH_AUTH_SOCK ? { allowUnixSockets: [onDisk(env.SSH_AUTH_SOCK)] } : {}) },
+    network: { ...domains, ...(machine.sshAuthSock ? { allowUnixSockets: [machine.sshAuthSock] } : {}) },
   };
 }
 
 const listOf = (csv: string | undefined) => (csv ?? "").split(",").map((d) => d.trim()).filter((d) => d !== "");
-
-/** macOS reaches /tmp, /var and /etc through /private, and the sandbox matches a socket by the path on disk. */
-const onDisk = (p: string) => (/^\/(tmp|var|etc)(\/|$)/.test(p) ? `/private${p}` : p);
-
-/**
- * macOS gives each user a temp dir (T, the launchd TMPDIR) and a cache dir (C) under /var/folders. Xcode, clang and
- * swift find them through confstr rather than $TMPDIR, which the sandbox repoints at its own dir, so an agent's builds
- * need both writable.
- */
-function userTempDirs(env: SandboxEnv): string[] {
-  const m = (env.TMPDIR ?? "").match(/^(?:\/private)?(\/var\/folders\/[^/]+\/[^/]+)\/T\/?$/);
-  return m ? [`/private${m[1]}/T`, `/private${m[1]}/C`] : [];
-}
 
 /**
  * The git dirs a commit in `cwd` writes outside it: the repo's `.git` when cwd is a subfolder of the repo, and for a

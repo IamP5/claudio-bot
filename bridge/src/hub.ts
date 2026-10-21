@@ -639,7 +639,7 @@ export function createHub(deps: HubDeps): Hub {
           model: deps.model,
           hooks: gate.hooks(actor),
           canUseTool: gate.canUseTool(actor),
-          sandbox: sandboxFor(actor, scopeOf(actor), process.env),
+          sandbox: sandboxFor(actor, scopeOf(actor), deps.profile, process.env),
           settings: settingsFor(bot.id),
           // A block's start tells whether the text before it leads up to a question card (Reading.tail).
           includePartialMessages: true,
@@ -793,7 +793,7 @@ export function createHub(deps: HubDeps): Hub {
     beginTurn: (actor) => gate.beginTurn(actor),
     sandbox(actor) {
       const scope = scopeOf(actor);
-      return sandboxFor(actor, scope, process.env, gitDirsOf(scope.own));
+      return sandboxFor(actor, scope, deps.profile, process.env, gitDirsOf(scope.own));
     },
     configRoot: (id) => homes.agentConfig(id),
     transcriptExists: (id, cwd) => transcriptExists(projectsDir, id, cwd),

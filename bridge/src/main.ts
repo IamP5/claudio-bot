@@ -179,6 +179,13 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, shutdown
 console.log(`claudiobot bridge on ${machine}`);
 for (const url of urls) console.log(`  ${url}`);
 console.log(accessLine(profile.access));
+const missing = profile.sandboxNeeds.filter((command) => Bun.which(command) === null);
+if (missing.length > 0) {
+  console.error(
+    `WARNING: the sandbox is on but ${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} not on PATH, so every Bash call of a bot or agent will fail.\n` +
+      `  Install ${missing.map((c) => (c === "bwrap" ? "bubblewrap" : c)).join(" and ")}, or set CLAUDIOBOT_SANDBOX=off.`,
+  );
+}
 
 function announce({ code, expiresAt }: PairCode) {
   const link = pairLink(urls, code);

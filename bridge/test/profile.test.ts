@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { platformOf, profileOf, scopeFor, type MachineProfile, type Platform } from "../src/machine/profile";
+import { PRIVATE } from "../src/private";
 import { decide, type PolicyContext, type Scope, type ToolCall } from "../src/policy";
 import type { AgentId, BotId } from "../src/protocol";
 import type { Actor } from "../src/world";
@@ -16,6 +17,7 @@ describe("scopeFor", () => {
       homedir: "/Users/alex",
       users: { alex: "/Users/alex", root: "/var/root" },
       full: false,
+      private: PRIVATE.darwin,
     });
   });
 
@@ -25,6 +27,7 @@ describe("scopeFor", () => {
       homedir: "/home/alex",
       users: { alex: "/home/alex", root: "/root" },
       full: true,
+      private: PRIVATE.linux,
     });
   });
 

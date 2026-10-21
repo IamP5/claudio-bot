@@ -1,3 +1,4 @@
+import { PRIVATE } from "../src/private";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -79,7 +80,7 @@ function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
     decideGate: () => ({ ok: false, error: "Unknown card" }),
     ledger: { add() {}, headroom: () => ({ ok: true, capReached: false }), budgetLeft: () => null, dailyLeft: () => null },
     claude: { query: (() => { throw new Error("no Claude Code in this test"); }) as never, executable: () => "/fake/claude" },
-    scope: (cwd) => ({ bridgeHome: join(base, "home"), own: cwd, userMd: null, homedir: base }),
+    scope: (cwd) => ({ bridgeHome: join(base, "home"), own: cwd, userMd: null, homedir: base, private: PRIVATE.darwin }),
     folders: () => [],
     persist: () => {},
     now: () => new Date(),

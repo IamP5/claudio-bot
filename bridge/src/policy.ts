@@ -15,7 +15,7 @@
 //     a differently-cased spelling, which realpath canonicalises, but homoglyphs and percent-encoding are not decoded.
 import { basename, isAbsolute, normalize, resolve, sep } from "node:path";
 import type { Headroom } from "./ledger";
-import { PRIVATE } from "./private";
+import type { PrivatePaths } from "./private";
 import type { MessageId } from "./protocol";
 import type { ClaudioTool } from "./tools";
 import { heredocBodies, shellCommands, type Word } from "./shell";
@@ -40,6 +40,8 @@ export type Scope = {
   own: string;
   userMd: string | null;
   homedir: string;
+  /** This machine's private paths under homedir (private.ts). */
+  private: PrivatePaths;
   /** Known username → home directory, so `~name` resolves. The boundary fills at least the current user and root. */
   users?: Readonly<Record<string, string>>;
   /** CLAUDIOBOT_ACCESS=full (access.ts): only FULL_FLOORS refuse, and only FULL_HELD rows wait for a tap. */
@@ -603,7 +605,7 @@ type Floor = {
   handOff?: boolean;
 };
 
-const inHome = (...rels: string[]) => (ctx: PolicyContext) => rels.map((r) => resolve(ctx.scope.homedir, r));
+const privateOf = (kind: keyof PrivatePaths) => (ctx: PolicyContext) => ctx.scope.private[kind].map((r) => resolve(ctx.scope.homedir, r));
 
 /** Entering any of these is the user's job (handed off), read or write, by the tool name or an input field. */
 const CREDENTIAL_WORDS = new Set(["password", "passwords", "passcode", "otp", "totp", "2fa", "mfa", "cvv", "cvc", "cardnumber"]);
@@ -687,7 +689,7 @@ const FLOORS: readonly Floor[] = [
   {
     id: "floor.bridge",
     label: "ClaudioBot's own state, tokens and other bots' homes",
-    roots: (ctx) => [ctx.scope.bridgeHome, ...inHome(...PRIVATE.bridge)(ctx)],
+    roots: (ctx) => [ctx.scope.bridgeHome, ...privateOf("bridge")(ctx)],
     except: (ctx) => (ctx.actor.kind === "bot" ? [ctx.scope.own, ...(ctx.scope.userMd === null ? [] : [ctx.scope.userMd])] : []),
   },
   {
@@ -699,14 +701,14 @@ const FLOORS: readonly Floor[] = [
   {
     id: "floor.keys",
     label: "SSH, GPG and cloud keys or the Keychain",
-    roots: inHome(...PRIVATE.keys),
-    bash: (p) => p.verb === "security" || (p.verb === "ssh-add" && p.words.includes("-L")) || (p.verb === "gpg" && p.words.some((w) => w.includes("export-secret"))),
+    roots: privateOf("keys"),
+    bash: (p) => p.verb === "security" || p.verb === "secret-tool" || (p.verb === "ssh-add" && p.words.includes("-L")) || (p.verb === "gpg" && p.words.some((w) => w.includes("export-secret"))),
     rawScan: true,
   },
   {
     id: "floor.browser",
     label: "browser profiles and cookies",
-    roots: inHome(...PRIVATE.browser),
+    roots: privateOf("browser"),
     rawScan: true,
   },
   {
@@ -718,7 +720,7 @@ const FLOORS: readonly Floor[] = [
   {
     id: "floor.creds",
     label: "a stored credential or token",
-    roots: inHome(...PRIVATE.creds),
+    roots: privateOf("creds"),
     bash: (p) =>
       (p.verb === "gh" && p.words[1] === "auth" && (["token", "refresh"].includes(p.words[2] ?? "") || (p.words[2] === "status" && (p.words.includes("-t") || p.words.includes("--show-token"))))) ||
       (p.verb === "git" && (p.words[1] ?? "").startsWith("credential")) ||
@@ -729,7 +731,7 @@ const FLOORS: readonly Floor[] = [
   {
     id: "floor.personal",
     label: "Messages, Mail, Contacts or Calendars",
-    roots: inHome(...PRIVATE.personal),
+    roots: privateOf("personal"),
     rawScan: true,
   },
   {

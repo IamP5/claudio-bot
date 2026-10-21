@@ -32,13 +32,16 @@ enum DemoSessions {
         _ id: SessionID, _ project: ProjectID, _ title: String, origin: SessionOrigin, minutes: Double,
         status: SessionStatus = .idle, holder: SessionHolder = .nobody, unread: Bool = false, parent: SessionID? = nil,
         agent: SessionAgentLink? = nil, branch: String? = nil, worktree: Bool = false, pr: (Int, PullRequestState?)? = nil,
-        mirror: SessionMirror = .imported, url: URL? = nil, hidden: Bool = false
+        mirror: SessionMirror = .imported, url: URL? = nil, hidden: Bool = false,
+        since: Double? = nil, running: (agents: Int, commands: Int)? = nil, activity: String? = nil, outcome: (SessionOutcomeKind, String)? = nil
     ) -> SessionRow {
         SessionRow(
             id: id, projectId: project, parentId: parent, title: title, origin: origin, agent: agent, status: status,
             holder: holder, unread: unread, branch: branch, worktree: worktree,
             pr: pr.map { SessionPullRequest(number: $0.0, url: URL(string: "https://github.com/alex/repo/pull/\($0.0)")!, state: $0.1) },
-            mirror: mirror, hidden: hidden, url: url, createdAt: ago(minutes + 90), lastAt: ago(minutes)
+            mirror: mirror, hidden: hidden, url: url, createdAt: ago(minutes + 90), lastAt: ago(minutes),
+            since: since.map(ago), running: running.map { SessionRunning(agents: $0.agents, commands: $0.commands) }, activity: activity,
+            outcome: outcome.map { SessionOutcome(kind: $0.0, text: $0.1, at: ago(minutes)) }
         )
     }
 
@@ -48,23 +51,27 @@ enum DemoSessions {
 
     static let rows: [SessionRow] = [
         row(fade, soltaOSom, "Smooth the audio fade on iOS Safari", origin: .agent, minutes: 1, status: .awaitingApproval, holder: .claudio,
-            agent: SessionAgentLink(botId: BotID("engineer"), agentId: AgentID("a1")), branch: "claudio/6b1f3c2a", worktree: true, mirror: .pending),
+            agent: SessionAgentLink(botId: BotID("engineer"), agentId: AgentID("a1")), branch: "claudio/6b1f3c2a", worktree: true, mirror: .pending,
+            since: 3, activity: "Waiting for approval: Bash"),
         row(playlist, soltaOSom, "Plan the playlist import", origin: .phone, minutes: 6, status: .awaitingApproval, holder: .claudio, branch: "main"),
         row(sleepers, soltaOSom, "Sleepers in parallel", origin: .phone, minutes: 2, status: .awaitingApproval, holder: .claudio, branch: "main"),
-        row(id(11), soltaOSom, "Bridge with Tailscale for iPhone", origin: .desktop, minutes: 50, unread: true, branch: "main"),
+        row(id(11), soltaOSom, "Bridge with Tailscale for iPhone", origin: .desktop, minutes: 50, unread: true, branch: "main",
+            outcome: (.finished, "Background command finished: tailscale serve")),
         row(id(12), soltaOSom, "Song of the day genre misses", origin: .terminal, minutes: 180, branch: "fix/genre"),
         row(id(13), soltaOSom, "PR #34 merge to main", origin: .desktop, minutes: 60 * 20, branch: "main", pr: (34, .merged)),
         row(id(14), soltaOSom, "Songs catalog admin page", origin: .desktop, minutes: 60 * 26, branch: "feat/admin", pr: (13, .open)),
         row(id(15), soltaOSom, "PStack setup", origin: .terminal, minutes: 60 * 30, branch: "main"),
         row(id(16), soltaOSom, "Trim verify feature files into batch recipes", origin: .sdk, minutes: 60 * 29, parent: id(15)),
         row(id(17), soltaOSom, "Fix flaky nickname-dialog specs in account.spec", origin: .sdk, minutes: 60 * 28, parent: id(15)),
-        row(id(18), soltaOSom, "Trial e2e explore as a bug-bash layer", origin: .sdk, minutes: 60 * 27, status: .failed, parent: id(15)),
+        row(id(18), soltaOSom, "Trial e2e explore as a bug-bash layer", origin: .sdk, minutes: 60 * 27, status: .failed, parent: id(15),
+            outcome: (.failed, "Exit code 1: playwright timed out after 30 s")),
         row(id(19), soltaOSom, "Volume slider on the mini player", origin: .desktop, minutes: 60 * 50, pr: (41, .closed)),
         row(id(20), soltaOSom, "Upgrade Expo to SDK 54", origin: .terminal, minutes: 60 * 70),
 
         row(sidebar, claudioBot, "Sessions sidebar for iOS", origin: .desktop, minutes: 4, status: .awaitingInput, holder: .desktop,
             branch: "feat/sessions-ios", pr: (52, .open)),
-        row(audit, claudioBot, "Audit the session code in parallel", origin: .phone, minutes: 0.5, status: .working, holder: .claudio, branch: "main"),
+        row(audit, claudioBot, "Audit the session code in parallel", origin: .phone, minutes: 0.5, status: .working, holder: .claudio, branch: "main",
+            since: 4, running: (3, 0), activity: "Agent: audit the bridge"),
         row(catalog, claudioBot, "Close all emulators", origin: .terminal, minutes: 35, branch: "main"),
         row(id(21), claudioBot, "Grokbot UI/UX polish", origin: .agent, minutes: 75, unread: true,
             agent: SessionAgentLink(botId: BotID("claude"), agentId: AgentID("a2")), branch: "claudio/polish", worktree: true, pr: (49, .open)),
@@ -74,7 +81,7 @@ enum DemoSessions {
         row(id(23), claudioBot, "Usage limits in the composer", origin: .phone, minutes: 60 * 9, branch: "feat/usage", pr: (47, .merged)),
 
         row(parity, specSync, "Mobile app feature parity with web", origin: .terminal, minutes: 9, status: .working, holder: .terminal,
-            branch: "feat/parity", pr: (2, .open)),
+            branch: "feat/parity", pr: (2, .open), since: 12, activity: "Run npm test"),
         row(id(31), specSync, "API e arquitetura, Sprint 3", origin: .desktop, minutes: 60 * 3, pr: (7, .closed)),
         row(id(32), specSync, "Catalog gap audit", origin: .desktop, minutes: 60 * 5, unread: true, pr: (9, nil)),
         row(id(33), specSync, "Jev System One model introduction", origin: .desktop, minutes: 60 * 24 * 3),

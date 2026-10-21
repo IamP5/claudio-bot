@@ -15,41 +15,29 @@ struct SessionRowView: View, Equatable {
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.row == b.row && a.avatar == b.avatar && a.depth == b.depth && a.isLast == b.isLast && a.freshness == b.freshness
-            && SessionText.age(a.row.lastAt, now: a.freshness.ageReference(now: a.now)) == SessionText.age(b.row.lastAt, now: b.freshness.ageReference(now: b.now))
+            && a.time == b.time
     }
 
+    private nonisolated var time: RowTime { RowTime(row, now: freshness.ageReference(now: now)) }
     private var emphasized: Bool { row.unread || row.needsYou }
 
+    /// At accessibility sizes the title keeps two lines and the status, time and unread dot share one line under it,
+    /// so a few rows still fit on screen.
     var body: some View {
         let accessible = typeSize.isAccessibilitySize
         HStack(alignment: accessible ? .top : .center, spacing: 10) {
             OriginBadge(origin: row.origin, avatar: avatar, size: badge)
-            let line = accessible ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(spacing: 8))
-            line {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(row.title)
-                        .font(.body.weight(emphasized ? .medium : .regular))
-                        .foregroundStyle(emphasized ? Color.white : Color.white.opacity(row.hidden ? 0.5 : 0.86))
-                        .lineLimit(accessible ? 4 : 1)
-                    if row.status == .parked {
-                        Text(SessionText.parked(row.holder))
-                            .font(.caption)
-                            .foregroundStyle(Theme.secondary)
-                            .lineLimit(accessible ? 3 : 1)
-                    }
+            if accessible {
+                VStack(alignment: .leading, spacing: 4) {
+                    lines(limit: 2)
+                    status
                 }
-                .frame(maxWidth: accessible ? .infinity : nil, alignment: .leading)
-                .layoutPriority(1)
-                if !accessible { Spacer(minLength: 0) }
-                HStack(spacing: 8) {
-                    MirrorGlyph(mirror: row.mirror)
-                    if let pr = row.pr { PullRequestChip(pr: pr) }
-                    Text(SessionText.age(row.lastAt, now: freshness.ageReference(now: now)))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(Theme.tertiary)
-                        .fixedSize()
-                    SessionMarkView(mark: SessionMark(row, freshness: freshness))
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                lines(limit: 1)
+                    .layoutPriority(1)
+                Spacer(minLength: 0)
+                status
             }
         }
         #if os(macOS)
@@ -70,6 +58,49 @@ struct SessionRowView: View, Equatable {
             }
         }
         .contentShape(Rectangle())
+    }
+
+    private func lines(limit: Int) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(row.title)
+                .font(.body.weight(emphasized ? .medium : .regular))
+                .foregroundStyle(emphasized ? Color.white : Color.white.opacity(row.hidden ? 0.5 : 0.86))
+                .lineLimit(limit)
+            if let detail = RowDetail(row) {
+                Text(detail.shown)
+                    .font(.caption)
+                    .foregroundStyle(detail.tone == .alarm ? Theme.danger : Theme.secondary)
+                    .lineLimit(limit)
+            }
+        }
+    }
+
+    private var status: some View {
+        HStack(spacing: 8) {
+            if row.hidden {
+                Image(systemName: "eye.slash").font(.caption2).foregroundStyle(Theme.secondary)
+            }
+            MirrorGlyph(mirror: row.mirror)
+            if let pr = row.pr { PullRequestChip(pr: pr) }
+            Text(time.short)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(Theme.secondary)
+                .fixedSize()
+            let mark = SessionMark(row, freshness: freshness)
+            SessionMarkView(mark: mark)
+                .overlay { if mark == nil && row.unread { UnreadDot() } }
+            if mark != nil && row.unread { UnreadDot() }
+        }
+    }
+}
+
+/// In the mark's place on a row at rest, and beside the mark on a row that is failed, working or needs you.
+struct UnreadDot: View {
+    @ScaledMetric(relativeTo: .caption) private var size: CGFloat = 8
+
+    var body: some View {
+        Circle().fill(Theme.unread).frame(width: size, height: size)
+            .accessibilityHidden(true)
     }
 }
 
@@ -120,10 +151,10 @@ struct SessionMarkView: View {
                 WorkingRing(size: size * 0.9, color: Theme.tertiary, spinning: false)
             case .failed:
                 Image(systemName: "xmark.circle").foregroundStyle(Theme.danger)
+            case .unavailable:
+                Image(systemName: "slash.circle").foregroundStyle(Theme.secondary)
             case .parked:
                 Image(systemName: "pause.circle").foregroundStyle(Theme.secondary)
-            case .unread:
-                Circle().fill(Theme.unread).frame(width: size * 0.62, height: size * 0.62)
             case nil:
                 Color.clear
             }
@@ -166,9 +197,18 @@ struct PullRequestChip: View {
         }
     }
 
+    /// A glyph per state, so the state never rests on color.
+    static func symbol(_ state: PullRequestState?) -> String {
+        switch state {
+        case .merged: "arrow.triangle.merge"
+        case .closed: "xmark.square"
+        case .open, .unknown, nil: "arrow.triangle.pull"
+        }
+    }
+
     var body: some View {
         HStack(spacing: 3) {
-            Image(systemName: "arrow.triangle.pull")
+            Image(systemName: Self.symbol(pr.state))
                 .font(.caption2.weight(.semibold))
             Text("\(pr.number)")
                 .font(.caption.monospacedDigit())
@@ -179,19 +219,19 @@ struct PullRequestChip: View {
     }
 }
 
+/// Only a failed copy to the Claude app shows on the row. A pending one is on its way and needs nothing from the
+/// user, and a glyph for it read as work in progress on a session at rest.
 struct MirrorGlyph: View {
     let mirror: SessionMirror
 
     var body: some View {
-        switch mirror {
-        case .pending:
-            Image(systemName: "arrow.triangle.2.circlepath").font(.caption2).foregroundStyle(Theme.tertiary)
-                .accessibilityHidden(true)
-        case .failed:
-            Image(systemName: "exclamationmark.triangle").font(.caption2).foregroundStyle(Theme.tertiary)
-                .accessibilityHidden(true)
-        default:
-            EmptyView()
+        if mirror == .failed {
+            Label("Not in Claude app", systemImage: "exclamationmark.triangle.fill")
+                .labelStyle(.titleAndIcon)
+                .font(.caption2)
+                .foregroundStyle(Theme.attention)
+                .fixedSize()
+                .accessibilityLabel(SessionText.mirrorFailed)
         }
     }
 }

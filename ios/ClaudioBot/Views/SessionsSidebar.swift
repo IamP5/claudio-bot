@@ -21,14 +21,19 @@ struct SidebarRoot: View {
         }
         .topBar {
             if showsSwitch {
-                Picker("Show", selection: $router.sidebar) {
-                    Text("Bots").tag(SidebarMode.bots)
-                    Text("Sessions").tag(SidebarMode.sessions)
+                VStack(alignment: .leading, spacing: 6) {
+                    Picker("Show", selection: $router.sidebar) {
+                        Text("Bots").tag(SidebarMode.bots)
+                        Text("Sessions").tag(SidebarMode.sessions)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    #if os(macOS)
+                    .controlSize(.small)
+                    #endif
+                    if router.sidebar == .bots { SessionsElsewhere() }
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
                 #if os(macOS)
-                .controlSize(.small)
                 .padding(.horizontal, 12)
                 #else
                 .padding(.horizontal, 16)
@@ -38,6 +43,30 @@ struct SidebarRoot: View {
         }
         .onChange(of: Reach(store.connection, failures: client.failures, greeted: store.bridgeProtocol != nil)) { old, new in
             if let text = Reach.announcement(from: old, to: new) { AccessibilityNotification.Announcement(text).post() }
+        }
+    }
+}
+
+/// The Bots side still says what runs and what needs the user in Sessions, from the list the window keeps watching.
+/// A view of its own, so a list change redraws this line and never the bot list.
+struct SessionsElsewhere: View {
+    @Environment(AppStore.self) private var store
+    @Environment(Router.self) private var router
+
+    var body: some View {
+        let counts = store.sessions.freshness(online: store.machine != nil).visibleCounts(store.sessions.counts)
+        let parts = SessionText.elsewhere(counts)
+        if !parts.isEmpty {
+            Button { router.sidebar = .sessions } label: {
+                Text((["Sessions"] + parts).joined(separator: " · "))
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(counts[.needsYou, default: 0] > 0 ? Theme.attention : Theme.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel((["Sessions"] + parts).joined(separator: ", "))
+            .accessibilityHint("Shows the Sessions list")
         }
     }
 }
@@ -56,10 +85,14 @@ struct SessionsSidebar: View {
     @AppStorage("collapsedProjects") private var collapsed = CollapsedProjects()
     @State private var renaming: SessionRow?
     @State private var newTitle = ""
-    /// One clock for every row's age. Rows compare their age text, so only those that changed redraw.
+    /// One clock for every row's time. Rows compare their time text, so only those that changed redraw.
     @State private var now = Date.now
     @State private var lastRetryFailed = false
+    /// The rows that needed the user when the list last looked, so only a new ask opens a folded project.
+    @State private var seenNeedingYou: Set<SessionID> = []
+    @State private var announcing: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
 
     private var index: SessionIndex { store.sessions }
     private var freshness: ListFreshness { index.freshness(online: store.machine != nil) }
@@ -120,9 +153,25 @@ struct SessionsSidebar: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
         .onChange(of: store.machine) { lastRetryFailed = false }
+        .onScrollPhaseChange { _, phase in index.holdOrder(phase != .idle) }
+        .onAppear {
+            now = .now
+            index.resort()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            now = .now
+            index.resort()
+        }
+        .onChange(of: index.needingYou, initial: true) { _, needing in
+            let opening = Set(needing.subtracting(seenNeedingYou).compactMap { index.rows[$0]?.projectId }).intersection(collapsed.ids)
+            if !opening.isEmpty { collapsed.ids.subtract(opening) }
+            seenNeedingYou = needing
+        }
+        .onChange(of: query) { _, query in announce(query) }
         .task {
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(30))
+                try? await Task.sleep(for: .seconds(10))
                 now = .now
             }
         }
@@ -155,7 +204,7 @@ struct SessionsSidebar: View {
         if query.isNarrowed {
             Text(query.filter == .all ? "No sessions match." : "No \(query.filter.title.lowercased()) sessions.")
                 .font(.subheadline)
-                .foregroundStyle(Theme.tertiary)
+                .foregroundStyle(Theme.secondary)
                 .frame(maxWidth: .infinity)
                 .padding(.top, 40)
                 .plainRow()
@@ -194,7 +243,9 @@ struct SessionsSidebar: View {
     /// A search or filter shows every match, so a narrowed list drops the fold.
     @ViewBuilder
     private func projectSection(_ section: ProjectSection) -> some View {
-        let header = ProjectHeader(project: section.project, count: section.trees.count, expanded: query.isNarrowed ? nil : expanded(section.id)) {
+        let header = ProjectHeader(
+            project: section.project, tally: SectionTally(section.rows), freshness: freshness, expanded: query.isNarrowed ? nil : expanded(section.id)
+        ) {
             router.newSession = NewSessionRequest(projectId: section.project.id)
         }
         Group {
@@ -220,32 +271,33 @@ struct SessionsSidebar: View {
     @ViewBuilder
     private func sectionRows(_ section: ProjectSection) -> some View {
         let limit = query.isNarrowed ? section.trees.count : limits[section.id, default: Self.pageSize]
-        let shown = section.trees.prefix(limit)
+        let shown = section.trees.enumerated().filter { $0.offset < limit || $0.element.isActive }.map(\.element)
         ForEach(shown) { tree in
             sessionRow(tree.row)
             ForEach(tree.descendants, id: \.row.id) { child in
-                sessionRow(child.row, depth: child.depth, isLast: child.isLast)
+                sessionRow(child.row, depth: child.depth, isLast: child.isLast, parent: child.row.parentId.flatMap { index.rows[$0]?.title })
             }
         }
-        if section.trees.count > limit {
+        let folded = section.trees.count - shown.count
+        if folded > 0 {
             Button {
                 withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) {
-                    limits[section.id] = limit + Self.moreStep
+                    limits[section.id] = max(limit, shown.count) + Self.moreStep
                 }
             } label: {
                 Text("Show more")
                     .font(.subheadline)
-                    .foregroundStyle(Theme.tertiary)
+                    .foregroundStyle(Theme.secondary)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Show \(min(Self.moreStep, section.trees.count - limit)) more in \(section.project.name)")
+            .accessibilityLabel("Show \(min(Self.moreStep, folded)) more in \(section.project.name)")
             .plainRow(insets: EdgeInsets(top: 0, leading: 20, bottom: 4, trailing: 16))
         }
     }
 
-    private func sessionRow(_ row: SessionRow, depth: Int = 0, isLast: Bool = false) -> some View {
+    private func sessionRow(_ row: SessionRow, depth: Int = 0, isLast: Bool = false, parent: String? = nil) -> some View {
         let bot = row.agent.flatMap { store.bots[$0.botId] }
         return SessionRowView(row: row, avatar: bot?.avatar, depth: depth, isLast: isLast, now: now, freshness: freshness)
             .equatable()
@@ -281,7 +333,7 @@ struct SessionsSidebar: View {
         }
         .contextMenu { menu(for: row) }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(SessionText.spoken(row, project: index.project(of: row)?.name, botName: bot?.name, freshness: freshness))
+        .accessibilityLabel(SessionText.spoken(row, project: index.project(of: row)?.name, botName: bot?.name, parent: parent, now: now, freshness: freshness))
         .accessibilityAddTraits(.isButton)
         // Ignoring the children drops the list's own press, so pressing the row selects it here.
         .accessibilityAction { router.selection = .session(row.id) }
@@ -375,6 +427,16 @@ struct SessionsSidebar: View {
         }
     }
 
+    /// Once the list has settled on the new filter or search, VoiceOver hears how many sessions it shows.
+    private func announce(_ query: SessionQuery) {
+        announcing?.cancel()
+        announcing = Task {
+            guard (try? await Task.sleep(for: .milliseconds(500))) != nil else { return }
+            let count = index.sections(query).reduce(0) { $0 + $1.rows.count }
+            AccessibilityNotification.Announcement(SessionText.matches(count, query: query)).post()
+        }
+    }
+
     /// What each filter would show for the current search, so the counts drop as the search narrows the list.
     private func counts(for query: SessionQuery) -> [SessionFilter: Int] {
         guard !query.needle.isEmpty else { return index.counts }
@@ -425,11 +487,13 @@ struct SessionsSidebar: View {
 
 struct ProjectHeader: View {
     let project: SessionProject
-    let count: Int
+    let tally: SectionTally
+    var freshness = ListFreshness.live
     /// Nil while the list is narrowed, when the section can't fold.
     var expanded: Binding<Bool>?
     let onNew: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var typeSize
     #if os(macOS)
     @State private var hovering = false
     #endif
@@ -449,13 +513,21 @@ struct ProjectHeader: View {
                             .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
                     }
                     #endif
-                    Text(project.name)
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(Theme.secondary)
-                        .lineLimit(1)
-                    Text("\(count)")
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(Theme.tertiary)
+                    // At accessibility sizes the name wraps whole and the counts go under it, so projects that share a
+                    // prefix stay apart.
+                    let accessible = typeSize.isAccessibilitySize
+                    let line = accessible ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout(spacing: 6))
+                    line {
+                        Text(project.name)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(Theme.secondary)
+                            .lineLimit(accessible ? nil : 1)
+                        Text(tally.shown(freshness))
+                            .font(.footnote.monospacedDigit())
+                            .foregroundStyle(tally.needsYou > 0 ? Theme.attention : Theme.secondary)
+                            .lineLimit(accessible ? nil : 1)
+                            .layoutPriority(1)
+                    }
                     Spacer(minLength: 8)
                 }
                 #if os(iOS)
@@ -465,7 +537,7 @@ struct ProjectHeader: View {
             }
             .buttonStyle(.plain)
             .disabled(expanded == nil)
-            .accessibilityLabel("\(project.name), \(count) \(count == 1 ? "session" : "sessions")")
+            .accessibilityLabel("\(project.name), \(tally.spoken(freshness))")
             .accessibilityValue(expanded.map { $0.wrappedValue ? "Expanded" : "Collapsed" } ?? "")
             #if os(macOS)
             // Shown under the pointer, as the Finder sidebar shows its section controls.
@@ -580,7 +652,7 @@ struct FilterChips: View {
             HStack(spacing: 5) {
                 Text(title)
                 if let count, count > 0 {
-                    Text("\(count)").monospacedDigit().foregroundStyle(on ? Color.black.opacity(0.6) : tint ?? Theme.tertiary)
+                    Text("\(count)").monospacedDigit().foregroundStyle(on ? Color.black.opacity(0.6) : tint ?? Theme.secondary)
                 }
             }
             .font(.subheadline.weight(on ? .semibold : .regular))

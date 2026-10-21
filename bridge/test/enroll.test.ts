@@ -209,3 +209,21 @@ test("claudiobot machine invite with no bridge running says so", async () => {
   expect(await c.run("invite")).toBe(1);
   expect(c.text()).toContain("No running bridge answered");
 });
+
+test("an enrollment the registry could not save leaves the code live, so the same code works on the retry", () => {
+  const identity = newIdentity("omarchy");
+  const registry = createRegistry({ bridgeHome: tmp(), now: () => new Date() });
+  const codes = createJoinCodes({ now: () => new Date() });
+  const { code } = codes.newCode();
+  const mac = newIdentity("MacBook");
+  const body = { code, machineId: mac.machineId, name: mac.name, publicKey: mac.publicKey };
+  const full = {
+    ...registry,
+    enroll: () => {
+      throw new Error("ENOSPC: no space left on device");
+    },
+  };
+  expect(() => enroll({ identity, registry: full, codes }, body)).toThrow("ENOSPC");
+  expect(enroll({ identity, registry, codes }, body)).toMatchObject({ status: 200, created: true });
+  expect(enroll({ identity, registry, codes }, { ...body, machineId: newIdentity("x").machineId })).toMatchObject({ status: 401 });
+});

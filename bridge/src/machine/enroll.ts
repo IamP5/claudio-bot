@@ -31,9 +31,9 @@ export function enroll(deps: { identity: Identity; registry: Registry; codes: Jo
   if (known?.publicKey === r.publicKey) return { status: 200, body: answer, created: false, machine: known.name };
   if (known) return { status: 409, body: { error: `${known.name} is already enrolled with another key.` } };
   if (r.machineId === deps.identity.machineId) return { status: 409, body: { error: "That is this home's own id." } };
-  const redeemed = deps.codes.redeem(r.code);
+  const redeemed = deps.codes.redeem(r.code, () => deps.registry.enroll({ id: r.machineId, name: displayName(r.name, NAME_LIMIT) || "Machine", publicKey: r.publicKey }));
   if (!redeemed.ok) return { status: 401, body: { error: redeemed.error } };
-  const enrolled = deps.registry.enroll({ id: r.machineId, name: displayName(r.name, NAME_LIMIT) || "Machine", publicKey: r.publicKey });
+  const enrolled = redeemed.value;
   if (!enrolled.ok) return { status: 409, body: { error: enrolled.reason } };
   return { status: 200, body: answer, created: true, machine: enrolled.record.name };
 }

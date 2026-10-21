@@ -39,19 +39,19 @@ test("enrolling the same machine with the same key again is a no-op; with anothe
 test("a join code works once", () => {
   const codes = createJoinCodes({ now });
   const { code } = codes.newCode();
-  expect(codes.redeem(code.toLowerCase().replace("-", " "))).toEqual({ ok: true });
-  expect(codes.redeem(code).ok).toBe(false);
+  expect(codes.redeem(code.toLowerCase().replace("-", " "), () => "used")).toEqual({ ok: true, value: "used" });
+  expect(codes.redeem(code, () => "used").ok).toBe(false);
 });
 
 test("five wrong join codes burn the live one, and an expired one is refused", () => {
   let t = now().getTime();
   const codes = createJoinCodes({ now: () => new Date(t) });
   const { code } = codes.newCode();
-  for (let i = 0; i < 4; i++) expect(codes.redeem("AAAA-AAAA")).toEqual({ ok: false, error: "That machine code is wrong." });
-  expect(codes.redeem("AAAA-AAAA")).toEqual({ ok: false, error: "Too many wrong machine codes. Get a new one." });
-  expect(codes.redeem(code).ok).toBe(false);
+  for (let i = 0; i < 4; i++) expect(codes.redeem("AAAA-AAAA", () => "used")).toEqual({ ok: false, error: "That machine code is wrong." });
+  expect(codes.redeem("AAAA-AAAA", () => "used")).toEqual({ ok: false, error: "Too many wrong machine codes. Get a new one." });
+  expect(codes.redeem(code, () => "used").ok).toBe(false);
 
   const next = codes.newCode();
   t += 10 * 60_000;
-  expect(codes.redeem(next.code)).toEqual({ ok: false, error: "That machine code has expired. Get a new one." });
+  expect(codes.redeem(next.code, () => "used")).toEqual({ ok: false, error: "That machine code has expired. Get a new one." });
 });

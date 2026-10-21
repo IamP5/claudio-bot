@@ -7,7 +7,8 @@ import { display, normalize, PAIR_CODE_ATTEMPTS, PAIR_CODE_TTL_MS, randomCode, s
 export type JoinCodes = {
   /** Replaces the live code. */
   newCode(): PairCode;
-  redeem(code: string): { ok: true } | { ok: false; error: string };
+  /** Spends the code only once use returns: a use that throws (a registry that could not save) leaves it live. */
+  redeem<T>(code: string, use: () => T): { ok: true; value: T } | { ok: false; error: string };
 };
 
 export function createJoinCodes(deps: { now: () => Date }): JoinCodes {
@@ -19,7 +20,7 @@ export function createJoinCodes(deps: { now: () => Date }): JoinCodes {
       live = { code: randomCode(), expiresAt, attemptsLeft: PAIR_CODE_ATTEMPTS };
       return { code: display(live.code), expiresAt: expiresAt.toISOString() };
     },
-    redeem(code) {
+    redeem(code, use) {
       if (live === null) return { ok: false, error: "No machine code is active. Get one from Settings > Machines on the phone, or run claudiobot machine invite on the home." };
       if (deps.now() >= live.expiresAt) {
         live = null;
@@ -31,8 +32,9 @@ export function createJoinCodes(deps: { now: () => Date }): JoinCodes {
         live = null;
         return { ok: false, error: "Too many wrong machine codes. Get a new one." };
       }
+      const value = use();
       live = null;
-      return { ok: true };
+      return { ok: true, value };
     },
   };
 }

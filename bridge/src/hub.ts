@@ -25,6 +25,7 @@ import {
   type BotPatch,
   type ClientMessage,
   type Feature,
+  type MachineView,
   type Mention,
   type Message,
   type MessageId,
@@ -40,6 +41,7 @@ import type { Push } from "./push";
 import type { Result } from "./result";
 import { sandboxFor } from "./sandbox";
 import { scopeFor, type MachineProfile } from "./machine/profile";
+import type { Links } from "./machine/links";
 import { createLocalMachine, createMachines } from "./machine/machines";
 import { placeAgent } from "./machine/place";
 import { memoryJournal } from "./machine/journal";
@@ -128,6 +130,8 @@ export type HubDeps = {
   webhookPort: number | null;
   /** Tests pass a fake SDK. The bridge uses the real query and the claude on PATH. */
   claude: Pick<SessionSpec, "query" | "executable">;
+  /** The machines enrolled into this home (machine/links.ts). Absent: no "machines" feature. */
+  links?: Pick<Links, "machines" | "onEvent" | "onChange">;
   /** The plan's usage limits: how to read them, and whether a phone is live to see them. Absent: no "usage" feature. */
   usage?: { read: () => Promise<UsageRead>; watched: () => boolean };
   /** Claude Code's folders, the Claude app and the sockets' channels. Absent: no "sessions" feature. */
@@ -747,7 +751,23 @@ export function createHub(deps: HubDeps): Hub {
 
   /** The gate's wiring, the clock and boot: what reaches agents in this process only. Commands go through machines. */
   const localAgents = runtime.local;
-  const machines = createMachines(createLocalMachine(deps.machineId, runtime, deps.profile));
+  const machines = createMachines(createLocalMachine(deps.machineId, runtime, deps.profile), () => deps.links?.machines() ?? []);
+
+  /** A machine shows once it has linked: until then the home knows neither its platform nor its access. */
+  const machineViews = (): MachineView[] =>
+    machines.list().flatMap((m) => {
+      const profile = m.profile();
+      if (!profile) return [];
+      const status = m.status();
+      const role = m.id === deps.machineId ? "home" : "machine";
+      return [{ id: m.id, name: m.name, role, online: status.online, since: status.since, platform: profile.platform, access: { ...profile.access } }];
+    });
+  deps.links?.onChange(() => deps.broadcast({ type: "machines", machines: machineViews() }));
+  // Remote agents, cards and usage reach the bots in Phase 4; until then the links log each event, and only a new
+  // profile, whose access the phone shows, changes anything here.
+  deps.links?.onEvent((_, e) => {
+    if (e.kind === "profile") deps.broadcast({ type: "machines", machines: machineViews() });
+  });
 
   // The runtime shares this World, so each event's record is the one in world.agents.
   runtime.subscribe((e) => {
@@ -1114,6 +1134,7 @@ export function createHub(deps: HubDeps): Hub {
       case "devices":
       case "revoke_device":
       case "pair_code":
+      case "machine_code":
       case "presence":
         return error("This bridge cannot manage devices yet.");
       case "refresh_usage":
@@ -1241,11 +1262,12 @@ export function createHub(deps: HubDeps): Hub {
     hello: (position) => ({
       type: "hello",
       protocol: PROTOCOL,
-      features: [...SERVED, ...(usage ? (["usage"] as const) : []), ...(sessions ? (["sessions"] as const) : [])],
+      features: [...SERVED, ...(usage ? (["usage"] as const) : []), ...(sessions ? (["sessions"] as const) : []), ...(deps.links ? (["machines"] as const) : [])],
       ...position,
       machine: deps.profile.name,
       userName,
       bots: sortBots([...[...world.bots.values()].map(view), ...[...world.groups.values()].map(groupView)]),
+      ...(deps.links && { machines: machineViews() }),
     }),
     greeting() {
       const latest = usage?.opened() ?? null;

@@ -1,7 +1,7 @@
 import type { HomeFrame, MachineFrame, Intent, EventBody } from "../src/machine/wire";
 import { FEATURES } from "../src/protocol";
 import type {
-  AgentView, Bot, Broadcast, ClientMessage, Message, Peer, Routine, ServerMessage, SessionControls, SessionItem, SessionProject, SessionRow,
+  AgentView, Bot, Broadcast, ClientMessage, MachineView, Message, Peer, Routine, ServerMessage, SessionControls, SessionItem, SessionProject, SessionRow,
 } from "../src/protocol";
 
 // The wire form of T: branded ids are plain strings, so fixtures type-check without casts.
@@ -112,8 +112,13 @@ const ask = {
   ] }],
 };
 
+const machines: Wire<MachineView>[] = [
+  { id: "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c", name: "omarchy", role: "home", online: true, since: null, platform: "linux", access: { full: true, sandbox: false } },
+  { id: "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b", name: "MacBook", role: "machine", online: false, since: at, platform: "darwin", access: { full: false, sandbox: true } },
+];
+
 export const server = [
-  { type: "hello", protocol: 3, features: [...FEATURES], epoch: "e_7f3a", seq: 41, resumed: false, machine: "MacBook", userName: "Alex", bots: [bot] },
+  { type: "hello", protocol: 3, features: [...FEATURES], epoch: "e_7f3a", seq: 41, resumed: false, machine: "omarchy", userName: "Alex", bots: [bot], machines },
   { type: "bot", seq: 42, bot: { ...bot, id: "b2", name: "news digest", title: "Morning digest", avatar: { shape: "pentagon", color: "teal" }, status: "working", unread: 0, question: null, pinned: true, dailyCapUsd: 5, spentTodayUsd: 0, capUsd: 5 } },
   { type: "bot_removed", botId: "b2" },
   { type: "created", ref: "c1", botId: "b3" },
@@ -158,6 +163,8 @@ export const server = [
     { id: "d0", name: "Paired before protocol 3", createdAt: at, lastSeenAt: null, legacy: true, current: false },
   ] },
   { type: "pair_code", code: "K7QD-M2XP", expiresAt: "2026-10-16T12:10:00.000Z", urls: ["ws://mac.tail1234.ts.net:7878/ws", "ws://Mac.local:7878/ws", "ws://192.168.1.20:7878/ws"] },
+  { type: "machines", seq: 43, machines: [machines[0]!, { ...machines[1]!, online: true, since: later }] },
+  { type: "machine_code", code: "R4TW-9HJC", expiresAt: "2026-10-16T12:10:00.000Z", urls: ["http://omarchy.tail1234.ts.net:7878", "http://192.168.1.30:7878"] },
   { type: "message", seq: 53, botId: "b1", message: { kind: "user", id: "m11", at, text: "Ship it", attachments: [], clientId: "c_9b1e" } },
   { type: "bot", seq: 54, bot: { ...bot, muted: true, spentTodayUsd: 1.25, capUsd: null } },
   {
@@ -243,6 +250,7 @@ export const client = [
   { type: "devices" },
   { type: "revoke_device", deviceId: "d0" },
   { type: "pair_code" },
+  { type: "machine_code" },
   { type: "presence", attended: false },
   { type: "send", botId: "b1", text: "Ship it", uploads: [], clientId: "c_9b1e" },
   { type: "update_bot", botId: "b1", patch: { muted: true } },

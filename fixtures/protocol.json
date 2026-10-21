@@ -18,12 +18,13 @@
         "groups",
         "usage",
         "sessions",
-        "presence"
+        "presence",
+        "machines"
       ],
       "epoch": "e_7f3a",
       "seq": 41,
       "resumed": false,
-      "machine": "MacBook",
+      "machine": "omarchy",
       "userName": "Alex",
       "bots": [
         {
@@ -95,6 +96,32 @@
           "muted": false,
           "spentTodayUsd": 8.4,
           "capUsd": 10
+        }
+      ],
+      "machines": [
+        {
+          "id": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
+          "name": "omarchy",
+          "role": "home",
+          "online": true,
+          "since": null,
+          "platform": "linux",
+          "access": {
+            "full": true,
+            "sandbox": false
+          }
+        },
+        {
+          "id": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+          "name": "MacBook",
+          "role": "machine",
+          "online": false,
+          "since": "2026-10-16T12:00:00.000Z",
+          "platform": "darwin",
+          "access": {
+            "full": false,
+            "sandbox": true
+          }
         }
       ]
     },
@@ -807,6 +834,45 @@
         "ws://mac.tail1234.ts.net:7878/ws",
         "ws://Mac.local:7878/ws",
         "ws://192.168.1.20:7878/ws"
+      ]
+    },
+    {
+      "type": "machines",
+      "seq": 43,
+      "machines": [
+        {
+          "id": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
+          "name": "omarchy",
+          "role": "home",
+          "online": true,
+          "since": null,
+          "platform": "linux",
+          "access": {
+            "full": true,
+            "sandbox": false
+          }
+        },
+        {
+          "id": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+          "name": "MacBook",
+          "role": "machine",
+          "online": true,
+          "since": "2026-10-16T14:00:00.000Z",
+          "platform": "darwin",
+          "access": {
+            "full": false,
+            "sandbox": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "machine_code",
+      "code": "R4TW-9HJC",
+      "expiresAt": "2026-10-16T12:10:00.000Z",
+      "urls": [
+        "http://omarchy.tail1234.ts.net:7878",
+        "http://192.168.1.30:7878"
       ]
     },
     {
@@ -1751,6 +1817,9 @@
     },
     {
       "type": "pair_code"
+    },
+    {
+      "type": "machine_code"
     },
     {
       "type": "presence",

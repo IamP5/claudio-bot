@@ -23,7 +23,7 @@ export type MachineId = string & { readonly __brand: "MachineId" };
  */
 export const FEATURES = [
   "memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend",
-  "mentions", "commands", "exchanges", "groups", "usage", "sessions", "presence",
+  "mentions", "commands", "exchanges", "groups", "usage", "sessions", "presence", "machines",
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 
@@ -550,7 +550,8 @@ export const isSessionRequest = (m: ClientMessage): m is SessionClientMessage =>
 
 export type ServerMessage =
   // The app shows "Update the bridge" or "Update the app" when protocol is outside the range it speaks.
-  | ({ type: "hello"; protocol: number; features: Feature[]; machine: string; userName: string; bots: Bot[] } & StreamPosition)
+  // machines: present when the bridge serves feature "machines".
+  | ({ type: "hello"; protocol: number; features: Feature[]; machine: string; userName: string; bots: Bot[]; machines?: MachineView[] } & StreamPosition)
   | { type: "bot"; bot: Bot }
   | { type: "bot_removed"; botId: BotId }
   // Answers create_bot with the ref the client sent, so the app can open the new bot.
@@ -566,6 +567,10 @@ export type ServerMessage =
   | { type: "file"; botId: BotId; path: string; mime: string; content: string | null; data: string | null }
   | { type: "devices"; devices: Device[] }
   | ({ type: "pair_code" } & PairOffer)
+  // Feature "machines": every machine, sent whenever one comes online, goes offline or enrolls.
+  | { type: "machines"; machines: MachineView[] }
+  // Feature "machines", in answer to machine_code: urls are the home's addresses for `claudiobot machine enroll`.
+  | ({ type: "machine_code" } & PairOffer)
   // What a bot or one of its agents is doing right now ("Reading hub.ts"). text null: it stopped. Live sockets only:
   // never sequenced, never replayed, never pushed.
   | { type: "activity"; botId: BotId; agentId: AgentId | null; text: string | null; at: string }
@@ -643,11 +648,28 @@ export type ClientMessage =
   | { type: "devices" }
   | { type: "revoke_device"; deviceId: DeviceId }
   | { type: "pair_code" }
+  // Feature "machines": a one-time code another computer enrolls with as a machine of this home.
+  | { type: "machine_code" }
   // Feature "presence". attended false: nobody is looking at this app, so its socket does not hold back a push. A
   // socket that never sends one counts as attended.
   | { type: "presence"; attended: boolean };
 
-export type TransportMessage = Extract<ClientMessage, { type: "devices" | "revoke_device" | "pair_code" | "presence" }>;
+export type TransportMessage = Extract<ClientMessage, { type: "devices" | "revoke_device" | "pair_code" | "machine_code" | "presence" }>;
+
+/**
+ * A computer that runs agents for this home (feature "machines"). role home: the bridge the phone is connected to.
+ * since: when it came online, or when it was last heard from while offline; null when never. access: the machine's
+ * own mode, which only its own environment sets.
+ */
+export type MachineView = {
+  id: MachineId;
+  name: string;
+  role: "home" | "machine";
+  online: boolean;
+  since: string | null;
+  platform: "darwin" | "linux";
+  access: { full: boolean; sandbox: boolean };
+};
 
 /**
  * A one-time code another device can pair with, valid until expiresAt, with the bridge's socket URLs best first: what

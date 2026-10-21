@@ -138,6 +138,7 @@ export function hubOver(
     executable?: string | null;
     usage?: HubDeps["usage"];
     sessions?: HubDeps["sessions"];
+    links?: HubDeps["links"];
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "claudiobot-hub-"));
@@ -168,6 +169,7 @@ export function hubOver(
     signal: (s) => (s.type === "activity" ? signals.push(s) : usage.push(s.usage)),
     usage: opts.usage,
     ...(opts.sessions && { sessions: opts.sessions }),
+    ...(opts.links && { links: opts.links }),
     webhookPort: null,
     persist: (urgency) => {
       opts.persist?.(urgency);

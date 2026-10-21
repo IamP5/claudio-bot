@@ -12,7 +12,10 @@ import { join, resolve } from "node:path";
 
 export const REPO = resolve(import.meta.dir, "../../../..");
 const MAIN = join(REPO, "bridge/src/main.ts");
-export const BASE = process.env.CLAUDIOBOT_VERIFY_DIR ?? join(realpathSync(tmpdir()), "claudiobot-verify");
+const base = process.env.CLAUDIOBOT_VERIFY_DIR ?? join(tmpdir(), "claudiobot-verify");
+mkdirSync(base, { recursive: true });
+/** Resolved, so paths built on it compare equal to the ones lsof and realpath report. */
+export const BASE = realpathSync(base);
 const CURRENT = join(BASE, "current");
 const TURN_S = 240;
 
@@ -323,6 +326,8 @@ console.log("ntfy-sink " + s.port);
   const run: Run = { id, dir, home, roots, worktrees, port, webhookPort, ntfyPort, bridgePid: bridge.pid, ntfyPid: ntfy.pid, model, rev, dirty, startedAt: new Date().toISOString(), budgetUsd };
   writeFileSync(join(dir, "run.json"), JSON.stringify(run, null, 2));
   writeFileSync(CURRENT, id);
+  // Printed before the bridge is ready, so a caller can clean up the run even if launch fails or is interrupted from here on.
+  console.log(`STARTED run=${id}`);
 
   let code: string | undefined;
   for (let i = 0; i < 600 && !code; i++) {
@@ -788,6 +793,9 @@ async function evidence(run: Run, label: string) {
 /** Stops only what this run started (pids from run.json, processes whose command line names the run folder). */
 async function cleanup() {
   const run = loadRun();
+  const home = join(BASE, "runs", run.id);
+  if (!/^[\w-]+$/.test(run.id) || !run.dir || !existsSync(run.dir) || realpathSync(run.dir) !== realpathSync(home))
+    die(`refusing to clean up: run.json names dir "${run.dir}", not ${home}`);
   const keepNone = flag("no-evidence");
   if (!keepNone && existsSync(run.dir)) await evidence(run, "final").catch((e) => console.log(`final evidence failed: ${e}`));
   for (const [what, pid] of [["bridge", run.bridgePid], ["push sink", run.ntfyPid]] as const) {
@@ -800,8 +808,22 @@ async function cleanup() {
     if (alive(pid)) process.kill(pid, "SIGKILL");
     console.log(`${what} pid ${pid} stopped`);
   }
-  // Agents, sandboxes and claude children of this run all name the run folder in their command line.
-  const strays = sh(["pgrep", "-f", run.dir]).out.split("\n").filter(Boolean).map(Number).filter((p) => p !== process.pid);
+  // Agents, sandboxes and claude children of this run name the run folder in their command line; the tools sessions
+  // run (a `sleep`, a dev server) often do not, but their working directory is inside it.
+  const dir = realpathSync(run.dir);
+  const exact = `${dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(/|[[:space:]"']|$)`;
+  const named = sh(["pgrep", "-f", exact]).out.split("\n").filter(Boolean).map(Number);
+  let pid = 0;
+  const inside: number[] = [];
+  for (const l of sh(["lsof", "-w", "-d", "cwd", "-Fpn"]).out.split("\n")) {
+    if (l.startsWith("p")) pid = Number(l.slice(1));
+    else if (l.startsWith("n") && (l.slice(1) === dir || l.slice(1).startsWith(`${dir}/`))) inside.push(pid);
+  }
+  // This process, whatever started it (a shell that cd'd into the run, the runner) and its process group (the rest of
+  // a pipeline) are never strays. The bridge is detached into its own session, so nothing of the run shares the group.
+  const ours = new Set<number>(sh(["pgrep", "-g", sh(["ps", "-o", "pgid=", "-p", String(process.pid)]).out]).out.split("\n").filter(Boolean).map(Number));
+  for (let p = process.pid, hops = 0; p > 1 && hops < 64; p = Number(sh(["ps", "-o", "ppid=", "-p", String(p)]).out) || 0, hops++) ours.add(p);
+  const strays = [...new Set([...named, ...inside])].filter((p) => !ours.has(p) && alive(p));
   for (const p of strays) {
     console.log(`stray pid ${p}: ${sh(["ps", "-p", String(p), "-o", "command="]).out.slice(0, 120)}`);
     try {
@@ -821,7 +843,7 @@ async function cleanup() {
         rmSync(join(projects, name), { recursive: true, force: true });
         console.log(`removed transcripts ~/.claude/projects/${name}`);
       }
-  rmSync(run.dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true });
   if (existsSync(CURRENT) && readFileSync(CURRENT, "utf8").trim() === run.id) rmSync(CURRENT);
   const ev = join(BASE, "evidence", run.id);
   console.log(`removed ${run.dir}`);

@@ -76,3 +76,4 @@ ts	decision	why
 2026-10-21T18:37:32Z	G15: all four consequence lines show at every text size, capped at the first accessibility size; no Always button when the bridge offers no Always text; "Never" stays the visible word with a spoken hint saying what it does	a sighted AX5 user has no focus to follow; an Always that only allows once misleads
 2026-10-21T18:37:32Z	G15: bot trust cards are recognised by the tool name "Claude Code settings" from gate.ts	no wire field yet; a real field would be better (backlog)
 2026-10-21T18:42:02Z	a rubric item must be able to fail on a broken product; a judge that replays frames through its own copy of the app logic is a model check, not an acceptance item	G12's S7.7 rewrite passed 3000 of 3000 random histories
+2026-10-21T18:55:12Z	app logs never carry command text in Release; diagnostic logs that quote user or tool content are DEBUG-only or .private	commands can hold credentials and the phone log is readable from a connected Mac

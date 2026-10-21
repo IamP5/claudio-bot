@@ -38,6 +38,7 @@
 		2E440D0E8C07E950C156A8B7 /* SessionComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCA5E07DE76D0F52EBC2333D /* SessionComposer.swift */; };
 		2E846BFB41E7893B98ECAEEC /* Brand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A5953065B9EE16E05C830E5 /* Brand.swift */; };
 		30348A431DCC218DDC010875 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D9A270A77B1F3B29884BEEC /* Platform.swift */; };
+		307AAA915E997E55198F51A1 /* OfflineListTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F523DED1BA9577E01293B06A /* OfflineListTests.swift */; };
 		312F3673878E0EC95E38FE5E /* SessionRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5A1F30F69CC2B352B64C345 /* SessionRowView.swift */; };
 		32E7D22E40B3361A566B819D /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 795BC99E02710AB9C992CE01 /* HomeView.swift */; };
 		332B484C55D9E03F1E3DE8EA /* SpendingSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CE4B7D7644CD34883E2D581 /* SpendingSection.swift */; };
@@ -86,6 +87,7 @@
 		8CC722D82773DB0FB48341EE /* ExchangeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1DF58E4527B980D434F6EB /* ExchangeView.swift */; };
 		8D0627AF518B8F18A3F62B88 /* Display.swift in Sources */ = {isa = PBXBuildFile; fileRef = E41D942EF4BC15933EE5DB0C /* Display.swift */; };
 		8E548A13634137BC72FB9023 /* Pairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = B115913A479F9E103CD5CFF9 /* Pairing.swift */; };
+		92A6168F9B4F0F4828B87EC1 /* OfflineListTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F523DED1BA9577E01293B06A /* OfflineListTests.swift */; };
 		93C8F23D6048AFBCD0CFDBB2 /* Splash.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF08C71B354F1D1EA6946487 /* Splash.swift */; };
 		943FD9C13AA969C667604435 /* DemoSessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8639AAB22DA05012B2D89760 /* DemoSessions.swift */; };
 		94C2AC30882A23F553F74E16 /* Notifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5DB853F507FAAC2088B4B45 /* Notifier.swift */; };
@@ -256,6 +258,7 @@
 		EA9652032D83AB4C07B9A127 /* RoutineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutineView.swift; sourceTree = "<group>"; };
 		EBEA8C29A5D23D59F250A951 /* WebhookTokenView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebhookTokenView.swift; sourceTree = "<group>"; };
 		F227964E023D95F10449A929 /* Threads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Threads.swift; sourceTree = "<group>"; };
+		F523DED1BA9577E01293B06A /* OfflineListTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineListTests.swift; sourceTree = "<group>"; };
 		FA2DDB4E3C0A0B83541F52CA /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileView.swift; sourceTree = "<group>"; };
 		FAB25DCB611E2EE3D5BE1B17 /* UsageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageTests.swift; sourceTree = "<group>"; };
 		FD515DB617C8BF071087E383 /* SessionThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionThreadView.swift; sourceTree = "<group>"; };
@@ -325,6 +328,7 @@
 				A043FD6FEC842D94A260F35E /* BridgeClientTests.swift */,
 				097EB76BEE0A213D3217C7AC /* FakeBridge.swift */,
 				9A5E4966422B7F7675BCF9E8 /* MentionsTests.swift */,
+				F523DED1BA9577E01293B06A /* OfflineListTests.swift */,
 				09AF3C72A0FA97F743E8DF2F /* PromptTextViewTests.swift */,
 				B39EB6FB6164288CB6A58B65 /* protocol.json */,
 				968DA57BA93F923DB93997B3 /* ProtocolTests.swift */,
@@ -722,6 +726,7 @@
 				536D4AC12412A81BB722100A /* FakeBridge.swift in Sources */,
 				0F2A29F13D0B77FADCB229DC /* LocalBridgeTests.swift in Sources */,
 				C9FCF80196C9FEA6B66AA9BA /* MentionsTests.swift in Sources */,
+				307AAA915E997E55198F51A1 /* OfflineListTests.swift in Sources */,
 				B1B2BC714CF0F074388DBBFC /* PromptTextViewMacTests.swift in Sources */,
 				CE1B1ED14F6E6D62F444C8DA /* ProtocolTests.swift in Sources */,
 				570D7D03933CFC4188B4BBAC /* QuestionRepeatTests.swift in Sources */,
@@ -741,6 +746,7 @@
 				C4D1C6705A84AF3D5E134452 /* BridgeClientTests.swift in Sources */,
 				D71C8C4D37722592EF686761 /* FakeBridge.swift in Sources */,
 				F07EB03CAF5E01F8AFB0904F /* MentionsTests.swift in Sources */,
+				92A6168F9B4F0F4828B87EC1 /* OfflineListTests.swift in Sources */,
 				AD829CCB4376E32073C6A59A /* PromptTextViewTests.swift in Sources */,
 				23288F140278C30D8EA49348 /* ProtocolTests.swift in Sources */,
 				7677D7D0941D11D62423324F /* QuestionRepeatTests.swift in Sources */,

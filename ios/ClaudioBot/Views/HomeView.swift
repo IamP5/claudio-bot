@@ -12,6 +12,7 @@ struct HomeView: View {
     /// The bot the user asked to delete. The dialog waits for its details, which say which worktrees stay behind.
     @State private var deleting: Bot?
     @State private var detailsLate = false
+    @State private var lastRetryFailed = false
 
     private var deletion: Deletion? {
         deleting.flatMap { Deletion($0, details: store.details[$0.id], detailsLate: detailsLate) }
@@ -40,7 +41,7 @@ struct HomeView: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             } else if store.machine == nil {
-                ConnectionBanner(state: store.connection)
+                ConnectionBanner(state: store.connection, lastRetryFailed: $lastRetryFailed)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
@@ -98,6 +99,7 @@ struct HomeView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
+        .onChange(of: store.machine) { lastRetryFailed = false }
         .alert("Rename Bot", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
             Button("Cancel", role: .cancel) {}
@@ -361,42 +363,76 @@ struct BotRow: View {
 
 struct ConnectionBanner: View {
     let state: ConnectionState
+    var staleSince: Date?
+    @Binding var lastRetryFailed: Bool
     @Environment(AppModel.self) private var app
+    @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var editingAddress = false
 
-    /// After a few failed connects in a row the banner stops only counting down and says what to try.
-    static func help(failures: Int, address: String?) -> String? {
-        guard failures >= BridgeClient.failuresBeforeHelp else { return nil }
+    /// `brief` drops the advice, which at accessibility sizes would push the buttons and the list off the screen.
+    static func cause(_ reach: Reach, address: String?, lastRetryFailed: Bool, brief: Bool = false) -> String {
         let at = address.map { " at \($0)" } ?? ""
-        return "Your Mac isn't answering\(at). Check the bridge is running. Away from home, connect with your Mac's Tailscale name, or pair again."
+        switch reach {
+        case .firstConnect:
+            return "Connecting to your Mac\(at)."
+        case .unreachable, .retrying:
+            let head = lastRetryFailed ? "Still no answer from your Mac\(at)." : "Your Mac isn't answering\(at)."
+            return brief ? head : head + " Check the bridge is running. Away from home, connect with your Mac's Tailscale name, or pair again."
+        case .connected, .unrecognized, .unpaired:
+            return "ClaudioBot needs the bridge running on your Mac. Your bots keep working there while this \(ThisDevice.casualNoun) is away."
+        }
+    }
+
+    static func retry(_ client: BridgeClient) async -> Bool {
+        let answered = await client.retryNowAndWait()
+        if !answered { AccessibilityNotification.Announcement("Still no answer from your Mac.").post() }
+        return answered
     }
 
     var body: some View {
+        let reach = Reach(state, failures: client.failures, greeted: store.bridgeProtocol != nil)
         VStack(alignment: .leading, spacing: 8) {
             ConnectionBadge(state: state)
-            if let help = Self.help(failures: client.failures, address: client.pairing?.url.bridgeAddress) {
-                Text(help)
-                    .font(.footnote)
-                    .foregroundStyle(Theme.secondary)
-                HStack(spacing: 8) {
-                    Button("Edit address") { editingAddress = true }
-                        .bannerProminent()
-                    Button("Pair again") { app.beginPairing() }
-                        .buttonStyle(.bordered)
+            Text(Self.cause(reach, address: client.pairing?.url.bridgeAddress, lastRetryFailed: lastRetryFailed, brief: typeSize.isAccessibilitySize))
+                .font(.footnote)
+                .foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let staleSince {
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    Text(SessionText.updated(staleSince, now: context.date) + (typeSize.isAccessibilitySize ? "." : ". Rows show what your Mac said then."))
+                        .font(.footnote)
+                        .foregroundStyle(Theme.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if reach.lost {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { actions(trying: reach == .retrying) }
+                    VStack(alignment: .leading, spacing: 8) { actions(trying: reach == .retrying) }
                 }
                 .font(.footnote.weight(.semibold))
                 .controlSize(.small)
-            } else {
-                Text("ClaudioBot needs the bridge running on your Mac. Your bots keep working there while this \(ThisDevice.casualNoun) is away.")
-                    .font(.footnote)
-                    .foregroundStyle(Theme.secondary)
             }
         }
         .sheet(isPresented: $editingAddress) { EditAddressView() }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func actions(trying: Bool) -> some View {
+        Button("Retry now") {
+            Task { lastRetryFailed = !(await Self.retry(client)) }
+        }
+        .bannerProminent()
+        .disabled(trying)
+        Button("Edit address") { editingAddress = true }
+            .buttonStyle(.bordered)
+        Button("Pair again") { app.beginPairing() }
+            .buttonStyle(.bordered)
     }
 }
 

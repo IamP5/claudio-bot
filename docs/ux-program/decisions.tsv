@@ -70,3 +70,4 @@ ts	decision	why
 2026-10-21T16:03:32Z	G8: every thread item sorts by its time, ties by arrival, queued messages last; a lost or undecodable frame makes the app re-watch the thread for a snapshot	one rule on bridge, app and runner; no new protocol field
 2026-10-21T16:03:32Z	G8: the user's bubble takes Claude Code's id and time when its copy lands, in place; F-SES-129's time change stays	keeping the send time would place a queued message inside the turn it waited behind
 2026-10-21T16:03:32Z	G8: catalog flush (F-SES-044, F-SES-104) left unchanged	did not reproduce with 12 sessions on this Mac; recheck in Step 4
+2026-10-21T16:39:33Z	G7: while "Show the step" marks a step (2 s tint), a change in thread height scrolls back to it	at large sizes the run lays out over several passes and the bottom anchor moves rows, so a single scroll lands on an old layout

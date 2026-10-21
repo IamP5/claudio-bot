@@ -180,3 +180,13 @@ describe("a permissions.ask rule under auto mode, recorded", () => {
     expect(answerTo(t, 0)).toMatchObject({ permission_denials: [{ tool_name: "Bash", tool_use_id: call!.options.toolUseID }] });
   });
 });
+
+describe("a background task that ends while the turn still runs, recorded", () => {
+  test("the turn's next request carries the notification, so after the reply nothing reads as running or coming", async () => {
+    const t = replay("background-folded-into-turn");
+    const h = await playAll(t);
+    h.player.done();
+    expect(recorded(t).filter((m) => m.type === "result").map((r) => r.origin?.kind ?? null)).toEqual([null]);
+    expect(h.session.activity()).toMatchObject({ turn: null, tasks: [] });
+  });
+});

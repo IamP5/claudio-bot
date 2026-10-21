@@ -696,6 +696,16 @@ describe("live work", () => {
     expect(await controlsNow()).toMatchObject({ working: false, tasks: [] });
   });
 
+  test("a background task that ends during a turn does not make the session read working after the turn", async () => {
+    await start();
+    await send("Start it and reply");
+    const q = queries[0]!;
+    const shell = shellTask("bq", "toolu_bq", "sleep 8");
+    q.emit(wakeInit(), taskStarted(shell), level(shell), completed("bq"), notifiedOf("bq", "toolu_bq"), level(), result());
+    await flush();
+    expect(await controlsNow()).toMatchObject({ working: false, tasks: [] });
+  });
+
   test("a terminal or Claude app session waiting on its user reads as needing them", async () => {
     await start();
     holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "cli", kind: "interactive", cwd: repo, status: "waiting", waitingFor: "permission prompt" });

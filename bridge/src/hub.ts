@@ -735,9 +735,6 @@ export function createHub(deps: HubDeps): Hub {
     log: deps.log,
     owner: { agent: (id) => placements.of(id)?.machine ?? null, card: (id) => placements.cardOn(id) },
   });
-  // A home from before placements: what its mirror already held was heard under the old rules, so it stays as placed.
-  for (const a of mirror.agents()) if (!placements.of(a.agent.id)) placements.place(a.agent.id, { machine: a.machine, botId: a.agent.botId, by: system });
-  for (const c of mirror.held()) placements.adoptCard(c.cardId, c.machine);
 
   const node = createNode({
     world,

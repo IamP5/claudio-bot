@@ -128,8 +128,6 @@ export type Placements = {
   cardOn(cardId: MessageId): MachineId | null;
   /** The agents placed for a bot, by machine. */
   ofBot(botId: BotId): { agentId: AgentId; machine: MachineId }[];
-  /** A card the home saw from this machine before placements were kept. */
-  adoptCard(cardId: MessageId, machine: MachineId): void;
   forgetAgent(agentId: AgentId): void;
   forgetBot(botId: BotId): void;
   forgetMachine(machine: MachineId): void;
@@ -172,11 +170,6 @@ export function createPlacements(deps: { path: string; log: (line: string) => vo
     of: (agentId) => state.agents[agentId] ?? null,
     cardOn: (cardId) => state.cards[cardId] ?? null,
     ofBot: (botId) => (Object.entries(state.agents) as [AgentId, Placement][]).flatMap(([agentId, p]) => (p.botId === botId ? [{ agentId, machine: p.machine }] : [])),
-    adoptCard(cardId, machine) {
-      if (state.cards[cardId] !== undefined) return;
-      state.cards[cardId] = machine;
-      save();
-    },
     forgetAgent(agentId) {
       if (forget((_, id) => id !== agentId)) save();
     },

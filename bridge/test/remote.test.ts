@@ -424,20 +424,6 @@ test("a start the machine refuses leaves it nothing to speak for", async () => {
   expect(r.h.frames.filter((f) => f.type === "agent")).toEqual([]);
 });
 
-test("a home from before placements keeps hearing the agents and cards its mirror already held", () => {
-  const before = (root: string) => {
-    const mirror = createMirror({ path: join(root, "machine", "mirror.json"), log: () => {}, owner: { agent: () => null, card: () => null } });
-    mirror.apply(MAC, { seq: 1, at, kind: "agent", agent: agent(), messages: [] });
-    mirror.apply(MAC, { seq: 2, at, kind: "card", botId: B, message: card() });
-  };
-  const r = home(emptyWorld(), before);
-  r.world.bots.get(B)!.messages.push(card());
-  r.send({ kind: "agent", agent: agent("waiting"), messages: [] });
-  r.send({ kind: "card", botId: B, message: card("once") });
-  expect(r.h.frames.findLast((f) => f.type === "agent")).toMatchObject({ agent: { id: A, status: "waiting" } });
-  expect(r.world.bots.get(B)!.messages.findLast((m) => m.id === "c_mac1")).toMatchObject({ answer: "once" });
-});
-
 test("remove_machine closes its link, expires its open cards with a note, drops what waits for it, and stops hearing it", async () => {
   const r = placed();
   r.send({ kind: "agent", agent: agent(), messages: [] });

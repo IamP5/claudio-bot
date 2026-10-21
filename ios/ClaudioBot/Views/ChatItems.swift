@@ -370,21 +370,23 @@ extension EnvironmentValues {
     @Entry var revealStep: (@MainActor @Sendable (HeldStep) -> Void)? = nil
     /// The step id "Show the step" marked. Its work run opens and tints it.
     @Entry var revealedStep: String? = nil
-    /// Stops a session's thread following its bottom, so a card that opens grows down from where it was tapped instead
-    /// of pushing its header off the top.
-    @Entry var opensInPlace: (@MainActor @Sendable () -> Void)? = nil
 }
 
 /// A permission card in a session's thread. It names the subagent that asked and links to the step it holds back.
-/// Once closed it folds to one line, so answered cards never push the running work off screen; a tap opens it again.
+/// Once closed it folds to one line, so answered cards never push the running work off screen. A tap opens it again
+/// in place, or at the accessibility sizes in a sheet: there the whole card is taller than the screen, and the thread,
+/// which keeps its bottom still, would grow it upward past the top.
 struct SessionPermissionCard: View {
     let sessionId: SessionID
     let permission: SessionPermission
     let model: ThreadModel
 
     @State private var opened = false
+    @State private var sheet = false
+    /// The step "Show the step" asked for from the sheet, revealed once the sheet is gone.
+    @State private var pendingReveal: HeldStep?
     @Environment(\.revealStep) private var revealStep
-    @Environment(\.opensInPlace) private var opensInPlace
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let card = permission.card
@@ -393,27 +395,50 @@ struct SessionPermissionCard: View {
             Settling(card.answer(at: .now)) { answer in
                 if let answer, !opened {
                     ClosedApprovalRow(permission: permission, outcome: answer.outcome(step: held?.step)) {
-                        opensInPlace?()
-                        opened = true
+                        if typeSize.isAccessibilitySize { sheet = true } else { opened = true }
                     }
                 } else {
-                    PermissionCardBody(
-                        messageId: permission.cardId, card: card, title: permission.title, answer: answer,
-                        decision: { .sessionDecide(sessionId: sessionId, cardId: permission.cardId, choice: $0) },
-                        step: held?.step, fillsColumn: true,
-                        reveal: held.flatMap { held in revealStep.map { reveal in { reveal(held) } } },
-                        collapse: answer == nil ? nil : { opened = false }
-                    )
+                    full(answer: answer, held: held, collapse: answer == nil ? nil : { opened = false })
                 }
             }
         }
         .announcesDecision(permission.cardId, outcome: card.answer?.outcome(step: held?.step))
+        .sheet(isPresented: $sheet, onDismiss: {
+            if let pendingReveal { revealStep?(pendingReveal) }
+            pendingReveal = nil
+        }) {
+            ScrollView {
+                full(answer: card.answer, held: held, collapse: { sheet = false }, reveal: revealStep.map { _ in
+                    { held in
+                        pendingReveal = held
+                        sheet = false
+                    }
+                })
+                .padding(16)
+            }
+            .presentationDragIndicator(.visible)
+        }
+    }
+
+    /// reveal: what "Show the step" does. In the thread it scrolls there; from the sheet it closes the sheet first.
+    private func full(
+        answer: PermissionAnswer?, held: HeldStep?, collapse: (() -> Void)?, reveal: ((HeldStep) -> Void)? = nil
+    ) -> some View {
+        let reveal = reveal ?? revealStep
+        return PermissionCardBody(
+            messageId: permission.cardId, card: permission.card, title: permission.title, answer: answer,
+            decision: { .sessionDecide(sessionId: sessionId, cardId: permission.cardId, choice: $0) },
+            step: held?.step, fillsColumn: true,
+            reveal: held.flatMap { held in reveal.map { reveal in { reveal(held) } } },
+            collapse: collapse
+        )
     }
 }
 
 /// An answered card folded to its outcome and command: "sleeper two · Allowed once" over "perl -e 'sleep 30'", or
-/// "Bash · Allowed once" when the main thread asked. At the accessibility sizes the command and the chevron wait for a tap, and the text stops growing at the second
-/// accessibility size: past that, three folded cards alone fill the screen and push the running work off it.
+/// "Bash · Allowed once" when the main thread asked. At the accessibility sizes the command and the chevron wait for
+/// a tap, and the text stops growing at the second accessibility size: past that, three folded cards alone fill the
+/// screen and push the running work off it.
 private struct ClosedApprovalRow: View {
     let permission: SessionPermission
     let outcome: PermissionOutcome
@@ -448,21 +473,20 @@ private struct ClosedApprovalRow: View {
         }
         .buttonStyle(.pressable)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
-        .accessibilityElement(children: .ignore)
-        .accessibilityAddTraits(.isButton)
         .accessibilityLabel([permission.title, outcome.text, permission.card.detail].map { $0.hasSuffix(".") ? String($0.dropLast()) : $0 }.joined(separator: ". "))
         .accessibilityValue("Collapsed")
         .accessibilityHint("Shows the whole request")
     }
 
     private var glyph: some View {
-        Image(systemName: outcome.glyph).foregroundStyle(outcome.color)
+        Image(systemName: outcome.glyph).foregroundStyle(outcome.color).accessibilityHidden(true)
     }
 
     private var chevron: some View {
         Image(systemName: "chevron.down")
             .font(.ui(.footnote, weight: .semibold))
             .foregroundStyle(Theme.tertiary)
+            .accessibilityHidden(true)
     }
 }
 

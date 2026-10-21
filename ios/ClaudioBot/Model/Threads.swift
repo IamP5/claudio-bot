@@ -217,6 +217,10 @@ struct WorkRun {
 
     var live: [ToolStep] { steps.filter(\.state.isLive) }
     var isLive: Bool { steps.contains { $0.state.isLive } }
+    /// Busy, as opposed to live: a run held only by approval cards is blocked, so it never looks busy.
+    var isRunning: Bool { steps.contains { $0.state == .running } }
+    /// Running with something that changes with time: a step's clock, or a quiet spell measured from a sign of life.
+    var ticks: Bool { isRunning && (since != nil || heardAt != nil || !tasks.isEmpty) }
 
     /// The run's clock: the earliest start among running steps. A waiting step has not started.
     var since: Date? { steps.filter { $0.state == .running }.compactMap(\.startedAt).min() }

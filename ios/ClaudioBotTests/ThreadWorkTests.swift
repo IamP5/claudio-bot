@@ -73,10 +73,18 @@ private func date(_ wire: String) -> Date {
     @Test func aWaitingStepKeepsTheRunLive() {
         let run = WorkRun(steps: [step("1", state: .ok), step("2", "Bash", "Remove the build folder", state: .waiting)])
         #expect(run.isLive)
+        #expect(!run.isRunning)
+        #expect(!run.ticks)
         #expect(run.live.map(\.id) == ["2"])
         #expect(run.since == nil)
         #expect(run.headline() == "1 waiting for approval")
         #expect(run.duration == nil)
+    }
+
+    @Test func aRunWithoutAClockOrASignOfLifeDoesNotTick() {
+        #expect(!WorkRun(steps: [step("1", state: .running)]).ticks)
+        #expect(WorkRun(steps: [step("1", state: .running, started: 0)]).ticks)
+        #expect(WorkRun(steps: [step("1", state: .running)], controls: controls(heardAt: start)).ticks)
     }
 
     @Test func runningCountsGroupByKind() {

@@ -221,7 +221,7 @@ struct WorkRunRow: View {
 
     var body: some View {
         Group {
-            if onScreen, staleAt == nil, run.steps.contains(where: { $0.state == .running }) {
+            if onScreen, staleAt == nil, run.ticks {
                 TimelineView(.periodic(from: run.since ?? .now, by: 1)) { context in
                     content(now: context.date)
                 }
@@ -259,24 +259,26 @@ struct WorkRunRow: View {
     }
 
     private func header(now: Date) -> some View {
-        let ticking = run.isLive && staleAt == nil
+        let busy = run.isRunning && staleAt == nil
         let line = Text(run.headline() + (run.since.map { " · " + RunClock.short(now.timeIntervalSince($0)) } ?? ""))
             .font(.subheadline)
             .monospacedDigit()
             .foregroundStyle(Theme.secondary)
         return HStack(alignment: .top, spacing: 8) {
             Group {
-                if ticking {
+                if busy {
                     WorkingRing(size: slot * 0.6)
-                } else if run.isLive {
+                } else if run.isRunning {
                     Image(systemName: "circle.dotted").font(.footnote).foregroundStyle(Theme.tertiary)
+                } else if run.isLive {
+                    Image(systemName: "hand.raised").font(.footnote).foregroundStyle(Theme.attention)
                 } else {
                     Image(systemName: "wrench.and.screwdriver").font(.footnote).foregroundStyle(Theme.tertiary)
                 }
             }
             .frame(width: slot, height: slot)
             VStack(alignment: .leading, spacing: 3) {
-                if ticking { line.shimmering() } else { line }
+                if busy { line.shimmering() } else { line }
                 if let failure = run.failure {
                     Label(failure, systemImage: "xmark.circle.fill")
                         .font(.caption.weight(.medium))

@@ -6,6 +6,6 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-21T07:43:52Z	owner	G1	ux/sessions-g1-step-truth	pr-open #9 35f550c, verifying	4h	wave 2
 2026-10-21T07:43:52Z	owner	G2	ux/sessions-g2-live-work	running (replacement owner after auth-expiry crash, same worktree)	6h	wave 2
 2026-10-21T07:43:52Z	owner	G4	ux/sessions-g4-work-run	merged #8 (verified 29dfed7; fix round 503f446 reviewed by root)	4h	wave 2
-2026-10-21T07:43:52Z	owner	G7	ux/sessions-g7-approval-cards	pr-open #7 ade6f12, verifying	4h	wave 2
+2026-10-21T07:43:52Z	owner	G7	ux/sessions-g7-approval-cards	pr-open #7; verifier PASS+3 issues, fix-forward + rebase on G4 sent	4h	wave 2
 2026-10-21T08:00:26Z	owner	G10	ux/sessions-g10-offline-list	running (replacement owner after auth-expiry crash, same worktree)	4h	wave 2
 2026-10-21T10:12:06Z	owner	R1	ux/runner-build-isolation	running	3h	per-tree app builds + stamp check + SIGINT cleanup

@@ -189,7 +189,7 @@ test("an enrolled machine comes online, answers an intent over the link, and goe
 
   const m = machineAt(h.url, pair, tmp());
   await until("online", () => h.links.machines()[0]!.status().online);
-  expect(live(m.dialer.state())).toBe("live");
+  await until("live", () => live(m.dialer.state()) === "live");
   expect(h.links.machines()[0]!.profile()).toMatchObject({ platform: "linux", access: { full: true, sandbox: false } });
 
   // The home asks for a snapshot as the machine comes online, then this test asks for another.

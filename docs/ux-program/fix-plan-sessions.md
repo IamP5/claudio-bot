@@ -760,3 +760,7 @@ Why this order:
 - **Run 2 of the audit is still going.** New survivors may land in files these groups own. Dedupe against this plan, and fold new findings into the group that owns their file, not into new groups.
 - **Acceptance depends on G14.** Until it merges, S1b.4, S4.5, S4.6 and S6.3 pass on `main` for the wrong reasons.
 - **VoiceOver and remote push banners cannot be observed** in the simulator lane. Those acceptance items are judged by code review plus unit tests on spoken strings and on the local-notification path. Keep them as coverage gaps.
+
+## Schema note (after G0 merged, PR #4)
+
+Section 2's sketch is superseded. The wire contract is `bridge/src/protocol.ts` and `docs/sessions-design.md` §3.1. Differences: new fields are `?: T` (absent, never null); `PushState` and `ErrorAbout` are discriminated unions; `session_tool_output.output` stays a string and a failed fetch is an `error` with `about: {kind: "tool"}`. G2, G3 and G13 add `session_tasks`, `session_unqueue` and `push_state` to the hub's `SERVED` list when they serve them.

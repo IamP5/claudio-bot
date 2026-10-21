@@ -95,6 +95,8 @@ export function createPush(deps: {
   liveUntil: () => Date | null;
   now: () => Date;
   log: (line: string) => void;
+  /** Open cards other machines' gates hold, shown in a bot's chat here. They never enter this world's gate. */
+  remoteCards?: () => { botId: BotId; cardId: MessageId }[];
 }): Push {
   const { world, sender } = deps;
   const graceEnds = deps.now().getTime() + START_GRACE_MS;
@@ -114,8 +116,10 @@ export function createPush(deps: {
 
   const live = (now: number) => (deps.liveUntil()?.getTime() ?? 0) > now;
   const pushed = (key: string) => world.push.sent.some((s) => s.key === key);
+  /** Every open card waiting on the user, this machine's and other machines'. */
+  const openCards = () => [...world.gate.open.map((c) => ({ botId: c.actor.botId, cardId: c.cardId })), ...(deps.remoteCards?.() ?? [])];
   /** Open cards whose own push has not gone out, for any reason but a failed record. */
-  const heldCards = () => world.gate.open.filter((c) => !pushed(`${c.cardId}|card`));
+  const heldCards = () => openCards().filter((c) => !pushed(`${c.cardId}|card`));
 
   function notify(bot: { id: BotId; name: string }, reason: PushReason, messageId: MessageId, now = deps.now().getTime()): boolean {
     if (sender === null || live(now)) return false;
@@ -181,7 +185,7 @@ export function createPush(deps: {
         deferred.clear();
       }
       for (const card of heldCards()) {
-        const bot = world.bots.get(card.actor.botId);
+        const bot = world.bots.get(card.botId);
         if (bot) notify(bot, "card", card.cardId, now.getTime());
       }
       for (const card of heldSessionCards()) notifySession(card.id, card.cardId, now.getTime());

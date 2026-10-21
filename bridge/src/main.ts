@@ -156,6 +156,7 @@ function bootHome() {
     liveUntil: () => transport.liveUntil(),
     now,
     log,
+    remoteCards: () => hub.remoteCards(),
   });
 
   const stream = createStream();

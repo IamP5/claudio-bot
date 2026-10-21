@@ -113,6 +113,8 @@ export type Hub = {
   handle(message: ClientMessage): Promise<ServerMessage[]>;
   /** Runs every stored-deadline owner once at `now`. One that throws is logged and the rest still run. */
   tick(now: Date): void;
+  /** The open cards other machines' gates hold, for push to catch up on once no phone is live. */
+  remoteCards(): { botId: BotId; cardId: MessageId }[];
   /** USER.md, the first bot on a first run, and sessions with queued envelopes (bots and agents). */
   boot(firstRun: boolean): void;
   startTicker(): () => void;
@@ -1657,6 +1659,7 @@ export function createHub(deps: HubDeps): Hub {
     },
     handle,
     tick: (at) => tickEach(tickers, at, deps.log),
+    remoteCards: () => mirror.held().map(({ botId, cardId }) => ({ botId, cardId })),
 
     boot(firstRun) {
       gate.resume(clockNow());

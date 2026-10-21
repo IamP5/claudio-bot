@@ -315,6 +315,31 @@ test("a remote card's reminder pushes from the home once, even when its event co
   expect(sent).toHaveLength(2);
 });
 
+test("a remote card a live phone held back is pushed once when the phone goes quiet, and not again on a replay", async () => {
+  const world = emptyWorld();
+  const sent: string[] = [];
+  const quietAt = new Date(Date.now() + 45_000);
+  let liveUntil: Date | null = quietAt;
+  let h: ReturnType<typeof hubOver> | undefined;
+  const push = createPush({ world, persist: () => {}, sender: async (n) => void sent.push(n.text), liveUntil: () => liveUntil, now: () => new Date(), log: () => {}, remoteCards: () => h!.hub.remoteCards() });
+  const m = remote();
+  world.bots.set(B, bot("eng"));
+  h = hubOver(world, { links: m.links, push, seed: placedOn({ agentId: A, machine: MAC, botId: B }) });
+  m.send({ kind: "card", botId: B, message: card() });
+  await flush();
+  expect(sent).toEqual([]);
+
+  h.hub.tick(new Date(quietAt.getTime() + 1_000));
+  await flush();
+  expect(sent).toEqual(["eng needs you"]);
+
+  liveUntil = null;
+  m.send({ kind: "card", botId: B, message: card() });
+  h.hub.tick(new Date(quietAt.getTime() + 2_000));
+  await flush();
+  expect(sent).toEqual(["eng needs you"]);
+});
+
 test("a machine is heard only about agents the home placed on it: another's agent, card, report, note and row are dropped", async () => {
   const r = home();
   const before = r.world.bots.get(B)!.messages.length;

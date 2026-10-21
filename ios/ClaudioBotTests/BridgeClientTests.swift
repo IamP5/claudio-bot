@@ -793,6 +793,36 @@ private func scratchVault() -> PairingVault {
         client.stop()
     }
 
+    @Test func aRepairWhoseReplyNeverComesIsAskedOnceMoreAfterAWhile() async throws {
+        let watched = OSAllocatedUnfairLock(initialState: 0)
+        let bridge = try FakeBridge(
+            onOpen: { $0.send(threadsHello) },
+            onText: { socket, text in
+                guard text.contains(#""type":"watch_session""#) else { return }
+                switch watched.withLock({ $0 += 1; return $0 }) {
+                case 1:
+                    socket.send(thread(rev: 1, [askedLs], working: true))
+                    socket.send(changes(rev: 3, [listed]))
+                case 2: break
+                default: socket.send(thread(rev: 3, [askedLs, listed], working: false))
+                }
+            }
+        )
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        var timing = quick
+        timing.repairWait = .milliseconds(300)
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: timing)
+        client.view(Viewing(session: SessionID("s1")), as: ViewingLease())
+        client.start(pairing)
+
+        try await eventually("the repair's snapshot") { client.store.threads[SessionID("s1")]?.position?.rev == 3 }
+        #expect(bridge.watches.count == 3)
+        #expect(bridge.watches[2].contains(#""after":null"#))
+        try await Task.sleep(for: .milliseconds(700))
+        #expect(bridge.watches.count == 3, "one retry, no more")
+        client.stop()
+    }
+
     @Test func aThreadOrListFrameTheAppCannotReadIsWatchedAgainOnTheSameSocket() async throws {
         let halfEmoji = #"{"type":"session_items","sessionId":"s1","rev":2,"items":[{"kind":"assistant","id":"r1","at":"2026-10-21T10:00:05.000Z","text":"Done \ud83d"}],"removed":[],"controls":null}"#
         let halfRow = #"{"type":"session_rows","rows":[{"id":"s9","title":"Refactor \ud83d"}],"removed":[],"projects":[]}"#

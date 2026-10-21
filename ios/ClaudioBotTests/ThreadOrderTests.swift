@@ -115,14 +115,50 @@ private func ids(_ model: ThreadModel) -> [String] { model.items.map(\.id.rawVal
         #expect(raced.lost, "a reply older than a live frame that beat it is repaired by a snapshot")
     }
 
-    @Test func aRepairWhoseReplyIsAlsoLostWaitsForTheNextWatchInsteadOfAskingAgain() {
+    @Test func aRepairWhoseReplyIsAlsoLostAsksOnceMoreThenWaitsForTheNextWatch() {
         let model = opened([user("u1", 0)])
         model.lose()
         #expect(model.takeLost())
         model.lose()
-        #expect(!model.takeLost(), "the repair's own reply could not be read; asking again would loop")
+        #expect(!model.takeLost(), "the repair's own reply could not be read; asking again at once could loop")
+        #expect(model.retryRepair(), "a repair with no snapshot back is asked once more, later")
+        #expect(!model.retryRepair(), "and only once")
         model.apply(.snapshot(SessionSnapshot(epoch: "e1", rev: 5, items: [user("u1", 0)], before: nil, controls: resting, live: nil)))
+        #expect(!model.retryRepair(), "a snapshot that lands ends the repair")
         model.lose()
-        #expect(model.takeLost(), "a snapshot that lands ends the repair")
+        #expect(model.takeLost())
+        #expect(model.retryRepair(), "a new loss gets its own retry")
+    }
+
+    @Test func aRepairSnapshotOvertakenByANewerLiveFrameIsALossNotAnErasure() {
+        let model = opened([user("u1", 0)])
+        model.lose()
+        #expect(model.takeLost())
+        #expect(model.willWatch() == nil)
+        model.apply(.items(rev: 3, items: [reply("r1", 5)], removed: [], controls: nil))
+        model.apply(.snapshot(SessionSnapshot(epoch: "e1", rev: 2, items: [user("u1", 0)], before: nil, controls: resting, live: nil)))
+        #expect(ids(model) == ["u1", "r1"], "the reply rev 3 brought stays")
+        #expect(model.takeLost(), "and the thread asks again")
+    }
+
+    @Test func aFirstOpenSnapshotOvertakenByANewerLiveFrameAsksAgain() {
+        let model = ThreadModel(id: SessionID("s1"))
+        #expect(model.willWatch() == nil)
+        model.apply(.items(rev: 3, items: [reply("r1", 5)], removed: [], controls: nil))
+        model.apply(.snapshot(SessionSnapshot(epoch: "e1", rev: 2, items: [user("u1", 0)], before: nil, controls: resting, live: nil)))
+        #expect(ids(model) == ["r1"])
+        #expect(model.takeLost())
+        #expect(model.willWatch() == nil)
+        model.apply(.snapshot(SessionSnapshot(epoch: "e1", rev: 3, items: [user("u1", 0), reply("r1", 5)], before: nil, controls: resting, live: nil)))
+        #expect(ids(model) == ["u1", "r1"] && model.position?.rev == 3)
+    }
+
+    @Test func anItemThatMovesToTieAnotherKeepsTheOrderTheyWereFirstSeenIn() {
+        let todo = { (second: Int) in decoded(#"{"kind":"todo","id":"toolu_todo","at":"\#(at(second))","todos":[{"text":"x","state":"pending"}]}"#) }
+        let fresh = opened([todo(5), reply("r1", 5)], rev: 3)
+        let live = opened([todo(1)])
+        live.apply(.items(rev: 2, items: [reply("r1", 5)], removed: [], controls: nil))
+        live.apply(.items(rev: 3, items: [todo(5)], removed: [], controls: nil))
+        #expect(live.items == fresh.items)
     }
 }

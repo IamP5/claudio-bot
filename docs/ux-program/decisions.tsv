@@ -1,0 +1,12 @@
+ts	decision	why
+2026-10-21T02:35:02Z	the 3-booted cap counts only ClaudioBot-UX-1..3; the already-booted iPhone 17 Pro (81E949D3) is the user's and is left alone	program forbids touching other devices; shutting it down could disrupt the user
+2026-10-21T02:35:02Z	findings live in docs/ux-program/findings.tsv; ledger.tsv tracks steps	one file per concern keeps "next unfinished step" a one-line read
+2026-10-21T02:54:03Z	scenario registry is TypeScript data (bin/scenarios.ts) and sessions.md is generated from it	one source for the setup, the rubric text and its mechanical check; a hand-written doc would drift from the checks
+2026-10-21T02:54:03Z	a failed rubric item is a finding (exit 0); only a failed precondition fails the scenario (exit 2)	the audit wants findings recorded, and must never judge a situation it could not produce
+2026-10-21T02:54:03Z	scenarios answer every permission card Allow once and record the tap	subagent and long Bash calls ask in default mode; a user would approve them, and auto mode would add a classifier as a second variable
+2026-10-21T02:54:03Z	the phone leaves a thread (unwatch) before unread is judged and reopens it (watch after) to judge the thread	the bridge never marks a watched thread unread (catalog.ts), so a watcher that never leaves cannot see unread at all
+2026-10-21T02:54:03Z	a lease's staleness is judged by its heartbeat only, not by pid liveness	lease acquire from the CLI exits right away, so another agent's lease has no live pid; the heartbeat is the one signal every holder keeps
+2026-10-21T02:54:03Z	pairing stops at the app's confirmation; the Pair tap is left to an agent with the simulator tool, and no Debug auto-pair hook was added to the app	Step 0 changes no product code; an auto-confirm launch argument is a product call for the iOS owner
+2026-10-21T03:03:11Z	S1 pins run_in_background false on its Agent calls and S1b pins true, each checked as a precondition	Claude Code's Agent tool defaults to async subagents and haiku chose either mode across runs; unpinned, S1 judged a different situation each time
+2026-10-21T03:03:11Z	long foreground calls in scenarios use perl -e 'sleep N', not sleep N	Claude Code blocks a leading foreground sleep ("Blocked: standalone sleep 30"), so a sleep-based call never holds the turn
+2026-10-21T03:03:11Z	in S8 the background command finishing is the judged outcome, not a precondition	the subagent started it (the situation was produced) and it never finished; reporting that as a failed precondition would hide the finding

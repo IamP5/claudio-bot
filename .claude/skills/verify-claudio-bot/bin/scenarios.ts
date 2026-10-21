@@ -253,7 +253,7 @@ const replied = (s: Snap | undefined) => !!s?.items.some((i) => i.kind === "assi
 const started = (name: string): Action => ({ do: "until", mark: `${name}-started`, what: `${name}'s turn to start`, timeoutS: 90, test: (ev) => snaps(ev, name).some((s) => isWorking(s) || replied(s)) });
 
 /** The user leaves the thread once the turn ended, looks at the list, reopens the thread, leaves again until it finished. */
-const awayAndBack = (name: string, doneFile: string): Action[] => [
+const awayAndBack = (name: string, doneFile: string, finishIsOutcome = false): Action[] => [
   { do: "leave", name },
   { do: "sleep", s: 12 },
   { do: "mark", mark: "list-mid" },
@@ -262,7 +262,7 @@ const awayAndBack = (name: string, doneFile: string): Action[] => [
   { do: "mark", mark: "mid-background" },
   { do: "screenshot", shot: "background-running" },
   { do: "leave", name },
-  { do: "until", mark: "bg-done", what: `${doneFile} to appear`, timeoutS: 150, test: (ev) => ev.exists(doneFile) },
+  { do: "until", mark: "bg-done", what: `${doneFile} to appear`, timeoutS: 150, test: (ev) => ev.exists(doneFile), optional: finishIsOutcome },
   { do: "sleep", s: 20 },
   { do: "mark", mark: "list-after" },
   { do: "return", name },
@@ -276,131 +276,142 @@ const BG = (cmd: string) =>
 
 // ---- the scenarios
 
-const S1: Scenario = {
-  id: "S1",
-  area: "sessions",
-  title: "Three parallel subagents",
-  needsSimulator: false,
-  journey: [
-    "The user starts a session from the phone that fans out three subagents at once.",
-    "They watch the thread while the three run: which three, that all three run, for how long, and that Stop is there.",
-    "They see each one finish and the session come to rest.",
-  ],
-  setup: [
-    {
-      do: "create",
-      name: "s1",
-      prompt:
-        'Launch exactly 3 subagents in parallel, all in one message, with the Agent tool: subagent_type general-purpose, model haiku. Their descriptions are "sleeper one", "sleeper two" and "sleeper three". Each one\'s prompt is: "Run exactly this Bash command in the foreground: perl -e \'sleep 30\' . Then reply with the single word done." When all three have returned, reply with one line: all done.',
-    },
-    started("s1"),
-    { do: "until", mark: "agents-launched", what: "3 Agent calls in the transcript", timeoutS: 120, test: (ev) => blocks(ev.transcript("s1").main).uses.filter((u) => AGENT_TOOLS.has(u.name)).length >= 3 },
-    { do: "sleep", s: 12 },
-    { do: "mark", mark: "mid-run" },
-    { do: "screenshot", shot: "running" },
-    { do: "until", mark: "all-done", what: 'the "all done" reply', timeoutS: 240, test: (ev) => !!last(ev, "s1")?.items.some((i) => i.kind === "assistant" && /all done/i.test(i.text ?? "")) },
-    { do: "until", mark: "s1-ended", what: "the turn to end", timeoutS: 120, test: turnEnded("s1") },
-    { do: "screenshot", shot: "done" },
-  ],
-  pre: [
-    created("s1"),
-    {
-      what: "3 subagents ran at the same time (their own transcripts overlap)",
-      check: (ev) => {
-        const spans = [...subagentSpans(ev, "s1").values()];
-        const overlap = Math.min(...spans.map((x) => x.to)) - Math.max(...spans.map((x) => x.from));
-        return spans.length >= 3 && overlap > 5000 ? ok(`${spans.length} subagents, all running together for ${Math.round(overlap / 1000)} s`) : no(`${spans.length} subagents, overlap ${Math.round(overlap / 1000)} s`);
+const fanOut = (id: "S1" | "S1b", background: boolean): Scenario => {
+  const n = id.toLowerCase();
+  return {
+    id,
+    area: "sessions",
+    title: background ? "Three parallel subagents in the background (Claude Code's default)" : "Three parallel subagents the session waits for",
+    needsSimulator: false,
+    journey: [
+      "The user starts a session from the phone that fans out three subagents at once.",
+      "They watch the thread while the three run: which three, that all three run, for how long, and that Stop is there.",
+      "They see each one finish and the session come to rest.",
+    ],
+    setup: [
+      {
+        do: "create",
+        name: n,
+        prompt:
+          `Launch exactly 3 subagents in parallel, all in one message, with the Agent tool: subagent_type general-purpose, model haiku, run_in_background ${background}. Their descriptions are "sleeper one", "sleeper two" and "sleeper three". Each one\'s prompt is: "Run exactly this Bash command in the foreground: perl -e \'sleep 30\' . Then reply with the single word done." When all three have returned, reply with one line: all done.`,
       },
-    },
-  ],
-  derive: (ev): Record<string, number> => {
-    const spans = [...subagentSpans(ev, "s1").values()];
-    return spans.length ? { "agents-from": Math.min(...spans.map((x) => x.from)), "agents-to": Math.max(...spans.map((x) => x.to)) } : {};
-  },
-  rubric: [
-    {
-      id: "S1.1",
-      tell: "what",
-      lane: "protocol",
-      text: "Each subagent appears as its own step that names its job.",
-      pass: "At least 3 Agent/Task steps, with distinct labels that carry the description.",
-      fail: "Fewer than 3 subagent steps, or labels that do not tell them apart.",
-      check: (ev) => {
-        const steps = new Map(snaps(ev, "s1").flatMap(stepsOf).filter((s) => AGENT_TOOLS.has(s.tool)).map((s) => [s.id, s.label]));
-        const labels = new Set(steps.values());
-        return steps.size >= 3 && labels.size >= 3 ? ok([...labels].join(" | ")) : no(`${steps.size} steps, labels: ${[...labels].join(" | ") || "none"}`);
+      started(n),
+      { do: "until", mark: "agents-launched", what: "3 Agent calls in the transcript", timeoutS: 120, test: (ev) => blocks(ev.transcript(n).main).uses.filter((u) => AGENT_TOOLS.has(u.name)).length >= 3 },
+      { do: "sleep", s: 12 },
+      { do: "mark", mark: "mid-run" },
+      { do: "screenshot", shot: "running" },
+      { do: "until", mark: "all-done", what: 'the "all done" reply', timeoutS: 240, test: (ev) => !!last(ev, n)?.items.some((i) => i.kind === "assistant" && /all done/i.test(i.text ?? "")) },
+      { do: "until", mark: `${n}-ended`, what: "the turn to end", timeoutS: 120, test: turnEnded(n) },
+      { do: "screenshot", shot: "done" },
+    ],
+    pre: [
+      created(n),
+      {
+        what: `the 3 Agent calls ran with run_in_background ${background}`,
+        check: (ev) => {
+          const calls = blocks(ev.transcript(n).main).uses.filter((u) => AGENT_TOOLS.has(u.name));
+          const right = calls.filter((u) => (u.input.run_in_background === true) === background);
+          return calls.length >= 3 && right.length === calls.length ? ok(`${calls.length} calls`) : no(`${right.length}/${calls.length} calls with run_in_background ${background}`);
+        },
       },
-    },
-    {
-      id: "S1.2",
-      tell: "how-many",
-      lane: "protocol",
-      text: "The phone can tell that three subagents run at the same time.",
-      pass: "At one moment, 3 subagent steps are in state running.",
-      fail: "The most running at once is under 3 (they look sequential, or their state is not live).",
-      check: (ev) => {
-        const n = maxRunning(ev, "s1", (s) => AGENT_TOOLS.has(s.tool));
-        return n >= 3 ? ok(`max ${n} running at once`) : no(`max ${n} running at once`);
+      {
+        what: "3 subagents ran at the same time (their own transcripts overlap)",
+        check: (ev) => {
+          const spans = [...subagentSpans(ev, n).values()];
+          const overlap = Math.min(...spans.map((x) => x.to)) - Math.max(...spans.map((x) => x.from));
+          return spans.length >= 3 && overlap > 5000 ? ok(`${spans.length} subagents, all running together for ${Math.round(overlap / 1000)} s`) : no(`${spans.length} subagents, overlap ${Math.round(overlap / 1000)} s`);
+        },
       },
+    ],
+    derive: (ev): Record<string, number> => {
+      const spans = [...subagentSpans(ev, n).values()];
+      return spans.length ? { "agents-from": Math.min(...spans.map((x) => x.from)), "agents-to": Math.max(...spans.map((x) => x.to)) } : {};
     },
-    {
-      id: "S1.3",
-      tell: "state",
-      lane: "protocol",
-      text: "While the subagents run, the Sessions list shows the session as working.",
-      pass: "row.status is working in every state between agents-from and agents-to (the subagents' own transcripts).",
-      fail: "The row reads idle (or another rest state) while subagents still run.",
-      check: (ev) => {
-        const w = span(ev, "agents-from", "agents-to");
-        if (!w) return needMarks(ev, "agents-from", "agents-to")!;
-        const xs = during(ev, "s1", w[0], w[1]).filter((s) => s.row);
-        const bad = xs.filter((s) => s.row!.status !== "working");
-        const idle = bad.reduce((n, s, i) => n + ((xs[xs.indexOf(s) + 1]?.at ?? w[1]) - Math.max(s.at, w[0])), 0);
-        return bad.length ? no(`row ${statuses(bad)} for about ${Math.round(idle / 1000)} of the ${Math.round((w[1] - w[0]) / 1000)} s the subagents ran`) : ok(`row working in all ${xs.length} states`);
+    rubric: [
+      {
+        id: `${id}.1`,
+        tell: "what",
+        lane: "protocol",
+        text: "Each subagent appears as its own step that names its job.",
+        pass: "At least 3 Agent/Task steps, with distinct labels that carry the description.",
+        fail: "Fewer than 3 subagent steps, or labels that do not tell them apart.",
+        check: (ev) => {
+          const steps = new Map(snaps(ev, n).flatMap(stepsOf).filter((s) => AGENT_TOOLS.has(s.tool)).map((s) => [s.id, s.label]));
+          const labels = new Set(steps.values());
+          return steps.size >= 3 && labels.size >= 3 ? ok([...labels].join(" | ")) : no(`${steps.size} steps, labels: ${[...labels].join(" | ") || "none"}`);
+        },
       },
-    },
-    {
-      id: "S1.4",
-      tell: "state",
-      lane: "protocol",
-      text: "Each subagent's step reads done when that subagent finishes, not before, and none stays running after.",
-      pass: "Each Agent step first reads ok no earlier than 2 s before its subagent's transcript ends, and reads ok at the end.",
-      fail: "A step reads ok while its subagent still runs (or stays running after it ended).",
-      check: (ev) => {
-        const spans = subagentSpans(ev, "s1");
-        const calls = agentOfCall(ev, "s1");
-        const early: string[] = [];
-        const ids = [...new Set(snaps(ev, "s1").flatMap(stepsOf).filter((x) => AGENT_TOOLS.has(x.tool)).map((x) => x.id))];
-        for (const id of ids) {
-          const end = spans.get(calls.get(id) ?? "")?.to;
-          const firstOk = snaps(ev, "s1").find((s) => stepsOf(s).some((x) => x.id === id && x.state === "ok"))?.at;
-          const label = stepsOf(last(ev, "s1")!).find((x) => x.id === id)?.label ?? id;
-          if (end !== undefined && firstOk !== undefined && firstOk < end - 2000) early.push(`${label} read ok ${Math.round((end - firstOk) / 1000)} s before its subagent ended`);
-        }
-        const notOk = stepsOf(last(ev, "s1")!).filter((x) => AGENT_TOOLS.has(x.tool) && x.state !== "ok");
-        if (!ids.length) return no("no subagent steps");
-        return early.length || notOk.length ? no([...early, ...notOk.map((x) => `${x.label} ends ${x.state}`)].join("; ")) : ok(`${ids.length} steps read ok when their subagents ended`);
+      {
+        id: `${id}.2`,
+        tell: "how-many",
+        lane: "protocol",
+        text: "The phone can tell that three subagents run at the same time.",
+        pass: "At one moment, 3 subagent steps are in state running.",
+        fail: "The most running at once is under 3 (they look sequential, or their state is not live).",
+        check: (ev) => {
+          const most = maxRunning(ev, n, (s) => AGENT_TOOLS.has(s.tool));
+          return most >= 3 ? ok(`max ${most} running at once`) : no(`max ${most} running at once`);
+        },
       },
-    },
-    startTime("S1.5", "s1", (s) => AGENT_TOOLS.has(s.tool), "a subagent"),
-    {
-      id: "S1.6",
-      tell: "what",
-      lane: "protocol",
-      text: "The user can see what a running subagent is doing inside, not only that it runs.",
-      pass: "A child row (parentId = the session) is listed, or a running subagent step carries progress output.",
-      fail: "A running subagent is an opaque line: no child row and no output until it returns.",
-      check: (ev) => {
-        const id = ev.ids.s1;
-        const child = ev.history.some((s) => s.row?.parentId === id);
-        const progress = snaps(ev, "s1").flatMap(stepsOf).some((x) => AGENT_TOOLS.has(x.tool) && x.state === "running" && (x.output ?? "") !== "");
-        return child || progress ? ok(`child row: ${child}, progress output: ${progress}`) : no("no child row, no output while running");
+      {
+        id: `${id}.3`,
+        tell: "state",
+        lane: "protocol",
+        text: "While the subagents run, the Sessions list shows the session as working.",
+        pass: "row.status is working in every state between agents-from and agents-to (the subagents' own transcripts).",
+        fail: "The row reads idle (or another rest state) while subagents still run.",
+        check: (ev) => {
+          const w = span(ev, "agents-from", "agents-to");
+          if (!w) return needMarks(ev, "agents-from", "agents-to")!;
+          const xs = during(ev, n, w[0], w[1]).filter((s) => s.row);
+          const bad = xs.filter((s) => s.row!.status !== "working");
+          const idle = bad.reduce((n, s, i) => n + ((xs[xs.indexOf(s) + 1]?.at ?? w[1]) - Math.max(s.at, w[0])), 0);
+          return bad.length ? no(`row ${statuses(bad)} for about ${Math.round(idle / 1000)} of the ${Math.round((w[1] - w[0]) / 1000)} s the subagents ran`) : ok(`row working in all ${xs.length} states`);
+        },
       },
-    },
-    stopOffered("S1.7", "s1", "agents-from", "agents-to", "the subagents"),
-    review("S1.8", "how-many", "Mid-run, the thread shows three labeled subagent rows, each visibly running, and a Stop button.", "All three rows, a running indicator on each, Stop visible.", "Rows missing or merged, no running indicator, or no Stop.", ["running"]),
-    review("S1.9", "state", "After the turn, the thread shows all three done and the session at rest.", "Three done rows, no spinner, composer ready.", "A spinner or running state remains.", ["done"]),
-  ],
+      {
+        id: `${id}.4`,
+        tell: "state",
+        lane: "protocol",
+        text: "Each subagent's step reads done when that subagent finishes, not before, and none stays running after.",
+        pass: "Each Agent step first reads ok no earlier than 2 s before its subagent's transcript ends, and reads ok at the end.",
+        fail: "A step reads ok while its subagent still runs (or stays running after it ended).",
+        check: (ev) => {
+          const spans = subagentSpans(ev, n);
+          const calls = agentOfCall(ev, n);
+          const early: string[] = [];
+          const ids = [...new Set(snaps(ev, n).flatMap(stepsOf).filter((x) => AGENT_TOOLS.has(x.tool)).map((x) => x.id))];
+          for (const id of ids) {
+            const end = spans.get(calls.get(id) ?? "")?.to;
+            const firstOk = snaps(ev, n).find((s) => stepsOf(s).some((x) => x.id === id && x.state === "ok"))?.at;
+            const label = stepsOf(last(ev, n)!).find((x) => x.id === id)?.label ?? id;
+            if (end !== undefined && firstOk !== undefined && firstOk < end - 2000) early.push(`${label} read ok ${Math.round((end - firstOk) / 1000)} s before its subagent ended`);
+          }
+          const notOk = stepsOf(last(ev, n)!).filter((x) => AGENT_TOOLS.has(x.tool) && x.state !== "ok");
+          if (!ids.length) return no("no subagent steps");
+          return early.length || notOk.length ? no([...early, ...notOk.map((x) => `${x.label} ends ${x.state}`)].join("; ")) : ok(`${ids.length} steps read ok when their subagents ended`);
+        },
+      },
+      startTime(`${id}.5`, n, (s) => AGENT_TOOLS.has(s.tool), "a subagent"),
+      {
+        id: `${id}.6`,
+        tell: "what",
+        lane: "protocol",
+        text: "The user can see what a running subagent is doing inside, not only that it runs.",
+        pass: "A child row (parentId = the session) is listed, or a running subagent step carries progress output.",
+        fail: "A running subagent is an opaque line: no child row and no output until it returns.",
+        check: (ev) => {
+          const id = ev.ids[n];
+          const child = ev.history.some((s) => s.row?.parentId === id);
+          const progress = snaps(ev, n).flatMap(stepsOf).some((x) => AGENT_TOOLS.has(x.tool) && x.state === "running" && (x.output ?? "") !== "");
+          return child || progress ? ok(`child row: ${child}, progress output: ${progress}`) : no("no child row, no output while running");
+        },
+      },
+      stopOffered(`${id}.7`, n, "agents-from", "agents-to", "the subagents"),
+      review(`${id}.8`, "how-many", "Mid-run, the thread shows three labeled subagent rows, each visibly running, and a Stop button.", "All three rows, a running indicator on each, Stop visible.", "Rows missing or merged, no running indicator, or no Stop.", ["running"]),
+      review(`${id}.9`, "state", "After the turn, the thread shows all three done and the session at rest.", "Three done rows, no spinner, composer ready.", "A spinner or running state remains.", ["done"]),
+    ],
+  };
 };
 
 const S2: Scenario = {
@@ -470,7 +481,7 @@ const S3: Scenario = {
     { do: "until", mark: "bg-done", what: "bg3.txt to appear", timeoutS: 150, test: (ev) => ev.exists("bg3.txt") },
     { do: "sleep", s: 20 },
     { do: "mark", mark: "list-after" },
-    { do: "screenshot", shot: "home-screen" },
+    { do: "screenshot", shot: "while-away" },
     { do: "app", to: "foreground", mark: "foregrounded" },
     { do: "sleep", s: 5 },
     { do: "screenshot", shot: "thread-after" },
@@ -514,7 +525,7 @@ const S3: Scenario = {
     unreadAfter("S3.3", "s3", "list-after"),
     finishShows("S3.4", "s3", "bg-done", "the background command"),
     review("S3.5", "state", "Before leaving, the thread shows the command running in the background.", "Running indicator with what runs.", "Looks finished.", ["thread-before"]),
-    review("S3.6", "state", "On the home screen, a notification or badge says the work finished.", "Notification banner or badge.", "Nothing.", ["home-screen"]),
+    review("S3.6", "state", "While the app is away (Settings in front), a notification says the work finished.", "Notification banner or badge.", "Nothing.", ["while-away"]),
     review("S3.7", "state", "Back in the app, the thread shows the result, with no stale running indicator.", "Done state and the reply.", "Still running, or stale.", ["thread-after"]),
   ],
 };
@@ -698,7 +709,9 @@ const S5: Scenario = {
       check: (ev) => {
         const w = span(ev, "call-running", "call-done");
         if (!w) return needMarks(ev, "call-running", "call-done")!;
-        const xs = snaps(ev, "s5", w[0], w[1] - 1);
+        // The call-done mark lands a poll after the step finishes; the window ends at the first state it no longer runs.
+        const end = snaps(ev, "s5", w[0]).find((s) => !stepsOf(s).some((x) => x.tool === "Bash" && x.state === "running"))?.at ?? w[1];
+        const xs = during(ev, "s5", w[0], end - 1);
         const bad = xs.filter((s) => !(stepsOf(s).some((x) => x.state === "running") && s.row?.status === "working"));
         return bad.length ? no(`${bad.length}/${xs.length} states: ${statuses(bad)}`) : ok(`${xs.length} states, all running and working`);
       },
@@ -931,13 +944,21 @@ const S8: Scenario = {
     },
     started("s8"),
     { do: "until", mark: "s8-ended", what: "the parent turn to end", timeoutS: 180, test: turnEnded("s8") },
-    ...awayAndBack("s8", "nested.txt"),
+    ...awayAndBack("s8", "nested.txt", true),
   ],
   pre: [
     created("s8"),
     { what: "the subagent ran Bash with run_in_background", check: (ev) => (bgBash(ev.transcript("s8").subagents).length ? ok("yes") : no("no background Bash in a subagent transcript")) },
-    fileMade("nested.txt"),
-    { what: "the parent turn ended before nested.txt appeared", check: (ev) => ((mark(ev, "s8-ended") ?? Infinity) < (mark(ev, "bg-done") ?? 0) ? ok("yes") : no("no")) },
+    {
+      what: "the parent turn ended while that command still had at least 40 s to run",
+      check: (ev) => {
+        const started = bgBash(ev.transcript("s8").subagents)[0];
+        const ended = mark(ev, "s8-ended");
+        if (!started || ended === undefined) return no("no background command or no turn end");
+        const left = 60 - (ended - ev.atOf(started.at)) / 1000;
+        return left >= 40 ? ok(`${Math.round(left)} s left when the turn ended`) : no(`${Math.round(left)} s left`);
+      },
+    },
   ],
   rubric: [
     stillRunning("S8.1a", "s8", "list-mid", "list", "the subagent's background command"),
@@ -957,11 +978,24 @@ const S8: Scenario = {
         return hit ? ok(hit) : no("no running step or notice names it");
       },
     },
-    finishShows("S8.3", "s8", "bg-done", "the subagent's background command"),
+    {
+      id: "S8.3",
+      tell: "state",
+      lane: "protocol",
+      text: "The user learns how the subagent's background command ended: it finished, or it was stopped.",
+      pass: "nested.txt appeared and the thread changed within 60 s of it; or, if it never appeared, a thread item says the background work stopped.",
+      fail: "The command never finished (nested.txt missing) and nothing told the user, or it finished and the thread did not change.",
+      check: (ev) => {
+        const done = mark(ev, "bg-done");
+        if (done !== undefined) return finishShows("S8.3", "s8", "bg-done", "it").check!(ev);
+        const told = snaps(ev, "s8", mark(ev, "s8-ended") ?? 0).flatMap((s) => s.items).find((i) => (i.kind === "notice" || i.kind === "assistant") && /stopp|killed|background|nested/i.test(i.text ?? ""));
+        return told ? ok(`never finished; the thread says: ${told.kind} "${(told.text ?? "").slice(0, 80)}"`) : no("nested.txt never appeared (the command did not finish) and no thread item says it stopped");
+      },
+    },
     unreadAfter("S8.4", "s8", "list-after"),
     stopOffered("S8.5", "s8", "mid-background", "mid-background", "the subagent's background command"),
     review("S8.6", "state", "Mid-background, the thread shows that something still runs and what.", "A running indicator with the command or the subagent.", "Looks finished.", ["background-running"]),
   ],
 };
 
-export const SCENARIOS: Scenario[] = [S1, S2, S3, S4, S5, S6, S7, S8];
+export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S4, S5, S6, S7, S8];

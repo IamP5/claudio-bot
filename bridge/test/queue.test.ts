@@ -30,7 +30,9 @@ test.each<[string, QueuedIntent, string | null, string]>([
   ["a message waits 24 h", message("x"), null, plus(DAY)],
   ["a stop waits 10 min", stop(), null, plus(10 * MIN)],
   ["a worktree removal waits 24 h", { kind: "agent.removeWorktree", intentId: newIntentId(), agentId: A1 }, null, plus(DAY)],
-  ["a card answer waits until its card expires", answer(), plus(2 * 60 * MIN), plus(2 * 60 * MIN)],
+  ["a card answer waits at least 24 h, so a sleeping machine's gate is the one to say its card expired", answer(), plus(2 * 60 * MIN), plus(DAY)],
+  ["a card answer waits until its card expires, when that is later", answer(), plus(2 * DAY), plus(2 * DAY)],
+  ["a card answer with no known expiry waits 24 h", answer(), null, plus(DAY)],
 ])("%s", (_, intent, cardExpiresAt, expiresAt) => {
   expect(expiryOf(intent, T0, cardExpiresAt)).toBe(expiresAt);
 });

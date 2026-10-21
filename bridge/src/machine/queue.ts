@@ -20,19 +20,23 @@ const MINUTE = 60_000;
 const RETRY = { firstMs: 1000, maxMs: 30_000 } as const;
 const DAY = 24 * 60 * MINUTE;
 
-/** How long each kind waits for its machine. A card answer waits until its card expires, which it is told. */
-export const QUEUE_TTL_MS: Record<Exclude<QueuedIntent["kind"], "card.answer">, number> = {
+/**
+ * How long each kind waits for its machine. A card answer waits at least as long as a start, and longer when its card
+ * lives longer: the machine's gate, not the home, says whether the card expired, and its refusal becomes a note.
+ */
+export const QUEUE_TTL_MS: Record<QueuedIntent["kind"], number> = {
   "agent.start": DAY,
   "agent.message": DAY,
   "agent.direct": DAY,
   "agent.stop": 10 * MINUTE,
   "agent.removeWorktree": DAY,
+  "card.answer": DAY,
 };
 
-/** cardExpiresAt: for a card answer, when its card expires. */
+/** cardExpiresAt: for a card answer, when its card expires as the machine last said. */
 export function expiryOf(intent: QueuedIntent, at: Date, cardExpiresAt: string | null): string {
-  if (intent.kind === "card.answer") return cardExpiresAt ?? at.toISOString();
-  return new Date(at.getTime() + QUEUE_TTL_MS[intent.kind]).toISOString();
+  const ttl = new Date(at.getTime() + QUEUE_TTL_MS[intent.kind]).toISOString();
+  return intent.kind === "card.answer" && cardExpiresAt !== null && cardExpiresAt > ttl ? cardExpiresAt : ttl;
 }
 
 /** The machine's next intent to send, in queue order, and every queued intent (for any machine) past its TTL. */

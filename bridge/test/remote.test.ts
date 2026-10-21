@@ -134,6 +134,20 @@ test("an answer to a card of an offline machine waits for it, says so in the cha
   expect(r.intents).toMatchObject([{ kind: "card.answer", reply: { choice: "deny" } }]);
 });
 
+test("an answer queued for a machine asleep past its card's expiry still goes, and the machine's refusal is the note in the chat", async () => {
+  const r = home();
+  r.send({ kind: "card", botId: B, message: card() });
+  r.flip(false);
+  await r.h.hub.handle({ type: "decide", botId: B, messageId: "c_mac1" as MessageId, choice: "once" });
+  later(3 * 3600_000);
+  r.h.hub.tick(new Date());
+  r.answers((i) => (i.kind === "card.answer" ? { ok: false, reason: "That request expired" } : { ok: true }));
+  r.flip(true);
+  await flush();
+  expect(r.intents.map((i) => i.kind)).toEqual(["card.answer"]);
+  expect(r.world.bots.get(B)!.messages.at(-1)).toMatchObject({ kind: "note", text: 'Your answer to "Push to the default branch" on MacBook did not go through: That request expired' });
+});
+
 test("a snapshot that no longer holds a mirrored card closes it in the chat as expired", () => {
   const r = home();
   r.send({ kind: "card", botId: B, message: card() });

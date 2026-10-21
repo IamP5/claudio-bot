@@ -51,3 +51,4 @@ ts	decision	why
 2026-10-21T10:44:12Z	G2: after a background task notifies, the session reads working (Stop offered) for up to 30 s until Claude Code's wake turn starts	hiding Stop for a turn about to run would be the same lie as the P0
 2026-10-21T10:44:12Z	G2: the row's activity line reads "Waiting for approval: <tool>"; a subagent's card marks its task waiting while its Agent step keeps reading running	the subagent is alive; the card is what waits
 2026-10-21T10:44:12Z	G2 gets a three-lane verifier swarm (rubric+protocol, simulator, code audit)	largest change of the program and the only P0; it also touches the runner's turn-end wait
+2026-10-21T10:57:58Z	UI fixes that depend on a tap must be proven with a real tap (XCUITest host), not a probe build that triggers the action	G7's probe build hid a hang that only a real tap at AX4/AX5 showed

@@ -20,13 +20,15 @@ import {
   type Foreground,
   type ServiceDeps,
 } from "./service";
+import { platformOf } from "./machine/profile";
 import { errorText } from "./text";
 
 const USAGE = `usage: claudiobot <install|uninstall|status|doctor|logs|pair|update> [--label <label>] [--log-dir <dir>]
 
-  install    run the bridge as a LaunchAgent that starts at login, and print the pairing code
-  uninstall  stop it and remove the LaunchAgent (your bots and data are kept)
-  status     launchd state, pid, /health and the lock holder
+  install    run the bridge as a service that starts at login (a LaunchAgent on macOS, a systemd user unit on
+             Linux), and print the pairing code
+  uninstall  stop it and remove the service (your bots and data are kept)
+  status     the service's state and pid, /health and the lock holder
   doctor     check everything the service needs; exits 1 on any FAIL
   logs       follow the service log
   pair       stop the service, run the bridge here with --pair until a phone pairs, start it again
@@ -98,9 +100,10 @@ const alive = (pid: number) => {
 
 async function main(argv: string[]): Promise<number> {
   const command = argv[0];
-  const label = flag(argv, "--label") ?? process.env.CLAUDIOBOT_SERVICE_LABEL ?? DEFAULT_LABEL;
-  const logDir = flag(argv, "--log-dir") ?? process.env.CLAUDIOBOT_LOG_DIR ?? defaultLogDir();
-  const target = serviceTarget({ label, uid: process.getuid!(), logDir, bridgeDir: dirname(import.meta.dir) });
+  const platform = platformOf(process.platform);
+  const label = flag(argv, "--label") ?? process.env.CLAUDIOBOT_SERVICE_LABEL ?? DEFAULT_LABEL[platform];
+  const logDir = flag(argv, "--log-dir") ?? process.env.CLAUDIOBOT_LOG_DIR ?? defaultLogDir(platform);
+  const target = serviceTarget({ platform, label, uid: process.getuid!(), logDir, bridgeDir: dirname(import.meta.dir) });
   const out = (text: string) => process.stdout.write(text);
   const deps: ServiceDeps = { exec, out, sleep: Bun.sleep };
   const doctorDeps: DoctorDeps = {
@@ -110,7 +113,7 @@ async function main(argv: string[]): Promise<number> {
     which: (command, path) => Bun.which(command, { PATH: path }),
     alive,
     lan: lanAddresses,
-    platform: process.platform,
+    platform,
     env: process.env,
     homeDir: homedir(),
     login: (claude, env) =>
@@ -119,7 +122,7 @@ async function main(argv: string[]): Promise<number> {
 
   switch (command) {
     case "install": {
-      // The PATH symlink, not the resolved Cellar path, so a bun upgrade does not strand the plist.
+      // The PATH symlink, not the resolved Cellar path, so a bun upgrade does not strand the service.
       const bun = Bun.which("bun") ?? process.execPath;
       return install(deps, { target, bun, env: capturedEnv(process.env) });
     }

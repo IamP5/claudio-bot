@@ -226,7 +226,8 @@ export type MachineNode = Node & {
  */
 export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "rowed" | "elsewhere" | "observe" | "idle" | "turnDone">): MachineNode {
   const { world } = deps;
-  const archiveOf = (botId: BotId) => join(deps.root, "machine", "history", `${botId}.jsonl`);
+  /** A stand-in's chat, or an agent's thread. */
+  const archiveOf = (id: BotId | AgentId) => join(deps.root, "machine", "history", `${id}.jsonl`);
   const node: Node = createNode({
     ...deps,
     // The home counts the row toward the bot's daily cap; this machine's ledger already holds it to its own.
@@ -253,6 +254,14 @@ export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "row
       // The home pushes, from the card events.
       notify: () => {},
     },
+  });
+
+  // The home saves an agent's record on each of its events; here nothing else would, so a restart would find it stale.
+  node.runtime.subscribe((e) => {
+    if (e.kind !== "agent") return;
+    const rec = world.agents.get(e.agent.id);
+    if (rec) trimThread(rec.messages, archiveOf(rec.agent.id), () => false, deps.log);
+    deps.persist();
   });
 
   const turns: Tickable = {

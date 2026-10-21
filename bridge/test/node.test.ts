@@ -18,7 +18,7 @@ const at = "2026-10-21T12:00:00.000Z";
 const HISTORY_KEEP = 1000;
 const HISTORY_SLACK = 100;
 
-function machine() {
+function machine(persist: () => void = () => {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-node-")));
   // The projects sit outside the bridge home, which the floors keep every agent out of.
   const code = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-code-")));
@@ -39,7 +39,7 @@ function machine() {
       }) as unknown as typeof query,
       executable: () => "/fake/claude",
     },
-    persist: () => {},
+    persist,
     log: () => {},
     now: () => new Date(),
     root,
@@ -145,4 +145,16 @@ test("at boot, agents whose bot moved to the home get a stand-in, from the froze
   m.node.boot();
   expect(m.world.bots.get("b_ana" as BotId)).toMatchObject({ name: "Ana", dailyCapUsd: 3, connectorsOff: ["gmail"], messages: [] });
   expect(m.world.bots.get("b_finished" as BotId)).toMatchObject({ name: "b_finished", dailyCapUsd: null, connectorsOff: [] });
+});
+
+test("a machine saves an agent's record on each of its events, so a restart finds the status the home last heard", async () => {
+  const saved: string[] = [];
+  const m = machine(() => saved.push([...m.world.agents.values()][0]?.agent.status ?? "none"));
+  await m.node.runtime.apply(start({ name: "Ana", dailyCapUsd: null, connectorsOff: [] }));
+  await flush();
+  m.queries[0]!.emit(result(0.1));
+  await flush();
+  await flush();
+  expect(m.events.findLast((e) => e.kind === "agent")).toMatchObject({ agent: { status: "waiting" } });
+  expect(saved.at(-1)).toBe("waiting");
 });

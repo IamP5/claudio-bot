@@ -5,11 +5,22 @@ import { join } from "node:path";
 import type { SessionId, SessionItem } from "../src/protocol";
 import { createHeads, emptyTail, pageOf, extend, follow, parseEntry, project, readThread, sdkReaders, toolOutput, type Entry, type ProjectContext, type SdkReaders } from "../src/transcript";
 
-// Claude Code transcripts recorded by scripts/record-transcript.ts (own-permission, own-ask, own-plan), read through the
-// SDK's real readers pointed at a temp CLAUDE_CONFIG_DIR, plus lines crafted from real ones for the rarer shapes.
+// Claude Code transcripts recorded by scripts/record-transcript.ts (own-permission, own-ask, own-plan) and imported from
+// scenario runs by scripts/import-transcript.ts (subagents and background commands), read through the SDK's real
+// readers pointed at a temp CLAUDE_CONFIG_DIR, plus lines crafted from real ones for the rarer shapes.
 
 const FIXTURES = join(import.meta.dir, "transcripts", "jsonl");
-const IDS = { "own-permission": "11111111-1111-4111-8111-111111111111", "own-ask": "22222222-2222-4222-8222-222222222222", "own-plan": "33333333-3333-4333-8333-333333333333" } as const;
+const IDS = {
+  "own-permission": "11111111-1111-4111-8111-111111111111",
+  "own-ask": "22222222-2222-4222-8222-222222222222",
+  "own-plan": "33333333-3333-4333-8333-333333333333",
+  "agents-foreground": "44444444-4444-4444-8444-444444444444",
+  "agents-background": "55555555-5555-4555-8555-555555555555",
+  "bash-background": "66666666-6666-4666-8666-666666666666",
+  "agent-stopped": "77777777-7777-4777-8777-777777777777",
+  "agent-killed": "88888888-8888-4888-8888-888888888888",
+  "agent-own-work": "99999999-9999-4999-8999-999999999999",
+} as const;
 type Name = keyof typeof IDS;
 const ctx: ProjectContext = { cwd: "<cwd>", userName: "Alex", agent: false };
 
@@ -43,7 +54,7 @@ describe("heads", () => {
   test("each transcript is listed with the facts a row needs", async () => {
     const heads = await createHeads({ projectsDir: projects }).scan();
     const permission = heads.find((h) => h.id === IDS["own-permission"])!;
-    expect(heads).toHaveLength(3);
+    expect(heads).toHaveLength(Object.keys(IDS).length);
     expect(permission).toMatchObject({ cwd: "<cwd>", firstEntry: "sdk-ts", lastEntry: "sdk-ts", model: "claude-haiku-5-5", mode: "default", lastRole: "assistant", pr: null });
     const aiTitle = fixture("own-permission").split("\n").flatMap((l) => (l.includes('"ai-title"') ? [JSON.parse(l).aiTitle as string] : [])).at(-1);
     expect(permission.title).toBe(aiTitle!);
@@ -102,7 +113,7 @@ describe("threads", () => {
     expect(work.steps.map((s) => [s.tool, s.label, s.state, s.diff])).toEqual([
       ["Write", "Write a.txt", "ok", { path: "a.txt", added: 3, removed: 0 }],
       ["Edit", "Edit a.txt", "ok", { path: "a.txt", added: 1, removed: 1 }],
-      ["Bash", "Run Print contents of a.txt", "ok", null],
+      ["Bash", "Print contents of a.txt", "ok", null],
     ]);
     expect(work.id).toBe(work.steps[0]!.id as never);
     expect(work.steps[2]!.output).toContain("TWO");
@@ -160,15 +171,15 @@ describe("live tail", () => {
     }
   });
 
-  test("lines appended in pieces, a torn line included, project to the same items as the whole file", async () => {
+  test.each(Object.keys(IDS) as Name[])("%s appended in pieces, a torn line included, projects to the same items as the whole file", async (name) => {
     const dir = mkdtempSync(join(tmpdir(), "tail-"));
     try {
-      const path = join(dir, `${IDS["own-permission"]}.jsonl`);
-      const text = fixture("own-permission");
-      const cuts = [Math.floor(text.length * 0.3), Math.floor(text.length * 0.55), Math.floor(text.length * 0.8), text.length];
+      const path = join(dir, `${IDS[name]}.jsonl`);
+      const text = fixture(name);
+      const cuts = Array.from({ length: 12 }, (_, i) => Math.floor((text.length * (i + 1)) / 12));
       writeFileSync(path, text.slice(0, cuts[0]));
       const none: SdkReaders = { ...sdkReaders, getSessionMessages: async () => [] };
-      const thread = await readThread(IDS["own-permission"] as SessionId, path, "<cwd>", none);
+      const thread = await readThread(IDS[name] as SessionId, path, "<cwd>", none);
       const seen = new Map<string, SessionItem>();
       let { items, tail } = project(thread.entries, ctx);
       for (const i of items) seen.set(i.id, i);
@@ -182,7 +193,7 @@ describe("live tail", () => {
         ({ items, tail } = project(appended, ctx, tail));
         for (const item of items) seen.set(item.id, item);
       }
-      expect([...seen.values()]).toEqual(await itemsOf("own-permission"));
+      expect([...seen.values()]).toEqual(await itemsOf(name));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -313,5 +324,217 @@ describe("projection rules", () => {
     expect(parseEntry("{not json")).toBeNull();
     expect(parseEntry(JSON.stringify({ type: "custom-title", customTitle: "x" }))).toBeNull();
     expect(parseEntry(JSON.stringify({ type: "user", uuid: "u", parentUuid: null, message: { content: "hi" } }))?.uuid).toBe("u");
+  });
+});
+
+const stepsOf = (items: SessionItem[]) => items.flatMap((i) => (i.kind === "work" ? i.steps : []));
+const stepNamed = (items: SessionItem[], label: string) => stepsOf(items).find((s) => s.label === label)!;
+/** The thread's items as they stood right before the first entry whose content holds `text`. */
+const itemsBefore = async (name: Name, text: string) => {
+  const { entries } = await readThread(IDS[name] as SessionId, fileOf(name), "<cwd>");
+  return project(entries.slice(0, entries.findIndex((e) => JSON.stringify(e.message?.content ?? "").includes(text))), ctx).items;
+};
+const notices = (items: SessionItem[]) => items.flatMap((i) => (i.kind === "notice" ? [{ text: i.text, tone: i.tone, reason: i.reason, at: i.at }] : []));
+
+describe("subagents and background work", () => {
+  test("async Agents run in the background from their launch until each one's notification", async () => {
+    const launched = await itemsBefore("agents-background", "<task-notification>");
+    expect(stepsOf(launched).map((s) => [s.label, s.state, s.background, s.output, s.detail, s.startedAt])).toEqual([
+      ["Agent: sleeper one", "running", true, null, "general-purpose", "2026-10-21T03:30:22.838Z"],
+      ["Agent: sleeper two", "running", true, null, "general-purpose", "2026-10-21T03:30:23.238Z"],
+      ["Agent: sleeper three", "running", true, null, "general-purpose", "2026-10-21T03:30:23.731Z"],
+    ]);
+    const items = await itemsOf("agents-background");
+    expect(stepsOf(items).map((s) => [s.state, s.output, s.endedAt, s.usage])).toEqual([
+      ["ok", "done", "2026-10-21T03:30:56.575Z", { tools: 1, ms: 33674 }],
+      ["ok", "done", "2026-10-21T03:30:56.690Z", { tools: 1, ms: 33216 }],
+      ["ok", "done", "2026-10-21T03:30:58.294Z", { tools: 1, ms: 32974 }],
+    ]);
+  });
+
+  test("each notification is a task notice, before the turn it wakes, and the work item keeps its place", async () => {
+    const items = await itemsOf("agents-background");
+    expect(items.map((i) => (i.kind === "notice" || i.kind === "assistant" ? `${i.kind}: ${i.text}` : i.kind))).toEqual([
+      "user",
+      "work",
+      "assistant: The three sleeper agents are running in the background. I'll reply \"all done\" once all three have returned.",
+      'notice: Agent "sleeper one" finished',
+      'notice: Agent "sleeper two" finished',
+      'assistant: Two of three sleeper agents have finished, both reporting "done". Still waiting on "sleeper three".',
+      'notice: Agent "sleeper three" finished',
+      "assistant: all done",
+    ]);
+    expect(notices(items).every((n) => n.reason === "task" && n.tone === "info")).toBe(true);
+  });
+
+  test("foreground Agents show their report, subagent type, usage and times, not the hand-back frame", async () => {
+    const items = await itemsOf("agents-foreground");
+    expect(stepsOf(items).map((s) => [s.label, s.state, s.output, s.detail, s.usage, s.startedAt, s.endedAt, s.background])).toEqual([
+      ["Agent: sleeper one", "ok", "done", "general-purpose", { tools: 1, ms: 42899 }, "2026-10-21T04:19:58.697Z", "2026-10-21T04:20:43.015Z", undefined],
+      ["Agent: sleeper two", "ok", "done", "general-purpose", { tools: 1, ms: 42952 }, "2026-10-21T04:19:59.596Z", "2026-10-21T04:20:43.071Z", undefined],
+      ["Agent: sleeper three", "ok", "done", "general-purpose", { tools: 1, ms: 42896 }, "2026-10-21T04:19:59.645Z", "2026-10-21T04:20:43.017Z", undefined],
+    ]);
+  });
+
+  test("a background command reads as one, runs until its notification, then is ok", async () => {
+    const label = "Run in background: delayed background write of bg.txt";
+    const running = stepNamed(await itemsBefore("bash-background", "<task-notification>"), label);
+    expect(running).toMatchObject({ state: "running", background: true, output: null, detail: "sleep 75 && echo bg-done > bg.txt", startedAt: "2026-10-21T03:53:05.263Z" });
+    expect(running.endedAt).toBeUndefined();
+    const items = await itemsOf("bash-background");
+    expect(stepNamed(items, label)).toMatchObject({ state: "ok", output: null, endedAt: "2026-10-21T03:54:25.268Z" });
+    expect(notices(items)).toEqual([{ text: 'Background command "Run delayed background write of bg.txt" completed (exit code 0)', tone: "info", reason: "task", at: "2026-10-21T03:54:25.268Z" }]);
+  });
+
+  test("an unknown agent type fails with its cause; a rejected Agent the user then interrupted is stopped", async () => {
+    const denied = stepNamed(await itemsBefore("agent-stopped", "[Request interrupted by user"), "Agent: long sleeper");
+    expect(denied).toMatchObject({ state: "denied", cause: "Denied by you", output: null });
+    const items = await itemsOf("agent-stopped");
+    const broken = stepNamed(items, "Agent: broken helper");
+    expect(broken).toMatchObject({ state: "error", detail: "no-such-agent-type", endedAt: "2026-10-21T04:19:59.078Z" });
+    expect(broken.cause).toStartWith("Agent type 'no-such-agent-type' not found. Available agents: ");
+    expect(broken.cause!.length).toBeLessThanOrEqual(200);
+    expect(stepNamed(items, "Agent: long sleeper")).toMatchObject({ state: "stopped", cause: "Stopped by you", output: null, endedAt: "2026-10-21T04:20:10.564Z" });
+    expect(notices(items).map((n) => n.text)).toEqual(["Interrupted"]);
+  });
+
+  test("an Agent killed in the background is stopped by its notification; the wake turn's failed command shows its exit", async () => {
+    const items = await itemsOf("agent-killed");
+    expect(stepNamed(items, "Agent: long sleeper")).toMatchObject({ state: "stopped", cause: "Stopped by you", background: true, output: null, endedAt: "2026-10-21T03:53:02.940Z" });
+    expect(notices(items)).toEqual([{ text: 'Agent "long sleeper" was stopped by user', tone: "info", reason: "task", at: "2026-10-21T03:53:02.940Z" }]);
+    const check = stepNamed(items, "Check whether late.txt was written");
+    expect(check).toMatchObject({ state: "error", cause: "Exit code 1: ls: late.txt: No such file or directory", output: "Exit code 1\nls: late.txt: No such file or directory", detail: "ls -la late.txt 2>&1" });
+    const works = items.filter((i) => i.kind === "work");
+    expect(works).toHaveLength(2);
+    expect(items.findIndex((i) => i.kind === "notice")).toBeLessThan(items.indexOf(works[1]!));
+  });
+
+  test("an interim notification keeps the Agent running; the final one, named by task id only, settles it", async () => {
+    const final = "<task-id>a889ddb94a6f914b7</task-id>\n<output-file>";
+    const interim = await itemsBefore("agent-own-work", JSON.stringify(final).slice(1, -1));
+    expect(stepNamed(interim, "Agent: starter")).toMatchObject({ state: "running", background: true, output: "started" });
+    expect(notices(interim).map((n) => n.text)).toEqual(['Agent "starter" is waiting on its own background work']);
+    const items = await itemsOf("agent-own-work");
+    expect(stepNamed(items, "Agent: starter")).toMatchObject({
+      state: "ok",
+      output: "The background command finished with exit code 0, so `nested.txt` should now contain `nested-done`. I did not verify the file contents.",
+      endedAt: "2026-10-21T04:21:15.381Z",
+      usage: { tools: 1, ms: 65904 },
+    });
+  });
+
+  test("no step anywhere shows Claude Code's launch acknowledgement, hand-back frame or reject text", async () => {
+    for (const name of Object.keys(IDS) as Name[]) {
+      for (const s of stepsOf(await itemsOf(name))) expect(s.output ?? "").not.toMatch(/Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed|agentId:/);
+    }
+  });
+
+  test("a step's full output is what the call returned: the report, the last notification's result, or nothing", async () => {
+    const outputOf = async (name: Name, label: string) => toolOutput(fileOf(name), stepNamed(await itemsOf(name), label).id);
+    expect(await outputOf("agents-foreground", "Agent: sleeper one")).toBe("done");
+    expect(await outputOf("agents-background", "Agent: sleeper two")).toBe("done");
+    expect(await outputOf("agent-own-work", "Agent: starter")).toStartWith("The background command finished");
+    expect(await outputOf("bash-background", "Run in background: delayed background write of bg.txt")).toBeNull();
+    expect(await outputOf("agent-stopped", "Agent: long sleeper")).toBeNull();
+    expect(await outputOf("agent-killed", "Check whether late.txt was written")).toBe("Exit code 1\nls: late.txt: No such file or directory");
+  });
+});
+
+describe("step labels", () => {
+  const stepOf = (name: string, input: object) => stepsOf(project([call("l1", name, input)], ctx).items)[0]!;
+
+  test('a command reads as its description, never "Run Run", and says when it runs in the background', () => {
+    expect(stepOf("Bash", { command: "bun test", description: "Run the tests" }).label).toBe("Run the tests");
+    expect(stepOf("Bash", { command: "bun test" }).label).toBe("Run bun test");
+    expect(stepOf("Bash", { command: "bun test", description: "Run the tests", run_in_background: true })).toMatchObject({ label: "Run in background: the tests", background: true });
+    expect(stepOf("Bash", { command: "sleep 5", run_in_background: true }).label).toBe("Run in background: sleep 5");
+  });
+
+  test("a description is masked as prose, a command as a secret", () => {
+    expect(stepOf("Bash", { command: "ls", description: "Check token refresh handling" }).label).toBe("Check token refresh handling");
+    const step = stepOf("Bash", { command: "curl -H 'Authorization: Bearer tok123456' x\nline 2\nline 3\nline 4" });
+    expect(step.detail).toBe("curl -H 'Authorization: Bearer «redacted:9 chars»' x\nline 2\nline 3");
+    expect(step.label).not.toContain("tok123456");
+  });
+
+  test("a long Agent description is cut in the middle, so two that differ at the end still differ", () => {
+    const shared = "Investigate why the session list shows the wrong title after a rename in ".repeat(3);
+    const [a, b] = ["the iOS app", "the bridge"].map((end) => stepOf("Agent", { description: shared + end }).label);
+    expect(a!.length).toBeLessThanOrEqual(120);
+    expect(a).toStartWith("Agent: Investigate why");
+    expect(a).toEndWith("in the iOS app");
+    expect(b).toEndWith("in the bridge");
+  });
+
+  test("background-control tools name the task they point at", () => {
+    const launch = (id: string, name: string, input: object, ack: string) => [call(id, name, input), answer(id, ack)];
+    const { items } = project(
+      [
+        prompt("go"),
+        ...launch("b", "Bash", { command: "sleep 5\necho hi", run_in_background: true }, "Command running in background with ID: bg1. Output is being written to: x"),
+        ...launch("a", "Agent", { description: "helper", prompt: "p" }, "Async agent launched successfully.\nagentId: ag1 (internal ID)"),
+        call("c1", "BashOutput", { bash_id: "bg1" }),
+        call("c2", "KillShell", { shell_id: "bg1" }),
+        call("c3", "TaskOutput", { task_id: "ag1" }),
+        call("c4", "TaskStop", { task_id: "nope" }),
+        call("c5", "Monitor", {}),
+        call("c6", "ScheduleWakeup", {}),
+      ],
+      ctx,
+    );
+    expect(stepsOf(items).slice(2).map((s) => s.label)).toEqual([
+      "Check background command: sleep 5",
+      "Stop background command: sleep 5",
+      "Check agent: helper",
+      "Stop a background task",
+      "Watch background output",
+      "Schedule a wake-up",
+    ]);
+  });
+});
+
+describe("step outcomes", () => {
+  const settled = (result: string, isError: boolean) => stepsOf(project([prompt("go"), call("t1", "Bash", { command: "make" }), answer("t1", result, isError)], ctx).items)[0]!;
+
+  test("a long error keeps its head, so the exit status survives, and its tail", () => {
+    const step = settled(`Exit code 2\n${"x".repeat(5000)}\nmake: *** [all] Error 2`, true);
+    expect(step.output).toStartWith("Exit code 2\nxxx");
+    expect(step.output).toEndWith("make: *** [all] Error 2");
+    expect(step.output!.length).toBeLessThanOrEqual(2048 + 3);
+    expect(step.cause).toBe(`Exit code 2: ${"x".repeat(186)}…`);
+  });
+
+  test("the bridge's Stop is a stop, and a permission denial keeps its first line as its cause", () => {
+    expect(settled("Alex pressed Stop. This call did not run, and nothing more runs this turn. End your turn now.", true)).toMatchObject({ state: "stopped", cause: "Stopped by you", output: null });
+    expect(settled("Permission to use Bash has been denied.", true)).toMatchObject({ state: "denied", cause: "Permission to use Bash has been denied.", output: null });
+  });
+
+  test("parallel calls rejected one result at a time are all stopped by the interrupt after them; a reject alone stays denied", () => {
+    const reject = "The user doesn't want to proceed with this tool use. The tool use was rejected.";
+    const calls = [prompt("go"), call("t1", "Bash", { command: "a" }, "m1"), call("t2", "Bash", { command: "b" }, "m1"), answer("t1", reject, true), answer("t2", reject, true)];
+    expect(stepsOf(project([...calls, prompt("[Request interrupted by user for tool use]")], ctx).items).map((s) => [s.state, s.cause])).toEqual([
+      ["stopped", "Stopped by you"],
+      ["stopped", "Stopped by you"],
+    ]);
+    expect(stepsOf(project([...calls, said("m2", "Understood.")], ctx).items).map((s) => s.state)).toEqual(["denied", "denied"]);
+  });
+
+  test("a background command that exits non-zero is an error with its exit code; a note for an unknown task is still a notice", () => {
+    const note = (id: string, summary: string) => prompt(`<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>${summary}</summary>\n</task-notification>`);
+    const { items } = project(
+      [
+        prompt("go"),
+        call("t1", "Bash", { command: "false", run_in_background: true }),
+        answer("t1", "Command running in background with ID: bg9. Output is being written to: x"),
+        note("bg9", 'Background command "false" completed (exit code 1)'),
+        note("other", "Task &quot;x&quot; was stopped by main session"),
+      ],
+      ctx,
+    );
+    expect(stepsOf(items)[0]).toMatchObject({ state: "error", cause: "Exit code 1", background: true });
+    expect(notices(items).map((n) => [n.text, n.tone])).toEqual([
+      ['Background command "false" completed (exit code 1)', "error"],
+      ['Task "x" was stopped by main session', "info"],
+    ]);
   });
 });

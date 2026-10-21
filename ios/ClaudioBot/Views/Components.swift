@@ -133,6 +133,9 @@ struct ConnectionBadge: View {
         .font(.footnote.weight(.medium))
         .foregroundStyle(.primary)
         .lineLimit(1)
+        // VoiceOver would reread the per-second countdown, so it hears only the state.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(state.spoken)
     }
 }
 
@@ -144,6 +147,55 @@ extension ConnectionState {
         case .connected: "Connected"
         case .disconnected: "Reconnecting"
         case .unrecognized: "Not recognized"
+        }
+    }
+
+    var spoken: String {
+        switch self {
+        case .unpaired: "Not paired"
+        case .connecting: "Connecting to your Mac"
+        case .connected(let machine, _): "Connected to \(machine)"
+        case .disconnected: "Mac unreachable, reconnecting"
+        case .unrecognized: "Not recognized by your Mac"
+        }
+    }
+}
+
+enum Reach: Equatable, Sendable {
+    case connected(machine: String)
+    case firstConnect
+    case unreachable(nextTry: Date)
+    case retrying
+    case unrecognized
+    case unpaired
+
+    init(_ state: ConnectionState, failures: Int, greeted: Bool) {
+        switch state {
+        case .connected(let machine, _): self = .connected(machine: machine)
+        case .connecting: self = failures > 0 || greeted ? .retrying : .firstConnect
+        case .disconnected(let at): self = .unreachable(nextTry: at)
+        case .unrecognized: self = .unrecognized
+        case .unpaired: self = .unpaired
+        }
+    }
+
+    var lost: Bool {
+        switch self {
+        case .unreachable, .retrying: true
+        case .connected, .firstConnect, .unrecognized, .unpaired: false
+        }
+    }
+
+    static func announcement(from old: Reach, to new: Reach) -> String? {
+        switch new {
+        case .unreachable, .retrying:
+            old.lost ? nil : "Can't reach your Mac. Reconnecting."
+        case .connected(let machine):
+            old.lost || old == .unrecognized ? "Reconnected to \(machine)." : nil
+        case .unrecognized:
+            old == .unrecognized ? nil : "Your Mac doesn't recognize this \(ThisDevice.noun)."
+        case .firstConnect, .unpaired:
+            nil
         }
     }
 }

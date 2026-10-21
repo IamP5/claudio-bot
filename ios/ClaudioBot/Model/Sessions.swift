@@ -58,6 +58,23 @@ extension SessionRow {
     var needsYou: Bool { status == .awaitingApproval || status == .awaitingInput }
 }
 
+enum ListFreshness: Equatable, Sendable {
+    case live
+    case asOf(Date)
+
+    func ageReference(now: Date) -> Date {
+        switch self {
+        case .live: now
+        case .asOf(let date): date
+        }
+    }
+
+    func visibleCounts(_ counts: [SessionFilter: Int]) -> [SessionFilter: Int] {
+        guard case .asOf = self else { return counts }
+        return counts.filter { $0.key != .working }
+    }
+}
+
 /// The Sessions list as the bridge last sent it. AppStore holds it as a `let`, so a change here re-renders the
 /// sessions views only, never the bot list.
 @Observable
@@ -74,6 +91,11 @@ final class SessionIndex {
     @ObservationIgnored private var memo: (revision: Int, query: SessionQuery, sections: [ProjectSection])?
 
     var loaded: Bool { updatedAt != nil }
+
+    func freshness(online: Bool) -> ListFreshness {
+        guard !online, let updatedAt else { return .live }
+        return .asOf(updatedAt)
+    }
 
     func apply(_ frame: SessionsFrame, at now: Date = .now) {
         switch frame {
@@ -200,11 +222,11 @@ final class SessionIndex {
 
 /// The single status mark a row wears, most urgent first. Each has its own symbol, so none is color alone.
 enum SessionMark: Equatable, Sendable {
-    case needsYou, working, failed, parked, unread
+    case needsYou, working, lastKnownWorking, failed, parked, unread
 
-    init?(_ row: SessionRow) {
+    init?(_ row: SessionRow, freshness: ListFreshness = .live) {
         if row.needsYou { self = .needsYou }
-        else if row.status == .working { self = .working }
+        else if row.status == .working { self = freshness == .live ? .working : .lastKnownWorking }
         else if row.status == .failed || row.status == .unavailable { self = .failed }
         else if row.status == .parked { self = .parked }
         else if row.unread { self = .unread }
@@ -215,6 +237,7 @@ enum SessionMark: Equatable, Sendable {
         switch self {
         case .needsYou: "needs you"
         case .working: "working"
+        case .lastKnownWorking: "working when last updated"
         case .failed: "failed"
         case .parked: "parked"
         case .unread: "unread"
@@ -256,14 +279,14 @@ enum SessionText {
         }
     }
 
-    static func spoken(_ row: SessionRow, project: String?, botName: String?, now: Date = .now) -> String {
+    static func spoken(_ row: SessionRow, project: String?, botName: String?, now: Date = .now, freshness: ListFreshness = .live) -> String {
         var parts = [project, row.title].compactMap { $0 }
-        if let mark = SessionMark(row) { parts.append(mark == .parked ? parked(row.holder).lowercased() : mark.spoken) }
+        if let mark = SessionMark(row, freshness: freshness) { parts.append(mark == .parked ? parked(row.holder).lowercased() : mark.spoken) }
         let origin = origin(row.origin, botName: botName)
         if !origin.isEmpty { parts.append(origin) }
         if let pr = row.pr { parts.append("PR \(pr.number)" + (pr.state.map { " \($0.rawValue)" } ?? "")) }
         if row.hidden { parts.append("hidden") }
-        parts.append(RelativeDateTimeFormatter().localizedString(for: row.lastAt, relativeTo: now))
+        parts.append(RelativeDateTimeFormatter().localizedString(for: row.lastAt, relativeTo: freshness.ageReference(now: now)))
         return parts.joined(separator: ", ")
     }
 

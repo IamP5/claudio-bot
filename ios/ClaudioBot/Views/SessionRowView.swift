@@ -7,13 +7,15 @@ struct SessionRowView: View, Equatable {
     var depth = 0
     var isLast = false
     var now: Date = .now
+    var freshness = ListFreshness.live
 
     @Environment(\.dynamicTypeSize) private var typeSize
     @ScaledMetric(relativeTo: .body) private var badge: CGFloat = 18
     @ScaledMetric(relativeTo: .body) private var indent: CGFloat = 20
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
-        a.row == b.row && a.avatar == b.avatar && a.depth == b.depth && a.isLast == b.isLast && SessionText.age(a.row.lastAt, now: a.now) == SessionText.age(b.row.lastAt, now: b.now)
+        a.row == b.row && a.avatar == b.avatar && a.depth == b.depth && a.isLast == b.isLast && a.freshness == b.freshness
+            && SessionText.age(a.row.lastAt, now: a.freshness.ageReference(now: a.now)) == SessionText.age(b.row.lastAt, now: b.freshness.ageReference(now: b.now))
     }
 
     private var emphasized: Bool { row.unread || row.needsYou }
@@ -42,11 +44,11 @@ struct SessionRowView: View, Equatable {
                 HStack(spacing: 8) {
                     MirrorGlyph(mirror: row.mirror)
                     if let pr = row.pr { PullRequestChip(pr: pr) }
-                    Text(SessionText.age(row.lastAt, now: now))
+                    Text(SessionText.age(row.lastAt, now: freshness.ageReference(now: now)))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(Theme.tertiary)
                         .fixedSize()
-                    SessionMarkView(mark: SessionMark(row))
+                    SessionMarkView(mark: SessionMark(row, freshness: freshness))
                 }
             }
         }
@@ -114,6 +116,8 @@ struct SessionMarkView: View {
                 Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Theme.attention)
             case .working:
                 WorkingRing(size: size * 0.9)
+            case .lastKnownWorking:
+                WorkingRing(size: size * 0.9, color: Theme.tertiary, spinning: false)
             case .failed:
                 Image(systemName: "xmark.circle").foregroundStyle(Theme.danger)
             case .parked:
@@ -133,15 +137,17 @@ struct SessionMarkView: View {
 struct WorkingRing: View {
     var size: CGFloat = 12
     var color: Color = AvatarColor.orange.color
+    var spinning = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { context in
+        let still = reduceMotion || !spinning
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: still)) { context in
             let turn = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.9) / 0.9
             Circle()
                 .trim(from: 0.12, to: 0.82)
                 .stroke(color, style: StrokeStyle(lineWidth: max(1.5, size * 0.16), lineCap: .round))
-                .rotationEffect(.degrees(reduceMotion ? 0 : turn * 360))
+                .rotationEffect(.degrees(still ? 0 : turn * 360))
         }
         .frame(width: size, height: size)
     }

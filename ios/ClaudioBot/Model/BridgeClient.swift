@@ -83,9 +83,6 @@ final class BridgeClient {
         var settle: Duration = .milliseconds(500)
     }
 
-    /// Failed connects in a row after which the app offers to edit the address or pair again.
-    static let failuresBeforeHelp = 3
-
     enum Ending: Equatable, Sendable { case greeted, failed, revoked, unrecognized }
 
     let store: AppStore
@@ -244,6 +241,18 @@ final class BridgeClient {
         case .unrecognized: start(pairing)
         case .connecting, .unpaired: break
         }
+    }
+
+    /// True once the Mac said hello.
+    func retryNowAndWait(within limit: Duration = .seconds(15)) async -> Bool {
+        let before = failures
+        retryNow()
+        let deadline = ContinuousClock.now + limit
+        while ContinuousClock.now < deadline, !Task.isCancelled, store.machine == nil {
+            if failures > before || store.connection == .unrecognized { break }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return store.machine != nil
     }
 
     /// A new network may have killed the socket without a word, or stalled an attempt on the old one.

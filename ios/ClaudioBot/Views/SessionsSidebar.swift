@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SidebarRoot: View {
     @Environment(AppStore.self) private var store
+    @Environment(BridgeClient.self) private var client
     @Environment(Router.self) private var router
 
     /// Kept up while Sessions is picked, so a bridge without the feature can say to update it and the user can go back.
@@ -35,6 +36,9 @@ struct SidebarRoot: View {
                 .padding(.bottom, 8)
             }
         }
+        .onChange(of: Reach(store.connection, failures: client.failures, greeted: store.bridgeProtocol != nil)) { old, new in
+            if let text = Reach.announcement(from: old, to: new) { AccessibilityNotification.Announcement(text).post() }
+        }
     }
 }
 
@@ -54,9 +58,11 @@ struct SessionsSidebar: View {
     @State private var newTitle = ""
     /// One clock for every row's age. Rows compare their age text, so only those that changed redraw.
     @State private var now = Date.now
+    @State private var lastRetryFailed = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var index: SessionIndex { store.sessions }
+    private var freshness: ListFreshness { index.freshness(online: store.machine != nil) }
 
     var body: some View {
         @Bindable var router = router
@@ -73,9 +79,9 @@ struct SessionsSidebar: View {
                     .plainRow()
             } else if !index.loaded {
                 if store.machine == nil {
-                    Text("Connect to your Mac to see its Claude Code sessions.")
+                    Text("Your sessions show here once your Mac answers.")
                         .font(.subheadline)
-                        .foregroundStyle(Theme.tertiary)
+                        .foregroundStyle(Theme.secondary)
                         .frame(maxWidth: .infinity)
                         .padding(.top, 40)
                         .plainRow()
@@ -83,7 +89,7 @@ struct SessionsSidebar: View {
                     SessionsSkeleton()
                 }
             } else {
-                FilterChips(query: $query.animation(reduceMotion ? nil : .snappy(duration: 0.25)), counts: counts(for: query), hidden: index.hiddenCount)
+                FilterChips(query: $query.animation(reduceMotion ? nil : .snappy(duration: 0.25)), counts: freshness.visibleCounts(counts(for: query)), hidden: index.hiddenCount)
                     .plainRow(insets: EdgeInsets(top: 0, leading: 0, bottom: 2, trailing: 0))
                 if sections.isEmpty {
                     emptyState
@@ -113,6 +119,7 @@ struct SessionsSidebar: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
+        .onChange(of: store.machine) { lastRetryFailed = false }
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(30))
@@ -136,11 +143,7 @@ struct SessionsSidebar: View {
         if store.connection == .unrecognized {
             UnrecognizedBanner().plainRow()
         } else if store.machine == nil {
-            if let updatedAt = index.updatedAt {
-                StaleListBanner(state: store.connection, updatedAt: updatedAt).plainRow()
-            } else {
-                ConnectionBanner(state: store.connection).plainRow()
-            }
+            ConnectionBanner(state: store.connection, staleSince: index.updatedAt, lastRetryFailed: $lastRetryFailed).plainRow()
         }
         if let mismatch = store.protocolMismatch {
             UpdateBanner(mismatch: mismatch).plainRow()
@@ -244,7 +247,7 @@ struct SessionsSidebar: View {
 
     private func sessionRow(_ row: SessionRow, depth: Int = 0, isLast: Bool = false) -> some View {
         let bot = row.agent.flatMap { store.bots[$0.botId] }
-        return SessionRowView(row: row, avatar: bot?.avatar, depth: depth, isLast: isLast, now: now)
+        return SessionRowView(row: row, avatar: bot?.avatar, depth: depth, isLast: isLast, now: now, freshness: freshness)
             .equatable()
             .tag(Selection.session(row.id))
         .listRowSeparator(.hidden)
@@ -278,7 +281,7 @@ struct SessionsSidebar: View {
         }
         .contextMenu { menu(for: row) }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(SessionText.spoken(row, project: index.project(of: row)?.name, botName: bot?.name))
+        .accessibilityLabel(SessionText.spoken(row, project: index.project(of: row)?.name, botName: bot?.name, freshness: freshness))
         .accessibilityAddTraits(.isButton)
         // Ignoring the children drops the list's own press, so pressing the row selects it here.
         .accessibilityAction { router.selection = .session(row.id) }
@@ -407,7 +410,12 @@ struct SessionsSidebar: View {
 
     private func refresh() async {
         let before = index.updatedAt
-        client.refreshSessions()
+        if store.machine == nil {
+            lastRetryFailed = !(await ConnectionBanner.retry(client))
+            if lastRetryFailed { return }
+        } else {
+            client.refreshSessions()
+        }
         for _ in 0..<25 {
             if index.updatedAt != before || Task.isCancelled { return }
             try? await Task.sleep(for: .milliseconds(200))
@@ -586,28 +594,6 @@ struct FilterChips: View {
         .buttonStyle(.pressable)
         .accessibilityAddTraits(on ? .isSelected : [])
         .accessibilityLabel(count.map { "\(title), \($0)" } ?? title)
-    }
-}
-
-struct StaleListBanner: View {
-    let state: ConnectionState
-    let updatedAt: Date
-
-    var body: some View {
-        HStack(spacing: 10) {
-            ConnectionBadge(state: state)
-            TimelineView(.periodic(from: .now, by: 30)) { context in
-                Text(SessionText.updated(updatedAt, now: context.date))
-                    .font(.footnote)
-                    .foregroundStyle(Theme.secondary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .accessibilityElement(children: .combine)
     }
 }
 

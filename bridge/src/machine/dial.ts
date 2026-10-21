@@ -157,8 +157,9 @@ export function dialHub(deps: {
     s.onmessage = (e) => hear(s, String(e.data));
     s.onclose = (e) => {
       // Another bridge with this machine's identity linked after this one: two would take the link from each other
-      // forever, so the older one gives way.
-      if (e.code === LINK_REPLACED && socket === s) {
+      // forever, so the older one gives way. Only a link the home welcomed can be replaced: before that, the code is
+      // nobody's word for it but whoever answered the socket.
+      if (e.code === LINK_REPLACED && socket === s && state.kind === "live") {
         stopped = true;
         log(`link: another bridge with this machine's identity linked to ${home.name}, so this one stops dialing. Run one bridge per machine.json.`);
       }

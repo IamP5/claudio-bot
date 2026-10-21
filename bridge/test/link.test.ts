@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dialHub, type Dialer } from "../src/machine/dial";
+import { dialHub, type Dialer, type DialSocket } from "../src/machine/dial";
 import { newIdentity, signWith, type Identity } from "../src/machine/identity";
 import { fileJournal, type Journal } from "../src/machine/journal";
 import { homeHears, homeOpens, machineHears, newNonce, type LinkState } from "../src/machine/link";
@@ -321,4 +321,24 @@ test("a machine whose key does not match its enrollment is refused with a logged
   expect(h.links.machines()[0]!.status().online).toBe(false);
   expect(h.seen).toEqual([]);
   await until("the machine heard why", () => m.log.some((l) => l.includes("did not prove its enrolled key")));
+});
+
+test("a 4005 close before the link is live does not stop the machine dialing: only a live link can be replaced", async () => {
+  const pair = enrolledPair();
+  let dials = 0;
+  const dialer = dialHub({
+    identity: pair.machine,
+    runtime: miniRuntime(fileJournal(tmp(), () => {})),
+    profile,
+    log: () => {},
+    backoff: { firstMs: 5, maxMs: 5 },
+    connect() {
+      dials += 1;
+      const s: DialSocket = { send() {}, close() {}, onopen: null, onmessage: null, onclose: null, onerror: null };
+      setTimeout(() => s.onclose?.({ code: 4005, reason: "replaced by a newer link" }), 1);
+      return s;
+    },
+  });
+  dialers.push(dialer);
+  await until("dialing on after each refusal", () => dials >= 3);
 });

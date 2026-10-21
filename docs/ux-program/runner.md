@@ -95,3 +95,21 @@ The pairing:
 4. `open-thread` uses `claudiobot://session/<id>`, and `app background|foreground` launches Settings over the app, then the app again.
 
 A paired app lists every project on the Mac the bridge runs on, not only the run's seed project. A screenshot of the Sessions list (`pair-link`, `after-pairing`, S7's `mixed`) can show real session titles, so judge it in place and never copy it into the repo.
+
+## The swipe check
+
+A screenshot cannot show a main thread that never settles. `ios/scripts/swipe-check.sh` swipes each demo thread down once at each Dynamic Type size, through XCUITest, and fails when a swipe takes over 10 s or the app's mean CPU over the next 10 s stays above 50%. XCUITest waits up to 60 s for the app to go idle after a swipe, so a hang reads as a swipe of about a minute; a swipe that settles takes 1 to 4 s, most of it the scroll's deceleration. `MAX_SWIPE_S` and `MAX_CPU` change the limits. Run it on a device you hold, with the app `sim-build` made:
+
+```bash
+$R lease acquire --label "swipe check" --boot     # LEASED device=… udid=… token=…
+ios/scripts/swipe-check.sh <udid> "$CLAUDIOBOT_VERIFY_DIR/ios-build/<stamp>/Build/Products/Debug-iphonesimulator/ClaudioBot.app"
+#   ok workrun large swipe=1.2s cpu-after=12% (…)
+#   FAIL workrun accessibility-extra-extra-extra-large swipe=60.5s cpu-after=99% (…)
+$R lease release <device> --token <token>
+```
+
+`SCREENS` and `SIZES` narrow the matrix (default: `workrun thread plan streaming longthread` at `large`, `accessibility-extra-large` and `accessibility-extra-extra-extra-large`). With `ATTACH=1` it swipes the app once as it runs, at the content size the run set, instead of launching demo screens, so it can swipe a live thread mid-scenario. Start `$R run S1b --sim --content-size accessibility-extra-extra-extra-large`, then run `ATTACH=1 ios/scripts/swipe-check.sh <the run's udid>` when its log prints `mark s1b-started`. The driver builds first, for 10 to 30 s, so the swipe lands while the three subagents run:
+
+```
+ok live current swipe=2.7s cpu-after=10% (…)
+```

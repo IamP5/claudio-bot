@@ -92,10 +92,16 @@ struct SessionThreadView: View {
         let rows = model.rows
         let openCard = Self.openCard(model.items)
         return ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                if model.before != nil {
-                    LoadEarlierRow(loading: model.loadingEarlier)
-                        .onAppear { loadEarlier(model) }
+            // Not lazy: a lazy stack estimates the height of rows it has not drawn, and at the largest text sizes one
+            // row can be several screens tall. Pinned to the bottom, a swipe moved the rows by those estimates and they
+            // never settled, so the app stopped responding.
+            VStack(alignment: .leading, spacing: 0) {
+                // Lazy, so the earlier page loads only once the thread is scrolled up to it.
+                LazyVStack {
+                    if model.before != nil {
+                        LoadEarlierRow(loading: model.loadingEarlier)
+                            .onAppear { loadEarlier(model) }
+                    }
                 }
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                     ThreadRowView(row: row, sessionId: sessionId, model: model, botName: botName) { fullOutput = $0 }

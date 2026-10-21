@@ -377,7 +377,7 @@ describe("subagents and background work", () => {
   });
 
   test("a background command reads as one, runs until its notification, then is ok", async () => {
-    const label = "Run in background: delayed background write of bg.txt";
+    const label = "Run delayed background write of bg.txt";
     const running = stepNamed(await itemsBefore("bash-background", "<task-notification>"), label);
     expect(running).toMatchObject({ state: "running", background: true, output: null, detail: "sleep 75 && echo bg-done > bg.txt", startedAt: "2026-10-21T03:53:05.263Z" });
     expect(running.endedAt).toBeUndefined();
@@ -434,7 +434,7 @@ describe("subagents and background work", () => {
     expect(await outputOf("agents-foreground", "Agent: sleeper one")).toBe("done");
     expect(await outputOf("agents-background", "Agent: sleeper two")).toBe("done");
     expect(await outputOf("agent-own-work", "Agent: starter")).toStartWith("The background command finished");
-    expect(await outputOf("bash-background", "Run in background: delayed background write of bg.txt")).toBeNull();
+    expect(await outputOf("bash-background", "Run delayed background write of bg.txt")).toBeNull();
     expect(await outputOf("agent-stopped", "Agent: long sleeper")).toBeNull();
     expect(await outputOf("agent-killed", "Check whether late.txt was written")).toBe("Exit code 1\nls: late.txt: No such file or directory");
   });
@@ -448,6 +448,7 @@ describe("step labels", () => {
     expect(stepOf("Bash", { command: "bun test" }).label).toBe("Run bun test");
     expect(stepOf("Bash", { command: "bun test", description: "Run the tests", run_in_background: true })).toMatchObject({ label: "Run in background: the tests", background: true });
     expect(stepOf("Bash", { command: "sleep 5", run_in_background: true }).label).toBe("Run in background: sleep 5");
+    expect(stepOf("Bash", { command: "sleep 75", description: "Run sleep 75 then write bg.txt in background", run_in_background: true }).label).toBe("Run sleep 75 then write bg.txt in background");
   });
 
   test("a description is masked as prose, a command as a secret", () => {
@@ -536,5 +537,58 @@ describe("step outcomes", () => {
       ['Background command "false" completed (exit code 1)', "error"],
       ['Task "x" was stopped by main session', "info"],
     ]);
+  });
+
+  const SECRET_COMMANDS: [string, string][] = [
+    ["curl -s -H 'Authorization: Bearer abc123xyz789secret' https://api.example.com/x", "abc123xyz789secret"],
+    ["curl -s -H 'Authorization: Basic dXNlcjpwYXNzd29yZA==' https://api.example.com/x", "dXNlcjpwYXNzd29yZA=="],
+    ["deploy --token=s3cr3tvalue1 prod", "s3cr3tvalue1"],
+    ["curl -u alice:hunter2pass https://api.example.com/x", "hunter2pass"],
+    ["mysql -uroot -phunter3pass app", "hunter3pass"],
+  ];
+
+  test.each(SECRET_COMMANDS)("a background command's notice and cause mask the command Claude Code quotes: %s", (command, secret) => {
+    const ended = (status: string, summary: string) =>
+      project(
+        [
+          prompt("go"),
+          call("t1", "Bash", { command, run_in_background: true }),
+          answer("t1", "Command running in background with ID: bg1. Output is being written to: x"),
+          prompt(`<task-notification>\n<task-id>bg1</task-id>\n<tool-use-id>t1</tool-use-id>\n<status>${status}</status>\n<summary>${summary}</summary>\n</task-notification>`),
+        ],
+        ctx,
+      ).items;
+    for (const items of [ended("failed", `Background command "${command}" failed with exit code 22`), ended("killed", `Background command "${command}" was stopped`)]) {
+      expect(stepsOf(items)[0]!.cause).toBeDefined();
+      expect(JSON.stringify(items)).not.toContain(secret);
+    }
+  });
+
+  test("a call's full output masks secrets like its shown output does", () => {
+    const dir = mkdtempSync(join(tmpdir(), "full-"));
+    try {
+      const path = join(dir, "s.jsonl");
+      const line = (o: object) => JSON.stringify({ parentUuid: null, timestamp: "2026-10-18T12:00:00.000Z", sessionId: "s", ...o });
+      writeFileSync(
+        path,
+        [
+          line({ type: "assistant", uuid: "a", message: { id: "m", role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "env" } }] } }),
+          line({ type: "user", uuid: "r", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "API_TOKEN=s3cr3tvalue1\nok" }] } }),
+        ].join("\n") + "\n",
+      );
+      expect(toolOutput(path, "t1")).toBe("API_TOKEN=«redacted:12 chars»\nok");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a background step leaves the projection's open work once its final notification settles it", () => {
+    const note = (status: string, extra = "") => prompt(`<task-notification>\n<task-id>bg1</task-id>\n<status>${status}</status>\n<summary>s</summary>${extra}\n</task-notification>`);
+    const launch = [prompt("go"), call("t1", "Bash", { command: "sleep 5", run_in_background: true }), answer("t1", "Command running in background with ID: bg1. Output is being written to: x"), said("m2", "started")];
+    const running = project([...launch, note("completed", "\n<note>the result below may be interim</note>")], ctx).tail;
+    expect([running.open.size, running.tools.size, running.tasks.size]).toEqual([1, 1, 1]);
+    const done = project([...launch, note("completed")], ctx);
+    expect([done.tail.open.size, done.tail.tools.size, done.tail.tasks.size]).toEqual([0, 0, 0]);
+    expect(stepsOf(done.items)[0]!.state).toBe("ok");
   });
 });

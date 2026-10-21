@@ -459,7 +459,7 @@ export function toolOutput(path: string, toolUseId: string): string | null {
     }
     for (const note of parseNotes(promptText(content))) if (note.toolUseId === toolUseId || (task !== null && note.taskId === task)) output = note.result;
   }
-  return output === null ? null : output.slice(-FULL_OUTPUT_MAX);
+  return output === null ? null : maskSecrets(output.slice(-FULL_OUTPUT_MAX));
 }
 
 /** How much history a thread's first frame carries: whichever limit comes first, counted back from the newest. */
@@ -548,7 +548,7 @@ const middleCut = (s: string, max: number) => (s.length <= max ? s : `${s.slice(
 
 const AGENT_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
 const AGENT_LABEL_MAX = 120;
-const backgroundLabel = (label: string) => `Run in background: ${label.replace(/^Run /, "")}`;
+const backgroundLabel = (label: string) => (/\bbackground\b/i.test(label) ? label : `Run in background: ${label.replace(/^Run /, "")}`);
 
 /** What a Bash step shows it runs: the command's first 3 lines, each capped, secrets masked. */
 const commandDetail = (command: string) =>
@@ -745,7 +745,10 @@ function parseNotes(text: string): TaskNote[] {
   });
 }
 
-function noteOutcome(note: TaskNote): Outcome {
+/** Claude Code quotes a background command's description in its summary, and that is the raw command when the model gave none. */
+const maskSummary = (note: TaskNote, command: boolean) => (command || /^Background command\b/.test(note.summary) ? maskSecrets(note.summary) : maskProse(note.summary));
+
+function noteOutcome(note: TaskNote, summary: string): Outcome {
   switch (note.status) {
     case "completed": {
       if (/may be interim/.test(note.note) || /is waiting on its own background work/.test(note.summary)) return { kind: "interim", output: note.result };
@@ -754,10 +757,10 @@ function noteOutcome(note: TaskNote): Outcome {
       return { kind: "ok", output: note.result, ...(note.usage && { usage: note.usage }) };
     }
     case "failed":
-      return { kind: "error", output: note.result, cause: capped(maskProse(note.summary), CAUSE_MAX) };
+      return { kind: "error", output: note.result, cause: capped(summary, CAUSE_MAX) };
     case "killed":
     case "stopped":
-      return { kind: "stopped", cause: /stopped by user/i.test(note.summary) ? STOPPED_BY_YOU : capped(maskProse(note.summary), CAUSE_MAX) };
+      return { kind: "stopped", cause: /stopped by user/i.test(note.summary) ? STOPPED_BY_YOU : capped(summary, CAUSE_MAX) };
     default:
       return { kind: "interim", output: note.result };
   }
@@ -855,9 +858,6 @@ function speakerOf(text: string, ctx: ProjectContext): { from: "user" | "bot" | 
   return { from: direct ? "user" : "bot", text: rest };
 }
 
-/** A work item stays open while it is the current work, a step runs, or a step runs in the background (a note may settle it again). */
-const lingers = (s: ToolStep) => s.state === "running" || s.background === true;
-
 /** Pure: entries in chain order → the items they make or change, in first-change order, and the tail to continue from. */
 export function project(entries: readonly Entry[], ctx: ProjectContext, prior: ProjectionTail = emptyTail()): { items: SessionItem[]; tail: ProjectionTail } {
   const tail: ProjectionTail = {
@@ -879,14 +879,16 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
     const id = tail.work;
     tail.work = null;
     const work = id === null ? undefined : tail.open.get(id);
-    if (work?.kind === "work" && !work.steps.some(lingers)) tail.open.delete(work.id);
+    if (work?.kind === "work" && !work.steps.some((s) => s.state === "running")) tail.open.delete(work.id);
   };
   const updateStep = (itemId: ItemId, toolId: string, change: (s: ToolStep) => ToolStep) => {
     const item = tail.open.get(itemId);
     if (item?.kind !== "work") return;
     const steps = item.steps.map((s) => (s.id === toolId ? change(s) : s));
-    put({ ...item, steps }, tail.work === item.id || steps.some(lingers));
-    if (!steps.some((s) => s.id === toolId && s.background)) tail.tools.delete(toolId);
+    put({ ...item, steps }, tail.work === item.id || steps.some((s) => s.state === "running"));
+    if (steps.some((s) => s.id === toolId && s.state === "running")) return;
+    tail.tools.delete(toolId);
+    for (const [task, tool] of tail.tasks) if (tool === toolId) tail.tasks.delete(task);
   };
   /** "background command: sleep 75", "agent: sleeper one": the task a control tool points at, as its step shows it. */
   const target = (taskId: string | null) => {
@@ -1050,11 +1052,13 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
 
   /** A task notification settles the step that launched the task, and shows Claude Code's summary as a notice. */
   function noted(note: TaskNote, id: string, at: string) {
-    const outcome = noteOutcome(note);
     const toolId = [note.toolUseId, note.taskId === null ? undefined : tail.tasks.get(note.taskId)].find((t): t is string => typeof t === "string" && tail.tools.has(t));
-    if (toolId !== undefined) updateStep(tail.tools.get(toolId)!, toolId, (s) => settleStep(s, outcome, at));
+    const item = toolId === undefined ? undefined : tail.open.get(tail.tools.get(toolId)!);
+    const summary = maskSummary(note, item?.kind === "work" && item.steps.some((s) => s.id === toolId && s.tool === "Bash"));
+    const outcome = noteOutcome(note, summary);
+    if (toolId !== undefined && item) updateStep(item.id, toolId, (s) => settleStep(s, outcome, at));
     closeWork();
-    put({ kind: "notice", id: id as ItemId, at, text: maskProse(note.summary), tone: outcome.kind === "error" ? "error" : "info", reason: "task" }, false);
+    put({ kind: "notice", id: id as ItemId, at, text: summary, tone: outcome.kind === "error" ? "error" : "info", reason: "task" }, false);
   }
 
   return { items: [...changed.values()], tail };

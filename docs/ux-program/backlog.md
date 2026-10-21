@@ -14,3 +14,5 @@
 - Protocol (from G15): bot trust cards are detected by the tool name string "Claude Code settings"; add a card kind field on the wire.
 - Cards (from G15): a decision lost in a reconnect and answered later on another device is still announced as this phone's answer; the store cannot tell landed from lost. Needs a bridge ack per decision (G11 territory).
 - Runner launch flake: "the run's demo project is not listed" right after launch, seen by G8, G12 and G16 verifiers; passes on retry. The bridge can list projects before it has scanned the seed roots; launch should wait for the demo project.
+- Runner (S7.6 with the list probe): the 1/s XCUITest probe adds simulator load; S7.6 worst lag rose to 1.6 s once at AX5 (limit 1.5 s) vs 0.3-0.6 s without the probe. Run the probe only during the phase S7.7 judges, or measure S7.6 in a probe-free run.
+- Runner (S7.9): cannot catch a missing fold exemption alone when ranking already lifts working rows; add a variant with more working rows than fit above the fold.

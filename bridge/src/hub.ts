@@ -767,7 +767,9 @@ export function createHub(deps: HubDeps): Hub {
       if (!profile) return [];
       const status = m.status();
       const role = m.id === deps.machineId ? "home" : "machine";
-      return [{ id: m.id, name: m.name, role, online: status.online, since: status.since, platform: profile.platform, access: { ...profile.access } }];
+      return [
+        { id: m.id, name: m.name, role, online: status.online, since: status.since, platform: profile.platform, access: { ...profile.access }, connectors: [...profile.connectors] },
+      ];
     });
   deps.links?.onChange(() => deps.broadcast({ type: "machines", machines: machineViews() }));
   // Remote agents, cards and usage reach the bots in Phase 4; until then the links log each event, and only a new

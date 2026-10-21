@@ -12,6 +12,7 @@ import { newIdentity, readIdentity, type Identity } from "../src/machine/identit
 import { createJoinCodes } from "../src/machine/joinCodes";
 import { createLinks } from "../src/machine/links";
 import { profileOf } from "../src/machine/profile";
+import { profileView } from "../src/machine/wire";
 import { createRegistry } from "../src/machine/registry";
 import type { PairOffer, PairResponse, ServerMessage, StreamPosition } from "../src/protocol";
 import { serve } from "../src/serve";
@@ -91,7 +92,7 @@ const enrollAs = (h: { http: string }, me: Identity, code: string) =>
   fetch(`${h.http}/enroll`, { method: "POST", body: JSON.stringify({ code, machineId: me.machineId, name: me.name, publicKey: me.publicKey }) });
 
 const profile = (() => {
-  const { sshAuthSock: _, ...view } = profileOf({ env: {}, platform: "darwin", name: "MacBook", homedir: "/Users/alex", username: "alex" });
+  const view = profileView(profileOf({ env: {}, platform: "darwin", name: "MacBook", homedir: "/Users/alex", username: "alex" }));
   return view;
 })();
 

@@ -15,6 +15,13 @@ test.each(link.map((f) => [[f.t, f.intent?.kind ?? f.event?.kind].filter(Boolean
   },
 );
 
+test("a profile from a machine before connectors reads as none", () => {
+  const event = link.find((f) => f.event?.kind === "profile")! as Frame & { event: { profile: Record<string, unknown> } };
+  const { connectors: _, ...old } = event.event.profile;
+  const parsed = parseMachineFrame(JSON.stringify({ ...event, event: { ...event.event, profile: old } }));
+  expect(parsed).toEqual({ ok: true, value: { ...event, event: { ...event.event, profile: { ...old, connectors: [] } } } } as never);
+});
+
 test("a home frame is not a machine frame, nor the other way round", () => {
   const challenge = link.find((f) => f.t === "challenge")!;
   const event = link.find((f) => f.t === "event")!;

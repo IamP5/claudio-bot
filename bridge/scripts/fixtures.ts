@@ -116,8 +116,11 @@ const ask = {
 };
 
 const machines: Wire<MachineView>[] = [
-  { id: HOME, name: "omarchy", role: "home", online: true, since: null, platform: "linux", access: { full: true, sandbox: false } },
-  { id: MAC, name: "MacBook", role: "machine", online: false, since: at, platform: "darwin", access: { full: false, sandbox: true } },
+  { id: HOME, name: "omarchy", role: "home", online: true, since: null, platform: "linux", access: { full: true, sandbox: false }, connectors: [] },
+  {
+    id: MAC, name: "MacBook", role: "machine", online: false, since: at, platform: "darwin", access: { full: false, sandbox: true },
+    connectors: [{ name: "claude-in-chrome", kind: "chrome" }, { name: "computer-use", kind: "computer-use" }, { name: "github", kind: "other" }],
+  },
 ];
 
 export const server = [
@@ -306,6 +309,7 @@ const machineProfile = {
   managedMcpPath: "/etc/claude-code/managed-mcp.json",
   private: { bridge: [".claudiobot"], keys: [".ssh"], browser: [".config/google-chrome"], creds: [".netrc"], personal: [] },
   caches: [".npm"], pushReadable: [".ssh/*.pub"], tempDirs: ["/tmp"], sandboxNeeds: [], access: { full: true, sandbox: false },
+  connectors: [{ name: "chrome-devtools", kind: "chrome" }, { name: "linear", kind: "other" }],
 } as const;
 const fromBot = { kind: "bot", botId: "b1", hops: 1, origin: { kind: "routine", run: { routineId: "r1", runId: "run4" }, manual: false } } as const;
 const agentCard = { ...permission, id: "m30", from: agentPeer };

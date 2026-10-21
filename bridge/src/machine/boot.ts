@@ -11,6 +11,7 @@ import type { HomeRef, Identity } from "./identity";
 import { fileJournal } from "./journal";
 import { createMachineNode } from "./node";
 import type { MachineProfile } from "./profile";
+import { profileView } from "./wire";
 
 // A bridge whose machine.json names a home runs as that home's machine: its agents, gate, ledger, sandbox and
 // transcripts, on its own World, and nothing else. No bots, no scheduler, no push, no phone socket, no pairing. It
@@ -56,7 +57,7 @@ export function bootMachine(deps: {
     fetch: (req) => (new URL(req.url).pathname === "/health" ? Response.json({ ok: true }) : new Response("Not found", { status: 404 })),
   });
 
-  const { sshAuthSock: _, ...view } = profile;
+  const view = profileView(profile);
   // Recorded before the link is up, so the home hears this boot's profile, its access mode included, once it is.
   node.runtime.emit({ kind: "profile", profile: view });
   node.boot();

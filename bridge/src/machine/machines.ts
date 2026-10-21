@@ -1,6 +1,6 @@
 import type { MachineProfile } from "./profile";
 import type { AgentRuntime } from "./runtime";
-import type { Applied, Intent, MachineId, ProfileView } from "./wire";
+import { profileView, type Applied, type Intent, type MachineId, type ProfileView } from "./wire";
 
 /** since: when it came online, or while offline when it was last heard from; null when not known. */
 export type MachineStatus = { online: boolean; since: string | null };
@@ -22,7 +22,8 @@ export type Machines = {
 
 /** The machine in this process, under the id in machine.json: send is the runtime's apply, and it is online while the process runs. */
 export function createLocalMachine(id: MachineId, runtime: AgentRuntime, profile: MachineProfile): Machine {
-  return { id, name: profile.name, profile: () => profile, status: () => ({ online: true, since: null }), send: (intent) => runtime.apply(intent) };
+  const view = profileView(profile);
+  return { id, name: profile.name, profile: () => view, status: () => ({ online: true, since: null }), send: (intent) => runtime.apply(intent) };
 }
 
 /** remote: the machines enrolled into this home, read afresh on each call. */

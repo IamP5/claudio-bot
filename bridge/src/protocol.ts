@@ -687,7 +687,8 @@ export type TransportMessage = Extract<ClientMessage, { type: "devices" | "revok
 /**
  * A computer that runs agents for this home (feature "machines"). role home: the bridge the phone is connected to.
  * since: when it came online, or when it was last heard from while offline; null when never. access: the machine's
- * own mode, which only its own environment sets.
+ * own mode, which only its own environment sets. connectors: the MCP servers its agents can use, as it last reported
+ * them.
  */
 export type MachineView = {
   id: MachineId;
@@ -697,7 +698,14 @@ export type MachineView = {
   since: string | null;
   platform: "darwin" | "linux";
   access: { full: boolean; sandbox: boolean };
+  connectors: MachineConnector[];
 };
+
+/**
+ * An MCP server on a machine, by name only. kind: chrome for a browser server (chrome, chrome-devtools,
+ * claude-in-chrome), computer-use for computer-use, other for the rest. The app treats an unknown kind as "other".
+ */
+export type MachineConnector = { name: string; kind: "chrome" | "computer-use" | "other" };
 
 /**
  * A one-time code another device can pair with, valid until expiresAt, with the bridge's socket URLs best first: what

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { CardReply } from "../gate";
 import type { UsageRow } from "../ledger";
-import { PERMISSION_CHOICES, SHAPES, COLORS, type Agent, type AgentId, type AgentMessage, type BotId, type DeviceId, type Message, type MachineId, type MessageId, type RoutineId, type RunId } from "../protocol";
+import { PERMISSION_CHOICES, SHAPES, COLORS, type Agent, type AgentId, type AgentMessage, type BotId, type DeviceId, type MachineConnector, type Message, type MachineId, type MessageId, type RoutineId, type RunId } from "../protocol";
 import type { Isolate } from "../tools";
 import type { Initiator } from "../world";
 import type { MachineProfile } from "./profile";
@@ -59,8 +59,14 @@ export type Intent =
 /** reply: what the bot or the phone is told, such as "Sent. Fix tests will report back." */
 export type Applied = { ok: true; reply?: string } | { ok: false; reason: string };
 
-/** A machine's profile as the home may see it: no agent socket path. */
-export type ProfileView = Omit<MachineProfile, "sshAuthSock">;
+/** A machine's profile as the home may see it: no agent socket path, and the connectors its agents can use. */
+export type ProfileView = Omit<MachineProfile, "sshAuthSock"> & { connectors: readonly MachineConnector[] };
+
+/** No machine reads its own connectors yet, so each reports none. */
+export function profileView(profile: MachineProfile): ProfileView {
+  const { sshAuthSock: _, ...view } = profile;
+  return { ...view, connectors: [] };
+}
 
 export type EventBody =
   /** The record or something its status derives from changed. */
@@ -262,6 +268,8 @@ export const profileViewSchema: z.ZodType<ProfileView> = z.object({
   tempDirs: paths,
   sandboxNeeds: paths,
   access: z.object({ full: z.boolean(), sandbox: z.boolean() }),
+  // A machine from before connectors sends none.
+  connectors: z.array(z.object({ name: text, kind: z.enum(["chrome", "computer-use", "other"]) })).default([]),
 });
 
 const stamp = { seq, at: iso };

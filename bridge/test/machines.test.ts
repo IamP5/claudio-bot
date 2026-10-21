@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import type { Links } from "../src/machine/links";
 import type { Machine } from "../src/machine/machines";
 import { profileOf } from "../src/machine/profile";
-import type { Event, MachineId } from "../src/machine/wire";
+import { profileView, type Event, type MachineId, type ProfileView } from "../src/machine/wire";
 import type { AgentId, ServerMessage } from "../src/protocol";
 import { flushNow, loadWorld } from "../src/store";
 import { emptySession, emptyWorld, type AgentRecord } from "../src/world";
@@ -11,10 +11,10 @@ import { NO_RING, at, bot, cleanup, hubOver } from "./hub-kit";
 afterEach(cleanup);
 
 const MAC = "m_mac" as MachineId;
-const view = (() => {
-  const { sshAuthSock: _, ...v } = profileOf({ env: { CLAUDIOBOT_ACCESS: "full" }, platform: "darwin", name: "MacBook", homedir: "/Users/alex", username: "alex" });
-  return v;
-})();
+const view: ProfileView = {
+  ...profileView(profileOf({ env: { CLAUDIOBOT_ACCESS: "full" }, platform: "darwin", name: "MacBook", homedir: "/Users/alex", username: "alex" })),
+  connectors: [{ name: "claude-in-chrome", kind: "chrome" }],
+};
 
 function fakeLinks() {
   let online = false;
@@ -51,8 +51,17 @@ test("a home that takes machines lists itself and each linked machine in hello, 
   const hello = h.hub.hello(NO_RING);
   expect(hello.type === "hello" && hello.features).toContain("machines");
   expect(machinesOf(hello) as unknown[]).toEqual([
-    { id: "m_test", name: "Mac", role: "home", online: true, since: null, platform: process.platform, access: expect.any(Object) },
-    { id: MAC, name: "MacBook", role: "machine", online: false, since: "2026-10-21T09:00:00.000Z", platform: "darwin", access: { full: true, sandbox: false } },
+    { id: "m_test", name: "Mac", role: "home", online: true, since: null, platform: process.platform, access: expect.any(Object), connectors: [] },
+    {
+      id: MAC,
+      name: "MacBook",
+      role: "machine",
+      online: false,
+      since: "2026-10-21T09:00:00.000Z",
+      platform: "darwin",
+      access: { full: true, sandbox: false },
+      connectors: [{ name: "claude-in-chrome", kind: "chrome" }],
+    },
   ]);
 });
 

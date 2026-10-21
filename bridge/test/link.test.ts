@@ -10,10 +10,10 @@ import { createLinks, type LinkSession, type Links } from "../src/machine/links"
 import { profileOf } from "../src/machine/profile";
 import { createRegistry, type Registry } from "../src/machine/registry";
 import type { AgentRuntime } from "../src/machine/runtime";
-import { newIntentId, type Event, type EventBody, type HomeFrame, type MachineId } from "../src/machine/wire";
+import { newIntentId, profileView, type Event, type EventBody, type HomeFrame, type MachineId } from "../src/machine/wire";
 
 const profile = (() => {
-  const { sshAuthSock: _, ...view } = profileOf({ env: { CLAUDIOBOT_ACCESS: "full" }, platform: "linux", name: "omarchy", homedir: "/home/alex", username: "alex" });
+  const view = profileView(profileOf({ env: { CLAUDIOBOT_ACCESS: "full" }, platform: "linux", name: "omarchy", homedir: "/home/alex", username: "alex" }));
   return view;
 })();
 

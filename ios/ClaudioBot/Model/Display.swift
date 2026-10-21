@@ -328,6 +328,83 @@ extension PermissionAnswer {
     }
 }
 
+/// Where a permission card was raised, which decides how far Always and Never reach.
+enum ApprovalScope: Equatable, Sendable {
+    /// A session's own Claude Code: Always lasts until the session ends, and Never also stops the turn.
+    case session
+    /// A bot's chat: Always and Never write a standing rule for the bot, and the bot is told about Deny.
+    case bot(name: String)
+    /// A bot's chat card that asks to trust a repo's own Claude Code settings.
+    case trust
+
+    /// The bridge's trust card is the only one with this tool name (gate.ts `trustCard`).
+    static func chat(_ card: PermissionCard, bot: String) -> ApprovalScope {
+        card.tool == "Claude Code settings" ? .trust : .bot(name: bot)
+    }
+}
+
+extension PermissionCard {
+    /// The choices the card offers. Without an Always text the bridge offers no Always: it would only allow once.
+    var choices: [PermissionChoice] {
+        always.isEmpty ? [.once, .deny, .never] : [.once, .always, .deny, .never]
+    }
+
+    /// The command's first line, at most 60 characters, for a spoken label.
+    var commandHead: String {
+        let line = detail.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? detail
+        return line.count > 60 ? "\(line.prefix(59))…" : line
+    }
+
+    /// What Always would cover and for how long, read before the buttons. nil when the card offers no Always.
+    func scopeLine(_ scope: ApprovalScope) -> String? {
+        guard !always.isEmpty else { return nil }
+        return switch scope {
+        case .session: "For the rest of this session, Always allow covers \(always)"
+        case .bot: "From now on, Always allow covers \(always)."
+        case .trust: "Always allow: \(always)."
+        }
+    }
+
+    /// What VoiceOver says for a choice: the choice, then the tool and the command it decides.
+    func spokenLabel(_ choice: PermissionChoice) -> String {
+        "\(choice.button), \(tool) \(commandHead)"
+    }
+}
+
+extension PermissionChoice {
+    /// One line on what the choice does, shown under its button and spoken as its hint.
+    func consequence(_ scope: ApprovalScope) -> String {
+        switch (self, scope) {
+        case (.once, .trust): "Trusts it for this agent only."
+        case (.once, _): "Runs this call only."
+        case (.always, .session): "Runs it, then stops asking about these this session."
+        case (.always, .bot): "Runs it, then stops asking about it."
+        case (.always, .trust): "Trusts it for every agent in this repo."
+        case (.deny, .session): "Skips it. Claude carries on and may ask again."
+        case (.deny, .bot(let name)): "Skips it and tells \(name) not to try it."
+        case (.deny, .trust): "Keeps this agent on empty settings."
+        case (.never, .session): "Skips it and stops the turn."
+        case (.never, .bot(let name)): "Skips it and refuses it for \(name) from now on."
+        case (.never, .trust): "Keeps every agent in this repo on empty settings."
+        }
+    }
+}
+
+extension PermissionAnswer {
+    /// What VoiceOver hears when an open card closes: who closed it when it was not this device, the outcome, whether
+    /// the tool ran, and the command: "Expired. Bash did not run: perl -e 'sleep 45'".
+    func announcement(card: PermissionCard, step: ToolStep? = nil, here: Bool) -> String {
+        let outcome = outcome(step: step)
+        let result = if case .chose(let choice) = self, choice.allows {
+            "\(outcome.text.trimmingCharacters(in: CharacterSet(charactersIn: "."))). \(card.tool)"
+        } else {
+            "\(outcome.short). \(card.tool) did not run"
+        }
+        let elsewhere = if case .chose = self, !here { "Answered on another device. " } else { "" }
+        return "\(elsewhere)\(result): \(card.commandHead)"
+    }
+}
+
 extension SessionPermission {
     /// "sleeper two wants to run Bash" when a subagent asked, else the card's own label.
     var title: String {

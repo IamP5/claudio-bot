@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 
 struct ChatRowView: View {
@@ -29,7 +30,9 @@ struct ChatRowView: View {
             case let .question(id, _, card):
                 QuestionCardView(botId: bot.id, messageId: id, card: card, color: bot.avatar.color)
             case let .permission(id, _, card):
-                PermissionCardView(messageId: id, card: card) { .decide(botId: bot.id, messageId: id, choice: $0) }
+                PermissionCardView(messageId: id, card: card, scope: .chat(card, bot: bot.name)) {
+                    .decide(botId: bot.id, messageId: id, choice: $0)
+                }
             case let .exchange(_, _, peer, sent, received):
                 EventLineView(segments: EventLine.exchange(peer: peer, sent: sent, received: received), onPeer: onExchange ?? onPeer)
             case let .note(_, _, text, refs):
@@ -192,8 +195,8 @@ struct QuestionCardView: View {
     let color: AvatarColor
 
     var body: some View {
-        TimelineView(.deadline(card.expiresAt)) { _ in
-            Settling(card.answer(at: .now)) { answer in
+        AtDeadline(card.expiresAt) { now in
+            Settling(card.answer(at: now)) { answer in
                 QuestionCardBody(botId: botId, messageId: messageId, card: card, answer: answer, color: color)
             }
         }
@@ -339,15 +342,23 @@ private struct QuestionCardBody: View {
 struct PermissionCardView: View {
     let messageId: MessageID
     let card: PermissionCard
+    let scope: ApprovalScope
     let decision: (PermissionChoice) -> ClientMessage
 
+    @AccessibilityFocusState private var focus: CardFocus?
+    @State private var sentHere = false
+
     var body: some View {
-        TimelineView(.deadline(card.expiresAt)) { _ in
-            Settling(card.answer(at: .now)) { answer in
-                PermissionCardBody(messageId: messageId, card: card, title: card.label, answer: answer, decision: decision)
+        AtDeadline(card.expiresAt) { now in
+            let answer = card.answer(at: now)
+            Settling(answer) { answer in
+                PermissionCardBody(
+                    messageId: messageId, card: card, title: card.label, scope: scope, answer: answer, decision: decision,
+                    focus: $focus, onSend: { sentHere = true }
+                )
             }
+            .announcesClose(card: card, answer: answer, here: sentHere, focus: $focus)
         }
-        .announcesDecision(messageId, outcome: card.answer?.outcome())
     }
 }
 
@@ -384,20 +395,23 @@ struct SessionPermissionCard: View {
     /// The step "Show the step" asked for from the sheet, revealed once the sheet is gone.
     @State private var pendingReveal: HeldStep?
     @Environment(\.revealStep) private var revealStep
+    @AccessibilityFocusState private var focus: CardFocus?
+    @State private var sentHere = false
 
     var body: some View {
         let card = permission.card
         let held = HeldStep.find(permission.stepId, in: model.items)
-        TimelineView(.deadline(card.expiresAt)) { _ in
-            Settling(card.answer(at: .now)) { answer in
+        AtDeadline(card.expiresAt) { now in
+            let answer = card.answer(at: now)
+            Settling(answer) { answer in
                 if let answer {
-                    ClosedApprovalRow(permission: permission, outcome: answer.outcome(step: held?.step)) { sheet = true }
+                    ClosedApprovalRow(permission: permission, outcome: answer.outcome(step: held?.step), focus: $focus) { sheet = true }
                 } else {
                     full(answer: nil, held: held)
                 }
             }
+            .announcesClose(card: card, answer: answer, step: held?.step, here: sentHere, focus: $focus)
         }
-        .announcesDecision(permission.cardId, outcome: card.answer?.outcome(step: held?.step))
         .sheet(isPresented: $sheet, onDismiss: {
             if let pendingReveal { revealStep?(pendingReveal) }
             pendingReveal = nil
@@ -421,8 +435,9 @@ struct SessionPermissionCard: View {
     ) -> some View {
         let reveal = reveal ?? revealStep
         return PermissionCardBody(
-            messageId: permission.cardId, card: permission.card, title: permission.title, answer: answer,
+            messageId: permission.cardId, card: permission.card, title: permission.title, scope: .session, answer: answer,
             decision: { .sessionDecide(sessionId: sessionId, cardId: permission.cardId, choice: $0) },
+            focus: $focus, onSend: { sentHere = true },
             step: held?.step, fillsColumn: true,
             reveal: held.flatMap { held in reveal.map { reveal in { reveal(held) } } },
             close: close
@@ -437,6 +452,7 @@ struct SessionPermissionCard: View {
 private struct ClosedApprovalRow: View {
     let permission: SessionPermission
     let outcome: PermissionOutcome
+    let focus: AccessibilityFocusState<CardFocus?>.Binding
     let open: () -> Void
 
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -470,6 +486,7 @@ private struct ClosedApprovalRow: View {
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .accessibilityLabel([permission.title, outcome.text, permission.card.detail].map { $0.hasSuffix(".") ? String($0.dropLast()) : $0 }.joined(separator: ". "))
         .accessibilityHint("Shows the whole request")
+        .accessibilityFocused(focus, equals: .outcome)
     }
 
     private var glyph: some View {
@@ -494,24 +511,54 @@ extension PermissionOutcome {
     }
 }
 
+/// Where VoiceOver sits on a card: one of its choices, or the line that says how it closed.
+enum CardFocus: Hashable {
+    case choice(PermissionChoice)
+    case outcome
+}
+
+private let a11yLog = Logger(subsystem: "dev.claudiobot.app", category: "a11y")
+
 extension View {
-    /// Says the result of a decision this phone sent once the bridge confirms it, so a VoiceOver user hears more than
-    /// the buttons going away.
-    func announcesDecision(_ cardId: MessageID, outcome: PermissionOutcome?) -> some View {
-        modifier(DecisionAnnouncer(cardId: cardId, outcome: outcome))
+    /// Speaks an open card closing, whatever closed it: this phone's choice once the bridge confirms it, another
+    /// device, Stop, or its deadline passing. A VoiceOver user on one of its choices is moved to the outcome, since the
+    /// choices are gone. here: this phone sent a choice for the card.
+    func announcesClose(
+        card: PermissionCard, answer: PermissionAnswer?, step: ToolStep? = nil, here: Bool,
+        focus: AccessibilityFocusState<CardFocus?>.Binding
+    ) -> some View {
+        modifier(CloseAnnouncer(card: card, answer: answer, step: step, here: here, focus: focus))
     }
 }
 
-private struct DecisionAnnouncer: ViewModifier {
-    let cardId: MessageID
-    let outcome: PermissionOutcome?
+private struct CloseAnnouncer: ViewModifier {
+    let card: PermissionCard
+    let answer: PermissionAnswer?
+    let step: ToolStep?
+    let here: Bool
+    let focus: AccessibilityFocusState<CardFocus?>.Binding
 
-    @Environment(AppStore.self) private var store
+    @State private var onChoice = false
 
     func body(content: Content) -> some View {
-        content.onChange(of: store.pendingDecisions[cardId]) { sent, now in
-            if sent != nil, now == nil, let outcome { AccessibilityNotification.Announcement(outcome.text).post() }
-        }
+        content
+            .onChange(of: focus.wrappedValue) { _, now in
+                if answer == nil { onChoice = if case .choice? = now { true } else { false } }
+            }
+            .onChange(of: answer) { old, new in
+                guard old == nil, let new else { return }
+                let said = new.announcement(card: card, step: step, here: here)
+                var text = AttributedString(said)
+                text.accessibilitySpeechAnnouncementPriority = .high
+                AccessibilityNotification.Announcement(text).post()
+                a11yLog.debug("announced \(said, privacy: .public)")
+                guard onChoice else { return }
+                Task {
+                    // The outcome fades in after the choices fade out (Card.swap); focus set before it exists is lost.
+                    try? await Task.sleep(for: .milliseconds(400))
+                    focus.wrappedValue = .outcome
+                }
+            }
     }
 }
 
@@ -519,8 +566,11 @@ private struct PermissionCardBody: View {
     let messageId: MessageID
     let card: PermissionCard
     let title: String
+    let scope: ApprovalScope
     let answer: PermissionAnswer?
     let decision: (PermissionChoice) -> ClientMessage
+    let focus: AccessibilityFocusState<CardFocus?>.Binding
+    let onSend: () -> Void
     var step: ToolStep?
     var fillsColumn = false
     var reveal: (() -> Void)?
@@ -534,6 +584,7 @@ private struct PermissionCardBody: View {
     private var sent: PermissionChoice? { store.pendingDecisions[messageId] }
 
     private func send(_ choice: PermissionChoice) {
+        onSend()
         client.send(decision(choice))
         AccessibilityNotification.Announcement("\(choice.button), sending").post()
     }
@@ -607,13 +658,16 @@ private struct PermissionCardBody: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .accessibilityElement(children: .combine)
+                    .accessibilityFocused(focus, equals: .outcome)
                 } else {
                     VStack(alignment: .leading, spacing: 12) {
+                        if let scopeLine = card.scopeLine(scope) {
+                            Text(scopeLine)
+                                .font(.ui(.footnote))
+                                .foregroundStyle(Theme.tertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         buttons
-                        Text("Always allows \(card.always).")
-                            .font(.ui(.footnote))
-                            .foregroundStyle(Theme.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
                         ExpiryLine(expiresAt: card.expiresAt)
                     }
                 }
@@ -622,20 +676,33 @@ private struct PermissionCardBody: View {
         }
         .padding(16)
         .transcriptCard(fillsColumn: fillsColumn)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(title). \(card.commandHead)")
         .sensoryFeedback(trigger: sent) { _, choice in
             choice.map { $0.allows ? .success : .warning }
         }
     }
 
+    /// Names the tool and command each choice decides, so a VoiceOver user with several cards open can tell them
+    /// apart, and keeps the visible word for Voice Control.
+    private func spoken(_ button: some View, _ choice: PermissionChoice) -> some View {
+        button
+            .accessibilityLabel(card.spokenLabel(choice))
+            .accessibilityInputLabels([choice.button])
+            .accessibilityHint(choice.consequence(scope))
+            .accessibilityFocused(focus, equals: .choice(choice))
+    }
+
     #if os(macOS)
     /// One row of standard buttons, refusals on the left and Allow Once as the prominent default on the right. Return
-    /// is left to the composer: a stray Return should send a message, never run a held tool call.
+    /// is left to the composer: a stray Return should send a message, never run a held tool call. Each button's
+    /// consequence is its tooltip.
     private var buttons: some View {
         HStack(spacing: 8) {
             choiceButton(.deny)
             choiceButton(.never)
             Spacer(minLength: 8)
-            choiceButton(.always)
+            if card.choices.contains(.always) { choiceButton(.always) }
             choiceButton(.once)
         }
         .controlSize(.large)
@@ -653,36 +720,49 @@ private struct PermissionCardBody: View {
             }
         }
         .sending(sent == choice)
+        .help(choice.consequence(scope))
         switch choice {
         case .once:
-            button.buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
+            spoken(button.buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black), choice)
         case .always:
-            button.buttonStyle(.bordered)
+            spoken(button.buttonStyle(.bordered), choice)
         case .deny, .never:
-            button.buttonStyle(.bordered).foregroundStyle(Theme.danger)
+            spoken(button.buttonStyle(.bordered).foregroundStyle(Theme.danger), choice)
         }
     }
     #else
-    /// Two by two, or one per row once the words no longer fit half the card.
+    /// The choices that run the call above the ones that do not, two to a row, or one per row once the words no
+    /// longer fit half the card. Each choice's consequence sits under its button.
     @ViewBuilder
     private var buttons: some View {
         if typeSize.isAccessibilitySize {
-            VStack(spacing: 8) {
-                ForEach([PermissionChoice.once, .always, .deny, .never], id: \.self) { choiceButton($0) }
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(card.choices, id: \.self) { choice($0) }
             }
             .disabled(sent != nil)
         } else {
-            Grid(horizontalSpacing: 8, verticalSpacing: 8) {
-                GridRow {
-                    choiceButton(.once)
-                    choiceButton(.always)
-                }
-                GridRow {
-                    choiceButton(.deny)
-                    choiceButton(.never)
+            let rows = [card.choices.filter(\.allows), card.choices.filter { !$0.allows }]
+            Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 12) {
+                ForEach(rows, id: \.self) { row in
+                    GridRow {
+                        ForEach(row, id: \.self) { choice($0).gridCellColumns(row.count == 1 ? 2 : 1) }
+                    }
                 }
             }
             .disabled(sent != nil)
+        }
+    }
+
+    private func choice(_ choice: PermissionChoice) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            spoken(choiceButton(choice), choice)
+            // Capped like a folded card's line: at the largest sizes four of them would take two screens of their own.
+            Text(choice.consequence(scope))
+                .font(.ui(.caption))
+                .foregroundStyle(Theme.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+                .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+                .accessibilityHidden(true)
         }
     }
 
@@ -737,6 +817,31 @@ extension TimelineSchedule where Self == ExplicitTimelineSchedule<[Date]> {
     /// The past entry matters: before its first entry a timeline reports that entry's date, not the clock.
     static func deadline(_ date: Date?) -> Self {
         .explicit([.distantPast] + (date.map { [$0] } ?? []))
+    }
+}
+
+/// Draws its content with the current time, and once more when the deadline passes, so a card closes on time without a
+/// bridge frame. A TimelineView on `.deadline` stayed on its first entry while the thread sat still, so an open card
+/// never expired on screen.
+struct AtDeadline<Content: View>: View {
+    let deadline: Date?
+    let content: (Date) -> Content
+
+    @State private var passed: Date?
+
+    init(_ deadline: Date?, @ViewBuilder content: @escaping (Date) -> Content) {
+        self.deadline = deadline
+        self.content = content
+    }
+
+    var body: some View {
+        content(max(passed ?? .distantPast, .now))
+            .task(id: deadline) {
+                guard let deadline else { return }
+                let wait = deadline.timeIntervalSinceNow
+                if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+                if !Task.isCancelled { passed = max(deadline, .now) }
+            }
     }
 }
 

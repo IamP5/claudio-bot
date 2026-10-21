@@ -120,6 +120,7 @@
 		BDFDAE2BCE66614D384C68BA /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 982F1219C87F1A4346344127 /* ChatView.swift */; };
 		C133FC61B6F5B8F58A1773DA /* ThreadWorkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9075DD4B11D99F8110DFA1ED /* ThreadWorkTests.swift */; };
 		C1BAACAF45074976D7D9BDFC /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64F093F0E46C0BAC5BE987F1 /* MainView.swift */; };
+		C24B7A960C83949C3BD236FA /* ApprovalCopyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 715B528E1F333F5EFF0F6EF6 /* ApprovalCopyTests.swift */; };
 		C2DA6E69FD78B035FD432B9A /* ConnectorsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8852760CD0E7465CD1204064 /* ConnectorsView.swift */; };
 		C3AC6D6A5E7C8459DA94A750 /* ApprovalCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0B62E0514191256711E3296 /* ApprovalCardTests.swift */; };
 		C3EC6FA685AE4D2689BEB1B8 /* Sessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458D4E72664733CA07544FD5 /* Sessions.swift */; };
@@ -148,6 +149,7 @@
 		E8437FC53424A48F755EA838 /* Spend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A61D6DA58D7DE2CDA74F96F /* Spend.swift */; };
 		E927D4976DA9672D4ED903FA /* ChatNotices.swift in Sources */ = {isa = PBXBuildFile; fileRef = B66044096F0B9816E53050C9 /* ChatNotices.swift */; };
 		E944A6BDFA56826F902B81ED /* FileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A929F97F49B2C78A33813AAA /* FileView.swift */; };
+		EB7D915605AA316218F31F16 /* ApprovalCopyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 715B528E1F333F5EFF0F6EF6 /* ApprovalCopyTests.swift */; };
 		EEA6ADDD829E09F38160A151 /* Groups.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83A625070DCD73947EE2086E /* Groups.swift */; };
 		EF22354B191EFD0CA90FF12F /* ChatItems.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06280DC6DF2D564FD10301E5 /* ChatItems.swift */; };
 		F07EB03CAF5E01F8AFB0904F /* MentionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A5E4966422B7F7675BCF9E8 /* MentionsTests.swift */; };
@@ -214,6 +216,7 @@
 		6A5953065B9EE16E05C830E5 /* Brand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Brand.swift; sourceTree = "<group>"; };
 		6E239D4F0DF5EA2B3D309E36 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		702ADCCAC3224198DEEABCB4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		715B528E1F333F5EFF0F6EF6 /* ApprovalCopyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalCopyTests.swift; sourceTree = "<group>"; };
 		7210A34FDFDC73B0B972F06E /* LocalBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalBridge.swift; sourceTree = "<group>"; };
 		7820C0044FEE201808CA15BD /* GroupViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupViews.swift; sourceTree = "<group>"; };
 		793A4ED4251CB9F9136B3525 /* Usage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Usage.swift; sourceTree = "<group>"; };
@@ -332,6 +335,7 @@
 			isa = PBXGroup;
 			children = (
 				D0B62E0514191256711E3296 /* ApprovalCardTests.swift */,
+				715B528E1F333F5EFF0F6EF6 /* ApprovalCopyTests.swift */,
 				A043FD6FEC842D94A260F35E /* BridgeClientTests.swift */,
 				097EB76BEE0A213D3217C7AC /* FakeBridge.swift */,
 				9A5E4966422B7F7675BCF9E8 /* MentionsTests.swift */,
@@ -731,6 +735,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C3AC6D6A5E7C8459DA94A750 /* ApprovalCardTests.swift in Sources */,
+				C24B7A960C83949C3BD236FA /* ApprovalCopyTests.swift in Sources */,
 				00856B227ECFDFD264CF6F1E /* BridgeClientTests.swift in Sources */,
 				536D4AC12412A81BB722100A /* FakeBridge.swift in Sources */,
 				0F2A29F13D0B77FADCB229DC /* LocalBridgeTests.swift in Sources */,
@@ -754,6 +759,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5377102E92CCFF82C76D55D7 /* ApprovalCardTests.swift in Sources */,
+				EB7D915605AA316218F31F16 /* ApprovalCopyTests.swift in Sources */,
 				C4D1C6705A84AF3D5E134452 /* BridgeClientTests.swift in Sources */,
 				D71C8C4D37722592EF686761 /* FakeBridge.swift in Sources */,
 				F07EB03CAF5E01F8AFB0904F /* MentionsTests.swift in Sources */,

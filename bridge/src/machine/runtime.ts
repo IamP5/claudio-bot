@@ -17,7 +17,7 @@ export type RuntimeDeps = Omit<AgentsDeps, "changed" | "reported" | "note"> & {
    * Makes sure agent.start's bot is there to hold the agent's cards, rules and cap. False: the bot is gone. On the home
    * the bot's real record is its stand-in, and only the home writes it; a machine keeps a stand-in of its own.
    */
-  standIn: (bot: BotStandIn) => boolean;
+  standIn: (bot: BotStandIn, spentTodayUsd: number) => boolean;
   /** bot.forget: what holds the bot's agents here lets go of them for good. Absent: the bot lives here, and the hub deletes it. */
   forgetBot?: (botId: BotId) => void;
   journal: Journal;
@@ -86,7 +86,7 @@ export function createAgentRuntime(deps: RuntimeDeps): AgentRuntime {
     const replayed = deps.world.agents.get(i.agentId);
     if (replayed) return { ok: true, reply: started(replayed) };
     const projects = await scan();
-    if (!standIn(i.bot)) return refuse("This bot no longer exists.");
+    if (!standIn(i.bot, i.spentTodayUsd)) return refuse("This bot no longer exists.");
     const project = findProject(projects, i.project.name);
     if (!project) return refuse(`No project "${i.project.name}". Call list_projects for the names.`);
     if (i.where === "cloud" && !project.githubRepo) return refuse(`${project.name} has no GitHub remote, so start it with where "mac".`);
@@ -142,6 +142,21 @@ export function createAgentRuntime(deps: RuntimeDeps): AgentRuntime {
         const r = answer(intent.botId, intent.cardId, intent.reply);
         return r.ok ? ok : refuse(r.error);
       }
+      case "bot.update": {
+        const before = deps.world.bots.get(intent.bot.id);
+        // No stand-in: none of the bot's agents ever ran here, so there is nothing to keep current.
+        if (!before) return ok;
+        const reopen = before.name !== intent.bot.name || before.connectorsOff.join("\n") !== intent.bot.connectorsOff.join("\n");
+        standIn(intent.bot, intent.spentTodayUsd);
+        for (const rec of deps.world.agents.values()) {
+          if (rec.agent.botId !== intent.bot.id) continue;
+          const session = agents.session(rec.agent.id);
+          // A new name or connector set changes the query's prompt and settings; a cap only what may start next.
+          if (reopen) session?.reopen();
+          session?.recheck();
+        }
+        return ok;
+      }
       case "bot.forget":
         if (!forgetBot) return refuse("This bridge holds the bot itself.");
         forgetBot(intent.botId);
@@ -160,7 +175,7 @@ export function createAgentRuntime(deps: RuntimeDeps): AgentRuntime {
 
   return {
     apply(intent) {
-      if (intent.kind === "snapshot" || intent.kind === "projects") return run(intent);
+      if (intent.kind === "snapshot" || intent.kind === "projects" || intent.kind === "bot.update") return run(intent);
       const done = journal.applied(intent.intentId);
       if (done) return Promise.resolve(done);
       const seen = applying.get(intent.intentId);

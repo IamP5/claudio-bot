@@ -246,7 +246,7 @@ test("a decide on a machine's agent card goes to that machine as card.answer; on
   const card = { kind: "permission", id: "c_gate" as MessageId, at, from: { kind: "agent", id: "a_mac1" as AgentId, title: "Fix" }, tool: "Bash", label: "Run", detail: "ls", always: "", answer: null, expiresAt: "2099-01-01T00:00:00.000Z" } as const;
   m.event({ kind: "card", botId: B, message: card });
   expect(await m.ask({ type: "session_decide", sessionId: S1, cardId: "c_gate" as MessageId, choice: "once" })).toEqual([]);
-  expect(m.intents).toMatchObject([{ kind: "card.answer", botId: B, cardId: "c_gate", reply: { kind: "permission", choice: "once" } }]);
+  expect(m.intents.filter((i) => i.kind !== "bot.update")).toMatchObject([{ kind: "card.answer", botId: B, cardId: "c_gate", reply: { kind: "permission", choice: "once" } }]);
 
   await m.ask({ type: "session_decide", sessionId: S1, cardId: "c_own" as MessageId, choice: "deny" });
   expect(m.asked.at(-1)).toEqual({ type: "session_decide", sessionId: S1, cardId: "c_own" as MessageId, choice: "deny" });

@@ -2225,7 +2225,8 @@
         "slash": null,
         "initiator": {
           "kind": "user"
-        }
+        },
+        "spentTodayUsd": 3.2
       }
     },
     {
@@ -2296,6 +2297,20 @@
         "kind": "bot.forget",
         "intentId": "i_10",
         "botId": "b1"
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "bot.update",
+        "intentId": "i_11",
+        "bot": {
+          "id": "b1",
+          "name": "engineer",
+          "dailyCapUsd": 12,
+          "connectorsOff": []
+        },
+        "spentTodayUsd": 3.2
       }
     },
     {

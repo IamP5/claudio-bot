@@ -66,6 +66,7 @@ const start = (bot: { name: string; dailyCapUsd: number | null; connectorsOff: s
   budgetUsd: null,
   slash: null,
   initiator: { kind: "user" },
+  spentTodayUsd: 0,
 });
 
 test("agent.start on a machine creates the bot's stand-in from the intent, and a later start updates its home-owned fields", async () => {
@@ -198,4 +199,21 @@ test("bot.forget on a machine stops the bot's agents, drops its stand-in and the
   expect(calls.at(-1)).toBe("now");
   m.node.boot();
   expect(m.queries).toHaveLength(1);
+});
+
+test("bot.update renames the stand-in and counts the home's spend today against the cap, then this machine's own on top", async () => {
+  const m = machine();
+  const s = start({ name: "Ana", dailyCapUsd: 1, connectorsOff: [] });
+  await m.node.runtime.apply({ ...s, spentTodayUsd: 0 });
+  await flush();
+  expect(m.node.ledger.dailyLeft(B1)).toBe(1);
+  expect(await m.node.runtime.apply({ kind: "bot.update", intentId: newIntentId(), bot: { id: B1, name: "Ana B.", dailyCapUsd: 1, connectorsOff: ["gmail"] }, spentTodayUsd: 0.75 })).toEqual({ ok: true });
+  expect(m.world.bots.get(B1)).toMatchObject({ name: "Ana B.", connectorsOff: ["gmail"] });
+  expect(m.node.ledger.dailyLeft(B1)).toBeCloseTo(0.25);
+  m.queries[0]!.emit(result(0.1));
+  await flush();
+  expect(m.node.ledger.dailyLeft(B1)).toBeCloseTo(0.15);
+  await m.node.runtime.apply({ kind: "bot.update", intentId: newIntentId(), bot: { id: B1, name: "Ana B.", dailyCapUsd: 1, connectorsOff: ["gmail"] }, spentTodayUsd: 1.2 });
+  expect(m.node.ledger.dailyLeft(B1)).toBe(0);
+  expect(m.node.ledger.headroom({ kind: "agent", botId: B1, agentId: s.agentId }, { kind: "system" })).toMatchObject({ ok: false, reason: "daily_cap" });
 });

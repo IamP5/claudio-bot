@@ -65,6 +65,8 @@ function remote() {
 }
 
 const B = "b_eng" as BotId;
+/** The intents sent besides the bot.update every link brings. */
+const besidesUpdates = (intents: Intent[]) => intents.filter((i) => i.kind !== "bot.update");
 const A = "a_mac1" as AgentId;
 const agent = (status: Agent["status"] = "working"): Agent => ({
   id: A,
@@ -146,7 +148,7 @@ test("an answer to a card of an offline machine waits for it, says so in the cha
   expect(r.intents).toEqual([]);
   r.flip(true);
   await flush();
-  expect(r.intents).toMatchObject([{ kind: "card.answer", reply: { choice: "deny" } }]);
+  expect(besidesUpdates(r.intents)).toMatchObject([{ kind: "card.answer", reply: { choice: "deny" } }]);
 });
 
 test("an answer queued for a machine asleep past its card's expiry still goes, and the machine's refusal is the note in the chat", async () => {
@@ -159,7 +161,7 @@ test("an answer queued for a machine asleep past its card's expiry still goes, a
   r.answers((i) => (i.kind === "card.answer" ? { ok: false, reason: "That request expired" } : { ok: true }));
   r.flip(true);
   await flush();
-  expect(r.intents.map((i) => i.kind)).toEqual(["card.answer"]);
+  expect(besidesUpdates(r.intents).map((i) => i.kind)).toEqual(["card.answer"]);
   expect(r.world.bots.get(B)!.messages.at(-1)).toMatchObject({ kind: "note", text: 'Your answer to "Push to the default branch" on MacBook did not go through: That request expired' });
 });
 
@@ -189,7 +191,7 @@ test("start_agent on an offline machine waits for it: the bot hears so, and the 
   expect(reply).toMatchObject({ content: [{ text: expect.stringMatching(/^Waiting for MacBook; agent a_[\w-]+ starts when MacBook is online\.$/) }] });
   r.flip(true);
   await flush();
-  expect(r.intents.map((i) => i.kind)).toEqual(["agent.start"]);
+  expect(besidesUpdates(r.intents).map((i) => i.kind)).toEqual(["agent.start"]);
 });
 
 test("a bot whose agents run on a machine starts there when it names none; an unknown machine is refused", async () => {
@@ -291,7 +293,7 @@ test("deleting a bot drops the start still waiting for its offline machine, so n
   expect(await r.h.hub.handle({ type: "delete_bot", botId: B })).toEqual([]);
   r.flip(true);
   await flush();
-  expect(r.intents.filter((i) => i.kind !== "bot.forget")).toEqual([]);
+  expect(besidesUpdates(r.intents).filter((i) => i.kind !== "bot.forget")).toEqual([]);
 });
 
 test("a remote card's reminder pushes from the home once, even when its event comes again, and not after the card closed", async () => {
@@ -456,4 +458,32 @@ test("at boot, a mirror slice of a machine no longer enrolled is dropped and its
   expect(r.world.bots.get(B)!.messages.find((m) => m.id === "c_mac1")).toMatchObject({ answer: "expired" });
   const hello = r.h.hub.hello({ epoch: "", seq: 0, resumed: false });
   expect(hello.type === "hello" && hello.bots.find((b) => b.id === B)?.status).toBe("idle");
+});
+
+test("a cap change, a rename and a connector toggle reach each machine with the bot's agents as bot.update, with the home's spend today", async () => {
+  const r = placed();
+  const day = new Date().toLocaleDateString("en-CA");
+  r.send({ kind: "usage", row: { at, actor: `agent:${A}`, botId: B, sessionId: "s_mac", initiator: { kind: "user" }, cumulativeUsd: 0.6, deltaUsd: 0.6, day } });
+  await r.h.hub.handle({ type: "update_bot", botId: B, patch: { dailyCapUsd: 5 } });
+  await r.h.hub.handle({ type: "update_bot", botId: B, patch: { name: "eng2" } });
+  await turn(r);
+  expect(await r.h.hub.handle({ type: "set_connector", botId: B, name: "chrome-devtools", enabled: false })).toMatchObject([{ type: "connectors" }]);
+  await flush();
+  expect(r.intents.filter((i) => i.kind === "bot.update")).toMatchObject([
+    { bot: { id: B, name: "eng", dailyCapUsd: 5, connectorsOff: [] }, spentTodayUsd: 0.6 },
+    { bot: { id: B, name: "eng2", dailyCapUsd: 5 } },
+    { bot: { id: B, connectorsOff: ["chrome-devtools"] } },
+  ]);
+});
+
+test("a machine that links again hears each of its bots' stand-ins and spend afresh; a start carries the spend too", async () => {
+  const r = placed();
+  r.flip(false);
+  r.flip(true);
+  await flush();
+  expect(r.intents).toMatchObject([{ kind: "bot.update", bot: { id: B }, spentTodayUsd: 0 }]);
+  const other = home();
+  await turn(other);
+  await callTool(other.h.q(), "start_agent", { title: "Push fix", prompt: "Push it.", project: "shop", machine: "MacBook" });
+  expect(other.intents).toMatchObject([{ kind: "agent.start", spentTodayUsd: 0 }]);
 });

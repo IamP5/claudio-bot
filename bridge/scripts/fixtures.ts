@@ -325,7 +325,7 @@ export const link = [
     intent: {
       kind: "agent.start", intentId: "i_1", agentId: "a1", bot: { id: "b1", name: "engineer", dailyCapUsd: 10, connectorsOff: ["gmail"] },
       title: "Set up verification skill", prompt: "Write the verify skill.", project: { githubRepo: "alex/web", name: "alex/web" },
-      where: "mac", isolate: "worktree", budgetUsd: 5, slash: null, initiator: { kind: "user" },
+      where: "mac", isolate: "worktree", budgetUsd: 5, slash: null, initiator: { kind: "user" }, spentTodayUsd: 3.2,
     },
   },
   { t: "intent", intent: { kind: "agent.message", intentId: "i_2", agentId: "a1", text: "Also cover the login page.", initiator: fromBot } },
@@ -334,6 +334,7 @@ export const link = [
   { t: "intent", intent: { kind: "agent.removeWorktree", intentId: "i_5", agentId: "a1" } },
   { t: "intent", intent: { kind: "card.answer", intentId: "i_6", botId: "b1", cardId: "m30", reply: { kind: "permission", choice: "once" }, signed: null } },
   { t: "intent", intent: { kind: "bot.forget", intentId: "i_10", botId: "b1" } },
+  { t: "intent", intent: { kind: "bot.update", intentId: "i_11", bot: { id: "b1", name: "engineer", dailyCapUsd: 12, connectorsOff: [] }, spentTodayUsd: 3.2 } },
   { t: "intent", intent: { kind: "snapshot", intentId: "i_7" } },
   { t: "intent", intent: { kind: "projects", intentId: "i_8" } },
   { t: "ack", seq: 10 },

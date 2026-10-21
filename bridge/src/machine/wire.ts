@@ -70,6 +70,8 @@ export type Intent =
       budgetUsd: number | null;
       slash: string | null;
       initiator: Initiator;
+      /** What the home counts against the bot's daily cap today: the bot's own spend and all its agents'. */
+      spentTodayUsd: number;
     }
   | { kind: "agent.message"; intentId: IntentId; agentId: AgentId; text: string; initiator: Initiator }
   /** The user from the phone, in the agent's session. */
@@ -79,6 +81,11 @@ export type Intent =
   | { kind: "card.answer"; intentId: IntentId; botId: BotId; cardId: MessageId; reply: CardReply; signed: SignedAnswer | null }
   /** The bot was deleted on the home: its agents here stop for good, and its stand-in and their records go. */
   | { kind: "bot.forget"; intentId: IntentId; botId: BotId }
+  /**
+   * The bot's home-owned fields changed (cap, name, connectors), or the machine linked again: its stand-in follows, and
+   * spentTodayUsd is the home's count against the cap. Sent only while the machine is online, and applied afresh.
+   */
+  | { kind: "bot.update"; intentId: IntentId; bot: BotStandIn; spentTodayUsd: number }
   /** Always applied afresh: its intentId only pairs it with its applied frame. */
   | { kind: "snapshot"; intentId: IntentId }
   /** The projects under the machine's roots, as the reply's text. Always applied afresh, as snapshot. */
@@ -199,6 +206,7 @@ export const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("kind", [
     budgetUsd: usd.nullable(),
     slash: z.string().min(1).nullable(),
     initiator,
+    spentTodayUsd: usd,
   }),
   z.object({ kind: z.literal("agent.message"), intentId, agentId, text: z.string().min(1), initiator }),
   z.object({ kind: z.literal("agent.direct"), intentId, agentId, text: z.string().min(1), clientId: z.string().min(1) }),
@@ -206,6 +214,7 @@ export const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("agent.removeWorktree"), intentId, agentId }),
   z.object({ kind: z.literal("card.answer"), intentId, botId: id<BotId>(), cardId: id<MessageId>(), reply: cardReply, signed: signedAnswer.nullable() }),
   z.object({ kind: z.literal("bot.forget"), intentId, botId: id<BotId>() }),
+  z.object({ kind: z.literal("bot.update"), intentId, bot: botStandIn, spentTodayUsd: usd }),
   z.object({ kind: z.literal("snapshot"), intentId }),
   z.object({ kind: z.literal("projects"), intentId }),
 ]);

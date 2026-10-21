@@ -165,6 +165,18 @@ The machine fills these fields from the `agent.start` intent, and updates them w
 - `dailyCapUsd` is read by the ledger through `capFor`. Null means the machine's default cap.
 - `connectorsOff` becomes the agent's flag settings.
 
+The home sends a change as a `bot.update` intent: on a cap change, a rename or a connector toggle, and to every
+machine with the bot's agents each time it links. A new name or connector set reopens the bot's agents' queries
+there; a cap change only rechecks what may start next.
+
+**One cap across machines.** `agent.start` and `bot.update` carry `spentTodayUsd`, what the home counts against the
+bot's cap today: the bot's own spend and every agent row it has, local or from any machine. The machine's ledger
+then enforces `max(0, cap - spentTodayUsd)` less its own spend for the bot since that count. The count is in memory
+on the machine and refreshed on each link. It is not exact: a row still in flight when the home counted is in
+neither number, and a machine spends against a stale count until the next update. So a bot can overspend its cap by
+what its agents spend in one update interval, which is accepted. A machine's own `CLAUDIOBOT_DAILY_USD` default stays
+its own limit, without the home's count.
+
 The machine owns these fields and never takes them from the home:
 
 - `messages` holds the cards. The gate writes them, and the home only sees them as `card` events.

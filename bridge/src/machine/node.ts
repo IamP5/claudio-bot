@@ -4,7 +4,7 @@ import type { SDKMessage, Settings } from "@anthropic-ai/claude-agent-sdk";
 import type { Tickable } from "../clock";
 import { connectorSettings } from "../connectors";
 import { createGate, type Gate, type GateDeps } from "../gate";
-import { createLedger, type UsageRow } from "../ledger";
+import { createLedger, localDay, type UsageRow } from "../ledger";
 import type { Scope } from "../policy";
 import type { Project } from "../projects";
 import type { AgentId, BotId, Message } from "../protocol";
@@ -78,8 +78,10 @@ export type NodeDeps = {
   projectsDir: string;
   scan: () => Promise<Project[]>;
   journal: Journal;
-  standIn: (bot: BotStandIn) => boolean;
+  standIn: (bot: BotStandIn, spentTodayUsd: number) => boolean;
   forgetBot?: (botId: BotId) => void;
+  /** A bot's daily cap as this bridge's ledger enforces it; absent: the bot record's own. */
+  capFor?: (botId: BotId) => number | null;
   bots: BotSide;
   /** Each usage row the ledger charges. */
   rowed?: (row: UsageRow) => void;
@@ -103,7 +105,7 @@ export function createNode(deps: NodeDeps): Node {
 
   const ledger = createLedger({
     dir: join(deps.root, "usage"),
-    capFor: (id) => world.bots.get(id)?.dailyCapUsd ?? null,
+    capFor: deps.capFor ?? ((id) => world.bots.get(id)?.dailyCapUsd ?? null),
     budgetFor: (id) => world.agents.get(id)?.budgetUsd ?? null,
     now: deps.now,
     log: deps.log,
@@ -226,18 +228,35 @@ export type MachineNode = Node & {
  * A machine: no bots, only a stand-in per bot that has agents here. A stand-in's chat holds the cards this machine's
  * gate posts, which go to the home as card events; the home pushes and shows them. Nothing a bot does runs here.
  */
-export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "forgetBot" | "rowed" | "elsewhere" | "idle">): MachineNode {
+export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "forgetBot" | "capFor" | "rowed" | "elsewhere" | "idle">): MachineNode {
   const { world } = deps;
+  /**
+   * What the home last said it counts against each bot's cap today, and this machine's own spend for the bot at that
+   * moment. Memory only: the home says it again each time the machine links.
+   */
+  const homeSpend = new Map<BotId, { homeUsd: number; localUsd: number; day: string }>();
   /** A stand-in's chat, or an agent's thread. */
   const archiveOf = (id: BotId | AgentId) => join(deps.root, "machine", "history", `${id}.jsonl`);
   const node: Node = createNode({
     ...deps,
     // The home counts the row toward the bot's daily cap; this machine's ledger already holds it to its own.
     rowed: (row) => node.runtime.emit({ kind: "usage", row }),
-    standIn(bot) {
+    standIn(bot, spentTodayUsd) {
       upsertStandIn(world, bot, deps.now().toISOString());
+      homeSpend.set(bot.id, { homeUsd: spentTodayUsd, localUsd: node.ledger.botSpend(bot.id).spentTodayUsd, day: localDay(deps.now()) });
       deps.persist();
       return true;
+    },
+    /**
+     * The bot's cap less what the home counted today, plus what this machine spent before the home's count, so its own
+     * spend since then is all that is charged on top. A row in flight when the home counted is in neither, so a bot
+     * may overspend by what one update interval spends. A machine's own CLAUDIOBOT_DAILY_USD default is its own limit.
+     */
+    capFor(botId) {
+      const cap = world.bots.get(botId)?.dailyCapUsd ?? null;
+      const told = homeSpend.get(botId);
+      if (cap === null || !told || told.day !== localDay(deps.now())) return cap;
+      return Math.max(0, cap - told.homeUsd) + told.localUsd;
     },
     // Records and stand-in go too, so nothing resumes them; worktrees and transcripts stay on disk.
     forgetBot(botId) {

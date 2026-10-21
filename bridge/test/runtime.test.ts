@@ -106,6 +106,7 @@ const startOf = (over: Partial<Extract<Intent, { kind: "agent.start" }>> = {}): 
   budgetUsd: null,
   slash: null,
   initiator: user,
+  spentTodayUsd: 0,
   ...over,
 });
 

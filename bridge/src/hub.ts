@@ -53,7 +53,7 @@ import { placeAgent } from "./machine/place";
 import { createDispatch, fileQueue, type Dispatched, type QueuedIntent } from "./machine/queue";
 import { memoryJournal } from "./machine/journal";
 import { createNode, settingsFor, trimThread } from "./machine/node";
-import { newAgentId, newIntentId, type Applied, type Event, type MachineId } from "./machine/wire";
+import { newAgentId, newIntentId, type Applied, type BotStandIn, type Event, type MachineId } from "./machine/wire";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { createSessions, type Sessions, type SessionsEnv } from "./sessions";
 import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
@@ -544,6 +544,8 @@ export function createHub(deps: HubDeps): Hub {
   function reopenFor(botId: BotId, which: "agents" | "all") {
     if (which === "all") brains.get(botId)?.reopen();
     for (const rec of world.agents.values()) if (rec.agent.botId === botId) localAgents.session(rec.agent.id)?.reopen();
+    const bot = world.bots.get(botId);
+    if (bot) updateMachines(bot);
   }
 
   const activity = createActivity({ signal: deps.signal, now: clockNow });
@@ -826,6 +828,23 @@ export function createHub(deps: HubDeps): Hub {
     },
   });
 
+  const standInOf = (bot: BotRecord): BotStandIn => ({ id: bot.id, name: bot.name, dailyCapUsd: bot.dailyCapUsd, connectorsOff: [...bot.connectorsOff] });
+
+  /**
+   * Each online machine with the bot's agents hears its stand-in and what the home counts against its cap today. One
+   * that is offline hears it as it links, so nothing waits in the queue.
+   */
+  function updateMachines(bot: BotRecord, only?: MachineId) {
+    for (const id of new Set(placements.ofBot(bot.id).map((p) => p.machine))) {
+      const m = only === undefined || id === only ? machines.of(id) : null;
+      if (!m?.status().online) continue;
+      const intent = { kind: "bot.update" as const, intentId: newIntentId(), bot: standInOf(bot), spentTodayUsd: ledger.botSpend(bot.id).spentTodayUsd };
+      void m.send(intent).then((a) => {
+        if (!a.ok) deps.log(`machine: ${m.name} did not take ${bot.name}'s update: ${a.reason}`);
+      });
+    }
+  }
+
   /** An agent on any machine: this one's record, or another machine's mirror. */
   type Located = { machine: MachineId; agent: Agent; messages: AgentMessage[] };
   function agentOf(id: AgentId): Located | null {
@@ -942,10 +961,21 @@ export function createHub(deps: HubDeps): Hub {
     for (const bot of world.bots.values()) if (byBot.has(bot.id)) changed(bot);
   }
 
+  const online = new Set<MachineId>();
   deps.links?.onChange(() => {
     deps.broadcast({ type: "machines", machines: machineViews() });
-    // What waited for a machine goes first, then its snapshot (links.ts asks for that as it links).
-    for (const m of machines.list()) if (m.id !== deps.machineId && m.status().online) dispatch.drain(m.id);
+    for (const m of machines.list()) {
+      if (m.id === deps.machineId) continue;
+      if (!m.status().online) {
+        online.delete(m.id);
+        continue;
+      }
+      // What waited for a machine goes first, then its snapshot (links.ts asks for that as it links).
+      dispatch.drain(m.id);
+      if (online.has(m.id)) continue;
+      online.add(m.id);
+      for (const bot of world.bots.values()) updateMachines(bot, m.id);
+    }
   });
   deps.links?.onEvent(remoteEvent);
 
@@ -1170,7 +1200,7 @@ export function createHub(deps: HubDeps): Hub {
         kind: "agent.start",
         intentId: newIntentId(),
         agentId,
-        bot: { id: bot.id, name: bot.name, dailyCapUsd: bot.dailyCapUsd, connectorsOff: [...bot.connectorsOff] },
+        bot: standInOf(bot),
         title: a.title,
         prompt: a.prompt,
         project: placed.project,
@@ -1179,6 +1209,7 @@ export function createHub(deps: HubDeps): Hub {
         budgetUsd: null,
         slash,
         initiator: initiatorNow(bot),
+        spentTodayUsd: ledger.botSpend(bot.id).spentTodayUsd,
       };
       if (placed.machine !== deps.machineId) placements.place(agentId, { machine: placed.machine, botId, by: intent.initiator });
       const sent: Dispatched =
@@ -1511,6 +1542,7 @@ export function createHub(deps: HubDeps): Hub {
         Object.assign(bot, message.patch, message.patch.name !== undefined && { name: message.patch.name.trim() });
         if (message.patch.name !== undefined) retitle(bot.id, bot.name);
         changed(bot);
+        if (message.patch.name !== undefined || message.patch.dailyCapUsd !== undefined) updateMachines(bot);
         // A raised cap may lift a daily-cap park at once instead of at the next tick.
         if (message.patch.dailyCapUsd !== undefined) {
           brains.get(bot.id)?.recheck();

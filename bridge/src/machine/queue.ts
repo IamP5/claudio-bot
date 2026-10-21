@@ -10,8 +10,11 @@ import { intentSchema, type Applied, type Intent, type IntentId, type MachineId 
 // machine applies them. One that waits past its kind's TTL is dropped with a note in its bot's chat. A machine applies
 // an intentId once, so an intent sent again after a lost link or a home restart runs once.
 
-/** What may wait for a machine. A snapshot and a projects listing are only worth having while it is online. */
-export type QueuedIntent = Exclude<Intent, { kind: "snapshot" | "projects" }>;
+/**
+ * What may wait for a machine. A snapshot, a projects listing and a bot update are only worth having while it is
+ * online: the home sends every bot update afresh when it links.
+ */
+export type QueuedIntent = Exclude<Intent, { kind: "snapshot" | "projects" | "bot.update" }>;
 
 /** what: the intent in words for the expiry note, such as `Starting "Fix tests"`. botId: whose chat hears of it. */
 export type Queued = { machine: MachineId; intent: QueuedIntent; botId: BotId | null; what: string; at: string; expiresAt: string };
@@ -51,7 +54,7 @@ export function due(queue: readonly Queued[], machine: MachineId | null, now: st
 const FILE = z.array(
   z.object({
     machine: z.string().min(1) as unknown as z.ZodType<MachineId>,
-    intent: intentSchema.refine((i) => i.kind !== "snapshot" && i.kind !== "projects") as unknown as z.ZodType<QueuedIntent>,
+    intent: intentSchema.refine((i) => i.kind !== "snapshot" && i.kind !== "projects" && i.kind !== "bot.update") as unknown as z.ZodType<QueuedIntent>,
     botId: (z.string().min(1) as unknown as z.ZodType<BotId>).nullable(),
     what: z.string(),
     at: z.string(),

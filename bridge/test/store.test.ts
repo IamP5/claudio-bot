@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { BotId, MessageId, RoutineId, RunId, SessionId } from "../src/protocol";
 import { newGroup } from "../src/groups";
 import { createSaver, flushNow, loadWorld, StateFileError } from "../src/store";
-import { emptySession, emptyWorld, exchangeBetween, logExchange, newBot, type Signature } from "../src/world";
+import { emptySession, emptyWorld, exchangeBetween, logExchange, newBot, own, type MoveId, type MoveRecord, type Signature } from "../src/world";
 
 const homes: string[] = [];
 const freshHome = () => {
@@ -385,6 +385,25 @@ test("the sessions overlay and the mirror setting survive a save and a load; a f
   writeState(old, v3({ bots: [v3Bot] }));
   expect(loadWorld(old).world.sessions.size).toBe(0);
   expect(loadWorld(old).world.sessionPrefs).toEqual({ mirror: "auto" });
+});
+
+test("world moves survive a save and a load; a file from before them reads as none", () => {
+  const home = freshHome();
+  const { world } = loadWorld(home);
+  const held = newBot({ id: "b_held" as BotId, name: "Held", avatar: { shape: "circle", color: "white" }, at });
+  const moves = [
+    { kind: "out" as const, moveId: "mv_1" as MoveId, at, machine: "mac", phase: "frozen" as const, held: { bots: [held], groups: [], exchanges: [] } },
+    { kind: "in" as const, moveId: "mv_2" as MoveId, at, from: "laptop" },
+  ];
+  own<MoveRecord[]>(world.moves).push(...moves);
+  flushNow(world, home);
+  const again = loadWorld(home).world;
+  expect(again.moves).toEqual(moves);
+  expect(again.bots.has(held.id)).toBe(false);
+
+  const old = freshHome();
+  writeState(old, v3({ bots: [v3Bot] }));
+  expect(loadWorld(old).world.moves).toEqual([]);
 });
 
 test("the saver debounces, and \"now\" writes before it returns", async () => {

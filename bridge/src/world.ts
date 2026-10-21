@@ -464,6 +464,20 @@ export type OwnCard =
 /** Settings, "Show agent sessions in the Claude app". Writer: sessions.ts. */
 export type SessionPrefs = { mirror: MirrorPref };
 
+export type MoveId = string & { readonly __brand: "MoveId" };
+
+/**
+ * One world move between bridge homes (docs/world-move.md). Writer: move.ts, run by the CLI with the bridge stopped.
+ * - out frozen: this home exported its bots. They wait in `held`, out of World.bots, so nothing here runs, fires or
+ *   pushes for them, until `world finish` trashes their homes.
+ * - out done: finished. Kept so a rerun of finish, or of export, knows the move.
+ * - in: this home imported the move. A replayed import of the same moveId changes nothing.
+ */
+export type MoveRecord =
+  | { kind: "out"; moveId: MoveId; at: string; machine: string; phase: "frozen"; held: { bots: BotRecord[]; groups: GroupRecord[]; exchanges: ExchangeLog[] } }
+  | { kind: "out"; moveId: MoveId; at: string; machine: string; phase: "done" }
+  | { kind: "in"; moveId: MoveId; at: string; from: string };
+
 export type World = {
   bots: Map<BotId, BotRecord>;
   /** Group ids share the bot id space, as Bot.id on the wire, and never collide with a bot's. */
@@ -476,6 +490,7 @@ export type World = {
   readonly exchanges: Owned<ExchangeLog[]>;
   sessions: Map<SessionId, SessionRecord>;
   readonly sessionPrefs: Owned<SessionPrefs>;
+  readonly moves: Owned<MoveRecord[]>;
 };
 
 export const emptyWorld = (): World => ({
@@ -489,6 +504,7 @@ export const emptyWorld = (): World => ({
   exchanges: [],
   sessions: new Map(),
   sessionPrefs: { mirror: "auto" },
+  moves: [],
 });
 
 export const EXCHANGE_KEEP = 200;

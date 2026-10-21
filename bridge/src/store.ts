@@ -15,6 +15,7 @@ import {
   type ExchangeLog,
   type GateState,
   type GroupRecord,
+  type MoveRecord,
   type Owned,
   type PushState,
   type SessionPrefs,
@@ -48,6 +49,8 @@ type StateFileV3 = {
   /** Absent in files from before Sessions: no session was hidden or visited. */
   sessions?: SessionRecord[];
   sessionPrefs?: Owned<SessionPrefs>;
+  /** Absent in files from before world moves: this home never exported or imported one. */
+  moves?: Owned<MoveRecord[]>;
 };
 
 // Protocol 2's records, frozen here for the upgrade only.
@@ -171,6 +174,14 @@ const V3_FILE = z.looseObject({
   groups: z.array(z.looseObject({ ...profile, muted: z.boolean(), members: z.array(text) })).optional(),
   sessions: z.array(z.looseObject({ id: text, hidden: z.boolean(), visitedAt: maybeText })).optional(),
   sessionPrefs: z.looseObject({ mirror: z.enum(MIRROR_PREFS) }).optional(),
+  moves: z
+    .array(
+      z.discriminatedUnion("kind", [
+        z.looseObject({ kind: z.literal("out"), moveId: text, at: text, phase: z.enum(["frozen", "done"]), held: z.looseObject({ bots: z.array(anyObject), groups: z.array(anyObject), exchanges: z.array(anyObject) }).optional() }),
+        z.looseObject({ kind: z.literal("in"), moveId: text, at: text }),
+      ]),
+    )
+    .optional(),
 });
 
 /**
@@ -347,6 +358,7 @@ function fromV3(file: StateFileV3): World {
     exchanges: file.exchanges ?? [],
     sessions: new Map((file.sessions ?? []).map((r) => [r.id, r])),
     sessionPrefs: file.sessionPrefs ?? { mirror: "auto" },
+    moves: file.moves ?? [],
   };
 }
 
@@ -362,6 +374,7 @@ const toFile = (world: World): StateFileV3 => ({
   groups: [...world.groups.values()],
   sessions: [...world.sessions.values()],
   sessionPrefs: world.sessionPrefs,
+  moves: world.moves,
 });
 
 /**

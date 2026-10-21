@@ -64,7 +64,7 @@ extension ThreadRowView {
                 withdraw: { client.withdraw(id, text: text, from: model, edit: false) }
             )
         }
-        return unanswered && !queued ? .resend { model.edit(text) } : nil
+        return unanswered && !queued ? .resend { model.resend(id, text: text) } : nil
     }
 }
 
@@ -170,7 +170,9 @@ struct SessionUserBubble: View {
 
     /// The message as it reads on screen: link labels, not their addresses, and no markup characters (F-SES-168).
     static func spoken(_ rendered: AttributedString, from: SessionAuthor, botName: String?, queued: Bool) -> String {
-        (from == .bot ? "From \(botName ?? "a bot"): " : "You: ") + String(rendered.characters) + (queued ? ". Queued" : "")
+        let text = String(rendered.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+        let ends = text.last.map { ".!?".contains($0) } ?? true
+        return (from == .bot ? "From \(botName ?? "a bot"): " : "You: ") + text + (queued ? (ends ? " Queued" : ". Queued") : "")
     }
 }
 

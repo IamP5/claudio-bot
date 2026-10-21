@@ -41,7 +41,7 @@ struct SessionComposer: View {
     var body: some View {
         let now = max(clock, .now)
         let state = state(at: now)
-        let note = ComposerNote.of(error: store.sessionErrors[sessionId], stop: state.stop, set: store.sets[sessionId], now: now)
+        let note = ComposerNote.of(error: store.sessionErrors[sessionId], stop: state.stop, set: store.sets[sessionId], controls: controls, now: now)
         glassGroup {
             VStack(alignment: .leading, spacing: 8) {
                 if let controls { controlsRow(controls) }
@@ -79,6 +79,11 @@ struct SessionComposer: View {
             try? await Task.sleep(for: .seconds(max(0, ComposerState.sentShown - Date.now.timeIntervalSince(sentAt))))
             if !Task.isCancelled { clock = .now }
         }
+        .task(id: store.sets[sessionId]) {
+            guard let set = store.sets[sessionId] else { return }
+            try? await Task.sleep(for: .seconds(max(0, SetRequest.patience - Date.now.timeIntervalSince(set.at))))
+            if !Task.isCancelled { clock = .now }
+        }
         .task(id: stopRequest) {
             guard let request = stopRequest, request.state == .pending else { return }
             try? await Task.sleep(for: .seconds(max(0, StopRequest.patience - Date.now.timeIntervalSince(request.at))))
@@ -87,6 +92,12 @@ struct SessionComposer: View {
         .onChange(of: state.stop?.phase) { _, phase in
             guard let phase, let scope = state.stop?.scope, let text = ComposerState.announcement(phase, scope) else { return }
             announce(text)
+        }
+        .onChange(of: note) { _, note in
+            if let note, note.announced { announce(note.text) }
+        }
+        .onChange(of: store.sets[sessionId]) { old, new in
+            if let old, new == nil, let controls, old.landed(in: controls) { announce(old.landedLine) }
         }
         .onChange(of: store.sessionErrors[sessionId]) { _, error in
             // A refused stop is spoken with the stop's own progress.
@@ -125,7 +136,7 @@ struct SessionComposer: View {
     private func field(_ state: ComposerState) -> some View {
         let text = PromptTextView(
             draft: $model.draft, caret: $caret, placeholder: ComposerState.placeholder(controls), label: ComposerState.fieldLabel(controls),
-            maxLines: 6, onSubmit: { send(interrupt: false) }
+            maxLines: typeSize.isAccessibilitySize ? 2 : 6, onSubmit: { send(interrupt: false) }
         )
         .padding(.vertical, 8)
         .frame(minHeight: Composer.field)
@@ -219,7 +230,7 @@ struct SessionComposer: View {
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.danger)
                 case .stopping, .changing:
                     ProgressView().controlSize(.mini)
-                case .unconfirmed:
+                case .unconfirmed, .changeUnconfirmed:
                     Image(systemName: "questionmark.circle").foregroundStyle(Theme.attention)
                 }
                 Text(note.text)
@@ -227,22 +238,29 @@ struct SessionComposer: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if case .error(let error) = note {
-                Button("Dismiss") { store.dismissSessionError(error, in: sessionId) }
+            if let dismiss = dismiss(note) {
+                Button("Dismiss", action: dismiss)
                     .font(.footnote.weight(.semibold))
                     .buttonStyle(.borderless)
             }
         }
         .font(.footnote)
         // Past this size the line alone would take the screen and push the field out of it.
-        .dynamicTypeSize(...DynamicTypeSize.accessibility3)
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .padding(.horizontal, 16)
         .accessibilityElement(children: .contain)
         .accessibilityRepresentation {
             Text(note.spoken)
-            if case .error(let error) = note {
-                Button("Dismiss") { store.dismissSessionError(error, in: sessionId) }
-            }
+            if let dismiss = dismiss(note) { Button("Dismiss", action: dismiss) }
+        }
+    }
+
+    /// An error, or a change that never landed, stays until the user puts it away.
+    private func dismiss(_ note: ComposerNote) -> (() -> Void)? {
+        switch note {
+        case .error(let error): { store.dismissSessionError(error, in: sessionId) }
+        case .changeUnconfirmed: { store.dismissSet(in: sessionId) }
+        case .stopping, .unconfirmed, .changing: nil
         }
     }
 

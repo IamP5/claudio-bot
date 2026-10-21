@@ -50,18 +50,23 @@ struct StopRequest: Equatable, Sendable {
 
     let target: StopTarget
     let turnStartedAt: String?
+    /// The tasks live when the stop was asked for. A stop of everything has landed once none of them is left.
+    var tasks: Set<TaskID> = []
     let at: Date
     var state = State.pending
 
     /// How long a stop may stay unconfirmed before the control offers to stop again.
     static let patience: TimeInterval = 10
 
-    /// The work this stop was aimed at no longer runs.
+    /// The work this stop was aimed at no longer runs. A wake turn that starts after it is new work, not this stop's.
     func landed(in controls: SessionControls) -> Bool {
+        let turnEnded = turnStartedAt == nil || controls.turn?.startedAt != turnStartedAt
         switch target {
-        case .all: !controls.working
-        case .turn: controls.turn == nil || controls.turn?.startedAt != turnStartedAt
-        case .task(let id): controls.tasks.map { !$0.contains { $0.id == id } } ?? !controls.working
+        case .all:
+            guard let live = controls.tasks else { return !controls.working }
+            return turnEnded && tasks.isDisjoint(with: live.map(\.id))
+        case .turn: return controls.turn == nil || turnEnded
+        case .task(let id): return controls.tasks.map { !$0.contains { $0.id == id } } ?? !controls.working
         }
     }
 }
@@ -101,7 +106,7 @@ struct SetRequest: Equatable, Sendable {
     let change: Change
     let at: Date
 
-    /// A change that neither lands nor is refused stops reading as in flight after this long.
+    /// A change that neither lands nor is refused reads as not confirmed after this long.
     static let patience: TimeInterval = 15
 
     func landed(in controls: SessionControls) -> Bool {
@@ -111,12 +116,31 @@ struct SetRequest: Equatable, Sendable {
         }
     }
 
-    /// "Changing the mode to Accept edits…".
-    var line: String {
+    private var field: String {
+        if case .model = change { "model" } else { "mode" }
+    }
+
+    private var target: String {
         switch change {
-        case .model(_, let label): "Changing the model to \(label)…"
-        case .mode(let mode): "Changing the mode to \(SessionText.mode(mode))…"
+        case .model(_, let label): label
+        case .mode(let mode): SessionText.mode(mode)
         }
+    }
+
+    /// "Changing the mode to Accept edits…".
+    var line: String { "Changing the \(field) to \(target)…" }
+
+    /// The change took too long: what still runs. kept: the value the controls show.
+    func unconfirmed(kept: String) -> String {
+        "Claude Code has not taken the change to \(target) yet. The \(field) stays \(kept)."
+    }
+
+    /// Spoken once the controls carry it.
+    var landedLine: String { "The \(field) is now \(target)." }
+
+    /// The value the controls show for this change's field.
+    func kept(_ controls: SessionControls) -> String {
+        if case .model = change { controls.modelLabel } else { SessionText.mode(controls.mode) }
     }
 }
 
@@ -136,17 +160,6 @@ extension SessionControls {
         let id = model ?? models.first?.id
         let label = models.first { $0.id == id }?.label ?? model ?? "Model"
         return label.replacing(/\s*\(.*\)$/, with: "")
-    }
-}
-
-extension ThreadFrame {
-    /// The items the frame upserts.
-    var items: [SessionItem] {
-        switch self {
-        case .snapshot(let snapshot): snapshot.items
-        case .items(_, let items, _, _), .page(let items, _): items
-        case .delta, .toolOutput, .removed: []
-        }
     }
 }
 
@@ -322,13 +335,18 @@ enum ComposerNote: Equatable, Sendable {
     case stopping(StopScope)
     case unconfirmed
     case changing(SetRequest)
+    /// The change took longer than SetRequest.patience. text: what still runs.
+    case changeUnconfirmed(SetRequest, text: String)
 
-    static func of(error: SessionError?, stop: (scope: StopScope, phase: StopPhase)?, set: SetRequest?, now: Date) -> ComposerNote? {
+    static func of(
+        error: SessionError?, stop: (scope: StopScope, phase: StopPhase)?, set: SetRequest?, controls: SessionControls?, now: Date
+    ) -> ComposerNote? {
         if let error { return .error(error) }
         if let stop, stop.phase == .stopping { return .stopping(stop.scope) }
         if stop?.phase == .unconfirmed { return .unconfirmed }
-        if let set, now.timeIntervalSince(set.at) < SetRequest.patience { return .changing(set) }
-        return nil
+        guard let set else { return nil }
+        if now.timeIntervalSince(set.at) < SetRequest.patience { return .changing(set) }
+        return controls.map { .changeUnconfirmed(set, text: set.unconfirmed(kept: set.kept($0))) }
     }
 
     var text: String {
@@ -337,6 +355,15 @@ enum ComposerNote: Equatable, Sendable {
         case .stopping(let scope): "Stopping \(scope.what)…"
         case .unconfirmed: "Your Mac has not confirmed the stop. It may still be running."
         case .changing(let set): set.line
+        case .changeUnconfirmed(_, let text): text
+        }
+    }
+
+    /// The line itself is news when it says something did not happen.
+    var announced: Bool {
+        switch self {
+        case .changeUnconfirmed: true
+        case .error, .stopping, .unconfirmed, .changing: false
         }
     }
 
@@ -347,26 +374,33 @@ enum ComposerNote: Equatable, Sendable {
 }
 
 /// The user's prompts in a thread that a stop ended before Claude answered, so they can be edited and sent again
-/// (F-SES-143): a prompt followed by a stop notice with no reply, step or thinking between.
+/// (F-SES-143): a prompt with a stop notice after it and no reply, step or thinking before the next prompt. A refusal
+/// to stop is not a stop. turnRuns: the newest prompt may still get its reply, so it does not count yet.
 enum UnansweredPrompts {
-    static func of(_ items: [SessionItem]) -> Set<ItemID> {
+    static func of(_ items: [SessionItem], turnRuns: Bool) -> Set<ItemID> {
         var found: Set<ItemID> = []
         var open: ItemID?
+        var stopped = false
+        func close() {
+            if let open, stopped { found.insert(open) }
+        }
         for item in items {
             switch item {
             case .user(_, _, _, .system, _):
                 continue
             case let .user(id, _, _, from, queued):
+                close()
                 open = from == .user && !queued ? id : nil
-            case .notice(_, _, _, _, .stop?):
-                if let id = open { found.insert(id) }
-                open = nil
+                stopped = false
+            case let .notice(_, _, _, tone, .stop?):
+                if tone != .error { stopped = true }
             case .assistant, .work, .thinking, .plan, .ask, .todo:
                 open = nil
             case .permission, .notice, .compaction, .unknown:
                 continue
             }
         }
+        if !turnRuns { close() }
         return found
     }
 }

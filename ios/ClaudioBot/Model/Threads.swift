@@ -362,8 +362,9 @@ final class ThreadModel {
     private(set) var toolOutputs: [String: String] = [:]
     /// The composer's text, kept with the thread so a queued message taken back for editing lands in it.
     var draft = ComposerDraft()
-    /// The user's prompts a stop ended before Claude answered (UnansweredPrompts).
+    /// The user's prompts a stop ended before Claude answered (UnansweredPrompts), less the ones already taken back.
     private(set) var unanswered: Set<ItemID> = []
+    @ObservationIgnored private var resent: Set<ItemID> = []
     let live = LiveText()
     @ObservationIgnored private(set) var lost = false
     @ObservationIgnored private var index: [ItemID: Int] = [:]
@@ -508,10 +509,6 @@ final class ThreadModel {
         relayout()
     }
 
-    func has(_ id: ItemID) -> Bool {
-        index[id] != nil
-    }
-
     /// The cursor to ask for, once. Nil while a page is out or at the start of the transcript.
     func requestEarlier() -> Cursor? {
         guard !loadingEarlier, let before, phase == .ready else { return nil }
@@ -577,8 +574,16 @@ final class ThreadModel {
     private func relayout() {
         let next = ThreadLayout.rows(items, expanded: expanded, working: controls?.working ?? false)
         if next != rows { rows = next }
-        let prompts = UnansweredPrompts.of(items)
+        let prompts = UnansweredPrompts.of(items, turnRuns: ComposerState.queues(controls)).subtracting(resent)
         if prompts != unanswered { unanswered = prompts }
+    }
+
+    /// Edit and resend, once per prompt: its text goes back in the composer and the offer goes away.
+    func resend(_ id: ItemID, text: String) {
+        guard !resent.contains(id) else { return }
+        resent.insert(id)
+        edit(text)
+        relayout()
     }
 
     /// Puts a message back in the composer for editing, after whatever is typed there.

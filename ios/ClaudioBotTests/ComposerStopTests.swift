@@ -14,12 +14,13 @@ private let sleeper = task("t1", .agent, "sleeper one", background: false)
 private let sleep75 = task("t2", .command, "sleep 75", background: true)
 
 private func controls(
-    working: Bool = true, turn: Bool = true, tasks: [SessionTask]? = [], queued: Int = 0, mode: PermissionMode = .default, canSend: Bool = true
+    working: Bool = true, turn: Bool = true, tasks: [SessionTask]? = [], queued: Int = 0, mode: PermissionMode = .default, canSend: Bool = true,
+    turnAt: String = turnStart
 ) -> SessionControls {
     SessionControls(
         canSend: canSend, reason: canSend ? nil : "Working in a terminal. Your messages wait.", working: working, queued: queued,
         model: "sonnet", models: [SessionModelOption(id: "sonnet", label: "Sonnet (4.5)"), SessionModelOption(id: "opus", label: "Opus (5.5)")],
-        mode: mode, modes: [.default, .acceptEdits, .plan], turn: turn ? SessionTurn(startedAt: turnStart, wake: false) : nil, tasks: tasks
+        mode: mode, modes: [.default, .acceptEdits, .plan], turn: turn ? SessionTurn(startedAt: turnAt, wake: turnAt != turnStart) : nil, tasks: tasks
     )
 }
 
@@ -114,7 +115,7 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         #expect(ComposerState.announcement(.ready, StopScope(busy)) == nil, "the status line speaks the outcome")
     }
 
-    @Test func theStoreConfirmsAStopWhenItsWorkEndsOrAStopNoticeLands() {
+    @Test func theStoreConfirmsAStopOnceTheWorkItWasAimedAtIsGone() {
         let store = store(controls(tasks: [sleeper, sleep75]))
         store.sessionRequestSent(.sessionStop(sessionId: sid, target: .turn, turnStartedAt: turnStart), at: at)
         #expect(store.latestStop(in: sid, [.all, .turn])?.state == .pending)
@@ -122,10 +123,21 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         #expect(store.latestStop(in: sid, [.all, .turn])?.state == .confirmed, "the turn ended; the background command still runs")
 
         store.sessionRequestSent(.sessionStop(sessionId: sid, target: .all, turnStartedAt: nil), at: at + 1)
-        frame(store, rev: 3, items: [stopNotice("n1", "Stopped by you: sleep 75.")], controls: controls(turn: true, tasks: []))
-        #expect(store.latestStop(in: sid, [.all])?.state == .confirmed, "a wake turn keeps it working, but the stop notice answered")
-        frame(store, rev: 4, controls: controls(working: false, turn: false))
+        frame(store, rev: 3, items: [stopNotice("n1", "Claude Code has not confirmed the stop of command \"sleep 75\" yet.")], controls: controls(turn: false, tasks: [sleep75]))
+        #expect(store.latestStop(in: sid, [.all])?.state == .pending, "a stop notice is not the stop: sleep 75 still runs")
+        frame(store, rev: 4, controls: controls(tasks: [], turnAt: "2026-10-21T12:05:00.000Z"))
+        #expect(store.latestStop(in: sid, [.all])?.state == .confirmed, "sleep 75 is gone; the wake turn after it is new work")
+        frame(store, rev: 5, controls: controls(working: false, turn: false))
         #expect(store.latestStop(in: sid, [.all, .turn]) == nil, "nothing runs, so nothing is left to stop")
+    }
+
+    @Test func aTaskStopIsNotConfirmedByAnotherTasksNotice() {
+        let store = store(controls(turn: false, tasks: [sleeper, sleep75]))
+        store.sessionRequestSent(.sessionStop(sessionId: sid, target: .task(sleep75.id), turnStartedAt: nil), at: at)
+        frame(store, rev: 2, items: [stopNotice("n1", "Stopped by you: agent \"sleeper one\".")], controls: controls(turn: false, tasks: [sleep75]))
+        #expect(store.stops[sid]?[.task(sleep75.id)]?.state == .pending)
+        frame(store, rev: 3, controls: controls(turn: false, tasks: [sleeper]))
+        #expect(store.stops[sid]?[.task(sleep75.id)]?.state == .confirmed)
     }
 
     @Test func aRefusedStopShowsUnderTheComposerNotAsAToastWhicheverFrameComesFirst() {
@@ -136,6 +148,8 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         #expect(store.latestStop(in: sid, [.all])?.state == .refused("Claude Code did not stop sleep 75."))
         #expect(store.sessionErrors[sid]?.text == "Couldn't stop. Claude Code did not stop sleep 75.")
         #expect(store.lastError == nil, "F-SES-002: a session's error is not a five-second toast")
+        store.sessionRequestSent(.sessionSend(sessionId: sid, text: "next", clientId: "c9", interrupt: false), at: at + 2)
+        #expect(store.sessionErrors[sid]?.kind == .stop, "a send keeps the reason Stop again offers")
         store.sessionRequestSent(.sessionStop(sessionId: sid, target: .all, turnStartedAt: nil), at: at + 3)
         #expect(store.sessionErrors[sid] == nil && store.latestStop(in: sid, [.all])?.state == .pending, "trying again clears the refusal")
 
@@ -154,9 +168,14 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
     @Test func aModelOrModeChangeShowsTheValueThatRunsUntilClaudeCodeTakesIt() {
         let store = store(controls())
         store.sessionRequestSent(.sessionSet(sessionId: sid, patch: SessionPatch(mode: .acceptEdits)), at: at)
-        let note = ComposerNote.of(error: store.sessionErrors[sid], stop: nil, set: store.sets[sid], now: at + 1)
-        #expect(note?.text == "Changing the mode to Accept edits…")
+        let c = store.threads[sid]?.controls
+        let note = ComposerNote.of(error: store.sessionErrors[sid], stop: nil, set: store.sets[sid], controls: c, now: at + 1)
+        #expect(note?.text == "Changing the mode to Accept edits…" && note?.announced == false)
         #expect(store.threads[sid]?.controls?.mode == .default, "the chip keeps the old value until controls change")
+        let lapsed = ComposerNote.of(error: nil, stop: nil, set: store.sets[sid], controls: c, now: at + 16)
+        #expect(lapsed?.text == "Claude Code has not taken the change to Accept edits yet. The mode stays Ask before edits.")
+        #expect(lapsed?.announced == true, "a change that goes quiet says so")
+        #expect(store.sets[sid] != nil, "it stays until it lands, is refused or put away")
         store.apply(.error(message: "Claude Code did not take the change: busy", about: .set(sessionId: sid)))
         #expect(store.sets[sid] == nil)
         #expect(store.sessionErrors[sid]?.text == "The mode stays Ask before edits. Claude Code did not take the change: busy", "F-SES-140")
@@ -166,22 +185,31 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         #expect(store.sets[sid]?.line == "Changing the model to Opus (5.5)…")
         var opus = controls()
         opus.model = "opus"
-        frame(store, rev: 2, controls: opus, at: at + 3)
+        let asked = store.sets[sid]
+        frame(store, rev: 2, controls: opus, at: at + 30)
         #expect(store.sets[sid] == nil, "landed: the controls carry the new model")
+        #expect(asked?.landedLine == "The model is now Opus (5.5).")
     }
 
     @Test func aPromptAStopCutOffBeforeAnyReplyCanBeEditedAndSentAgain() {
-        #expect(UnansweredPrompts.of([user("u1"), stopNotice("n1")]) == [ItemID("u1")], "F-SES-143")
-        #expect(UnansweredPrompts.of([user("u1"), user("i1", "[Request interrupted by user]", from: .system), stopNotice("n1")]) == [ItemID("u1")])
-        #expect(UnansweredPrompts.of([user("u1"), .assistant(id: ItemID("a1"), at: at, text: "On it"), stopNotice("n1")]).isEmpty)
-        #expect(UnansweredPrompts.of([user("u1"), user("q1", queued: true), stopNotice("n1")]).isEmpty, "a queued message still runs after a stop")
+        let reply = SessionItem.assistant(id: ItemID("a1"), at: at, text: "PONGMARK")
+        #expect(UnansweredPrompts.of([user("u1"), stopNotice("n1")], turnRuns: false) == [ItemID("u1")], "F-SES-143")
+        #expect(UnansweredPrompts.of([user("u1"), user("i1", "[Request interrupted by user]", from: .system), stopNotice("n1")], turnRuns: false) == [ItemID("u1")])
+        #expect(UnansweredPrompts.of([user("u1"), reply, stopNotice("n1")], turnRuns: false).isEmpty)
+        #expect(UnansweredPrompts.of([user("u1"), stopNotice("n1", "Stopped by you: command \"sleep 300\"."), reply], turnRuns: false).isEmpty, "a task stop, then the reply")
+        #expect(UnansweredPrompts.of([user("u1"), stopNotice("n1", "Stopped by you: command \"sleep 300\".")], turnRuns: true).isEmpty, "its turn still runs")
+        #expect(UnansweredPrompts.of([user("u1"), stopNotice("n1", "Couldn't stop sleep 300.", tone: .error)], turnRuns: false).isEmpty, "a refusal is not a stop")
+        #expect(UnansweredPrompts.of([user("u1"), stopNotice("n1"), user("u2"), reply], turnRuns: false) == [ItemID("u1")])
+        #expect(UnansweredPrompts.of([user("u1"), user("q1", queued: true), stopNotice("n1")], turnRuns: false).isEmpty, "a queued message still runs after a stop")
 
         let model = ThreadModel(id: sid)
         model.apply(.snapshot(SessionSnapshot(epoch: "e1", rev: 1, items: [user("u1"), stopNotice("n1")], before: nil, controls: controls(working: false, turn: false), live: nil)))
         #expect(model.unanswered == [ItemID("u1")])
         model.draft = ComposerDraft(text: "and lint")
-        model.edit("Run the tests")
-        #expect(model.draft.text == "and lint\n\nRun the tests", "a typed draft is kept")
+        model.resend(ItemID("u1"), text: "Run the tests")
+        model.resend(ItemID("u1"), text: "Run the tests")
+        #expect(model.draft.text == "and lint\n\nRun the tests", "a typed draft is kept, and the prompt goes back once")
+        #expect(model.unanswered.isEmpty, "the offer goes away once taken")
     }
 
     @Test func queuedMessagesCanBeTakenBackOneByOne() {
@@ -204,5 +232,6 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
     @Test func aSentMessageIsSpokenAsItReadsNotAsItsMarkup() {
         let rendered = MarkdownText.inline("Fix **the** build, see [the docs](https://example.com/very/long/path)")
         #expect(SessionUserBubble.spoken(rendered, from: .user, botName: nil, queued: true) == "You: Fix the build, see the docs. Queued", "F-SES-168")
+        #expect(SessionUserBubble.spoken(MarkdownText.inline("Reply MARKER."), from: .user, botName: nil, queued: true) == "You: Reply MARKER. Queued")
     }
 }

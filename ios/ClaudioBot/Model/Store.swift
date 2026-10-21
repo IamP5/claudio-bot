@@ -286,7 +286,9 @@ final class AppStore {
         switch msg {
         case let .sessionStop(sessionId, target, turnStartedAt):
             let target = target ?? .all
-            stops[sessionId, default: [:]][target] = StopRequest(target: target, turnStartedAt: turnStartedAt, at: now)
+            var request = StopRequest(target: target, turnStartedAt: turnStartedAt, at: now)
+            if target == .all { request.tasks = Set(threads[sessionId]?.controls?.tasks?.map(\.id) ?? []) }
+            stops[sessionId, default: [:]][target] = request
             if sessionErrors[sessionId]?.kind == .stop { sessionErrors[sessionId] = nil }
         case let .sessionSet(sessionId, patch):
             let models = threads[sessionId]?.controls?.models ?? []
@@ -299,7 +301,8 @@ final class AppStore {
             }
             if sessionErrors[sessionId]?.kind == .set { sessionErrors[sessionId] = nil }
         case let .sessionSend(sessionId, _, _, _), let .sessionUnqueue(sessionId, _):
-            sessionErrors[sessionId] = nil
+            // A refused stop stays: the slot's Stop again needs its reason.
+            if sessionErrors[sessionId]?.kind != .stop { sessionErrors[sessionId] = nil }
         default:
             break
         }
@@ -310,21 +313,26 @@ final class AppStore {
         targets.compactMap { stops[sessionId]?[$0] }.max { $0.at < $1.at }
     }
 
-    /// A frame for the thread came in. A stop whose work no longer runs, or that a new stop notice answers, is
-    /// confirmed, and a change the controls now carry has landed. Once nothing runs, nothing is left to stop.
-    private func settleRequests(_ sessionId: SessionID, stopNoticed: Bool, at now: Date) {
+    /// A change the user gave up waiting for.
+    func dismissSet(in sessionId: SessionID) {
+        sets[sessionId] = nil
+    }
+
+    /// A frame for the thread came in. A stop whose work no longer runs is confirmed, and a change the controls now
+    /// carry has landed. Once nothing runs, nothing is left to stop.
+    private func settleRequests(_ sessionId: SessionID) {
         guard let controls = threads[sessionId]?.controls else { return }
         if !controls.working {
             stops[sessionId] = nil
             // A stop Claude Code took late still landed: the status line says how the run ended.
             if sessionErrors[sessionId]?.kind == .stop { sessionErrors[sessionId] = nil }
         } else if var asked = stops[sessionId] {
-            for (target, request) in asked where request.state == .pending && (stopNoticed || request.landed(in: controls)) {
+            for (target, request) in asked where request.state == .pending && request.landed(in: controls) {
                 asked[target]?.state = .confirmed
             }
             stops[sessionId] = asked
         }
-        if let set = sets[sessionId], set.landed(in: controls) || now.timeIntervalSince(set.at) >= SetRequest.patience {
+        if let set = sets[sessionId], set.landed(in: controls) {
             sets[sessionId] = nil
         }
     }
@@ -495,12 +503,8 @@ final class AppStore {
             return []
 
         case let .thread(sessionId, frame):
-            let model = threads[sessionId]
-            let stopNoticed = frame.items.contains { item in
-                if case .notice(_, _, _, _, .stop?) = item { model?.has(item.id) != true } else { false }
-            }
             for card in threads.apply(sessionId, frame) { pendingDecisions[card] = nil }
-            settleRequests(sessionId, stopNoticed: stopNoticed, at: now)
+            settleRequests(sessionId)
             return []
 
         case let .sessionCreated(ref, sessionId):

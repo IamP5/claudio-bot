@@ -82,6 +82,7 @@ export type NodeDeps = {
   bots: BotSide;
   /** Each usage row the ledger charges. */
   rowed?: (row: UsageRow) => void;
+  elsewhere?: GateDeps["elsewhere"];
   observe?: (actor: AgentActor, m: SDKMessage) => void;
   idle?: (actor: AgentActor) => void;
   turnDone?: (rec: AgentRecord) => void;
@@ -144,6 +145,7 @@ export function createNode(deps: NodeDeps): Node {
     denied: (actor) => sessionOf(actor)?.denied(),
     notify: bots.notify,
     trusted: (root) => runtime.local.trusted(root),
+    elsewhere: deps.elsewhere,
     persist: deps.persist,
     auditDir: join(deps.root, "audit"),
     userName: deps.userName,
@@ -206,7 +208,7 @@ export type MachineNode = Node & {
  * A machine: no bots, only a stand-in per bot that has agents here. A stand-in's chat holds the cards this machine's
  * gate posts, which go to the home as card events; the home pushes and shows them. Nothing a bot does runs here.
  */
-export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "rowed" | "observe" | "idle" | "turnDone">): MachineNode {
+export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "rowed" | "elsewhere" | "observe" | "idle" | "turnDone">): MachineNode {
   const { world } = deps;
   const archiveOf = (botId: BotId) => join(deps.root, "machine", "history", `${botId}.jsonl`);
   const node: Node = createNode({

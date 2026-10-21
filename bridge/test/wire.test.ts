@@ -30,6 +30,7 @@ test("a home frame is not a machine frame, nor the other way round", () => {
 });
 
 const start = link.find((f) => f.intent?.kind === "agent.start")!;
+const usageRow = { at: "2026-10-16T12:00:00.000Z", actor: "agent:a1", botId: "b1", sessionId: "s1", initiator: { kind: "user" }, cumulativeUsd: 1, deltaUsd: 1, day: "2026-10-16" };
 
 test.each([
   ["not json", "{nope"],
@@ -63,6 +64,8 @@ test.each([
   ["a reply whose row has no id", { t: "reply", id: "i_9", frames: [{ type: "session_rows", rows: [{ title: "x" }], removed: [], projects: [] }] }],
   ["a reply with a frame that is not a session frame", { t: "reply", id: "i_9", frames: [{ type: "bot_removed", botId: "b1" }] }],
   ["a signal that is a whole list, which only answers a request", { t: "signal", frame: { type: "sessions", rows: [], projects: [], mirror: "auto" } }],
+  ["a usage row with a negative charge", { t: "event", event: { seq: 1, at: "2026-10-16T12:00:00.000Z", kind: "usage", row: { ...usageRow, deltaUsd: -5 } } }],
+  ["a usage row with a negative total", { t: "event", event: { seq: 1, at: "2026-10-16T12:00:00.000Z", kind: "usage", row: { ...usageRow, cumulativeUsd: -1 } } }],
 ])("a machine frame with %s is refused", (_, raw) => {
   expect(parseMachineFrame(JSON.stringify(raw)).ok).toBe(false);
 });

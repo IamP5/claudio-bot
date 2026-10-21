@@ -8,11 +8,12 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHomes } from "../src/home";
 import { createHub, type HubDeps } from "../src/hub";
+import { createPlacements } from "../src/machine/placements";
 import { platformOf, profileOf, type MachineProfile } from "../src/machine/profile";
 import type { Project } from "../src/projects";
 import type { BotId, MessageId, PlanUsage, ServerMessage, Signal, StreamPosition, WorldId } from "../src/protocol";
 import type { Push, PushReason } from "../src/push";
-import { newBot, type BotRecord, type World } from "../src/world";
+import { newBot, type BotRecord, type Initiator, type World } from "../src/world";
 
 // A hub over a fake Claude Code: the queries it opens, the frames and signals it sends, the pushes it makes.
 
@@ -139,10 +140,13 @@ export function hubOver(
     usage?: HubDeps["usage"];
     sessions?: HubDeps["sessions"];
     links?: HubDeps["links"];
+    /** Files the bridge home holds before the hub starts, as after a restart. */
+    seed?: (root: string) => void;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "claudiobot-hub-"));
   roots.push(root);
+  opts.seed?.(root);
   const homes = createHomes(root);
   const events: string[] = [];
   const frames: ServerMessage[] = [];
@@ -217,3 +221,11 @@ export async function callTool(q: FakeQuery, name: string, args: Record<string, 
 }
 
 export const bot = (name: string, patch: Partial<BotRecord> = {}): BotRecord => ({ ...newBot({ id: `b_${name}` as BotId, name, avatar: { shape: "circle", color: "white" }, at }), ...patch });
+
+/** A seed: agents the home placed on machines before it restarted, as its dispatch records them. */
+export const placedOn =
+  (...agents: { agentId: string; machine: string; botId: string; by?: Initiator }[]) =>
+  (root: string) => {
+    const placements = createPlacements({ path: join(root, "machine", "placements.json"), log: () => {} });
+    for (const a of agents) placements.place(a.agentId as never, { machine: a.machine as MachineId, botId: a.botId as BotId, by: a.by ?? { kind: "user" } });
+  };

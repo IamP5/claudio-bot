@@ -11,7 +11,7 @@ import type { AgentId, BotId, MessageId, ProjectId, ServerMessage, SessionClient
 import { newDrive } from "../src/own";
 import type { ThreadSignal } from "../src/sessions";
 import { emptyWorld, type World } from "../src/world";
-import { bot, cleanup, flush, hubOver, roots } from "./hub-kit";
+import { bot, cleanup, flush, hubOver, placedOn, roots } from "./hub-kit";
 
 afterEach(cleanup);
 
@@ -89,7 +89,7 @@ test("a session id or project another machine already lists stays that machine's
 });
 
 /** A home with the Sessions tab over an empty ~/.claude, and one enrolled machine the test answers for. */
-function setup(world: World = emptyWorld()) {
+function setup(world: World = emptyWorld(), seed?: (root: string) => void) {
   const dir = mkdtempSync(join(tmpdir(), "claudiobot-routing-"));
   roots.push(dir);
   let online = false;
@@ -128,6 +128,7 @@ function setup(world: World = emptyWorld()) {
   const apps = { holders: () => new Map(), desktop: () => new Map(), desktopState: async () => "absent" as const, idleSeconds: async () => null, importToDesktop: async () => false, openInDesktop: async () => false, refresh() {}, onChange() {}, close() {} };
   const h = hubOver(world, {
     links,
+    ...(seed && { seed }),
     sessions: { epoch: "e1", projectsDir: join(dir, "projects"), apps, cacheDir: join(dir, "cache"), signal: { list: (f) => list.push(f), thread: (id, frame) => thread.push({ id, frame }) }, watchers: (id) => watchers.get(id) ?? 0, watch: false },
     push: { notify: () => true, notifySession: (id, cardId) => (notified.push([id, cardId]), true), tick() {}, nextDeadline: () => null },
   });
@@ -239,7 +240,7 @@ test("a decide on a machine's agent card goes to that machine as card.answer; on
   const world = emptyWorld();
   const B = "b_eng" as BotId;
   world.bots.set(B, bot("eng"));
-  const m = setup(world);
+  const m = setup(world, placedOn({ agentId: "a_mac1", machine: MAC, botId: B }));
   await m.flip(true);
   const card = { kind: "permission", id: "c_gate" as MessageId, at, from: { kind: "agent", id: "a_mac1" as AgentId, title: "Fix" }, tool: "Bash", label: "Run", detail: "ls", always: "", answer: null, expiresAt: "2099-01-01T00:00:00.000Z" } as const;
   m.event({ kind: "card", botId: B, message: card });
@@ -288,8 +289,12 @@ test("unwatching a machine's thread reaches the machine only once no phone here 
   expect(m.asked.map((a) => a.type)).toEqual(["watch_sessions", "unwatch_session"]);
 });
 
-test("a card in a session the phone drives on a machine pushes from the home", async () => {
+test("a card in a session the phone drives on a machine pushes from the home; one for a session the machine does not list does not", async () => {
   const m = setup();
   m.event({ kind: "sessionCard", sessionId: S1, cardId: "c_own" as MessageId });
+  expect(m.notified).toEqual([]);
+  await m.flip(true);
+  m.event({ kind: "sessionCard", sessionId: S1, cardId: "c_own" as MessageId });
+  m.event({ kind: "sessionCard", sessionId: S2, cardId: "c_other" as MessageId });
   expect(m.notified).toEqual([[S1, "c_own" as MessageId]]);
 });

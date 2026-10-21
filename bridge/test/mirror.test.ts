@@ -80,12 +80,13 @@ test("the mirror is saved 0600 and read back; a file that does not parse starts 
   const dir = mkdtempSync(join(tmpdir(), "claudiobot-mirror-"));
   dirs.push(dir);
   const path = join(dir, "machine", "mirror.json");
-  const mirror = createMirror({ path, log: () => {} });
+  const owner = { agent: (id: AgentId) => (id === "a1" ? MAC : null), card: (id: MessageId) => (id === "c1" ? MAC : null) };
+  const mirror = createMirror({ path, log: () => {}, owner });
   mirror.apply(MAC, ev({ kind: "agent", agent: agent("a1"), messages: [] }));
   mirror.apply(MAC, ev({ kind: "card", botId: B1, message: card("c1") }));
   expect(statSync(path).mode & 0o777).toBe(0o600);
 
-  const again = createMirror({ path, log: () => {} });
+  const again = createMirror({ path, log: () => {}, owner });
   expect(again.agent("a1" as AgentId)).toMatchObject({ machine: MAC, agent: { id: "a1" } });
   expect(again.cardOwner("c1" as MessageId)).toEqual({ machine: MAC, botId: B1 });
   expect(again.cardOwner("c2" as MessageId)).toBeNull();
@@ -94,7 +95,7 @@ test("the mirror is saved 0600 and read back; a file that does not parse starts 
 
   writeFileSync(path, "{nope");
   const logs: string[] = [];
-  expect(createMirror({ path, log: (l) => logs.push(l) }).agents()).toEqual([]);
+  expect(createMirror({ path, log: (l) => logs.push(l), owner }).agents()).toEqual([]);
   expect(logs[0]).toContain("starts empty");
 });
 
@@ -105,4 +106,16 @@ test("a snapshot's shortened thread keeps the older messages the mirror already 
   const change = reduce(state, MAC, ev({ kind: "snapshot", agents: [{ agent: agent("a1", "waiting"), messages: [m(3), m(4)] }], openCards: [] }));
   expect(change?.agents[0]!.messages.map((x) => x.text)).toEqual(["1", "2", "3", "4"]);
   expect(state.machines[MAC]!.agents["a1" as AgentId]!.messages.map((x) => x.text)).toEqual(["1", "2", "3", "4"]);
+});
+
+test("an agent or card is found only in the slice of the machine it was placed on, whatever another machine's slice holds", () => {
+  const dir = mkdtempSync(join(tmpdir(), "claudiobot-mirror-"));
+  dirs.push(dir);
+  const mirror = createMirror({ path: join(dir, "mirror.json"), log: () => {}, owner: { agent: () => MAC, card: () => MAC } });
+  mirror.apply(PI, ev({ kind: "agent", agent: agent("a1", "failed"), messages: [] }));
+  mirror.apply(PI, ev({ kind: "card", botId: B1, message: card("c1") }));
+  expect(mirror.agent("a1" as AgentId)).toBeNull();
+  expect(mirror.cardOwner("c1" as MessageId)).toBeNull();
+  mirror.apply(MAC, ev({ kind: "agent", agent: agent("a1"), messages: [] }));
+  expect(mirror.agent("a1" as AgentId)).toMatchObject({ machine: MAC, agent: { status: "working" } });
 });

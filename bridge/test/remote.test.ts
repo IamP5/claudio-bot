@@ -1,13 +1,15 @@
 import { afterEach, expect, test } from "bun:test";
+import { join } from "node:path";
 import type { HubDeps } from "../src/hub";
+import { createMirror } from "../src/machine/mirror";
 import type { Machine, Sent } from "../src/machine/machines";
 import { profileOf } from "../src/machine/profile";
 import { profileView, type Event, type EventBody, type Intent, type MachineId } from "../src/machine/wire";
 import { machinesBlock } from "../src/prompts";
 import type { Agent, AgentId, BotId, Message, MessageId } from "../src/protocol";
 import { createPush } from "../src/push";
-import { emptyWorld, type World } from "../src/world";
-import { assistant, bot, callTool, cleanup, flush, hubOver, later, result, text } from "./hub-kit";
+import { emptyWorld, own, type SessionState, type World } from "../src/world";
+import { assistant, bot, callTool, cleanup, flush, hubOver, later, placedOn, result, text } from "./hub-kit";
 
 afterEach(cleanup);
 
@@ -54,8 +56,9 @@ function remote() {
 }
 
 const B = "b_eng" as BotId;
+const A = "a_mac1" as AgentId;
 const agent = (status: Agent["status"] = "working"): Agent => ({
-  id: "a_mac1" as AgentId,
+  id: A,
   botId: B,
   title: "Push fix",
   where: "mac",
@@ -71,7 +74,7 @@ const card = (answer: "once" | null = null): Message => ({
   kind: "permission",
   id: "c_mac1" as MessageId,
   at,
-  from: { kind: "agent", id: "a_mac1" as AgentId, title: "Push fix" },
+  from: { kind: "agent", id: A, title: "Push fix" },
   tool: "Bash",
   label: "Push to the default branch",
   detail: "git push origin main",
@@ -80,10 +83,10 @@ const card = (answer: "once" | null = null): Message => ({
   expiresAt,
 });
 
-function home(world: World = emptyWorld()) {
+function home(world: World = emptyWorld(), seed?: (root: string) => void) {
   const m = remote();
   world.bots.set(B, bot("eng"));
-  const h = hubOver(world, { links: m.links });
+  const h = hubOver(world, { links: m.links, ...(seed && { seed }) });
   h.homes.create(B, "# eng\n");
   return { ...m, h, world, botFrame: () => h.frames.findLast((f) => f.type === "bot" && f.bot.id === B) };
 }
@@ -94,8 +97,11 @@ async function turn(r: ReturnType<typeof home>) {
   await flush();
 }
 
+/** A home that placed agent A of bot B on the MacBook before it restarted, so the MacBook may speak for it. */
+const placed = (world?: World) => home(world, placedOn({ agentId: A, machine: MAC, botId: B }));
+
 test("a remote agent's card shows in its bot's chat, pushes, and holds the bot at awaiting approval; this gate never expires it", async () => {
-  const r = home();
+  const r = placed();
   r.send({ kind: "agent", agent: agent(), messages: [] });
   r.send({ kind: "card", botId: B, message: card() });
   expect(r.world.bots.get(B)!.messages.at(-1)).toEqual(card());
@@ -110,7 +116,7 @@ test("a remote agent's card shows in its bot's chat, pushes, and holds the bot a
 });
 
 test("a phone decide on a mirrored card goes to its machine as card.answer and leaves this gate alone; the machine's card event closes it", async () => {
-  const r = home();
+  const r = placed();
   r.send({ kind: "card", botId: B, message: card() });
   expect(await r.h.hub.handle({ type: "decide", botId: B, messageId: "c_mac1" as MessageId, choice: "once" })).toEqual([]);
   expect(r.intents).toMatchObject([{ kind: "card.answer", botId: B, cardId: "c_mac1", reply: { kind: "permission", choice: "once" }, signed: null }]);
@@ -123,7 +129,7 @@ test("a phone decide on a mirrored card goes to its machine as card.answer and l
 });
 
 test("an answer to a card of an offline machine waits for it, says so in the chat, and goes when it links", async () => {
-  const r = home();
+  const r = placed();
   r.send({ kind: "card", botId: B, message: card() });
   r.flip(false);
   expect(await r.h.hub.handle({ type: "decide", botId: B, messageId: "c_mac1" as MessageId, choice: "deny" })).toEqual([]);
@@ -135,7 +141,7 @@ test("an answer to a card of an offline machine waits for it, says so in the cha
 });
 
 test("an answer queued for a machine asleep past its card's expiry still goes, and the machine's refusal is the note in the chat", async () => {
-  const r = home();
+  const r = placed();
   r.send({ kind: "card", botId: B, message: card() });
   r.flip(false);
   await r.h.hub.handle({ type: "decide", botId: B, messageId: "c_mac1" as MessageId, choice: "once" });
@@ -148,8 +154,8 @@ test("an answer queued for a machine asleep past its card's expiry still goes, a
   expect(r.world.bots.get(B)!.messages.at(-1)).toMatchObject({ kind: "note", text: 'Your answer to "Push to the default branch" on MacBook did not go through: That request expired' });
 });
 
-test("a snapshot that no longer holds a mirrored card closes it in the chat as expired", () => {
-  const r = home();
+test("a snapshot that no longer holds a mirrored card closes it in the chat as expired", async () => {
+  const r = placed();
   r.send({ kind: "card", botId: B, message: card() });
   r.send({ kind: "snapshot", agents: [], openCards: [] });
   expect(r.world.bots.get(B)!.messages.at(-1)).toMatchObject({ id: "c_mac1", answer: "expired" });
@@ -198,38 +204,38 @@ test("list_projects with a machine lists that machine's projects", async () => {
 });
 
 test("a remote agent shows in its bot's details under its machine, and the phone's stop and the bot's message go to that machine", async () => {
-  const r = home();
+  const r = placed();
   r.send({ kind: "agent", agent: agent(), messages: [{ id: "m1" as MessageId, at, from: "bot", text: "Push it." }] });
-  expect(r.h.frames.findLast((f) => f.type === "agent")).toMatchObject({ agent: { id: "a_mac1", machine: MAC, budgetUsd: null } });
+  expect(r.h.frames.findLast((f) => f.type === "agent")).toMatchObject({ agent: { id: A, machine: MAC, budgetUsd: null } });
   const [details] = await r.h.hub.handle({ type: "details", botId: B });
-  expect(details?.type === "details" && details.agents.map((a): string[] => [a.id, a.machine])).toEqual([["a_mac1", MAC]]);
-  expect(await r.h.hub.handle({ type: "agent", agentId: "a_mac1" as AgentId })).toMatchObject([{ type: "agent", agent: { machine: MAC }, messages: [{ text: "Push it." }] }]);
+  expect(details?.type === "details" && details.agents.map((a): string[] => [a.id, a.machine])).toEqual([[A, MAC]]);
+  expect(await r.h.hub.handle({ type: "agent", agentId: A })).toMatchObject([{ type: "agent", agent: { machine: MAC }, messages: [{ text: "Push it." }] }]);
 
-  expect(await r.h.hub.handle({ type: "stop_agent", agentId: "a_mac1" as AgentId })).toEqual([]);
+  expect(await r.h.hub.handle({ type: "stop_agent", agentId: A })).toEqual([]);
   await turn(r);
-  await callTool(r.h.q(), "message_agent", { agentId: "a_mac1", text: "Also tag it." });
+  await callTool(r.h.q(), "message_agent", { agentId: A, text: "Also tag it." });
   expect(r.intents).toMatchObject([
-    { kind: "agent.stop", agentId: "a_mac1" },
-    { kind: "agent.message", agentId: "a_mac1", text: "Also tag it." },
+    { kind: "agent.stop", agentId: A },
+    { kind: "agent.message", agentId: A, text: "Also tag it." },
   ]);
 });
 
 test("a remote agent's report reaches its bot as a local agent's does, with the exchange counted", async () => {
-  const r = home();
+  const r = placed();
   await turn(r);
   r.h.q().emit(assistant(text("On it.")), result());
   await flush();
   r.send({ kind: "agent", agent: agent(), messages: [] });
-  r.send({ kind: "report", agentId: "a_mac1" as AgentId, botId: B, text: "Pushed to main.", by: { kind: "user" } });
+  r.send({ kind: "report", agentId: A, botId: B, text: "Pushed to main.", by: { kind: "user" } });
   await flush();
   expect(r.h.q().received.at(-1)).toContain("Pushed to main.");
-  expect(r.world.bots.get(B)!.messages.findLast((m) => m.kind === "exchange")).toMatchObject({ peer: { kind: "agent", id: "a_mac1" }, received: 1 });
+  expect(r.world.bots.get(B)!.messages.findLast((m) => m.kind === "exchange")).toMatchObject({ peer: { kind: "agent", id: A }, received: 1 });
 });
 
-test("a remote agent's usage counts toward its bot's day here", () => {
-  const r = home();
+test("a remote agent's usage counts toward its bot's day here", async () => {
+  const r = placed();
   const day = new Date().toLocaleDateString("en-CA");
-  r.send({ kind: "usage", row: { at, actor: "agent:a_mac1", botId: B, sessionId: "s_mac", initiator: { kind: "user" }, cumulativeUsd: 0.6, deltaUsd: 0.6, day } });
+  r.send({ kind: "usage", row: { at, actor: `agent:${A}`, botId: B, sessionId: "s_mac", initiator: { kind: "user" }, cumulativeUsd: 0.6, deltaUsd: 0.6, day } });
   expect(r.botFrame()).toMatchObject({ bot: { spentTodayUsd: 0.6 } });
 });
 
@@ -272,7 +278,7 @@ test("a remote card's reminder pushes from the home once, even when its event co
   const push = createPush({ world, persist: () => {}, sender: async (n) => void sent.push(n.text), liveUntil: () => null, now: () => new Date(), log: () => {} });
   const m = remote();
   world.bots.set(B, bot("eng"));
-  hubOver(world, { links: m.links, push });
+  hubOver(world, { links: m.links, push, seed: placedOn({ agentId: A, machine: MAC, botId: B }) });
   m.send({ kind: "card", botId: B, message: card() });
   m.send({ kind: "reminder", botId: B, cardId: "c_mac1" as MessageId });
   m.send({ kind: "reminder", botId: B, cardId: "c_mac1" as MessageId });
@@ -283,4 +289,102 @@ test("a remote card's reminder pushes from the home once, even when its event co
   m.send({ kind: "reminder", botId: B, cardId: "c_mac2" as MessageId });
   await flush();
   expect(sent).toHaveLength(2);
+});
+
+test("a machine is heard only about agents the home placed on it: another's agent, card, report, note and row are dropped", async () => {
+  const r = home();
+  const before = r.world.bots.get(B)!.messages.length;
+  r.send({ kind: "agent", agent: agent(), messages: [] });
+  r.send({ kind: "card", botId: B, message: card() });
+  r.send({ kind: "report", agentId: A, botId: B, text: "Pushed.", by: { kind: "user" } });
+  r.send({ kind: "note", agentId: A, botId: B, text: "hi" });
+  r.send({ kind: "usage", row: { at, actor: `agent:${A}`, botId: B, sessionId: "s_mac", initiator: { kind: "user" }, cumulativeUsd: 5, deltaUsd: 5, day: new Date().toLocaleDateString("en-CA") } });
+  await flush();
+  expect(r.h.frames.filter((f) => f.type === "agent")).toEqual([]);
+  expect(r.world.bots.get(B)!.messages).toHaveLength(before);
+  expect(r.h.pushes).toEqual([]);
+  expect(await r.h.hub.handle({ type: "agent", agentId: A })).toEqual([{ type: "error", message: "Unknown agent" }]);
+  expect(r.botFrame()?.type === "bot" ? r.botFrame()! : null).toBeFalsy();
+});
+
+test("an agent placed for one bot cannot speak for another bot, nor post a card from another bot's agent", async () => {
+  const world = emptyWorld();
+  const other = bot("ops");
+  world.bots.set(other.id, other);
+  const r = placed(world);
+  r.send({ kind: "agent", agent: { ...agent(), botId: other.id }, messages: [] });
+  r.send({ kind: "card", botId: other.id, message: card() });
+  r.send({ kind: "report", agentId: A, botId: other.id, text: "Pushed.", by: { kind: "user" } });
+  await flush();
+  expect(r.h.frames.filter((f) => f.type === "agent")).toEqual([]);
+  expect(world.bots.get(other.id)!.messages).toEqual([]);
+});
+
+test("a report reaches the bot under the turn the home sent, whatever hops and origin the machine claims", async () => {
+  const sent = { kind: "bot" as const, botId: "b_ops" as BotId, hops: 2, origin: { kind: "user" as const } };
+  const r = home(emptyWorld(), placedOn({ agentId: A, machine: MAC, botId: B, by: sent }));
+  await turn(r);
+  r.send({ kind: "agent", agent: agent(), messages: [] });
+  const routine = { kind: "routine" as const, run: { routineId: "r1" as never, runId: "x" as never }, manual: false };
+  r.send({ kind: "report", agentId: A, botId: B, text: "Pushed to main.", by: { kind: "agent", agentId: A, hops: 0, origin: routine } });
+  await flush();
+  expect(own<SessionState>(r.world.bots.get(B)!.session).pending.at(-1)?.initiator).toEqual({ kind: "agent", agentId: A, hops: 2, origin: { kind: "user" } });
+});
+
+test("a card under an id the bot's chat already holds is refused, so a machine cannot replace or answer the home's own card", async () => {
+  const r = placed();
+  const own = { ...(card() as Extract<Message, { kind: "permission" }>), id: "c_home" as MessageId, from: null };
+  r.world.bots.get(B)!.messages.push(own);
+  r.send({ kind: "card", botId: B, message: { ...own, label: "Something else", from: null } });
+  r.send({ kind: "card", botId: B, message: { ...own, answer: "once", from: null } });
+  expect(r.world.bots.get(B)!.messages.filter((m) => m.id === "c_home")).toEqual([own]);
+  expect(r.h.pushes).toEqual([]);
+});
+
+test("a remote usage row never moves the baseline of the home's own session, and counts on today at the latest", async () => {
+  const r = placed();
+  await turn(r);
+  r.h.q().emit(assistant(text("On it.")), result(0.25));
+  await flush();
+  expect(r.botFrame()).toMatchObject({ bot: { spentTodayUsd: 0.25 } });
+  r.send({ kind: "usage", row: { at, actor: `agent:${A}`, botId: B, sessionId: "s_1", initiator: { kind: "user" }, cumulativeUsd: 100, deltaUsd: 0.1, day: "2999-01-01" } });
+  expect(r.botFrame()).toMatchObject({ bot: { spentTodayUsd: 0.35 } });
+  await r.h.hub.handle({ type: "send", botId: B, text: "and again", uploads: [] });
+  await flush();
+  r.h.q().emit(assistant(text("Again.")), result(0.5));
+  await flush();
+  expect(r.botFrame()).toMatchObject({ bot: { spentTodayUsd: 0.6 } });
+});
+
+test("an agent the bot starts on a machine is heard from that machine at once, and from no other", async () => {
+  const r = home();
+  await turn(r);
+  await callTool(r.h.q(), "start_agent", { title: "Push fix", prompt: "Push it.", project: "shop", machine: "MacBook" });
+  const start = r.intents.find((i): i is Extract<Intent, { kind: "agent.start" }> => i.kind === "agent.start")!;
+  r.send({ kind: "agent", agent: { ...agent(), id: start.agentId }, messages: [] });
+  expect(r.h.frames.findLast((f) => f.type === "agent")).toMatchObject({ agent: { id: start.agentId, machine: MAC } });
+});
+
+test("a start the machine refuses leaves it nothing to speak for", async () => {
+  const r = home();
+  r.answers((i) => (i.kind === "agent.start" ? { ok: false, reason: 'No project "shop".' } : { ok: true }));
+  await turn(r);
+  await callTool(r.h.q(), "start_agent", { title: "Push fix", prompt: "Push it.", project: "shop", machine: "MacBook" });
+  const start = r.intents.find((i): i is Extract<Intent, { kind: "agent.start" }> => i.kind === "agent.start")!;
+  r.send({ kind: "agent", agent: { ...agent(), id: start.agentId }, messages: [] });
+  expect(r.h.frames.filter((f) => f.type === "agent")).toEqual([]);
+});
+
+test("a home from before placements keeps hearing the agents and cards its mirror already held", () => {
+  const before = (root: string) => {
+    const mirror = createMirror({ path: join(root, "machine", "mirror.json"), log: () => {}, owner: { agent: () => null, card: () => null } });
+    mirror.apply(MAC, { seq: 1, at, kind: "agent", agent: agent(), messages: [] });
+    mirror.apply(MAC, { seq: 2, at, kind: "card", botId: B, message: card() });
+  };
+  const r = home(emptyWorld(), before);
+  r.world.bots.get(B)!.messages.push(card());
+  r.send({ kind: "agent", agent: agent("waiting"), messages: [] });
+  r.send({ kind: "card", botId: B, message: card("once") });
+  expect(r.h.frames.findLast((f) => f.type === "agent")).toMatchObject({ agent: { id: A, status: "waiting" } });
+  expect(r.world.bots.get(B)!.messages.findLast((m) => m.id === "c_mac1")).toMatchObject({ answer: "once" });
 });

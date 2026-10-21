@@ -47,6 +47,7 @@ import { sessionScope, type MachineProfile } from "./machine/profile";
 import type { Links } from "./machine/links";
 import { createLocalMachine, createMachines } from "./machine/machines";
 import { createMirror } from "./machine/mirror";
+import { createPlacements } from "./machine/placements";
 import { createRemoteSessions, isEmpty } from "./machine/remoteSessions";
 import { placeAgent } from "./machine/place";
 import { createDispatch, fileQueue, type Dispatched, type QueuedIntent } from "./machine/queue";
@@ -723,7 +724,16 @@ export function createHub(deps: HubDeps): Hub {
     return bot;
   }
 
-  const mirror = createMirror({ path: join(root, "machine", "mirror.json"), log: deps.log });
+  /** Which machine each remote agent and card belongs to: the only ground a machine's events stand on. */
+  const placements = createPlacements({ path: join(root, "machine", "placements.json"), log: deps.log });
+  const mirror = createMirror({
+    path: join(root, "machine", "mirror.json"),
+    log: deps.log,
+    owner: { agent: (id) => placements.of(id)?.machine ?? null, card: (id) => placements.cardOn(id) },
+  });
+  // A home from before placements: what its mirror already held was heard under the old rules, so it stays as placed.
+  for (const a of mirror.agents()) if (!placements.of(a.agent.id)) placements.place(a.agent.id, { machine: a.machine, botId: a.agent.botId, by: system });
+  for (const c of mirror.held()) placements.adoptCard(c.cardId, c.machine);
 
   const node = createNode({
     world,
@@ -805,9 +815,14 @@ export function createHub(deps: HubDeps): Hub {
     machine: (id) => machines.of(id),
     now: clockNow,
     log: deps.log,
-    expired: (q) => tell(q.botId, `${q.what} expired while ${nameOf(q.machine)} was offline.`),
+    expired: (q) => {
+      if (q.intent.kind === "agent.start") placements.forgetAgent(q.intent.agentId);
+      tell(q.botId, `${q.what} expired while ${nameOf(q.machine)} was offline.`);
+    },
     applied: (q, a) => {
-      if (!a.ok) tell(q.botId, `${q.what} on ${nameOf(q.machine)} did not go through: ${a.reason}`);
+      if (a.ok) return;
+      if (q.intent.kind === "agent.start") placements.forgetAgent(q.intent.agentId);
+      tell(q.botId, `${q.what} on ${nameOf(q.machine)} did not go through: ${a.reason}`);
     },
   });
 
@@ -820,10 +835,15 @@ export function createHub(deps: HubDeps): Hub {
   const agentsOf = (botId: BotId): Located[] =>
     [...[...world.agents.values()].map((rec) => ({ machine: deps.machineId, agent: rec.agent, messages: rec.messages })), ...mirror.agents()].filter((a) => a.agent.botId === botId);
 
-  /** An intent about an agent goes to the machine it runs on. An unknown agent is this machine's to refuse. */
+  /**
+   * An intent about an agent goes to the machine it runs on. An unknown agent is this machine's to refuse. A turn sent
+   * to another machine is recorded first, so the agent's report reaches its bot under this turn's initiator.
+   */
   async function toAgent(intent: Extract<QueuedIntent, { agentId: AgentId }>, what: (title: string) => string): Promise<Dispatched> {
     const found = agentOf(intent.agentId);
     if (!found || found.machine === deps.machineId) return { kind: "applied", applied: await machines.self().send(intent) };
+    if (intent.kind === "agent.message") placements.turn(intent.agentId, intent.initiator);
+    if (intent.kind === "agent.direct") placements.turn(intent.agentId, { kind: "user" });
     return dispatch.send(found.machine, intent, { botId: found.agent.botId, what: what(found.agent.title) });
   }
   const waiting = (d: Extract<Dispatched, { kind: "queued" }>, then: string) => `Waiting for ${d.machine}; ${then} when ${d.machine} is online.`;
@@ -839,7 +859,17 @@ export function createHub(deps: HubDeps): Hub {
     if (fresh && message.answer === null) deps.push.notify(bot, "card", message.id);
   }
 
-  function remoteEvent(machine: MachineId, e: Event) {
+  function remoteEvent(machine: MachineId, heard: Event) {
+    const admitted = placements.admit(machine, heard, {
+      chatHas: (botId, id) => world.bots.get(botId)?.messages.some((m) => m.id === id) ?? false,
+      sessionOwner: (id) => remote.ownerOf(id),
+      days() {
+        const today = clockNow();
+        return { today: localDay(today), yesterday: localDay(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1)) };
+      },
+    });
+    if (!admitted.ok) return deps.log(`machine: dropped ${nameOf(machine)}'s ${heard.kind} event ${heard.seq}: ${admitted.reason}`);
+    const e = admitted.event;
     const change = mirror.apply(machine, e);
     if (change) {
       for (const a of change.agents) if (world.bots.has(a.agent.botId)) deps.broadcast({ type: "agent", agent: agentView(a.agent, machine), messages: a.messages });
@@ -1128,10 +1158,12 @@ export function createHub(deps: HubDeps): Hub {
         slash,
         initiator: initiatorNow(bot),
       };
+      if (placed.machine !== deps.machineId) placements.place(agentId, { machine: placed.machine, botId, by: intent.initiator });
       const sent: Dispatched =
         placed.machine === deps.machineId
           ? { kind: "applied", applied: await machines.self().send(intent) }
           : await dispatch.send(placed.machine, intent, { botId, what: `Starting "${a.title}"` });
+      if (sent.kind === "applied" && !sent.applied.ok) placements.forgetAgent(agentId);
       // The bot may have been deleted while the machine read its projects: that is the tool's error, as owned() makes it.
       owned(botId);
       const applied = appliedOf(sent, `agent ${agentId} starts`);

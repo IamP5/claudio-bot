@@ -163,11 +163,12 @@ const origin = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("routine"), run: runRef, manual: z.boolean() }),
   z.object({ kind: z.literal("system") }),
 ]);
-const initiator: z.ZodType<Initiator> = z.discriminatedUnion("kind", [
+export const initiatorSchema: z.ZodType<Initiator> = z.discriminatedUnion("kind", [
   ...origin.options,
   z.object({ kind: z.literal("bot"), botId: id<BotId>(), hops: seq, origin }),
   z.object({ kind: z.literal("agent"), agentId: id<AgentId>(), hops: seq, origin }),
 ]);
+const initiator = initiatorSchema;
 
 const cardReply: z.ZodType<CardReply> = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("option"), index: seq }),
@@ -293,8 +294,8 @@ const usageRow: z.ZodType<UsageRow> = z.object({
   botId: id<BotId>().nullable(),
   sessionId: text,
   initiator,
-  cumulativeUsd: z.number(),
-  deltaUsd: z.number(),
+  cumulativeUsd: usd,
+  deltaUsd: usd,
   day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   fresh: z.literal(true).optional(),
 });

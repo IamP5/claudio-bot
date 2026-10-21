@@ -74,6 +74,8 @@ export type Mirror = {
   cardOwner(cardId: MessageId): { machine: MachineId; botId: BotId } | null;
   /** How many open cards other machines hold for this bot. */
   openCards(botId: BotId): number;
+  /** Every open card each machine's gate holds, by machine. */
+  held(): { machine: MachineId; cardId: MessageId; botId: BotId }[];
 };
 
 function load(path: string, log: (line: string) => void): MirrorState {
@@ -89,7 +91,15 @@ function load(path: string, log: (line: string) => void): MirrorState {
   return { machines: {} };
 }
 
-export function createMirror(deps: { path: string; log: (line: string) => void }): Mirror {
+/**
+ * owner: the machine the home placed an agent on, and the machine that posted a card (machine/placements.ts). A lookup
+ * goes to that machine's slice only, so no other machine's copy of an id can stand in for it.
+ */
+export function createMirror(deps: {
+  path: string;
+  log: (line: string) => void;
+  owner: { agent(id: AgentId): MachineId | null; card(id: MessageId): MachineId | null };
+}): Mirror {
   const state = load(deps.path, deps.log);
   const slices = () => Object.entries(state.machines) as [MachineId, Slice][];
 
@@ -109,19 +119,16 @@ export function createMirror(deps: { path: string; log: (line: string) => void }
     },
     agents: () => slices().flatMap(([machine, s]) => Object.values(s.agents).map((a) => ({ machine, ...a }))),
     agent(id) {
-      for (const [machine, s] of slices()) {
-        const a = s.agents[id];
-        if (a) return { machine, ...a };
-      }
-      return null;
+      const machine = deps.owner.agent(id);
+      const a = machine === null ? undefined : state.machines[machine]?.agents[id];
+      return machine !== null && a ? { machine, ...a } : null;
     },
     cardOwner(cardId) {
-      for (const [machine, s] of slices()) {
-        const botId = s.cards[cardId];
-        if (botId) return { machine, botId };
-      }
-      return null;
+      const machine = deps.owner.card(cardId);
+      const botId = machine === null ? undefined : state.machines[machine]?.cards[cardId];
+      return machine !== null && botId ? { machine, botId } : null;
     },
     openCards: (botId) => slices().reduce((n, [, s]) => n + Object.values(s.cards).filter((b) => b === botId).length, 0),
+    held: () => slices().flatMap(([machine, s]) => (Object.entries(s.cards) as [MessageId, BotId][]).map(([cardId, botId]) => ({ machine, cardId, botId }))),
   };
 }

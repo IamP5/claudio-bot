@@ -10,13 +10,13 @@ import { chmodSync, closeSync, cpSync, existsSync, mkdirSync, openSync, readdirS
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const REPO = resolve(import.meta.dir, "../../../..");
+export const REPO = resolve(import.meta.dir, "../../../..");
 const MAIN = join(REPO, "bridge/src/main.ts");
-const BASE = process.env.CLAUDIOBOT_VERIFY_DIR ?? join(realpathSync(tmpdir()), "claudiobot-verify");
+export const BASE = process.env.CLAUDIOBOT_VERIFY_DIR ?? join(realpathSync(tmpdir()), "claudiobot-verify");
 const CURRENT = join(BASE, "current");
 const TURN_S = 240;
 
-type Run = {
+export type Run = {
   id: string;
   dir: string;
   home: string;
@@ -35,7 +35,7 @@ type Run = {
 };
 type Msg = { kind: string; id: string; at: string; text?: string; [k: string]: unknown };
 type Bot = { id: string; name: string; status: string; question: string | null; [k: string]: unknown };
-type Frame = { type: string; [k: string]: unknown };
+export type Frame = { type: string; [k: string]: unknown };
 
 const args = process.argv.slice(2);
 const cmd = args.shift() ?? "help";
@@ -81,7 +81,7 @@ const freePort = () => {
   return p;
 };
 // Claude Code names a project's transcript folder after its path with every non-alphanumeric character as "-".
-const slug = (p: string) => p.replace(/[^A-Za-z0-9]/g, "-");
+export const slug = (p: string) => p.replace(/[^A-Za-z0-9]/g, "-");
 
 function loadRun(): Run {
   const id = flag("run") ?? process.env.CLAUDIO_RUN ?? (existsSync(CURRENT) ? readFileSync(CURRENT, "utf8").trim() : "");
@@ -92,11 +92,11 @@ function loadRun(): Run {
 }
 const tokenOf = (run: Run) => readFileSync(join(run.dir, "token"), "utf8").trim();
 const bridgeLog = (run: Run) => (existsSync(join(run.dir, "bridge.log")) ? readFileSync(join(run.dir, "bridge.log"), "utf8") : "");
-const spent = (run: Run) =>
+export const spent = (run: Run) =>
   [...bridgeLog(run).matchAll(/^result \S+ \S+ session=\S+ totalCostUsd=\S+ deltaUsd=([\d.e-]+)$/gm)].reduce((n, m) => n + Number(m[1]), 0);
 
 /** One socket like the app's: protocol 3, Bearer token. Keeps the bot list and every conversation it has seen. */
-async function connect(run: Run) {
+export async function connect(run: Run) {
   const bots = new Map<string, Bot>();
   const convs = new Map<string, Msg[]>();
   const frames: Frame[] = [];
@@ -472,13 +472,13 @@ async function main() {
 }
 
 /** Copies what proves a behavior into evidence/<run>/<label>/. Never the token. */
-type Row = { id: string; projectId: string; title: string; origin: string; status: string; holder: string; unread: boolean; agent: unknown; mirror: string; hidden: boolean; branch: string | null; worktree: boolean };
-type Project = { id: string; name: string; path: string };
+export type Row = { id: string; projectId: string; parentId?: string | null; title: string; origin: string; status: string; holder: string; unread: boolean; agent: unknown; mirror: string; hidden: boolean; branch: string | null; worktree: boolean };
+export type Project = { id: string; name: string; path: string };
 
 const countBy = <T>(xs: T[], key: (x: T) => string) => Object.entries(xs.reduce<Record<string, number>>((m, x) => ((m[key(x)] = (m[key(x)] ?? 0) + 1), m), {})).map(([k, n]) => `${k}=${n}`).join(" ");
 
 /** A session is the run's own when its project lies under the run's roots: only those are printed with their words. */
-const ownProject = (run: Run, p: Project | undefined) => p !== undefined && (p.path === run.roots || p.path.startsWith(`${run.roots}/`));
+export const ownProject = (run: Run, p: Project | undefined) => p !== undefined && (p.path === run.roots || p.path.startsWith(`${run.roots}/`));
 
 async function listOf(run: Run, c: Awaited<ReturnType<typeof connect>>) {
   const at = c.frames.length;
@@ -509,7 +509,7 @@ async function sessionsList(run: Run) {
 }
 
 /** A frame in a line: types, revs, item kinds and ids, delta offsets; the words only for the run's own sessions. */
-function frameLine(f: Frame, words: boolean): string {
+export function frameLine(f: Frame, words: boolean): string {
   const items = (f.items as { kind: string; id: string; text?: string; steps?: { label: string; state: string }[]; card?: { label: string; detail: string; answer: unknown }; state?: string }[] | undefined) ?? [];
   const shown = items.map((i) => {
     const detail = !words
@@ -790,5 +790,8 @@ async function cleanup() {
   console.log(existsSync(ev) ? `evidence kept at ${ev}: ${readdirSync(ev).join(" ")}` : "no evidence was captured for this run");
 }
 
-await main();
-process.exit(0);
+// scenario.ts imports the socket and run helpers; only a direct run parses argv as a command.
+if (import.meta.main) {
+  await main();
+  process.exit(0);
+}

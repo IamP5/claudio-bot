@@ -162,6 +162,10 @@ final class AppModel {
         var flow = pairingFlow ?? PairingFlow()
         flow.propose(invite)
         pairingFlow = flow
+        #if DEBUG
+        // `-pairingAutoConfirm YES` taps Pair for the scenario runner, which cannot tap a simulator.
+        if UserDefaults.standard.bool(forKey: "pairingAutoConfirm") { confirmPairing() }
+        #endif
     }
 
     func cancelConfirmation() {

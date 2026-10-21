@@ -103,7 +103,7 @@ Takes a `final` evidence snapshot, SIGTERMs the bridge and push sink by the pids
 
 `bin/control-claudio.ts` (Bun, executable). Subcommands: `launch [--budget usd] [--model id]`, `doctor`, `runs`, `bots`, `messages`, `send`, `wait`, `decide`, `answer`, `dismiss`, `stop`, `raw`, `sessions`, `thread`, `session-flow`, `evidence <label>`, `cleanup [--no-evidence]`. Global: `--run <id>`. Environment: `CLAUDIOBOT_VERIFY_DIR`, `CLAUDIOBOT_VERIFY_MODEL`, `CLAUDIOBOT_VERIFY_BUDGET_USD`, `CLAUDIO_RUN`. Run layout: `runs/<id>/{run.json,token,bridge.log,ntfy.log,pushes.jsonl,desktop-imports.txt,home/,roots/{demo,pushme}/,origin.git/,bin/claude}`.
 
-Related harnesses: `cd bridge && bun test` (unit, no network) and `bun run e2e` (29 scripted scenarios against real Claude Code, about $1.60). Use the e2e for a full regression pass; use this skill to prove one behavior interactively.
+Related harnesses: `cd bridge && bun test` (unit, no network) and `bun run e2e` (29 scripted scenarios against real Claude Code, about $1.60). Use the e2e for a full regression pass; use this skill to prove one behavior interactively. For UX scenarios judged against a rubric (and the leased simulator pool), use `bin/scenario.ts`; see `docs/ux-program/runner.md`.
 
 ## The iOS app (secondary surface)
 

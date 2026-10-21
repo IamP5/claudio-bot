@@ -1,0 +1,19 @@
+step	area	status	ts	note
+0	all	done	2026-10-21T03:13:26Z	runner+registry (scenario.ts, scenarios.ts, pool.ts), pool UX-1..3, lease proof ok (max 3 booted), S1-S8+S1b run; S3 sim paired via -pairingAutoConfirm
+1	all	done	2026-10-21T03:27:22Z	patterns.md: 47 patterns, 15 anti-patterns; t3code @4741dc5 (24 citations checked, 1 fixed), CLI 2.1.305 observed S1-S8, desktop from docs+bundle+disk
+2	sessions	in_progress	2026-10-21T03:27:22Z	run 1: 6 rounds (not dry), 152 found, 137 survived (P0 1, P1 80, P2 56); run 2 continues
+3	sessions	todo		fix PRs
+4	sessions	todo		rerun audit on main
+2	chat	todo		
+3	chat	todo		
+4	chat	todo		
+2	home	todo		
+3	home	todo		
+4	home	todo		
+2	pairing	todo		
+3	pairing	todo		
+4	pairing	todo		
+2	settings	todo		
+3	settings	todo		
+4	settings	todo		
+exit	all	todo		final cross-area audit

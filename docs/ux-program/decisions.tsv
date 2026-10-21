@@ -81,3 +81,7 @@ ts	decision	why
 2026-10-21T19:16:50Z	G5: a finished turn leaves the status line empty; failed, stopped and lost stay with "Send a message to start it again"; a status is spoken once it has held 500 ms; spoken cards are not repeated after reconnect	the reply above already says it finished; the turn end and its outcome arrive in separate frames
 2026-10-21T20:07:59Z	G5: the thread waits 1.5 s after a run rests before speaking, so a late failed/stopped outcome is spoken instead of "finished"; the thread's Retry may restart a hung connect attempt	the bridge coalesces row updates for 500 ms; a hung connect should not lock Retry
 2026-10-21T20:28:02Z	G5: a row arriving more than 1.5 s after rest may produce "Claude finished." then the real outcome	measured row lag is 319-619 ms; waiting longer would delay every finished announcement
+2026-10-21T22:12:05Z	G6: a Stop that would also end background work always asks (Stop everything / Stop the turn only), even with no turn running; a turn alone stops at once	a background build is often why the session exists; asking costs one tap
+2026-10-21T22:12:05Z	G6: a stop refusal clears once nothing runs; the thread keeps the bridge notice as the record	Claude Code can take a stop late, so a refusal can stop being true
+2026-10-21T22:12:05Z	G6: Edit and resend / Edit on a queued message appends to the draft instead of replacing it	nothing the user typed is lost
+2026-10-21T22:12:05Z	G6: composer chips stop growing at AX2 and the error line at AX3; spoken labels unchanged	uncapped, AX5 pushed the text field off screen

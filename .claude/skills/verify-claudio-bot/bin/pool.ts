@@ -1,7 +1,7 @@
 // The simulator pool for scenario runs: three cloned iPhones, a per-device lease, and the only code that boots them.
 // A lease is a directory leases/<device>/ made with mkdir (atomic), holding owner.json and a heartbeat file the holder
 // touches; a heartbeat older than STALE_MS marks the lease reclaimable. Nothing here touches a device outside POOL.
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BASE, REPO } from "./control-claudio";
 
@@ -279,7 +279,12 @@ export function treeStamp() {
   const untracked = run(["git", "-C", REPO, "ls-files", "-o", "--exclude-standard", "-z", "--", "ios"]).out.split("\0").filter(Boolean);
   if (!diff.length && !untracked.length) return tree;
   const h = new Bun.CryptoHasher("sha256").update(diff);
-  for (const f of untracked.sort()) h.update(`\0${f}\0`).update(readFileSync(join(REPO, f)));
+  for (const f of untracked.sort()) {
+    const p = join(REPO, f);
+    const st = lstatSync(p);
+    // A symlink counts by its target; a directory git lists whole (a nested repository) counts by its path only.
+    h.update(`\0${f}\0`).update(st.isSymbolicLink() ? `link:${readlinkSync(p)}` : st.isFile() ? readFileSync(p) : "dir");
+  }
   return `${tree}+${h.digest("hex").slice(0, 16)}`;
 }
 

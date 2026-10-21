@@ -286,7 +286,7 @@ function sh(argv: string[], logFile?: string) {
   const p = Bun.spawnSync(argv, { stdout: "pipe", stderr: "pipe", env: process.env });
   const out = p.stdout.toString() + p.stderr.toString();
   if (logFile) appendFileSync(logFile, out);
-  return { ok: p.exitCode === 0, out };
+  return { ok: p.exitCode === 0, out, signal: p.signalCode };
 }
 
 type Outcome = "judged" | "precondition-failed" | "error";
@@ -378,6 +378,11 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
     const launched = sh(["bun", CONTROL, "launch", "--model", "haiku"], join(out, "launch.log"));
     const started = launched.out.match(/STARTED run=(\S+)/)?.[1];
     if (started) live = { id: started, out };
+    // Ctrl-C reaches launch too; the runner's own handler would only run after this scenario is judged.
+    if (launched.signal === "SIGINT" || launched.signal === "SIGTERM") {
+      log(`interrupted during launch (${launched.signal})`);
+      process.exit(launched.signal === "SIGINT" ? 130 : 143);
+    }
     const runId = launched.out.match(/READY run=(\S+)/)?.[1];
     if (!launched.ok || !runId) throw new Error(`launch failed; see ${join(out, "launch.log")}`);
     run = JSON.parse(readFileSync(join(BASE, "runs", runId, "run.json"), "utf8")) as Run;

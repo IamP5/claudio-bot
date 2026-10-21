@@ -197,6 +197,22 @@ export function upsertStandIn(world: World, bot: BotStandIn, at: string): BotRec
   return rec;
 }
 
+/**
+ * A bridge that became a machine after a world move keeps its agents, but their bots moved to the home (frozen in
+ * moves[], or gone after finish). Each such agent's bot gets a stand-in, from the frozen record when there is one, so
+ * its gate, cap and reports keep working; the home, which now has the real bot, receives its events.
+ */
+export function adoptOrphans(world: World, at: string, log: (line: string) => void) {
+  const frozen = new Map(world.moves.flatMap((m) => (m.kind === "out" && m.phase === "frozen" ? m.held.bots.map((b) => [b.id, b] as const) : [])));
+  for (const rec of world.agents.values()) {
+    const id = rec.agent.botId;
+    if (world.bots.has(id)) continue;
+    const held = frozen.get(id);
+    upsertStandIn(world, { id, name: held?.name ?? id, dailyCapUsd: held?.dailyCapUsd ?? null, connectorsOff: held ? [...held.connectorsOff] : [] }, at);
+    log(`machine: agent ${rec.agent.id}'s bot ${held?.name ?? id} lives on the home now, so it runs here under a stand-in`);
+  }
+}
+
 export type MachineNode = Node & {
   /** Card expiry and the agents' turn deadlines. */
   tickers: Tickable[];
@@ -251,6 +267,8 @@ export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "row
     ...node,
     tickers: [node.gate, turns],
     boot() {
+      adoptOrphans(world, deps.now().toISOString(), deps.log);
+      deps.persist();
       node.gate.resume(deps.now());
       node.runtime.local.resume();
     },

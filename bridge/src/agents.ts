@@ -465,6 +465,11 @@ export function createAgents(deps: {
     resume() {
       for (const rec of deps.world.agents.values()) {
         if (rec.agent.where !== "mac") continue;
+        // Its bot moved away and nothing stands in for it here: every call would be denied, and no report has a reader.
+        if (!deps.world.bots.has(rec.agent.botId)) {
+          deps.log(`agent ${rec.agent.id}: its bot ${rec.agent.botId} is not here, so it does not resume`);
+          continue;
+        }
         const unreported = rec.unreported ?? [];
         for (const r of unreported) deliverWithEvidence(rec, r);
         if (rec.session.pending.length > 0) macSession(rec);

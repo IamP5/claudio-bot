@@ -6,13 +6,14 @@ import type { Options, query, SDKUserMessage } from "@anthropic-ai/claude-agent-
 import { memoryJournal } from "../src/machine/journal";
 import { createMachineNode } from "../src/machine/node";
 import { newAgentId, newIntentId, type Event, type Intent } from "../src/machine/wire";
-import type { BotId, Message, MessageId } from "../src/protocol";
-import { emptyWorld } from "../src/world";
+import type { AgentId, BotId, Message, MessageId } from "../src/protocol";
+import { emptySession, emptyWorld, newBot, own, type AgentRecord, type MoveId, type MoveRecord } from "../src/world";
 import { FakeQuery, cleanup, flush, result, roots, runBash, testProfile } from "./hub-kit";
 
 afterEach(cleanup);
 
 const B1 = "b_home" as BotId;
+const at = "2026-10-21T12:00:00.000Z";
 /** world.ts's HISTORY_KEEP and HISTORY_SLACK. */
 const HISTORY_KEEP = 1000;
 const HISTORY_SLACK = 100;
@@ -123,4 +124,25 @@ test("projects lists this machine's own projects in the reply, applied afresh ea
   const first = await m.node.runtime.apply(ask);
   expect(first).toMatchObject({ ok: true, reply: expect.stringContaining('"name": "shop"') });
   expect(await m.node.runtime.apply(ask)).toEqual(first);
+});
+
+test("at boot, agents whose bot moved to the home get a stand-in, from the frozen record when the move still holds it", async () => {
+  const m = machine();
+  const agentOf = (id: string, botId: string): AgentRecord => ({
+    agent: { id: id as AgentId, botId: botId as BotId, title: "Fix", where: "mac", projectName: "shop", status: "waiting", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null },
+    cwd: m.root,
+    messages: [],
+    session: emptySession("s_old"),
+    cloudSession: null,
+    budgetUsd: null,
+    startedBy: { kind: "user" },
+  });
+  m.world.agents.set("a_frozen" as AgentId, agentOf("a_frozen", "b_ana"));
+  m.world.agents.set("a_gone" as AgentId, agentOf("a_gone", "b_finished"));
+  const ana = { ...newBot({ id: "b_ana" as BotId, name: "Ana", avatar: { shape: "circle", color: "gray" }, at }), dailyCapUsd: 3, connectorsOff: ["gmail"] };
+  own<MoveRecord[]>(m.world.moves).push({ kind: "out", moveId: "mv_1" as MoveId, at, machine: "Mac", phase: "frozen", held: { bots: [ana], groups: [], exchanges: [] } });
+
+  m.node.boot();
+  expect(m.world.bots.get("b_ana" as BotId)).toMatchObject({ name: "Ana", dailyCapUsd: 3, connectorsOff: ["gmail"], messages: [] });
+  expect(m.world.bots.get("b_finished" as BotId)).toMatchObject({ name: "b_finished", dailyCapUsd: null, connectorsOff: [] });
 });

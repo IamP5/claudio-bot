@@ -403,6 +403,7 @@ test("a report saved but not delivered when the bridge stopped reaches the bot a
     startedBy: user,
     unreported: [{ status: "waiting", text: "Done: opened PR #4.", by: routine }],
   });
+  world.bots.set(B1, newBot({ id: B1, name: "Ana", avatar: { shape: "circle", color: "gray" }, at: AT }));
   const home = mkdtempSync(join(tmpdir(), "claudiobot-agents-"));
   roots.push(home);
   flushNow(world, home);
@@ -417,7 +418,7 @@ test("a report saved but not delivered when the bridge stopped reaches the bot a
   expect([rec.agent.status, rec.unreported, rec.messages.map((m) => m.text)]).toEqual(["waiting", [], ["Done: opened PR #4."]]);
 });
 
-test("resume starts mac agents with queued work and tells bots about agents a restart cut off", async () => {
+test("resume starts mac agents with queued work and tells bots about agents a restart cut off, and leaves an agent whose bot is not here", async () => {
   const world = emptyWorld();
   const record = (id: string, status: AgentStatus, where: "mac" | "cloud", queued: boolean): AgentRecord => {
     const session = emptySession("s_old");
@@ -434,6 +435,9 @@ test("resume starts mac agents with queued work and tells bots about agents a re
   };
   for (const r of [record("a_q", "working", "mac", true), record("a_cut", "working", "mac", false), record("a_idle", "waiting", "mac", false), record("a_cloud", "in_cloud", "cloud", false)])
     world.agents.set(r.agent.id, r);
+  world.bots.set(B1, newBot({ id: B1, name: "Ana", avatar: { shape: "circle", color: "gray" }, at: AT }));
+  const orphan = record("a_orphan", "working", "mac", true);
+  world.agents.set(orphan.agent.id, { ...orphan, agent: { ...orphan.agent, botId: "b_moved" as BotId } });
   const h = harness({ world });
   h.agents.resume();
   await flush();

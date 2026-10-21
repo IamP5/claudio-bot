@@ -98,6 +98,33 @@ then try the real Mac and Omarchy.
 | 7 | **iOS.** One pairing with endpoints, keep the store within one world, machine chips, an "Agents run on" picker, New session grouped by machine. | Simulator against two local bridges. An old app build still works. |
 | Later | **Before any VPS:** signed answers with call digests, leases, the guarded tier, a Tailscale ACL that makes the home a sink, and the hostile-home harness. | See vps-design.md. |
 
+## Status
+
+Done so far: phases 0, 1, 2, 3, 6 and 4, in that order. Phases 5 and 7 are next.
+
+- **0. Stand-in spike.** GO. `bridge/test/standin.test.ts` runs the real gate, agents and ledger on a stand-in. The
+  decisions.tsv row of 2026-10-21T02:24 records it.
+- **1. Linux parity.** Built from `497e6de` to `755174d`: the machine profile, Linux private paths and sandbox paths,
+  `script` for cloud agents, the systemd unit, the Linux managed MCP path. `profile.test.ts` covers darwin and linux.
+  No run on Omarchy is recorded yet.
+- **2. AgentRuntime.** Built from `93f68ee` to `8106015`. The hub reaches agents only through a machine.
+  `boundary.test.ts` checks that only `machine/` imports `agents.ts`.
+- **3. Wire and link.** Built from `36e184f` to `679c85e`, then `b9477a8` to `fe937f5` for the phone's view.
+  `link.test.ts`, `enroll.test.ts` and `registry.test.ts` cover enrollment, the handshake, a bad key and replay.
+- **6. Migration.** Built from `64cb061` to `bece6d1`, described in [world-move.md](world-move.md). `move.test.ts`
+  covers export, import, a repeat import and finish.
+- **4. Remote agents.** Built from `67519ce` to `af31828`. `start_agent` and `list_projects` take a machine. The
+  home keeps `machine/mirror.json` and `machine/queue.json`. Cards travel as `card` events and `card.answer`
+  intents, usage rows as `usage` events. Unit tests are in `place`, `mirror`, `queue`, `remote`, `node` and
+  `ledger`. Two live runs on one Mac, a home and a machine named Studio, each with its own `CLAUDIOBOT_HOME`:
+  - Full access, sandbox off. A bot on the home started an agent on Studio. Its `git push origin main` raised a
+    `git.push.default` card on the phone. Allow once from the phone ran the push on Studio. The report reached the
+    bot, and the transcript was in Studio's project folder under `~/.claude/projects`. A SIGKILL of Studio mid-turn
+    and a restart gave one report. A start while Studio was offline answered "Waiting for Studio", then ran when it
+    linked. Evidence: `claudiobot-verify/evidence/20261021-042740-93a5/run1-full-sandbox-off`.
+  - Guarded, sandbox on. The same start, card, Allow once, push and report. Evidence:
+    `claudiobot-verify/evidence/20261021-043335-b9d9/run2-guarded-sandbox-on`.
+
 ## Traps found during design
 
 - **Gate and ledger are tied to bot records.** Cards are `BotRecord.messages` (`gate.ts:48`). `reconcile`

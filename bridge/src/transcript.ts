@@ -574,7 +574,8 @@ export function stepLabel(tool: string, input: Record<string, unknown>, cwd: str
   if (FILE_TOOLS[tool] && path) return maskSecrets(`${FILE_TOOLS[tool]} ${shown(path)}`);
   switch (tool) {
     case "Bash": {
-      const label = description ? maskProse(firstLine(description)) : maskSecrets(`Run ${firstLine(str(input.command) ?? "a command")}`);
+      const command = str(input.command);
+      const label = description && description !== command ? maskProse(firstLine(description)) : maskSecrets(`Run ${firstLine(command ?? "a command")}`);
       return input.run_in_background === true ? backgroundLabel(label) : label;
     }
     case "Agent":
@@ -757,7 +758,15 @@ const SUMMARY = /^([A-Z][\w ]* ")([\s\S]*?)(" (?:finished|completed|failed|was|i
 function maskSummary(summary: string, description: string | null): string {
   const m = summary.match(SUMMARY);
   if (!m) return maskSecrets(summary);
-  return m[1]! + (m[2] === description ? maskProse(m[2]!) : maskSecrets(m[2]!)) + maskSecrets(m[3]!);
+  return m[1]! + (description !== null && quotes(m[2]!, description) ? maskProse(m[2]!) : maskSecrets(m[2]!)) + maskSecrets(m[3]!);
+}
+
+/** Whether a summary's quote is the description, allowing for collapsed spaces and a quote cut short with "…". */
+function quotes(quote: string, description: string): boolean {
+  const words = (s: string) => s.replace(/\s+/g, " ").trim();
+  const q = words(quote);
+  const d = words(description);
+  return q === d || (q.endsWith("…") && q.length > 1 && d.startsWith(q.slice(0, -1).trimEnd()));
 }
 
 function noteOutcome(note: TaskNote, summary: string): Outcome {
@@ -1032,7 +1041,7 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
     tail.work = work.id;
     tail.tools.set(toolId, work.id);
     const description = str(input.description);
-    if (description !== null && (name === "Bash" || AGENT_TOOLS.has(name))) tail.descriptions.set(toolId, description);
+    if (description !== null && description !== command && (name === "Bash" || AGENT_TOOLS.has(name))) tail.descriptions.set(toolId, description);
     put(work, true);
   }
 
@@ -1070,7 +1079,7 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
   function noted(note: TaskNote, id: string, at: string) {
     const toolId = [note.toolUseId, note.taskId === null ? undefined : tail.tasks.get(note.taskId)].find((t): t is string => typeof t === "string" && tail.tools.has(t));
     const item = toolId === undefined ? undefined : tail.open.get(tail.tools.get(toolId)!);
-    const description = toolId === undefined ? (/^Agent "/.test(note.summary) ? (note.summary.match(SUMMARY)?.[2] ?? null) : null) : (tail.descriptions.get(toolId) ?? null);
+    const description = toolId === undefined ? null : (tail.descriptions.get(toolId) ?? null);
     const summary = maskSummary(note.summary, description);
     const outcome = noteOutcome(note, summary);
     if (toolId !== undefined && item) updateStep(item.id, toolId, (s) => settleStep(s, outcome, at));

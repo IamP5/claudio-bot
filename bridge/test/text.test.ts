@@ -36,7 +36,7 @@ describe("maskSecrets", () => {
 
 describe("maskProse", () => {
   test("keeps the word after token, Basic or Bearer in a description", () => {
-    for (const s of ["Check token refresh handling", "Basic Setup of the app", "Bearer of bad news", "Rotate the token for staging"]) expect(maskProse(s)).toBe(s);
+    for (const s of ["Check token refresh handling", "Basic Setup of the app", "Bearer of bad news", "Rotate the token for staging", "Check Basic auth works", "Explain token expiry"]) expect(maskProse(s)).toBe(s);
   });
 
   test("masks a credential a description quotes from a command", () => {
@@ -45,6 +45,7 @@ describe("maskProse", () => {
     expect(maskProse("Run gh auth login --with-token token tk9Hq2ZzLm")).toBe("Run gh auth login --with-token token «redacted:10 chars»");
     expect(maskProse("Run curl -u admin:hunter2pass https://h")).toBe("Run curl -u admin:«redacted:11 chars» https://h");
     expect(maskProse("Run mysql -u root -pMyp4ssw0rd db")).toBe("Run mysql -u root -p«redacted:10 chars» db");
+    expect(maskProse("Call API with Bearer abcdefghijklmnop")).toBe("Call API with Bearer «redacted:16 chars»");
   });
 
   test("masks an assignment and a key shape", () => {

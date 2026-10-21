@@ -595,6 +595,42 @@ describe("step outcomes", () => {
     expect(stepsOf(items)[0]!.cause).toBe(text);
   });
 
+  const bgEnded = (input: object, summary: string, launched = true) =>
+    project(
+      [
+        prompt("go"),
+        ...(launched ? [call("t1", "Bash", { ...input, run_in_background: true }), answer("t1", "Command running in background with ID: bg1. Output is being written to: x")] : []),
+        prompt(`<task-notification>\n<task-id>bg1</task-id>\n<tool-use-id>t1</tool-use-id>\n<status>failed</status>\n<summary>${summary}</summary>\n</task-notification>`),
+      ],
+      ctx,
+    ).items;
+
+  test("a description that is the command, or quotes a long credential, is masked in the label, the notice and the cause", () => {
+    const command = "curl -H 'Authorization: Bearer abcdefghijklmnop' https://h";
+    for (const items of [
+      bgEnded({ command, description: command }, `Background command "${command}" failed with exit code 22`),
+      bgEnded({ command: "./x", description: "Call API with Bearer abcdefghijklmnop" }, 'Background command "Call API with Bearer abcdefghijklmnop" failed with exit code 1'),
+    ]) {
+      expect(stepsOf(items)[0]!.cause).toBeDefined();
+      expect(JSON.stringify(items)).not.toContain("abcdefghijklmnop");
+    }
+  });
+
+  test("a summary for a task the projection does not know masks its quote as secrets", () => {
+    const items = bgEnded({}, 'Agent "Use token abcdefghijklmnop" failed: token abcdefghijklmnop rejected', false);
+    expect(notices(items)[0]!.text).not.toContain("abcdefghijklmnop");
+  });
+
+  test("a summary that quotes the description with its spaces collapsed or cut short stays readable", () => {
+    const description = "Rotate the token for staging and also more words";
+    expect(notices(bgEnded({ command: "./r.sh", description }, 'Background command "Rotate the token  for staging and also more words" failed with exit code 1'))[0]!.text).toBe(
+      'Background command "Rotate the token  for staging and also more words" failed with exit code 1',
+    );
+    expect(notices(bgEnded({ command: "./r.sh", description }, 'Background command "Rotate the token for staging and…" failed with exit code 1'))[0]!.text).toBe(
+      'Background command "Rotate the token for staging and…" failed with exit code 1',
+    );
+  });
+
   test("a call's full output masks secrets like its shown output does", () => {
     const dir = mkdtempSync(join(tmpdir(), "full-"));
     try {

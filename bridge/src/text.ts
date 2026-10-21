@@ -62,8 +62,8 @@ const SHAPES: readonly Rule[] = [
 // Keyed rules run first so a keyed value is masked once, not twice.
 const COMMAND_LINE: readonly Rule[] = [URL_RULE, [CURL_USER, maskValue], [MYSQL_PASSWORD, (_, pre, flag, value) => pre + flag + masked(value.length)]];
 const SECRET_RULES: readonly Rule[] = [[keyed(`${SPOKEN}|${ASSIGNED}`), maskValue], ...COMMAND_LINE, ...SHAPES];
-/** In prose the word after "token" is masked only when it does not read as a word: a digit, = + /, or a capital inside it. */
-const spokenInProse: Rule = [keyed(SPOKEN), (m, lead, value) => (/\d|[=+/]|.[A-Z]/.test(value) ? lead + masked(value.length) : m)];
+/** In prose the word after "token" is masked only when it does not read as a word: 12 or more characters, a digit, = + /, or a capital inside it. */
+const spokenInProse: Rule = [keyed(SPOKEN), (m, lead, value) => (value.length >= 12 || /\d|[=+/]|.[A-Z]/.test(value) ? lead + masked(value.length) : m)];
 const PROSE_RULES: readonly Rule[] = [[keyed(ASSIGNED), maskValue], spokenInProse, ...COMMAND_LINE, ...SHAPES];
 
 const applying = (rules: readonly Rule[]) => (text: string) => rules.reduce((out, [re, to]) => out.replace(re, to), text);

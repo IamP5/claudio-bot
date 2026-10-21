@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { CanUseTool, HookCallback, Options, PermissionResult, query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeApps, DesktopEntry, Live } from "../src/claudeApps";
 import { OWN_CARD_TTL_MS } from "../src/own";
-import type { AgentId, BotId, MessageId, ServerMessage, SessionId, SessionItem, SessionRow, ThreadChannelFrame } from "../src/protocol";
+import type { AgentId, BotId, MessageId, ServerMessage, SessionId, SessionItem, SessionRow, TaskId, ThreadChannelFrame } from "../src/protocol";
 import { GONE_ERROR } from "../src/session";
 import { createSessions, type Sessions } from "../src/sessions";
 import { emptySession, emptyWorld, type AgentRecord, type World } from "../src/world";
@@ -137,6 +137,16 @@ describe("taking on a session from the phone", () => {
     expect(queries[0]!.received).toEqual(["Also add a test"]);
     expect(world.sessions.get(ASK)?.own).toMatchObject({ cwd: repo, created: false });
     expect(await rowOf(ASK)).toMatchObject({ status: "working", holder: "claudio", origin: "sdk" });
+  });
+
+  test("a stop aimed at part of the run and a withdrawal are refused while the bridge does not serve them, and the turn runs on", async () => {
+    await start();
+    await send("Sleep for a minute");
+    expect(await handle({ type: "session_stop", sessionId: ASK, target: "turn" })).toEqual([{ type: "error", message: expect.stringContaining("part of a session") }]);
+    expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk2x9q7" as TaskId } })).toEqual([{ type: "error", message: expect.stringContaining("part of a session") }]);
+    expect(await handle({ type: "session_unqueue", sessionId: ASK, clientId: "c_Sleep for a minute" })).toEqual([{ type: "error", message: expect.stringContaining("queued message") }]);
+    expect(await rowOf(ASK)).toMatchObject({ status: "working" });
+    expect(await handle({ type: "session_stop", sessionId: ASK, target: "all" })).toEqual([]);
   });
 
   test("the bridge's own settings stay out of the session's environment", async () => {

@@ -192,6 +192,33 @@ Rules:
 - A rename calls SDK `renameSession`, which writes `custom-title` into the transcript, the source of truth.
 - Fixtures: 8 server and 14 client fixtures in `fixtures/protocol.json`, with compile-time coverage through `scripts/fixtures.ts` as today.
 
+### 3.1 Run state (features `session_tasks`, `session_unqueue`, `push_state`)
+
+The Sessions fix plan (`docs/ux-program/fix-plan-sessions.md`, G0) adds what the wire needs to say about background work, step times, run endings, stop targets and push state. `bridge/src/protocol.ts` is the contract; this is the shape at a glance. Every new field is optional, so protocol stays 3: an older app ignores the keys, and a newer app reads an absent key as none. An optional field is either set or absent, never `null`, so each fact has one spelling and the fixtures round-trip on both sides. The bridge lists a feature in `hello.features` only once it serves it, and the app offers a control only behind its feature.
+
+```ts
+type StepState = "running" | "waiting" | "ok" | "error" | "denied" | "stopped";
+type ToolStep = { /* as before */ state: StepState;
+  detail?: string; startedAt?: string; endedAt?: string; background?: true; owner?: string; cause?: string; usage?: { tools: number; ms: number } };
+type SessionTask = { id: TaskId; stepId: string | null; kind: "agent" | "command" | "other"; label: string; background: boolean;
+  startedAt: string; owner: string | null; progress: { tools: number; last: string | null; at: string } | null; waiting: MessageId | null };
+type SessionControls = { /* as before */ turn?: { startedAt: string; wake: boolean }; tasks?: SessionTask[]; heardAt?: string };
+type SessionRow = { /* as before */ since?: string; running?: { agents: number; commands: number }; activity?: string;
+  outcome?: { kind: "finished" | "failed" | "stopped" | "lost"; text: string; at: string } };
+// SessionItem: permission + stepId?, subagent?; notice + reason?: "stop" | "task" | "restart" | "failure" | "approval"
+// PermissionMessage.answer + "stopped"
+// Client: session_stop + target?: "all" | "turn" | { task: TaskId }, turnStartedAt?; session_unqueue { sessionId, clientId }
+// Server: hello + push?; push_state { push: PushState } (a live signal, like usage); error + about?: ErrorAbout
+type PushState = { state: "on" } | { state: "off" } | { state: "failing"; error: string; at: string };
+type ErrorAbout = { kind: "stop"; sessionId } | { kind: "send"; sessionId; clientId } | { kind: "tool"; sessionId; toolUseId } | { kind: "create"; ref };
+```
+
+Rules:
+- Steps come from the transcript, so they survive a reopen or a restart. Tasks come from the live SDK stream and exist only while a bridge-driven query runs. The app joins them by `SessionTask.stepId` = `ToolStep.id`.
+- With `session_tasks`, `controls.working` means something runs (a turn, a wake turn, or a live task), and Stop follows it. `controls.turn` says whether a turn runs, and queue-versus-send follows it. Without the feature, `working` is the turn alone and `turn` is never sent.
+- A failed full-output fetch is an `error` with `about: { kind: "tool" }`. `session_tool_output.output` stays a string, so an older app never meets a `null` there.
+- Until a bridge serves `session_tasks`, a `session_stop` aimed at `"turn"` or a task is refused with an error, and `session_unqueue` is refused the same way.
+
 ## 4. Bridge modules
 
 ### 4.1 Module map

@@ -52,6 +52,12 @@ struct StreamCursor: Equatable, Sendable {
     }
 }
 
+/// What the phone's network looks like. A change can kill the socket without telling it, or bring the Mac back.
+struct NetworkPath: Equatable, Sendable {
+    var satisfied: Bool
+    var interfaces: [String]
+}
+
 /// Owns the one WebSocket to the Mac bridge and feeds every frame into the store's reducer.
 @Observable
 @MainActor
@@ -64,6 +70,17 @@ final class BridgeClient {
         var legacyRetry: Duration = .seconds(600)
         /// A Stop queued offline for longer than this is dropped: by the time it arrives it would stop a later turn.
         var staleStop: TimeInterval = 60
+        /// How often the socket is pinged, and how long the pong may take before the socket counts as dead.
+        var ping: Duration = .seconds(20)
+        var pong: Duration = .seconds(5)
+        /// The pong deadline when the app has reason to doubt the socket: back on screen, or on another network.
+        var probe: Duration = .seconds(2)
+        /// Back on screen after this long away, the app connects again instead of probing the socket.
+        var awayBeforeReconnect: TimeInterval = 10
+        /// No frame for this long while a thread on screen is working makes the connection quiet.
+        var quiet: TimeInterval = 45
+        /// Network changes this close together count as one.
+        var settle: Duration = .milliseconds(500)
     }
 
     /// Failed connects in a row after which the app offers to edit the address or pair again.
@@ -98,16 +115,17 @@ final class BridgeClient {
             change.watched.forEach { store.threads.open($0) }
             return
         }
-        change.unwatched.forEach { transmitIfConnected(.unwatchSession(sessionId: $0)) }
+        if awaySince == nil { change.unwatched.forEach { transmitIfConnected(.unwatchSession(sessionId: $0)) } }
         if let list = change.sessionsList { transmitIfConnected(list ? .watchSessions : .unwatchSessions) }
         for id in change.watched {
             store.threads.open(id)
-            watchThreadIfConnected(id)
+            if awaySince == nil { watchThreadIfConnected(id) }
         }
     }
 
     /// Whether someone is looking at this app, sent after every hello and on every change to a bridge with presence.
-    /// nil never sends one, so the bridge counts the socket as attended: the iPhone leaves it nil.
+    /// nil never sends one, so the bridge counts the socket as attended. The Mac follows its active state; the iPhone
+    /// sets it when it leaves the screen and comes back.
     var attended: Bool? {
         didSet {
             guard let attended, attended != oldValue, store.has(.presence) else { return }
@@ -127,6 +145,14 @@ final class BridgeClient {
     @ObservationIgnored private var outbox: [(message: ClientMessage, at: Date)] = []
     /// Kept across reconnects to one bridge, because the store still holds what came before.
     @ObservationIgnored private var cursor = StreamCursor()
+    /// Set by `reconnect()`: the attempt that ends next is followed by another at once, and is not counted as a failure.
+    @ObservationIgnored private var hurry = false
+    /// When the last frame arrived on the current socket.
+    @ObservationIgnored private var heardAt = Date.now
+    /// When the app left the screen, while it is away. Threads are not watched meanwhile.
+    @ObservationIgnored private var awaySince: Date?
+    @ObservationIgnored private var network: NetworkPath?
+    @ObservationIgnored private var settling: Task<Void, Never>?
     @ObservationIgnored private let log = Logger(subsystem: "dev.claudiobot.app", category: "bridge")
 
     init(store: AppStore, vault: PairingVault = .app, deviceName: String = "iPhone", timing: Timing = Timing()) {
@@ -208,15 +234,81 @@ final class BridgeClient {
         forget(reason: nil)
     }
 
-    /// Tries a bridge that did not recognize this iPhone again, for example back on the home network.
-    func retry() {
-        if store.connection == .unrecognized, let pairing { start(pairing) }
+    /// Connects now instead of waiting out the backoff, tries a bridge that did not recognize this iPhone again, or
+    /// checks that a connected socket still answers. An attempt already under way is left to finish.
+    func retryNow() {
+        guard let pairing else { return }
+        switch store.connection {
+        case .connected: if let socket { probe(socket, within: timing.probe) }
+        case .disconnected: reconnect()
+        case .unrecognized: start(pairing)
+        case .connecting, .unpaired: break
+        }
     }
 
-    /// Skips the remaining backoff, for example when the app returns to the foreground.
-    func reconnectNow() {
+    /// A new network may have killed the socket without a word, or stalled an attempt on the old one.
+    func networkChanged(_ path: NetworkPath) {
+        settling?.cancel()
+        settling = Task { [weak self, settle = timing.settle] in
+            try? await Task.sleep(for: settle)
+            guard !Task.isCancelled, let self else { return }
+            let previous = network
+            network = path
+            guard let previous, previous != path, path.satisfied || store.machine != nil else { return }
+            if store.connection == .connecting { reconnect() } else { retryNow() }
+        }
+    }
+
+    /// The iPhone app left the screen. The bridge stops counting it as attended, so pushes are not held for it, and
+    /// stops counting its threads as read, so what arrives while it is away shows as unread.
+    func leave() {
+        guard awaySince == nil else { return }
+        awaySince = .now
+        attended = false
+        if store.has(.sessions) { onScreen.sessions.forEach { transmitIfConnected(.unwatchSession(sessionId: $0)) } }
+    }
+
+    /// The app is on screen again. After a short absence the socket is probed and the threads are watched again from
+    /// where the app stands; after a longer one the app connects again, since a socket that slept is often dead.
+    func comeBack() {
+        guard let since = awaySince else { return retryNow() }
+        awaySince = nil
+        attended = true
+        if store.machine != nil, Date.now.timeIntervalSince(since) >= timing.awayBeforeReconnect { return reconnect() }
+        if store.has(.sessions) { onScreen.sessions.sorted { $0.rawValue < $1.rawValue }.forEach(watchThreadIfConnected) }
+        retryNow()
+    }
+
+    /// Ends the socket, the attempt in flight or the wait, and connects again at once.
+    private func reconnect() {
+        hurry = true
         nap?.cancel()
-        retry()
+        socket?.cancel(with: .goingAway, reason: nil)
+    }
+
+    /// Pings `ws`. With neither the pong nor any frame by `deadline`, the socket died without the phone being told.
+    /// A frame counts because a pong queued behind a busy stream arrives late on a live socket.
+    private func probe(_ ws: URLSessionWebSocketTask, within deadline: Duration) {
+        let answered = OSAllocatedUnfairLock(initialState: false)
+        let sentAt = Date.now
+        ws.sendPing { error in
+            if error == nil { answered.withLock { $0 = true } }
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: deadline)
+            guard let self, socket === ws, !answered.withLock({ $0 }), heardAt <= sentAt else { return }
+            log.info("no pong within \(deadline); connecting again")
+            reconnect()
+        }
+    }
+
+    /// A working thread that hears nothing for `timing.quiet` may be stuck, or the bridge may be.
+    private func checkQuiet() {
+        guard case .connected(let machine, .none) = store.connection, awaySince == nil,
+              Date.now.timeIntervalSince(heardAt) >= timing.quiet,
+              onScreen.sessions.contains(where: { store.threads[$0]?.controls?.working == true })
+        else { return }
+        store.setConnection(.connected(machine: machine, quietSince: heardAt))
     }
 
     /// Sends now when connected; otherwise holds the message until the next hello.
@@ -305,6 +397,7 @@ final class BridgeClient {
     private func run() async {
         failures = 0
         while !Task.isCancelled, let pairing {
+            hurry = false
             store.setConnection(.connecting)
             let ending = await session(pairing)
             if Task.isCancelled { return }
@@ -318,6 +411,7 @@ final class BridgeClient {
             case .failed:
                 break
             }
+            if hurry { continue }
             let delay = Backoff.delay(afterFailures: failures)
             if ending == .failed { failures += 1 }
             store.setConnection(.disconnected(retryAt: .now + delay))
@@ -347,16 +441,28 @@ final class BridgeClient {
         ws.maximumMessageSize = 32 << 20
         socket = ws
         ws.resume()
-        let pinger = Task {
+        heardAt = .now
+        let timing = timing
+        let greeting = Task {
+            try? await Task.sleep(for: timing.greeting)
+            if !Task.isCancelled { ws.cancel(with: .goingAway, reason: nil) }
+        }
+        let pinger = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(20))
-                ws.sendPing { error in
-                    if error != nil { ws.cancel(with: .goingAway, reason: nil) }
-                }
+                try? await Task.sleep(for: timing.ping)
+                if !Task.isCancelled { self?.probe(ws, within: timing.pong) }
+            }
+        }
+        let watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(timing.quiet / 9))
+                if !Task.isCancelled { self?.checkQuiet() }
             }
         }
         defer {
+            greeting.cancel()
             pinger.cancel()
+            watchdog.cancel()
             ws.cancel(with: .goingAway, reason: nil)
             if socket === ws { socket = nil }
         }
@@ -371,6 +477,8 @@ final class BridgeClient {
                 log.info("socket closed: \(error.localizedDescription)")
                 return Self.ending(greeted: greeted, closeCode: ws.closeCode.rawValue, upgradeStatus: (ws.response as? HTTPURLResponse)?.statusCode)
             }
+            heardAt = .now
+            if case .connected(let machine, .some) = store.connection { store.setConnection(.connected(machine: machine)) }
             let data: Data
             switch received {
             case .string(let text): data = Data(text.utf8)
@@ -394,6 +502,7 @@ final class BridgeClient {
             switch msg {
             case .hello:
                 greeted = true
+                greeting.cancel()
                 if let attended, store.has(.presence) { transmit(.presence(attended: attended), on: ws) }
                 onScreen.bots.sorted { $0.rawValue < $1.rawValue }.forEach { transmit(.open(botId: $0), on: ws) }
                 // Facts bots propose show as a badge and in their chats, so the app keeps them live from the start.
@@ -401,7 +510,7 @@ final class BridgeClient {
                 // Before the outbox, so a send made offline lands after the thread's snapshot, not before it.
                 if store.has(.sessions) {
                     if onScreen.sessionsList { transmit(.watchSessions, on: ws) }
-                    onScreen.sessions.sorted { $0.rawValue < $1.rawValue }.forEach { watchThread($0, on: ws) }
+                    if awaySince == nil { onScreen.sessions.sorted { $0.rawValue < $1.rawValue }.forEach { watchThread($0, on: ws) } }
                 }
                 let resent = store.resendsAfterHello()
                 resent.forEach { transmitCounted($0, on: ws) }

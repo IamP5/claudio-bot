@@ -6,10 +6,16 @@ import type { Row } from "./control-claudio";
 export type Step = { id: string; tool: string; label: string; state: string; output: string | null; [k: string]: unknown };
 export type Item = { kind: string; id: string; at: string; text?: string; steps?: Step[]; card?: { id: string; answer: unknown; label: string; detail: string }; tone?: string; [k: string]: unknown };
 export type Controls = { canSend: boolean; reason: string | null; working: boolean; queued: number; [k: string]: unknown };
-/** One change to one of the scenario's sessions, as the phone's reducer saw it. at: ms since the scenario started. */
-export type Snap = { at: number; name: string; row: Row | null; controls: Controls | null; items: Item[] };
+/**
+ * One change to one of the scenario's sessions, as the phone's reducer saw it. at: ms since the scenario started.
+ * frame: the number of the frame that caused it, shared by every session one list frame touched.
+ */
+export type Snap = { at: number; frame: number; name: string; row: Row | null; controls: Controls | null; items: Item[] };
 export type TranscriptLine = { type?: string; timestamp?: string; message?: { content?: unknown }; [k: string]: unknown };
-export type Resume = { mark: string; reply: string; resumed: Item[]; fresh: Item[]; resumedControls: Controls | null; rows: Row[] };
+/** One reconnect. resumed: hello.resumed, the bridge replayed the stream after the phone's position; replayed: how many frames. */
+export type Resume = { mark: string; how: Drop; resumed: boolean; replayed: number; reply: string; items: Item[]; fresh: Item[]; resumedControls: Controls | null; rows: Row[] };
+/** How the network loses the phone: a closed socket the app notices, or a half-open one where nothing passes and no close arrives. */
+export type Drop = "close" | "half-open";
 
 /** What a scenario run captured, live while it runs and complete when the rubric is judged. */
 export type Ev = {
@@ -26,10 +32,16 @@ export type Ev = {
   pushes(): { at: string; title: string | null; click: string | null; body: string }[];
   /** Elapsed ms of the scenario at a wall-clock ISO time. */
   atOf(iso: string): number;
+  /** Processes on the Mac whose command line matches `pattern` and whose working directory is the seed project: "pid command". */
+  procs(pattern: string): string[];
+  /** Process samples the scenario took (action ps), by label; written to the report. */
+  samples: Record<string, string[]>;
 };
 
 export type Action =
   | { do: "create"; name: string; prompt: string; mode?: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" }
+  /** The user sends in the thread. interrupt: "Stop and send". While the phone is offline the message waits for the next hello, as in the app. */
+  | { do: "send"; name: string; text: string; interrupt?: boolean; mark?: string }
   | { do: "until"; mark: string; what: string; timeoutS: number; test: (ev: Ev) => boolean; optional?: boolean }
   | { do: "stop"; name: string; mark: string }
   | { do: "sleep"; s: number }
@@ -38,11 +50,25 @@ export type Action =
   | { do: "leave"; name: string }
   /** Watches the thread again from the position the phone held, as the app does when the user reopens it. */
   | { do: "return"; name: string }
-  /** Drops the phone's socket, waits, reconnects, and resumes every thread from the position it held. */
-  | { do: "reconnect"; afterS: number; mark: string; until?: { what: string; timeoutS: number; test: (ev: Ev) => boolean } }
+  /**
+   * The network drops the phone (and, with --sim, the app): `how` close or half-open. send: a message the user sends
+   * while it is down. Waits, reconnects with the app's stream position (epoch, after), resumes every thread, and
+   * unless compare is false, compares each with a fresh open.
+   */
+  | { do: "reconnect"; afterS: number; mark: string; how?: Drop; send?: { name: string; text: string }; compare?: boolean; until?: { what: string; timeoutS: number; test: (ev: Ev) => boolean } }
   | { do: "screenshot"; shot: string }
+  /** The user opens the thread: the app by its link with --sim; on the protocol lane the phone watches it again if it had left. */
   | { do: "open-thread"; name: string }
-  | { do: "app"; to: "background" | "foreground"; mark: string };
+  /** With --sim, the app goes back to the Sessions list (it is relaunched on the list). Nothing on the protocol lane, where leave does it. */
+  | { do: "show-list" }
+  /** With --sim, Settings over the app and back. On the protocol lane the phone is suspended: its socket goes half-open, then it reconnects. */
+  | { do: "app"; to: "background" | "foreground"; mark: string }
+  /** Samples the Mac's processes matching `pattern` in the seed project into the report under `as`. */
+  | { do: "ps"; pattern: string; as: string }
+  /** SIGKILLs the Claude Code process that runs the session, as a crash would. */
+  | { do: "kill-claude"; name: string; mark: string }
+  /** Restarts the bridge on the same port and home; the phone reconnects as the app does. */
+  | { do: "restart-bridge"; mark: string };
 
 export type Tell = "what" | "how-many" | "how-long" | "state" | "stop";
 export type Verdict = { ok: boolean; why: string };
@@ -69,6 +95,8 @@ export type Scenario = {
   rubric: RubricItem[];
   /** Marks read from the evidence after the run (transcript times), merged in before the rubric is judged. */
   derive?: (ev: Ev) => Record<string, number>;
+  /** Seconds the user takes to tap Allow once on each card; 0 (the default) taps at once. */
+  holdCardsS?: number;
 };
 
 // ---- reading the evidence
@@ -120,15 +148,27 @@ function blocks(lines: TranscriptLine[]) {
   }
   return { uses, results };
 }
-/** Each subagent's run, from the first to the last line of its own transcript, in scenario ms; keyed by agentId. */
+/** An assistant line that ends a run: text and no tool call. */
+const isFinal = (l: TranscriptLine) => {
+  const c = l.message?.content;
+  return l.type === "assistant" && Array.isArray(c) && c.some((b) => (b as { type?: string }).type === "text") && !c.some((b) => (b as { type?: string }).type === "tool_use");
+};
+/**
+ * Each subagent's run in scenario ms, keyed by agentId: from its first line to its final result (done), or to its
+ * last line so far while it has none. A line written before a blocked tool call is not the end.
+ */
 function subagentSpans(ev: Ev, name: string) {
-  const spans = new Map<string, { from: number; to: number }>();
+  const lines = new Map<string, TranscriptLine[]>();
   for (const l of ev.transcript(name).subagents) {
     const id = String(l.agentId ?? "");
-    if (!id || !l.timestamp) continue;
-    const at = ev.atOf(l.timestamp);
-    const s = spans.get(id) ?? { from: at, to: at };
-    spans.set(id, { from: Math.min(s.from, at), to: Math.max(s.to, at) });
+    if (id && l.timestamp) lines.set(id, [...(lines.get(id) ?? []), l]);
+  }
+  const spans = new Map<string, { from: number; to: number; done: boolean }>();
+  for (const [id, ls] of lines) {
+    const ats = ls.map((l) => ev.atOf(l.timestamp!));
+    const assistant = ls.filter((l) => l.type === "assistant").at(-1);
+    const done = assistant !== undefined && isFinal(assistant);
+    spans.set(id, { from: Math.min(...ats), to: done ? ev.atOf(assistant.timestamp!) : Math.max(...ats), done });
   }
   return spans;
 }
@@ -246,6 +286,25 @@ const unreadAfter = (id: string, name: string, at: string): RubricItem => ({
 
 const review = (id: string, tell: Tell, text: string, pass: string, fail: string, shots: string[]): RubricItem => ({ id, tell, lane: "simulator", text, pass, fail, shots });
 
+/** Claude Code's own texts: a background launch ack, the subagent hand-back wrapper, the rejection boilerplate. */
+const ACK = /Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed/;
+const noAckOutput = (id: string, names: string[]): RubricItem => ({
+  id,
+  tell: "state",
+  lane: "protocol",
+  text: "A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate.",
+  pass: `No step output in any state matches ${ACK.source}.`,
+  fail: "A step shows one of those texts as its output, so a launch or a refusal reads like a result.",
+  check: (ev) => {
+    const hits = new Map<string, string>();
+    for (const n of names) for (const s of snaps(ev, n)) for (const x of stepsOf(s)) if (ACK.test(x.output ?? "")) hits.set(x.id, `${x.label}: "${x.output!.match(ACK)![0]}"`);
+    return hits.size ? no([...hits.values()].join("; ")) : ok(`no step output matches`);
+  },
+});
+
+/** The notice items a session showed from `from` on. A notice is written by the bridge; assistant prose never counts. */
+const notices = (ev: Ev, name: string, from = 0) => [...new Map(snaps(ev, name, from).flatMap((s) => s.items).filter((i) => i.kind === "notice").map((i) => [i.id, i])).values()];
+
 const created = (name: string): Precondition => ({ what: `session ${name} was created`, check: (ev) => (ev.ids[name] ? ok(ev.ids[name]!) : no("no session_created")) });
 const fileMade = (rel: string): Precondition => ({ what: `${rel} exists in the seed project`, check: (ev) => (ev.exists(rel) ? ok("present") : no("missing")) });
 const turnEnded = (name: string) => (ev: Ev) => mark(ev, `${name}-started`) !== undefined && !isWorking(last(ev, name) ?? ({ controls: null, row: null } as Snap));
@@ -258,14 +317,17 @@ const awayAndBack = (name: string, doneFile: string, finishIsOutcome = false): A
   { do: "sleep", s: 12 },
   { do: "mark", mark: "list-mid" },
   { do: "return", name },
+  { do: "open-thread", name },
   { do: "sleep", s: 3 },
   { do: "mark", mark: "mid-background" },
   { do: "screenshot", shot: "background-running" },
+  { do: "show-list" },
   { do: "leave", name },
   { do: "until", mark: "bg-done", what: `${doneFile} to appear`, timeoutS: 150, test: (ev) => ev.exists(doneFile), optional: finishIsOutcome },
   { do: "sleep", s: 20 },
   { do: "mark", mark: "list-after" },
   { do: "return", name },
+  { do: "open-thread", name },
   { do: "sleep", s: 3 },
   { do: "mark", mark: "returned" },
   { do: "screenshot", shot: "after" },
@@ -296,11 +358,23 @@ const fanOut = (id: "S1" | "S1b", background: boolean): Scenario => {
           `Launch exactly 3 subagents in parallel, all in one message, with the Agent tool: subagent_type general-purpose, model haiku, run_in_background ${background}. Their descriptions are "sleeper one", "sleeper two" and "sleeper three". Each one\'s prompt is: "Run exactly this Bash command in the foreground: perl -e \'sleep 30\' . Then reply with the single word done." When all three have returned, reply with one line: all done.`,
       },
       started(n),
+      { do: "open-thread", name: n },
       { do: "until", mark: "agents-launched", what: "3 Agent calls in the transcript", timeoutS: 120, test: (ev) => blocks(ev.transcript(n).main).uses.filter((u) => AGENT_TOOLS.has(u.name)).length >= 3 },
       { do: "sleep", s: 12 },
       { do: "mark", mark: "mid-run" },
       { do: "screenshot", shot: "running" },
-      { do: "until", mark: "all-done", what: 'the "all done" reply', timeoutS: 240, test: (ev) => !!last(ev, n)?.items.some((i) => i.kind === "assistant" && /all done/i.test(i.text ?? "")) },
+      {
+        do: "until",
+        mark: "agents-finished",
+        what: "each subagent's final result in its own transcript",
+        timeoutS: 240,
+        test: (ev) => {
+          const spans = [...subagentSpans(ev, n).values()];
+          return spans.length >= 3 && spans.every((s) => s.done);
+        },
+      },
+      // The parent promises "all done" when it launches them, so only a line that is exactly the reply counts.
+      { do: "until", mark: "all-done", what: 'the "all done" reply', timeoutS: 180, test: (ev) => !!last(ev, n)?.items.some((i) => i.kind === "assistant" && /^\W*all done\W*$/im.test(i.text ?? "")) },
       { do: "until", mark: `${n}-ended`, what: "the turn to end", timeoutS: 120, test: turnEnded(n) },
       { do: "screenshot", shot: "done" },
     ],
@@ -374,7 +448,7 @@ const fanOut = (id: "S1" | "S1b", background: boolean): Scenario => {
         tell: "state",
         lane: "protocol",
         text: "Each subagent's step reads done when that subagent finishes, not before, and none stays running after.",
-        pass: "Each Agent step first reads ok no earlier than 2 s before its subagent's transcript ends, and reads ok at the end.",
+        pass: "Each Agent step first reads ok no earlier than 2 s before its subagent's final result (the last line of its transcript when that is plain text), and reads ok at the end.",
         fail: "A step reads ok while its subagent still runs (or stays running after it ended).",
         check: (ev) => {
           const spans = subagentSpans(ev, n);
@@ -382,10 +456,13 @@ const fanOut = (id: "S1" | "S1b", background: boolean): Scenario => {
           const early: string[] = [];
           const ids = [...new Set(snaps(ev, n).flatMap(stepsOf).filter((x) => AGENT_TOOLS.has(x.tool)).map((x) => x.id))];
           for (const id of ids) {
-            const end = spans.get(calls.get(id) ?? "")?.to;
+            const span = spans.get(calls.get(id) ?? "");
             const firstOk = snaps(ev, n).find((s) => stepsOf(s).some((x) => x.id === id && x.state === "ok"))?.at;
             const label = stepsOf(last(ev, n)!).find((x) => x.id === id)?.label ?? id;
-            if (end !== undefined && firstOk !== undefined && firstOk < end - 2000) early.push(`${label} read ok ${Math.round((end - firstOk) / 1000)} s before its subagent ended`);
+            if (firstOk === undefined) continue;
+            if (!span) early.push(`${label} read ok, and no subagent transcript matches its call, so its end is unknown`);
+            else if (!span.done) early.push(`${label} read ok at +${Math.round(firstOk / 1000)} s; its subagent never wrote a final result`);
+            else if (firstOk < span.to - 2000) early.push(`${label} read ok ${Math.round((span.to - firstOk) / 1000)} s before its subagent ended`);
           }
           const notOk = stepsOf(last(ev, n)!).filter((x) => AGENT_TOOLS.has(x.tool) && x.state !== "ok");
           if (!ids.length) return no("no subagent steps");
@@ -398,18 +475,20 @@ const fanOut = (id: "S1" | "S1b", background: boolean): Scenario => {
         tell: "what",
         lane: "protocol",
         text: "The user can see what a running subagent is doing inside, not only that it runs.",
-        pass: "A child row (parentId = the session) is listed, or a running subagent step carries progress output.",
-        fail: "A running subagent is an opaque line: no child row and no output until it returns.",
+        pass: "A child row (parentId = the session) is listed, a running subagent step carries progress output, or controls.tasks has an agent task with progress.",
+        fail: "A running subagent is an opaque line: no child row, no output and no task progress until it returns.",
         check: (ev) => {
           const id = ev.ids[n];
           const child = ev.history.some((s) => s.row?.parentId === id);
-          const progress = snaps(ev, n).flatMap(stepsOf).some((x) => AGENT_TOOLS.has(x.tool) && x.state === "running" && (x.output ?? "") !== "");
-          return child || progress ? ok(`child row: ${child}, progress output: ${progress}`) : no("no child row, no output while running");
+          const progress = snaps(ev, n).flatMap(stepsOf).some((x) => AGENT_TOOLS.has(x.tool) && x.state === "running" && (x.output ?? "") !== "" && !ACK.test(x.output ?? ""));
+          const tasks = snaps(ev, n).some((s) => ((s.controls?.tasks as { kind?: string; progress?: unknown }[] | undefined) ?? []).some((t) => t.kind === "agent" && t.progress));
+          return child || progress || tasks ? ok(`child row: ${child}, progress output: ${progress}, task progress: ${tasks}`) : no("no child row, no output and no task progress while running");
         },
       },
       stopOffered(`${id}.7`, n, "agents-from", "agents-to", "the subagents"),
       review(`${id}.8`, "how-many", "Mid-run, the thread shows three labeled subagent rows, each visibly running, and a Stop button.", "All three rows, a running indicator on each, Stop visible.", "Rows missing or merged, no running indicator, or no Stop.", ["running"]),
       review(`${id}.9`, "state", "After the turn, the thread shows all three done and the session at rest.", "Three done rows, no spinner, composer ready.", "A spinner or running state remains.", ["done"]),
+      noAckOutput(`${id}.10`, [n]),
     ],
   };
 };
@@ -429,6 +508,18 @@ const S2: Scenario = {
     started("s2"),
     { do: "until", mark: "s2-ended", what: "the turn that starts the command to end", timeoutS: 180, test: turnEnded("s2") },
     ...awayAndBack("s2", "bg.txt"),
+    // S2.4 judges the 60 s after bg-done; the second part must not add items to that window.
+    { do: "until", mark: "finish-window-over", what: "the 60 s after bg-done to pass", timeoutS: 120, test: (ev) => ev.now() > (mark(ev, "bg-done") ?? Infinity) + 61_000 },
+    {
+      do: "send",
+      name: "s2",
+      text: "Use the Bash tool with run_in_background set to true to run exactly this command: sleep 45 && echo bg-done > bg2.txt\nThen, without waiting for it, use the Bash tool in the foreground (not in the background) to run exactly: perl -e 'sleep 40'\nThen reply with one line: waited.",
+    },
+    { do: "until", mark: "fg-running", what: "the foreground perl sleep 40 to run on the Mac", timeoutS: 150, test: (ev) => ev.procs("sleep 40").length > 0 },
+    { do: "sleep", s: 3 },
+    { do: "ps", pattern: "sleep 45", as: "bg2-before-stop-and-send" },
+    { do: "send", name: "s2", text: "Reply with one word: ok.", interrupt: true, mark: "stop-and-send" },
+    { do: "until", mark: "bg2-done", what: "bg2.txt to appear", timeoutS: 90, optional: true, test: (ev) => ev.exists("bg2.txt") },
   ],
   pre: [
     created("s2"),
@@ -441,11 +532,12 @@ const S2: Scenario = {
       tell: "what",
       lane: "protocol",
       text: "The background command shows as a step that names what it runs.",
-      pass: 'A Bash step whose label carries the command ("Run sleep 75 …").',
-      fail: "No step for it, or a label that does not say what runs.",
+      pass: 'A Bash step whose label or detail carries the command itself ("sleep 75 && …"), not only the model\'s description of it.',
+      fail: "No step for it, or a label and detail that do not show the command.",
       check: (ev) => {
         const s = snaps(ev, "s2").flatMap(stepsOf).find((x) => x.tool === "Bash");
-        return s && /sleep 75|bg/i.test(s.label) ? ok(s.label) : no(s ? s.label : "no Bash step");
+        const said = s && [s.label, String(s.detail ?? "")].find((t) => /sleep 75 &&/.test(t));
+        return said ? ok(said) : no(s ? `label "${s.label}", detail ${JSON.stringify(s.detail ?? null)}` : "no Bash step");
       },
     },
     stillRunning("S2.2a", "s2", "list-mid", "list", "the background command"),
@@ -456,6 +548,22 @@ const S2: Scenario = {
     stopOffered("S2.6", "s2", "mid-background", "mid-background", "the background command"),
     review("S2.7", "state", "Mid-background, the thread shows the command still running, with elapsed time and a Stop.", "Running indicator, elapsed time, Stop.", "The thread looks finished.", ["background-running"]),
     review("S2.8", "state", "After it finished, the thread shows the result.", "A done state or the wake turn's reply.", "Still shows running, or nothing changed.", ["after"]),
+    {
+      id: "S2.9",
+      tell: "stop",
+      lane: "protocol",
+      text: '"Stop and send" stops the turn, not the background command the session started earlier.',
+      pass: "A second background command (sleep 45, then bg2.txt) seen running before a send with interrupt still writes bg2.txt.",
+      fail: "bg2.txt never appears: Stop and send killed the background command with the turn.",
+      check: (ev) => {
+        const at = mark(ev, "stop-and-send");
+        if (at === undefined) return needMarks(ev, "stop-and-send")!;
+        if (!ev.samples["bg2-before-stop-and-send"]?.length) return no("not judged: the background sleep 45 was not running when the user pressed Stop and send");
+        const done = mark(ev, "bg2-done");
+        return done !== undefined ? ok(`bg2.txt appeared ${Math.round((done - at) / 1000)} s after Stop and send`) : no("bg2.txt never appeared within 90 s of Stop and send");
+      },
+    },
+    noAckOutput("S2.10", ["s2"]),
   ],
 };
 
@@ -463,7 +571,7 @@ const S3: Scenario = {
   id: "S3",
   area: "sessions",
   title: "Background work finishes while the app is in the background",
-  needsSimulator: true,
+  needsSimulator: false,
   journey: [
     "The user starts a background command from the phone, watches the thread, then leaves the app.",
     "The command finishes on the Mac while the app is in the background.",
@@ -473,6 +581,7 @@ const S3: Scenario = {
     { do: "create", name: "s3", prompt: BG("sleep 60 && echo bg-done > bg3.txt") },
     started("s3"),
     { do: "until", mark: "s3-ended", what: "the turn that starts the command to end", timeoutS: 180, test: turnEnded("s3") },
+    // With --sim the app is the phone: this socket stops watching and the app opens the thread instead.
     { do: "leave", name: "s3" },
     { do: "open-thread", name: "s3" },
     { do: "sleep", s: 4 },
@@ -489,7 +598,7 @@ const S3: Scenario = {
     { do: "sleep", s: 3 },
   ],
   pre: [
-    { what: "the app on the leased simulator paired with the run's bridge", check: (ev) => (ev.paired ? ok("paired") : no("not paired within --pair-wait (see runner.md)")) },
+    { what: "with --sim, the app on the leased simulator paired with the run's bridge", check: (ev) => (!ev.sim ? ok("protocol lane: the runner is the phone") : ev.paired ? ok("paired") : no("not paired within --pair-wait (see runner.md)")) },
     created("s3"),
     { what: "the transcript runs Bash with run_in_background", check: (ev) => (bgBash(ev.transcript("s3").main).length ? ok("yes") : no("no background Bash call")) },
     fileMade("bg3.txt"),
@@ -522,11 +631,16 @@ const S3: Scenario = {
         return p ? ok(p.click!) : no("no push links to the session");
       },
     },
-    unreadAfter("S3.3", "s3", "list-after"),
+    {
+      ...unreadAfter("S3.3", "s3", "list-after"),
+      pass: "With --sim, at mark list-after (the app in the background), the row is unread. On the protocol lane, where the suspended phone hears nothing, the first list it gets on its return (mark foregrounded-list) has the row unread.",
+      check: (ev) => unreadAfter("S3.3", "s3", ev.sim ? "list-after" : "foregrounded-list").check!(ev),
+    },
     finishShows("S3.4", "s3", "bg-done", "the background command"),
     review("S3.5", "state", "Before leaving, the thread shows the command running in the background.", "Running indicator with what runs.", "Looks finished.", ["thread-before"]),
     review("S3.6", "state", "While the app is away (Settings in front), a notification says the work finished.", "Notification banner or badge.", "Nothing.", ["while-away"]),
     review("S3.7", "state", "Back in the app, the thread shows the result, with no stale running indicator.", "Done state and the reply.", "Still running, or stale.", ["thread-after"]),
+    noAckOutput("S3.8", ["s3"]),
   ],
 };
 
@@ -548,12 +662,16 @@ const S4: Scenario = {
         'In one message, launch 2 subagents in parallel with the Agent tool. The first: subagent_type "no-such-agent-type", description "broken helper", prompt "Say hi." The second: subagent_type general-purpose, model haiku, description "long sleeper", prompt "Run exactly this Bash command in the foreground: perl -e \'sleep 45\' && echo late > late.txt . Then reply done." Use exactly these values even if one looks wrong. Then reply with one line saying what happened.',
     },
     started("s4"),
-    { do: "until", mark: "sleeper-running", what: "the sleeper's Bash call to start", timeoutS: 150, test: (ev) => blocks(ev.transcript("s4").subagents).uses.some((u) => u.name === "Bash" && String(u.input.command).includes("sleep 45") && u.input.run_in_background !== true) },
+    { do: "open-thread", name: "s4" },
+    // The tool call alone is not enough: it can sit behind its approval card. The command must run on the Mac.
+    { do: "until", mark: "sleeper-running", what: "the sleeper's perl sleep 45 to run on the Mac", timeoutS: 150, test: (ev) => ev.procs("sleep 45").length > 0 },
     { do: "sleep", s: 8 },
     { do: "screenshot", shot: "running" },
+    { do: "ps", pattern: "sleep 45", as: "before-stop" },
     { do: "stop", name: "s4", mark: "stopped" },
     { do: "until", mark: "s4-rest", what: "the session to rest after Stop", timeoutS: 60, optional: true, test: (ev) => !isWorking(last(ev, "s4")!) },
     { do: "sleep", s: 5 },
+    { do: "ps", pattern: "sleep 45", as: "after-stop" },
     { do: "screenshot", shot: "stopped" },
     { do: "sleep", s: 45 },
     { do: "mark", mark: "late-window-over" },
@@ -568,7 +686,7 @@ const S4: Scenario = {
         return failed.length ? ok(failed[0]!.text.slice(0, 120)) : no("no failed Agent call");
       },
     },
-    { what: "the sleeper ran its command before Stop", check: (ev) => (mark(ev, "sleeper-running") !== undefined ? ok("yes") : no("no")) },
+    { what: "the sleeper's command ran on the Mac right before Stop (process sample before-stop)", check: (ev) => (ev.samples["before-stop"]?.length ? ok(ev.samples["before-stop"]!.join(" | ").slice(0, 160)) : no("no sleep 45 process in the seed project")) },
   ],
   rubric: [
     {
@@ -629,13 +747,14 @@ const S4: Scenario = {
       tell: "stop",
       lane: "protocol",
       text: "The thread says the user stopped it.",
-      pass: "After Stop, a notice or an interruption line appears.",
-      fail: "Nothing in the thread says it was stopped.",
+      pass: 'After Stop, a notice item says so: its reason is "stop", or, from a bridge without reasons, its text says interrupted or stopped. Assistant prose does not count.',
+      fail: "No notice says it was stopped.",
       check: (ev) => {
         const at = mark(ev, "stopped");
         if (at === undefined) return needMarks(ev, "stopped")!;
-        const it = snaps(ev, "s4", at).flatMap((s) => s.items).find((i) => i.kind === "notice" || /interrupt|stopp/i.test(i.text ?? ""));
-        return it ? ok(`${it.kind}: ${(it.text ?? "").slice(0, 80)}`) : no("no notice or interruption");
+        const it = notices(ev, "s4", at).find((i) => (i.reason !== undefined && i.reason !== null ? i.reason === "stop" : /interrupt|stopp/i.test(i.text ?? "")));
+        const other = notices(ev, "s4", at).map((i) => `"${(i.text ?? "").slice(0, 60)}" reason ${String(i.reason ?? "-")}`);
+        return it ? ok(`notice: ${(it.text ?? "").slice(0, 80)}`) : no(other.length ? `no stop notice; notices: ${other.join("; ")}` : "no notice after Stop");
       },
     },
     {
@@ -643,12 +762,38 @@ const S4: Scenario = {
       tell: "stop",
       lane: "protocol",
       text: "Stop really stops the subagent's work on the Mac.",
-      pass: "late.txt never appears (the sleeper's command was killed), checked 50 s after Stop.",
-      fail: "late.txt appeared: the subagent's command kept running after Stop.",
-      check: (ev) => (mark(ev, "late-window-over") === undefined ? needMarks(ev, "late-window-over")! : ev.exists("late.txt") ? no("late.txt exists") : ok("late.txt absent")),
+      pass: "The sleeper's sleep 45 process ran before Stop (sample before-stop), is gone 5 s after the session rests (sample after-stop), and late.txt never appears, checked 50 s after Stop.",
+      fail: "The process is still there after Stop, or late.txt appeared.",
+      check: (ev) => {
+        if (mark(ev, "late-window-over") === undefined) return needMarks(ev, "late-window-over")!;
+        const before = ev.samples["before-stop"] ?? [];
+        const after = ev.samples["after-stop"] ?? [];
+        if (!before.length) return no("not judged: the sleeper's command was not seen running before Stop");
+        if (after.length) return no(`still running after Stop: ${after.join(" | ").slice(0, 160)}`);
+        return ev.exists("late.txt") ? no("late.txt exists") : ok(`ran as ${before.join(" | ").slice(0, 100)}; gone after Stop; late.txt absent`);
+      },
     },
     review("S4.7", "state", "Mid-run, the failed subagent reads failed and the other running.", "Two distinct states.", "Same look for both.", ["running"]),
     review("S4.8", "stop", "After Stop, the thread reads stopped, no spinner.", "Stopped state.", "Spinner left.", ["stopped"]),
+    {
+      id: "S4.9",
+      tell: "state",
+      lane: "protocol",
+      text: "The failed subagent reads failed as soon as Claude Code records the failure.",
+      pass: "Its step first reads error within 2 s of the failed tool_result line in the transcript.",
+      fail: "The step reads error later than 2 s after the transcript has the failure, or never.",
+      check: (ev) => {
+        const { uses, results } = blocks(ev.transcript("s4").main);
+        const r = results.find((x) => x.isError && uses.some((u) => u.id === x.id && AGENT_TOOLS.has(u.name)));
+        if (!r) return no("not judged: no failed Agent call in the transcript");
+        const written = ev.atOf(r.at);
+        const seen = snaps(ev, "s4").find((s) => stepsOf(s).some((x) => x.id === r.id && x.state === "error"))?.at;
+        if (seen === undefined) return no("the failed Agent step never read error");
+        const lag = seen - written;
+        return lag <= 2000 ? ok(`error on the wire ${(lag / 1000).toFixed(1)} s after the transcript line`) : no(`error on the wire ${(lag / 1000).toFixed(1)} s after the transcript line`);
+      },
+    },
+    noAckOutput("S4.10", ["s4"]),
   ],
 };
 
@@ -661,10 +806,13 @@ const S5: Scenario = {
     "The user's session runs one command that prints nothing for two minutes.",
     "They watch the thread and must tell it is still alive, not stuck: what runs, for how long, and how to stop it.",
   ],
+  holdCardsS: 10,
   setup: [
     { do: "create", name: "s5", prompt: "Run exactly this Bash command in the foreground (not in the background), with timeout 200000: perl -e 'sleep 120' && echo slept > slept.txt\nThen reply with one line: slept." },
     started("s5"),
-    { do: "until", mark: "call-running", what: "the sleep step to run", timeoutS: 120, test: (ev) => snaps(ev, "s5").some((s) => stepsOf(s).some((x) => x.tool === "Bash" && x.state === "running")) },
+    { do: "open-thread", name: "s5" },
+    // The user takes 10 s to allow the card, so the call runs only once the process is there.
+    { do: "until", mark: "call-running", what: "the perl sleep 120 to run on the Mac", timeoutS: 150, test: (ev) => ev.procs("sleep 120").length > 0 },
     { do: "sleep", s: 30 },
     { do: "screenshot", shot: "at-30s" },
     { do: "sleep", s: 60 },
@@ -692,11 +840,12 @@ const S5: Scenario = {
       tell: "what",
       lane: "protocol",
       text: "While it runs, the thread names the command.",
-      pass: "The running Bash step's label carries the command.",
-      fail: "No label, or a generic one.",
+      pass: "The running Bash step's label or detail carries the command itself (\"perl -e 'sleep 120' …\"), not only the model's description of it.",
+      fail: "No label or detail, a generic one, or only a description such as \"Sleep 120 seconds\".",
       check: (ev) => {
         const s = snaps(ev, "s5").flatMap(stepsOf).find((x) => x.tool === "Bash" && x.state === "running");
-        return s && /sleep|perl|120/i.test(s.label) ? ok(s.label) : no(s?.label ?? "never running");
+        const said = s && [s.label, String(s.detail ?? "")].find((t) => /perl -e/.test(t));
+        return said ? ok(said) : no(s ? `label "${s.label}", detail ${JSON.stringify(s.detail ?? null)}` : "never running");
       },
     },
     {
@@ -748,31 +897,75 @@ const S5: Scenario = {
       },
     },
     review("S5.7", "how-long", "At 30 s and 90 s the thread looks alive: a running indicator and an elapsed time that moves.", "Elapsed time differs between the two shots.", "Identical frozen screens.", ["at-30s", "at-90s"]),
+    {
+      id: "S5.8",
+      tell: "state",
+      lane: "protocol",
+      text: "While the command waits on its approval card, the thread says it waits, not that it runs.",
+      pass: "In every state with the Bash card open (the user takes 10 s to allow), the Bash step is on the wire in state waiting.",
+      fail: "A state with the card open shows the step running, or shows no step.",
+      check: (ev) => {
+        const open = snaps(ev, "s5").filter((s) => s.items.some((i) => i.kind === "permission" && i.card?.answer === null));
+        if (!open.length) return no("not judged: no state had the card open");
+        const bad = open.filter((s) => !stepsOf(s).some((x) => x.tool === "Bash" && x.state === "waiting"));
+        const seen = [...new Set(bad.map((s) => stepsOf(s).filter((x) => x.tool === "Bash").map((x) => x.state).join(",") || "no step"))].join(" / ");
+        return bad.length ? no(`${bad.length}/${open.length} states with the card open: Bash step ${seen}`) : ok(`${open.length} states, the step waiting in each`);
+      },
+    },
+    noAckOutput("S5.9", ["s5"]),
   ],
 };
 
 const S6: Scenario = {
   id: "S6",
   area: "sessions",
-  title: "Reconnect in the middle of a run",
+  title: "Reconnect in the middle of a run, then a crash and a bridge restart",
   needsSimulator: false,
   journey: [
     "The user watches a command run; the phone loses its connection for 15 s and comes back while it still runs.",
-    "It drops again and comes back only after the turn ended.",
-    "Each time, the thread must show the truth at once: still running, then done, with no duplicates.",
+    "It drops again, half-open this time (no close reaches either side), and comes back only after the turn ended.",
+    "Each time, the thread must show the truth at once: still running, then done, with no duplicates, in the same order as a fresh open.",
+    "Offline once more, the user sends a message; it goes out when the phone is back, and its command runs.",
+    "Claude Code crashes mid-command, then the Mac's bridge restarts. The thread and the row must say the run failed, and keep saying it.",
   ],
   setup: [
     { do: "create", name: "s6", prompt: "Run exactly this Bash command in the foreground (not in the background): perl -e 'sleep 40' && echo hi > s6.txt\nThen reply with one line: done." },
     started("s6"),
+    { do: "open-thread", name: "s6" },
     { do: "until", mark: "call-running", what: "the sleep step to run", timeoutS: 120, test: (ev) => snaps(ev, "s6").some((s) => stepsOf(s).some((x) => x.tool === "Bash" && x.state === "running")) },
     { do: "sleep", s: 3 },
     { do: "reconnect", afterS: 15, mark: "resume-1" },
     { do: "screenshot", shot: "after-resume-1" },
-    { do: "reconnect", afterS: 15, mark: "resume-2", until: { what: "s6.txt and the end of the turn while offline", timeoutS: 120, test: (ev) => ev.exists("s6.txt") } },
+    { do: "reconnect", how: "half-open", afterS: 15, mark: "resume-2", until: { what: "s6.txt and the end of the turn while offline", timeoutS: 120, test: (ev) => ev.exists("s6.txt") } },
     { do: "until", mark: "s6-ended", what: "the turn to end", timeoutS: 60, test: turnEnded("s6") },
     { do: "screenshot", shot: "after-resume-2" },
+    {
+      do: "reconnect",
+      afterS: 3,
+      mark: "resume-3",
+      compare: false,
+      send: { name: "s6", text: "Run exactly this Bash command in the foreground (not in the background): perl -e 'sleep 90'\nThen reply with one line: done." },
+    },
+    { do: "until", mark: "second-running", what: "the perl sleep 90 sent while offline to run on the Mac", timeoutS: 150, test: (ev) => ev.procs("sleep 90").length > 0 },
+    { do: "sleep", s: 3 },
+    { do: "kill-claude", name: "s6", mark: "killed" },
+    { do: "until", mark: "s6-rest-after-kill", what: "the session to rest after the crash", timeoutS: 30, optional: true, test: (ev) => !isWorking(last(ev, "s6")!) },
+    { do: "sleep", s: 5 },
+    { do: "mark", mark: "after-kill" },
+    { do: "screenshot", shot: "after-kill" },
+    { do: "restart-bridge", mark: "restarted" },
+    { do: "sleep", s: 8 },
+    { do: "mark", mark: "after-restart" },
+    { do: "screenshot", shot: "after-restart" },
   ],
-  pre: [created("s6"), fileMade("s6.txt"), { what: "both reconnects happened", check: (ev) => (ev.resumes.length === 2 ? ok(ev.resumes.map((r) => r.reply).join(", ")) : no(`${ev.resumes.length} reconnects`)) }],
+  pre: [
+    created("s6"),
+    fileMade("s6.txt"),
+    { what: "both compared reconnects happened", check: (ev) => (ev.resumes.length === 2 ? ok(ev.resumes.map((r) => `${r.mark} ${r.how}: ${r.reply}`).join(", ")) : no(`${ev.resumes.length} reconnects`)) },
+    { what: "each reconnect resumed the stream from the phone's position, as the app's does (hello resumed)", check: (ev) => (ev.resumes.every((r) => r.resumed) ? ok(ev.resumes.map((r) => `${r.mark}: ${r.replayed} frames replayed`).join(", ")) : no(ev.resumes.map((r) => `${r.mark}: resumed ${r.resumed}`).join(", "))) },
+    { what: "Claude Code was killed while the command sent offline ran", check: (ev) => (ev.samples["kill-claude"]?.length ? ok(ev.samples["kill-claude"]!.join(" | ").slice(0, 160)) : no("no Claude Code process was killed")) },
+    { what: "the bridge restarted", check: (ev) => (mark(ev, "after-restart") !== undefined ? ok("yes") : no("no")) },
+  ],
   rubric: [
     {
       id: "S6.1",
@@ -784,7 +977,7 @@ const S6: Scenario = {
       check: (ev) => {
         const r = ev.resumes.find((x) => x.mark === "resume-1");
         if (!r) return no("no resume-1");
-        const running = r.resumed.flatMap((i) => i.steps ?? []).some((s) => s.tool === "Bash" && s.state === "running");
+        const running = r.items.flatMap((i) => i.steps ?? []).some((s) => s.tool === "Bash" && s.state === "running");
         return running && r.resumedControls?.working ? ok(`${r.reply}; step running, working`) : no(`${r.reply}; step running ${running}, working ${r.resumedControls?.working}`);
       },
     },
@@ -798,8 +991,8 @@ const S6: Scenario = {
       check: (ev) => {
         const r = ev.resumes.find((x) => x.mark === "resume-2");
         if (!r) return no("no resume-2");
-        const done = r.resumed.flatMap((i) => i.steps ?? []).some((s) => s.tool === "Bash" && s.state === "ok");
-        const reply = r.resumed.some((i) => i.kind === "assistant");
+        const done = r.items.flatMap((i) => i.steps ?? []).some((s) => s.tool === "Bash" && s.state === "ok");
+        const reply = r.items.some((i) => i.kind === "assistant");
         return done && reply && r.resumedControls?.working === false ? ok(`${r.reply}; done, reply, at rest`) : no(`${r.reply}; done ${done}, reply ${reply}, working ${r.resumedControls?.working}`);
       },
     },
@@ -807,13 +1000,20 @@ const S6: Scenario = {
       id: "S6.3",
       tell: "what",
       lane: "protocol",
-      text: "The resumed thread equals a fresh open: no duplicates, nothing missing, same step states.",
-      pass: "For both resumes, the item ids and step states equal a fresh snapshot's.",
-      fail: "The resumed view differs from a fresh open.",
+      text: "The resumed thread equals a fresh open: no duplicates, nothing missing, same contents, same order.",
+      pass: "For both resumes, the resumed items equal a fresh snapshot's item for item, as JSON, in order.",
+      fail: "The resumed view differs from a fresh open in an item, a field or the order.",
       check: (ev) => {
-        const key = (xs: Item[]) => xs.map((i) => `${i.kind}:${i.id}:${(i.steps ?? []).map((s) => s.state).join("")}`).sort().join("|");
-        const bad = ev.resumes.filter((r) => key(r.resumed) !== key(r.fresh));
-        return ev.resumes.length && !bad.length ? ok(`${ev.resumes.length} resumes match a fresh open`) : no(bad.map((r) => `${r.mark}: resumed ${r.resumed.length} items vs fresh ${r.fresh.length}`).join("; ") || "no resumes");
+        const tag = (i: Item | undefined) => (i ? `${i.kind}:${i.id}` : "nothing");
+        const diffs = ev.resumes.flatMap((r) => {
+          const n = Math.max(r.items.length, r.fresh.length);
+          const k = Array.from({ length: n }, (_, i) => i).find((i) => JSON.stringify(r.items[i]) !== JSON.stringify(r.fresh[i]));
+          if (k === undefined) return [];
+          const same = tag(r.items[k]) === tag(r.fresh[k]);
+          const field = same ? Object.keys({ ...r.items[k], ...r.fresh[k] }).filter((f) => JSON.stringify(r.items[k]![f]) !== JSON.stringify(r.fresh[k]![f])) : [];
+          return [`${r.mark}: item ${k + 1} is ${tag(r.items[k])} resumed but ${tag(r.fresh[k])} fresh${field.length ? ` (differs in ${field.join(", ")})` : ""}; resumed ${r.items.map(tag).join(",")} vs fresh ${r.fresh.map(tag).join(",")}`];
+        });
+        return ev.resumes.length && !diffs.length ? ok(`${ev.resumes.length} resumes equal a fresh open, in order`) : no(diffs.join("; ") || "no resumes");
       },
     },
     {
@@ -830,6 +1030,44 @@ const S6: Scenario = {
     },
     startTime("S6.5", "s6", (s) => s.tool === "Bash", "the command"),
     review("S6.6", "state", "Right after each reconnect, the thread on screen matches the truth.", "Running after resume-1, done after resume-2.", "Stale state.", ["after-resume-1", "after-resume-2"]),
+    {
+      id: "S6.7",
+      tell: "state",
+      lane: "protocol",
+      text: "When Claude Code dies mid-command, nothing keeps reading running, and the row says the run failed and why.",
+      pass: "At mark after-kill (5 s after the session rests), no step reads running, the row reads failed, and row.outcome carries the cause.",
+      fail: "A step still reads running, the row is not failed, or the row gives no cause.",
+      check: (ev) => {
+        const at = mark(ev, "after-kill");
+        if (at === undefined) return needMarks(ev, "after-kill")!;
+        const s = last(ev, "s6", at);
+        if (!s) return no("no state seen");
+        const running = stepsOf(s).filter((x) => x.state === "running").map((x) => x.label);
+        const outcome = s.row?.outcome as { kind?: string; text?: string } | null | undefined;
+        const bad = [running.length ? `still running: ${running.join("; ")}` : "", s.row?.status !== "failed" ? `row ${rowStatus(s)}` : "", outcome?.text ? "" : "the row carries no outcome cause"].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok(`no running step; row failed: ${outcome!.text}`);
+      },
+    },
+    {
+      id: "S6.8",
+      tell: "state",
+      lane: "protocol",
+      text: "The failure outlives a bridge restart: the row and the thread still say the run failed.",
+      pass: "At mark after-restart, the row reads failed (or its outcome is failed or lost) and the thread still holds a notice that says the run failed or that the bridge restarted.",
+      fail: "After the restart the row reads idle, or the thread lost the notice.",
+      check: (ev) => {
+        const at = mark(ev, "after-restart");
+        if (at === undefined) return needMarks(ev, "after-restart")!;
+        const s = last(ev, "s6", at);
+        if (!s) return no("no state seen");
+        const outcome = s.row?.outcome as { kind?: string } | null | undefined;
+        const rowFailed = s.row?.status === "failed" || ["failed", "lost"].includes(outcome?.kind ?? "");
+        const notice = s.items.find((i) => i.kind === "notice" && (i.tone === "error" || ["failure", "restart"].includes(String(i.reason))));
+        const bad = [rowFailed ? "" : `row ${rowStatus(s)}, outcome ${outcome?.kind ?? "none"}`, notice ? "" : "no failure or restart notice in the thread"].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok(`row ${rowStatus(s)}; notice "${(notice!.text ?? "").slice(0, 80)}"`);
+      },
+    },
+    noAckOutput("S6.9", ["s6"]),
   ],
 };
 
@@ -922,6 +1160,62 @@ const S7: Scenario = {
       },
     },
     review("S7.5", "how-many", "The Sessions list shows at a glance which 4 run and how many.", "Working rows stand out; a count is visible or obvious.", "Running rows look like the rest.", ["mixed"]),
+    {
+      id: "S7.6",
+      tell: "state",
+      lane: "protocol",
+      text: "A row stops reading Working as soon as its thread is at rest.",
+      pass: "Each time a thread's controls.working turns false, its row leaves working within 1.5 s.",
+      fail: "A row keeps reading working for more than 1.5 s after its thread came to rest.",
+      check: (ev) => {
+        const lags: { name: string; ms: number }[] = [];
+        for (const n of s7names) {
+          const xs = snaps(ev, n);
+          xs.forEach((s, i) => {
+            if (i === 0 || s.controls?.working !== false || xs[i - 1]!.controls?.working !== true) return;
+            const left = xs.slice(i).find((x) => x.row && x.row.status !== "working");
+            lags.push({ name: n, ms: left ? left.at - s.at : Infinity });
+          });
+        }
+        if (!lags.length) return no("not judged: no thread came to rest while watched");
+        const slow = lags.filter((l) => l.ms > 1500);
+        const worst = Math.max(...lags.map((l) => l.ms));
+        return slow.length ? no(`${slow.length}/${lags.length} rows lagged: ${slow.map((l) => `${l.name} ${Number.isFinite(l.ms) ? `${(l.ms / 1000).toFixed(1)} s` : "never"}`).join(", ")}`) : ok(`${lags.length} rest transitions, worst ${(worst / 1000).toFixed(1)} s`);
+      },
+    },
+    {
+      id: "S7.7",
+      tell: "how-many",
+      lane: "protocol",
+      text: "The list keeps its order while the user reads it: rows move only when a status changes.",
+      pass: "Ordering the rows as the app does (newest lastAt first), the order changes only in list frames that also change a row's status.",
+      fail: "The order changes in a frame where no status changed (a title rewrite, a bare transcript write).",
+      check: (ev) => {
+        const names = new Set(s7names);
+        const rows = new Map<string, Row>();
+        let order = "";
+        let reorders = 0;
+        let statusChanges = 0;
+        const bad: string[] = [];
+        const frames = new Map<number, Snap[]>();
+        for (const s of ev.history) if (names.has(s.name) && s.row) frames.set(s.frame, [...(frames.get(s.frame) ?? []), s]);
+        for (const xs of frames.values()) {
+          const changed = xs.filter((s) => rows.has(s.name) && rows.get(s.name)!.status !== s.row!.status).length;
+          const known = new Set(rows.keys());
+          for (const s of xs) rows.set(s.name, s.row!);
+          statusChanges += changed;
+          const next = [...rows].filter(([n]) => known.has(n)).sort(([a, x], [b, y]) => y.lastAt.localeCompare(x.lastAt) || a.localeCompare(b)).map(([n]) => n).join(",");
+          const before = order.split(",").filter((n) => known.has(n)).join(",");
+          if (before && next !== before) {
+            reorders++;
+            if (!changed) bad.push(`+${(xs[0]!.at / 1000).toFixed(1)}s`);
+          }
+          order = [...rows].sort(([a, x], [b, y]) => y.lastAt.localeCompare(x.lastAt) || a.localeCompare(b)).map(([n]) => n).join(",");
+        }
+        return bad.length ? no(`${bad.length} of ${reorders} reorders came with no status change, at ${bad.slice(0, 6).join(", ")}; ${statusChanges} status changes in all`) : ok(`${reorders} reorders, each with a status change (${statusChanges} status changes)`);
+      },
+    },
+    noAckOutput("S7.8", s7names),
   ],
 };
 
@@ -983,18 +1277,33 @@ const S8: Scenario = {
       tell: "state",
       lane: "protocol",
       text: "The user learns how the subagent's background command ended: it finished, or it was stopped.",
-      pass: "nested.txt appeared and the thread changed within 60 s of it; or, if it never appeared, a thread item says the background work stopped.",
-      fail: "The command never finished (nested.txt missing) and nothing told the user, or it finished and the thread did not change.",
+      pass: "nested.txt appeared and the thread changed within 60 s of it; or, if it never appeared, a notice says the background work stopped. Assistant prose does not count.",
+      fail: "The command never finished (nested.txt missing) and no notice told the user, or it finished and the thread did not change.",
       check: (ev) => {
         const done = mark(ev, "bg-done");
         if (done !== undefined) return finishShows("S8.3", "s8", "bg-done", "it").check!(ev);
-        const told = snaps(ev, "s8", mark(ev, "s8-ended") ?? 0).flatMap((s) => s.items).find((i) => (i.kind === "notice" || i.kind === "assistant") && /stopp|killed|background|nested/i.test(i.text ?? ""));
-        return told ? ok(`never finished; the thread says: ${told.kind} "${(told.text ?? "").slice(0, 80)}"`) : no("nested.txt never appeared (the command did not finish) and no thread item says it stopped");
+        const told = notices(ev, "s8", mark(ev, "s8-ended") ?? 0).find((i) => /stopp|killed|background|nested/i.test(i.text ?? ""));
+        return told ? ok(`never finished; the thread says: notice "${(told.text ?? "").slice(0, 80)}"`) : no("nested.txt never appeared (the command did not finish) and no notice says it stopped");
       },
     },
     unreadAfter("S8.4", "s8", "list-after"),
     stopOffered("S8.5", "s8", "mid-background", "mid-background", "the subagent's background command"),
     review("S8.6", "state", "Mid-background, the thread shows that something still runs and what.", "A running indicator with the command or the subagent.", "Looks finished.", ["background-running"]),
+    {
+      id: "S8.7",
+      tell: "what",
+      lane: "protocol",
+      text: "When Claude Code kills the subagent's background command, the thread names the command and the subagent that started it.",
+      pass: 'If nested.txt never appeared, a notice after the parent turn names the command ("sleep 60" or "nested") and its owner ("starter").',
+      fail: "The command was killed and no notice names both it and its owner.",
+      check: (ev) => {
+        if (mark(ev, "bg-done") !== undefined) return no("not judged: the command was not killed (nested.txt appeared)");
+        const all = notices(ev, "s8", mark(ev, "s8-ended") ?? 0);
+        const hit = all.find((i) => /sleep 60|nested/i.test(i.text ?? "") && /starter/i.test(i.text ?? ""));
+        return hit ? ok(`notice "${(hit.text ?? "").slice(0, 100)}"`) : no(all.length ? `no notice names both; notices: ${all.map((i) => `"${(i.text ?? "").slice(0, 60)}"`).join("; ")}` : "no notice after the parent turn");
+      },
+    },
+    noAckOutput("S8.8", ["s8"]),
   ],
 };
 

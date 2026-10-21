@@ -95,12 +95,16 @@ const bridgeLog = (run: Run) => (existsSync(join(run.dir, "bridge.log")) ? readF
 export const spent = (run: Run) =>
   [...bridgeLog(run).matchAll(/^result \S+ \S+ session=\S+ totalCostUsd=\S+ deltaUsd=([\d.e-]+)$/gm)].reduce((n, m) => n + Number(m[1]), 0);
 
-/** One socket like the app's: protocol 3, Bearer token. Keeps the bot list and every conversation it has seen. */
-export async function connect(run: Run) {
+/**
+ * One socket like the app's: protocol 3, Bearer token. Keeps the bot list and every conversation it has seen. `port`
+ * reaches the bridge through a relay; `resume` asks for a replay after the stream position the app holds.
+ */
+export async function connect(run: Run, opts: { port?: number; resume?: { epoch: string; after: number } | null } = {}) {
   const bots = new Map<string, Bot>();
   const convs = new Map<string, Msg[]>();
   const frames: Frame[] = [];
-  const ws = new WebSocket(`ws://127.0.0.1:${run.port}/ws?protocol=3`, { headers: { Authorization: `Bearer ${tokenOf(run)}` } } as never);
+  const resume = opts.resume ? `&epoch=${encodeURIComponent(opts.resume.epoch)}&after=${opts.resume.after}` : "";
+  const ws = new WebSocket(`ws://127.0.0.1:${opts.port ?? run.port}/ws?protocol=3${resume}`, { headers: { Authorization: `Bearer ${tokenOf(run)}` } } as never);
   const upsert = (botId: string, m: Msg) => {
     const list = convs.get(botId) ?? [];
     const i = list.findIndex((x) => x.id === m.id);
@@ -167,6 +171,68 @@ function line(i: number, m: Msg) {
   }
 }
 
+// setsid puts each process in its own session, so it outlives this command and the shell that ran it. stdout and
+// stderr share one append-mode descriptor: two separate opens of the file overwrite each other's lines.
+function detach(argv: string[], logFile: string, env: Record<string, string | undefined>) {
+  const fd = openSync(logFile, "a");
+  const p = Bun.spawn(["perl", "-MPOSIX", "-e", "POSIX::setsid(); exec @ARGV", ...argv], { env, stdout: fd, stderr: fd, stdin: "ignore" });
+  closeSync(fd);
+  p.unref();
+  return p;
+}
+
+/** The bridge's environment for a run, everything pointing into the run folder. launch and restart share it. */
+function bridgeEnv(run: Pick<Run, "dir" | "home" | "roots" | "port" | "webhookPort" | "ntfyPort" | "model">) {
+  const bin = join(run.dir, "bin");
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    CLAUDIOBOT_PORT: String(run.port),
+    CLAUDIOBOT_ROOTS: run.roots,
+    CLAUDIOBOT_HOME: run.home,
+    CLAUDIOBOT_MODEL: run.model,
+    CLAUDIOBOT_USER_NAME: "Alex",
+    CLAUDIOBOT_PUSH_URL: `http://127.0.0.1:${run.ntfyPort}/verify`,
+    CLAUDIOBOT_DESKTOP_FAKE: join(run.dir, "desktop-imports.txt"),
+    CLAUDIOBOT_WEBHOOK_PORT: String(run.webhookPort),
+    CLAUDIOBOT_CLAUDE: join(bin, "claude"),
+    PATH: `${bin}:${process.env.PATH ?? ""}`,
+    ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+  };
+  for (const k of ["CLAUDEBOT_HOME", "SSH_AUTH_SOCK", "GH_TOKEN", "GITHUB_TOKEN", "CLAUDIOBOT_ALLOWED_DOMAINS", "CLAUDIOBOT_SANDBOX_STRICT_NETWORK", "CLAUDIOBOT_SANDBOX_GH"]) delete env[k];
+  // A Claude Code this helper runs inside (the desktop app, a terminal) leaves its session id, entrypoint and messaging
+  // socket in the environment; the bridge's own Claude Code children must not inherit them.
+  for (const k of Object.keys(env)) if (/^(CLAUDE_CODE_|CLAUDE_AGENT_SDK_|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDECODE$|AI_AGENT$)/.test(k)) delete env[k];
+  // Inherited CLAUDIOBOT_* settings would leak the user's own configuration into the run. Access and sandbox modes pass
+  // through on purpose, so full access can be verified by setting them for one launch.
+  const ours = new Set(["CLAUDIOBOT_PORT", "CLAUDIOBOT_ROOTS", "CLAUDIOBOT_HOME", "CLAUDIOBOT_MODEL", "CLAUDIOBOT_USER_NAME", "CLAUDIOBOT_PUSH_URL", "CLAUDIOBOT_DESKTOP_FAKE", "CLAUDIOBOT_WEBHOOK_PORT", "CLAUDIOBOT_CLAUDE", "CLAUDIOBOT_ACCESS", "CLAUDIOBOT_SANDBOX"]);
+  for (const k of Object.keys(env)) if (k.startsWith("CLAUDIOBOT_") && !ours.has(k)) delete env[k];
+  return env;
+}
+
+/**
+ * restart: stops the run's bridge and starts it again on the same port, home and roots, as a crash and relaunch would.
+ * Sockets drop; the pairing, sessions and transcripts stay. run.json gets the new pid.
+ */
+async function restart(run: Run) {
+  if (run.port === 7878 || !run.home.startsWith(`${run.dir}/`)) die("refusing to restart a bridge that is not a verification run's");
+  if (alive(run.bridgePid)) {
+    process.kill(run.bridgePid, "SIGTERM");
+    for (let i = 0; i < 100 && alive(run.bridgePid); i++) await Bun.sleep(100);
+    if (alive(run.bridgePid)) process.kill(run.bridgePid, "SIGKILL");
+  }
+  for (let i = 0; i < 50 && listener(run.port).length; i++) await Bun.sleep(100);
+  const bridge = detach(["bun", "run", MAIN], join(run.dir, "bridge.log"), bridgeEnv(run));
+  const next = { ...run, bridgePid: bridge.pid };
+  writeFileSync(join(run.dir, "run.json"), JSON.stringify(next, null, 2));
+  for (let i = 0; i < 600; i++) {
+    await Bun.sleep(100);
+    if (!alive(bridge.pid)) die(`the bridge exited at restart; log ${join(run.dir, "bridge.log")}:\n${bridgeLog(run).slice(-2000)}`);
+    const ok = await fetch(`http://127.0.0.1:${run.port}/health`).then((r) => r.ok).catch(() => false);
+    if (ok) return console.log(`RESTARTED run=${run.id} pid ${run.bridgePid} -> ${bridge.pid} on 127.0.0.1:${run.port}`);
+  }
+  die(`the bridge did not answer /health within 60s of restart; log ${join(run.dir, "bridge.log")}`);
+}
+
 async function launch() {
   const model = flag("model") ?? process.env.CLAUDIOBOT_VERIFY_MODEL ?? "claude-sonnet-5-5";
   const budgetUsd = Number(flag("budget") ?? process.env.CLAUDIOBOT_VERIFY_BUDGET_USD ?? 2);
@@ -219,15 +285,6 @@ const s = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async (req) => {
 console.log("ntfy-sink " + s.port);
 `,
   );
-  // setsid puts each process in its own session, so it outlives this command and the shell that ran it. stdout and
-  // stderr share one append-mode descriptor: two separate opens of the file overwrite each other's lines.
-  const detach = (argv: string[], logFile: string, env: Record<string, string | undefined>) => {
-    const fd = openSync(logFile, "a");
-    const p = Bun.spawn(["perl", "-MPOSIX", "-e", "POSIX::setsid(); exec @ARGV", ...argv], { env, stdout: fd, stderr: fd, stdin: "ignore" });
-    closeSync(fd);
-    p.unref();
-    return p;
-  };
   const ntfy = detach(["bun", "run", sink], join(dir, "ntfy.log"), process.env);
   let ntfyPort = 0;
   for (let i = 0; i < 100 && !ntfyPort; i++) {
@@ -238,28 +295,7 @@ console.log("ntfy-sink " + s.port);
 
   const port = freePort();
   const webhookPort = freePort();
-  const env: Record<string, string | undefined> = {
-    ...process.env,
-    CLAUDIOBOT_PORT: String(port),
-    CLAUDIOBOT_ROOTS: roots,
-    CLAUDIOBOT_HOME: home,
-    CLAUDIOBOT_MODEL: model,
-    CLAUDIOBOT_USER_NAME: "Alex",
-    CLAUDIOBOT_PUSH_URL: `http://127.0.0.1:${ntfyPort}/verify`,
-    CLAUDIOBOT_DESKTOP_FAKE: join(dir, "desktop-imports.txt"),
-    CLAUDIOBOT_WEBHOOK_PORT: String(webhookPort),
-    CLAUDIOBOT_CLAUDE: wrapper,
-    PATH: `${bin}:${process.env.PATH ?? ""}`,
-    ENABLE_CLAUDEAI_MCP_SERVERS: "false",
-  };
-  for (const k of ["CLAUDEBOT_HOME", "SSH_AUTH_SOCK", "GH_TOKEN", "GITHUB_TOKEN", "CLAUDIOBOT_ALLOWED_DOMAINS", "CLAUDIOBOT_SANDBOX_STRICT_NETWORK", "CLAUDIOBOT_SANDBOX_GH"]) delete env[k];
-  // A Claude Code this helper runs inside (the desktop app, a terminal) leaves its session id, entrypoint and messaging
-  // socket in the environment; the bridge's own Claude Code children must not inherit them.
-  for (const k of Object.keys(env)) if (/^(CLAUDE_CODE_|CLAUDE_AGENT_SDK_|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDECODE$|AI_AGENT$)/.test(k)) delete env[k];
-  // Inherited CLAUDIOBOT_* settings would leak the user's own configuration into the run. Access and sandbox modes pass
-  // through on purpose, so full access can be verified by setting them for one launch.
-  const ours = new Set(["CLAUDIOBOT_PORT", "CLAUDIOBOT_ROOTS", "CLAUDIOBOT_HOME", "CLAUDIOBOT_MODEL", "CLAUDIOBOT_USER_NAME", "CLAUDIOBOT_PUSH_URL", "CLAUDIOBOT_DESKTOP_FAKE", "CLAUDIOBOT_WEBHOOK_PORT", "CLAUDIOBOT_CLAUDE", "CLAUDIOBOT_ACCESS", "CLAUDIOBOT_SANDBOX"]);
-  for (const k of Object.keys(env)) if (k.startsWith("CLAUDIOBOT_") && !ours.has(k)) delete env[k];
+  const env = bridgeEnv({ dir, home, roots, port, webhookPort, ntfyPort, model });
   for (const k of ["CLAUDIOBOT_ACCESS", "CLAUDIOBOT_SANDBOX"]) if (process.env[k] !== undefined) console.log(`note: ${k}=${process.env[k]} is passed through from your shell`);
 
   const inRun = (v: string | undefined) => v !== undefined && v.startsWith(`${dir}/`);
@@ -347,6 +383,8 @@ async function main() {
       return launch();
     case "doctor":
       return doctor();
+    case "restart":
+      return restart(loadRun());
     case "runs": {
       for (const id of readdirSync(join(BASE, "runs"))) {
         const f = join(BASE, "runs", id, "run.json");
@@ -472,7 +510,7 @@ async function main() {
 }
 
 /** Copies what proves a behavior into evidence/<run>/<label>/. Never the token. */
-export type Row = { id: string; projectId: string; parentId?: string | null; title: string; origin: string; status: string; holder: string; unread: boolean; agent: unknown; mirror: string; hidden: boolean; branch: string | null; worktree: boolean };
+export type Row = { id: string; projectId: string; parentId?: string | null; title: string; origin: string; status: string; holder: string; unread: boolean; agent: unknown; mirror: string; hidden: boolean; branch: string | null; worktree: boolean; lastAt: string; outcome?: unknown };
 export type Project = { id: string; name: string; path: string };
 
 const countBy = <T>(xs: T[], key: (x: T) => string) => Object.entries(xs.reduce<Record<string, number>>((m, x) => ((m[key(x)] = (m[key(x)] ?? 0) + 1), m), {})).map(([k, n]) => `${k}=${n}`).join(" ");

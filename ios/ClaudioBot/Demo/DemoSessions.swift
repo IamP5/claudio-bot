@@ -309,7 +309,7 @@ enum DemoSessions {
             }
         case let .sessionSend(id, text, clientId, _):
             reply(to: text, clientId: clientId, in: id, store: store)
-        case let .sessionStop(id):
+        case let .sessionStop(id, _, _):
             var c = store.threads[id]?.controls ?? controls()
             c.working = false
             items(store, id, [], controls: c)

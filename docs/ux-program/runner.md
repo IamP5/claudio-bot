@@ -18,12 +18,32 @@ $R run S2                     # protocol lane: bridge + socket only
 $R run S1,S4,S5               # several, one after another
 $R run S3 --sim               # simulator lane: also leases a device, installs the app, takes screenshots
 $R run S3 --sim --pair-wait 180
+$R run S1 --sim --content-size accessibility-extra-extra-extra-large --appearance dark   # simctl ui for the run, reset after
 $R doc sessions > docs/ux-program/scenarios/sessions.md   # regenerate the rubric doc
 ```
 
-Scenarios live in `bin/scenarios.ts` as data: setup actions, preconditions and rubric items, each item with its lane and, for protocol items, a mechanical check. `docs/ux-program/scenarios/sessions.md` is generated from it, so edit the registry, never the doc.
+Scenarios live in `bin/scenarios.ts` as data: setup actions, preconditions and rubric items, each item with its lane and, for protocol items, a mechanical check. `docs/ux-program/scenarios/sessions.md` is generated from it, so edit the registry, never the doc. Every scenario runs on the protocol lane; S3 judges its push and unread items there through the run's push sink (`pushes.jsonl`), and its screenshots need `--sim`.
 
-Exit code 0 means the scenario was judged (rubric failures are findings, not runner failures). 2 means a precondition failed: the scenario could not produce its situation, and its rubric is reported not judged. 1 means the runner itself failed. Every session turn runs on haiku. Each permission card a scenario raises is answered Allow once, and the timeline records the tap.
+Exit code 0 means the scenario was judged (rubric failures are findings, not runner failures). 2 means a precondition failed: the scenario could not produce its situation, and its rubric is reported not judged. 1 means the runner itself failed. Every session turn runs on haiku. Each permission card a scenario raises is answered Allow once, and the timeline records the tap. A scenario with `holdCardsS` (S5) taps it that many seconds after the card appears, so the waiting state is on the wire.
+
+## What the runner does for the user
+
+The phone, and with `--sim` the app, reach the bridge through a TCP relay the runner owns. The relay is how the network fails: `reconnect` with `how: "close"` ends the sockets and refuses new ones for the window; `how: "half-open"` passes nothing either way and closes nothing, as when a phone loses signal or iOS suspends the app. Reconnects send `?epoch&after` with the stream position the phone holds, as the app's `StreamCursor` does, and the report says whether the hello resumed and how many frames were replayed. A message sent while the socket is closed waits in an outbox and goes after the next hello and the thread watches, as in the app; one sent into a half-open socket is lost.
+
+| action | what it does |
+| --- | --- |
+| `create`, `send` | a new session, or a message in one (`interrupt: true` is "Stop and send") |
+| `until`, `sleep`, `mark` | wait for a condition on the evidence, wait, or mark the time |
+| `leave`, `return` | the phone unwatches a thread, or watches it again from its position |
+| `open-thread`, `show-list` | with `--sim`, the app opens the thread by its link (then 3 s to draw) or is relaunched on the Sessions list; on the protocol lane `open-thread` watches the thread again if the phone had left it |
+| `app background`, `app foreground` | with `--sim`, Settings over the app and back; on the protocol lane the phone's socket goes half-open, then the phone reconnects (mark `<mark>-list` when the list arrives, before any thread is watched) |
+| `reconnect` | drop (`close` or `half-open`), optional `send` while down, reconnect with resume, compare each thread with a fresh open as JSON in order (unless `compare: false`) |
+| `ps` | sample the Mac's processes matching a pattern whose working directory is the seed project; the report lists every sample |
+| `kill-claude` | SIGKILL the Claude Code process whose command line names the session |
+| `restart-bridge` | `control-claudio restart`: the bridge stops and starts on the same port, home and roots; the phone reconnects |
+| `screenshot` | simulator lane only |
+
+Simulator shots of a thread come after `open-thread`, so `running.png`, `done.png`, `background-running.png` and the rest show the thread their rubric item names. S2 and S8 relaunch the app on the list (`show-list`) after the mid-background shot, so the app is not watching the thread while the list's unread mark is judged.
 
 ## Evidence layout
 
@@ -31,12 +51,12 @@ Each run writes to `$CLAUDIOBOT_VERIFY_DIR/scenarios/<id>/<stamp>[-sim]/` (defau
 
 | file | what |
 | --- | --- |
-| `report.md`, `report.json` | outcome, preconditions, each rubric verdict with its reason, marks (seconds since start), spend |
+| `report.md`, `report.json` | outcome, preconditions, each rubric verdict with its reason, marks (seconds since start), process samples, spend |
 | `timeline.jsonl` | every frame about the scenario's own sessions, both directions, with `at` in ms; list frames are cut to the run's seed projects |
 | `threads.txt` | the same, one readable line per frame |
 | `transcripts/` | Claude Code's transcripts of the scenario's sessions, subagents included, copied before cleanup removes them |
 | `screenshots/` | simulator lane only: `pair-confirm.png`, `after-pairing.png` and each scenario shot |
-| `launch.log`, `cleanup.log` | control-claudio's output; cleanup also keeps the bridge's own snapshot under `evidence/<run>/final/` |
+| `launch.log`, `restart.log`, `cleanup.log` | control-claudio's output; cleanup also keeps the bridge's own snapshot under `evidence/<run>/final/` |
 
 Verdicts: `pass`, `fail`, `review` (a simulator item with screenshots for a person or agent to judge), `not-judged` (a mark it needs was never reached, or the precondition failed) and `skipped` (a simulator item on the protocol lane).
 
@@ -70,7 +90,7 @@ A lease is the directory `$CLAUDIOBOT_VERIFY_DIR/leases/<device>/`, made with `m
 The pairing:
 
 1. The runner asks its bridge for a one-time code over the socket (`pair_code`).
-2. It opens `claudiobot://pair?url=ws%3A%2F%2F127.0.0.1%3A<port>%2Fws&code=<code>` with `xcrun simctl openurl`, and the app confirms it on its own. `screenshots/pair-link.png` is the app 3 s later.
+2. It opens `claudiobot://pair?url=ws%3A%2F%2F127.0.0.1%3A<relay port>%2Fws&code=<code>` with `xcrun simctl openurl`, and the app confirms it on its own. `screenshots/pair-link.png` is the app 3 s later.
 3. It polls the bridge's `devices` list for up to `--pair-wait` seconds (default 120). A new device means the app paired, and `paired` is true in the report.
 4. `open-thread` uses `claudiobot://session/<id>`, and `app background|foreground` launches Settings over the app, then the app again.
 

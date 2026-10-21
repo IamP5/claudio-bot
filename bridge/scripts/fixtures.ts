@@ -102,6 +102,37 @@ const card = {
   kind: "permission" as const, id: "m20", at: later, from: null, tool: "Bash", label: "Bash",
   detail: "rm -rf node_modules && bun install", always: "rm -rf node_modules in solta-o-som, for this session", answer: null, expiresAt: "2026-10-16T16:00:00.000Z",
 };
+// Run state (feature session_tasks): a session the phone started, with a background subagent blocked on a card, the
+// command it started, a failed call and a stopped subagent.
+const phoneRow: Wire<SessionRow> = {
+  id: "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16", projectId: solta.id, parentId: null, title: "Sleep in parallel", origin: "phone",
+  agent: null, status: "awaiting_approval", holder: "claudio", unread: false,
+  branch: "main", worktree: false, pr: null, mirror: "none", hidden: false, url: null, createdAt: at, lastAt: later,
+  since: at, running: { agents: 1, commands: 1 }, activity: "Waiting for approval: Bash",
+};
+const runControls: Wire<SessionControls> = {
+  ...controls, queued: 0,
+  turn: { startedAt: at, wake: false },
+  tasks: [
+    { id: "a7f3c2e9b1d40e58", stepId: "toolu_01Ac1", kind: "agent", label: "sleeper two", background: true, startedAt: at, owner: null, progress: { tools: 3, last: "Bash", at: later }, waiting: "m23" },
+    { id: "bk2x9q7", stepId: "toolu_01Ac3", kind: "command", label: "sleep 60", background: true, startedAt: at, owner: "toolu_01Ac1", progress: null, waiting: null },
+  ],
+  heardAt: later,
+};
+const runItems = [
+  { kind: "work", id: "toolu_01Ac1", at, steps: [
+    { id: "toolu_01Ac1", tool: "Agent", label: "sleeper two", state: "running", diff: null, output: null, detail: "general-purpose", startedAt: at, background: true },
+    { id: "toolu_01Ac2", tool: "Bash", label: "Remove the build folder", state: "waiting", diff: null, output: null, detail: "rm -rf build", owner: "toolu_01Ac1" },
+    { id: "toolu_01Ac3", tool: "Bash", label: "Run in background: sleep 60", state: "running", diff: null, output: null, detail: "sleep 60", startedAt: at, background: true, owner: "toolu_01Ac1" },
+    { id: "toolu_01Ac4", tool: "Bash", label: "List the late files", state: "error", diff: null, output: "ls: late.txt: No such file or directory\n", detail: "ls late.txt", startedAt: at, endedAt: later, cause: "Exit code 1: ls: late.txt: No such file or directory" },
+    { id: "toolu_01Ac5", tool: "Agent", label: "sleeper one", state: "stopped", diff: null, output: null, detail: "general-purpose", startedAt: at, endedAt: later, cause: "Stopped by you", usage: { tools: 4, ms: 31000 } },
+  ] },
+  { kind: "permission", id: "m23", at: later, card: { ...permission, id: "m23", label: "Bash", detail: "rm -rf build", always: "rm -rf build in solta-o-som, for this session" }, stepId: "toolu_01Ac2", subagent: "sleeper two" },
+  { kind: "permission", id: "m24", at: later, card: { ...permission, id: "m24", label: "Bash", detail: "sleep 30", always: "sleep in solta-o-som, for this session", answer: "stopped" }, stepId: "toolu_01Ac6", subagent: "sleeper one" },
+  { kind: "notice", id: "n_2", at: later, text: "Background command \"sleep 75\" completed (exit code 0)", tone: "info", reason: "task" },
+  { kind: "notice", id: "n_3", at: later, text: "Stopped by Alex: the turn and 1 agent", tone: "info", reason: "stop" },
+] satisfies Wire<SessionItem>[];
+
 const asked = "Which audio library should the fade use?";
 const ask = {
   kind: "ask" as const, id: "toolu_01Ab8", at: later, cardId: "m21", answers: null,
@@ -112,7 +143,7 @@ const ask = {
 };
 
 export const server = [
-  { type: "hello", protocol: 3, features: [...FEATURES], epoch: "e_7f3a", seq: 41, resumed: false, machine: "MacBook", userName: "Alex", bots: [bot] },
+  { type: "hello", protocol: 3, features: [...FEATURES], epoch: "e_7f3a", seq: 41, resumed: false, machine: "MacBook", userName: "Alex", bots: [bot], push: { state: "on" } },
   { type: "bot", seq: 42, bot: { ...bot, id: "b2", name: "news digest", title: "Morning digest", avatar: { shape: "pentagon", color: "teal" }, status: "working", unread: 0, question: null, pinned: true, dailyCapUsd: 5, spentTodayUsd: 0, capUsd: 5 } },
   { type: "bot_removed", botId: "b2" },
   { type: "created", ref: "c1", botId: "b3" },
@@ -219,6 +250,21 @@ export const server = [
   { type: "session_tool_output", sessionId: agentSession, toolUseId: "toolu_01Ab5", output: "bun test v1.3.0\n\nsrc/audio/fade.test.ts:\n(fail) fades to silence in 40 ms\n\n 13 pass\n 1 fail\n" },
   { type: "session_removed", sessionId: agentSession, movedTo: "f2c8b4a6-1e3d-4f9b-a7c5-6d2e8b1f4a37" },
   { type: "session_removed", sessionId: desktopRow.id, movedTo: null },
+  {
+    type: "session_rows", removed: [], projects: [], rows: [
+      phoneRow,
+      { ...desktopRow, status: "failed", outcome: { kind: "failed", text: "Claude Code exited: out of memory", at: later } },
+      { ...childRow, status: "idle", outcome: { kind: "stopped", text: "Stopped by you: the turn, 2 agents", at: later } },
+    ],
+  },
+  { type: "session_items", sessionId: phoneRow.id, rev: 3, removed: [], items: runItems, controls: runControls },
+  { type: "session_items", sessionId: phoneRow.id, rev: 4, removed: [], items: [], controls: { ...runControls, turn: { startedAt: later, wake: true }, tasks: [] } },
+  { type: "push_state", push: { state: "failing", error: "The push server answered 500", at: later } },
+  { type: "push_state", push: { state: "off" } },
+  { type: "error", message: "Nothing is running.", about: { kind: "stop", sessionId: agentSession } },
+  { type: "error", message: "That session is gone.", about: { kind: "send", sessionId: agentSession, clientId: "c_4d2a" } },
+  { type: "error", message: "That output is no longer on the Mac.", about: { kind: "tool", sessionId: agentSession, toolUseId: "toolu_01Ab5" } },
+  { type: "error", message: "That project is gone.", about: { kind: "create", ref: "s1" } },
 ] satisfies (Wire<ServerMessage> | Wire<Broadcast>)[];
 
 export const client = [
@@ -271,6 +317,9 @@ export const client = [
   { type: "session_send", sessionId: agentSession, text: "Also check it on Firefox", clientId: "c_4d2a", interrupt: false },
   { type: "session_send", sessionId: desktopRow.id, text: "Stop, use the Web Audio API instead", clientId: "c_4d2b", interrupt: true },
   { type: "session_stop", sessionId: agentSession },
+  { type: "session_stop", sessionId: agentSession, target: "turn", turnStartedAt: at },
+  { type: "session_stop", sessionId: agentSession, target: { task: "bk2x9q7" }, turnStartedAt: at },
+  { type: "session_unqueue", sessionId: agentSession, clientId: "c_4d2a" },
   { type: "session_decide", sessionId: agentSession, cardId: "m20", choice: "once" },
   { type: "session_answer", sessionId: agentSession, cardId: "m21", answers: { [asked]: "Howler.js" } },
   { type: "session_answer", sessionId: agentSession, cardId: "m21", answers: null },

@@ -78,6 +78,8 @@ type State = {
   controls: string;
   /** A card is held back until the transcript shows its call. */
   holding: boolean;
+  /** What the published controls say. */
+  working: boolean;
   /** The step patches last published, by step id, as JSON. */
   steps: Map<string, string>;
   sentAt: number;
@@ -117,7 +119,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
 
   const indexOf = (items: readonly SessionItem[]) => new Map(items.map((item, i) => [item.id, i] as const));
 
-  async function read(id: SessionId): Promise<Omit<State, "overlay" | "controls" | "steps" | "holding" | "sentAt" | "shownByTranscript" | "rev" | "ring" | "live" | "queue" | "usedAt" | "epoch">> {
+  async function read(id: SessionId): Promise<Omit<State, "overlay" | "controls" | "steps" | "holding" | "working" | "sentAt" | "shownByTranscript" | "rev" | "ring" | "live" | "queue" | "usedAt" | "epoch">> {
     const head = deps.head(id);
     const ctx = deps.context(id, head);
     if (!head) return { id, path: null, ctx, items: [], index: new Map(), tail: emptyTail(), chain: { uuids: new Set(), leaf: null }, offset: 0 };
@@ -140,6 +142,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
           controls: "",
           steps: new Map(),
           holding: false,
+          working: false,
           sentAt: deps.now().getTime(),
           shownByTranscript: new Set(),
           rev: 0,
@@ -162,10 +165,9 @@ export function createThreads(deps: ThreadsDeps): Threads {
     return made;
   }
 
-  /** The overlay as it should show: suppressed items left out. Records it as published. */
   /**
-   * The overlay as shown. A card for a main-thread call waits, up to CARD_WAIT_MS, for the transcript to show the call,
-   * which Claude Code can write a moment after it asks, so the card never reads as asking about a step the thread lacks.
+   * The overlay as shown: suppressed items left out. A card for a main-thread call waits, up to CARD_WAIT_MS, for the
+   * transcript to show the call, which Claude Code can write a moment after it asks, so the card goes out with its step.
    */
   function visible(s: State): SessionItem[] {
     const now = deps.now().getTime();
@@ -179,12 +181,18 @@ export function createThreads(deps: ThreadsDeps): Threads {
     });
   }
 
+  /** The overlay as shown, recorded as published with the controls. */
   function absorbOverlay(s: State): SessionItem[] {
     s.holding = false;
     const overlay = visible(s);
     s.overlay = new Map(overlay.map((item) => [item.id, JSON.stringify(item)]));
-    s.controls = JSON.stringify(deps.controls(s.id));
+    absorbControls(s, deps.controls(s.id));
     return overlay;
+  }
+
+  function absorbControls(s: State, controls: SessionControls) {
+    s.controls = JSON.stringify(controls);
+    s.working = controls.working;
   }
 
   /** Records the step patches as published; returns the transcript's work items whose patches changed. */
@@ -405,7 +413,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
       const s = states.get(id);
       if (!s) return;
       void serial(s, async () => {
-        // Claude Code writes a call to the transcript before it asks about it, so a card is published with its step.
+        // A card's call may be in the transcript already, so the thread reads it first and the two go out together.
         if (behind(s)) await catchUp(s);
         if (states.get(s.id) !== s) return;
         const o = overlayDiff(s, []);
@@ -416,12 +424,12 @@ export function createThreads(deps: ThreadsDeps): Threads {
     beat() {
       const now = deps.now().getTime();
       for (const s of states.values()) {
-        if (now - s.sentAt < BEAT_MS || !deps.watched(s.id) || !(JSON.parse(s.controls || "{}") as Partial<SessionControls>).working) continue;
+        if (!s.working || now - s.sentAt < BEAT_MS || !deps.watched(s.id)) continue;
         s.sentAt = now;
         void serial(s, () => {
           const controls = deps.controls(s.id);
           if (!controls.working) return;
-          s.controls = JSON.stringify(controls);
+          absorbControls(s, controls);
           emit(s, [], [], controls);
         });
       }

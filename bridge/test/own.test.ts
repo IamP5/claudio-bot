@@ -465,20 +465,20 @@ describe("live work", () => {
     const input = { command: "sleep 75 && echo bg-done > bg.txt", description: "Sleep 75 seconds then write bg-done marker", run_in_background: true };
     q.emit(toolCall("toolu_bg", "Bash", input));
     await flush();
-    expect((await rowOf(ASK)).activity).toBe("Run Sleep 75 seconds then write bg-done marker");
+    expect((await rowOf(ASK)).activity).toBe("Run in background: Sleep 75 seconds then write bg-done marker");
     q.emit(taskStarted(shellTask("bp4", "toolu_bg", input.description)), level(shellTask("bp4", "toolu_bg", input.description)), toolResult("toolu_bg", "Command running in background with ID: bp4."), result());
     await transcribe(calledEntry("toolu_bg", "Bash", input), resultEntry("toolu_bg", "Command running in background with ID: bp4."));
     expect(await stepOf("toolu_bg")).toMatchObject({ state: "running", output: null, startedAt: "2026-10-18T12:00:00.000Z" });
     expect(await controlsNow()).toMatchObject({ working: true, tasks: [{ id: "bp4", kind: "command", stepId: "toolu_bg", background: true }] });
-    expect(await rowOf(ASK)).toMatchObject({ status: "working", running: { agents: 0, commands: 1 }, activity: "Background: Sleep 75 seconds then write bg-done marker" });
+    expect(await rowOf(ASK)).toMatchObject({ status: "working", running: { agents: 0, commands: 1 }, activity: "Background: sleep 75 && echo bg-done > bg.txt" });
 
     thread.length = 0;
     q.emit(completed("bp4"), notifiedOf("bp4", "toolu_bg"), level(), wakeInit(), result());
-    await flush();
+    await transcribe({ type: "user", message: { role: "user", content: "<task-notification>\n<task-id>bp4</task-id>\n<tool-use-id>toolu_bg</tool-use-id>\n<status>completed</status>\n<summary>Background command completed (exit code 0)</summary>\n</task-notification>" } });
     const frames = thread.flatMap(({ frame }) => (frame.type === "session_items" ? frame.items : []));
     expect(frames.flatMap((i) => (i.kind === "work" ? i.steps : [])).findLast((s) => s.id === "toolu_bg")?.state).toBe("ok");
     expect((await controlsNow()).working).toBe(false);
-    expect((await noticesNow()).length).toBe(0);
+    expect((await noticesNow()).map((n) => n.text)).toEqual(["Background command completed (exit code 0)"]);
   });
 
   test("a subagent's background command keeps the subagent's step running and names it as owner; killed unannounced, the thread says so", async () => {
@@ -642,6 +642,58 @@ describe("live work", () => {
     const notices = await noticesNow();
     expect(notices).toHaveLength(1);
     for (const secret of ["sk-ant-api03", "hunter2pass", "topsecret9"]) expect(JSON.stringify([live, notices])).not.toContain(secret);
+  });
+
+  test("a Stop Claude Code refuses says so, and the task's later end is still named", async () => {
+    await start();
+    await send("Start it");
+    const q = queries[0]!;
+    const shell = shellTask("bk", "toolu_k", "sleep 600");
+    q.emit(taskStarted(shell), level(shell), result());
+    await flush();
+    q.refuseStop = true;
+    expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } })).toEqual([{ type: "error", message: "Claude Code did not stop that task." }]);
+    q.emit(sys("task_updated", { task_id: "bk", patch: { status: "killed" } }), level());
+    await flush();
+    expect((await noticesNow()).map((n) => n.text)).toEqual(['The background command "sleep 600" was stopped by Claude Code.']);
+  });
+
+  test("Stop stays offered while the bridge's background task runs, even when another Claude Code is busy on the session", async () => {
+    await start();
+    await send("Go");
+    const q = queries[0]!;
+    const shell = shellTask("b1", "toolu_b1", "sleep 600");
+    q.emit(taskStarted(shell), level(shell), result());
+    await flush();
+    holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "cli", kind: "interactive", cwd: repo, status: "busy", waitingFor: null });
+    for (const f of appChanged) f();
+    await flush();
+    const controls = await controlsNow();
+    expect([controls.canSend, controls.working, controls.tasks?.map((t) => t.id)]).toEqual([false, true, ["b1" as TaskId]]);
+  });
+
+  test("the row's activity line masks a secret before it cuts the command short", async () => {
+    await start();
+    await send("Upload it");
+    const command = "./scripts/upload-release-artifacts.sh --channel stable --mirror eu Zq8vR2kLm9Xw4TbN7pHs3JdF6yGc1VaE";
+    queries[0]!.emit(toolCall("toolu_up", "Bash", { command }));
+    await flush();
+    const activity = (await rowOf(ASK)).activity!;
+    expect([activity.startsWith("Run ./scripts/upload-release-artifacts.sh"), activity.includes("Zq8v")]).toEqual([true, false]);
+  });
+
+  test("Claude Code stopping a foreground subagent's background command is named, and the session rests when the turn ends", async () => {
+    await start();
+    await send("Start a starter");
+    const q = queries[0]!;
+    const starter = { ...agentTask("af", "toolu_af", "starter"), is_backgrounded: false };
+    const shell = shellTask("bs", "toolu_bs", "Run delayed write to nested.txt in background", "af");
+    q.emit(wakeInit(), taskStarted(starter), toolCall("toolu_bs", "Bash", { command: "sleep 60 && echo nested-done > nested.txt", run_in_background: true }, "toolu_af"), level(shell), taskStarted(shell));
+    await flush();
+    q.emit(sys("task_updated", { task_id: "bs", patch: { status: "killed" } }), notifiedOf("bs", "toolu_bs", "stopped"), level(), completed("af"), notifiedOf("af", "toolu_af"), result());
+    await flush();
+    expect((await noticesNow()).map((n) => n.text)).toEqual(['The background command "sleep 60 && echo nested-done > nested.txt", started by starter, was stopped by Claude Code.']);
+    expect(await controlsNow()).toMatchObject({ working: false, tasks: [] });
   });
 
   test("a terminal or Claude app session waiting on its user reads as needing them", async () => {

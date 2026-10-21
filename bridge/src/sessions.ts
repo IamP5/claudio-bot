@@ -213,7 +213,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     const a = session?.activity() ?? RESTING;
     const working = (session?.working ?? false) || runs(a);
     const status: SessionStatus = working ? "working" : session?.parkedFor ? "parked" : AGENT_STATUS[w.rec.agent.status];
-    return { status, working, ...(working && rowRun(a, null, (c) => stepLabel(c.tool, c.input, w.rec.cwd))) };
+    return { status, working, ...(working && rowRun(a, null, (c, target) => stepLabel(c.tool, c.input, w.rec.cwd, target))) };
   }
 
   function controls(id: SessionId): SessionControls {
@@ -439,8 +439,10 @@ export function createSessions(deps: SessionsDeps): Sessions {
     const w = driverOf(id);
     if (w.kind === "cloud") return error("A cloud session runs on claude.ai; stop it there.");
     if (w.kind === "agent" && target !== "all") return error("An agent's session stops as a whole.");
+    const live = typeof target === "object" && w.kind === "own" && (drivers.controls(w.rec).tasks ?? []).some((t) => t.id === target.task);
     const stopped = w.kind === "agent" ? await deps.agents.stop(w.rec) : w.kind === "own" ? await drivers.stop(w.rec, target) : false;
-    return stopped ? [] : error(typeof target === "object" ? "That task is not running." : "Nothing is running.");
+    if (stopped) return [];
+    return error(typeof target !== "object" ? "Nothing is running." : live ? "Claude Code did not stop that task." : "That task is not running.");
   }
 
   function decide(m: Extract<SessionClientMessage, { type: "session_decide" }>): ServerMessage[] {

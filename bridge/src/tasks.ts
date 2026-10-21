@@ -6,8 +6,9 @@ import { displayName, maskSecrets } from "./text";
 // read from its task stream. background_tasks_changed is the level for background work and wins over the edges
 // (task_started, task_updated, task_notification), which are the only word on foreground tasks. Observed on CLI
 // 2.1.305: a subagent is a local_agent task whose id is the agentID its permission asks carry; a subagent's shell names
-// it in parent_task_id; a foreground shell becomes a task about 5 s after it starts; a finishing task notifies before
-// it leaves the level, and a stopped one is patched killed and notifies stopped.
+// it in parent_task_id; a foreground shell becomes a task about 5 s after it starts; a finishing task is patched
+// completed and notifies before it leaves the level; a task the bridge or Claude Code stops is patched killed and
+// notifies stopped, which is how Claude Code ends a foreground subagent's background shell when the subagent returns.
 
 export type Task = {
   id: TaskId;
@@ -20,69 +21,104 @@ export type Task = {
   parent: TaskId | null;
   progress: SessionTask["progress"];
   ended: boolean;
-  /** Claude Code said how it ended: a notification, or a completed or failed status. Killed alone says nothing. */
+  /** Claude Code said it completed or failed. A stop says nothing of the work. */
   told: boolean;
 };
 
 export type Tasks = {
-  /** Every task of the query, ended ones too, so an ended owner can still be named. */
+  /** Every task of the query; an ended one stays until its turn ends, or while a live task names it as parent. */
   all: Map<TaskId, Task>;
   /** What the last background_tasks_changed listed. */
   listed: Set<TaskId>;
-  /** Background Bash commands by their call's tool_use id, so a lost command is named by what it ran. */
+  /** Bash commands by their call's tool_use id, so a command task is named by what it runs; kept while it can. */
   commands: Map<string, string>;
   /** Main-thread tool calls still waiting for their result. */
   calls: Map<string, { tool: string; input: Record<string, unknown> }>;
   /** Tasks the bridge stopped: their end is the user's doing. */
   stopped: Set<TaskId>;
+  /** Grows whenever a task or a main-thread call starts or ends, so a change is seen without comparing lists. */
+  rev: number;
 };
 
-/** A background task that left without Claude Code saying how it ended. */
-export type Lost = { task: Task; command: string | null; owner: Task | null };
+/** A background task that ended without Claude Code saying it completed or failed. killed: Claude Code stopped it. */
+export type Lost = { task: Task; command: string | null; owner: Task | null; killed: boolean };
 
-export const emptyTasks = (): Tasks => ({ all: new Map(), listed: new Set(), commands: new Map(), calls: new Map(), stopped: new Set() });
+export const emptyTasks = (): Tasks => ({ all: new Map(), listed: new Set(), commands: new Map(), calls: new Map(), stopped: new Set(), rev: 0 });
 
 const LABEL_MAX = 80;
 const label = (text: string) => displayName(maskSecrets(text), LABEL_MAX);
+const firstLine = (s: string) => displayName(maskSecrets(s.trim()).split("\n")[0] ?? "", LABEL_MAX);
 const kindOf = (type: string | undefined): Task["kind"] => (type === "local_agent" ? "agent" : type === "local_bash" ? "command" : "other");
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 export const liveTasks = (t: Tasks): Task[] => [...t.all.values()].filter((x) => !x.ended);
 
-/** Ends a task and the foreground tasks under it, which cannot outlive it. */
-function end(t: Tasks, id: TaskId) {
+/** Ends a task and the foreground tasks under it, which cannot outlive it, noting a background one that was lost. */
+function end(t: Tasks, id: TaskId, lost: Lost[], killed: boolean) {
   const task = t.all.get(id);
   if (!task || task.ended) return;
   task.ended = true;
-  for (const child of t.all.values()) if (child.parent === id && !child.background) end(t, child.id);
+  t.rev++;
+  if (task.background && !task.told && !t.stopped.has(id)) {
+    const owner = task.parent === null ? null : (t.all.get(task.parent) ?? null);
+    lost.push({ task, command: task.stepId === null ? null : (t.commands.get(task.stepId) ?? null), owner, killed });
+  }
+  for (const child of t.all.values()) if (child.parent === id && !child.background) end(t, child.id, lost, killed);
+}
+
+function start(t: Tasks, task: Task) {
+  const command = task.kind === "command" && task.stepId !== null ? t.commands.get(task.stepId) : undefined;
+  t.all.set(task.id, command ? { ...task, label: command } : task);
+  t.rev++;
+}
+
+/** At a turn's end, when every notification of its tasks is in: drops ended tasks no live task names as parent. */
+function prune(t: Tasks) {
+  const parents = new Set(liveTasks(t).flatMap((x) => (x.parent === null ? [] : [x.parent])));
+  for (const task of [...t.all.values()]) {
+    if (!task.ended || parents.has(task.id)) continue;
+    t.all.delete(task.id);
+    t.stopped.delete(task.id);
+    if (task.stepId !== null) t.commands.delete(task.stepId);
+  }
 }
 
 /**
- * Folds one message into the ledger. Returns the background tasks that left the level with no word on how they ended
- * and that the bridge did not stop, which is how Claude Code kills a subagent's shell when the subagent returns.
+ * Folds one message into the ledger. Returns the background tasks that ended with no word that they completed or
+ * failed and that the bridge did not stop, which the thread then names.
  */
 export function observe(t: Tasks, m: SDKMessage, at: string): Lost[] {
   const lost: Lost[] = [];
   if (m.type === "assistant") {
     for (const b of m.message.content) {
       if (b.type !== "tool_use" || !isRecord(b.input)) continue;
-      if (b.name === "Bash" && b.input.run_in_background === true && typeof b.input.command === "string") t.commands.set(b.id, firstLine(b.input.command));
-      if (m.parent_tool_use_id === null) t.calls.set(b.id, { tool: b.name, input: b.input });
+      if (b.name === "Bash" && typeof b.input.command === "string") t.commands.set(b.id, firstLine(b.input.command));
+      if (m.parent_tool_use_id === null) {
+        t.calls.set(b.id, { tool: b.name, input: b.input });
+        t.rev++;
+      }
     }
-  } else if (m.type === "user" && m.parent_tool_use_id === null && typeof m.message.content !== "string") {
-    for (const b of m.message.content) if (b.type === "tool_result") t.calls.delete(b.tool_use_id);
+  } else if (m.type === "user" && typeof m.message.content !== "string") {
+    const running = new Set(liveTasks(t).map((x) => x.stepId));
+    for (const b of m.message.content) {
+      if (b.type !== "tool_result") continue;
+      if (!running.has(b.tool_use_id)) t.commands.delete(b.tool_use_id);
+      if (m.parent_tool_use_id === null && t.calls.delete(b.tool_use_id)) t.rev++;
+    }
   } else if (m.type === "result") {
+    if (t.calls.size > 0) t.rev++;
     t.calls.clear();
     // A foreground task lives inside a turn or a live subagent; one with neither has ended unannounced.
     for (const task of liveTasks(t)) {
-      if (!task.background && (task.parent === null || t.all.get(task.parent)?.ended !== false)) end(t, task.id);
+      if (!task.background && (task.parent === null || t.all.get(task.parent)?.ended !== false)) end(t, task.id, lost, false);
     }
+    prune(t);
   } else if (m.type === "system") {
     switch (m.subtype) {
       case "task_started": {
         if (m.ambient === true || m.skip_transcript === true) break;
         const id = m.task_id as TaskId;
-        t.all.set(id, {
+        start(t, {
           id,
           stepId: m.tool_use_id ?? null,
           kind: kindOf(m.task_type),
@@ -105,36 +141,35 @@ export function observe(t: Tasks, m: SDKMessage, at: string): Lost[] {
       case "task_updated": {
         const task = t.all.get(m.task_id as TaskId);
         if (!task) break;
-        if (m.patch.is_backgrounded !== undefined) task.background = m.patch.is_backgrounded;
+        if (m.patch.is_backgrounded !== undefined && task.background !== m.patch.is_backgrounded) {
+          task.background = m.patch.is_backgrounded;
+          t.rev++;
+        }
         if (m.patch.status === "completed" || m.patch.status === "failed") task.told = true;
-        if (m.patch.status === "completed" || m.patch.status === "failed" || m.patch.status === "killed") end(t, task.id);
+        if (m.patch.status === "completed" || m.patch.status === "failed" || m.patch.status === "killed") end(t, task.id, lost, m.patch.status === "killed");
         break;
       }
       case "task_notification": {
         const task = t.all.get(m.task_id as TaskId);
         if (!task) break;
-        task.told = true;
-        end(t, task.id);
+        if (m.status !== "stopped") task.told = true;
+        end(t, task.id, lost, m.status === "stopped");
         break;
       }
       case "background_tasks_changed": {
         const listed = m.tasks.filter((x) => x.ambient !== true);
         const now = new Set(listed.map((x) => x.task_id as TaskId));
-        for (const id of t.listed) {
-          if (now.has(id)) continue;
-          const task = t.all.get(id);
-          if (task && !task.told && !t.stopped.has(id)) {
-            const owner = task.parent === null ? null : (t.all.get(task.parent) ?? null);
-            lost.push({ task, command: task.stepId === null ? null : (t.commands.get(task.stepId) ?? null), owner });
-          }
-          end(t, id);
-        }
+        // A background task that leaves the level has ended; one never listed has once the level empties.
+        for (const task of liveTasks(t)) if (task.background && !now.has(task.id) && (t.listed.has(task.id) || now.size === 0)) end(t, task.id, lost, false);
         for (const x of listed) {
           const id = x.task_id as TaskId;
           const known = t.all.get(id);
-          if (known && !known.ended) known.background = true;
-          else if (!known)
-            t.all.set(id, {
+          if (known) {
+            if (known.ended || !known.background) t.rev++;
+            known.ended = false;
+            known.background = true;
+          } else
+            start(t, {
               id,
               stepId: null,
               kind: kindOf(x.task_type),
@@ -158,15 +193,22 @@ export function observe(t: Tasks, m: SDKMessage, at: string): Lost[] {
   return lost;
 }
 
-const firstLine = (s: string) => displayName(maskSecrets(s.trim().split("\n")[0] ?? ""), LABEL_MAX);
+/**
+ * Whether a task_notification announces a wake turn. Claude Code wakes for a background task that ended or that the
+ * bridge stopped, not for a foreground one or one it stopped itself. A task the ledger never saw wakes, as it may.
+ */
+export function wakes(t: Tasks, id: TaskId, status: string): boolean {
+  const task = t.all.get(id);
+  return task?.background !== false && (status !== "stopped" || t.stopped.has(id));
+}
 
 const KIND_WORD: Record<Task["kind"], string> = { agent: "background agent", command: "background command", other: "background task" };
 
 export function lostNotice(l: Lost): string {
-  const what = `The ${KIND_WORD[l.task.kind]} "${l.command ?? l.task.label}"`;
-  if (l.owner === null) return `${what} stopped, and Claude Code did not say how it ended.`;
-  if (l.owner.ended) return `${what}, started by ${l.owner.label}, was stopped when ${l.owner.label} returned.`;
-  return `${what}, started by ${l.owner.label}, stopped, and Claude Code did not say how it ended.`;
+  const what = `The ${KIND_WORD[l.task.kind]} "${l.command ?? l.task.label}"${l.owner === null ? "" : `, started by ${l.owner.label},`}`;
+  if (l.killed) return `${what} was stopped by Claude Code.`;
+  if (l.owner?.ended) return `${what} was stopped when ${l.owner.label} returned.`;
+  return `${what} stopped, and Claude Code did not say how it ended.`;
 }
 
 /** What runs on a session besides its queue. turn: the foreground turn; wake: Claude Code started it on its own. */
@@ -203,8 +245,15 @@ function wireTasks(a: Activity, waiting: (t: Task) => MessageId | null): Session
   }));
 }
 
-export function rowRun(a: Activity, card: string | null, call: (c: Activity["calls"][number]) => string): Pick<SessionRow, "since" | "running" | "activity"> {
+/** A call's label, given how to name the task a control tool such as TaskStop points at. */
+export type CallLabel = (c: Activity["calls"][number], target: (taskId: string | null) => string) => string;
+
+export function rowRun(a: Activity, card: string | null, call: CallLabel): Pick<SessionRow, "since" | "running" | "activity"> {
   if (!runs(a)) return {};
+  const target = (id: string | null) => {
+    const t = id === null ? undefined : a.all.get(id as TaskId);
+    return t ? `${t.kind === "agent" ? "agent" : "background command"}: ${t.label}` : "a background task";
+  };
   const starts = [...(a.turn ? [a.turn.startedAt] : []), ...a.tasks.map((t) => t.startedAt)].sort();
   const background = a.tasks.filter((t) => t.background);
   const last = a.calls.at(-1);
@@ -212,7 +261,7 @@ export function rowRun(a: Activity, card: string | null, call: (c: Activity["cal
     card !== null
       ? `Waiting for approval: ${card}`
       : last
-        ? call(last)
+        ? call(last, target)
         : background.length > 0
           ? `Background: ${background[0]!.label}${background.length > 1 ? ` and ${background.length - 1} more` : ""}`
           : null;

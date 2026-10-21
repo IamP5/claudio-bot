@@ -452,7 +452,7 @@ export function createOwn(deps: OwnDeps): Own {
       return {
         canSend: wait === null,
         reason: wait,
-        working: wait === null && ((s?.working ?? false) || runs(a)),
+        working: (wait === null && (s?.working ?? false)) || runs(a),
         queued: Math.max(0, pending.length - inFlight),
         model: rec.own?.model ?? null,
         models: MODELS,
@@ -472,7 +472,7 @@ export function createOwn(deps: OwnDeps): Own {
       const working = (s?.working ?? false) || runs(a);
       const asking = open.find((c) => c.kind === "permission");
       const cwd = rec.own?.cwd ?? "";
-      const run = rowRun(a, asking?.kind === "permission" ? asking.card.tool : null, (c) => stepLabel(c.tool, c.input, cwd));
+      const run = rowRun(a, asking?.kind === "permission" ? asking.card.tool : null, (c, target) => stepLabel(c.tool, c.input, cwd, target));
       if (s?.unavailable && deps.blocked(rec.id) === null) return { status: "unavailable", working };
       if (open.some((c) => c.kind !== "ask")) return { status: "awaiting_approval", working, ...run };
       if (open.length > 0) return { status: "awaiting_input", working, ...run };

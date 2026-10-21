@@ -557,14 +557,11 @@ const backgroundLabel = (label: string) => (/\bin (?:the )?background\b/i.test(l
 
 /** What a Bash step shows it runs: the command's first 3 lines, each capped, secrets masked. */
 const commandDetail = (command: string) =>
-  maskSecrets(
-    command
-      .trim()
-      .split("\n")
-      .slice(0, 3)
-      .map((l) => capped(l, 200))
-      .join("\n"),
-  );
+  maskSecrets(command.trim())
+    .split("\n")
+    .slice(0, 3)
+    .map((l) => capped(l, 200))
+    .join("\n");
 
 /**
  * The call in words: "Edit src/app.ts", "Run bun test", the model's own description of a command. Words the model
@@ -578,7 +575,7 @@ export function stepLabel(tool: string, input: Record<string, unknown>, cwd: str
   switch (tool) {
     case "Bash": {
       const command = str(input.command);
-      const label = description && !repeatsCommand(description, command) ? maskProse(firstLine(description)) : maskSecrets(`Run ${firstLine(command ?? "a command")}`);
+      const label = description && !repeatsCommand(description, command) ? firstLine(maskProse(description)) : firstLine(maskSecrets(`Run ${command ?? "a command"}`));
       return input.run_in_background === true ? backgroundLabel(label) : label;
     }
     case "Agent":
@@ -597,13 +594,13 @@ export function stepLabel(tool: string, input: Record<string, unknown>, cwd: str
     case "ScheduleWakeup":
       return "Schedule a wake-up";
     case "Grep":
-      return maskSecrets(`Search for ${firstLine(str(input.pattern) ?? "text", 60)}`);
+      return `Search for ${firstLine(maskSecrets(str(input.pattern) ?? "text"), 60)}`;
     case "Glob":
-      return maskSecrets(`Find ${firstLine(str(input.pattern) ?? "files", 60)}`);
+      return `Find ${firstLine(maskSecrets(str(input.pattern) ?? "files"), 60)}`;
     case "WebFetch":
       return maskSecrets(`Read ${host(str(input.url) ?? "a web page")}`);
     case "WebSearch":
-      return maskSecrets(`Search the web for ${firstLine(str(input.query) ?? "", 60)}`);
+      return `Search the web for ${firstLine(maskSecrets(str(input.query) ?? ""), 60)}`;
     case "Skill":
       return maskSecrets(`Skill ${str(input.skill) ?? ""}`.trim());
   }
@@ -710,7 +707,7 @@ function classifyResult(tool: string, text: string, toolResult: unknown, isError
   if (isError) {
     if (REJECTED.test(text) || toolResult === "User rejected tool use") return { kind: "denied", cause: "Denied by you", reject: true };
     if (STOPPED.test(text.replace(ERROR_TAGS, ""))) return { kind: "stopped", cause: STOPPED_BY_YOU };
-    if (DENIED.test(text)) return { kind: "denied", cause: maskSecrets(firstLine(text.replace(ERROR_TAGS, ""), CAUSE_MAX)), reject: false };
+    if (DENIED.test(text)) return { kind: "denied", cause: firstLine(maskSecrets(text.replace(ERROR_TAGS, "")), CAUSE_MAX), reject: false };
     return { kind: "error", output: text === "" ? null : text, cause: maskSecrets(failureCause(text)) };
   }
   const r = isRecord(toolResult) ? toolResult : {};

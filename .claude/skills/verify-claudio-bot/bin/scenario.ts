@@ -260,8 +260,8 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
       const link = `claudiobot://pair?url=${encodeURIComponent(`ws://127.0.0.1:${run.port}/ws`)}&code=${offer.code}`;
       pool.simctl(lease, "openurl", link);
       await Bun.sleep(3000);
-      shots["pair-confirm"] = pool.screenshot(lease, join(out, "screenshots", "pair-confirm.png"));
-      log(`PAIR: tap "Pair" in the confirmation on ${lease.device} (${lease.udid}) within ${pairWaitS}s`);
+      shots["pair-link"] = pool.screenshot(lease, join(out, "screenshots", "pair-link.png"));
+      log(`waiting up to ${pairWaitS}s for ${lease.device} to pair (-pairingAutoConfirm confirms the link)`);
       const deadline = Date.now() + pairWaitS * 1000;
       while (Date.now() < deadline && !ev.paired) {
         ev.paired = ((await phone.request({ type: "devices" }, "devices")).devices as unknown[]).length > before;

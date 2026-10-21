@@ -350,7 +350,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S7.2 | how-many | protocol | The rows say which sessions run, so the phone can count them. | At mark mixed, the 4 sleepers' rows read working and the 8 others idle. | A row's status disagrees with its thread. |
 | S7.3 | what | protocol | The user can tell the 12 sessions apart by their titles. | 12 distinct row titles. | Titles repeat. |
 | S7.4 | state | protocol | Every session comes to rest, none stuck working. | At the end, every row reads idle. | A row still reads working. |
-| S7.5 | how-many | simulator (mixed) | The Sessions list shows at a glance which 4 run and how many (needs a tap to the Sessions sidebar first). | Working rows stand out; a count is visible or obvious. | Running rows look like the rest. |
+| S7.5 | how-many | simulator (mixed) | The Sessions list shows at a glance which 4 run and how many. | Working rows stand out; a count is visible or obvious. | Running rows look like the rest. |
 
 ## S8 A subagent starts a background task and returns
 

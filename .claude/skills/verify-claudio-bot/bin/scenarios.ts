@@ -489,7 +489,7 @@ const S3: Scenario = {
     { do: "sleep", s: 3 },
   ],
   pre: [
-    { what: "the app on the leased simulator paired with the run's bridge", check: (ev) => (ev.paired ? ok("paired") : no("not paired: tap Pair on the confirmation (see runner.md)")) },
+    { what: "the app on the leased simulator paired with the run's bridge", check: (ev) => (ev.paired ? ok("paired") : no("not paired within --pair-wait (see runner.md)")) },
     created("s3"),
     { what: "the transcript runs Bash with run_in_background", check: (ev) => (bgBash(ev.transcript("s3").main).length ? ok("yes") : no("no background Bash call")) },
     fileMade("bg3.txt"),
@@ -921,7 +921,7 @@ const S7: Scenario = {
         return bad.length ? no(`not idle: ${bad.join(", ")}`) : ok("12 idle");
       },
     },
-    review("S7.5", "how-many", "The Sessions list shows at a glance which 4 run and how many (needs a tap to the Sessions sidebar first).", "Working rows stand out; a count is visible or obvious.", "Running rows look like the rest.", ["mixed"]),
+    review("S7.5", "how-many", "The Sessions list shows at a glance which 4 run and how many.", "Working rows stand out; a count is visible or obvious.", "Running rows look like the rest.", ["mixed"]),
   ],
 };
 

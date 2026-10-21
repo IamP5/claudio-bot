@@ -298,12 +298,16 @@ export async function buildApp(): Promise<string> {
   }
 }
 
-/** Installs and launches the app on a leased, booted device. -pairingVault keeps a throwaway pairing per device. */
+/**
+ * Installs and launches the app on a leased, booted device. Debug launch arguments: -pairingVault keeps a throwaway
+ * pairing per device, -pairingAutoConfirm confirms a pairing link without the tap simctl cannot make, and -sidebarMode
+ * opens on the Sessions list.
+ */
 export function installAndLaunch(lease: Lease, app: string, extra: string[] = []) {
   const i = simctl(lease, "install", app);
   if (!i.ok) throw new Error(`install on ${lease.device}: ${i.err}`);
   simctl(lease, "terminate", BUNDLE);
-  const l = simctl(lease, "launch", BUNDLE, "-pairingVault", `claudiobot-ux-${lease.device}`, ...extra);
+  const l = simctl(lease, "launch", BUNDLE, "-pairingVault", `claudiobot-ux-${lease.device}`, "-pairingAutoConfirm", "YES", "-sidebarMode", "sessions", ...extra);
   if (!l.ok) throw new Error(`launch on ${lease.device}: ${l.err}`);
   log(`installed and launched ${BUNDLE} on ${lease.device}`);
 }

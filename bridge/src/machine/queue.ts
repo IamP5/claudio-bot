@@ -17,6 +17,7 @@ export type QueuedIntent = Exclude<Intent, { kind: "snapshot" | "projects" }>;
 export type Queued = { machine: MachineId; intent: QueuedIntent; botId: BotId | null; what: string; at: string; expiresAt: string };
 
 const MINUTE = 60_000;
+const RETRY = { firstMs: 1000, maxMs: 30_000 } as const;
 const DAY = 24 * 60 * MINUTE;
 
 /** How long each kind waits for its machine. A card answer waits until its card expires, which it is told. */
@@ -111,10 +112,28 @@ export function createDispatch(deps: {
   expired: (q: Queued) => void;
   /** A queued intent nobody waits on any more (sent before a restart, or after it was told queued) got its answer. */
   applied: (q: Queued, a: Applied) => void;
+  /** How soon an intent that did not reach a machine still online goes again. */
+  retry?: { firstMs: number; maxMs: number };
 }): Dispatch {
   const { queue } = deps;
+  const backoff = deps.retry ?? RETRY;
   const waiters = new Map<IntentId, (d: Dispatched) => void>();
   const draining = new Set<MachineId>();
+  /** A drain asked for while one ran: that one goes again as it ends, since it may have stopped short of the new entry. */
+  const again = new Set<MachineId>();
+  const retries = new Map<MachineId, { timer: ReturnType<typeof setTimeout> | null; delayMs: number }>();
+
+  /** The machine is online and something still waits for it, which no link change will send: try again later. */
+  function retryLater(id: MachineId) {
+    const r = retries.get(id) ?? { timer: null, delayMs: backoff.firstMs };
+    retries.set(id, r);
+    if (r.timer) return;
+    r.timer = setTimeout(() => {
+      r.timer = null;
+      void drain(id);
+    }, r.delayMs);
+    r.delayMs = Math.min(r.delayMs * 2, backoff.maxMs);
+  }
 
   function settle(q: Queued, d: Dispatched) {
     const waiter = waiters.get(q.intent.intentId);
@@ -133,8 +152,9 @@ export function createDispatch(deps: {
   }
 
   async function drain(id: MachineId) {
-    if (draining.has(id)) return;
+    if (draining.has(id)) return void again.add(id);
     draining.add(id);
+    let stuck = false;
     try {
       for (;;) {
         const m = deps.machine(id);
@@ -145,18 +165,28 @@ export function createDispatch(deps: {
         const sent = await m.send(next.intent);
         if (!sent.ok && "undelivered" in sent) {
           deps.log(`queue: ${next.what} waits for ${m.name}: ${sent.reason}`);
+          stuck = true;
           break;
         }
+        retries.delete(id);
         queue.remove(next.intent.intentId);
         settle(next, { kind: "applied", applied: sent });
       }
     } catch (e) {
+      stuck = true;
       deps.log(`queue: sending to ${id} failed: ${errorText(e)}`);
     } finally {
       draining.delete(id);
     }
     const name = deps.machine(id)?.name ?? id;
     for (const q of queue.list()) if (q.machine === id && waiters.has(q.intent.intentId)) settle(q, { kind: "queued", machine: name });
+    const waiting = deps.machine(id)?.status().online === true && due(queue.list(), id, deps.now().toISOString()).next !== null;
+    if (!waiting) {
+      again.delete(id);
+      return;
+    }
+    if (stuck) return retryLater(id);
+    if (again.delete(id)) void drain(id);
   }
 
   return {

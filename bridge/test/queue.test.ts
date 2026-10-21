@@ -78,6 +78,7 @@ function harness() {
       log: () => {},
       expired: (q) => expired.push(q),
       applied: (q, a) => late.push([q, a]),
+      retry: { firstMs: 5, maxMs: 10 },
     });
   const tick = () => new Promise<void>((r) => setTimeout(r, 0));
   async function reply(s: Sent) {
@@ -169,4 +170,23 @@ test("forgetting a bot drops what waits on its behalf, with no expiry, and leave
   d.drain(MAC);
   await h.tick();
   expect(h.sent).toEqual([]);
+});
+
+test.each([
+  ["its link was replaced mid-send", "MacBook went offline"],
+  ["it did not apply in time", "MacBook did not answer"],
+])("an intent that did not reach a machine still online because %s goes again on its own, with no link change", async (_, reason) => {
+  const h = harness();
+  h.set(true);
+  const d = h.open();
+  const intent = message("hi");
+  const answered = d.send(MAC, intent, meta("A message"));
+  d.drain(MAC);
+  await h.reply({ ok: false, reason, undelivered: true });
+  expect(await answered).toEqual({ kind: "queued", machine: "MacBook" });
+  for (let i = 0; i < 50 && h.sent.length < 2; i++) await Bun.sleep(5);
+  expect(h.sent).toEqual(["hi", "hi"]);
+  await h.reply({ ok: true });
+  expect(h.late.map(([q, a]) => [q.intent.intentId, a.ok])).toEqual([[intent.intentId, true]]);
+  expect(d.nextDeadline()).toBeNull();
 });

@@ -21,6 +21,8 @@ import {
   type SessionClientMessage,
   type SessionId,
   type SessionPatch,
+  type StopTarget,
+  type TaskId,
   type ThreadPosition,
   type Upload,
 } from "./protocol";
@@ -160,6 +162,11 @@ function sessionPatch(v: unknown): SessionPatch {
   return p;
 }
 
+function stopTarget(v: unknown): StopTarget {
+  if (v === "all" || v === "turn") return v;
+  return { task: str(obj(v, "target"), "task") as TaskId };
+}
+
 const botId = (o: Obj) => str(o, "botId") as BotId;
 const messageId = (o: Obj) => str(o, "messageId") as MessageId;
 const agentId = (o: Obj) => str(o, "agentId") as AgentId;
@@ -175,7 +182,13 @@ const sessionParsers: Record<SessionClientMessage["type"], (o: Obj) => SessionCl
   unwatch_session: (o) => ({ type: "unwatch_session", sessionId: sessionId(o) }),
   session_page: (o) => ({ type: "session_page", sessionId: sessionId(o), before: str(o, "before") as Cursor }),
   session_send: (o) => ({ type: "session_send", sessionId: sessionId(o), text: prompt(o, "text"), clientId: str(o, "clientId"), interrupt: bool(o, "interrupt") }),
-  session_stop: (o) => ({ type: "session_stop", sessionId: sessionId(o) }),
+  session_stop: (o) => ({
+    type: "session_stop",
+    sessionId: sessionId(o),
+    ...(o.target !== undefined && { target: stopTarget(o.target) }),
+    ...(o.turnStartedAt !== undefined && { turnStartedAt: str(o, "turnStartedAt") }),
+  }),
+  session_unqueue: (o) => ({ type: "session_unqueue", sessionId: sessionId(o), clientId: str(o, "clientId") }),
   session_decide: (o) => ({ type: "session_decide", sessionId: sessionId(o), cardId: cardId(o), choice: oneOf(o, "choice", PERMISSION_CHOICES) }),
   session_answer: (o) => ({ type: "session_answer", sessionId: sessionId(o), cardId: cardId(o), answers: answers(o.answers) }),
   session_create: (o) => ({

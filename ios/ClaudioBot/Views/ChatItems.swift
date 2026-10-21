@@ -420,7 +420,7 @@ private struct PermissionCardBody: View {
                     .accessibilityElement(children: .combine)
                 case .expired:
                     ClosedLine(text: "Expired. It did not run.")
-                case .closed:
+                case .stopped, .closed:
                     ClosedLine(text: "Closed. It did not run.")
                 }
             }

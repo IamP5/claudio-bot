@@ -23,6 +23,7 @@ export type FactId = string & { readonly __brand: "FactId" };
 export const FEATURES = [
   "memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend",
   "mentions", "commands", "exchanges", "groups", "usage", "sessions", "presence",
+  "session_tasks", "session_unqueue", "push_state",
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 
@@ -168,7 +169,8 @@ export type Message =
       detail: string;
       // What "Always" would allow from now on, in words, so that button never surprises.
       always: string;
-      answer: PermissionChoice | "expired" | null;
+      // stopped: the user stopped the session while the card was open, so the call never ran.
+      answer: PermissionChoice | "expired" | "stopped" | null;
       expiresAt: string;
     }
   // A run of messages between this bot and one peer, grouped while nothing else is said.
@@ -390,20 +392,73 @@ export type SessionRow = {
   url: string | null;
   createdAt: string;
   lastAt: string;
+  // Run state (feature session_tasks), absent on a bridge without it. since, running and activity are absent at rest.
+  /** When the current run started: its turn, or its oldest live task. */
+  since?: string;
+  running?: { agents: number; commands: number };
+  /** One line while busy: "Run perl -e 'sleep 60'", "Waiting for approval: Bash", "Background: sleep 75". */
+  activity?: string;
+  /** How the last run ended, kept until the next send. */
+  outcome?: SessionOutcome;
 };
+
+/** lost: a process death or a bridge restart cut the work off. The app treats an unknown kind as "finished". */
+export type SessionOutcome = { kind: "finished" | "failed" | "stopped" | "lost"; text: string; at: string };
+
+/** Claude Code's task_id for a subagent or a background command. */
+export type TaskId = string & { readonly __brand: "TaskId" };
+
+/**
+ * waiting: an approval card for the call is open, so it has not started. stopped: cut off by the user or by a bridge
+ * restart. The app shows a step in a state it does not know without a state mark.
+ */
+export type StepState = "running" | "waiting" | "ok" | "error" | "denied" | "stopped";
 
 /**
  * One tool call in a work item. id: its tool_use id, which session_tool names. label: the call in words ("Edit
  * src/app.ts", "Run bun test"). diff: the line counts of an Edit, Write or MultiEdit, else null. output: the last
- * 2 KB of its result, null while it runs or when it returned nothing.
+ * 2 KB of what the call itself returned, null while it runs or when it returned nothing; never Claude Code's launch
+ * acknowledgement or hand-back wrapper. The optional fields are absent when they do not apply, and on older bridges.
  */
 export type ToolStep = {
   id: string;
   tool: string;
   label: string;
-  state: "running" | "ok" | "error" | "denied";
+  state: StepState;
   diff: { path: string; added: number; removed: number } | null;
   output: string | null;
+  /** What actually runs: a Bash command (its first 3 lines, secrets masked), or an Agent's subagent type. */
+  detail?: string;
+  /** When it started executing: the tool_use time, or the approval time when it waited on a card. */
+  startedAt?: string;
+  /** When it finished: the tool_result time, or the task notification's time for background work. */
+  endedAt?: string;
+  /** A run_in_background Bash or an async Agent: it outlives the turn that started it. */
+  background?: true;
+  /** The id of the Agent step whose subagent made this call. */
+  owner?: string;
+  /** One line on error, denied or stopped: "Exit code 1: ls: late.txt: No such file", "Stopped by you". */
+  cause?: string;
+  /** A finished Agent's tool count and run time. */
+  usage?: { tools: number; ms: number };
+};
+
+/**
+ * Live work Claude Code tracks for a session the bridge drives: a subagent (foreground or background) or a background
+ * command. It lives only while the query runs; the step that started it (stepId, a ToolStep id) survives in the
+ * transcript. The app treats an unknown kind as "other". owner: the step id of the subagent that started it, null for
+ * the main thread. progress: its tool count, last tool and last activity. waiting: the open card it is blocked on.
+ */
+export type SessionTask = {
+  id: TaskId;
+  stepId: string | null;
+  kind: "agent" | "command" | "other";
+  label: string;
+  background: boolean;
+  startedAt: string;
+  owner: string | null;
+  progress: { tools: number; last: string | null; at: string } | null;
+  waiting: MessageId | null;
 };
 
 /** One AskUserQuestion question. The app offers a free answer besides the options, as Claude Code does. */
@@ -421,10 +476,12 @@ export type PermissionMessage = Extract<Message, { kind: "permission" }>;
  * - todo: the turn's TodoWrite list, upserted in place.
  * - plan: an ExitPlanMode plan. cardId: set while the phone may decide it (session_decide: "once" approves, "deny"
  *   keeps planning), null when it was decided or was proposed elsewhere.
- * - permission: a card the gate or the session holds. Open while card.answer is null.
+ * - permission: a card the gate or the session holds. Open while card.answer is null. stepId: the ToolStep it holds
+ *   back. subagent: the label of the subagent that asked, absent when the main thread did.
  * - ask: an AskUserQuestion. answers: by question text, a multi-select's labels comma-separated; null while open.
  *   cardId: set while the phone may answer it (session_answer), null otherwise.
- * - notice: a line the bridge adds ("This session's transcript is gone").
+ * - notice: a line the bridge adds ("This session's transcript is gone"). reason: what it reports, absent for any
+ *   other line; the app treats an unknown reason as absent.
  * - compaction: Claude Code compacted the conversation here.
  */
 export type SessionItem =
@@ -434,15 +491,26 @@ export type SessionItem =
   | { kind: "work"; id: ItemId; at: string; steps: ToolStep[] }
   | { kind: "todo"; id: ItemId; at: string; todos: { text: string; state: "pending" | "in_progress" | "done" }[] }
   | { kind: "plan"; id: ItemId; at: string; text: string; state: "proposed" | "approved" | "rejected" | "expired"; cardId: MessageId | null }
-  | { kind: "permission"; id: ItemId; at: string; card: PermissionMessage }
+  | { kind: "permission"; id: ItemId; at: string; card: PermissionMessage; stepId?: string; subagent?: string }
   | { kind: "ask"; id: ItemId; at: string; questions: AskQuestion[]; answers: Record<string, string> | "dismissed" | "expired" | null; cardId: MessageId | null }
-  | { kind: "notice"; id: ItemId; at: string; text: string; tone: "info" | "error" }
+  | { kind: "notice"; id: ItemId; at: string; text: string; tone: "info" | "error"; reason?: NoticeReason }
   | { kind: "compaction"; id: ItemId; at: string };
 
 /**
- * What the composer may do now. canSend false comes with the reason in words ("Working in the Claude app"). queued:
- * the user's messages waiting for their turn. model: null for the transcript's last model, else the user's default.
- * modes: what the mode menu offers.
+ * stop: the user stopped the session. task: a background task ended, in Claude Code's own words. restart: a bridge
+ * restart cut work off. failure: the run failed. approval: a card expired unanswered.
+ */
+export type NoticeReason = "stop" | "task" | "restart" | "failure" | "approval";
+
+/**
+ * What the composer may do now. canSend false comes with the reason in words ("Working in the Claude app"). working:
+ * something runs, so Stop shows; with feature session_tasks that is a turn, a wake turn or a live task, without it the
+ * turn alone. queued: the user's messages waiting for their turn. model: null for the transcript's last model, else
+ * the user's default. modes: what the mode menu offers.
+ *
+ * Feature session_tasks adds the rest. turn: the foreground turn, absent when none runs; wake: Claude Code started it
+ * on its own after background work ended. A message queues only while a turn runs. tasks: the live tasks, [] when
+ * none. heardAt: the last sign of life from Claude Code for this session, refreshed at least every 25 s while working.
  */
 export type SessionControls = {
   canSend: boolean;
@@ -453,6 +521,9 @@ export type SessionControls = {
   models: { id: string; label: string }[];
   mode: PermissionMode;
   modes: PhoneMode[];
+  turn?: { startedAt: string; wake: boolean };
+  tasks?: SessionTask[];
+  heardAt?: string;
 };
 
 /** Where a thread stands. rev counts upserts per session within one bridge epoch (the epoch in hello). */
@@ -503,6 +574,9 @@ export type SessionsChannelFrame = Extract<SessionServerMessage, { type: "sessio
 /** Sent on channel `s:<sessionId>`. */
 export type ThreadChannelFrame = Extract<SessionServerMessage, { type: "session_items" | "session_delta" | "session_removed" }>;
 
+/** What session_stop stops. */
+export type StopTarget = "all" | "turn" | { task: TaskId };
+
 /** The fields set are the ones to change. title renames through Claude Code, so the transcript keeps it. */
 export type SessionPatch = { title?: string; hidden?: boolean; model?: string | null; mode?: PhoneMode };
 
@@ -518,8 +592,12 @@ export type SessionClientMessage =
   | { type: "session_page"; sessionId: SessionId; before: Cursor }
   // clientId: the queued user item's id until the transcript's own entry replaces it. interrupt: "Stop and send": stops the turn in flight, then queues.
   | { type: "session_send"; sessionId: SessionId; text: string; clientId: string; interrupt: boolean }
-  // Stops the turn in flight. The user's queued messages still run.
-  | { type: "session_stop"; sessionId: SessionId }
+  // Stops what target names: "all" (also when absent) is the turn and every live task, "turn" the turn alone, {task}
+  // one task; the last two need feature session_tasks. turnStartedAt: controls.turn.startedAt as the app saw it, so a
+  // stop meant for an earlier run is refused. The user's queued messages still run.
+  | { type: "session_stop"; sessionId: SessionId; target?: StopTarget; turnStartedAt?: string }
+  // Feature session_unqueue: withdraws a queued message, by its clientId, before it runs.
+  | { type: "session_unqueue"; sessionId: SessionId; clientId: string }
   // Answers a permission item (card.id) or a plan item (cardId), whoever holds the card.
   | { type: "session_decide"; sessionId: SessionId; cardId: MessageId; choice: PermissionChoice }
   // Answers an ask item by question text. null dismisses it.
@@ -541,15 +619,16 @@ const SESSION_FRAMES: Record<SessionServerMessage["type"], true> = {
 };
 const SESSION_REQUESTS: Record<SessionClientMessage["type"], true> = {
   watch_sessions: true, unwatch_sessions: true, watch_session: true, unwatch_session: true, session_page: true,
-  session_send: true, session_stop: true, session_decide: true, session_answer: true, session_create: true,
-  session_set: true, session_open_desktop: true, session_tool: true, session_prefs: true,
+  session_send: true, session_stop: true, session_unqueue: true, session_decide: true, session_answer: true,
+  session_create: true, session_set: true, session_open_desktop: true, session_tool: true, session_prefs: true,
 };
 export const isSessionFrame = (m: ServerMessage): m is SessionServerMessage => Object.hasOwn(SESSION_FRAMES, m.type);
 export const isSessionRequest = (m: ClientMessage): m is SessionClientMessage => Object.hasOwn(SESSION_REQUESTS, m.type);
 
 export type ServerMessage =
   // The app shows "Update the bridge" or "Update the app" when protocol is outside the range it speaks.
-  | ({ type: "hello"; protocol: number; features: Feature[]; machine: string; userName: string; bots: Bot[] } & StreamPosition)
+  // push: whether phone pushes reach the user (feature push_state).
+  | ({ type: "hello"; protocol: number; features: Feature[]; machine: string; userName: string; bots: Bot[]; push?: PushState } & StreamPosition)
   | { type: "bot"; bot: Bot }
   | { type: "bot_removed"; botId: BotId }
   // Answers create_bot with the ref the client sent, so the app can open the new bot.
@@ -580,11 +659,30 @@ export type ServerMessage =
   // The plan's usage limits (feature "usage"). Live sockets only, like activity: sent after the hello to each socket
   // that connects, and to every live socket when they change. Never sequenced or replayed.
   | { type: "usage"; usage: PlanUsage }
+  // Feature push_state. Live sockets only, like usage: sent when the state changes; hello carries it on connect.
+  | { type: "push_state"; push: PushState }
   | SessionServerMessage
-  | { type: "error"; message: string };
+  // about: the session request that failed, so the app can show the error there instead of as a toast.
+  | { type: "error"; message: string; about?: ErrorAbout };
+
+/**
+ * Whether phone pushes reach the user. off: no push URL is set. failing: the last send failed after its retries, with
+ * why and when. The app treats an unknown state as "on".
+ */
+export type PushState = { state: "on" } | { state: "off" } | { state: "failing"; error: string; at: string };
+
+/**
+ * The session request an error answers: a stop, a send (its clientId), a full-output fetch (its toolUseId) or a create
+ * (its ref). The app treats an unknown kind as no subject.
+ */
+export type ErrorAbout =
+  | { kind: "stop"; sessionId: SessionId }
+  | { kind: "send"; sessionId: SessionId; clientId: string }
+  | { kind: "tool"; sessionId: SessionId; toolUseId: string }
+  | { kind: "create"; ref: string };
 
 /** Sent to live protocol 3 sockets only, without a seq: not kept for replay. */
-export type Signal = Extract<ServerMessage, { type: "activity" | "usage" }>;
+export type Signal = Extract<ServerMessage, { type: "activity" | "usage" | "push_state" }>;
 
 // A frame published to every socket carries the stream seq. Replies to one client do not.
 export type Broadcast = ServerMessage & { seq: number };

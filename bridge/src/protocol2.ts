@@ -14,8 +14,12 @@ const PROTOCOL_2_OPTIONS = [
 type Permission = Extract<Message, { kind: "permission" }>;
 type Question = Extract<Message, { kind: "question" }>;
 
+const ANSWERS: Record<NonNullable<Permission["answer"]>, Question["answer"]> = {
+  once: 0, always: 0, deny: 1, never: 1, expired: "expired", stopped: "dismissed",
+};
+
 function asQuestion(p: Permission): Question {
-  const answer = p.answer === null || p.answer === "expired" ? p.answer : p.answer === "once" || p.answer === "always" ? 0 : 1;
+  const answer = p.answer === null ? null : ANSWERS[p.answer];
   return {
     kind: "question",
     id: p.id,

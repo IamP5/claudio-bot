@@ -40,7 +40,7 @@ struct ThreadRowView: View, Equatable {
                 }, fillsColumn: true)
             case let .ask(_, _, questions, answers, cardId):
                 AskCard(sessionId: sessionId, questions: questions, answers: answers, cardId: cardId)
-            case let .notice(_, _, text, tone):
+            case let .notice(_, _, text, tone, _):
                 NoticeLine(text: text, tone: tone)
             case .compaction:
                 CompactionDivider()
@@ -343,6 +343,10 @@ private struct StepState: View {
             Image(systemName: "xmark.circle.fill").font(.footnote).foregroundStyle(Theme.danger).accessibilityLabel("Failed")
         case .denied:
             Image(systemName: "nosign").font(.footnote).foregroundStyle(Theme.attention).accessibilityLabel("Denied")
+        case .waiting:
+            Label("Waiting for approval", systemImage: "hand.raised").font(.caption).foregroundStyle(Theme.attention)
+        case .stopped:
+            Label("Stopped", systemImage: "stop.circle").font(.caption).foregroundStyle(Theme.secondary)
         case .ok, .unknown:
             EmptyView()
         }

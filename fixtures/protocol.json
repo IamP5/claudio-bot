@@ -18,7 +18,10 @@
         "groups",
         "usage",
         "sessions",
-        "presence"
+        "presence",
+        "session_tasks",
+        "session_unqueue",
+        "push_state"
       ],
       "epoch": "e_7f3a",
       "seq": 41,
@@ -96,7 +99,10 @@
           "spentTodayUsd": 8.4,
           "capUsd": 10
         }
-      ]
+      ],
+      "push": {
+        "state": "on"
+      }
     },
     {
       "type": "bot",
@@ -1640,6 +1646,368 @@
       "type": "session_removed",
       "sessionId": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
       "movedTo": null
+    },
+    {
+      "type": "session_rows",
+      "removed": [],
+      "projects": [],
+      "rows": [
+        {
+          "id": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+          "projectId": "3f9a1c7e2b4d6a80",
+          "parentId": null,
+          "title": "Sleep in parallel",
+          "origin": "phone",
+          "agent": null,
+          "status": "awaiting_approval",
+          "holder": "claudio",
+          "unread": false,
+          "branch": "main",
+          "worktree": false,
+          "pr": null,
+          "mirror": "none",
+          "hidden": false,
+          "url": null,
+          "createdAt": "2026-10-16T12:00:00.000Z",
+          "lastAt": "2026-10-16T14:00:00.000Z",
+          "since": "2026-10-16T12:00:00.000Z",
+          "running": {
+            "agents": 1,
+            "commands": 1
+          },
+          "activity": "Waiting for approval: Bash"
+        },
+        {
+          "id": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
+          "projectId": "3f9a1c7e2b4d6a80",
+          "parentId": null,
+          "title": "Add a volume slider to the player",
+          "origin": "desktop",
+          "agent": null,
+          "status": "failed",
+          "holder": "desktop",
+          "unread": true,
+          "branch": "feat/volume-slider",
+          "worktree": false,
+          "pr": {
+            "number": 87,
+            "url": "https://github.com/IamP5/solta-o-som/pull/87",
+            "state": "open"
+          },
+          "mirror": "imported",
+          "hidden": false,
+          "url": null,
+          "createdAt": "2026-10-15T09:30:00.000Z",
+          "lastAt": "2026-10-16T12:00:00.000Z",
+          "outcome": {
+            "kind": "failed",
+            "text": "Claude Code exited: out of memory",
+            "at": "2026-10-16T14:00:00.000Z"
+          }
+        },
+        {
+          "id": "d4e8a1b6-3c2f-4b9e-8a7d-1f6c5e3b2a90",
+          "projectId": "3f9a1c7e2b4d6a80",
+          "parentId": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
+          "title": "Check the slider on iPad",
+          "origin": "terminal",
+          "agent": null,
+          "status": "idle",
+          "holder": "terminal",
+          "unread": false,
+          "branch": "feat/volume-slider",
+          "worktree": false,
+          "pr": null,
+          "mirror": "none",
+          "hidden": false,
+          "url": null,
+          "createdAt": "2026-10-16T12:00:00.000Z",
+          "lastAt": "2026-10-16T14:00:00.000Z",
+          "outcome": {
+            "kind": "stopped",
+            "text": "Stopped by you: the turn, 2 agents",
+            "at": "2026-10-16T14:00:00.000Z"
+          }
+        }
+      ]
+    },
+    {
+      "type": "session_items",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "rev": 3,
+      "removed": [],
+      "items": [
+        {
+          "kind": "work",
+          "id": "toolu_01Ac1",
+          "at": "2026-10-16T12:00:00.000Z",
+          "steps": [
+            {
+              "id": "toolu_01Ac1",
+              "tool": "Agent",
+              "label": "sleeper two",
+              "state": "running",
+              "diff": null,
+              "output": null,
+              "detail": "general-purpose",
+              "startedAt": "2026-10-16T12:00:00.000Z",
+              "background": true
+            },
+            {
+              "id": "toolu_01Ac2",
+              "tool": "Bash",
+              "label": "Remove the build folder",
+              "state": "waiting",
+              "diff": null,
+              "output": null,
+              "detail": "rm -rf build",
+              "owner": "toolu_01Ac1"
+            },
+            {
+              "id": "toolu_01Ac3",
+              "tool": "Bash",
+              "label": "Run in background: sleep 60",
+              "state": "running",
+              "diff": null,
+              "output": null,
+              "detail": "sleep 60",
+              "startedAt": "2026-10-16T12:00:00.000Z",
+              "background": true,
+              "owner": "toolu_01Ac1"
+            },
+            {
+              "id": "toolu_01Ac4",
+              "tool": "Bash",
+              "label": "List the late files",
+              "state": "error",
+              "diff": null,
+              "output": "ls: late.txt: No such file or directory\n",
+              "detail": "ls late.txt",
+              "startedAt": "2026-10-16T12:00:00.000Z",
+              "endedAt": "2026-10-16T14:00:00.000Z",
+              "cause": "Exit code 1: ls: late.txt: No such file or directory"
+            },
+            {
+              "id": "toolu_01Ac5",
+              "tool": "Agent",
+              "label": "sleeper one",
+              "state": "stopped",
+              "diff": null,
+              "output": null,
+              "detail": "general-purpose",
+              "startedAt": "2026-10-16T12:00:00.000Z",
+              "endedAt": "2026-10-16T14:00:00.000Z",
+              "cause": "Stopped by you",
+              "usage": {
+                "tools": 4,
+                "ms": 31000
+              }
+            }
+          ]
+        },
+        {
+          "kind": "permission",
+          "id": "m23",
+          "at": "2026-10-16T14:00:00.000Z",
+          "card": {
+            "kind": "permission",
+            "id": "m23",
+            "at": "2026-10-16T14:00:00.000Z",
+            "from": null,
+            "tool": "Bash",
+            "label": "Bash",
+            "detail": "rm -rf build",
+            "always": "rm -rf build in solta-o-som, for this session",
+            "answer": null,
+            "expiresAt": "2026-10-16T16:00:00.000Z"
+          },
+          "stepId": "toolu_01Ac2",
+          "subagent": "sleeper two"
+        },
+        {
+          "kind": "permission",
+          "id": "m24",
+          "at": "2026-10-16T14:00:00.000Z",
+          "card": {
+            "kind": "permission",
+            "id": "m24",
+            "at": "2026-10-16T14:00:00.000Z",
+            "from": null,
+            "tool": "Bash",
+            "label": "Bash",
+            "detail": "sleep 30",
+            "always": "sleep in solta-o-som, for this session",
+            "answer": "stopped",
+            "expiresAt": "2026-10-16T16:00:00.000Z"
+          },
+          "stepId": "toolu_01Ac6",
+          "subagent": "sleeper one"
+        },
+        {
+          "kind": "notice",
+          "id": "n_2",
+          "at": "2026-10-16T14:00:00.000Z",
+          "text": "Background command \"sleep 75\" completed (exit code 0)",
+          "tone": "info",
+          "reason": "task"
+        },
+        {
+          "kind": "notice",
+          "id": "n_3",
+          "at": "2026-10-16T14:00:00.000Z",
+          "text": "Stopped by Alex: the turn and 1 agent",
+          "tone": "info",
+          "reason": "stop"
+        }
+      ],
+      "controls": {
+        "canSend": true,
+        "reason": null,
+        "working": true,
+        "queued": 0,
+        "model": null,
+        "models": [
+          {
+            "id": "default",
+            "label": "Default (recommended)"
+          },
+          {
+            "id": "opus",
+            "label": "Opus"
+          },
+          {
+            "id": "sonnet",
+            "label": "Sonnet"
+          }
+        ],
+        "mode": "acceptEdits",
+        "modes": [
+          "default",
+          "acceptEdits",
+          "plan"
+        ],
+        "turn": {
+          "startedAt": "2026-10-16T12:00:00.000Z",
+          "wake": false
+        },
+        "tasks": [
+          {
+            "id": "a7f3c2e9b1d40e58",
+            "stepId": "toolu_01Ac1",
+            "kind": "agent",
+            "label": "sleeper two",
+            "background": true,
+            "startedAt": "2026-10-16T12:00:00.000Z",
+            "owner": null,
+            "progress": {
+              "tools": 3,
+              "last": "Bash",
+              "at": "2026-10-16T14:00:00.000Z"
+            },
+            "waiting": "m23"
+          },
+          {
+            "id": "bk2x9q7",
+            "stepId": "toolu_01Ac3",
+            "kind": "command",
+            "label": "sleep 60",
+            "background": true,
+            "startedAt": "2026-10-16T12:00:00.000Z",
+            "owner": "toolu_01Ac1",
+            "progress": null,
+            "waiting": null
+          }
+        ],
+        "heardAt": "2026-10-16T14:00:00.000Z"
+      }
+    },
+    {
+      "type": "session_items",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "rev": 4,
+      "removed": [],
+      "items": [],
+      "controls": {
+        "canSend": true,
+        "reason": null,
+        "working": true,
+        "queued": 0,
+        "model": null,
+        "models": [
+          {
+            "id": "default",
+            "label": "Default (recommended)"
+          },
+          {
+            "id": "opus",
+            "label": "Opus"
+          },
+          {
+            "id": "sonnet",
+            "label": "Sonnet"
+          }
+        ],
+        "mode": "acceptEdits",
+        "modes": [
+          "default",
+          "acceptEdits",
+          "plan"
+        ],
+        "turn": {
+          "startedAt": "2026-10-16T14:00:00.000Z",
+          "wake": true
+        },
+        "tasks": [],
+        "heardAt": "2026-10-16T14:00:00.000Z"
+      }
+    },
+    {
+      "type": "push_state",
+      "push": {
+        "state": "failing",
+        "error": "The push server answered 500",
+        "at": "2026-10-16T14:00:00.000Z"
+      }
+    },
+    {
+      "type": "push_state",
+      "push": {
+        "state": "off"
+      }
+    },
+    {
+      "type": "error",
+      "message": "Nothing is running.",
+      "about": {
+        "kind": "stop",
+        "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31"
+      }
+    },
+    {
+      "type": "error",
+      "message": "That session is gone.",
+      "about": {
+        "kind": "send",
+        "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+        "clientId": "c_4d2a"
+      }
+    },
+    {
+      "type": "error",
+      "message": "That output is no longer on the Mac.",
+      "about": {
+        "kind": "tool",
+        "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+        "toolUseId": "toolu_01Ab5"
+      }
+    },
+    {
+      "type": "error",
+      "message": "That project is gone.",
+      "about": {
+        "kind": "create",
+        "ref": "s1"
+      }
     }
   ],
   "client": [
@@ -1913,6 +2281,25 @@
     {
       "type": "session_stop",
       "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31"
+    },
+    {
+      "type": "session_stop",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "target": "turn",
+      "turnStartedAt": "2026-10-16T12:00:00.000Z"
+    },
+    {
+      "type": "session_stop",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "target": {
+        "task": "bk2x9q7"
+      },
+      "turnStartedAt": "2026-10-16T12:00:00.000Z"
+    },
+    {
+      "type": "session_unqueue",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "clientId": "c_4d2a"
     },
     {
       "type": "session_decide",

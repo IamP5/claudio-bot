@@ -1052,6 +1052,7 @@ describe("how a run ends", () => {
     queries[0]!.emit(toolCall("toolu_p", "Bash", { command: "perl -e 'sleep 40'" }));
     await flush();
     await restart();
+    expect([(await rowOf(ASK)).status, (await rowOf(ASK)).outcome]).toEqual(["working", undefined]);
     queries[0]!.emit(result(0.01, { session_id: ASK }));
     await flush();
     expect(await rowOf(ASK)).toMatchObject({ status: "idle", outcome: { kind: "finished" } });
@@ -1217,6 +1218,38 @@ describe("how a run ends", () => {
     clock += 1000;
     await transcribe({ type: "user", message: { role: "user", content: '<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_a1</tool-use-id>\n<status>killed</status>\n<summary>Agent "long sleeper" was stopped by user</summary>\n</task-notification>' } });
     expect((await noticesNow()).map((n) => n.reason)).toEqual(["stop"]);
+  });
+
+  test("a step another Claude Code still holds is not ended at rest, even idle at its prompt across a bridge restart", async () => {
+    await start();
+    await send("Hi");
+    queries[0]!.emit(result(0.01, { session_id: ASK }));
+    await flush();
+    clock += 60_000;
+    await transcribe(calledEntry("toolu_t", "Bash", { command: "sleep 900", run_in_background: true }), resultEntry("toolu_t", "Command running in background with ID: bt."));
+    holders.set(ASK, { pid: 9, sessionId: ASK, entrypoint: "cli", kind: "interactive", cwd: repo, status: "idle", waitingFor: null });
+    for (const f of appChanged) f();
+    await flush();
+    clock += 60_000;
+    await restart();
+    expect((await stepOf("toolu_t")).state).toBe("running");
+  });
+
+  test("Claude Code's word that the user stopped a task hides only when the bridge just said so itself", async () => {
+    await start();
+    await send("Fan out");
+    const q = queries[0]!;
+    await transcribe(calledEntry("toolu_a1", "Agent", { description: "worker", subagent_type: "general-purpose", prompt: "Sleep.", run_in_background: true }));
+    q.emit(taskStarted(agentTask("a1", "toolu_a1", "worker")), level(agentTask("a1", "toolu_a1", "worker")), result());
+    await flush();
+    await handle({ type: "session_stop", sessionId: ASK });
+    q.emit(sys("task_updated", { task_id: "a1", patch: { status: "killed" } }), level());
+    await flush();
+    clock += 3_600_000;
+    await transcribe(calledEntry("toolu_a2", "Agent", { description: "worker", subagent_type: "general-purpose", prompt: "Sleep.", run_in_background: true }));
+    clock += 1000;
+    await transcribe({ type: "user", message: { role: "user", content: '<task-notification>\n<task-id>a2</task-id>\n<tool-use-id>toolu_a2</tool-use-id>\n<status>killed</status>\n<summary>Agent "worker" was stopped by user</summary>\n</task-notification>' } });
+    expect((await noticesNow()).map((n) => n.reason)).toEqual(["stop", "task"]);
   });
 
   test("Always names the tool once and lists each rule as its own item", () => {

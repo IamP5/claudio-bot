@@ -45,6 +45,8 @@ export type OwnDeps = {
   transcriptExists(id: SessionId, cwd: string): boolean;
   /** Why a turn must wait now: another live Claude Code is busy on the id. */
   blocked(id: SessionId): string | null;
+  /** Another live Claude Code has the id open, busy or idle at its prompt; its background work may still run. */
+  elsewhere(id: SessionId): boolean;
   /** The user's settings.permissions.defaultMode, when it is one the phone may use. */
   defaultMode(): PhoneMode | null;
   scope(cwd: string): Scope;
@@ -740,7 +742,7 @@ export function createOwn(deps: OwnDeps): Own {
       const turn = activityOf(rec).turn;
       const out = drive.cut && !(turn !== null && turn.startedAt <= drive.cut.at) ? [drive.cut] : [];
       // At rest nothing runs, so a step the transcript still leaves running never got its result.
-      if (!working(rec) && deps.blocked(rec.id) === null) out.push({ at: rested.get(rec.id) ?? bootAt, state: "stopped", cause: UNSEEN_END });
+      if (!working(rec) && !deps.elsewhere(rec.id)) out.push({ at: rested.get(rec.id) ?? bootAt, state: "stopped", cause: UNSEEN_END });
       return out;
     },
 
@@ -774,7 +776,12 @@ export function createOwn(deps: OwnDeps): Own {
 
     restart() {
       // A session whose background work the restart killed gets its driver too, which says so in the thread.
-      for (const rec of deps.world.sessions.values()) if (rec.own && (rec.own.session.pending.length > 0 || (rec.own.session.background?.length ?? 0) > 0)) driver(rec);
+      for (const rec of deps.world.sessions.values()) {
+        if (!rec.own || (rec.own.session.pending.length === 0 && (rec.own.session.background?.length ?? 0) === 0)) continue;
+        driver(rec);
+        // After the driver tells how the cut-off turn ended and starts the next queued one, that turn begins a new run.
+        queueMicrotask(() => changed(rec.id));
+      }
     },
 
     tick(at) {

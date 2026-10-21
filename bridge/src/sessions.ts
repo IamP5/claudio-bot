@@ -305,6 +305,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     },
     transcriptExists: (id, cwd) => transcriptExists(deps.projectsDir, id, cwd),
     blocked,
+    elsewhere: (id) => deps.apps.holders().has(id),
     defaultMode: () => settingsMode(configDir),
     scope: deps.scope,
     changed(id) {

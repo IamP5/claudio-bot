@@ -63,6 +63,8 @@ const KEEP = 4;
 /** While a session works, its watchers hear from it at least this often, so a silent call never looks like a dead link. */
 export const BEAT_MS = 25_000;
 const CARD_WAIT_MS = 2_000;
+/** Claude Code writes a stopped task's notification within seconds of the stop; an older stop notice of the same name was another task. */
+const RESTATED_MS = 60_000;
 
 type Frame = { rev: number; items: SessionItem[]; removed: ItemId[]; bytes: number };
 
@@ -202,11 +204,15 @@ export function createThreads(deps: ThreadsDeps): Threads {
     return last?.kind === "notice" && last.tone === "error" && last.text === notice.text;
   }
 
-  /** Claude Code's word that the user stopped a task the bridge already named in its own stop notice. */
+  /** Claude Code's word that the user stopped a task the bridge named in its own stop notice moments before. */
   function restated(item: SessionItem, overlay: readonly SessionItem[]): boolean {
     if (item.kind !== "notice" || item.reason !== "task" || !/stopped by user/i.test(item.text)) return false;
     const quoted = item.text.match(/"[^"]*"/)?.[0];
-    return quoted !== undefined && overlay.some((o) => o.kind === "notice" && o.reason === "stop" && o.at <= item.at && o.text.includes(quoted));
+    const at = Date.parse(item.at);
+    return (
+      quoted !== undefined &&
+      overlay.some((o) => o.kind === "notice" && o.reason === "stop" && o.text.includes(quoted) && Date.parse(o.at) <= at && at - Date.parse(o.at) <= RESTATED_MS)
+    );
   }
 
   /** The overlay as shown, recorded as published with the controls. */

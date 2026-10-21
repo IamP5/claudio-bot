@@ -2,6 +2,8 @@
 
 This plan covers all 81 P0/P1 Sessions findings from audit run `20261021T0327Z` (`docs/ux-program/findings.tsv`, survivors in `run-20261021T0327Z.json`). It folds in the 46 P2s that fall inside a group's files and theme. The 9 other P2s wait in the backlog. The plan was written from the code at `ce9b3d0`, and line numbers point there.
 
+Audit run 2 (`20261021T0645Z`) added 10 P1s and 22 P2s (F-SES-138 to F-SES-169). They are folded into the groups that have not started, plus one new group, G15. The groups that merged (G0, G1, G4, G9, G10, G14) and the two in review (G2 #13, G7 #7) are not reopened. Section 9 maps each new finding to its group and lists the ones a merged or in-review PR likely fixes already. Run 2 text was checked against `origin/main` at `91a104e` and the two PR branches.
+
 Each group is one PR, or one PR plus a short follow-up where noted. A group names its data shape before its UI. The bridge and the app share one schema PR (G0), so bridge groups and app groups can run in parallel afterwards.
 
 ## 1. Root causes
@@ -210,6 +212,8 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
 
 - **Findings:** F-SES-009 composer-stop-and-send-kills-background-process-silently, F-SES-010 offline-bridge-restart-leaves-background-promise-unmarked, F-SES-031 sessions-failed-mark-and-error-notice-lost-on-bridge-restart, F-SES-049 sessions-stop-leaves-no-stopped-entry, F-SES-051 sessions-stopped-subagents-labelled-denied (+G1, +G5 for per-task Stop), F-SES-072 thread-step-running-after-process-death.
   P2: F-SES-108 sessions-row-carries-no-outcome-after-failure-or-stop, F-SES-111 sessions-stop-retires-subagent-approval-as-expired, F-SES-117 sessions-unread-dot-says-nothing-about-what-finished (outcome text; the row UI is in G12), F-SES-130 thread-stop-notice-bare-interrupted-and-header-says-ran.
+  Run 2, P1: F-SES-143 sessions-stop-in-first-seconds-erases-prompt-permanently (+G6 for the draft), F-SES-140 sessions-model-mode-chip-shows-new-value-when-claude-code-refused (bridge half; the chip is in G6).
+  Run 2, P2: F-SES-156 sessions-stop-of-background-work-reports-success-before-it-happens-failure-silent, F-SES-157 sessions-subagent-denied-command-step-reads-ok-while-stop-reads-denied (the Deny half; G1 already fixed the Stop half), F-SES-159 thread-failed-turn-error-notice-shown-twice, F-SES-152 sessions-failed-thread-error-raw-signal-no-next-step (bridge half, +G5), F-SES-150 sessions-approval-always-text-garbles-compound-command (bridge half, +G15).
 - **Root cause (R3):**
   - `interrupt()` (`session.ts:1315-1325`) stops every background task on any interrupt, including "Stop and send".
   - `onTurnEnd` (`own.ts:331-340`) has no `stopped` branch.
@@ -232,19 +236,33 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
   - Bridge, `catalog.ts`: `row.outcome` comes from the record. Status is `failed` for failed or lost, and `idle` for stopped or finished.
   - Bridge, `protocol2.ts`: `stopped` closes as `expired` for v2 apps.
   - iOS: none. G6 and G5 consume it.
+  - **Run 2 additions:**
+    - **A stop must not erase the prompt (143).** Today the phone's user bubble is built only from `session.pending` (`own.ts:416-420`, `sessions.ts:253-257`), and `finish()` (`session.ts:260-266`) removes it when the turn ends `stopped`. If Claude Code had not yet written the user entry, the text is gone for good. On a `stopped` end, `own.ts` keeps the prompt as a persisted overlay user item, with the same id and send time, followed by the stop notice. The item is dropped only once a transcript user entry with that text exists (the same rule G8 uses for live sends). The stop notice then reads "Stopped before Claude started. Your message was not sent to Claude." G6 adds Edit and resend on that bubble.
+    - **Model and mode changes report the value that runs (140).** `set()` (`own.ts:389-408` on the G2 branch) writes `drive.model`/`drive.mode` before `setModel`/`setPermissionMode` and does not roll back on a throw. It should apply to the live query first and store only on success. On a refusal it keeps the old value, still calls `changed()` so `controls()` pushes the true value, and returns the refusal as `error` with `about: {kind: "set", sessionId}` (a new additive `ErrorAbout` variant). G6 shows the pending state and the inline error.
+    - **Stopping background work is confirmed (156).** G2's branch already has `interrupt(target)` and `stopTask(l, id)`, but `stopTask` is fire-and-forget and `interrupt` returns `true` whatever happens. `interrupt` awaits each `stopTask` with a 5 s cap and returns `{ stopped, failed }`. A failed stop sends `error{about:{kind:"stop"}}` and adds a notice ("Couldn't stop sleeper two"). A successful one settles the task's step `stopped` through the overlay below.
+    - **A denied subagent call shows on its Agent step (157).** The overlay in `threads.ts` already knows each card's `stepId` and `subagent` (G2). When a card a subagent raised is answered Deny or Never, its owning Agent step gets `cause: "You denied its Bash: <detail>"`. When the step settles ok, it reads `denied` with that cause, not a bare ok.
+    - **One notice per failure (159).** When the turn's transcript already has an API-error notice (`transcript.ts:665-669`) with the same text, `onTurnEnd` (`own.ts:332`) records the outcome but adds no second notice. Dedupe in the overlay by text within the turn, so `transcript.ts` is not touched.
+    - **Failure wording and next step (152, bridge half).** The failure notice says what happened in words and keeps the raw error as its second line: "Claude Code stopped unexpectedly. Send a message to start it again." A card whose signal aborts because the process died settles as closed, not `expired` (`own.ts:158-161`), so it does not read "Expired" a minute after it opened.
+    - **Always text as a list (150, bridge half).** `alwaysText()` (`own.ts:530-535`) names the tool and separates the rules with " · ", not ", ": "Bash: perl -e 'sleep 45' · echo late …". It drops the trailing ", for this session", because G15's card line states the scope. The `always` field stays a string, so there is no schema change.
 - **Patterns:** P-STATE-7, P-STATE-2, P-STOP-2, P-STOP-3, P-STOP-4, P-BG-7, P-CONN-5, A-5, A-9.
-- **Files:** `bridge/src/session.ts`, `bridge/src/own.ts`, `bridge/src/sessions.ts`, `bridge/src/threads.ts`, `bridge/src/catalog.ts`, `bridge/src/world.ts`, `bridge/src/protocol2.ts`, `bridge/src/hub.ts` (one line: serve `session_unqueue`), `bridge/test/{session,own,sessions,threads,protocol2}.test.ts`.
+- **Files:** `bridge/src/session.ts`, `bridge/src/own.ts`, `bridge/src/sessions.ts`, `bridge/src/threads.ts`, `bridge/src/catalog.ts`, `bridge/src/world.ts`, `bridge/src/protocol2.ts`, `bridge/src/hub.ts` (one line: serve `session_unqueue`), `bridge/test/{session,own,sessions,threads,protocol2}.test.ts`. Run 2: `bridge/src/protocol.ts` and `fixtures/protocol.json` (one additive `ErrorAbout` variant, `{kind: "set"}`, for 140; G6 mirrors it in `Protocol.swift`).
 - **Verify:** protocol lane S4 and S2 (with G14's new "Stop and send keeps background" item). Restart and SIGKILL probes come from G14's `bridge restart` and `kill-claude` actions. No simulator.
 - **Acceptance:**
   - S4.3, S4.4, S4.5 (a notice with `reason:"stop"`; assistant prose no longer counts after G14) and S4.6 (with process evidence).
   - New S2.9: after "Stop and send" the background command still finishes.
   - New S6.7: after SIGKILL no step reads running, and the row reads failed with a cause.
   - New S6.8: after a bridge restart the row keeps failed or lost, and the thread has the restart notice.
+  - Run 2:
+    - Early-stop probe (Stop 0.8 s and 1.2 s after `session_create`): the user item is still there after the stop and after a fresh open, with the stop notice under it (143).
+    - A `set` that Claude Code refuses leaves `controls.model`/`controls.mode` at the old value and sends `error{about:{kind:"set"}}` (140; unit test with a throwing `setPermissionMode`).
+    - A `stopTask` that rejects gives an error frame and a notice. One that resolves settles the step `stopped` within 2 s (156; S4 background variant).
+    - Deny probe (S4 with the card answered deny): the Agent step reads `denied` with a cause, not ok (157).
+    - A bad-model failure shows one error notice (159). After `kill-claude`, the notice has the worded line, and an open card reads closed, not expired (152).
 - **Risk:**
   - Persisting notices grows `world.json`. Keep `NOTICES_KEPT = 10` per session.
   - `stopped` as a card answer touches bot chats' `PermissionMessage`. Check `gate.ts` consumers before shipping.
   - The wake turn that Claude Code starts after a stopped subagent cannot be prevented. G2 makes it read working, and the stop notice above it explains it.
-- **Depends on:** G2 (same files, and it reads `activity()` to know nothing is left running). **Wave 3.**
+- **Depends on:** G2 (same files, and it reads `activity()` to know nothing is left running). G2's branch already carries `interrupt(target)` and per-task `stopTask`, so G3 builds its stop targets on that code and does not write them again. **Wave 3.**
 
 ---
 
@@ -283,6 +301,7 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
 - **Findings:** F-SES-005 a11y-thread-header-and-tail-no-run-state-for-voiceover, F-SES-006 a11y-thread-opened-on-waiting-approval-announces-nothing, F-SES-007 a11y-turn-end-and-failure-never-announced, F-SES-065 thread-offline-bar-does-not-say-state-is-stale, F-SES-071 thread-skeleton-forever-when-offline, F-SES-081 x-ipad-sidebar-hidden-in-portrait-running-elsewhere-invisible.
   P2: F-SES-086 a11y-permission-announcement-omits-command-and-session, F-SES-089 a11y-streaming-tail-label-is-whole-growing-reply, F-SES-123 thread-doubled-working-indicators-for-one-running-step, F-SES-125 thread-expired-approval-still-hides-working-and-announces, F-SES-131 thread-top-edge-blur-leaks-transcript-words-beside-title, F-SES-137 x-ipad-thread-header-title-capped-at-260pt.
   Also the per-task Stop UI for F-SES-051.
+  Run 2, P2: F-SES-148 a11y-ask-announcement-reads-only-first-question-plan-announcement-unnamed, F-SES-163 voiceover-holder-banner-open-button-merged-and-silent, F-SES-169 x-ipad-selection-not-restored-after-kill-detail-pane-says-no-session-selected (the detail pane half), and the app half of F-SES-152 (the failed outcome's next step).
 - **Root cause (R4):**
   - Run state is only `StreamingTail` at the bottom of a lazy list (`ThreadItems.swift:725-749`).
   - The only announcement is a card `.onChange`, which never fires on first render (`SessionThreadView.swift:164-166`).
@@ -304,6 +323,12 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
     Offline: the thread view renders even before `.ready`. The skeleton shows for 1 s at most while connected. Otherwise the status line says "This session loads when your Mac is back" (071). It sets `\.runStateStale` from G4, so running marks dim (065).
 
     iPad: when the split view hides the sidebar, a toolbar chip shows "2 working · 1 needs you" for the other sessions (081). The header title is no longer capped at 260 pt and carries the state word (137). The header band is opaque (131).
+
+    Run 2:
+    - The card announcement counts questions ("3 questions. First: …") and the plan announcement names the plan's first heading (148, `SessionThreadView.swift:250-253`).
+    - The holder banner (`SessionThreadView.swift:308-346`) keeps its text and its button as separate elements, with the button labelled "Open on claude.ai". A banner that appears or changes (parked, busy elsewhere) is announced, using the same 2 s debounce (163).
+    - When Sessions is the sidebar and nothing is selected, the wide-layout detail pane (`MainView.swift:148-159`) shows the live summary instead of "No session selected": "2 running · 1 needs you", with one button per session. Restoring the last open thread after a kill stays out of scope (169).
+    - The at-rest outcome line for a failed run (level 6) gives the next step from G3's notice: "Send a message to start it again" (152).
 - **Patterns:** P-STATE-5, P-STATE-4, P-BG-3, P-STOP-2, P-ALIVE-3, P-CONN-1, P-CONN-4 (do not flash the stale line for gaps under 400 ms), P-A11Y-1, P-A11Y-2.
 - **Files:** `ios/ClaudioBot/Views/SessionThreadView.swift`, `ios/ClaudioBot/Views/ThreadItems.swift` (StreamingTail only), `ios/ClaudioBot/Views/ChatNotices.swift` (OfflineBar folded into the status line), `ios/ClaudioBot/Views/MainView.swift`, new `ios/ClaudioBot/Views/BackgroundWorkSheet.swift`, new `ios/ClaudioBotTests/ThreadStatusTests.swift` (precedence table).
 - **Verify:** **simulator lane** S2, S5, S6 (G14's app-side drop) and X-empty-error-offline cases 2-5. X-voiceover by code review plus precedence unit tests. X-ipad is code read (pool has no iPad; keep it as a coverage gap).
@@ -313,8 +338,9 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
   - X-empty-error-offline case 5: no skeleton past 1 s offline.
   - One status line, never two working indicators.
   - The precedence unit tests pass for all six levels.
+  - Run 2: unit tests on the spoken strings for a 3-question card, a plan, and a banner change (148, 163). On a wide layout with nothing selected, the detail pane lists the running sessions, judged by code read like 081 (169).
 - **Risk:** this changes the thread's bottom layout, so check the composer inset and the keyboard. Announcement storms: debounce one announcement per 2 s. Do not announce replays after reconnect (P-NOTIFY-3).
-- **Depends on:** G4 (`ThreadItems.swift`, and the stale environment key). Soft dependency on G10 (shared connection copy and Retry). Verification needs G2 and G3. **Wave 3.**
+- **Depends on:** G4 (`ThreadItems.swift`, and the stale environment key). G7 (its PR also edits `ThreadItems.swift` and `SessionThreadView.swift`: the card's reveal-step hook and the sending spinners), so G5 rebases after #7 merges. Soft dependency on G10 (shared connection copy and Retry). Verification needs G2 and G3. **Wave 3.**
 
 ---
 
@@ -323,6 +349,8 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
 - **Findings:** F-SES-002 a11y-error-toast-five-seconds-unannounced, F-SES-004 a11y-stop-button-no-target-no-pending-no-ack, F-SES-040 sessions-queued-message-cannot-be-withdrawn-and-survives-stop (+G3).
   P2: F-SES-083 a11y-composer-queued-chip-says-1-messages, F-SES-088 a11y-session-composer-field-unlabelled-queue-mode-only-in-placeholder, F-SES-093 composer-stop-hidden-while-draft-text-present, F-SES-124 thread-error-notice-colour-icon-only, F-SES-134 x-dynamic-type-composer-chips-clipped-stop-squeezes-field.
   Also the Stop label part of 009 and 037.
+  Run 2, P1: F-SES-146 voiceover-send-no-spoken-ack-and-focus-lost, the chip half of F-SES-140 (+G3), and the draft half of F-SES-143 (+G3).
+  Run 2, P2: F-SES-162 voiceover-composer-field-swaps-to-lock-line-silently, F-SES-168 voiceover-user-bubble-label-is-raw-markdown-source.
 - **Root cause:**
   - `showsStop = working && !hasText` with a bare "Stop" label (`SessionComposer.swift:17-22`, `:127-129`).
   - `stop()` only sends the frame (`:242-245`).
@@ -339,8 +367,14 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
     - With background work only (`turn == nil`), Send sends at once. The placeholder is "Message Claude", not "Queue a message", and the field's accessibility label carries the mode (088).
   - iOS, queue: the chip reads "1 message queued" (083). Tapping the chip or a queued bubble offers Withdraw or Edit, which sends `session_unqueue` behind feature `session_unqueue` (040).
   - iOS, errors: `ErrorToast` posts an announcement, prefixes "Error:", and stays until dismissed while VoiceOver runs (002). Session errors with `sessionId` show inline under the composer instead of the global toast. The error `NoticeLine` speaks "Error" (124).
+  - iOS, run 2:
+    - **Send.** The Send/Stop slot is always drawn while the composer shows, so the focused control keeps its place. After Send it reads "Sent" until `working` makes it Stop. Send posts "Sent" or "Queued behind the current turn" (146, `SessionComposer.swift:62-77`, `:212-222`).
+    - **Model and mode chips.** A change in flight shows the old value with "Changing to Accept edits…". A refusal (G3's `error{about:{kind:"set"}}`) shows inline under the composer and is announced until dismissed. The chip and its spoken label always come from `controls` (140). `Protocol.swift` mirrors the new `ErrorAbout` variant.
+    - **Lock line.** When `canSend` flips to false, the change is announced ("Held by the terminal. Messages wait.") and the lock line takes accessibility focus (162).
+    - **Stopped-before-start bubble.** A user item that G3 kept after an early stop offers "Edit and resend", which puts its text back in the composer (143). It uses the same menu as Withdraw and Edit for queued messages.
+    - **Bubble speech.** `SessionUserBubble`'s label is built from the rendered text, not the raw markdown. Links read as their labels, and the "You:" and "Queued" parts stay (168, `ThreadItems.swift:106`).
 - **Patterns:** P-STOP-1, P-STOP-3, P-STOP-4, P-A11Y-2, P-CONN-6.
-- **Files:** `ios/ClaudioBot/Views/SessionComposer.swift`, `ios/ClaudioBot/Views/Components.swift` (ErrorToast), `ios/ClaudioBot/Model/Store.swift` (stop pending state and session-scoped errors), `ios/ClaudioBot/Views/ThreadItems.swift` (SessionUserBubble withdraw, NoticeLine speech), `ios/ClaudioBot/Views/PromptTextView.swift` (field label), new `ios/ClaudioBotTests/ComposerStopTests.swift`.
+- **Files:** `ios/ClaudioBot/Views/SessionComposer.swift`, `ios/ClaudioBot/Views/Components.swift` (ErrorToast), `ios/ClaudioBot/Model/Store.swift` (stop pending state and session-scoped errors), `ios/ClaudioBot/Views/ThreadItems.swift` (SessionUserBubble withdraw, NoticeLine speech), `ios/ClaudioBot/Views/PromptTextView.swift` (field label), new `ios/ClaudioBotTests/ComposerStopTests.swift`. Run 2: `ios/ClaudioBot/Model/Protocol.swift` (the `{kind:"set"}` error variant only), `ios/ClaudioBot/Views/MarkdownText.swift` (a plain-text rendering for the bubble label, if `inline` has none).
 - **Verify:** **simulator lane** S4 (S4.8), S1 and S2 at AX5. Protocol lane S4 for the ack timing. X-voiceover by code review.
 - **Acceptance:**
   - S4.8: the stopped state shows with no spinner.
@@ -348,8 +382,9 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
   - The Stop label names its targets, "Stopping…" shows and is spoken, and the end is announced.
   - A withdrawn queued message never runs.
   - The toast is announced.
+  - Run 2: unit tests on the composer's spoken strings and on the Send/Stop slot staying present after Send (146, 162, 168). A refused mode change leaves the chip on the old value with an inline error (140, FakeBridge). The early-stop probe from G3 leaves an Edit and resend bubble (143).
 - **Risk:** the confirmation step must not slow down the common one-turn stop. With no background tasks, never confirm.
-- **Depends on:** G5 (`ThreadItems.swift`), G10 (`Components.swift`), G3 (stop targets, ack notice, unqueue). **Wave 4.**
+- **Depends on:** G5 (`ThreadItems.swift`), G10 (`Components.swift`), G3 (stop targets, ack notice, unqueue, the `set` refusal and the kept prompt). **Wave 4.**
 
 ---
 
@@ -387,6 +422,8 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
 - **Findings:** F-SES-032 sessions-failed-subagent-step-not-on-wire-until-later, F-SES-044 sessions-row-working-lags-thread-idle-under-load, F-SES-064 thread-item-order-differs-live-resumed-fresh, F-SES-066 thread-overlay-notice-pinned-below-newer-turns, F-SES-067 thread-prompt-and-tool-step-missing-until-transcript-read.
   P2: F-SES-104 sessions-new-sessions-absent-from-list-while-many-start, F-SES-116 sessions-unread-dot-lights-on-bookkeeping-write-before-reply-exists, F-SES-129 thread-start-phase-14s-silent-and-prompt-timestamp-jumps.
   Also the bridge half of F-SES-034 (lastAt on bookkeeping writes).
+  Run 2, P1: F-SES-145 thread-rev-never-checked-lost-frame-not-healed-by-resume, F-SES-144 sessions-title-cut-at-80-code-units-splits-emoji-undecodable-frame.
+  Run 2, P2: F-SES-153 sessions-finished-row-lastat-stale-for-whole-turn, F-SES-161 thread-silent-command-output-shows-claude-code-no-output-boilerplate (a one-line `transcript.ts` filter; G8 is the only open group on that file).
 - **Root cause (R5):**
   - `merged()` puts overlay-only items after the transcript (`threads.ts:156-165`), and the app appends new ids (`Threads.swift:293-299`).
   - `catalog.flush()` awaits a serial `readDirty()` and `getSessionInfo()` with no dir (`catalog.ts:156-170`, `transcript.ts:356-358`) before it publishes anything.
@@ -403,8 +440,14 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
   - Bridge, `transcript.ts`: `getSessionInfo(id, { dir })`. `lastAt` and `lastRole` move only on user, assistant and tool entries, not on title or metadata writes (034, 116).
   - Bridge, `own.ts`: the pending user item stays until the transcript copy that replaces it exists. It keeps its id and send time (067, 129).
   - iOS, `Threads.swift`: `upsert` inserts by `at` with a stable tiebreak. Snapshot, replay and live paths then give one order.
+  - **Run 2: no lost frame passes unseen.**
+    - **Rev gaps (145).** Today `apply(.items)` sets `position.rev` to the frame's rev every time (`Threads.swift:397`), and `replay()` (`threads.ts:288-300`) resends only revs above it. Thread frames carry no stream seq. The bridge's `emit()` already makes revs contiguous, so a live `session_items` frame whose rev is not `position.rev + 1` is a gap. The model then drops its position, and the next `watch_session` asks for a snapshot at once. A replay reply is the one exception.
+    - **Undecodable thread frames (145, 144).** `BridgeClient.swift` hands an unsequenced frame that fails to decode on a thread channel to that thread as a gap, which triggers the same re-watch. It does not drop the socket.
+    - **Well-formed text (144).** `sessions.ts:322` and `:344` cut the draft title with `slice(0, 80)`, which can split a surrogate pair. The cut moves to a code-point boundary and adds an ellipsis. Every frame goes through one `wire()` helper in `serve.ts` and `stream.ts` (`serve.ts:163`, `:307-310`, `stream.ts:33`). It stringifies with a replacer that calls `toWellFormed()` on each string, so no frame can carry a lone surrogate.
+    - **Turn end moves `lastAt` (153).** A driven session's turn end (G2's `working` true → false) marks its transcript path dirty and forces a head re-read, skipping the size and mtime cache in `transcript.ts:347-362`. The row frame that announces idle then carries a `lastAt` at or after the last assistant entry.
+    - **Placeholder output (161).** `classifyResult` maps Claude Code's `(Bash completed with no output)` (and an empty `toolUseResult.stdout`/`stderr`) to `output: null`. G4's row then shows no output.
 - **Patterns:** P-CONN-2, P-STATE-1, P-LIST-1 (stable), P-CONN-4.
-- **Files:** `bridge/src/threads.ts`, `bridge/src/catalog.ts`, `bridge/src/transcript.ts`, `bridge/src/own.ts`, `ios/ClaudioBot/Model/Threads.swift`, `bridge/test/{threads,catalog,transcript,own}.test.ts`, new `ios/ClaudioBotTests/ThreadOrderTests.swift`.
+- **Files:** `bridge/src/threads.ts`, `bridge/src/catalog.ts`, `bridge/src/transcript.ts`, `bridge/src/own.ts`, `ios/ClaudioBot/Model/Threads.swift`, `bridge/test/{threads,catalog,transcript,own}.test.ts`, new `ios/ClaudioBotTests/ThreadOrderTests.swift`. Run 2: `bridge/src/sessions.ts` (title cut), `bridge/src/serve.ts` and `bridge/src/stream.ts` (one `wire()` serializer), `ios/ClaudioBot/Model/BridgeClient.swift` (an undecodable thread frame is a gap), `bridge/test/{sessions,serve}.test.ts`, `ios/ClaudioBotTests/BridgeClientTests.swift`.
 - **Verify:** protocol lane S6 (G14's order-aware compare, resume via epoch/after), S7 (12 sessions) and S4. No simulator.
 - **Acceptance:**
   - S6.3: resumed equals fresh, including order.
@@ -412,8 +455,13 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
   - New S4.9: a failed subagent step is on the wire within 2 s of the transcript write.
   - S7: the user item is never removed before its transcript copy exists.
   - S6.4.
+  - Run 2:
+    - A FakeBridge test that skips one `session_items` rev ends in a snapshot re-watch, and the thread matches a fresh open (145).
+    - A `session_create` whose prompt has an emoji at UTF-16 index 79 gives a decodable row with a whole character and an ellipsis (144). A runner check is proposed for G14's next round.
+    - In S1, the idle row's `lastAt` is at or after the final assistant entry (153).
+    - In S5, a silent command's step has `output: null` (161).
 - **Risk:** sorting by `at` relies on bridge and Claude Code clocks agreeing. Both are on the same Mac, so this holds. A card raised before its tool_use entry is written sorts above the work item, which matches when it was asked.
-- **Depends on:** G1 (`transcript.ts`), G3 (`threads.ts`, `catalog.ts`, `own.ts`), G4 (`Threads.swift`). **Wave 4.**
+- **Depends on:** G1 (`transcript.ts`), G3 (`threads.ts`, `catalog.ts`, `own.ts`, `sessions.ts`), G4 (`Threads.swift`), G9 (`BridgeClient.swift`, merged). **Wave 4.**
 
 ---
 
@@ -479,6 +527,8 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
 
 - **Findings:** F-SES-014 offline-session-stop-not-age-guarded-replays-on-reconnect, F-SES-036 sessions-new-session-start-spinner-unlabelled-no-timeout, F-SES-070 thread-session-send-lost-with-socket-never-resent-echo-stays-queued, F-SES-073 thread-tool-output-spinner-never-ends-on-failure.
   P2: F-SES-094 offline-permission-card-stays-live-and-queued-decision-replays, F-SES-127 thread-load-earlier-row-says-loading-when-idle-or-waiting-for-mac, F-SES-128 thread-reopened-kept-thread-shows-stale-running-until-watch-reply.
+  Run 2, P1: F-SES-142 sessions-plan-ask-card-spinner-stuck-after-failed-or-refused-send.
+  Run 2, P2: F-SES-154 sessions-new-session-start-disabled-offline-no-reason, and the plan-card half of F-SES-166 (+G15).
 - **Root cause (R7):**
   - Only bot `.send` is tracked for resend (`Store.swift:213-243`, `BridgeClient.swift:282-285`).
   - Only bot `.stop` is age-guarded (`BridgeClient.swift:243-248`).
@@ -495,16 +545,20 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
     - The tool-output sheet ends with a reason and Retry or Close, and says "Waiting for your Mac" while offline (073).
     - The load-earlier row is a button when idle and says "Waiting for your Mac" when offline (127).
     - A thread reopened from cache reads "Catching up…" without Stop until the watch reply arrives (128).
+    - **Run 2: plan and question cards (142).** `PlanCard` and `AskCard` keep their own `@State sent`, which is cleared only when the card changes (`ThreadItems.swift`). `transmit` calls `decisionFailed` only for `.decide` and `.sessionDecide`, never `.sessionAnswer` (`BridgeClient.swift:389`), and an `.error` frame clears nothing (`Store.swift:378-380`). The pending state moves into `Store.pendingDecisions`, keyed by card id, for all three card kinds. A failed transmit and a bridge refusal ("Unknown card", "already answered") both clear it, which needs `error.about` to carry the card id (a new additive variant `{kind: "decide", sessionId, cardId}`, emitted by `sessions.ts`). The card then reads "Not sent · Try again", or "Already answered" for that refusal. G7's `.sending` value supplies the spoken "Sending".
+    - **Run 2: the plan card's buttons (166, plan half).** Approve and Keep planning carry hints that state their effect ("Leaves plan mode and starts the work"), and the footnote moves before them.
+    - **Run 2: New Session offline (154).** While `store.machine == nil`, the sheet shows the shared connection line from G10 with Retry, and Start's label reads "Start (your Mac is unreachable)". The typed prompt is kept when the sheet closes and comes back when it reopens.
 - **Patterns:** P-CONN-6, P-STOP-1 (run identity), P-STOP-4, P-CONN-5, P-STATE-2.
-- **Files:** `ios/ClaudioBot/Model/BridgeClient.swift`, `ios/ClaudioBot/Model/Store.swift`, `ios/ClaudioBot/Model/Threads.swift`, `ios/ClaudioBot/Views/SessionComposer.swift` (NewSessionSheet), `ios/ClaudioBot/Views/SessionThreadView.swift` (ToolOutputSheet, LoadEarlierRow), `ios/ClaudioBot/Views/ChatItems.swift` (offline-disabled buttons), `bridge/src/threads.ts`, `bridge/test/threads.test.ts`, `ios/ClaudioBotTests/BridgeClientTests.swift`.
-- **Verify:** unit tests with FakeBridge (send during drop, stale stop, lost create). Protocol lane S6 with G14's send-while-dropping. **Simulator lane** X-empty-error-offline.
+- **Files:** `ios/ClaudioBot/Model/BridgeClient.swift`, `ios/ClaudioBot/Model/Store.swift`, `ios/ClaudioBot/Model/Threads.swift`, `ios/ClaudioBot/Views/SessionComposer.swift` (NewSessionSheet), `ios/ClaudioBot/Views/SessionThreadView.swift` (ToolOutputSheet, LoadEarlierRow), `ios/ClaudioBot/Views/ChatItems.swift` (offline-disabled buttons), `bridge/src/threads.ts`, `bridge/test/threads.test.ts`, `ios/ClaudioBotTests/BridgeClientTests.swift`. Run 2: `ios/ClaudioBot/Views/ThreadItems.swift` (PlanCard and AskCard pending state), `bridge/src/sessions.ts` and `bridge/src/protocol.ts` (the `{kind:"decide"}` error variant), `ios/ClaudioBot/Model/Protocol.swift`.
+- **Verify:** unit tests with FakeBridge (send during drop, stale stop, lost create, a refused `session_answer`). Protocol lane S6 with G14's send-while-dropping. **Simulator lane** X-empty-error-offline.
 - **Acceptance:**
   - A send during a drop runs exactly once after reconnect, or shows "Not sent · Retry".
   - A stop older than 60 s or for another turn is never delivered.
   - Start ends within 20 s with words.
   - The tool sheet never spins forever.
+  - Run 2: a plan or question card whose answer fails or is refused is tappable again within 1 s and says why (142). The New Session sheet offline names the cause and offers Retry (154).
 - **Risk:** resending relies on the bridge's `taken` list (`SENT_KEPT`). Check that it survives a bridge restart, or accept one duplicate at most and say so.
-- **Depends on:** G9 (`BridgeClient.swift`), G13 (`Store.swift`), G8 (`threads.ts`, `Threads.swift`), G6 (`SessionComposer.swift`), G5 (`SessionThreadView.swift`), G7 (`ChatItems.swift`). **Wave 6.**
+- **Depends on:** G9 (`BridgeClient.swift`), G13 (`Store.swift`, `sessions.ts`), G8 (`threads.ts`, `Threads.swift`, `BridgeClient.swift`), G6 (`SessionComposer.swift`, `ThreadItems.swift`), G5 (`SessionThreadView.swift`), G15 (`ChatItems.swift`, after G7). **Wave 6.**
 
 ---
 
@@ -513,6 +567,8 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
 - **Findings:** F-SES-003 a11y-row-spoken-drops-unread-when-another-mark, F-SES-034 sessions-list-reorders-on-every-transcript-write (+G8), F-SES-035 sessions-mirror-failed-glyph-grey-and-hidden, F-SES-039 sessions-pr-chip-state-colour-only, F-SES-042 sessions-row-has-no-activity-or-cause-line (+G2, +G3), F-SES-043 sessions-row-spoken-working-with-stale-age, F-SES-046 sessions-running-rows-hidden-below-fold, F-SES-079 x-dynamic-type-sessions-project-header-truncated-prefix.
   P2: F-SES-096 sessions-age-label-now-lags-up-to-90s-and-not-refreshed-on-return, F-SES-102 sessions-hidden-row-state-dim-only, F-SES-103 sessions-mirror-pending-glyph-reads-as-working, F-SES-105 sessions-project-header-count-excludes-child-sessions-and-children-spoken-flat, F-SES-106 sessions-project-sections-reorder-under-the-user, F-SES-109 sessions-row-spoken-age-in-seconds-and-future, F-SES-110 sessions-running-rows-sink-below-finished, F-SES-120 sessions-working-row-age-is-last-write, F-SES-133 x-dark-mode-tertiary-text-low-contrast, F-SES-135 x-dynamic-type-sessions-row-fills-screen.
   Also the row half of F-SES-045 and F-SES-117.
+  Run 2, P1: F-SES-139 sessions-bots-mode-hides-running-sessions-and-stops-watching, F-SES-147 x-ipad-session-row-tap-leaves-pushed-screen-covering-thread.
+  Run 2, P2: F-SES-151 sessions-collapsed-project-header-hides-running-and-needs-you-rows, F-SES-167 voiceover-sessions-filter-and-search-result-never-announced.
 - **Root cause:**
   - The list sorts by `lastAt` only, live, with no hysteresis (`Sessions.swift:171-200`), and folds at 5 rows regardless of status (`SessionsSidebar.swift:42`, `:219-236`).
   - One `SessionMark` by precedence hides unread (`Sessions.swift:202-212`).
@@ -527,16 +583,22 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
     - **Speech.** "Working for 2 minutes, 3 agents, unread". Unavailable says "unavailable" (043). Ages use the visible buckets (109).
     - **Glyphs.** The PR state gets a glyph per state (039). A failed mirror gets a word, an attention colour and a label, and the pending mirror glyph is no longer circular arrows (035, 103). Hidden rows get an eye-slash (102).
     - **Text and layout.** Informative text uses `Theme.secondary` (133). The ages clock refreshes on `.active` and ticks at 10 s near boundaries (096). Rows are compact at AX sizes: the title capped at 2 lines and status with age on one line (135).
+  - iOS, run 2:
+    - **Bots mode (139).** The Bots/Sessions picker (`SessionsSidebar.swift:21-27`) shows "Sessions · 2 working · 1 needs you" as text and in its spoken label. `Router.watchesSessions` (`ClaudioBotApp.swift:91-93`) stays true in Bots mode while the bridge serves sessions, so the counts are live. The list is small, and the bridge already coalesces diffs to 500 ms. When rows come back from a re-watch, cached rows are drawn as last known (G10's dimmed style) until the first fresh `session_rows` frame.
+    - **Selection pops the stack (147).** `Router.selection` gets a `didSet` that clears `path` when the selection changes. The sidebar's `List(selection:)` (`SessionsSidebar.swift:64`) and its VoiceOver action (`:284`) then behave like `Router.open(_:)`.
+    - **Collapsed projects (151).** A collapsed header reads "my-app · 3 · 2 working · 1 needs you", and says the same aloud. A section that holds a needs-you row opens when that row first needs the user. A later collapse is respected until the next new card.
+    - **Filter and search results (167).** A filter or search change posts one announcement after a 500 ms debounce: "2 working sessions" or "No sessions match".
 - **Patterns:** P-LIST-1, P-LIST-2, P-LIST-3, P-STATE-1, P-STATE-2, P-TIME-1, P-TIME-2, P-A11Y-1.
-- **Files:** `ios/ClaudioBot/Model/Sessions.swift`, `ios/ClaudioBot/Views/SessionRowView.swift`, `ios/ClaudioBot/Views/SessionsSidebar.swift`, `ios/ClaudioBot/Views/Theme.swift` (contrast), `ios/ClaudioBotTests/SessionsTests.swift`.
+- **Files:** `ios/ClaudioBot/Model/Sessions.swift`, `ios/ClaudioBot/Views/SessionRowView.swift`, `ios/ClaudioBot/Views/SessionsSidebar.swift`, `ios/ClaudioBot/Views/Theme.swift` (contrast), `ios/ClaudioBotTests/SessionsTests.swift`. Run 2: `ios/ClaudioBot/App/ClaudioBotApp.swift` (`Router` only: `selection` didSet and `watchesSessions`).
 - **Verify:** **simulator lane** S7 (S7.5 mixed), S1 and S2 list shots, X-dark-mode, X-dynamic-type (list) and X-voiceover (spoken strings in unit tests). Protocol lane S7 for order stability once G8 is in.
 - **Acceptance:**
   - S7.5: the 4 working rows are on screen without expanding, with a visible count.
   - Order changes at most once per status change in S7's timeline (new S7.7 from G14).
   - Spoken row strings include all true states.
   - Age and count contrast ≥ 4.5:1.
+  - Run 2: unit tests for `Router` (a selection change clears `path`; Bots mode still watches) and for the picker, the collapsed-header and the filter announcement strings (139, 147, 151, 167). On iPhone, Bots mode shows the live session count. The iPad half is judged by code read.
 - **Risk:** freezing order while touched needs a short timeout (2 s), or a stuck finger leaves the order stale.
-- **Depends on:** G10 (same three list files), G7 (`Theme.swift`). Verification needs G2, G3 and G8. **Wave 3.**
+- **Depends on:** G10 (same three list files), G7 (`Theme.swift`), G9 (`ClaudioBotApp.swift`, merged). Verification needs G2, G3 and G8. **Wave 3.**
 
 ---
 
@@ -544,6 +606,7 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
 
 - **Findings:** F-SES-016 push-delivered-needs-you-never-withdrawn, F-SES-017 push-no-completion-push-for-phone-sessions (+G2), F-SES-018 push-off-or-failed-is-invisible, F-SES-019 push-session-card-no-reminder-single-shot, F-SES-020 push-session-has-no-local-alert-while-socket-live, F-SES-021 push-suppressed-up-to-45s-after-leaving-app (+G9), F-SES-057 sessions-unread-false-after-work-finished-while-away (+G9).
   P2: F-SES-095 push-session-card-payload-anonymous, F-SES-118 sessions-unread-dot-stays-while-thread-open.
+  Run 2, P2: F-SES-149 push-parallel-approvals-send-identical-pushes-per-card.
 - **Root cause (R8):**
   - `PushReason` covers bots and a single session-card push (`push.ts:26`, `:155-173`).
   - Nothing calls push on a session's completion.
@@ -558,6 +621,7 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
     - `notifySession(id, reason)` with reasons `card`, `reminder`, `finished` and `failed`. Text stays content-free but says what happened: "A Claude Code session finished", "… needs your approval", or "2 sessions need you" when coalescing (095). Approvals send with high priority.
     - Pushes held while live are deferred, not dropped, and sent when the phone goes quiet (021).
     - Failed sends are retried with backoff (3 tries). The push state goes to `failing` with the error (018).
+    - Session card pushes coalesce per session (149). Today `notifySession` dedupes per card (`push.ts:155-173`), so a three-way fan-out sends three identical pushes within 3 ms. Cards that open within 2 s of each other share one push: "A Claude Code session needs 3 approvals". A later card updates that push in place when ntfy supports it (the same spike as 016). Otherwise the next push is held for the bot throttle window. The key becomes `${sessionId}|${runSince}|cards`.
     - Withdrawal on card settle uses ntfy's message update or delete by sequence id, if the server supports it (spike). Otherwise the click link carries the card id, so the app can say "Already answered" (016).
   - Bridge, `own.ts`: session cards get `remindAt = TTL/2` and a reminder push. Expiry adds a thread notice (`reason:"approval"`) naming what was refused (019).
   - Bridge, `sessions.ts` and `own.ts`: a run's end (G2's `working` true → false), when not caused by a user stop, calls `notifySession(finished|failed)` (017, P-STOP-4: no Done push after a user stop).
@@ -578,10 +642,11 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
   - No push after a user stop.
   - A reminder at TTL/2 in a card probe.
   - Push state reads `off` with no URL and `failing` after a 500 from the sink.
+  - Run 2: in S1b with the phone gone, three parallel cards give one push that counts them (149).
 - **Risk:**
   - ntfy update/delete support depends on the server version. Spike before promising 016.
   - Presence false on background must be sent before iOS suspends the socket. Use a background task assertion around the send.
-- **Depends on:** G8 (`own.ts`, `catalog.ts`), G3 (`sessions.ts`), G9 (`ClaudioBotApp.swift`, presence sender), G6 (`Store.swift`). Data from G2. **Wave 5.**
+- **Depends on:** G8 (`own.ts`, `catalog.ts`, `sessions.ts`, `serve.ts`), G3 (`sessions.ts`), G9 (`ClaudioBotApp.swift`, presence sender), G12 (`ClaudioBotApp.swift`, the `Router` changes), G6 (`Store.swift`). Data from G2. **Wave 5.**
 
 ---
 
@@ -622,28 +687,64 @@ Format: findings are the ones the group closes. "(+Gx)" means another group must
 - **Risk:** new items fail on `main` until the groups land. That is intended. Mark them in the ledger so the audit does not re-file them as new findings.
 - **Depends on:** nothing. **Wave 1.** Every group's acceptance run should wait until G14 is merged.
 
+---
+
+### G15. Approval cards say what each choice does, and speak every change (iOS, added after run 2)
+
+- **Why a new group.** These findings live in `ChatItems.swift` and `Display.swift`. G7 (#7, in review) owns those files and is not reopened. The only open group on `ChatItems.swift` is G11, and G11 is about requests that outlive the socket and sits last in wave 6. The card's copy and speech make one small PR that follows G7.
+- **Findings:** P1: F-SES-141 sessions-permission-card-never-and-deny-unexplained, F-SES-138 a11y-approval-card-close-and-expiry-unspoken-focus-dropped (likely fixed in part by G7: see section 9).
+  P2: F-SES-166 voiceover-permission-buttons-bare-and-consequence-read-after (permission card; the plan card is in G11), F-SES-150 sessions-approval-always-text-garbles-compound-command (app half, +G3).
+- **Root cause:**
+  - Only Always allow has a consequence line, "Always allows \(card.always)." (`ChatItems.swift:402-408`). Deny and Never share the danger style and have no line. In a session, Never denies and **stops the turn** (`own.ts:256-257` on the G2 branch). In a bot chat it writes a standing deny rule (`gate.ts:233`, `:572`). The user is told neither.
+  - The choice buttons are bare `Text(choice.button)` with no label or hint, and the consequence line comes after them in reading order (`ChatItems.swift:452-500`, `Display.swift:262-269`).
+  - G7's `DecisionAnnouncer` speaks the result only when this phone's own decision is confirmed (`pendingDecisions` goes from set to empty). A card that expires on its `TimelineView(.deadline)`, or is closed by Stop or by another device, changes silently, and focus drops when the buttons go.
+- **Fix design:**
+  - Data: none new. Reads `card.always`, `answer`, `subagent`, and the card's context (session or bot) that G7 already passes.
+  - iOS, `Display.swift`: `PermissionChoice.consequence(context:)` gives one line per choice:
+    - Allow once: "Runs this call only."
+    - Always allow: "Runs these without asking for the rest of this session: <rules>." G3 sends the rules as a " · " list.
+    - Deny: "Skips this call. Claude carries on and may ask again."
+    - Never: in a session, "Skips this call and stops the turn". In a bot chat, "Never allows this for <bot> again". Check the rule's real scope in `gate.ts` before writing the copy.
+  - iOS, `ChatItems.swift`:
+    - The open card shows the consequence of each choice under its button. At accessibility sizes it shows one line, which changes with focus. The Always line moves before the buttons (141, 150).
+    - Each button gets `accessibilityLabel` "<choice>: <tool> <command head>" and the consequence as `accessibilityHint`. The card is one `.contain` container labelled with the asker and the command (166).
+    - `DecisionAnnouncer` becomes a card-state announcer. Any open-to-closed change while the card is on screen posts the outcome with the command ("Expired. Bash did not run."), and a focused button hands focus to the outcome line through `AccessibilityFocusState`. Expiry is announced from the `TimelineView` tick, not from a frame (138).
+- **Patterns:** P-A11Y-1, P-A11Y-2, P-STOP-3 (say the blast radius before the tap), P-STATE-4.
+- **Files:** `ios/ClaudioBot/Views/ChatItems.swift`, `ios/ClaudioBot/Model/Display.swift`, new `ios/ClaudioBotTests/ApprovalCopyTests.swift`. G7's `ApprovalCardTests.swift` is left alone.
+- **Verify:** **simulator lane** S1 and S4 with cards left open, at default size and at AX5. X-voiceover by code review plus unit tests on the labels, hints and announcement strings. Bot chat cards get one regression shot.
+- **Acceptance:**
+  - Each of the four choices has a visible consequence line, and Never's line differs between a session card and a bot card.
+  - Every button's spoken label names its tool and command.
+  - Expiry, Stop and a decision from another device each post one announcement with the outcome and the command.
+  - The S4 compound command reads as two separate rules.
+- **Risk:** four consequence lines make the card taller, which works against G7's AX5 goal. At accessibility sizes show only the focused or pressed choice's line. Bot chats share the card, so check that their copy still reads true.
+- **Depends on:** G7 (#7, same files). Data from G3 for the Always list (the line still reads correctly on today's string). **Wave 3.** G11 follows it on `ChatItems.swift`.
+
 ## 4. Sequencing
 
 ### File overlap (only the shared files)
 
 | File | Groups, in merge order |
 | --- | --- |
-| `bridge/src/protocol.ts`, `fixtures/protocol.json`, `Model/Protocol.swift` | G0 |
+| `bridge/src/protocol.ts`, `fixtures/protocol.json` | G0 → G3 → G11 (run 2: one additive `ErrorAbout` variant each) |
+| `Model/Protocol.swift` | G0 → G6 → G11 (run 2: the same two variants) |
 | `bridge/src/transcript.ts` | G1 → G8 |
 | `bridge/src/session.ts` | G2 → G3 |
 | `bridge/src/own.ts` | G2 → G3 → G8 → G13 |
-| `bridge/src/sessions.ts` | G2 → G3 → G13 |
+| `bridge/src/sessions.ts` | G2 → G3 → G8 → G13 → G11 |
 | `bridge/src/threads.ts` | G2 → G3 → G8 → G11 |
 | `bridge/src/catalog.ts` | G2 → G3 → G8 → G13 |
-| `Views/ThreadItems.swift` | G0 → G4 → G5 → G6 |
+| `bridge/src/serve.ts` | G8 → G13 |
+| `Views/ThreadItems.swift` | G0 → G4 → G7 → G5 → G6 → G11 |
 | `Model/Threads.swift` | G4 → G8 → G11 |
-| `Views/SessionThreadView.swift` | G5 → G11 |
+| `Views/SessionThreadView.swift` | G7 → G5 → G11 |
 | `Views/SessionComposer.swift` | G6 → G11 |
 | `Views/Components.swift` | G10 → G6 |
 | `Model/Store.swift` | G6 → G13 → G11 |
-| `Model/BridgeClient.swift` | G9 → G11 |
-| `App/ClaudioBotApp.swift` | G9 → G13 |
-| `Views/ChatItems.swift` | G7 → G11 |
+| `Model/BridgeClient.swift` | G9 → G8 → G11 |
+| `App/ClaudioBotApp.swift` | G9 → G12 → G13 |
+| `Views/ChatItems.swift` | G7 → G15 → G11 |
+| `Model/Display.swift` | G7 → G15 |
 | `Views/Theme.swift` | G7 → G12 |
 | `Views/SessionsSidebar.swift`, `SessionRowView.swift`, `Model/Sessions.swift` | G10 → G12 |
 
@@ -655,10 +756,10 @@ Not counted as overlap: a one-line addition to the served features list in `hub.
 | --- | --- | --- |
 | 1 | now | **G0** schema, **G9** connection transport, **G14** runner |
 | 2 | G0 merged (G10: G9 merged) | **G1** step truth, **G2** live work model (P0), **G4** thread work UI, **G7** cards, **G10** offline list |
-| 3 | G2 (G3); G4 (G5); G10 + G7 (G12) | **G3** run endings, **G5** status slot, **G12** list |
+| 3 | G2 (G3); G4 + G7 (G5); G10 + G7 (G12); G7 (G15) | **G3** run endings, **G5** status slot, **G12** list, **G15** card copy and speech |
 | 4 | G3 + G5 + G10 (G6); G1 + G3 + G4 (G8) | **G6** composer Stop, **G8** order and latency |
-| 5 | G8 + G3 + G9 + G6 | **G13** notify when away |
-| 6 | G8 + G13 + G9 + G6 + G5 + G7 | **G11** requests outlive the socket |
+| 5 | G8 + G3 + G9 + G6 + G12 | **G13** notify when away |
+| 6 | G8 + G13 + G9 + G6 + G5 + G15 | **G11** requests outlive the socket |
 
 ```mermaid
 graph LR
@@ -666,6 +767,8 @@ graph LR
   G9 --> G10
   G2 --> G3
   G4 --> G5
+  G7 --> G5
+  G7 --> G15
   G10 -.copy.-> G5
   G10 --> G12
   G7 --> G12
@@ -675,16 +778,18 @@ graph LR
   G1 --> G8
   G3 --> G8
   G4 --> G8
+  G9 --> G8
   G8 --> G13
   G3 --> G13
   G9 --> G13
   G6 --> G13
+  G12 --> G13
   G13 --> G11
   G8 --> G11
   G9 --> G11
   G6 --> G11
   G5 --> G11
-  G7 --> G11
+  G15 --> G11
   G14 -.rubric before acceptance.-> G1 & G2 & G3
 ```
 
@@ -696,7 +801,8 @@ Why this order:
 - **G4 and G7 in wave 2.** They build against G0's fixtures while G1 and G2 land. They merge when green and take their simulator acceptance run after G1, G2 and G3.
 - **G8 after G3.** It edits the same `threads.ts`, `catalog.ts` and `own.ts` paths, and ordering notices depends on G3's persisted notices.
 - **G13 and G11 last.** They sit at the end of several file chains. G13 goes first because its findings (S3) are a full scenario at 0 passes and its bridge half is larger.
-- **Critical path:** G0 → G2 → G3 → G8 → G13 → G11, which is six PRs in a row. The iOS groups fill the waves alongside it.
+- **Critical path:** G0 → G2 → G3 → G8 → G13 → G11, which is six PRs in a row. The iOS groups fill the waves alongside it. Run 2 does not lengthen it: G15 and G12's new `Router` work land in wave 3, ahead of G13 and G11.
+- **G15 after G7.** It edits the same card files. It is a new group because G7 is in review and G11 is a different theme.
 
 ## 5. P2 backlog (not folded into a group)
 
@@ -711,6 +817,11 @@ Why this order:
 | F-SES-107 sessions-pull-to-refresh-online-is-no-rescan-spinner-ends-on-any-frame | Needs a bridge rescan request on `sessions.ts` and `catalog.ts`, which are busy through wave 5. Do it after G13. |
 | F-SES-115 sessions-titles-rewritten-and-generic | Title generation belongs to Claude Code. A disambiguator needs a product call (see Decisions). |
 | F-SES-119 sessions-wide-open-thread-row-vanishes-from-sidebar | Wide-layout pinning of the selected row. Pairs with 087. |
+| F-SES-155 sessions-no-projects-new-session-disabled-no-way-forward | Run 2. Needs the bridge to report its project roots, or to list projects with no sessions. That is the same catalog change as 099, so the two go together. |
+| F-SES-158 sessions-subagent-step-label-no-background-flag-model-or-task | Run 2. Likely fixed in part by G1: see section 9. What remains (a "background" mark on Agent steps, the model, the prompt on expand) needs new `ToolStep` fields and a row change in `ThreadItems.swift`. Cheap follow-up after G6. |
+| F-SES-160 thread-running-bash-step-hides-its-timeout-deadline | Run 2. A feature request (a skeptic found no pattern that asks for it). It needs a new `ToolStep` field (`limitMs`) and a running-row change. Follow-up to G4 once G6 is in. |
+| F-SES-164 voiceover-markdown-list-marker-separate-element | Run 2. `MarkdownText.swift` is shared with bot chats and is outside every group's theme. A one-modifier follow-up after G6, which touches the same file for 168. |
+| F-SES-165 voiceover-no-heading-traits-sessions-list-or-thread | Run 2. It spans `SessionsSidebar.swift` (G12), `ThreadItems.swift` (G6) and `ChatItems.swift` (G15). Do it once all three have merged, so it does not add a file to three groups. G7's PR already marks its sheet title as a header. |
 
 ## 6. Suggested merges and severity changes (findings.tsv is unchanged)
 
@@ -757,9 +868,50 @@ Why this order:
 
   Spike all four with raw-frame logging in S1b, S4 and S8 first.
 - **ntfy withdrawal (016) may not be possible** on the user's ntfy server version. The fallback ("Already answered" on tap) only partly closes the finding.
-- **Run 2 of the audit is still going.** New survivors may land in files these groups own. Dedupe against this plan, and fold new findings into the group that owns their file, not into new groups.
+- **Run 2 of the audit has finished** (32 survivors, section 9). Its findings went into the open groups that own their files. The exception is G15, because the card files belong to G7 (in review) and to G11 (a different theme, last wave). Several groups grew: G3 gained 7 findings, G6 5, G8 4 and G12 4. Watch G3's size, and split the run-2 bridge items into a second commit if review is slow.
 - **Acceptance depends on G14.** Until it merges, S1b.4, S4.5, S4.6 and S6.3 pass on `main` for the wrong reasons.
 - **VoiceOver and remote push banners cannot be observed** in the simulator lane. Those acceptance items are judged by code review plus unit tests on spoken strings and on the local-notification path. Keep them as coverage gaps.
+
+## 9. Run 2 additions (audit run `20261021T0645Z`)
+
+Code checked at `origin/main` `91a104e` (G0, G1, G4, G9, G10, G14 and R1 merged), `origin/ux/sessions-g2-live-work` (#13) and `origin/ux/sessions-g7-approval-cards` (#7, `acc9e0d`).
+
+| Finding | Sev | Group | Note |
+| --- | --- | --- | --- |
+| F-SES-138 a11y-approval-card-close-and-expiry-unspoken-focus-dropped | P1 | G15 | **Likely fixed in part by G7, confirm in Step 4.** G7's `DecisionAnnouncer` speaks the outcome once this phone's own decision is confirmed. Expiry, Stop, a decision from another device and the focus move are still open. |
+| F-SES-139 sessions-bots-mode-hides-running-sessions-and-stops-watching | P1 | G12 | Adds `ClaudioBotApp.swift` (`Router`) to G12. |
+| F-SES-140 sessions-model-mode-chip-shows-new-value-when-claude-code-refused | P1 | G3 (bridge) + G6 (chip) | Not fixed on G2's branch: `set()` still stores before it awaits. |
+| F-SES-141 sessions-permission-card-never-and-deny-unexplained | P1 | G15 | Not fixed by G7: no Deny or Never line. |
+| F-SES-142 sessions-plan-ask-card-spinner-stuck-after-failed-or-refused-send | P1 | G11 | G7 only labels the spinner ("Sending"). The stuck state is still open. |
+| F-SES-143 sessions-stop-in-first-seconds-erases-prompt-permanently | P1 | G3 (+G6 for Edit and resend) | |
+| F-SES-144 sessions-title-cut-at-80-code-units-splits-emoji-undecodable-frame | P1 | G8 | `slice(0, 80)` is still on main and on G2. Adds `sessions.ts`, `serve.ts`, `stream.ts` and `BridgeClient.swift` to G8. |
+| F-SES-145 thread-rev-never-checked-lost-frame-not-healed-by-resume | P1 | G8 | |
+| F-SES-146 voiceover-send-no-spoken-ack-and-focus-lost | P1 | G6 | |
+| F-SES-147 x-ipad-session-row-tap-leaves-pushed-screen-covering-thread | P1 | G12 | `Router.selection` has no didSet on main. |
+| F-SES-148 a11y-ask-announcement-reads-only-first-question-plan-announcement-unnamed | P2 | G5 | |
+| F-SES-149 push-parallel-approvals-send-identical-pushes-per-card | P2 | G13 | |
+| F-SES-150 sessions-approval-always-text-garbles-compound-command | P2 | G3 (bridge) + G15 (card) | |
+| F-SES-151 sessions-collapsed-project-header-hides-running-and-needs-you-rows | P2 | G12 | |
+| F-SES-152 sessions-failed-thread-error-raw-signal-no-next-step | P2 | G3 (bridge) + G5 (outcome line) | |
+| F-SES-153 sessions-finished-row-lastat-stale-for-whole-turn | P2 | G8 | |
+| F-SES-154 sessions-new-session-start-disabled-offline-no-reason | P2 | G11 | |
+| F-SES-155 sessions-no-projects-new-session-disabled-no-way-forward | P2 | backlog | With 099. |
+| F-SES-156 sessions-stop-of-background-work-reports-success-before-it-happens-failure-silent | P2 | G3 | G2's branch adds per-task `stopTask`, but it is still fire-and-forget. |
+| F-SES-157 sessions-subagent-denied-command-step-reads-ok-while-stop-reads-denied | P2 | G3 | **The Stop half is likely fixed by G1, confirm in Step 4.** `classifyResult` maps the bridge's stop text to `stopped`, "Stopped by you". The Deny half is still open. |
+| F-SES-158 sessions-subagent-step-label-no-background-flag-model-or-task | P2 | backlog | **Likely fixed in part by G1 (+G4), confirm in Step 4.** The launch ack is no longer the output, `background: true` and `detail` (the subagent type) are on the wire, and G4 draws `detail`. The background mark, model and prompt are not shown. |
+| F-SES-159 thread-failed-turn-error-notice-shown-twice | P2 | G3 | |
+| F-SES-160 thread-running-bash-step-hides-its-timeout-deadline | P2 | backlog | |
+| F-SES-161 thread-silent-command-output-shows-claude-code-no-output-boilerplate | P2 | G8 | Not fixed by G1: there is no placeholder filter in `transcript.ts`. |
+| F-SES-162 voiceover-composer-field-swaps-to-lock-line-silently | P2 | G6 | |
+| F-SES-163 voiceover-holder-banner-open-button-merged-and-silent | P2 | G5 | |
+| F-SES-164 voiceover-markdown-list-marker-separate-element | P2 | backlog | |
+| F-SES-165 voiceover-no-heading-traits-sessions-list-or-thread | P2 | backlog | |
+| F-SES-166 voiceover-permission-buttons-bare-and-consequence-read-after | P2 | G15 (permission card) + G11 (plan card) | Not fixed by G7: its new hints are only on the fold and on "Show the step". |
+| F-SES-167 voiceover-sessions-filter-and-search-result-never-announced | P2 | G12 | |
+| F-SES-168 voiceover-user-bubble-label-is-raw-markdown-source | P2 | G6 | |
+| F-SES-169 x-ipad-selection-not-restored-after-kill-detail-pane-says-no-session-selected | P2 | G5 | The detail pane summary only. Restoring the selection is out of scope. |
+
+Totals: 10 P1s, all assigned (G3 2, G6 1, G8 2, G11 1, G12 2, G15 2, where 140 and 143 also need G6). 22 P2s: 17 folded in and 5 to the backlog.
 
 ## Schema note (after G0 merged, PR #4)
 

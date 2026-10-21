@@ -333,6 +333,7 @@ export const link = [
   { t: "intent", intent: { kind: "agent.stop", intentId: "i_4", agentId: "a1" } },
   { t: "intent", intent: { kind: "agent.removeWorktree", intentId: "i_5", agentId: "a1" } },
   { t: "intent", intent: { kind: "card.answer", intentId: "i_6", botId: "b1", cardId: "m30", reply: { kind: "permission", choice: "once" }, signed: null } },
+  { t: "intent", intent: { kind: "bot.forget", intentId: "i_10", botId: "b1" } },
   { t: "intent", intent: { kind: "snapshot", intentId: "i_7" } },
   { t: "intent", intent: { kind: "projects", intentId: "i_8" } },
   { t: "ack", seq: 10 },

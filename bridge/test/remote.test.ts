@@ -270,6 +270,19 @@ test("the Machines block names chips for Chrome and computer use only, and is em
   expect(machinesBlock([m, mac], null).split("\n").slice(1)).toEqual(["- Omarchy (this computer, online): Linux, guarded, sandboxed.", "- Mac (online): macOS, guarded, sandboxed. Chrome, Computer use."]);
 });
 
+test("deleting a bot tells each machine with its agents to forget it, also one asleep, and the home stops hearing them", async () => {
+  const r = placed();
+  r.send({ kind: "agent", agent: agent(), messages: [] });
+  r.flip(false);
+  expect(await r.h.hub.handle({ type: "delete_bot", botId: B })).toEqual([]);
+  r.flip(true);
+  await flush();
+  expect(r.intents).toMatchObject([{ kind: "bot.forget", botId: B }]);
+  expect(await r.h.hub.handle({ type: "agent", agentId: A })).toEqual([{ type: "error", message: "Unknown agent" }]);
+  r.send({ kind: "agent", agent: agent(), messages: [] });
+  expect(r.h.frames.filter((f) => f.type === "agent")).toHaveLength(1);
+});
+
 test("deleting a bot drops the start still waiting for its offline machine, so nothing starts when it links", async () => {
   const r = home();
   r.flip(false);
@@ -278,7 +291,7 @@ test("deleting a bot drops the start still waiting for its offline machine, so n
   expect(await r.h.hub.handle({ type: "delete_bot", botId: B })).toEqual([]);
   r.flip(true);
   await flush();
-  expect(r.intents).toEqual([]);
+  expect(r.intents.filter((i) => i.kind !== "bot.forget")).toEqual([]);
 });
 
 test("a remote card's reminder pushes from the home once, even when its event comes again, and not after the card closed", async () => {

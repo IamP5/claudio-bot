@@ -31,6 +31,8 @@ export const QUEUE_TTL_MS: Record<QueuedIntent["kind"], number> = {
   "agent.stop": 10 * MINUTE,
   "agent.removeWorktree": DAY,
   "card.answer": DAY,
+  // Until the machine is back, or the user removes it: its agents must not run on for a deleted bot.
+  "bot.forget": 30 * DAY,
 };
 
 /** cardExpiresAt: for a card answer, when its card expires as the machine last said. */

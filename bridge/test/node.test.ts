@@ -184,3 +184,18 @@ test("a machine saves its world at once when an agent reports, so a restart does
   expect(report).toBeGreaterThan(0);
   expect(calls[report - 1]).toBe("now");
 });
+
+test("bot.forget on a machine stops the bot's agents, drops its stand-in and their records, so a restart resumes nothing", async () => {
+  const calls: string[] = [];
+  const m = machine((urgency) => calls.push(urgency ?? "soon"));
+  const s = start({ name: "Ana", dailyCapUsd: null, connectorsOff: [] });
+  await m.node.runtime.apply(s);
+  await flush();
+  expect(await m.node.runtime.apply({ kind: "bot.forget", intentId: newIntentId(), botId: B1 })).toEqual({ ok: true });
+  expect(m.queries[0]!.closed).toBe(true);
+  expect(m.world.bots.has(B1)).toBe(false);
+  expect(m.world.agents.has(s.agentId)).toBe(false);
+  expect(calls.at(-1)).toBe("now");
+  m.node.boot();
+  expect(m.queries).toHaveLength(1);
+});

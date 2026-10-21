@@ -77,6 +77,8 @@ export type Intent =
   | { kind: "agent.stop"; intentId: IntentId; agentId: AgentId }
   | { kind: "agent.removeWorktree"; intentId: IntentId; agentId: AgentId }
   | { kind: "card.answer"; intentId: IntentId; botId: BotId; cardId: MessageId; reply: CardReply; signed: SignedAnswer | null }
+  /** The bot was deleted on the home: its agents here stop for good, and its stand-in and their records go. */
+  | { kind: "bot.forget"; intentId: IntentId; botId: BotId }
   /** Always applied afresh: its intentId only pairs it with its applied frame. */
   | { kind: "snapshot"; intentId: IntentId }
   /** The projects under the machine's roots, as the reply's text. Always applied afresh, as snapshot. */
@@ -203,6 +205,7 @@ export const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("agent.stop"), intentId, agentId }),
   z.object({ kind: z.literal("agent.removeWorktree"), intentId, agentId }),
   z.object({ kind: z.literal("card.answer"), intentId, botId: id<BotId>(), cardId: id<MessageId>(), reply: cardReply, signed: signedAnswer.nullable() }),
+  z.object({ kind: z.literal("bot.forget"), intentId, botId: id<BotId>() }),
   z.object({ kind: z.literal("snapshot"), intentId }),
   z.object({ kind: z.literal("projects"), intentId }),
 ]);

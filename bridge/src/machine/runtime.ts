@@ -18,6 +18,8 @@ export type RuntimeDeps = Omit<AgentsDeps, "changed" | "reported" | "note"> & {
    * the bot's real record is its stand-in, and only the home writes it; a machine keeps a stand-in of its own.
    */
   standIn: (bot: BotStandIn) => boolean;
+  /** bot.forget: what holds the bot's agents here lets go of them for good. Absent: the bot lives here, and the hub deletes it. */
+  forgetBot?: (botId: BotId) => void;
   journal: Journal;
 };
 
@@ -54,7 +56,7 @@ const ok: Applied = { ok: true };
 const refuse = (reason: string): Applied => ({ ok: false, reason });
 
 export function createAgentRuntime(deps: RuntimeDeps): AgentRuntime {
-  const { scan, answer, standIn, journal, ...agentDeps } = deps;
+  const { scan, answer, standIn, forgetBot, journal, ...agentDeps } = deps;
   const subscribers = new Set<(e: Event) => void>();
   /** Intents still being applied. A finished one's answer is in the journal. */
   const applying = new Map<IntentId, Promise<Applied>>();
@@ -140,6 +142,10 @@ export function createAgentRuntime(deps: RuntimeDeps): AgentRuntime {
         const r = answer(intent.botId, intent.cardId, intent.reply);
         return r.ok ? ok : refuse(r.error);
       }
+      case "bot.forget":
+        if (!forgetBot) return refuse("This bridge holds the bot itself.");
+        forgetBot(intent.botId);
+        return ok;
       case "snapshot":
         emit(snapshot());
         return ok;

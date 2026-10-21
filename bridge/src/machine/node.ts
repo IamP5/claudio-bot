@@ -79,6 +79,7 @@ export type NodeDeps = {
   scan: () => Promise<Project[]>;
   journal: Journal;
   standIn: (bot: BotStandIn) => boolean;
+  forgetBot?: (botId: BotId) => void;
   bots: BotSide;
   /** Each usage row the ledger charges. */
   rowed?: (row: UsageRow) => void;
@@ -180,6 +181,7 @@ export function createNode(deps: NodeDeps): Node {
     scan: deps.scan,
     answer: (botId, cardId, reply) => gate.answer(botId, cardId, reply),
     standIn: deps.standIn,
+    ...(deps.forgetBot && { forgetBot: deps.forgetBot }),
     journal: deps.journal,
   });
 
@@ -224,7 +226,7 @@ export type MachineNode = Node & {
  * A machine: no bots, only a stand-in per bot that has agents here. A stand-in's chat holds the cards this machine's
  * gate posts, which go to the home as card events; the home pushes and shows them. Nothing a bot does runs here.
  */
-export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "rowed" | "elsewhere" | "idle">): MachineNode {
+export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "forgetBot" | "rowed" | "elsewhere" | "idle">): MachineNode {
   const { world } = deps;
   /** A stand-in's chat, or an agent's thread. */
   const archiveOf = (id: BotId | AgentId) => join(deps.root, "machine", "history", `${id}.jsonl`);
@@ -236,6 +238,15 @@ export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "row
       upsertStandIn(world, bot, deps.now().toISOString());
       deps.persist();
       return true;
+    },
+    // Records and stand-in go too, so nothing resumes them; worktrees and transcripts stay on disk.
+    forgetBot(botId) {
+      node.runtime.local.stopFor(botId);
+      node.gate.forgetBot(botId);
+      for (const rec of [...world.agents.values()]) if (rec.agent.botId === botId) world.agents.delete(rec.agent.id);
+      world.bots.delete(botId);
+      deps.persist("now");
+      deps.log(`machine: the home deleted bot ${botId}, so its agents here stopped for good`);
     },
     bots: {
       folder() {

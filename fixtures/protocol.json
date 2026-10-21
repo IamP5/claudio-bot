@@ -2293,6 +2293,14 @@
     {
       "t": "intent",
       "intent": {
+        "kind": "bot.forget",
+        "intentId": "i_10",
+        "botId": "b1"
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
         "kind": "snapshot",
         "intentId": "i_7"
       }

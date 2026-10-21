@@ -408,6 +408,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 **Setup.**
 
+- The list probe (an XCUITest that only reads the accessibility tree) reads the app's Sessions list every 0.3 s until the setup ends (simulator lane).
 - New session `s7-sleep-1` in demo (haiku, mode default): "Task s7-sleep-1: run exactly this Bash command in the foreground (not in the background): perl -e 'sleep 60' . Then reply with one line: done."
 - New session `s7-sleep-2` in demo (haiku, mode default): "Task s7-sleep-2: run exactly this Bash command in the foreground (not in the background): perl -e 'sleep 60' . Then reply with one line: done."
 - New session `s7-sleep-3` in demo (haiku, mode default): "Task s7-sleep-3: run exactly this Bash command in the foreground (not in the background): perl -e 'sleep 60' . Then reply with one line: done."
@@ -439,8 +440,9 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S7.4 | state | protocol | Every session comes to rest, none stuck working. | At the end, every row reads idle. | A row still reads working. |
 | S7.5 | how-many | simulator (mixed) | The Sessions list shows at a glance which 4 run and how many. | Working rows stand out; a count is visible or obvious. | Running rows look like the rest. |
 | S7.6 | state | protocol | A row stops reading Working as soon as its thread is at rest. | Each time a thread's controls.working turns false, its row leaves working within 1.5 s. | A row keeps reading working for more than 1.5 s after its thread came to rest. |
-| S7.7 | how-many | protocol | The list keeps its order while the user reads it: rows move only when a status changes. | Ordering the rows as the app does (ListOrder in ios/ClaudioBot/Model/Sessions.swift: needs you, then working by run start, then the rest by newest lastAt, and a row is placed again only when it changes between those three), the order changes only in list frames that also change a row's status, and then only rows whose status changed move. | The order changes in a frame where no status changed (a title rewrite, a bare transcript write), or a row whose status did not change moves. |
+| S7.7 | how-many | simulator (list probe) | The list keeps its order while the user reads it: rows move only when their status changes. | In the app's own list, read by the list probe from creation to rest, a row whose spoken status (needs you, working, or neither) held between two samples never changes its place among the other rows whose status held. | A row moves past another while neither changed status (a title rewrite, a transcript write, a ticking age reordered the list). |
 | S7.8 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S7.9 | how-many | simulator (list probe) | No fold hides a running session: Show more never holds a row that works or needs the user. | Between marks mixed and s7-ended, whenever the app draws the project's Show more, every sleeper the bridge reports working (now and 1.5 s before) is among the rows above it. | A sleeper that works is folded under Show more. |
 
 ## S8 A subagent starts a background task and returns
 

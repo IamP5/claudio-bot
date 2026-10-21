@@ -515,7 +515,7 @@ async function main() {
 }
 
 /** Copies what proves a behavior into evidence/<run>/<label>/. Never the token. */
-export type Row = { id: string; projectId: string; parentId?: string | null; title: string; origin: string; status: string; holder: string; unread: boolean; agent: unknown; mirror: string; hidden: boolean; branch: string | null; worktree: boolean; lastAt: string; since?: string; outcome?: unknown };
+export type Row = { id: string; projectId: string; parentId?: string | null; title: string; origin: string; status: string; holder: string; unread: boolean; agent: unknown; mirror: string; hidden: boolean; branch: string | null; worktree: boolean; lastAt: string; outcome?: unknown };
 export type Project = { id: string; name: string; path: string };
 
 const countBy = <T>(xs: T[], key: (x: T) => string) => Object.entries(xs.reduce<Record<string, number>>((m, x) => ((m[key(x)] = (m[key(x)] ?? 0) + 1), m), {})).map(([k, n]) => `${k}=${n}`).join(" ");

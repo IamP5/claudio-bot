@@ -37,7 +37,7 @@ import {
   type StreamPosition,
   type WorldId,
 } from "./protocol";
-import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, onboarding, persona, type Envelope } from "./prompts";
+import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, machinesBlock, onboarding, persona, type Envelope } from "./prompts";
 import { cardReply } from "./protocol2";
 import type { CardReply } from "./gate";
 import type { Push } from "./push";
@@ -522,11 +522,20 @@ export function createHub(deps: HubDeps): Hub {
    */
   function standingBrief(bot: BotRecord): string {
     const job = section(readOwn(claudeMdOf(bot.id)) ?? "", "Job");
+    const machines = machinesOf(bot);
     return [
       "[Standing brief: this replaces what you were told before where they differ.]",
       persona({ name: bot.name, userName, machine: deps.profile.name }),
       ...(job === null ? [] : [`\nYour job: ${job}`]),
+      ...(machines === "" ? [] : [`\n${machines}`]),
     ].join("\n");
+  }
+
+  /** The bot's Machines block: every linked machine and its access, once there is more than the home. */
+  function machinesOf(bot: BotRecord): string {
+    const views = machineViews();
+    const agentsOn = bot.agentsOn === null ? null : (views.find((m) => m.id === bot.agentsOn)?.name ?? null);
+    return machinesBlock(views.map((m) => ({ ...m, home: m.role === "home" })), agentsOn);
   }
 
   /** The bot's and its agents' live queries close at their next chance, so the next ones open with fresh options. */
@@ -606,7 +615,7 @@ export function createHub(deps: HubDeps): Hub {
           cwd: homes.homeOf(bot.id),
           resume: bot.session.id ?? undefined,
           settingSources: ["user", "project"],
-          systemPrompt: { type: "preset", preset: "claude_code", append: persona({ name: bot.name, userName, machine: deps.profile.name }) },
+          systemPrompt: { type: "preset", preset: "claude_code", append: [persona({ name: bot.name, userName, machine: deps.profile.name }), machinesOf(bot)].filter(Boolean).join("\n\n") },
           permissionMode: "auto",
           mcpServers: { claudio: botToolServer(bot.id, actions) },
           // A bot asks with its own ask tool, which posts a card instead of blocking the turn. Plan mode would wait for

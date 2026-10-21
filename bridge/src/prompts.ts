@@ -227,6 +227,35 @@ How you work:
 - Never take an outward action without an explicit yes in chat: merging, deploying, posting, sending messages to people, setting secrets, spending money, deleting data.
 - Recurring work is a routine. Offer one when a job repeats.`;
 
+/** A machine as the bot's Machines block names it. */
+export type MachineLine = {
+  name: string;
+  home: boolean;
+  online: boolean;
+  platform: "darwin" | "linux";
+  access: { full: boolean; sandbox: boolean };
+  connectors: readonly { kind: "chrome" | "computer-use" | "other" }[];
+};
+
+const PLATFORM_NAME = { darwin: "macOS", linux: "Linux" } as const;
+const CHIP = { chrome: "Chrome", "computer-use": "Computer use" } as const;
+
+/** Each machine in plain words, its access mode included, for the bot's prompt. Empty while the home is the only one. */
+export function machinesBlock(machines: readonly MachineLine[], agentsOn: string | null): string {
+  if (machines.length < 2) return "";
+  const lines = machines.map((m) => {
+    const where = [m.home ? "this computer" : null, m.online ? "online" : "offline"].filter(Boolean).join(", ");
+    const access = `${m.access.full ? "full access" : "guarded"}, ${m.access.sandbox ? "sandboxed" : "no sandbox"}`;
+    const chips = [...new Set(m.connectors.flatMap((c) => (c.kind === "other" ? [] : [CHIP[c.kind]])))];
+    return `- ${m.name} (${where}): ${PLATFORM_NAME[m.platform]}, ${access}.${chips.length > 0 ? ` ${chips.join(", ")}.` : ""}`;
+  });
+  return [
+    "Machines your agents can run on. start_agent and list_projects take machine, by name. A start on an offline machine waits until it is back.",
+    ...lines,
+    ...(agentsOn === null ? [] : [`Your agents start on ${agentsOn} unless you name another.`]),
+  ].join("\n");
+}
+
 /** What holds for every turn of an agent: a mac agent's system prompt carries it, its first turn only the task. */
 export const agentRules = ({ botName, userName }: { botName: string; userName: string }) =>
   `You were started by the bot ${botName} for ${userName}. Nobody is at this terminal: your final message each turn is reported to the bot. ` +

@@ -3,6 +3,7 @@ import type { Links } from "../src/machine/links";
 import type { Machine, Sent } from "../src/machine/machines";
 import { profileOf } from "../src/machine/profile";
 import { profileView, type Event, type EventBody, type Intent, type MachineId } from "../src/machine/wire";
+import { machinesBlock } from "../src/prompts";
 import type { Agent, AgentId, BotId, Message, MessageId } from "../src/protocol";
 import { emptyWorld, type World } from "../src/world";
 import { assistant, bot, callTool, cleanup, flush, hubOver, later, result, text } from "./hub-kit";
@@ -213,4 +214,26 @@ test("a remote agent's usage counts toward its bot's day here", () => {
   const day = new Date().toLocaleDateString("en-CA");
   r.send({ kind: "usage", row: { at, actor: "agent:a_mac1", botId: B, sessionId: "s_mac", initiator: { kind: "user" }, cumulativeUsd: 0.6, deltaUsd: 0.6, day } });
   expect(r.botFrame()).toMatchObject({ bot: { spentTodayUsd: 0.6 } });
+});
+
+test("with a machine enrolled, the bot's prompt lists each machine: online or not, platform, access in words, connector chips", async () => {
+  const r = home();
+  r.world.bots.get(B)!.agentsOn = MAC;
+  r.flip(false);
+  await turn(r);
+  const append = (r.h.q().options.systemPrompt as { append: string }).append;
+  expect(append).toContain(
+    [
+      "Machines your agents can run on. start_agent and list_projects take machine, by name. A start on an offline machine waits until it is back.",
+      `- Mac (this computer, online): ${process.platform === "darwin" ? "macOS" : "Linux"}, `,
+    ].join("\n"),
+  );
+  expect(append).toContain("- MacBook (offline): macOS, full access, no sandbox.\nYour agents start on MacBook unless you name another.");
+});
+
+test("the Machines block names chips for Chrome and computer use only, and is empty while the home is alone", () => {
+  const m = { name: "Omarchy", home: true, online: true, platform: "linux" as const, access: { full: false, sandbox: true }, connectors: [] };
+  expect(machinesBlock([m], null)).toBe("");
+  const mac = { ...m, name: "Mac", home: false, platform: "darwin" as const, connectors: [{ kind: "chrome" as const }, { kind: "other" as const }, { kind: "computer-use" as const }] };
+  expect(machinesBlock([m, mac], null).split("\n").slice(1)).toEqual(["- Omarchy (this computer, online): Linux, guarded, sandboxed.", "- Mac (online): macOS, guarded, sandboxed. Chrome, Computer use."]);
 });

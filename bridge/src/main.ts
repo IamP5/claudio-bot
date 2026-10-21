@@ -1,5 +1,5 @@
 import { mkdirSync, realpathSync } from "node:fs";
-import { homedir, hostname, userInfo } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import qrcode from "qrcode-terminal";
@@ -9,7 +9,12 @@ import { readPlanUsage, strictMcp } from "./claudeCode";
 import { createDevices, type PairCode } from "./devices";
 import { createHomes } from "./home";
 import { createHub } from "./hub";
-import { loadIdentity } from "./machine/identity";
+import { bootMachine } from "./machine/boot";
+import { enroll } from "./machine/enroll";
+import { computerName, loadIdentity } from "./machine/identity";
+import { createJoinCodes } from "./machine/joinCodes";
+import { createLinks } from "./machine/links";
+import { createRegistry } from "./machine/registry";
 import { platformOf, profileOf } from "./machine/profile";
 import { legacyToken } from "./legacy";
 import { lockHome } from "./lock";
@@ -40,7 +45,6 @@ async function run(argv: string[]): Promise<string> {
   return code === 0 ? out.trim() : "";
 }
 
-const machineName = async () => (await run(["scutil", "--get", "ComputerName"])) || hostname().replace(/\.local$/, "");
 
 const firstName = async () =>
   process.env.CLAUDIOBOT_USER_NAME || (await run(["id", "-F"])).split(/\s+/)[0] || process.env.USER || "there";
@@ -97,7 +101,7 @@ mkdirSync(home, { recursive: true, mode: 0o700 });
 
 const port = Number(process.env.CLAUDIOBOT_PORT ?? 7878);
 // The names are read before the bridge listens, so no pair_code can arrive before the addresses it carries.
-const [machine, names] = await Promise.all([machineName(), readNames(run)]);
+const [machine, names] = await Promise.all([computerName(run), readNames(run)]);
 const profile = profileOf({
   env: process.env,
   platform: platformOf(process.platform),
@@ -107,103 +111,145 @@ const profile = profileOf({
   bridgeHome: realpathSync(home),
 });
 const identity = loadIdentity(home, machine);
-const { world, firstRun } = loadWorld(home);
-const saver = createSaver(world, home, 250, log);
-const devices = createDevices({ world, persist: saver.schedule, now, announce });
-const legacy = legacyToken(home);
-legacy.reconcile(devices);
+const userName = await firstName();
 
-const push = createPush({
-  world,
-  persist: saver.schedule,
-  sender: senderFromEnv(process.env.CLAUDIOBOT_PUSH_URL, log),
-  liveUntil: () => transport.liveUntil(),
-  now,
-  log,
-});
-
-const stream = createStream();
-
-const hub = createHub({
-  profile,
-  machineId: identity.machineId,
-  userName: await firstName(),
-  world,
-  homes: createHomes(home),
-  model: process.env.CLAUDIOBOT_MODEL || undefined,
-  scan: () => scanProjects(),
-  claude: { query },
-  broadcast: (message) => transport.publish(message),
-  signal: (message) => transport.signal(message),
-  persist: saver.schedule,
-  log,
-  push,
-  webhookPort: Number(process.env.CLAUDIOBOT_WEBHOOK_PORT ?? 7879),
-  usage: { read: readUsage, watched: () => transport.live() > 0 },
-  sessions: {
-    epoch: stream.epoch,
-    projectsDir: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects"),
-    // CLAUDIOBOT_DESKTOP_FAKE: a verification run's stand-in for the Claude app, which records imports to that file.
-    apps: process.env.CLAUDIOBOT_DESKTOP_FAKE
-      ? fakeDesktop(createClaudeApps(realAppsDeps(ownPids)), process.env.CLAUDIOBOT_DESKTOP_FAKE)
-      : createClaudeApps(realAppsDeps(ownPids)),
-    cacheDir: join(home, "cache"),
-    signal: { list: (frame) => transport.signal(frame, "sessions"), thread: (id, frame) => transport.signal(frame, threadTopic(id)) },
-    watchers: (id) => transport.watchers(id),
-  },
-});
-
-const transport = serve({ devices, stream, hub, legacy, log, now, port, offer });
-const urls = bridgeUrls(names, lanAddresses(), transport.port);
-const control = serveControl({ home, offer, log });
-
-function offer(): PairOffer {
-  return { ...devices.newCode(), urls };
-}
-
-function shutdown() {
-  let saved = true;
-  control?.stop();
-  try {
-    hub.close();
-  } catch (e) {
-    log(`shutdown: closing the bots failed: ${errorText(e)}`);
+function printAccess() {
+  console.log(accessLine(profile.access));
+  const missing = profile.sandboxNeeds.filter((command) => Bun.which(command) === null);
+  if (missing.length > 0) {
+    console.error(
+      `WARNING: the sandbox is on but ${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} not on PATH, so every Bash call of a bot or agent will fail.\n` +
+        `  Install ${missing.map((c) => (c === "bwrap" ? "bubblewrap" : c)).join(" and ")}, or set CLAUDIOBOT_SANDBOX=off.`,
+    );
   }
-  try {
-    saver.flush();
-  } catch (e) {
-    saved = false;
-    log(`shutdown: state.json was not saved: ${errorText(e)}`);
+}
+
+if (identity.home !== null) {
+  const running = bootMachine({ home, identity: { ...identity, home: identity.home }, profile, userName, port, claude: { query }, log });
+  printAccess();
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.on(signal, () => {
+      running.stop();
+      process.exit(0);
+    });
   }
-  process.exit(saved ? 0 : 1);
-}
-for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, shutdown);
-
-console.log(`claudiobot bridge on ${machine}`);
-for (const url of urls) console.log(`  ${url}`);
-console.log(accessLine(profile.access));
-const missing = profile.sandboxNeeds.filter((command) => Bun.which(command) === null);
-if (missing.length > 0) {
-  console.error(
-    `WARNING: the sandbox is on but ${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} not on PATH, so every Bash call of a bot or agent will fail.\n` +
-      `  Install ${missing.map((c) => (c === "bwrap" ? "bubblewrap" : c)).join(" and ")}, or set CLAUDIOBOT_SANDBOX=off.`,
-  );
-}
-
-function announce({ code, expiresAt }: PairCode) {
-  const link = pairLink(urls, code);
-  console.log(`pair code: ${code} (single use, until ${new Date(expiresAt).toLocaleTimeString()})`);
-  console.log(`pair: ${link}`);
-  qrcode.generate(link, { small: true }, (qr) => console.log(qr));
-}
-
-// The legacy phone alone still gets a code: it should re-pair with its own token before the legacy path goes away.
-const paired = devices.list(null).filter((d) => !d.legacy).length;
-if (paired === 0 || process.argv.includes("--pair")) {
-  announce(devices.newCode());
 } else {
-  console.log(`${paired} paired device${paired === 1 ? "" : "s"}. To pair another, use Settings on a paired phone or restart with --pair.`);
+  bootHome();
 }
 
-hub.boot(firstRun);
-hub.startTicker();
+/** The home: bots, scheduler, push, the phones' socket and pairing, and the machines enrolled into it. */
+function bootHome() {
+  const { world, firstRun } = loadWorld(home);
+  const saver = createSaver(world, home, 250, log);
+  const devices = createDevices({ world, persist: saver.schedule, now, announce });
+  const legacy = legacyToken(home);
+  legacy.reconcile(devices);
+
+  const push = createPush({
+    world,
+    persist: saver.schedule,
+    sender: senderFromEnv(process.env.CLAUDIOBOT_PUSH_URL, log),
+    liveUntil: () => transport.liveUntil(),
+    now,
+    log,
+  });
+
+  const stream = createStream();
+
+  const registry = createRegistry({ bridgeHome: home, now });
+  const joinCodes = createJoinCodes({ now });
+  const links = createLinks({ identity, registry, log, now });
+
+  const hub = createHub({
+    profile,
+    machineId: identity.machineId,
+    links,
+    userName,
+    world,
+    homes: createHomes(home),
+    model: process.env.CLAUDIOBOT_MODEL || undefined,
+    scan: () => scanProjects(),
+    claude: { query },
+    broadcast: (message) => transport.publish(message),
+    signal: (message) => transport.signal(message),
+    persist: saver.schedule,
+    log,
+    push,
+    webhookPort: Number(process.env.CLAUDIOBOT_WEBHOOK_PORT ?? 7879),
+    usage: { read: readUsage, watched: () => transport.live() > 0 },
+    sessions: {
+      epoch: stream.epoch,
+      projectsDir: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects"),
+      // CLAUDIOBOT_DESKTOP_FAKE: a verification run's stand-in for the Claude app, which records imports to that file.
+      apps: process.env.CLAUDIOBOT_DESKTOP_FAKE
+        ? fakeDesktop(createClaudeApps(realAppsDeps(ownPids)), process.env.CLAUDIOBOT_DESKTOP_FAKE)
+        : createClaudeApps(realAppsDeps(ownPids)),
+      cacheDir: join(home, "cache"),
+      signal: { list: (frame) => transport.signal(frame, "sessions"), thread: (id, frame) => transport.signal(frame, threadTopic(id)) },
+      watchers: (id) => transport.watchers(id),
+    },
+  });
+
+  const transport = serve({
+    devices,
+    stream,
+    hub,
+    legacy,
+    log,
+    now,
+    port,
+    offer,
+    machines: { links, enroll: (body) => enroll({ identity, registry, codes: joinCodes }, body), offer: machineOffer },
+  });
+  const urls = bridgeUrls(names, lanAddresses(), transport.port);
+  const control = serveControl({ home, offer, machineOffer, log });
+
+  function offer(): PairOffer {
+    return { ...devices.newCode(), urls };
+  }
+
+  /** The same addresses as the phone's, as the http:// base `claudiobot machine enroll` takes. */
+  function machineOffer(): PairOffer {
+    return { ...joinCodes.newCode(), urls: urls.map((u) => u.replace(/^ws:/, "http:").replace(/\/ws$/, "")) };
+  }
+
+  function shutdown() {
+    let saved = true;
+    control?.stop();
+    try {
+      hub.close();
+    } catch (e) {
+      log(`shutdown: closing the bots failed: ${errorText(e)}`);
+    }
+    try {
+      saver.flush();
+    } catch (e) {
+      saved = false;
+      log(`shutdown: state.json was not saved: ${errorText(e)}`);
+    }
+    process.exit(saved ? 0 : 1);
+  }
+  for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, shutdown);
+
+  console.log(`claudiobot bridge on ${machine}`);
+  for (const url of urls) console.log(`  ${url}`);
+  printAccess();
+
+  function announce({ code, expiresAt }: PairCode) {
+    const link = pairLink(urls, code);
+    console.log(`pair code: ${code} (single use, until ${new Date(expiresAt).toLocaleTimeString()})`);
+    console.log(`pair: ${link}`);
+    qrcode.generate(link, { small: true }, (qr) => console.log(qr));
+  }
+
+  // The legacy phone alone still gets a code: it should re-pair with its own token before the legacy path goes away.
+  const paired = devices.list(null).filter((d) => !d.legacy).length;
+  if (paired === 0 || process.argv.includes("--pair")) {
+    announce(devices.newCode());
+  } else {
+    console.log(`${paired} paired device${paired === 1 ? "" : "s"}. To pair another, use Settings on a paired phone or restart with --pair.`);
+  }
+
+  hub.boot(firstRun);
+  hub.startTicker();
+}

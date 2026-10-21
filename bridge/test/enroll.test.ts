@@ -7,7 +7,8 @@ import { createDevices } from "../src/devices";
 import { legacyToken } from "../src/legacy";
 import { dialHub } from "../src/machine/dial";
 import { enroll, type EnrollResponse } from "../src/machine/enroll";
-import { newIdentity, type Identity } from "../src/machine/identity";
+import { homeBase, machineCommand } from "../src/machine/command";
+import { newIdentity, readIdentity, type Identity } from "../src/machine/identity";
 import { createJoinCodes } from "../src/machine/joinCodes";
 import { createLinks } from "../src/machine/links";
 import { profileOf } from "../src/machine/profile";
@@ -157,4 +158,53 @@ test("a bridge that takes no machines answers no machine_code, /enroll or /link"
   expect(p.inbox.find((m) => m.type === "error")).toEqual({ type: "error", message: "This bridge does not take machines." });
   expect((await enrollAs(h, newIdentity("MacBook"), "x")).status).toBe(404);
   expect((await fetch(`${h.http}/link`)).status).toBe(404);
+});
+
+test.each([
+  ["http://omarchy.tail1234.ts.net:7878", "http://omarchy.tail1234.ts.net:7878"],
+  ["ws://omarchy.tail1234.ts.net:7878/ws", "http://omarchy.tail1234.ts.net:7878"],
+  ["omarchy.local:7878", "http://omarchy.local:7878"],
+  ["https://home.example.com/anything?x=1", "https://home.example.com"],
+  ["ftp://omarchy:21", null],
+  ["", null],
+])("the home URL %p enrolls at %p", (raw, base) => {
+  expect(homeBase(raw)).toBe(base);
+});
+
+function commandOn(bridgeHome: string, env: Record<string, string> = {}) {
+  const lines: string[] = [];
+  const deps = { bridgeHome, env, run: async () => "MacBook", fetch: (url: string, init?: RequestInit) => fetch(url, init), out: (t: string) => lines.push(t) };
+  return { run: (...argv: string[]) => machineCommand(argv, deps), text: () => lines.join("") };
+}
+
+test("claudiobot machine invite on the home and enroll on another computer pin both keys and say the machine's own mode", async () => {
+  const h = home();
+  const onHome = commandOn(h.dir);
+  expect(await onHome.run("invite")).toBe(0);
+  const code = /machine code: (\S+)/.exec(onHome.text())![1]!;
+  expect(onHome.text()).toContain(`claudiobot machine enroll ${ENROLL_URLS[0]} ${code}`);
+
+  const mac = tmp();
+  const onMac = commandOn(mac, { CLAUDIOBOT_ACCESS: "full" });
+  expect(await onMac.run("enroll", h.http, code)).toBe(0);
+  expect(onMac.text()).toContain('Enrolled "MacBook" into "omarchy".');
+  expect(onMac.text()).toContain("Agents here run with full access, sandbox off");
+  const me = readIdentity(mac)!;
+  expect(me.home).toEqual({ url: h.http, machineId: h.identity.machineId, publicKey: h.identity.publicKey, name: "omarchy" });
+  expect(h.registry.get(me.machineId)?.publicKey).toBe(me.publicKey);
+
+  expect(await onMac.run("enroll", h.http, "SPENT-CODE")).toBe(0);
+  expect(h.registry.list()).toHaveLength(1);
+
+  const elsewhere = home();
+  const again = commandOn(mac);
+  expect(await again.run("enroll", elsewhere.http, "ANY")).toBe(1);
+  expect(again.text()).toContain('already a machine of "omarchy"');
+  expect(elsewhere.registry.list()).toEqual([]);
+});
+
+test("claudiobot machine invite with no bridge running says so", async () => {
+  const c = commandOn(tmp());
+  expect(await c.run("invite")).toBe(1);
+  expect(c.text()).toContain("No running bridge answered");
 });

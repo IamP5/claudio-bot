@@ -3,7 +3,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import * as fs from "node:fs";
 import { homedir, hostname, userInfo } from "node:os";
 import { lanAddresses } from "./address";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { readAccount, strictMcp } from "./claudeCode";
 import { doctor, serviceView, status, type DoctorDeps } from "./doctor";
@@ -20,6 +20,7 @@ import {
   type Foreground,
   type ServiceDeps,
 } from "./service";
+import { machineCommand } from "./machine/command";
 import { platformOf, profileOf } from "./machine/profile";
 import { errorText } from "./text";
 
@@ -152,6 +153,20 @@ async function main(argv: string[]): Promise<number> {
     }
     case "update":
       return update({ ...deps, ask }, target);
+    case "machine": {
+      // The installed service's home and mode, unless this shell names its own.
+      const env = { ...(await serviceView(doctorDeps, target)).env, ...process.env };
+      return machineCommand(argv.slice(1), {
+        bridgeHome: env.CLAUDIOBOT_HOME ?? join(homedir(), ".claudiobot"),
+        env,
+        run: async (cmd) => {
+          const r = await exec(cmd);
+          return r.code === 0 ? r.stdout.trim() : "";
+        },
+        fetch: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(10_000) }),
+        out,
+      });
+    }
     default:
       process.stderr.write(USAGE);
       return command === undefined || command === "help" || command === "--help" ? 0 : 2;

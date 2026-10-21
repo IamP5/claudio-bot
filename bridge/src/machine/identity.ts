@@ -1,4 +1,5 @@
 import { createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from "node:crypto";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { readPrivate, writePrivate } from "./files";
@@ -23,6 +24,10 @@ const FILE: z.ZodType<Identity> = z.object({
   privateKey: b64,
   home: z.object({ url: z.url(), machineId, publicKey: b64, name: z.string().min(1) }).nullable(),
 });
+
+/** The computer's own name (System Settings on macOS), else its hostname. run gives "" for a command that fails. */
+export const computerName = async (run: (argv: string[]) => Promise<string>) =>
+  (await run(["scutil", "--get", "ComputerName"])) || hostname().replace(/\.local$/, "");
 
 export const identityPath = (bridgeHome: string) => join(bridgeHome, "machine.json");
 

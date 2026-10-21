@@ -307,7 +307,9 @@ const notices = (ev: Ev, name: string, from = 0) => [...new Map(snaps(ev, name, 
 
 const created = (name: string): Precondition => ({ what: `session ${name} was created`, check: (ev) => (ev.ids[name] ? ok(ev.ids[name]!) : no("no session_created")) });
 const fileMade = (rel: string): Precondition => ({ what: `${rel} exists in the seed project`, check: (ev) => (ev.exists(rel) ? ok("present") : no("missing")) });
-const turnEnded = (name: string) => (ev: Ev) => mark(ev, `${name}-started`) !== undefined && !isWorking(last(ev, name) ?? ({ controls: null, row: null } as Snap));
+/** A bridge that serves session_tasks says whether a turn runs in controls.turn; working also covers background work. */
+const turnRuns = (s: Snap) => (Array.isArray(s.controls?.tasks) ? s.controls?.turn != null : isWorking(s));
+const turnEnded = (name: string) => (ev: Ev) => mark(ev, `${name}-started`) !== undefined && !turnRuns(last(ev, name) ?? ({ controls: null, row: null } as Snap));
 const replied = (s: Snap | undefined) => !!s?.items.some((i) => i.kind === "assistant");
 const started = (name: string): Action => ({ do: "until", mark: `${name}-started`, what: `${name}'s turn to start`, timeoutS: 90, test: (ev) => snaps(ev, name).some((s) => isWorking(s) || replied(s)) });
 

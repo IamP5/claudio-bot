@@ -127,6 +127,7 @@ test("a paired phone mints a machine code, a computer enrolls with it, dials /li
   });
   cleanups.push(() => dialer.stop());
   await until("online", () => h.links.machines()[0]?.status().online === true);
+  await until("live", () => dialer.state().kind === "live");
   expect(dialer.state()).toEqual({ kind: "live", peer: h.identity.machineId });
 });
 

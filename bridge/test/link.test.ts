@@ -256,10 +256,11 @@ test("events emitted while the link is down, or sent and never acked before a ki
   const journal = tmp();
 
   const notes = () => h.seen.filter((x) => x.endsWith("note")).length;
+  const snapshots = () => h.seen.filter((x) => x.endsWith("snapshot")).length;
   const note = (r: MiniRuntime, text: string) => r.emit({ kind: "note", agentId: "a1" as never, botId: "b1" as never, text });
 
   const first = machineAt(h.url, pair, journal);
-  await until("online", () => h.links.machines()[0]!.status().online);
+  await until("the first snapshot", () => snapshots() === 1);
   note(first.runtime, "one");
   await until("note one acked", () => registry.get(pair.mac.machineId)!.ackedSeq === first.runtime.lastSeq());
   first.dialer.stop();
@@ -270,7 +271,7 @@ test("events emitted while the link is down, or sent and never acked before a ki
   note(first.runtime, "three");
 
   const second = machineAt(h.url, pair, journal);
-  await until("notes two and three", () => notes() === 3);
+  await until("notes two and three, then the second snapshot", () => notes() === 3 && snapshots() === 2);
   note(second.runtime, "four");
   await until("note four", () => notes() === 4);
   // Gone before the home's ack reached it: its journal still holds note four. The new link starts after what the home
@@ -278,7 +279,7 @@ test("events emitted while the link is down, or sent and never acked before a ki
   second.dialer.stop();
   machineAt(h.url, pair, journal);
   await until("the third link", () => h.log.filter((l) => l.includes("online, replaying after event")).length === 3);
-  await until("the third snapshot", () => h.seen.filter((x) => x.endsWith("snapshot")).length === 3);
+  await until("the third snapshot", () => snapshots() === 3);
   await Bun.sleep(100);
   const seqs = h.seen.map((x) => Number(x.split(" ")[1]));
   expect(seqs).toEqual(seqs.map((_, i) => i + 1));

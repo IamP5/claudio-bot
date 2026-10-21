@@ -186,6 +186,7 @@ final class AppStore {
     /// Transport changes from the client. Unpairing forgets everything the Mac sent.
     func setConnection(_ state: ConnectionState) {
         connection = state
+        if machine == nil { sessions.markStale() }
         if state == .unpaired {
             userName = ""
             bots = [:]

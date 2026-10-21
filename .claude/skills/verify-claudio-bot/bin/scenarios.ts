@@ -38,6 +38,11 @@ export type Ev = {
   samples: Record<string, string[]>;
   /** With --sim and tapApp: the frames about the scenario's sessions on the app's own socket, as the relay saw them. */
   app: { at: number; dir: "in" | "out" | "lost"; frame: Frame }[];
+  /**
+   * With --sim and watch-list: the app's Sessions list as it drew it, sampled by the list probe. rows: the spoken
+   * labels of the seed project's header and rows, top to bottom; more: its "Show N more" fold when on screen.
+   */
+  list: { at: number; rows: string[]; more: string[] }[];
 };
 
 export type Action =
@@ -72,7 +77,9 @@ export type Action =
   /** Restarts the bridge on the same port and home; the phone reconnects as the app does. */
   | { do: "restart-bridge"; mark: string }
   /** With --sim and tapApp, the next frame for the session that passes test is lost on its way to the app, as a flaky link or an unreadable frame loses it. */
-  | { do: "lose-frame"; name: string; mark: string; what: string; timeoutS: number; test: (f: Frame) => boolean };
+  | { do: "lose-frame"; name: string; mark: string; what: string; timeoutS: number; test: (f: Frame) => boolean }
+  /** With --sim, the list probe reads the app's Sessions list as it draws it until the setup ends, into ev.list. */
+  | { do: "watch-list" };
 
 export type Tell = "what" | "how-many" | "how-long" | "state" | "stop";
 export type Verdict = { ok: boolean; why: string };
@@ -291,6 +298,31 @@ const unreadAfter = (id: string, name: string, at: string): RubricItem => ({
 });
 
 const review = (id: string, tell: Tell, text: string, pass: string, fail: string, shots: string[]): RubricItem => ({ id, tell, lane: "simulator", text, pass, fail, shots });
+
+/**
+ * The app's list as the probe read it, as the run's sessions: each sample's rows of `names`, top to bottom, with the
+ * status their spoken label ("<project>, <title>, <status>, …") carries. A row is known by any title it ever had, so
+ * a title rewrite is the same row. The project header and other sessions are left out. Never returns a title.
+ */
+export function appList(ev: Ev, names: string[]) {
+  const byTitle = new Map<string, string>();
+  for (const s of ev.history) if (names.includes(s.name) && s.row?.title) byTitle.set(s.row.title, s.name);
+  const titles = [...byTitle.keys()].sort((a, b) => b.length - a.length);
+  return ev.list
+    .map((x) => {
+      const rows: { name: string; status: "needs-you" | "working" | "other" }[] = [];
+      for (const label of x.rows) {
+        const rest = label.slice(label.indexOf(", ") + 2);
+        const title = titles.find((t) => rest === t || rest.startsWith(`${t}, `));
+        const name = title && byTitle.get(title);
+        if (!name || rows.some((r) => r.name === name)) continue;
+        const words = rest.slice(title.length);
+        rows.push({ name, status: /, needs you(,|$)/.test(words) ? "needs-you" : /, working\b/.test(words) ? "working" : "other" });
+      }
+      return { at: x.at, rows, more: x.more };
+    })
+    .filter((x) => x.rows.length);
+}
 
 /** Claude Code's own texts: a background launch ack, the subagent hand-back wrapper, the rejection boilerplate. */
 const ACK = /Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed/;
@@ -1237,6 +1269,7 @@ const S7: Scenario = {
     "From the list they must tell how many run, which ones, and tell the sessions apart.",
   ],
   setup: [
+    { do: "watch-list" },
     ...s7names.map(
       (name, i): Action => ({
         do: "create",
@@ -1339,36 +1372,55 @@ const S7: Scenario = {
     {
       id: "S7.7",
       tell: "how-many",
-      lane: "protocol",
-      text: "The list keeps its order while the user reads it: rows move only when a status changes.",
-      pass: "Ordering the rows as the app does (newest lastAt first), the order changes only in list frames that also change a row's status.",
-      fail: "The order changes in a frame where no status changed (a title rewrite, a bare transcript write).",
+      lane: "simulator",
+      text: "The list keeps its order while the user reads it: rows move only when their status changes.",
+      pass: "In the app's own list, read by the list probe from creation to rest, a row whose spoken status (needs you, working, or neither) held between two samples never changes its place among the other rows whose status held. Not judged unless the probe saw at least two of the run's rows at once and at least one status change among them.",
+      fail: "A row moves past another while neither changed status (a title rewrite, a transcript write, a ticking age reordered the list).",
       check: (ev) => {
-        const names = new Set(s7names);
-        const rows = new Map<string, Row>();
-        let order = "";
+        if (!ev.list.length) return no("not judged: the list probe did not run (see the run's log)");
+        const xs = appList(ev, s7names);
+        if (xs.length < 10) return no(`not judged: ${xs.length} probe samples showed the run's rows`);
         let reorders = 0;
-        let statusChanges = 0;
+        let changes = 0;
         const bad: string[] = [];
-        const frames = new Map<number, Snap[]>();
-        for (const s of ev.history) if (names.has(s.name) && s.row) frames.set(s.frame, [...(frames.get(s.frame) ?? []), s]);
-        for (const xs of frames.values()) {
-          const changed = xs.filter((s) => rows.has(s.name) && rows.get(s.name)!.status !== s.row!.status).length;
-          const known = new Set(rows.keys());
-          for (const s of xs) rows.set(s.name, s.row!);
-          statusChanges += changed;
-          const next = [...rows].filter(([n]) => known.has(n)).sort(([a, x], [b, y]) => y.lastAt.localeCompare(x.lastAt) || a.localeCompare(b)).map(([n]) => n).join(",");
-          const before = order.split(",").filter((n) => known.has(n)).join(",");
-          if (before && next !== before) {
-            reorders++;
-            if (!changed) bad.push(`+${(xs[0]!.at / 1000).toFixed(1)}s`);
-          }
-          order = [...rows].sort(([a, x], [b, y]) => y.lastAt.localeCompare(x.lastAt) || a.localeCompare(b)).map(([n]) => n).join(",");
+        for (let i = 1; i < xs.length; i++) {
+          const [a, b] = [xs[i - 1]!, xs[i]!];
+          const both = a.rows.filter((r) => b.rows.some((x) => x.name === r.name)).map((r) => r.name);
+          const changed = new Set(both.filter((n) => a.rows.find((r) => r.name === n)!.status !== b.rows.find((r) => r.name === n)!.status));
+          changes += changed.size;
+          const order = (s: typeof a, keep: (n: string) => boolean) => s.rows.map((r) => r.name).filter((n) => both.includes(n) && keep(n)).join();
+          if (order(a, () => true) === order(b, () => true)) continue;
+          reorders++;
+          if (order(a, (n) => !changed.has(n)) !== order(b, (n) => !changed.has(n))) bad.push(`+${(b.at / 1000).toFixed(1)}s`);
         }
-        return bad.length ? no(`${bad.length} of ${reorders} reorders came with no status change, at ${bad.slice(0, 6).join(", ")}; ${statusChanges} status changes in all`) : ok(`${reorders} reorders, each with a status change (${statusChanges} status changes)`);
+        const most = Math.max(...xs.map((x) => x.rows.length));
+        const seen = `${xs.length} samples, up to ${most} of the run's rows on screen, ${changes} status changes, ${reorders} reorders`;
+        if (!bad.length && (most < 2 || !changes)) return no(`not judged: nothing could have moved (${seen})`);
+        return bad.length ? no(`${bad.length} reorders moved a row whose status held, at ${bad.slice(0, 6).join(", ")}; ${seen}`) : ok(`no row whose status held moved; ${seen}`);
       },
     },
     noAckOutput("S7.8", s7names),
+    {
+      id: "S7.9",
+      tell: "how-many",
+      lane: "simulator",
+      text: "No fold hides a running session: Show more never holds a row that works or needs the user.",
+      pass: "Between marks mixed and s7-ended, whenever the app draws the project's Show more, every sleeper the bridge reports working (now and 1.5 s before) is among the rows above it.",
+      fail: "A sleeper that works is folded under Show more.",
+      check: (ev) => {
+        const range = span(ev, "mixed", "s7-ended");
+        if (!range) return needMarks(ev, "mixed", "s7-ended")!;
+        if (!ev.list.length) return no("not judged: the list probe did not run (see the run's log)");
+        const busy = (n: string, at: number) => ["working", "awaiting_approval", "awaiting_input"].includes(last(ev, n, at)?.row?.status ?? "");
+        const xs = appList(ev, s7names).filter((x) => x.at >= range[0] && x.at <= range[1] && x.more.length);
+        if (!xs.length) return no("not judged: the probe never saw the project's Show more on screen between mixed and s7-ended, so what it folds cannot be read");
+        const bad = xs.flatMap((x) => {
+          const hidden = s7names.slice(0, SLEEPERS).filter((n) => busy(n, x.at) && busy(n, x.at - 1500) && !x.rows.some((r) => r.name === n));
+          return hidden.length ? [`+${(x.at / 1000).toFixed(1)}s ${hidden.join(", ")}`] : [];
+        });
+        return bad.length ? no(`${bad.length} of ${xs.length} samples with the fold on screen hid a working sleeper: ${bad.slice(0, 4).join("; ")}`) : ok(`${xs.length} samples with the fold on screen, every working sleeper above it`);
+      },
+    },
   ],
 };
 

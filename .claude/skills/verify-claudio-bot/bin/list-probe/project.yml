@@ -1,0 +1,16 @@
+name: ListProbe
+options: { bundleIdPrefix: dev.claudiobot.listprobe }
+targets:
+  Host:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources: [Host]
+    settings: { GENERATE_INFOPLIST_FILE: YES, CODE_SIGNING_ALLOWED: NO }
+  UITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources: [UITests]
+    dependencies: [{ target: Host }]
+    settings: { GENERATE_INFOPLIST_FILE: YES, CODE_SIGNING_ALLOWED: NO, TEST_TARGET_NAME: Host }

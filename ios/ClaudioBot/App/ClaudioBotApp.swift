@@ -55,7 +55,10 @@ enum SidebarMode: String, Hashable, Sendable {
 final class Router {
     static let sidebarKey = "sidebarMode"
 
-    var selection: Selection?
+    /// A new pick shows its own chat or thread, never a screen pushed over the last one, however it was picked.
+    var selection: Selection? {
+        didSet { if selection != oldValue { path = [] } }
+    }
     /// Whether this window has the sidebar. A Mac window opened for one chat or session has none.
     let hasSidebar: Bool
     var sidebar: SidebarMode {
@@ -88,9 +91,10 @@ final class Router {
         self.selection = selection
     }
 
-    /// The list is watched while it shows, and while a thread is open: its header reads the row.
+    /// A window with the sidebar watches the list on either side: the Bots side says what runs and what needs the
+    /// user. A window for one thread watches it for the thread's header, which reads the row.
     var watchesSessions: Bool {
-        (hasSidebar && sidebar == .sessions) || selection?.session != nil
+        hasSidebar || selection?.session != nil
     }
 
     var viewing: Viewing {

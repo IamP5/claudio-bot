@@ -209,6 +209,8 @@ class Phone {
   names = new Map<string, string>();
   ownProjects = new Set<string>();
   demo: Project | null = null;
+  /** Projects outside the run that share the seed project's name, which the list probe could not tell apart. */
+  namesakes = 0;
   decided = new Set<string>();
   /** Threads the user left: not watched until they return, so the bridge can count news as unread. */
   away = new Set<string>();
@@ -269,6 +271,7 @@ class Phone {
     if (typeof f.seq === "number" && this.cursor) this.cursor.seq = f.seq;
     if (f.type === "sessions" || f.type === "session_rows") {
       if (f.type === "sessions") for (const p of f.projects as Project[]) if (ownProject(this.run, p)) (this.ownProjects.add(p.id), p.name === "demo" && (this.demo = p));
+      if (f.type === "sessions") this.namesakes = (f.projects as Project[]).filter((p) => p.name === "demo" && !ownProject(this.run, p)).length;
       const mine = (f.rows as Row[]).filter((r) => this.ownProjects.has(r.projectId));
       if (f.type === "sessions") this.lastList = mine;
       const touched = new Set<string>();
@@ -397,6 +400,31 @@ function sh(argv: string[], logFile?: string) {
   return { ok: p.exitCode === 0, out, signal: p.signalCode };
 }
 
+const PROBE_SRC = join(import.meta.dir, "list-probe");
+
+/**
+ * Builds the list probe (list-probe/, an XCUITest that only reads the app's accessibility tree) once per source
+ * digest into $CLAUDIOBOT_VERIFY_DIR/list-probe/<digest>, for any simulator. Concurrent runs wait on the first.
+ */
+async function buildListProbe(): Promise<string> {
+  const files = ["project.yml", "Host/App.swift", "UITests/ListProbe.swift"];
+  const digest = new Bun.CryptoHasher("sha256").update(files.map((f) => readFileSync(join(PROBE_SRC, f), "utf8")).join("\0")).digest("hex").slice(0, 16);
+  const dir = join(BASE, "list-probe", digest);
+  const done = join(dir, "built");
+  if (!existsSync(done) && !existsSync(`${dir}.lock`)) {
+    mkdirSync(`${dir}.lock`, { recursive: true });
+    mkdirSync(dir, { recursive: true });
+    const gen = sh(["xcodegen", "generate", "--quiet", "--spec", join(PROBE_SRC, "project.yml"), "--project", dir], join(dir, "build.log"));
+    const built = gen.ok && sh(["xcodebuild", "-project", join(dir, "ListProbe.xcodeproj"), "-scheme", "UITests", "-destination", "generic/platform=iOS Simulator", "-derivedDataPath", join(dir, "dd"), "build-for-testing"], join(dir, "build.log")).ok;
+    if (built) writeFileSync(done, digest);
+    sh(["rmdir", `${dir}.lock`]);
+    if (!built) throw new Error(`the list probe did not build; see ${join(dir, "build.log")}`);
+  }
+  await until(() => existsSync(done) || !existsSync(`${dir}.lock`), "the list probe build", 600);
+  if (!existsSync(done)) throw new Error(`the list probe did not build; see ${join(dir, "build.log")}`);
+  return dir;
+}
+
 type Outcome = "judged" | "precondition-failed" | "error";
 /** simctl ui settings for a leased device during a run: Dynamic Type and appearance. Reset to large and light at the end. */
 type Ui = { contentSize?: string; appearance?: string };
@@ -456,7 +484,9 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
     },
     samples: {},
     app: [],
+    list: [],
   };
+  const probe: { run: { proc: ReturnType<typeof Bun.spawn>; file: string } | null } = { run: null };
   let phone: Phone | null = null;
   let relay: Relay | null = null;
   let losing: ((f: Frame) => boolean) | null = null;
@@ -542,6 +572,22 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
     outcome = e instanceof PreconditionFailed ? "precondition-failed" : "error";
     log(`${outcome}: ${failure}`);
     if (!(e instanceof PreconditionFailed)) console.error(e);
+  }
+  const watched = probe.run;
+  if (watched) {
+    watched.proc.kill("SIGTERM");
+    await watched.proc.exited;
+    if (lease) pool.simctl(lease, "terminate", "dev.claudiobot.listprobe.UITests.xctrunner");
+    const lines = existsSync(watched.file) ? readFileSync(watched.file, "utf8").split("\n").filter(Boolean) : [];
+    ev.list = lines.flatMap((l) => {
+      try {
+        const x = JSON.parse(l) as { t: number; rows: string[]; more: string[] };
+        return [{ at: x.t - t0, rows: x.rows, more: x.more }];
+      } catch {
+        return [];
+      }
+    });
+    log(`list probe stopped: ${ev.list.length} samples`);
   }
 
   async function perform(a: Action) {
@@ -659,6 +705,23 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
         losing = null;
         return markNow(a.mark);
       }
+      case "watch-list": {
+        if (!lease || !p.demo) return void skipped.push("watch-list");
+        // The app's labels carry the project's name, not its id, so a namesake's rows and fold would read as the run's.
+        if (p.namesakes) return void (skipped.push("watch-list"), log(`watch-list skipped: ${p.namesakes} other project(s) named ${p.demo.name}`));
+        const dir = await buildListProbe();
+        const file = join(out, "app-list.jsonl");
+        probe.run = {
+          file,
+          proc: Bun.spawn(
+            ["xcodebuild", "-project", join(dir, "ListProbe.xcodeproj"), "-scheme", "UITests", "-destination", `platform=iOS Simulator,id=${lease.udid}`, "-derivedDataPath", join(dir, "dd"), "test-without-building", "-only-testing:UITests/ListProbe/testWatch"],
+            { env: { ...process.env, TEST_RUNNER_OUT: file, TEST_RUNNER_PREFIX: p.demo.name, TEST_RUNNER_SECONDS: "900" }, stdout: Bun.file(join(out, "list-probe.log")), stderr: "pipe" },
+          ),
+        };
+        await until(() => existsSync(file) && readFileSync(file, "utf8").includes("\n"), "the list probe's first sample", 120);
+        log("list probe reading the app's Sessions list");
+        return;
+      }
       case "restart-bridge": {
         p.drop();
         const r = sh(["bun", CONTROL, "restart", "--run", run!.id], join(out, "restart.log"));
@@ -676,6 +739,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
   if (outcome === "judged" && pre.some((p) => !p.ok)) outcome = "precondition-failed";
   const rubric = sc.rubric.map((r) => {
     if (outcome !== "judged") return { id: r.id, lane: r.lane, tell: r.tell, verdict: "not-judged", why: "the precondition failed" };
+    if (r.lane === "simulator" && !sim) return { id: r.id, lane: r.lane, tell: r.tell, verdict: "skipped", why: "simulator item; protocol lane" };
     if (r.check) {
       const v = safe(() => r.check!(ev));
       return { id: r.id, lane: r.lane, tell: r.tell, verdict: v.ok ? "pass" : v.why.startsWith("not judged") ? "not-judged" : "fail", why: v.why };
@@ -773,7 +837,7 @@ function doc(area: string) {
     lines.push(`## ${sc.id} ${sc.title}`, "", `Needs the simulator: ${sc.needsSimulator ? "yes" : "no (simulator items run with `--sim`)"}.`, "", "**User journey.**", "", ...sc.journey.map((j, i) => `${i + 1}. ${j}`), "", "**Setup.**", "");
     for (const a of sc.setup) lines.push(`- ${describe(a)}`);
     lines.push("", "**Preconditions** (any failure fails the scenario):", "", ...sc.pre.map((p) => `- ${p.what}`), "", "**Rubric.**", "", "| id | tells | lane | the user can tell | pass | fail |", "| --- | --- | --- | --- | --- | --- |");
-    for (const r of sc.rubric) lines.push(`| ${r.id} | ${r.tell} | ${r.lane}${r.lane === "simulator" ? ` (${(r.shots ?? []).join(", ")})` : ""} | ${r.text} | ${r.pass} | ${r.fail} |`);
+    for (const r of sc.rubric) lines.push(`| ${r.id} | ${r.tell} | ${r.lane}${r.lane === "simulator" ? ` (${r.check ? "list probe" : (r.shots ?? []).join(", ")})` : ""} | ${r.text} | ${r.pass} | ${r.fail} |`);
     lines.push("");
   }
   return lines.join("\n");
@@ -815,6 +879,8 @@ function describe(a: Action): string {
       return `Restart the bridge on the same port and home; the phone reconnects. Mark \`${a.mark}\`.`;
     case "lose-frame":
       return `The relay loses ${a.what} on its way to the app (simulator lane), within ${a.timeoutS} s. Mark \`${a.mark}\`.`;
+    case "watch-list":
+      return "The list probe (an XCUITest that only reads the accessibility tree) reads the app's Sessions list about once a second until the setup ends (simulator lane).";
   }
 }
 

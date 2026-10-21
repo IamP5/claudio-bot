@@ -42,6 +42,7 @@ The phone, and with `--sim` the app, reach the bridge through a TCP relay the ru
 | `kill-claude` | SIGKILL the Claude Code process whose command line names the session |
 | `restart-bridge` | `control-claudio restart`: the bridge stops and starts on the same port, home and roots; the phone reconnects |
 | `screenshot` | simulator lane only |
+| `watch-list` | with `--sim`: the list probe (`bin/list-probe/`, an XCUITest that only reads the app's accessibility tree, built once per source digest under `$CLAUDIOBOT_VERIFY_DIR/list-probe/`) samples the app's Sessions list about once a second until the setup ends, into `app-list.jsonl` and `ev.list`. A simulator item with a `check` (S7.7, S7.9) is judged from it mechanically, and skipped on the protocol lane |
 | `lose-frame` | with `--sim` and a scenario that sets `tapApp` (S6b): the relay reads the app's own connection (its upgrade comes from CFNetwork) frame by frame and loses the next frame for the session that passes the test. What the app sent and received for the scenario's sessions goes into `ev.app` and the timeline as `app-in`, `app-out` and `app-lost` |
 
 The phone keeps each thread's items in the order the app's `ThreadModel` does (by `at`, a queued message last, ties in the order first seen), so a resumed thread compares with a fresh open item for item, in order, as the app would show it.

@@ -19,3 +19,8 @@ ts	decision	why
 2026-10-21T06:45:10Z	an extra iPhone 17 Pro (D91C2F8B) was found booted during the audit; no auditor commanded it (transcripts checked), other Claude sessions on this Mac use it, so it is left alone	never touch devices outside the pool
 2026-10-21T07:10:09Z	PR #3 (runner, pool, Debug auto-pair hook, docs) merged to main with a merge commit before fix groups start	fix worktrees branch off main and their verifiers need the runner; verified by the step 0 lease proof, bun test 2413 pass, iOS 277 pass
 2026-10-21T07:10:09Z	severity merges suggested by the fix planner are not applied; skeptic severities stand	changing severities after the skeptic vote would bypass the verification it records; merges are handled by grouping
+2026-10-21T07:30:32Z	G0: new protocol fields are absent-or-set, never null	absent and null are two spellings of one fact and Swift cannot round-trip both
+2026-10-21T07:30:32Z	G0: tool-output fetch failures are an error frame with about.kind tool; session_tool_output.output stays non-null	nullable output would break older apps and allow output and error together
+2026-10-21T07:30:32Z	G0: ErrorAbout and PushState are discriminated unions	a create error has no session; failing push always carries error and time
+2026-10-21T07:30:32Z	G0: a stopped card reads as dismissed to protocol 2 apps and as closed in bot chat until G7 sets wording	expired would claim nobody answered in time
+2026-10-21T07:30:32Z	G0: unserved partial stops and session_unqueue are refused with an error until G2/G3 serve them	silent ignore would lie about the stop

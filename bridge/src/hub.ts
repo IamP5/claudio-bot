@@ -863,7 +863,7 @@ export function createHub(deps: HubDeps): Hub {
         asked: null,
         self: machines.self().id,
         project: a.project,
-        machines: machines.list().map((m) => ({ id: m.id, online: m.status().online, profile: m.profile() })),
+        machines: machines.list().map((m) => ({ id: m.id, online: m.status().online, profile: { name: m.name } })),
       });
       if (!placed.ok) return placed.reason;
       const agentId = newAgentId();

@@ -135,6 +135,7 @@ const V3_FILE = z.looseObject({
     z.looseObject({
       ...profile,
       dailyCapUsd: z.number().nullable(),
+      agentsOn: maybeText.optional(),
       muted: z.boolean().optional(),
       connectorsOff: z.array(text).optional(),
       session,
@@ -199,6 +200,7 @@ export function upgradeV2(v2: StateFileV2): StateFileV3 {
     ...profile,
     messages: messages.map((m): Message => (m.kind === "question" ? { ...m, expiresAt: null } : m)),
     dailyCapUsd: null,
+    agentsOn: null,
     muted: false,
     connectorsOff: [],
     session: emptySession(sessionId),
@@ -342,6 +344,7 @@ function fromV3(file: StateFileV3): World {
   // Fields added after version 3 shipped. A file from before them reads as their empty value.
   for (const bot of file.bots) {
     bot.muted ??= false;
+    bot.agentsOn ??= null;
     if (bot.connectorsOff === undefined) Object.assign(bot, { connectorsOff: [] });
   }
   for (const rec of file.agents) rec.agent = { ...rec.agent, evidence: rec.agent.evidence ?? null, worktree: rec.agent.worktree ?? null };

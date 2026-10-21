@@ -16,6 +16,7 @@ import {
   type DeviceId,
   type ExchangeMessage,
   type Link,
+  type MachineId,
   type Mention,
   type Message,
   type MessageId,
@@ -337,6 +338,8 @@ export type ChatRecord = {
 export type BotRecord = ChatRecord & {
   /** null: the bridge default. Writer: hub (update_bot). */
   dailyCapUsd: number | null;
+  /** Where its agents start by default; null: the bot picks. Writer: hub (update_bot). */
+  agentsOn: MachineId | null;
   /** MCP servers the user turned off for this bot and its agents, by name. Writer: connectors.ts. */
   readonly connectorsOff: Owned<string[]>;
   readonly session: Owned<SessionState>;
@@ -549,6 +552,7 @@ export function newBot(fields: { id: BotId; name: string; avatar: Avatar; at: st
     messages: [],
     unread: 0,
     dailyCapUsd: null,
+    agentsOn: null,
     muted: false,
     connectorsOff: [],
     session: emptySession(),
@@ -710,6 +714,7 @@ export function toBot(bot: BotRecord, status: BotStatus): Omit<Bot, keyof BotSpe
     question: card === null ? null : card.kind === "question" ? card.question : `${card.label}: ${card.detail}`,
     routines: bot.routines.map((r) => routineView(r, RUNS_ON_BOT)),
     dailyCapUsd: bot.dailyCapUsd,
+    agentsOn: bot.agentsOn,
   };
 }
 
@@ -721,6 +726,7 @@ export const toGroup = (group: GroupRecord, status: BotStatus): Omit<Bot, keyof 
   question: null,
   routines: [],
   dailyCapUsd: null,
+  agentsOn: null,
 });
 
 export const sortBots = <B extends Pick<Bot, "pinned" | "lastAt">>(bots: B[]): B[] =>

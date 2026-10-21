@@ -1067,8 +1067,9 @@ export function createHub(deps: HubDeps): Hub {
   }
 
   function updateGroup(group: GroupRecord, patch: BotPatch): ServerMessage[] {
-    const { members, dailyCapUsd, ...rest } = patch;
+    const { members, dailyCapUsd, agentsOn, ...rest } = patch;
     if (dailyCapUsd !== undefined) return error("A group has no spending of its own: its bots do.");
+    if (agentsOn !== undefined) return error("A group has no agents of its own: its bots do.");
     if (rest.name !== undefined && !nameOk(rest.name)) return error(BAD_NAME);
     const why = members === undefined ? null : membersError(world, members);
     if (why !== null) return error(why);
@@ -1183,6 +1184,7 @@ export function createHub(deps: HubDeps): Hub {
       case "update_bot":
         if (message.patch.members !== undefined) return error("Only a group has members.");
         if (message.patch.name !== undefined && !nameOk(message.patch.name)) return error(BAD_NAME);
+        if (message.patch.agentsOn != null && machines.of(message.patch.agentsOn) === null) return error("Unknown machine");
         Object.assign(bot, message.patch, message.patch.name !== undefined && { name: message.patch.name.trim() });
         if (message.patch.name !== undefined) retitle(bot.id, bot.name);
         changed(bot);

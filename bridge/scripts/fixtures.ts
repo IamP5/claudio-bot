@@ -28,7 +28,7 @@ const bot: Wire<Bot> = {
   id: "b1", kind: "bot", members: [], name: "engineer", title: null, avatar: { shape: "hexagon", color: "orange" },
   pinned: false, hidden: false, status: "idle", unread: 2,
   question: "Want me to merge any of these now?", preview: "Want me to merge any of these now?",
-  lastAt: at, createdAt: at, routines: [routine], dailyCapUsd: null, muted: false,
+  lastAt: at, createdAt: at, routines: [routine], dailyCapUsd: null, muted: false, agentsOn: null,
   spentTodayUsd: 8.4, capUsd: 10,
 };
 const hookRoutine: Wire<Routine> = {
@@ -123,7 +123,7 @@ const machines: Wire<MachineView>[] = [
 export const server = [
   { type: "hello", protocol: 3, features: [...FEATURES], epoch: "e_7f3a", seq: 41, resumed: false, machine: "omarchy", userName: "Alex", bots: [bot], machines,
     world: { id: "w_2c9d4e1f-7a3b-4c5d-8e6f-0a1b2c3d4e5f", name: "Alex's bots" } },
-  { type: "bot", seq: 42, bot: { ...bot, id: "b2", name: "news digest", title: "Morning digest", avatar: { shape: "pentagon", color: "teal" }, status: "working", unread: 0, question: null, pinned: true, dailyCapUsd: 5, spentTodayUsd: 0, capUsd: 5 } },
+  { type: "bot", seq: 42, bot: { ...bot, id: "b2", name: "news digest", title: "Morning digest", avatar: { shape: "pentagon", color: "teal" }, status: "working", unread: 0, question: null, pinned: true, dailyCapUsd: 5, spentTodayUsd: 0, capUsd: 5, agentsOn: MAC } },
   { type: "bot_removed", botId: "b2" },
   { type: "created", ref: "c1", botId: "b3" },
   {
@@ -258,6 +258,8 @@ export const client = [
   { type: "presence", attended: false },
   { type: "send", botId: "b1", text: "Ship it", uploads: [], clientId: "c_9b1e" },
   { type: "update_bot", botId: "b1", patch: { muted: true } },
+  { type: "update_bot", botId: "b1", patch: { agentsOn: MAC } },
+  { type: "update_bot", botId: "b1", patch: { agentsOn: null } },
   { type: "memory" },
   { type: "set_fact", factId: null, text: "Prefers short answers" },
   { type: "set_fact", factId: "f_2", text: "Works on acme/web and acme/api" },

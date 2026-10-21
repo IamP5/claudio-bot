@@ -280,15 +280,15 @@ test("a v3 file from before Pending.kind reads an approval continuation from its
   ]);
 });
 
-test("a v3 file from before mute, connector toggles, agent evidence and worktrees reads them as empty", () => {
+test("a v3 file from before mute, connector toggles, agentsOn, agent evidence and worktrees reads them as empty", () => {
   const home = freshHome();
-  const { muted: _m, connectorsOff: _c, ...oldBot } = v3Bot;
+  const { muted: _m, connectorsOff: _c, agentsOn: _a, ...oldBot } = v3Bot;
   const { evidence: _e, worktree: _w, ...oldAgent } = v3Agent.agent;
   writeState(home, v3({ bots: [oldBot], agents: [{ ...v3Agent, agent: oldAgent }] }));
 
   const { world } = loadWorld(home);
 
-  expect(world.bots.get("b_1" as BotId)).toMatchObject({ muted: false, connectorsOff: [] });
+  expect(world.bots.get("b_1" as BotId)).toMatchObject({ muted: false, connectorsOff: [], agentsOn: null });
   expect([...world.agents.values()][0]!.agent).toMatchObject({ evidence: null, worktree: null });
 });
 
@@ -309,7 +309,7 @@ test("a v2 upgrade gives bots no mute and no connectors off, and agents no evide
 
   const { world } = loadWorld(home);
 
-  for (const bot of world.bots.values()) expect(bot).toMatchObject({ muted: false, connectorsOff: [] });
+  for (const bot of world.bots.values()) expect(bot).toMatchObject({ muted: false, connectorsOff: [], agentsOn: null });
   for (const rec of world.agents.values()) expect(rec.agent).toMatchObject({ evidence: null, worktree: null });
 });
 

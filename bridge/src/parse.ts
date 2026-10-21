@@ -111,6 +111,7 @@ function patch(v: unknown): BotPatch {
   if (o.dailyCapUsd !== undefined) p.dailyCapUsd = usd(o, "dailyCapUsd");
   if (o.muted !== undefined) p.muted = bool(o, "muted");
   if (o.members !== undefined) p.members = members(o.members);
+  if (o.agentsOn !== undefined) p.agentsOn = o.agentsOn === null ? null : (str(o, "agentsOn") as MachineId);
   return p;
 }
 

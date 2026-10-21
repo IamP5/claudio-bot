@@ -109,6 +109,9 @@ export type Bot = {
   dailyCapUsd: number | null;
   // No message or result pushes for this bot. Cards still push: a held call waits on the user.
   muted: boolean;
+  // The machine this bot starts its agents on unless it names another. null: the bot picks, the home's own machine
+  // when it names none. Always null for a group.
+  agentsOn: MachineId | null;
 } & BotSpend;
 
 /**
@@ -622,8 +625,8 @@ export type Broadcast = ServerMessage & { seq: number };
 
 export type Upload = { name: string; mime: string; data: string };
 
-// members applies to a group only.
-export type BotPatch = Partial<Pick<Bot, "name" | "title" | "avatar" | "pinned" | "hidden" | "dailyCapUsd" | "muted" | "members">>;
+// members applies to a group only; agentsOn, to a bot only, and names this home's own machine or one enrolled into it.
+export type BotPatch = Partial<Pick<Bot, "name" | "title" | "avatar" | "pinned" | "hidden" | "dailyCapUsd" | "muted" | "members" | "agentsOn">>;
 
 export type ClientMessage =
   | { type: "create_bot"; ref: string }

@@ -4,6 +4,7 @@ import type { Machine } from "../src/machine/machines";
 import { profileOf } from "../src/machine/profile";
 import type { Event, MachineId } from "../src/machine/wire";
 import type { AgentId, ServerMessage } from "../src/protocol";
+import { flushNow, loadWorld } from "../src/store";
 import { emptySession, emptyWorld, type AgentRecord } from "../src/world";
 import { NO_RING, at, bot, cleanup, hubOver } from "./hub-kit";
 
@@ -108,4 +109,34 @@ test("agent frames name the machine the agent runs on: the home's own, a cloud a
     ["a_mac", "m_test"],
     ["a_cloud", "m_test"],
   ]);
+});
+
+test("a bot's agentsOn is null until the phone names a machine of this home, which survives a reload; any other machine is refused", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world, { links: fakeLinks().links });
+  const botFrame = () => h.frames.findLast((f) => f.type === "bot");
+  const hello = h.hub.hello(NO_RING);
+  expect(hello.type === "hello" && hello.bots[0]?.agentsOn).toBeNull();
+
+  expect(await h.hub.handle({ type: "update_bot", botId: b.id, patch: { agentsOn: MAC } })).toEqual([]);
+  expect(botFrame()).toMatchObject({ bot: { id: b.id, agentsOn: MAC } });
+  expect(await h.hub.handle({ type: "update_bot", botId: b.id, patch: { agentsOn: "m_unknown" as MachineId } })).toEqual([{ type: "error", message: "Unknown machine" }]);
+  flushNow(world, h.root);
+  expect(loadWorld(h.root).world.bots.get(b.id)?.agentsOn).toBe(MAC);
+
+  expect(await h.hub.handle({ type: "update_bot", botId: b.id, patch: { agentsOn: "m_test" as MachineId } })).toEqual([]);
+  expect(await h.hub.handle({ type: "update_bot", botId: b.id, patch: { agentsOn: null } })).toEqual([]);
+  expect(botFrame()).toMatchObject({ bot: { agentsOn: null } });
+});
+
+test("a group has no agentsOn of its own: it is always null and the phone cannot set it", async () => {
+  const world = emptyWorld();
+  for (const name of ["ana", "bo"]) world.bots.set(bot(name).id, bot(name));
+  const h = hubOver(world, { links: fakeLinks().links });
+  const [created] = await h.hub.handle({ type: "create_group", ref: "c1", name: "crew", members: [...world.bots.keys()] });
+  const groupId = created?.type === "created" ? created.botId : ("" as never);
+  expect(h.frames.findLast((f) => f.type === "bot")).toMatchObject({ bot: { kind: "group", agentsOn: null } });
+  expect(await h.hub.handle({ type: "update_bot", botId: groupId, patch: { agentsOn: MAC } })).toEqual([{ type: "error", message: "A group has no agents of its own: its bots do." }]);
 });

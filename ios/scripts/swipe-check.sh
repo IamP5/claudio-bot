@@ -6,7 +6,10 @@
 # SCREENS and SIZES override the matrix. ATTACH=1 swipes the app as it already runs (a paired app on a live
 # thread) once, at the content size it has, and leaves both alone; the app path is then optional.
 # Needs a booted simulator you hold and xcodegen. Otherwise the device's content size is set back to large on exit.
-set -u
+# It runs under zsh whatever shell starts it, and any failed step ends it with a non-zero status.
+if [ -z "${ZSH_VERSION:-}" ]; then exec zsh "$0" "$@"; fi
+setopt err_exit pipe_fail no_unset
+[ $# -ge 1 ] || { echo "usage: $0 <simulator-udid> [path/to/ClaudioBot.app]" >&2; exit 2; }
 udid="$1"
 app="${2:-}"
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -20,14 +23,17 @@ attach="${ATTACH:-0}"
 xcodegen generate --quiet --spec "$here/swipe-check/project.yml" --project "$work" || exit 1
 xcodebuild -project "$work/SwipeCheck.xcodeproj" -scheme UITests -destination "platform=iOS Simulator,id=$udid" \
   -derivedDataPath "$work/dd" build-for-testing > "$work/build.log" 2>&1 || { echo "the swipe driver did not build: $work/build.log"; exit 1; }
-[ "$attach" = 1 ] || xcrun simctl install "$udid" "$app" || exit 1
+[ "$attach" = 1 ] || xcrun simctl install "$udid" "$app"
 
+# Prints nothing when the app is not running; that sample then counts as no CPU.
 app_cpu() {
-  local pid=$(pgrep -f "Devices/$udid/.*ClaudioBot.app/ClaudioBot" | head -1)
-  [ -n "$pid" ] && ps -o %cpu= -p "$pid" | tr -d ' '
+  local pid
+  pid=$(pgrep -f "Devices/$udid/.*ClaudioBot.app/ClaudioBot" | head -1) || return 0
+  [ -n "$pid" ] || return 0
+  ps -o %cpu= -p "$pid" | tr -d ' ' || true
 }
 
-screens="${SCREENS:-workrun thread plan streaming longthread}"
+screens="${SCREENS:-workrun thread plan streaming longthread approvals approvalsanswered}"
 sizes="${SIZES:-large accessibility-extra-large accessibility-extra-extra-extra-large}"
 [ "$attach" = 1 ] && screens=live && sizes=current
 failed=0
@@ -37,7 +43,8 @@ for size in ${=sizes}; do
     : > "$out"
     TEST_RUNNER_SCREEN="$screen" TEST_RUNNER_OUT="$out" TEST_RUNNER_ATTACH="$attach" \
       xcodebuild -project "$work/SwipeCheck.xcodeproj" -scheme UITests -destination "platform=iOS Simulator,id=$udid" \
-      -derivedDataPath "$work/dd" test-without-building -only-testing:UITests/Swipe/testSwipeDown > "$work/$screen-$size.log" 2>&1
+      -derivedDataPath "$work/dd" test-without-building -only-testing:UITests/Swipe/testSwipeDown > "$work/$screen-$size.log" 2>&1 \
+      || echo "the swipe test failed: $work/$screen-$size.log"
     seconds=$(awk '{print $2}' "$out")
     samples=()
     for i in {1..10}; do samples+=$(app_cpu); sleep 1; done
@@ -48,7 +55,7 @@ for size in ${=sizes}; do
       failed=1
     fi
     echo "$verdict $screen $size swipe=${seconds:-none}s cpu-after=${cpu}% ($samples)"
-    [ "$attach" = 1 ] || xcrun simctl terminate "$udid" dev.claudiobot.app 2>/dev/null
+    [ "$attach" = 1 ] || xcrun simctl terminate "$udid" dev.claudiobot.app 2>/dev/null || true
   done
 done
 exit $failed

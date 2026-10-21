@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { CanUseTool, HookCallback, Options, PermissionResult, query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeApps, DesktopEntry, Live } from "../src/claudeApps";
 import { OWN_CARD_TTL_MS } from "../src/own";
-import type { AgentId, BotId, MessageId, ServerMessage, SessionId, SessionItem, SessionRow, ThreadChannelFrame } from "../src/protocol";
+import type { AgentId, BotId, MessageId, ServerMessage, SessionId, SessionItem, SessionRow, ThreadChannelFrame, MachineId } from "../src/protocol";
 import { GONE_ERROR } from "../src/session";
 import { createSessions, type Sessions } from "../src/sessions";
 import { emptySession, emptyWorld, type AgentRecord, type World } from "../src/world";
@@ -51,6 +51,7 @@ const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 
 function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
   sessions = createSessions({
+    machine: "m_test" as MachineId,
     epoch: "e1",
     projectsDir: join(base, "projects"),
     apps: apps(),
@@ -388,6 +389,15 @@ describe("a session the phone starts", () => {
     const o = queries[0]!.options;
     expect([o.sessionId, o.resume, o.title, o.permissionMode, o.cwd]).toEqual([id, undefined, undefined, "acceptEdits", repo]);
     expect((await snapshot(id)).items).toMatchObject([{ kind: "user", id: "r1", text: "Add a mute button", queued: false }]);
+  });
+
+  test("it starts on this machine when it names this machine or none, and is refused on any other until they arrive", async () => {
+    await start({ folders: () => [repo] });
+    const project = ((await handle({ type: "watch_sessions" }))[0] as Extract<ServerMessage, { type: "sessions" }>).projects.find((p) => p.path === repo)!;
+    const base = { type: "session_create", projectId: project.id, text: "Add a mute button", model: null, mode: null, isolate: "none" } as const;
+    expect(await handle({ ...base, ref: "r1", machine: "m_other" as MachineId })).toEqual([{ type: "error", message: "Sessions on other machines arrive later" }]);
+    expect(queries).toHaveLength(0);
+    expect(await handle({ ...base, ref: "r2", machine: "m_test" as MachineId })).toMatchObject([{ type: "session_created", ref: "r2" }]);
   });
 });
 

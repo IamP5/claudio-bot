@@ -10,6 +10,9 @@ type Wire<T> = T extends string & { readonly __brand: string } ? string : T exte
 const at = "2026-10-16T12:00:00.000Z";
 const later = "2026-10-16T14:00:00.000Z";
 const tomorrow = "2026-10-17T11:57:00.000Z";
+// The home, omarchy, and a machine enrolled into it, the MacBook.
+const HOME = "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c";
+const MAC = "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b";
 const routine: Wire<Routine> = {
   id: "r1", name: "morning-digest", schedule: "57 7 * * 1-5", describe: "Weekdays at 7:57 AM",
   prompt: "Post today's tech digest.", enabled: true, lastRunAt: at,
@@ -45,7 +48,7 @@ const agentPeer: Wire<Peer> = { kind: "agent", id: "a1", title: "Set up verifica
 const agent: Wire<AgentView> = {
   id: "a1", botId: "b1", title: "Set up verification skill", where: "mac", projectName: "web",
   status: "waiting", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null,
-  spentUsd: 1.2, budgetUsd: 5, machine: "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
+  spentUsd: 1.2, budgetUsd: 5, machine: HOME,
 };
 
 // Sessions: solta-o-som (the GitHub name of ~/Dev/projects/br-soundless) holds an agent's session and one from the
@@ -58,24 +61,24 @@ const claudio: Wire<SessionProject> = {
 };
 const agentSession = "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31";
 const agentRow: Wire<SessionRow> = {
-  id: agentSession, projectId: solta.id, parentId: null, title: "Smooth the audio fade on iOS Safari", origin: "agent",
+  id: agentSession, machine: HOME, projectId: solta.id, parentId: null, title: "Smooth the audio fade on iOS Safari", origin: "agent",
   agent: { botId: "b1", agentId: "a3" }, status: "working", holder: "claudio", unread: false,
   branch: "claudio/6b1f3c2a", worktree: true, pr: null, mirror: "pending", hidden: false, url: null, createdAt: at, lastAt: later,
 };
 const desktopRow: Wire<SessionRow> = {
-  id: "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40", projectId: solta.id, parentId: null, title: "Add a volume slider to the player", origin: "desktop",
+  id: "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40", machine: MAC, projectId: solta.id, parentId: null, title: "Add a volume slider to the player", origin: "desktop",
   agent: null, status: "idle", holder: "desktop", unread: true,
   branch: "feat/volume-slider", worktree: false, pr: { number: 87, url: "https://github.com/IamP5/solta-o-som/pull/87", state: "open" },
   mirror: "imported", hidden: false, url: null, createdAt: "2026-10-15T09:30:00.000Z", lastAt: at,
 };
 const cloudRow: Wire<SessionRow> = {
-  id: "session_01Hq7vXk3mRt9wYpL2nB5cDe", projectId: claudio.id, parentId: null, title: "Add a changelog", origin: "cloud",
+  id: "session_01Hq7vXk3mRt9wYpL2nB5cDe", machine: HOME, projectId: claudio.id, parentId: null, title: "Add a changelog", origin: "cloud",
   agent: { botId: "b1", agentId: "a2" }, status: "idle", holder: "none", unread: false,
   branch: "claude/add-changelog", worktree: false, pr: { number: 12, url: "https://github.com/alex/claudio-bot/pull/12", state: "merged" },
   mirror: "none", hidden: false, url: "https://claude.ai/code/session_01Hq7vXk3mRt9wYpL2nB5cDe", createdAt: "2026-10-14T18:00:00.000Z", lastAt: at,
 };
 const childRow: Wire<SessionRow> = {
-  id: "d4e8a1b6-3c2f-4b9e-8a7d-1f6c5e3b2a90", projectId: solta.id, parentId: desktopRow.id, title: "Check the slider on iPad", origin: "terminal",
+  id: "d4e8a1b6-3c2f-4b9e-8a7d-1f6c5e3b2a90", machine: MAC, projectId: solta.id, parentId: desktopRow.id, title: "Check the slider on iPad", origin: "terminal",
   agent: null, status: "awaiting_input", holder: "terminal", unread: false,
   branch: "feat/volume-slider", worktree: false, pr: null, mirror: "none", hidden: false, url: null, createdAt: at, lastAt: later,
 };
@@ -113,8 +116,8 @@ const ask = {
 };
 
 const machines: Wire<MachineView>[] = [
-  { id: "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c", name: "omarchy", role: "home", online: true, since: null, platform: "linux", access: { full: true, sandbox: false } },
-  { id: "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b", name: "MacBook", role: "machine", online: false, since: at, platform: "darwin", access: { full: false, sandbox: true } },
+  { id: HOME, name: "omarchy", role: "home", online: true, since: null, platform: "linux", access: { full: true, sandbox: false } },
+  { id: MAC, name: "MacBook", role: "machine", online: false, since: at, platform: "darwin", access: { full: false, sandbox: true } },
 ];
 
 export const server = [
@@ -170,7 +173,7 @@ export const server = [
   { type: "bot", seq: 54, bot: { ...bot, muted: true, spentTodayUsd: 1.25, capUsd: null } },
   {
     type: "agent", seq: 55, messages: [], agent: {
-      ...agent, status: "capped", machine: "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+      ...agent, status: "capped", machine: MAC,
       evidence: { at: later, branch: "claudio/verify-skill", head: "4f2a9c1", ahead: 3, changed: 5, insertions: 120, deletions: 14, dirty: false, pr: "https://github.com/acme/web/pull/142" },
       worktree: { path: "/Users/alex/.claudiobot-worktrees/web/a1", branch: "claudio/verify-skill" },
     },
@@ -286,6 +289,7 @@ export const client = [
   { type: "session_answer", sessionId: agentSession, cardId: "m21", answers: null },
   { type: "session_create", ref: "s1", projectId: solta.id, text: "Add a mute button to the player", model: null, mode: "plan", isolate: "worktree" },
   { type: "session_create", ref: "s2", projectId: claudio.id, text: "Why does the bridge log a gap?", model: "opus", mode: null, isolate: "none" },
+  { type: "session_create", ref: "s3", projectId: solta.id, text: "Profile the fade on the Mac", model: null, mode: null, isolate: "none", machine: MAC },
   { type: "session_set", sessionId: desktopRow.id, patch: { title: "Volume slider", hidden: true } },
   { type: "session_set", sessionId: agentSession, patch: { model: null, mode: "acceptEdits" } },
   { type: "session_open_desktop", sessionId: agentSession },
@@ -307,7 +311,7 @@ const agentCard = { ...permission, id: "m30", from: agentPeer };
 const { spentUsd, budgetUsd, machine: _, ...bareAgent } = agent;
 export const link = [
   { t: "challenge", nonce: "9f".repeat(32) },
-  { t: "hello", machineId: "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b", sig: "c2lnbmF0dXJl", nonce: "4e".repeat(32), profile: machineProfile, lastSeq: 12 },
+  { t: "hello", machineId: MAC, sig: "c2lnbmF0dXJl", nonce: "4e".repeat(32), profile: machineProfile, lastSeq: 12 },
   { t: "welcome", sig: "c2lnbmF0dXJl", ackedSeq: 9 },
   {
     t: "intent",

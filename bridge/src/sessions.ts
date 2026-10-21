@@ -8,7 +8,7 @@ import type { Tickable } from "./clock";
 import type { Ledger } from "./ledger";
 import type { Machine } from "./machine/machines";
 import type { LocalAgents } from "./machine/runtime";
-import { newIntentId } from "./machine/wire";
+import { newIntentId, type MachineId } from "./machine/wire";
 import { createOwn, newDrive, type OwnDeps } from "./own";
 import type { Scope } from "./policy";
 import { createProjects } from "./projects";
@@ -56,6 +56,8 @@ export type SessionsEnv = {
 };
 
 export type SessionsDeps = SessionsEnv & {
+  /** This bridge's own machine: the one whose transcripts the list reads. */
+  machine: MachineId;
   world: World;
   userName: string;
   /** The bridge home: a session whose cwd is under it is a bot's, shown in the Bots view instead. */
@@ -316,6 +318,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   const watched = (id: SessionId) => deps.watchers(id) > 0;
 
   const catalog = createCatalog({
+    machine: deps.machine,
     projectsDir: deps.projectsDir,
     heads,
     projects,
@@ -438,6 +441,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   }
 
   async function create(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<ServerMessage[]> {
+    if (m.machine !== undefined && m.machine !== deps.machine) return error("Sessions on other machines arrive later");
     const project = catalog.snapshot().projects.find((p) => p.id === m.projectId);
     if (!project) return error("Unknown project");
     if (!existsSync(project.path)) return error(`${project.name}'s folder is gone from this Mac.`);

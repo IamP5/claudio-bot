@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 import type { Tickable } from "./clock";
 import type { ClaudeApps } from "./claudeApps";
 import type { ProjectOf } from "./projects";
-import type { Holder, SessionId, SessionOrigin, SessionProject, SessionRow, SessionsChannelFrame, SessionStatus } from "./protocol";
+import type { Holder, MachineId, SessionId, SessionOrigin, SessionProject, SessionRow, SessionsChannelFrame, SessionStatus } from "./protocol";
 import { isTranscriptName, type Head, type Heads } from "./transcript";
 import type { AgentRecord, World } from "./world";
 
@@ -14,6 +14,8 @@ import type { AgentRecord, World } from "./world";
 export type Driven = { status: SessionStatus; working: boolean };
 
 export type CatalogDeps = {
+  /** The machine whose transcripts these are. */
+  machine: MachineId;
   projectsDir: string;
   heads: Heads;
   projects: { of(cwd: string): ProjectOf; save(): void };
@@ -124,6 +126,7 @@ export function createCatalog(deps: CatalogDeps): Catalog {
       const holder: Holder = driven?.working ? "claudio" : held ? holderOf(held.entrypoint) : "none";
       rows.push({
         id,
+        machine: deps.machine,
         projectId: project.id,
         parentId: desktop.get(id)?.parent ?? null,
         title: head?.title ?? rec?.agent.title ?? draft!.title,

@@ -375,10 +375,12 @@ export type SessionPr = { number: number; url: string; state: "open" | "merged" 
  * One session in the list. Status, unread, holder and mirror are computed when the row is built. parentId: the
  * session it was spawned from, so the app nests it. agent: set when a bot's agent owns the id. worktree: the cwd is a
  * git worktree, not the main checkout. unread: the bridge drives it or the user opened it before, its lastAt is past
- * that visit, and its last item is the assistant's. url: claude.ai for a cloud row, else null.
+ * that visit, and its last item is the assistant's. url: claude.ai for a cloud row, else null. machine: the machine
+ * whose Claude Code transcripts hold the session, since a transcript resumes only where it was written.
  */
 export type SessionRow = {
   id: SessionId;
+  machine: MachineId;
   projectId: ProjectId;
   parentId: SessionId | null;
   title: string;
@@ -529,8 +531,18 @@ export type SessionClientMessage =
   | { type: "session_decide"; sessionId: SessionId; cardId: MessageId; choice: PermissionChoice }
   // Answers an ask item by question text. null dismisses it.
   | { type: "session_answer"; sessionId: SessionId; cardId: MessageId; answers: Record<string, string> | null }
-  // Answered by session_created with the same ref. model and mode null: the user's Claude Code defaults.
-  | { type: "session_create"; ref: string; projectId: ProjectId; text: string; model: string | null; mode: PhoneMode | null; isolate: "none" | "worktree" }
+  // Answered by session_created with the same ref. model and mode null: the user's Claude Code defaults. machine:
+  // where it runs; absent, the home's own machine.
+  | {
+      type: "session_create";
+      ref: string;
+      projectId: ProjectId;
+      text: string;
+      model: string | null;
+      mode: PhoneMode | null;
+      isolate: "none" | "worktree";
+      machine?: MachineId;
+    }
   | { type: "session_set"; sessionId: SessionId; patch: SessionPatch }
   // Imports the session into the Claude app when needed, then brings the app forward.
   | { type: "session_open_desktop"; sessionId: SessionId }

@@ -825,6 +825,7 @@ export function createHub(deps: HubDeps): Hub {
   const sessions: Sessions | null = deps.sessions
     ? createSessions({
         ...deps.sessions,
+        machine: deps.machineId,
         world,
         userName,
         bridgeHome: deps.profile.bridgeHome,

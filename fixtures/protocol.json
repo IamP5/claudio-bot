@@ -1295,6 +1295,7 @@
       "rows": [
         {
           "id": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
           "projectId": "3f9a1c7e2b4d6a80",
           "parentId": null,
           "title": "Smooth the audio fade on iOS Safari",
@@ -1317,6 +1318,7 @@
         },
         {
           "id": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
+          "machine": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
           "projectId": "3f9a1c7e2b4d6a80",
           "parentId": null,
           "title": "Add a volume slider to the player",
@@ -1340,6 +1342,7 @@
         },
         {
           "id": "session_01Hq7vXk3mRt9wYpL2nB5cDe",
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
           "projectId": "9c2e5b7a1d3f4e60",
           "parentId": null,
           "title": "Add a changelog",
@@ -1372,6 +1375,7 @@
       "rows": [
         {
           "id": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
           "projectId": "3f9a1c7e2b4d6a80",
           "parentId": null,
           "title": "Smooth the audio fade on iOS Safari",
@@ -1394,6 +1398,7 @@
         },
         {
           "id": "d4e8a1b6-3c2f-4b9e-8a7d-1f6c5e3b2a90",
+          "machine": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
           "projectId": "3f9a1c7e2b4d6a80",
           "parentId": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
           "title": "Check the slider on iPad",
@@ -2030,6 +2035,16 @@
       "model": "opus",
       "mode": null,
       "isolate": "none"
+    },
+    {
+      "type": "session_create",
+      "ref": "s3",
+      "projectId": "3f9a1c7e2b4d6a80",
+      "text": "Profile the fade on the Mac",
+      "model": null,
+      "mode": null,
+      "isolate": "none",
+      "machine": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b"
     },
     {
       "type": "session_set",

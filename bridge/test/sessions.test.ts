@@ -4,7 +4,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ClaudeApps, DesktopEntry, Live } from "../src/claudeApps";
-import type { AgentId, BotId, ServerMessage, SessionId, SessionItem, SessionRow, SessionsChannelFrame, ThreadChannelFrame } from "../src/protocol";
+import type { AgentId, BotId, ServerMessage, SessionId, SessionItem, SessionRow, SessionsChannelFrame, ThreadChannelFrame, MachineId } from "../src/protocol";
 import { createSessions, type Sessions } from "../src/sessions";
 import { emptySession, emptyWorld, own, type AgentRecord, type SessionState, type World } from "../src/world";
 
@@ -63,6 +63,7 @@ async function until<T>(get: () => T | undefined | false, what: string): Promise
 
 function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
   sessions = createSessions({
+    machine: "m_test" as MachineId,
     epoch: "e1",
     projectsDir: join(base, "projects"),
     apps: fakeApps(),
@@ -138,7 +139,7 @@ test("the list groups every transcript under its project, with what each row nee
   expect(frame.mirror).toBe("auto");
   expect(frame.projects).toEqual([expect.objectContaining({ name: "demo", path: repo, githubRepo: null, canCloud: false })]);
   expect(frame.rows.map((r) => r.id).sort()).toEqual([PERMISSION, ASK].sort());
-  expect(rowOf(frame.rows, ASK)).toMatchObject({ projectId: frame.projects[0]!.id, origin: "sdk", status: "idle", holder: "none", unread: false, worktree: false, mirror: "none", hidden: false, agent: null, parentId: null });
+  expect(rowOf(frame.rows, ASK)).toMatchObject({ machine: "m_test", projectId: frame.projects[0]!.id, origin: "sdk", status: "idle", holder: "none", unread: false, worktree: false, mirror: "none", hidden: false, agent: null, parentId: null });
 });
 
 test("a session another Claude Code holds busy shows working in the Claude app", async () => {

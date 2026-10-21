@@ -31,6 +31,12 @@ final class FakeBridge: @unchecked Sendable {
         /// 0 for the first socket this bridge accepted.
         let index: Int
         fileprivate let connection: NWConnection
+        private let mute = OSAllocatedUnfairLock(initialState: false)
+
+        /// Stops answering pings and messages, like a bridge that froze or a link that died without a close.
+        func goSilent() { mute.withLock { $0 = true } }
+
+        fileprivate var silent: Bool { mute.withLock { $0 } }
 
         fileprivate init(upgrade: Upgrade, index: Int, connection: NWConnection) {
             self.upgrade = upgrade
@@ -203,10 +209,10 @@ final class FakeBridge: @unchecked Sendable {
                 case 0x1:
                     let text = String(decoding: payload, as: UTF8.self)
                     record.withLockUnchecked { $0.texts.append(text) }
-                    onText(socket, text)
+                    if !socket.silent { onText(socket, text) }
                 case 0x8:
                     return socket.connection.cancel()
-                case 0x9:
+                case 0x9 where !socket.silent:
                     socket.connection.send(content: Self.frame(opcode: 0xA, payload: payload), completion: .contentProcessed { _ in })
                 default:
                     break

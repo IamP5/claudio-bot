@@ -414,7 +414,7 @@ struct UnrecognizedBanner: View {
             HStack(spacing: 8) {
                 Button("Pair again") { app.beginPairing() }
                     .bannerProminent()
-                Button("Retry") { client.retry() }
+                Button("Retry") { client.retryNow() }
                     .buttonStyle(.bordered)
             }
             .font(.footnote.weight(.semibold))

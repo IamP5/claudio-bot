@@ -10,6 +10,7 @@ import type { BotId, SessionId } from "../protocol";
 import { createSessions, type Sessions } from "../sessions";
 import { createSaver, loadWorld } from "../store";
 import { errorText } from "../text";
+import { probeConnectors, watchConnectors } from "./connectors";
 import { dialHub, type Dialer } from "./dial";
 import type { HomeRef, Identity } from "./identity";
 import { fileJournal } from "./journal";
@@ -97,7 +98,12 @@ export function bootMachine(deps: {
     const rec = e.kind === "agent" ? world.agents.get(e.agent.id) : undefined;
     if (rec) sessions.agentChanged(rec);
   });
-  const clock = createClock({ tickers: [...node.tickers, sessions], now, log });
+  const connectors = watchConnectors({
+    probe: () => probeConnectors(deps.claude, { cwd: profile.homedir, settingSources: ["user"] }),
+    changed: (list) => node.runtime.emit({ kind: "profile", profile: profileView(profile, list) }),
+    log,
+  });
+  const clock = createClock({ tickers: [...node.tickers, sessions, connectors], now, log });
 
   const health = Bun.serve({
     port: deps.port,
@@ -106,10 +112,9 @@ export function bootMachine(deps: {
     fetch: (req) => (new URL(req.url).pathname === "/health" ? Response.json({ ok: true }) : new Response("Not found", { status: 404 })),
   });
 
-  const view = profileView(profile);
   // Recorded before the link is up, so the home hears this boot's profile, its access mode included, once it is.
-  node.runtime.emit({ kind: "profile", profile: view });
-  dialer = dialHub({ identity, runtime: node.runtime, profile: view, sessions, log });
+  node.runtime.emit({ kind: "profile", profile: profileView(profile, connectors.list()) });
+  dialer = dialHub({ identity, runtime: node.runtime, profile: () => profileView(profile, connectors.list()), sessions, log });
   node.boot();
   sessions.resume();
   clock.start();

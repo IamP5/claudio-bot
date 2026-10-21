@@ -3,16 +3,16 @@ import type { HubDeps } from "../src/hub";
 import type { Machine } from "../src/machine/machines";
 import { profileOf } from "../src/machine/profile";
 import { profileView, type Event, type MachineId, type ProfileView } from "../src/machine/wire";
-import type { AgentId, ServerMessage } from "../src/protocol";
+import type { AgentId, MachineConnector, ServerMessage } from "../src/protocol";
 import { flushNow, loadWorld } from "../src/store";
 import { emptySession, emptyWorld, type AgentRecord } from "../src/world";
-import { NO_RING, at, bot, cleanup, hubOver } from "./hub-kit";
+import { NO_RING, at, bot, cleanup, flush, hubOver } from "./hub-kit";
 
 afterEach(cleanup);
 
 const MAC = "m_mac" as MachineId;
 const view: ProfileView = {
-  ...profileView(profileOf({ env: { CLAUDIOBOT_ACCESS: "full" }, platform: "darwin", name: "MacBook", homedir: "/Users/alex", username: "alex" })),
+  ...profileView(profileOf({ env: { CLAUDIOBOT_ACCESS: "full" }, platform: "darwin", name: "MacBook", homedir: "/Users/alex", username: "alex" }), []),
   connectors: [{ name: "claude-in-chrome", kind: "chrome" }],
 };
 
@@ -151,4 +151,15 @@ test("a group has no agentsOn of its own: it is always null and the phone cannot
   const groupId = created?.type === "created" ? created.botId : ("" as never);
   expect(h.frames.findLast((f) => f.type === "bot")).toMatchObject({ bot: { kind: "group", agentsOn: null } });
   expect(await h.hub.handle({ type: "update_bot", botId: groupId, patch: { agentsOn: MAC } })).toEqual([{ type: "error", message: "A group has no agents of its own: its bots do." }]);
+});
+
+test("the home lists the connectors it probed on itself, and tells the phones when they change", async () => {
+  const h = hubOver(emptyWorld(), { links: fakeLinks().links });
+  h.hub.tick(new Date());
+  for (let i = 0; i < 5; i++) await flush();
+  const probe = h.queries.at(-1)!;
+  expect([probe.received, probe.options.settingSources, probe.options.mcpServers]).toEqual([[], ["user"], undefined]);
+  const chrome: MachineConnector[] = [{ name: "chrome-devtools", kind: "chrome" }];
+  expect(machinesOf(h.hub.hello(NO_RING))?.[0]).toMatchObject({ role: "home", connectors: chrome });
+  expect(machinesOf(h.frames.findLast((m) => m.type === "machines")!)?.[0]?.connectors).toEqual(chrome);
 });

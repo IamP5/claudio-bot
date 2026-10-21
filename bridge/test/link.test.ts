@@ -14,7 +14,7 @@ import { newIntentId, profileView, type Event, type EventBody, type HomeFrame, t
 import type { SessionClientMessage, SessionId } from "../src/protocol";
 
 const profile = (() => {
-  const view = profileView(profileOf({ env: { CLAUDIOBOT_ACCESS: "full" }, platform: "linux", name: "omarchy", homedir: "/home/alex", username: "alex" }));
+  const view = profileView(profileOf({ env: { CLAUDIOBOT_ACCESS: "full" }, platform: "linux", name: "omarchy", homedir: "/home/alex", username: "alex" }), []);
   return view;
 })();
 
@@ -170,7 +170,7 @@ function machineAt(url: string, pair: ReturnType<typeof enrolledPair>, journalDi
   const dialer = dialHub({
     identity: { ...pair.machine, home: { ...pair.machine.home, url } },
     runtime,
-    profile,
+    profile: () => profile,
     ...(sessions && { sessions }),
     log: (l) => log.push(l),
     backoff: { firstMs: 20, maxMs: 40 },
@@ -339,7 +339,7 @@ test("a 4005 close before the link is live does not stop the machine dialing: on
   const dialer = dialHub({
     identity: pair.machine,
     runtime: miniRuntime(fileJournal(tmp(), () => {})),
-    profile,
+    profile: () => profile,
     log: () => {},
     backoff: { firstMs: 5, maxMs: 5 },
     connect() {

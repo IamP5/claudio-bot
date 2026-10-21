@@ -46,6 +46,7 @@ import { sandboxFor } from "./sandbox";
 import { sessionScope, type MachineProfile } from "./machine/profile";
 import type { Links } from "./machine/links";
 import { createLocalMachine, createMachines } from "./machine/machines";
+import { probeConnectors, watchConnectors } from "./machine/connectors";
 import { createMirror } from "./machine/mirror";
 import { createPlacements } from "./machine/placements";
 import { createRemoteSessions, isEmpty } from "./machine/remoteSessions";
@@ -791,7 +792,18 @@ export function createHub(deps: HubDeps): Hub {
 
   /** The gate's wiring, the clock and boot: what reaches agents in this process only. Commands go through machines. */
   const localAgents = runtime.local;
-  const machines = createMachines(createLocalMachine(deps.machineId, runtime, deps.profile), () => deps.links?.machines() ?? []);
+  // Only a home that takes machines lists them, so only it probes its own connectors.
+  const ownConnectors =
+    deps.links &&
+    watchConnectors({
+      probe: () => probeConnectors(deps.claude, { cwd: deps.profile.homedir, settingSources: ["user"] }),
+      changed: () => deps.broadcast({ type: "machines", machines: machineViews() }),
+      log: deps.log,
+    });
+  const machines = createMachines(
+    createLocalMachine(deps.machineId, runtime, deps.profile, () => ownConnectors?.list() ?? []),
+    () => deps.links?.machines() ?? [],
+  );
 
   /** A machine shows once it has linked: until then the home knows neither its platform nor its access. */
   const machineViews = (): MachineView[] =>
@@ -1164,7 +1176,7 @@ export function createHub(deps: HubDeps): Hub {
       return next.toISOString();
     },
   };
-  const tickers = { scheduler, gate, sessions: turns, push: deps.push, midnight, queue: dispatch, ...(usage && { usage }), ...(sessions && { index: sessions }) };
+  const tickers = { scheduler, gate, sessions: turns, push: deps.push, midnight, queue: dispatch, ...(usage && { usage }), ...(sessions && { index: sessions }), ...(ownConnectors && { connectors: ownConnectors }) };
   const clock = createClock({ tickers: Object.values(tickers), now: clockNow, log: deps.log });
   poke = () => clock.poke();
 

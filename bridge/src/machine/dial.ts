@@ -45,7 +45,8 @@ export function linkUrl(home: HomeRef): string {
 export function dialHub(deps: {
   identity: Identity & { home: HomeRef };
   runtime: Pick<AgentRuntime, "apply" | "events" | "lastSeq" | "ack" | "subscribe">;
-  profile: ProfileView;
+  /** Read at each hello, so a link made again carries the connectors found since boot. */
+  profile: () => ProfileView;
   /** This machine's Sessions tab, for the home's asks. Absent: every ask is refused. */
   sessions?: { handle(m: SessionClientMessage): Promise<ServerMessage[]> };
   log: (line: string) => void;
@@ -90,7 +91,7 @@ export function dialHub(deps: {
       s.close(4004, "bad frame");
       return drop(s, `${home.name} sent a bad frame: ${parsed.error}`);
     }
-    const step = machineHears(state, parsed.value, identity, () => ({ profile: deps.profile, lastSeq: runtime.lastSeq() }));
+    const step = machineHears(state, parsed.value, identity, () => ({ profile: deps.profile(), lastSeq: runtime.lastSeq() }));
     switch (step.kind) {
       case "close":
         s.close(4003, step.reason);

@@ -99,7 +99,7 @@ const enrollAs = (h: { http: string }, me: Identity, code: string) =>
   fetch(`${h.http}/enroll`, { method: "POST", body: JSON.stringify({ code, machineId: me.machineId, name: me.name, publicKey: me.publicKey }) });
 
 const profile = (() => {
-  const view = profileView(profileOf({ env: {}, platform: "darwin", name: "MacBook", homedir: "/Users/alex", username: "alex" }));
+  const view = profileView(profileOf({ env: {}, platform: "darwin", name: "MacBook", homedir: "/Users/alex", username: "alex" }), []);
   return view;
 })();
 
@@ -121,7 +121,7 @@ test("a paired phone mints a machine code, a computer enrolls with it, dials /li
   const dialer = dialHub({
     identity: { ...mac, home: { url: h.http, machineId: answer.homeMachineId, publicKey: answer.homePublicKey, name: answer.homeName } },
     runtime: { apply: async () => ({ ok: true }), events: () => [], lastSeq: () => 0, ack: () => {}, subscribe: () => () => {} },
-    profile,
+    profile: () => profile,
     log: () => {},
     backoff: { firstMs: 20, maxMs: 40 },
   });

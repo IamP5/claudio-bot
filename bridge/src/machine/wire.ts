@@ -97,10 +97,9 @@ export type Applied = { ok: true; reply?: string } | { ok: false; reason: string
 /** A machine's profile as the home may see it: no agent socket path, and the connectors its agents can use. */
 export type ProfileView = Omit<MachineProfile, "sshAuthSock"> & { connectors: readonly MachineConnector[] };
 
-/** No machine reads its own connectors yet, so each reports none. */
-export function profileView(profile: MachineProfile): ProfileView {
+export function profileView(profile: MachineProfile, connectors: readonly MachineConnector[]): ProfileView {
   const { sshAuthSock: _, ...view } = profile;
-  return { ...view, connectors: [] };
+  return { ...view, connectors };
 }
 
 export type EventBody =

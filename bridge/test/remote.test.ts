@@ -28,7 +28,7 @@ function remote() {
   const mac: Machine = {
     id: MAC,
     name: "MacBook",
-    profile: () => profileView(profileOf({ env: { CLAUDIOBOT_ACCESS: "full", CLAUDIOBOT_SANDBOX: "off" }, platform: "darwin", name: "MacBook", homedir: "/Users/alex", username: "alex" })),
+    profile: () => profileView(profileOf({ env: { CLAUDIOBOT_ACCESS: "full", CLAUDIOBOT_SANDBOX: "off" }, platform: "darwin", name: "MacBook", homedir: "/Users/alex", username: "alex" }), []),
     status: () => ({ online, since: null }),
     async send(intent) {
       if (!online) return { ok: false, reason: "MacBook is offline", undelivered: true };

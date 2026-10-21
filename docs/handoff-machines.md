@@ -124,6 +124,10 @@ Done so far: phases 0, 1, 2, 3, 6, 4 and 5, in that order. Phase 7 is next.
     linked. Evidence: `claudiobot-verify/evidence/20261021-042740-93a5/run1-full-sandbox-off`.
   - Guarded, sandbox on. The same start, card, Allow once, push and report. Evidence:
     `claudiobot-verify/evidence/20261021-043335-b9d9/run2-guarded-sandbox-on`.
+  - Connector chips. Each bridge reads its connected MCP servers from a query that sends no message
+    (`machine/connectors.ts`), at boot and every 30 minutes. A machine sends a `profile` event when the list changes.
+    A live home on a Mac listed `chrome-devtools` (chrome) in `hello.machines[0].connectors`. Evidence:
+    `claudiobot-verify/evidence/20261021-063526-dcae/connector-chips`.
 - **5. Sessions tab by machine.** Built from `0ba1ffa` to `14b4793`.
   - The wire. `ask` carries a phone's `session_*` request to a machine and `reply` brings its frames back. `signal`
     carries the machine's list and thread channel frames. They are link frames, not intents and events: session

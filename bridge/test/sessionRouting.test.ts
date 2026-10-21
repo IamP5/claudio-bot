@@ -102,7 +102,7 @@ function setup(world: World = emptyWorld(), seed?: (root: string) => void) {
   const mac: Machine = {
     id: MAC,
     name: "MacBook",
-    profile: () => profileView(profileOf({ env: {}, platform: "darwin", name: "MacBook", homedir: "/Users/alex", username: "alex" })),
+    profile: () => profileView(profileOf({ env: {}, platform: "darwin", name: "MacBook", homedir: "/Users/alex", username: "alex" }), []),
     status: () => ({ online, since: null }),
     async send(intent) {
       if (!online) return { ok: false, reason: "MacBook is offline", undelivered: true };

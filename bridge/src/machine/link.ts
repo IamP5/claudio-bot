@@ -16,8 +16,12 @@ export type LinkState =
 
 export const newNonce = () => randomBytes(32).toString("hex");
 
-/** What a side signs: the other side's nonce, then the other side's id, so a proof is good for one link to one peer. */
-const proofOf = (nonce: string, peer: MachineId) => Buffer.concat([Buffer.from(nonce, "hex"), Buffer.from(peer)]);
+/**
+ * What a side signs: who signs, the other side's nonce, then the other side's id, so a proof is good for one link to
+ * one peer, and a machine's proof never passes for the home's.
+ */
+const PROOF = { machine: "claudiobot-link machine-proof v1\n", home: "claudiobot-link home-proof v1\n" } as const;
+const proofOf = (by: keyof typeof PROOF, nonce: string, peer: MachineId) => Buffer.concat([Buffer.from(PROOF[by]), Buffer.from(nonce, "hex"), Buffer.from(peer)]);
 
 type Hello = Extract<MachineFrame, { t: "hello" }>;
 type Live<F, T> = Extract<F, { t: T }>;
@@ -50,13 +54,13 @@ export function homeHears(
       if (frame.t !== "hello") return { kind: "close", reason: `expected hello, got ${frame.t}` };
       const known = pinned(frame.machineId);
       if (known === null) return { kind: "close", reason: `machine ${frame.machineId} is not enrolled` };
-      if (!verifyWith(known.publicKey, proofOf(state.nonce, home.machineId), frame.sig)) return { kind: "close", reason: `machine ${frame.machineId} did not prove its enrolled key` };
+      if (!verifyWith(known.publicKey, proofOf("machine", state.nonce, home.machineId), frame.sig)) return { kind: "close", reason: `machine ${frame.machineId} did not prove its enrolled key` };
       // A machine whose outbox is behind what the home saved lost its journal: it starts over from its first event.
       const ackedSeq = frame.lastSeq < known.ackedSeq ? 0 : known.ackedSeq;
       return {
         kind: "welcome",
         state: { kind: "live", peer: frame.machineId },
-        send: { t: "welcome", sig: signWith(home.privateKey, proofOf(frame.nonce, frame.machineId)), ackedSeq },
+        send: { t: "welcome", sig: signWith(home.privateKey, proofOf("home", frame.nonce, frame.machineId)), ackedSeq },
         hello: frame,
         ackedSeq,
       };
@@ -84,12 +88,12 @@ export function machineHears(
       return {
         kind: "hello",
         state: { kind: "challenged", nonce },
-        send: { t: "hello", machineId: me.machineId, sig: signWith(me.privateKey, proofOf(frame.nonce, me.home.machineId)), nonce, profile, lastSeq },
+        send: { t: "hello", machineId: me.machineId, sig: signWith(me.privateKey, proofOf("machine", frame.nonce, me.home.machineId)), nonce, profile, lastSeq },
       };
     }
     case "challenged":
       if (frame.t !== "welcome") return { kind: "close", reason: `expected welcome, got ${frame.t}` };
-      if (!verifyWith(me.home.publicKey, proofOf(state.nonce, me.machineId), frame.sig)) return { kind: "close", reason: "the home did not prove its enrolled key" };
+      if (!verifyWith(me.home.publicKey, proofOf("home", state.nonce, me.machineId), frame.sig)) return { kind: "close", reason: "the home did not prove its enrolled key" };
       return { kind: "live", state: { kind: "live", peer: me.home.machineId }, ackedSeq: frame.ackedSeq };
     case "live":
       if (frame.t === "intent" || frame.t === "ack" || frame.t === "ask") return { kind: "frame", frame };

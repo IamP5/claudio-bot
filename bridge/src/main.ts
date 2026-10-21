@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import qrcode from "qrcode-terminal";
 import { accessLine } from "./access";
-import { bridgeUrls, lanAddresses, pairLink, readNames } from "./address";
+import { bridgeUrls, enrollUrls, lanAddresses, pairLink, readNames } from "./address";
 import { readPlanUsage, strictMcp } from "./claudeCode";
 import { createDevices, type PairCode } from "./devices";
 import { createHomes } from "./home";
@@ -210,9 +210,10 @@ function bootHome() {
     return { ...devices.newCode(), urls };
   }
 
-  /** The same addresses as the phone's, as the http:// base `claudiobot machine enroll` takes. */
   function machineOffer(): PairOffer {
-    return { ...joinCodes.newCode(), urls: urls.map((u) => u.replace(/^ws:/, "http:").replace(/\/ws$/, "")) };
+    const enrollAt = enrollUrls(names, lanAddresses(), transport.port);
+    if (enrollAt.warning) log(enrollAt.warning);
+    return { ...joinCodes.newCode(), urls: enrollAt.urls };
   }
 
   function shutdown() {

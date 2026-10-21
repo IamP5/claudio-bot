@@ -227,3 +227,11 @@ test("an enrollment the registry could not save leaves the code live, so the sam
   expect(enroll({ identity, registry, codes }, body)).toMatchObject({ status: 200, created: true });
   expect(enroll({ identity, registry, codes }, { ...body, machineId: newIdentity("x").machineId })).toMatchObject({ status: 401 });
 });
+
+test("claudiobot machine invite warns when the home offers no tailnet address", async () => {
+  const lines: string[] = [];
+  const offer: PairOffer = { code: "R4TW-9HJC", expiresAt: new Date(Date.now() + 600_000).toISOString(), urls: ["http://192.168.1.30:7878"] };
+  const code = await machineCommand(["invite"], { bridgeHome: tmp(), env: {}, run: async () => "", fetch: async () => Response.json(offer), out: (t) => lines.push(t) });
+  expect(code).toBe(0);
+  expect(lines.join("")).toContain("plain http");
+});

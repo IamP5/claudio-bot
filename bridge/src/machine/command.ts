@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { accessOf } from "../access";
+import { LAN_ENROLL_WARNING, onTailnet } from "../address";
 import type { PairOffer } from "../protocol";
 import { errorText } from "../text";
 import type { EnrollResponse } from "./enroll";
@@ -76,6 +77,7 @@ export async function machineCommand(argv: string[], deps: MachineCommandDeps): 
       out(`machine code: ${offer.code} (single use, until ${new Date(offer.expiresAt).toLocaleTimeString()})\n`);
       out(`On the other computer, run one of:\n`);
       for (const url of offer.urls) out(`  claudiobot machine enroll ${url} ${offer.code}\n`);
+      if (!onTailnet(offer.urls)) out(`${LAN_ENROLL_WARNING}\n`);
       return 0;
     }
 

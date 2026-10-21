@@ -79,6 +79,16 @@ test("the machine refuses a home that cannot prove the key it pinned at enrollme
   expect(machineHears(hello.state, welcome, machine, () => ({ profile, lastSeq: 0 }))).toEqual({ kind: "close", reason: "the home did not prove its enrolled key" });
 });
 
+test("a machine's own proof sent back to it is not the home's proof, even under one key and one id", () => {
+  const { machine } = enrolledPair();
+  const mirrored = { ...machine, home: { ...machine.home, machineId: machine.machineId, publicKey: machine.publicKey } };
+  const challenge = { t: "challenge" as const, nonce: newNonce() };
+  const hello = machineHears({ kind: "connecting" }, challenge, mirrored, () => ({ profile, lastSeq: 0 }), challenge.nonce);
+  if (hello.kind !== "hello" || hello.send.t !== "hello") throw new Error("no hello");
+  const welcome: HomeFrame = { t: "welcome", sig: hello.send.sig, ackedSeq: 0 };
+  expect(machineHears(hello.state, welcome, mirrored, () => ({ profile, lastSeq: 0 }))).toEqual({ kind: "close", reason: "the home did not prove its enrolled key" });
+});
+
 test.each([
   ["an intent before the handshake", { kind: "connecting" } as LinkState, { t: "intent", intent: { kind: "snapshot", intentId: "i_1" } } as HomeFrame],
   ["an ack while waiting for welcome", { kind: "challenged", nonce: "00".repeat(32) } as LinkState, { t: "ack", seq: 1 } as HomeFrame],

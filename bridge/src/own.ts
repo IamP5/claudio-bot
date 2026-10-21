@@ -172,6 +172,8 @@ export function createOwn(deps: OwnDeps): Own {
   const rested = new Map<SessionId, string>();
   /** Queued messages the user withdrew, so asking again says so. */
   const withdrawn = new Map<SessionId, string[]>();
+  /** The turn in flight on each session and when Claude Code took its message, which is where the message shows. */
+  const taken = new Map<SessionId, { turn: string; at: string }>();
 
   const now = () => deps.now().toISOString();
   const bootAt = now();
@@ -206,6 +208,7 @@ export function createOwn(deps: OwnDeps): Own {
       confirmLate(rec);
       const life = drive.session.lifecycle;
       const turn = life.kind === "working" || life.kind === "stopping" ? life.turn.pending : null;
+      if (life.kind === "working" || life.kind === "stopping") taken.set(id, { turn: life.turn.pending, at: life.turn.startedAt });
       if (drive.outcome && drive.outcome.kind !== "finished" && turn !== null && turn !== drive.endedTurn) begin(rec);
       if (working(rec)) {
         underway.add(id);
@@ -285,11 +288,12 @@ export function createOwn(deps: OwnDeps): Own {
   }
 
   /** A prompt a stop ended stays in the thread, whether or not Claude Code wrote it down. */
-  function keep(rec: SessionRecord, p: { clientId?: string; at: string; text: string }) {
+  function keep(rec: SessionRecord, p: { id: string; clientId?: string; at: string; text: string }) {
     if (p.clientId === undefined) return;
     const drive = driveOf(rec);
     const id = p.clientId as ItemId;
-    drive.kept = [...(drive.kept ?? []).filter((k) => k.id !== id), { id, at: p.at, text: p.text }].slice(-PROMPTS_KEPT);
+    const took = taken.get(rec.id);
+    drive.kept = [...(drive.kept ?? []).filter((k) => k.id !== id), { id, at: took?.turn === p.id ? took.at : p.at, text: p.text }].slice(-PROMPTS_KEPT);
     deps.persist("now");
   }
 
@@ -664,11 +668,12 @@ export function createOwn(deps: OwnDeps): Own {
         }
       }
       const life = drive.session.lifecycle;
-      const inFlight = life.kind === "working" || life.kind === "stopping" ? life.turn.pending : null;
+      const turn = life.kind === "working" || life.kind === "stopping" ? life.turn : null;
       for (const k of drive.kept ?? []) items.push({ kind: "user", id: k.id, at: k.at, text: k.text, from: "user", queued: false });
       for (const p of drive.session.pending) {
         if (p.clientId === undefined) continue;
-        items.push({ kind: "user", id: p.clientId as ItemId, at: p.at, text: p.text, from: "user", queued: p.id !== inFlight });
+        const took = p.id === turn?.pending ? turn.startedAt : null;
+        items.push({ kind: "user", id: p.clientId as ItemId, at: took ?? p.at, text: p.text, from: "user", queued: took === null });
       }
       return [...items, ...(drive.notices ?? [])];
     },

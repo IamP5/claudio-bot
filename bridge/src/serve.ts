@@ -16,7 +16,7 @@ import {
   type TransportMessage,
 } from "./protocol";
 import { forProtocol2 } from "./protocol2";
-import type { Stream } from "./stream";
+import { wire, type Stream } from "./stream";
 import { errorText } from "./text";
 
 // HTTP and the socket: /health, POST /pair, /ws with resume, and the transport messages.
@@ -160,7 +160,7 @@ export function serve(deps: ServeDeps): Transport {
 
   const send = (ws: Socket, message: ServerMessage) => {
     const frame = ws.data.protocol === 3 ? message : forProtocol2(message);
-    if (frame !== null) ws.send(JSON.stringify(frame));
+    if (frame !== null) ws.send(wire(frame));
   };
 
   function transport(ws: Socket, message: TransportMessage): ServerMessage[] {
@@ -304,10 +304,10 @@ export function serve(deps: ServeDeps): Transport {
       const frame = stream.append(message);
       server.publish(TOPIC[3], frame);
       const old = forProtocol2(message);
-      if (old !== null) server.publish(TOPIC[2], old === message ? frame : JSON.stringify({ ...old, seq: stream.seq }));
+      if (old !== null) server.publish(TOPIC[2], old === message ? frame : wire({ ...old, seq: stream.seq }));
     },
     signal: (message: Signal | SessionsChannelFrame | ThreadChannelFrame, topic?: string) => {
-      server.publish(topic ?? TOPIC[3], JSON.stringify(message));
+      server.publish(topic ?? TOPIC[3], wire(message));
     },
     watchers: (sessionId) => server.subscriberCount(threadTopic(sessionId)),
     live: () => quietAt().filter((t) => t > deps.now().getTime()).length,

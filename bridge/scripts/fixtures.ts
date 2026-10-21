@@ -233,7 +233,7 @@ export const server = [
   { type: "session_delta", sessionId: agentSession, itemId: "msg_01XyZ7Lq:2", offset: 15, text: " the fade test." },
   { type: "session_items", sessionId: agentSession, rev: 43, items: [{ kind: "permission", id: "toolu_01Ab7", at: later, card }], removed: [], controls: { ...controls, working: false } },
   {
-    type: "session_items", sessionId: agentSession, rev: 45, removed: ["c_4d2a"], controls: null, items: [
+    type: "session_items", sessionId: agentSession, rev: 44, removed: ["c_4d2a"], controls: null, items: [
       ask,
       { kind: "plan", id: "toolu_01Ab9", at: later, cardId: "m22", state: "proposed", text: "## Plan\n1. Swap the linear ramp for setTargetAtTime\n2. Test on iOS Safari 18 and Firefox" },
     ],

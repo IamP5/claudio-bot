@@ -30,7 +30,7 @@ import type { Result } from "./result";
 import type { SessionSpec } from "./session";
 import type { Persist } from "./store";
 import { RESTING, rowRun, runControls, runningSteps, runs, type StepPatch } from "./tasks";
-import { errorText } from "./text";
+import { displayName, errorText } from "./text";
 import { createThreads } from "./threads";
 import { createHeads, folderOf, sdkReaders, statOf, stepLabel, transcriptExists, type Head, type SdkReaders } from "./transcript";
 import { prepareWorkspace } from "./worktree";
@@ -132,6 +132,7 @@ const THREAD_POLL_MS = 1_000;
 
 const GONE = "This session's transcript is gone.";
 const SENT_KEPT = 50;
+const DRAFT_TITLE_MAX = 80;
 /** Shown cards per agent, so a settled gate card stays in the agent's thread with its answer. */
 const GATE_CARDS_KEPT = 20;
 
@@ -176,6 +177,18 @@ export function createSessions(deps: SessionsDeps): Sessions {
   function cloudOf(id: SessionId): AgentRecord | null {
     for (const rec of deps.world.agents.values()) if (rec.agent.where === "cloud" && rec.cloudSession === id) return rec;
     return null;
+  }
+
+  const cwdOf = (id: SessionId): string | null => catalog.head(id)?.cwd ?? agentOf(id)?.cwd ?? deps.world.sessions.get(id)?.own?.cwd ?? null;
+
+  /** A session's transcript: the index's head, else, for one the bridge drives, the file Claude Code writes in its cwd's folder before the index has read it. */
+  function transcript(id: SessionId): { file: string; cwd: string } | null {
+    const head = catalog.head(id);
+    if (head) return { file: head.file, cwd: head.cwd };
+    const cwd = cwdOf(id);
+    if (cwd === null) return null;
+    const file = join(deps.projectsDir, folderOf(cwd), `${id}.jsonl`);
+    return statOf(file) ? { file, cwd } : null;
   }
 
   function driverOf(id: SessionId): Writer {
@@ -264,11 +277,12 @@ export function createSessions(deps: SessionsDeps): Sessions {
       if (m?.kind === "permission") items.push({ kind: "permission", id: id as string as ItemId, at: m.at, card: { ...m } });
     }
     const life = rec.session.lifecycle;
-    const inFlight = life.kind === "working" || life.kind === "stopping" ? life.turn.pending : null;
+    const turn = life.kind === "working" || life.kind === "stopping" ? life.turn : null;
     for (const p of rec.session.pending) {
       if (p.clientId === undefined) continue;
       const text = p.text.split("\n").slice(1).join("\n");
-      items.push({ kind: "user", id: p.clientId as ItemId, at: p.at, text, from: "user", queued: p.id !== inFlight });
+      const took = p.id === turn?.pending ? turn.startedAt : null;
+      items.push({ kind: "user", id: p.clientId as ItemId, at: took ?? p.at, text, from: "user", queued: took === null });
     }
     return items;
   }
@@ -309,7 +323,10 @@ export function createSessions(deps: SessionsDeps): Sessions {
     defaultMode: () => settingsMode(configDir),
     scope: deps.scope,
     changed(id) {
-      catalog.touch();
+      // The row's last activity follows the transcript, so a turn's end re-reads it even when no watch event came.
+      const file = transcript(id)?.file;
+      if (file) catalog.changed(file);
+      else catalog.touch();
       threads.refresh(id);
     },
     done(id) {
@@ -342,7 +359,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     driven,
     drafts: () =>
       [...deps.world.sessions.values()].flatMap((r) =>
-        r.own?.created ? [{ id: r.id, cwd: r.own.cwd, title: (r.own.prompt ?? "New session").split("\n")[0]!.slice(0, 80), at: r.own.at }] : [],
+        r.own?.created ? [{ id: r.id, cwd: r.own.cwd, title: displayName((r.own.prompt ?? "New session").split("\n")[0]!, DRAFT_TITLE_MAX), at: r.own.at }] : [],
       ),
     watched,
     folders: deps.folders,
@@ -357,8 +374,8 @@ export function createSessions(deps: SessionsDeps): Sessions {
 
   const threads = createThreads({
     epoch: deps.epoch,
-    head: (id) => catalog.head(id),
-    context: (id, head) => ({ cwd: head?.cwd ?? agentOf(id)?.cwd ?? deps.world.sessions.get(id)?.own?.cwd ?? "", userName: deps.userName, agent: agentOf(id) !== null }),
+    transcript,
+    context: (id) => ({ cwd: cwdOf(id) ?? "", userName: deps.userName, agent: agentOf(id) !== null }),
     overlay,
     steps,
     cuts: (id) => {

@@ -1,19 +1,21 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Cursor, ItemId, ServerMessage, SessionControls, SessionId, SessionItem, ThreadChannelFrame, ThreadLive, ThreadPosition } from "./protocol";
 import { cutStep, patchStep, type StepPatch } from "./tasks";
-import { emptyTail, extend, follow, pageOf, project, readThread, sdkReaders, statOf, toolOutput, type Chain, type Head, type ProjectContext, type ProjectionTail, type SdkReaders } from "./transcript";
+import { emptyTail, extend, follow, pageOf, project, readThread, sdkReaders, statOf, toolOutput, type Chain, type ProjectContext, type ProjectionTail, type SdkReaders } from "./transcript";
 import type { Cut } from "./world";
 
 // Watching one session's thread: the newest page as a snapshot, older pages by cursor, every change after as upserts
 // on channel s:<id> with a per-thread rev and a ring to replay a reconnect from, and the streaming text of the item
 // being written. Items come from the transcript whoever writes it; the bridge adds an overlay (cards, queued
-// messages, notices) that replaces a transcript item of the same id or follows the transcript's items.
+// messages, notices) that replaces a transcript item of the same id or sits among them. A snapshot, a page and the
+// app's copy of the thread list items in one order: ordered().
 
 export type ThreadsDeps = {
   /** The bridge's epoch (the hello's): a position from another start is never replayed. */
   epoch: string;
-  head(id: SessionId): Head | null;
-  context(id: SessionId, head: Head | null): ProjectContext;
+  /** The session's transcript once Claude Code has written one, and the cwd it ran in. */
+  transcript(id: SessionId): { file: string; cwd: string } | null;
+  context(id: SessionId): ProjectContext;
   overlay(id: SessionId): SessionItem[];
   /** How the live query changes transcript steps, by tool_use id. */
   steps(id: SessionId): ReadonlyMap<string, StepPatch>;
@@ -103,6 +105,15 @@ let generation = 0;
 /** The text block a query is streaming now, and how much of it went out. */
 type Streaming = { message: string | null; index: number; itemId: ItemId | null; text: string; sent: number; timer: ReturnType<typeof setTimeout> | null };
 
+/**
+ * The one order of a thread's items: by time, ties as listed, and a message Claude Code has not taken yet after
+ * everything else, since it joins the conversation only once it is taken.
+ */
+export function ordered(items: readonly SessionItem[]): SessionItem[] {
+  const waits = (i: SessionItem) => (i.kind === "user" && i.queued ? 1 : 0);
+  return [...items].sort((a, b) => waits(a) - waits(b) || (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+}
+
 export function createThreads(deps: ThreadsDeps): Threads {
   const sdk = deps.sdk ?? sdkReaders;
   const states = new Map<SessionId, State>();
@@ -126,12 +137,12 @@ export function createThreads(deps: ThreadsDeps): Threads {
   const indexOf = (items: readonly SessionItem[]) => new Map(items.map((item, i) => [item.id, i] as const));
 
   async function read(id: SessionId): Promise<Omit<State, "overlay" | "controls" | "steps" | "cut" | "holding" | "working" | "sentAt" | "shownByTranscript" | "rev" | "ring" | "live" | "queue" | "usedAt" | "epoch">> {
-    const head = deps.head(id);
-    const ctx = deps.context(id, head);
-    if (!head) return { id, path: null, ctx, items: [], index: new Map(), tail: emptyTail(), chain: { uuids: new Set(), leaf: null }, offset: 0 };
-    const thread = await readThread(id, head.file, head.cwd, sdk);
+    const written = deps.transcript(id);
+    const ctx = deps.context(id);
+    if (!written) return { id, path: null, ctx, items: [], index: new Map(), tail: emptyTail(), chain: { uuids: new Set(), leaf: null }, offset: 0 };
+    const thread = await readThread(id, written.file, written.cwd, sdk);
     const { items, tail } = project(thread.entries, ctx);
-    return { id, path: head.file, ctx, items, index: indexOf(items), tail, chain: thread.chain, offset: thread.size };
+    return { id, path: written.file, ctx, items, index: indexOf(items), tail, chain: thread.chain, offset: thread.size };
   }
 
   async function load(id: SessionId): Promise<State> {
@@ -255,10 +266,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
     return steps.every((st, i) => st === item.steps[i]) ? item : { ...item, steps };
   }
 
-  /**
-   * The transcript's items with the overlay's replacements and step patches applied. The bridge's notices and the
-   * user's sent prompts go in where their time falls; cards and queued messages follow.
-   */
+  /** The transcript's items with the overlay's replacements and step patches applied, and the overlay's own among them. */
   function merged(s: State): SessionItem[] {
     const overlay = visible(s);
     const byId = new Map(overlay.map((item) => [item.id, item]));
@@ -268,13 +276,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
       if (over) byId.delete(item.id);
       return over ? [over] : restated(item, overlay) ? [] : [patched(item, view)];
     });
-    const rest = [...byId.values()];
-    const timed = rest.filter((i) => i.kind === "notice" || (i.kind === "user" && !i.queued));
-    for (const item of timed) {
-      const i = out.findIndex((o) => o.at > item.at);
-      out.splice(i === -1 ? out.length : i, 0, item);
-    }
-    return [...out, ...rest.filter((i) => !timed.includes(i))];
+    return ordered([...out, ...byId.values()]);
   }
 
   function emit(s: State, all: SessionItem[], removed: ItemId[], controls: SessionControls | null) {
@@ -348,15 +350,14 @@ export function createThreads(deps: ThreadsDeps): Threads {
 
   /** The transcript has lines the thread has not read, or has appeared. */
   function behind(s: State): boolean {
-    if (s.path === null) return deps.head(s.id) !== null;
+    if (s.path === null) return deps.transcript(s.id) !== null;
     const f = statOf(s.path);
     return f === null || f.size > s.offset;
   }
 
   async function catchUp(s: State) {
     if (s.path === null) {
-      const head = deps.head(s.id);
-      if (!head) return;
+      if (!deps.transcript(s.id)) return;
       const fresh = await read(s.id);
       Object.assign(s, fresh);
       const o = overlayDiff(s, fresh.items);
@@ -463,8 +464,8 @@ export function createThreads(deps: ThreadsDeps): Threads {
     },
 
     tool(id, toolUseId) {
-      const head = deps.head(id);
-      const output = head ? toolOutput(head.file, toolUseId) : null;
+      const written = deps.transcript(id);
+      const output = written ? toolOutput(written.file, toolUseId) : null;
       if (output === null) return [{ type: "error", message: "That tool call's output is not in the transcript." }];
       return [{ type: "session_tool_output", sessionId: id, toolUseId, output }];
     },

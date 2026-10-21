@@ -227,6 +227,8 @@ export type Agent = {
 
 /** An agent as the phone sees it: its spend from the ledger, null for cloud agents, which the bridge does not meter. */
 export type AgentView = Agent & {
+  // The machine it runs on; for a cloud agent, the machine that started it.
+  machine: MachineId;
   // Lifetime, every turn of every session.
   spentUsd: number | null;
   // The lifetime budget in force; null for a cloud agent or when there is none.

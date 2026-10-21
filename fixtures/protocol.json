@@ -361,7 +361,8 @@
           "evidence": null,
           "worktree": null,
           "spentUsd": 1.2,
-          "budgetUsd": 5
+          "budgetUsd": 5,
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c"
         },
         {
           "id": "a2",
@@ -376,7 +377,8 @@
           "evidence": null,
           "worktree": null,
           "spentUsd": null,
-          "budgetUsd": null
+          "budgetUsd": null,
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c"
         }
       ],
       "routines": [
@@ -454,7 +456,8 @@
         "evidence": null,
         "worktree": null,
         "spentUsd": 1.2,
-        "budgetUsd": 5
+        "budgetUsd": 5,
+        "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c"
       },
       "messages": [
         {
@@ -711,7 +714,8 @@
         "evidence": null,
         "worktree": null,
         "spentUsd": 1.2,
-        "budgetUsd": 5
+        "budgetUsd": 5,
+        "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c"
       },
       "messages": []
     },
@@ -805,7 +809,8 @@
         "evidence": null,
         "worktree": null,
         "spentUsd": 1.2,
-        "budgetUsd": 5
+        "budgetUsd": 5,
+        "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c"
       },
       "messages": []
     },
@@ -996,7 +1001,8 @@
           "branch": "claudio/verify-skill"
         },
         "spentUsd": 1.2,
-        "budgetUsd": 5
+        "budgetUsd": 5,
+        "machine": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b"
       }
     },
     {

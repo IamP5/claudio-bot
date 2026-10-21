@@ -45,7 +45,7 @@ const agentPeer: Wire<Peer> = { kind: "agent", id: "a1", title: "Set up verifica
 const agent: Wire<AgentView> = {
   id: "a1", botId: "b1", title: "Set up verification skill", where: "mac", projectName: "web",
   status: "waiting", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null,
-  spentUsd: 1.2, budgetUsd: 5,
+  spentUsd: 1.2, budgetUsd: 5, machine: "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
 };
 
 // Sessions: solta-o-som (the GitHub name of ~/Dev/projects/br-soundless) holds an agent's session and one from the
@@ -170,7 +170,7 @@ export const server = [
   { type: "bot", seq: 54, bot: { ...bot, muted: true, spentTodayUsd: 1.25, capUsd: null } },
   {
     type: "agent", seq: 55, messages: [], agent: {
-      ...agent, status: "capped",
+      ...agent, status: "capped", machine: "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
       evidence: { at: later, branch: "claudio/verify-skill", head: "4f2a9c1", ahead: 3, changed: 5, insertions: 120, deletions: 14, dirty: false, pr: "https://github.com/acme/web/pull/142" },
       worktree: { path: "/Users/alex/.claudiobot-worktrees/web/a1", branch: "claudio/verify-skill" },
     },
@@ -303,8 +303,8 @@ const machineProfile = {
 } as const;
 const fromBot = { kind: "bot", botId: "b1", hops: 1, origin: { kind: "routine", run: { routineId: "r1", runId: "run4" }, manual: false } } as const;
 const agentCard = { ...permission, id: "m30", from: agentPeer };
-// The machine's own record: spend is the ledger's, on whichever side shows it.
-const { spentUsd, budgetUsd, ...bareAgent } = agent;
+// The machine's own record: spend is the ledger's, and the machine is the home's to say, on whichever side shows it.
+const { spentUsd, budgetUsd, machine: _, ...bareAgent } = agent;
 export const link = [
   { t: "challenge", nonce: "9f".repeat(32) },
   { t: "hello", machineId: "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b", sig: "c2lnbmF0dXJl", nonce: "4e".repeat(32), profile: machineProfile, lastSeq: 12 },

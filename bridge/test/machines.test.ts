@@ -3,9 +3,9 @@ import type { Links } from "../src/machine/links";
 import type { Machine } from "../src/machine/machines";
 import { profileOf } from "../src/machine/profile";
 import type { Event, MachineId } from "../src/machine/wire";
-import type { ServerMessage } from "../src/protocol";
-import { emptyWorld } from "../src/world";
-import { NO_RING, cleanup, hubOver } from "./hub-kit";
+import type { AgentId, ServerMessage } from "../src/protocol";
+import { emptySession, emptyWorld, type AgentRecord } from "../src/world";
+import { NO_RING, at, bot, cleanup, hubOver } from "./hub-kit";
 
 afterEach(cleanup);
 
@@ -82,4 +82,30 @@ test("a bridge without machines keeps hello as it was: no feature, no machines k
   expect(hello.type === "hello" && hello.features).not.toContain("machines");
   expect("machines" in hello).toBe(false);
   expect("world" in hello).toBe(false);
+});
+
+test("agent frames name the machine the agent runs on: the home's own, a cloud agent's included", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  for (const where of ["mac", "cloud"] as const) {
+    const id = `a_${where}` as AgentId;
+    const rec: AgentRecord = {
+      agent: { id, botId: b.id, title: "Fix", where, projectName: "app", status: "waiting", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null },
+      cwd: "/code/app",
+      messages: [],
+      session: emptySession(),
+      cloudSession: null,
+      budgetUsd: null,
+      startedBy: { kind: "user" },
+    };
+    world.agents.set(id, rec);
+  }
+  const h = hubOver(world, { links: fakeLinks().links });
+  expect(await h.hub.handle({ type: "agent", agentId: "a_mac" as AgentId })).toMatchObject([{ type: "agent", agent: { machine: "m_test" } }]);
+  const [details] = await h.hub.handle({ type: "details", botId: b.id });
+  expect(details?.type === "details" && details.agents.map((a): string[] => [a.id, a.machine])).toEqual([
+    ["a_mac", "m_test"],
+    ["a_cloud", "m_test"],
+  ]);
 });

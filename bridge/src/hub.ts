@@ -279,8 +279,12 @@ export function createHub(deps: HubDeps): Hub {
     for (const group of world.groups.values()) if (group.members.includes(botId)) retype(group);
   };
 
-  const agentView = (agent: Agent): AgentView =>
-    agent.where === "mac" ? { ...agent, ...ledger.agentSpend(agent.id) } : { ...agent, spentUsd: null, budgetUsd: null };
+  // Every agent runs on this home's own machine until Phase 4 starts them on others.
+  const agentView = (agent: Agent): AgentView => ({
+    ...agent,
+    machine: deps.machineId,
+    ...(agent.where === "mac" ? ledger.agentSpend(agent.id) : { spentUsd: null, budgetUsd: null }),
+  });
 
   /**
    * Every deadline change reaches the clock through here: say, note, scheduler and gate changes, and each session's

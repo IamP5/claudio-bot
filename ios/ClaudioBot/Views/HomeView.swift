@@ -385,9 +385,14 @@ struct ConnectionBanner: View {
         }
     }
 
+    /// Retries still waiting for the Mac. Taps in a row are one retry to the user, so only the last one to give up speaks.
+    @MainActor private static var waiting = 0
+
     static func retry(_ client: BridgeClient, restartingAttempt: Bool = false) async -> Bool {
+        waiting += 1
         let answered = await client.retryNowAndWait(restartingAttempt: restartingAttempt)
-        if !answered { AccessibilityNotification.Announcement("Still no answer from your Mac.").post() }
+        waiting -= 1
+        if !answered, waiting == 0 { AccessibilityNotification.Announcement("Still no answer from your Mac.").post() }
         return answered
     }
 

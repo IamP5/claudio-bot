@@ -186,6 +186,8 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
     @Test func aStopThatClosesTheOpenCardIsSpokenOnceByTheCard() {
         let stopped = SessionOutcome(kind: .stopped, text: "Stopped by you: the turn", at: at)
         #expect(ThreadAnnouncement.of(from: .needsYou(card), to: .ended(stopped)) == nil)
+        #expect(ThreadAnnouncement.of(from: nil, to: .ended(stopped), cardClosed: true) == nil, "the stop's row landed after the rest")
+        #expect(ThreadAnnouncement.of(from: nil, to: .ended(failed), cardClosed: true) == ThreadStatus.outcome(failed), "a card does not speak a failure")
     }
 
     @Test func anOutcomeThatEndsWithAPeriodGetsNoSecondOne() {
@@ -277,7 +279,7 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
 }
 
 @MainActor
-@Suite struct StatusAnnouncerTests {
+@Suite(.serialized) struct StatusAnnouncerTests {
     private let working = ThreadStatus.working(since: at, tasks: [])
 
     private func announcer(_ spoken: @escaping (String) -> Void) -> StatusAnnouncer {
@@ -294,6 +296,44 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
         statuses.update(.ended(failed))
         try await Task.sleep(for: .milliseconds(600))
         #expect(spoken == [ThreadStatus.outcome(failed)])
+    }
+
+    /// Runs steps (ms after the previous one, status) and returns what was spoken from step `from` on.
+    private func run(_ steps: [(Int, ThreadStatus?)], from start: Int) async throws -> [String] {
+        var spoken: [String] = []
+        let statuses = announcer { spoken.append($0) }
+        for (index, (wait, status)) in steps.enumerated() {
+            try await Task.sleep(for: .milliseconds(wait))
+            if index == start { spoken = [] }
+            statuses.update(status)
+        }
+        try await Task.sleep(for: .milliseconds(700))
+        return spoken
+    }
+
+    private let stopped = SessionOutcome(kind: .stopped, text: "Stopped by you: the turn", at: at)
+
+    @Test(arguments: [60, 120, 240])
+    func aLateRowIsSpokenAsTheRunsOutcomeOnly(delay: Int) async throws {
+        #expect(try await run([(0, working), (150, nil), (delay, .ended(failed))], from: 1) == [ThreadStatus.outcome(failed)])
+        #expect(try await run([(0, working), (150, nil), (delay, .ended(stopped))], from: 1) == ["Stopped by you: the turn"])
+    }
+
+    @Test(arguments: [20, 60, 120, 240, 600])
+    func aStopThatClosesAnOpenCardLeavesTheSpeakingToTheCard(delay: Int) async throws {
+        let spoken = try await run([(0, working), (150, .needsYou(card)), (150, nil), (delay, .ended(stopped))], from: 2)
+        #expect(spoken.isEmpty, "\(delay) ms: \(spoken)")
+    }
+
+    @Test(arguments: [60, 120])
+    func aStopThatClosesAnOpenCardAFrameBeforeTheRestIsTheCardsToo(delay: Int) async throws {
+        let spoken = try await run([(0, working), (150, .needsYou(card)), (150, working), (20, nil), (delay, .ended(stopped))], from: 2)
+        #expect(spoken.isEmpty, "\(delay) ms: \(spoken)")
+    }
+
+    @Test func aStopAfterTheCardWasAnsweredAndTheRunWentOnIsSpoken() async throws {
+        let spoken = try await run([(0, working), (150, .needsYou(card)), (150, working), (150, nil), (120, .ended(stopped))], from: 3)
+        #expect(spoken == ["Stopped by you: the turn"])
     }
 
     @Test func aRunThatRestsWithNoOutcomeIsSpokenFinishedOnceTheRowHadItsChance() async throws {

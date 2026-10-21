@@ -210,7 +210,8 @@ enum ThreadAnnouncement {
     }
 
     /// heard: the last card spoken in this thread.
-    static func of(from old: ThreadStatus?, to new: ThreadStatus?, first: Bool = false, heard: ItemID? = nil) -> String? {
+    /// cardClosed: the run came to rest from an open card, whose close the card spoke itself.
+    static func of(from old: ThreadStatus?, to new: ThreadStatus?, first: Bool = false, heard: ItemID? = nil, cardClosed: Bool = false) -> String? {
         if case .needsYou(let card) = new {
             return first || card.id != heard ? card.announcement : nil
         }
@@ -220,7 +221,7 @@ enum ThreadAnnouncement {
             return nil
         case nil:
             // The row brings the outcome after the thread's frame put it at rest, later than StatusAnnouncer waited.
-            if case .ended(let outcome) = new { return ThreadStatus.outcome(outcome) }
+            if case .ended(let outcome) = new, !(cardClosed && outcome.kind == .stopped) { return ThreadStatus.outcome(outcome) }
             return nil
         case .needsYou:
             // Stop closes the open card, and the card says so itself (ChatItems announcesClose).
@@ -268,6 +269,8 @@ final class StatusAnnouncer {
     private var spoken: ThreadStatus?
     private var once = false
     private var heardCard: ItemID?
+    /// The last run came to rest from an open card. A Stop closes the card, and the card says so itself.
+    private var cardClosed = false
     private var pending: Task<Void, Never>?
 
     init(settle: Duration = .milliseconds(500), rest: Duration = .milliseconds(1500), speak: @escaping (String, Bool) -> Void) {
@@ -279,11 +282,11 @@ final class StatusAnnouncer {
     /// Call when the status's announcement key changes. What it replaces before it settles is never spoken.
     func update(_ status: ThreadStatus?) {
         pending?.cancel()
-        let busy = switch spoken {
-        case .working, .background: true
+        let live = switch spoken {
+        case .working, .background, .needsYou: true
         default: false
         }
-        let wait = status == nil && busy ? rest : settle
+        let wait = status == nil && live ? rest : settle
         pending = Task { [weak self] in
             try? await Task.sleep(for: wait)
             guard !Task.isCancelled else { return }
@@ -293,8 +296,18 @@ final class StatusAnnouncer {
 
     private func land(_ status: ThreadStatus?) {
         let first = !once
-        if let text = ThreadAnnouncement.of(from: spoken, to: status, first: first, heard: heardCard) { speak(text, first) }
-        if case .needsYou(let card) = status { heardCard = card.id }
+        if let text = ThreadAnnouncement.of(from: spoken, to: status, first: first, heard: heardCard, cardClosed: cardClosed) {
+            speak(text, first)
+        }
+        switch status {
+        case .needsYou(let card):
+            heardCard = card.id
+            cardClosed = false
+        case .working, .background:
+            cardClosed = false
+        case nil, .ended, .offline, .quiet:
+            if case .needsYou = spoken { cardClosed = true }
+        }
         spoken = status
         once = true
     }

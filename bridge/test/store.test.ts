@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { BotId, MessageId, RoutineId, RunId, SessionId } from "../src/protocol";
 import { newGroup } from "../src/groups";
 import { createSaver, flushNow, loadWorld, StateFileError } from "../src/store";
-import { emptySession, emptyWorld, exchangeBetween, logExchange, newBot, type Signature } from "../src/world";
+import { emptySession, emptyWorld, exchangeBetween, logExchange, newBot, own, type MoveId, type MoveRecord, type Signature } from "../src/world";
 
 const homes: string[] = [];
 const freshHome = () => {
@@ -280,15 +280,15 @@ test("a v3 file from before Pending.kind reads an approval continuation from its
   ]);
 });
 
-test("a v3 file from before mute, connector toggles, agent evidence and worktrees reads them as empty", () => {
+test("a v3 file from before mute, connector toggles, agentsOn, agent evidence and worktrees reads them as empty", () => {
   const home = freshHome();
-  const { muted: _m, connectorsOff: _c, ...oldBot } = v3Bot;
+  const { muted: _m, connectorsOff: _c, agentsOn: _a, ...oldBot } = v3Bot;
   const { evidence: _e, worktree: _w, ...oldAgent } = v3Agent.agent;
   writeState(home, v3({ bots: [oldBot], agents: [{ ...v3Agent, agent: oldAgent }] }));
 
   const { world } = loadWorld(home);
 
-  expect(world.bots.get("b_1" as BotId)).toMatchObject({ muted: false, connectorsOff: [] });
+  expect(world.bots.get("b_1" as BotId)).toMatchObject({ muted: false, connectorsOff: [], agentsOn: null });
   expect([...world.agents.values()][0]!.agent).toMatchObject({ evidence: null, worktree: null });
 });
 
@@ -309,7 +309,7 @@ test("a v2 upgrade gives bots no mute and no connectors off, and agents no evide
 
   const { world } = loadWorld(home);
 
-  for (const bot of world.bots.values()) expect(bot).toMatchObject({ muted: false, connectorsOff: [] });
+  for (const bot of world.bots.values()) expect(bot).toMatchObject({ muted: false, connectorsOff: [], agentsOn: null });
   for (const rec of world.agents.values()) expect(rec.agent).toMatchObject({ evidence: null, worktree: null });
 });
 
@@ -385,6 +385,29 @@ test("the sessions overlay and the mirror setting survive a save and a load; a f
   writeState(old, v3({ bots: [v3Bot] }));
   expect(loadWorld(old).world.sessions.size).toBe(0);
   expect(loadWorld(old).world.sessionPrefs).toEqual({ mirror: "auto" });
+});
+
+test("world moves survive a save and a load; a file from before them reads as none", () => {
+  const home = freshHome();
+  const { world } = loadWorld(home);
+  const held = newBot({ id: "b_held" as BotId, name: "Held", avatar: { shape: "circle", color: "white" }, at });
+  const moves = [
+    { kind: "out" as const, moveId: "mv_1" as MoveId, at, machine: "mac", phase: "frozen" as const, held: { bots: [held], groups: [], exchanges: [] } },
+    { kind: "in" as const, moveId: "mv_2" as MoveId, at, from: "laptop" },
+  ];
+  own<MoveRecord[]>(world.moves).push(...moves);
+  flushNow(world, home);
+  const again = loadWorld(home).world;
+  expect(again.moves).toEqual(moves);
+  expect(again.bots.has(held.id)).toBe(false);
+
+  const old = freshHome();
+  writeState(old, v3({ bots: [v3Bot] }));
+  expect(loadWorld(old).world.moves).toEqual([]);
+
+  const frozenWithNothingHeld = freshHome();
+  writeState(frozenWithNothingHeld, v3({ bots: [v3Bot], moves: [{ kind: "out", moveId: "mv_1", at, machine: "mac", phase: "frozen" }] }));
+  expect(() => loadWorld(frozenWithNothingHeld)).toThrow(StateFileError);
 });
 
 test("the saver debounces, and \"now\" writes before it returns", async () => {

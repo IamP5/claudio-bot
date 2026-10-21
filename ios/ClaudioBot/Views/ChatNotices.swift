@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Above the chat while the Mac is out of reach: what is wrong, and that what you send waits.
+/// Above the chat while the bridge is out of reach: what is wrong, and that what you send waits.
 struct OfflineBar: View {
     let state: ConnectionState
+    @Environment(AppStore.self) private var store
 
     static func shows(_ state: ConnectionState) -> Bool {
         switch state {
@@ -14,7 +15,7 @@ struct OfflineBar: View {
     var body: some View {
         HStack(spacing: 10) {
             ConnectionBadge(state: state)
-            Text(state == .unrecognized ? "Pair again from the chat list." : "Messages you send wait until your Mac is back.")
+            Text(state == .unrecognized ? "Pair again from the chat list." : "Messages you send wait until \(store.computerName()) is back.")
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)
                 .lineLimit(2)

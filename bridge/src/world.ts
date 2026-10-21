@@ -16,6 +16,7 @@ import {
   type DeviceId,
   type ExchangeMessage,
   type Link,
+  type MachineId,
   type Mention,
   type Message,
   type MessageId,
@@ -337,6 +338,8 @@ export type ChatRecord = {
 export type BotRecord = ChatRecord & {
   /** null: the bridge default. Writer: hub (update_bot). */
   dailyCapUsd: number | null;
+  /** Where its agents start by default; null: the bot picks. Writer: hub (update_bot). */
+  agentsOn: MachineId | null;
   /** MCP servers the user turned off for this bot and its agents, by name. Writer: connectors.ts. */
   readonly connectorsOff: Owned<string[]>;
   readonly session: Owned<SessionState>;
@@ -464,6 +467,20 @@ export type OwnCard =
 /** Settings, "Show agent sessions in the Claude app". Writer: sessions.ts. */
 export type SessionPrefs = { mirror: MirrorPref };
 
+export type MoveId = string & { readonly __brand: "MoveId" };
+
+/**
+ * One world move between bridge homes (docs/world-move.md). Writer: move.ts, run by the CLI with the bridge stopped.
+ * - out frozen: this home exported its bots. They wait in `held`, out of World.bots, so nothing here runs, fires or
+ *   pushes for them, until `world finish` trashes their homes.
+ * - out done: finished. Kept so a rerun of finish, or of export, knows the move.
+ * - in: this home imported the move. A replayed import of the same moveId changes nothing.
+ */
+export type MoveRecord =
+  | { kind: "out"; moveId: MoveId; at: string; machine: string; phase: "frozen"; held: { bots: BotRecord[]; groups: GroupRecord[]; exchanges: ExchangeLog[] } }
+  | { kind: "out"; moveId: MoveId; at: string; machine: string; phase: "done" }
+  | { kind: "in"; moveId: MoveId; at: string; from: string };
+
 export type World = {
   bots: Map<BotId, BotRecord>;
   /** Group ids share the bot id space, as Bot.id on the wire, and never collide with a bot's. */
@@ -476,6 +493,7 @@ export type World = {
   readonly exchanges: Owned<ExchangeLog[]>;
   sessions: Map<SessionId, SessionRecord>;
   readonly sessionPrefs: Owned<SessionPrefs>;
+  readonly moves: Owned<MoveRecord[]>;
 };
 
 export const emptyWorld = (): World => ({
@@ -489,6 +507,7 @@ export const emptyWorld = (): World => ({
   exchanges: [],
   sessions: new Map(),
   sessionPrefs: { mirror: "auto" },
+  moves: [],
 });
 
 export const EXCHANGE_KEEP = 200;
@@ -533,6 +552,7 @@ export function newBot(fields: { id: BotId; name: string; avatar: Avatar; at: st
     messages: [],
     unread: 0,
     dailyCapUsd: null,
+    agentsOn: null,
     muted: false,
     connectorsOff: [],
     session: emptySession(),
@@ -591,9 +611,9 @@ export const recordExchange = (bot: BotRecord, peer: Peer, direction: "sent" | "
   post(bot, exchangeFor(bot.messages.at(-1), peer, direction, { id: newMessageId(), at }));
 
 /** Messages a bot or agent thread keeps in state.json. Older ones move to the thread's archive. */
-const HISTORY_KEEP = 1000;
+export const HISTORY_KEEP = 1000;
 /** How far past HISTORY_KEEP a thread grows before the move, so the archive takes a batch at a time. */
-const HISTORY_SLACK = 100;
+export const HISTORY_SLACK = 100;
 
 /**
  * The move for a thread past HISTORY_KEEP + HISTORY_SLACK: what goes to the archive, oldest first, and what stays,
@@ -694,6 +714,7 @@ export function toBot(bot: BotRecord, status: BotStatus): Omit<Bot, keyof BotSpe
     question: card === null ? null : card.kind === "question" ? card.question : `${card.label}: ${card.detail}`,
     routines: bot.routines.map((r) => routineView(r, RUNS_ON_BOT)),
     dailyCapUsd: bot.dailyCapUsd,
+    agentsOn: bot.agentsOn,
   };
 }
 
@@ -705,6 +726,7 @@ export const toGroup = (group: GroupRecord, status: BotStatus): Omit<Bot, keyof 
   question: null,
   routines: [],
   dailyCapUsd: null,
+  agentsOn: null,
 });
 
 export const sortBots = <B extends Pick<Bot, "pinned" | "lastAt">>(bots: B[]): B[] =>

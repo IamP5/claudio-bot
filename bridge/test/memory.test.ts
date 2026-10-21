@@ -1,3 +1,5 @@
+import type { MachineId } from "../src/machine/wire";
+import { testProfile } from "./hub-kit";
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,7 +11,7 @@ import { createHomes } from "../src/home";
 import { createHub } from "../src/hub";
 import { createMemory, FACTS_MAX, MEMORY_CONTEXT_MAX, writeAtomic } from "../src/memory";
 import { botMemory } from "../src/prompts";
-import type { BotId, FactId, ServerMessage } from "../src/protocol";
+import type { BotId, FactId, ServerMessage, WorldId } from "../src/protocol";
 import { emptyWorld, newBot, type Initiator } from "../src/world";
 
 const roots: string[] = [];
@@ -470,7 +472,8 @@ const result = () =>
 const sentOf = (q: FakeQuery) => String(q.received.at(-1));
 
 test("hub: remember in a user turn has no card, stays with that bot, and reaches every bot once the user confirms it, all on one running hub", async () => {
-  const homes = createHomes(tempRoot("claudiobot-memory-hub-"));
+  const root = tempRoot("claudiobot-memory-hub-");
+  const homes = createHomes(root);
   const world = emptyWorld();
   const eng = newBot({ id: BOT, name: "Eng", avatar: { shape: "circle", color: "white" }, at: NOW.toISOString() });
   const ops = newBot({ id: OTHER, name: "Ops", avatar: { shape: "circle", color: "white" }, at: NOW.toISOString() });
@@ -484,7 +487,9 @@ test("hub: remember in a user turn has no card, stays with that bot, and reaches
     [OTHER, []],
   ]);
   const hub = createHub({
-    machine: "Mac",
+    machineId: "m_test" as MachineId,
+    worldId: "w_test" as WorldId,
+    profile: testProfile(root),
     userName: "Alex",
     world,
     homes,

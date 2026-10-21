@@ -21,6 +21,10 @@ private func hello(epoch: String = "e1", seq: Int = 0, protocol version: Int = 3
     #"{"type":"hello","protocol":\#(version),"machine":"Mac","userName":"Alex","bots":[],"epoch":"\#(epoch)","seq":\#(seq),"resumed":false}"#
 }
 
+private func hello(world: String) -> String {
+    #"{"type":"hello","protocol":3,"features":["machines"],"machine":"omarchy","userName":"Alex","bots":[],"epoch":"e1","seq":0,"resumed":false,"world":{"id":"\#(world)","name":"Alex's bots"},"machines":[]}"#
+}
+
 private func broadcast(_ seq: Int) -> String {
     #"{"type":"bot_removed","botId":"gone","seq":\#(seq)}"#
 }
@@ -134,6 +138,85 @@ private func scratchVault() -> PairingVault {
         #expect(client.pairing == nil)
         #expect(client.unpairedReason != nil)
         #expect(forgotten)
+    }
+
+    @Test func anotherAddressOfTheSameWorldKeepsTheStoreAndAnotherWorldEmptiesIt() {
+        let dead = URL(string: "ws://127.0.0.1:9/ws")!
+        let credential = Pairing.Credential.device(DeviceID("d1"), token: "t1")
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        var forgotten = 0
+        client.onForget = { forgotten += 1 }
+        let held = Bot(
+            id: BotID("b1"), name: "eng", title: nil, avatar: .standard, pinned: false, hidden: false, status: .idle, unread: 0,
+            question: nil, preview: "", lastAt: .now, createdAt: .now, routines: []
+        )
+        client.start(Pairing(url: dead, credential: credential, world: WorldID("w1")))
+        client.store.apply(.hello(Hello(machine: "omarchy", userName: "Alex", bots: [held])))
+
+        client.start(Pairing(url: URL(string: "ws://127.0.0.1:8/ws")!, credential: credential, world: WorldID("w1")))
+        #expect(client.store.bots[held.id] != nil && forgotten == 0)
+
+        client.start(Pairing(url: URL(string: "ws://127.0.0.1:8/ws")!, credential: credential, world: WorldID("w2")))
+        #expect(client.store.bots.isEmpty && forgotten == 1)
+        client.stop()
+    }
+
+    @Test func theFirstWorldAPairingHearsIsSavedAndADifferentOneLaterEmptiesTheStore() async throws {
+        let world = OSAllocatedUnfairLock(initialState: "w1")
+        let bridge = try FakeBridge(onOpen: { $0.send(hello(world: world.withLock { $0 })) })
+        let vault = scratchVault()
+        defer { vault.clear() }
+        let migrated = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        try vault.save(migrated)
+        let client = BridgeClient(store: AppStore(), vault: vault, timing: quick)
+        var forgotten = 0
+        client.onForget = { forgotten += 1 }
+        client.start(migrated)
+        try await eventually("the hello") { client.store.machine != nil }
+        #expect(vault.load()?.world == WorldID("w1") && client.pairing?.world == WorldID("w1"))
+        #expect(forgotten == 0)
+
+        world.withLock { $0 = "w2" }
+        bridge.sockets.first?.close(code: 1001)
+        try await eventually("the other world's hello") { client.pairing?.world == WorldID("w2") }
+        #expect(vault.load()?.world == WorldID("w2"))
+        #expect(forgotten == 1)
+        client.stop()
+    }
+
+    @Test func aConnectThatFailsMovesToTheNextAddressOfTheWorldThatProvesItself() async throws {
+        let bridge = try FakeBridge(onOpen: { $0.send(hello()) }, onHealth: FakeBridge.proving("t1"))
+        let vault = scratchVault()
+        defer { vault.clear() }
+        let good = try await bridge.start()
+        let dead = URL(string: "ws://127.0.0.1:9/ws")!
+        let pairing = Pairing(url: dead, credential: .device(DeviceID("d1"), token: "t1"), urls: [dead, good])
+        try vault.save(pairing)
+        let client = BridgeClient(store: AppStore(), vault: vault, timing: quick)
+        client.start(pairing)
+
+        try await eventually("the hello at the next address") { client.store.machine == "Mac" }
+        #expect(client.pairing == pairing.at(good))
+        #expect(vault.load() == pairing.at(good))
+        #expect(bridge.healthChecks.count == 1)
+        #expect(bridge.upgrades.allSatisfy { $0.authorization == "Bearer t1" })
+        client.stop()
+    }
+
+    @Test func anAddressOfTheWorldThatCannotProveItselfNeverReceivesTheToken() async throws {
+        let impostor = try FakeBridge(onOpen: { $0.send(hello()) }, onHealth: { _ in (200, #"{"ok":true}"#) })
+        let vault = scratchVault()
+        defer { vault.clear() }
+        let dead = URL(string: "ws://127.0.0.1:9/ws")!
+        let pairing = Pairing(url: dead, credential: .device(DeviceID("d1"), token: "t1"), urls: [dead, try await impostor.start()])
+        try vault.save(pairing)
+        let client = BridgeClient(store: AppStore(), vault: vault, timing: quick)
+        client.start(pairing)
+
+        try await eventually("two failed connects") { client.failures >= 2 && impostor.healthChecks.count >= 2 }
+        #expect(impostor.upgrades.isEmpty)
+        #expect(client.pairing == pairing && vault.load() == pairing)
+        client.stop()
     }
 
     @Test func afterEveryHelloTheListAndTheOpenThreadAreWatchedAgainFromWhereTheAppStands() async throws {
@@ -416,7 +499,7 @@ private func scratchVault() -> PairingVault {
 
         try await client.changeAddress(to: good)
 
-        #expect(vault.load() == Pairing(url: good, credential: dead.credential))
+        #expect(vault.load() == Pairing(url: good, credential: dead.credential, urls: [dead.url, good]))
         try await eventually("the hello at the new address") { client.store.machine == "Mac" }
         #expect(client.failures == 0)
         #expect(bridge.upgrades.allSatisfy { $0.authorization == "Bearer t1" })
@@ -497,7 +580,7 @@ private func scratchVault() -> PairingVault {
 
         try await client.pair(PairInvite(url: dead, code: "K7QD-M2XP", fallbacks: [good]))
 
-        let paired = Pairing(url: good, credential: .device(DeviceID("d2"), token: "t2"))
+        let paired = Pairing(url: good, credential: .device(DeviceID("d2"), token: "t2"), urls: [dead, good])
         #expect(vault.load() == paired)
         #expect(client.pairing == paired)
         client.stop()

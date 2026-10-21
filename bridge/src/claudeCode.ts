@@ -20,13 +20,11 @@ export function olderThan(version: string, floor: string): boolean | null {
 /** Where Claude Code keeps its settings, skills and login: CLAUDE_CONFIG_DIR, else ~/.claude. */
 export const claudeConfigDir = (env: Record<string, string | undefined>, homeDir: string) => env.CLAUDE_CONFIG_DIR || join(homeDir, ".claude");
 
-export const MANAGED_MCP = "/Library/Application Support/ClaudeCode/managed-mcp.json";
-
 /**
- * Claude Code refuses --strict-mcp-config and exits while an admin's managed-mcp.json exists. That file already takes
- * exclusive control of MCP servers, so leaving the flag out loads nothing else.
+ * Claude Code refuses --strict-mcp-config and exits while an admin's managed-mcp.json (the profile's managedMcpPath)
+ * exists. That file already takes exclusive control of MCP servers, so leaving the flag out loads nothing else.
  */
-export const strictMcp = (managed = MANAGED_MCP): Pick<Options, "strictMcpConfig"> => (existsSync(managed) ? {} : { strictMcpConfig: true });
+export const strictMcp = (managed: string): Pick<Options, "strictMcpConfig"> => (existsSync(managed) ? {} : { strictMcpConfig: true });
 
 export type ClaudeQuery = (a: { prompt: string | AsyncIterable<SDKUserMessage>; options?: Options }) => Query;
 

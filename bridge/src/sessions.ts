@@ -2,11 +2,13 @@ import { renameSession, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
-import type { Agents } from "./agents";
 import { createCatalog, type Driven } from "./catalog";
 import type { ClaudeApps } from "./claudeApps";
 import type { Tickable } from "./clock";
 import type { Ledger } from "./ledger";
+import type { Machine } from "./machine/machines";
+import type { LocalAgents } from "./machine/runtime";
+import { newIntentId, type MachineId } from "./machine/wire";
 import { createOwn, newDrive, type OwnDeps } from "./own";
 import type { Scope } from "./policy";
 import { createProjects } from "./projects";
@@ -18,6 +20,7 @@ import {
   type PhoneMode,
   type ServerMessage,
   type SessionClientMessage,
+  type SessionServerMessage,
   type SessionControls,
   type SessionId,
   type SessionItem,
@@ -45,7 +48,7 @@ export type SessionsEnv = {
   apps: ClaudeApps;
   /** Where the index and the project cache are kept between starts. */
   cacheDir: string;
-  signal: { list(frame: SessionsChannelFrame): void; thread(id: SessionId, frame: ThreadChannelFrame): void };
+  signal: { list(frame: SessionsChannelFrame): void; thread(id: SessionId, frame: ThreadSignal): void };
   watchers(id: SessionId): number;
   sdk?: SdkReaders & { renameSession?: typeof renameSession };
   coalesceMs?: number;
@@ -53,14 +56,25 @@ export type SessionsEnv = {
   watch?: boolean;
 };
 
+/**
+ * What goes on a thread's channel. A snapshot goes there only from the home, for a machine's thread the phones were
+ * watching when that machine linked again: the app applies a session frame whenever it gets one.
+ */
+export type ThreadSignal = ThreadChannelFrame | Extract<SessionServerMessage, { type: "session" }>;
+
 export type SessionsDeps = SessionsEnv & {
+  /** This bridge's own machine: the one whose transcripts the list reads. */
+  machine: MachineId;
   world: World;
   userName: string;
   /** The bridge home: a session whose cwd is under it is a bot's, shown in the Bots view instead. */
   bridgeHome: string;
   /** The project roots, by realpath: a session under a temp folder lists only when it is under one of these. */
   roots: string[];
-  agents: Pick<Agents, "session" | "direct" | "stop" | "message">;
+  /** The live sessions of the agents in this process, for a thread's status. */
+  agents: Pick<LocalAgents, "session">;
+  /** An intent to the machine that runs the agent: the user's turn, a stop, or a cloud agent's follow-up. */
+  send: Machine["send"];
   /** The gate's answer to one of its cards: an agent's permission card, decided from the agent's thread. */
   decideGate(botId: string, cardId: MessageId, choice: PermissionChoice): Result;
   ledger: Ledger;
@@ -81,6 +95,8 @@ export type Sessions = Tickable & {
   /** Reads the transcripts again now, as the sweep and the open threads' polls do. */
   sync(): Promise<void>;
   handle(m: SessionClientMessage): Promise<ServerMessage[]>;
+  /** This bridge's own list holds the session: its transcript, an agent's or a cloud agent's id, or a phone draft. */
+  owns(id: SessionId): boolean;
   /** An agent record changed: its row and its thread's controls follow. */
   agentChanged(rec: AgentRecord): void;
   /** A mac agent's turn ended done: its session becomes due for the Claude app (the mirror policy). */
@@ -311,6 +327,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   const watched = (id: SessionId) => deps.watchers(id) > 0;
 
   const catalog = createCatalog({
+    machine: deps.machine,
     projectsDir: deps.projectsDir,
     heads,
     projects,
@@ -394,12 +411,14 @@ export function createSessions(deps: SessionsDeps): Sessions {
     const w = driverOf(m.sessionId);
     switch (w.kind) {
       case "agent": {
-        if (m.interrupt) await deps.agents.stop(w.rec);
-        const refusal = deps.agents.direct(w.rec, m.text, m.clientId);
-        return refusal === null ? [] : error(refusal);
+        const agentId = w.rec.agent.id;
+        if (m.interrupt) await deps.send({ kind: "agent.stop", intentId: newIntentId(), agentId });
+        const applied = await deps.send({ kind: "agent.direct", intentId: newIntentId(), agentId, text: m.text, clientId: m.clientId });
+        return applied.ok ? [] : error(applied.reason);
       }
       case "cloud": {
-        const said = await deps.agents.message(w.rec, m.text, { kind: "user" });
+        const applied = await deps.send({ kind: "agent.message", intentId: newIntentId(), agentId: w.rec.agent.id, text: m.text, initiator: { kind: "user" } });
+        const said = applied.ok ? (applied.reply ?? "") : applied.reason;
         return said.startsWith("Sent") ? [] : error(said);
       }
       case "own":
@@ -414,7 +433,12 @@ export function createSessions(deps: SessionsDeps): Sessions {
   async function stopTurn(id: SessionId): Promise<ServerMessage[]> {
     const w = driverOf(id);
     if (w.kind === "cloud") return error("A cloud session runs on claude.ai; stop it there.");
-    const stopped = w.kind === "agent" ? await deps.agents.stop(w.rec) : w.kind === "own" ? await drivers.stop(w.rec) : false;
+    const stopped =
+      w.kind === "agent"
+        ? (await deps.send({ kind: "agent.stop", intentId: newIntentId(), agentId: w.rec.agent.id })).ok
+        : w.kind === "own"
+          ? await drivers.stop(w.rec)
+          : false;
     return stopped ? [] : error("Nothing is running.");
   }
 
@@ -426,6 +450,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   }
 
   async function create(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<ServerMessage[]> {
+    if (m.machine !== undefined && m.machine !== deps.machine) return error("Sessions on other machines arrive later");
     const project = catalog.snapshot().projects.find((p) => p.id === m.projectId);
     if (!project) return error("Unknown project");
     if (!existsSync(project.path)) return error(`${project.name}'s folder is gone from this Mac.`);
@@ -580,6 +605,8 @@ export function createSessions(deps: SessionsDeps): Sessions {
           return create(m);
       }
     },
+
+    owns: known,
 
     agentChanged(rec) {
       catalog.touch();

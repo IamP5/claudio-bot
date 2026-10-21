@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 import type { Tickable } from "./clock";
 import type { ClaudeApps } from "./claudeApps";
 import type { ProjectOf } from "./projects";
-import type { Holder, SessionId, SessionOrigin, SessionProject, SessionRow, SessionsChannelFrame, SessionStatus } from "./protocol";
+import type { Holder, MachineId, SessionId, SessionOrigin, SessionProject, SessionRow, SessionsChannelFrame, SessionStatus } from "./protocol";
 import { isTranscriptName, type Head, type Heads } from "./transcript";
 import type { AgentRecord, World } from "./world";
 
@@ -14,6 +14,8 @@ import type { AgentRecord, World } from "./world";
 export type Driven = { status: SessionStatus; working: boolean };
 
 export type CatalogDeps = {
+  /** The machine whose transcripts these are. */
+  machine: MachineId;
   projectsDir: string;
   heads: Heads;
   projects: { of(cwd: string): ProjectOf; save(): void };
@@ -104,7 +106,7 @@ export function createCatalog(deps: CatalogDeps): Catalog {
     const ids = new Set<SessionId>([...heads.keys(), ...agents.keys(), ...drafts.keys()]);
     const projects = new Map<string, SessionProject>();
     const rows: SessionRow[] = [];
-    for (const seed of seeds) projects.set(seed.id, { id: seed.id, name: seed.name, path: seed.root, githubRepo: seed.githubRepo, lastAt: null, canCloud: false });
+    for (const seed of seeds) projects.set(seed.id, { id: seed.id, machine: deps.machine, name: seed.name, path: seed.root, githubRepo: seed.githubRepo, lastAt: null, canCloud: false });
     for (const id of ids) {
       const head = heads.get(id) ?? null;
       const rec = agents.get(id) ?? null;
@@ -124,6 +126,7 @@ export function createCatalog(deps: CatalogDeps): Catalog {
       const holder: Holder = driven?.working ? "claudio" : held ? holderOf(held.entrypoint) : "none";
       rows.push({
         id,
+        machine: deps.machine,
         projectId: project.id,
         parentId: desktop.get(id)?.parent ?? null,
         title: head?.title ?? rec?.agent.title ?? draft!.title,
@@ -141,7 +144,7 @@ export function createCatalog(deps: CatalogDeps): Catalog {
         createdAt: iso(createdAt),
         lastAt: iso(lastAt),
       });
-      const p = projects.get(project.id) ?? { id: project.id, name: project.name, path: project.root, githubRepo: project.githubRepo, lastAt: null, canCloud: false };
+      const p = projects.get(project.id) ?? { id: project.id, machine: deps.machine, name: project.name, path: project.root, githubRepo: project.githubRepo, lastAt: null, canCloud: false };
       if (p.lastAt === null || iso(lastAt) > p.lastAt) p.lastAt = iso(lastAt);
       projects.set(project.id, p);
     }

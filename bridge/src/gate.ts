@@ -142,6 +142,11 @@ export type GateDeps = {
   notify: (bot: BotRecord, reason: "card" | "reminder", messageId: MessageId) => void;
   /** A trust card was answered Allow once or Always: the repo's agents load its config from their next query. */
   trusted: (root: string) => void;
+  /**
+   * An open card in a bot's chat that another machine's gate holds (a remote agent's, mirrored by the home). This gate
+   * never expires, adopts or settles it: that machine's events do.
+   */
+  elsewhere?: (cardId: MessageId) => boolean;
   persist: Persist;
   auditDir: string;
   userName: string;
@@ -512,7 +517,7 @@ export function createGate(deps: GateDeps): Gate {
     for (const card of [...state.open]) if (messageOf(card)?.answer !== null || !world.bots.has(card.actor.botId)) dropCard(card.cardId);
     for (const bot of world.bots.values())
       for (const m of bot.messages)
-        if (m.kind === "question" && m.answer === null && m.expiresAt !== null && !state.open.some((c) => c.cardId === m.id))
+        if (m.kind === "question" && m.answer === null && m.expiresAt !== null && !state.open.some((c) => c.cardId === m.id) && !deps.elsewhere?.(m.id))
           state.open.push({ kind: "question", cardId: m.id, actor: botActor(bot.id), remindAt: null, expiresAt: m.expiresAt });
     state.grants.splice(0, state.grants.length, ...state.grants.filter((g) => g.expiresAt > iso && keyExists(g.actor)));
     state.repos.splice(0, state.repos.length, ...state.repos.filter((r) => r.agentId === null || world.agents.has(r.agentId)));
@@ -629,6 +634,7 @@ export function createGate(deps: GateDeps): Gate {
     answer(botId, messageId, reply) {
       const bot = world.bots.get(botId);
       if (!bot) return { ok: false, error: "Unknown bot" };
+      if (deps.elsewhere?.(messageId)) return { ok: false, error: "Another machine holds that request" };
       // A card past its deadline is expired, never granted, even before the tick that would have retired it.
       const held = state.open.find((c) => c.cardId === messageId);
       if (held && held.expiresAt <= deps.now().toISOString()) {
@@ -731,7 +737,7 @@ export function createGate(deps: GateDeps): Gate {
       }
       for (const bot of world.bots.values())
         for (const m of bot.messages)
-          if (m.kind === "permission" && isOpenCard(m) && !state.open.some((c) => c.cardId === m.id)) {
+          if (m.kind === "permission" && isOpenCard(m) && !state.open.some((c) => c.cardId === m.id) && !deps.elsewhere?.(m.id)) {
             deps.say(bot, { ...m, answer: "expired" });
             changed = true;
           }

@@ -18,12 +18,13 @@
         "groups",
         "usage",
         "sessions",
-        "presence"
+        "presence",
+        "machines"
       ],
       "epoch": "e_7f3a",
       "seq": 41,
       "resumed": false,
-      "machine": "MacBook",
+      "machine": "omarchy",
       "userName": "Alex",
       "bots": [
         {
@@ -93,10 +94,56 @@
           ],
           "dailyCapUsd": null,
           "muted": false,
+          "agentsOn": null,
           "spentTodayUsd": 8.4,
           "capUsd": 10
         }
-      ]
+      ],
+      "machines": [
+        {
+          "id": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
+          "name": "omarchy",
+          "role": "home",
+          "online": true,
+          "since": null,
+          "platform": "linux",
+          "access": {
+            "full": true,
+            "sandbox": false
+          },
+          "connectors": []
+        },
+        {
+          "id": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+          "name": "MacBook",
+          "role": "machine",
+          "online": false,
+          "since": "2026-10-16T12:00:00.000Z",
+          "platform": "darwin",
+          "access": {
+            "full": false,
+            "sandbox": true
+          },
+          "connectors": [
+            {
+              "name": "claude-in-chrome",
+              "kind": "chrome"
+            },
+            {
+              "name": "computer-use",
+              "kind": "computer-use"
+            },
+            {
+              "name": "github",
+              "kind": "other"
+            }
+          ]
+        }
+      ],
+      "world": {
+        "id": "w_2c9d4e1f-7a3b-4c5d-8e6f-0a1b2c3d4e5f",
+        "name": "Alex's bots"
+      }
     },
     {
       "type": "bot",
@@ -168,6 +215,7 @@
         ],
         "dailyCapUsd": 5,
         "muted": false,
+        "agentsOn": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
         "spentTodayUsd": 0,
         "capUsd": 5
       }
@@ -330,7 +378,8 @@
           "evidence": null,
           "worktree": null,
           "spentUsd": 1.2,
-          "budgetUsd": 5
+          "budgetUsd": 5,
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c"
         },
         {
           "id": "a2",
@@ -345,7 +394,8 @@
           "evidence": null,
           "worktree": null,
           "spentUsd": null,
-          "budgetUsd": null
+          "budgetUsd": null,
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c"
         }
       ],
       "routines": [
@@ -423,7 +473,8 @@
         "evidence": null,
         "worktree": null,
         "spentUsd": 1.2,
-        "budgetUsd": 5
+        "budgetUsd": 5,
+        "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c"
       },
       "messages": [
         {
@@ -586,6 +637,7 @@
         ],
         "dailyCapUsd": null,
         "muted": false,
+        "agentsOn": null,
         "spentTodayUsd": 8.4,
         "capUsd": 10
       }
@@ -660,6 +712,7 @@
         ],
         "dailyCapUsd": null,
         "muted": false,
+        "agentsOn": null,
         "spentTodayUsd": 8.4,
         "capUsd": 10
       }
@@ -680,7 +733,8 @@
         "evidence": null,
         "worktree": null,
         "spentUsd": 1.2,
-        "budgetUsd": 5
+        "budgetUsd": 5,
+        "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c"
       },
       "messages": []
     },
@@ -754,6 +808,7 @@
         ],
         "dailyCapUsd": null,
         "muted": false,
+        "agentsOn": null,
         "spentTodayUsd": 8.4,
         "capUsd": 10
       }
@@ -774,7 +829,8 @@
         "evidence": null,
         "worktree": null,
         "spentUsd": 1.2,
-        "budgetUsd": 5
+        "budgetUsd": 5,
+        "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c"
       },
       "messages": []
     },
@@ -807,6 +863,60 @@
         "ws://mac.tail1234.ts.net:7878/ws",
         "ws://Mac.local:7878/ws",
         "ws://192.168.1.20:7878/ws"
+      ]
+    },
+    {
+      "type": "machines",
+      "seq": 43,
+      "machines": [
+        {
+          "id": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
+          "name": "omarchy",
+          "role": "home",
+          "online": true,
+          "since": null,
+          "platform": "linux",
+          "access": {
+            "full": true,
+            "sandbox": false
+          },
+          "connectors": []
+        },
+        {
+          "id": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+          "name": "MacBook",
+          "role": "machine",
+          "online": true,
+          "since": "2026-10-16T14:00:00.000Z",
+          "platform": "darwin",
+          "access": {
+            "full": false,
+            "sandbox": true
+          },
+          "connectors": [
+            {
+              "name": "claude-in-chrome",
+              "kind": "chrome"
+            },
+            {
+              "name": "computer-use",
+              "kind": "computer-use"
+            },
+            {
+              "name": "github",
+              "kind": "other"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "machine_code",
+      "code": "R4TW-9HJC",
+      "expiresAt": "2026-10-16T12:10:00.000Z",
+      "urls": [
+        "http://omarchy.tail1234.ts.net:7878",
+        "http://192.168.1.30:7878"
       ]
     },
     {
@@ -892,6 +1002,7 @@
         ],
         "dailyCapUsd": null,
         "muted": true,
+        "agentsOn": null,
         "spentTodayUsd": 1.25,
         "capUsd": null
       }
@@ -926,7 +1037,8 @@
           "branch": "claudio/verify-skill"
         },
         "spentUsd": 1.2,
-        "budgetUsd": 5
+        "budgetUsd": 5,
+        "machine": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b"
       }
     },
     {
@@ -1077,6 +1189,7 @@
         ],
         "dailyCapUsd": null,
         "muted": false,
+        "agentsOn": null,
         "spentTodayUsd": 8.4,
         "capUsd": 10
       }
@@ -1201,6 +1314,7 @@
       "projects": [
         {
           "id": "3f9a1c7e2b4d6a80",
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
           "name": "solta-o-som",
           "path": "/Users/alex/Dev/projects/br-soundless",
           "githubRepo": "IamP5/solta-o-som",
@@ -1209,6 +1323,7 @@
         },
         {
           "id": "9c2e5b7a1d3f4e60",
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
           "name": "claudio-bot",
           "path": "/Users/alex/Dev/projects/claudio-bot",
           "githubRepo": "alex/claudio-bot",
@@ -1219,6 +1334,7 @@
       "rows": [
         {
           "id": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
           "projectId": "3f9a1c7e2b4d6a80",
           "parentId": null,
           "title": "Smooth the audio fade on iOS Safari",
@@ -1241,6 +1357,7 @@
         },
         {
           "id": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
+          "machine": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
           "projectId": "3f9a1c7e2b4d6a80",
           "parentId": null,
           "title": "Add a volume slider to the player",
@@ -1264,6 +1381,7 @@
         },
         {
           "id": "session_01Hq7vXk3mRt9wYpL2nB5cDe",
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
           "projectId": "9c2e5b7a1d3f4e60",
           "parentId": null,
           "title": "Add a changelog",
@@ -1296,6 +1414,7 @@
       "rows": [
         {
           "id": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
           "projectId": "3f9a1c7e2b4d6a80",
           "parentId": null,
           "title": "Smooth the audio fade on iOS Safari",
@@ -1318,6 +1437,7 @@
         },
         {
           "id": "d4e8a1b6-3c2f-4b9e-8a7d-1f6c5e3b2a90",
+          "machine": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
           "projectId": "3f9a1c7e2b4d6a80",
           "parentId": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
           "title": "Check the slider on iPad",
@@ -1342,6 +1462,7 @@
       "projects": [
         {
           "id": "3f9a1c7e2b4d6a80",
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
           "name": "solta-o-som",
           "path": "/Users/alex/Dev/projects/br-soundless",
           "githubRepo": "IamP5/solta-o-som",
@@ -1753,6 +1874,13 @@
       "type": "pair_code"
     },
     {
+      "type": "machine_code"
+    },
+    {
+      "type": "remove_machine",
+      "machineId": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b"
+    },
+    {
       "type": "presence",
       "attended": false
     },
@@ -1768,6 +1896,20 @@
       "botId": "b1",
       "patch": {
         "muted": true
+      }
+    },
+    {
+      "type": "update_bot",
+      "botId": "b1",
+      "patch": {
+        "agentsOn": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b"
+      }
+    },
+    {
+      "type": "update_bot",
+      "botId": "b1",
+      "patch": {
+        "agentsOn": null
       }
     },
     {
@@ -1953,6 +2095,16 @@
       "isolate": "none"
     },
     {
+      "type": "session_create",
+      "ref": "s3",
+      "projectId": "3f9a1c7e2b4d6a80",
+      "text": "Profile the fade on the Mac",
+      "model": null,
+      "mode": null,
+      "isolate": "none",
+      "machine": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b"
+    },
+    {
       "type": "session_set",
       "sessionId": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
       "patch": {
@@ -1980,6 +2132,476 @@
     {
       "type": "session_prefs",
       "mirror": "tap"
+    }
+  ],
+  "link": [
+    {
+      "t": "challenge",
+      "nonce": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+    },
+    {
+      "t": "hello",
+      "machineId": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+      "sig": "c2lnbmF0dXJl",
+      "nonce": "4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e",
+      "profile": {
+        "name": "omarchy",
+        "platform": "linux",
+        "homedir": "/home/alex",
+        "username": "alex",
+        "rootHome": "/root",
+        "bridgeHome": "/home/alex/.claudiobot",
+        "managedMcpPath": "/etc/claude-code/managed-mcp.json",
+        "private": {
+          "bridge": [
+            ".claudiobot"
+          ],
+          "keys": [
+            ".ssh"
+          ],
+          "browser": [
+            ".config/google-chrome"
+          ],
+          "creds": [
+            ".netrc"
+          ],
+          "personal": []
+        },
+        "caches": [
+          ".npm"
+        ],
+        "pushReadable": [
+          ".ssh/*.pub"
+        ],
+        "tempDirs": [
+          "/tmp"
+        ],
+        "sandboxNeeds": [],
+        "access": {
+          "full": true,
+          "sandbox": false
+        },
+        "connectors": [
+          {
+            "name": "chrome-devtools",
+            "kind": "chrome"
+          },
+          {
+            "name": "linear",
+            "kind": "other"
+          }
+        ]
+      },
+      "lastSeq": 12
+    },
+    {
+      "t": "welcome",
+      "sig": "c2lnbmF0dXJl",
+      "ackedSeq": 9
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "agent.start",
+        "intentId": "i_1",
+        "agentId": "a1",
+        "bot": {
+          "id": "b1",
+          "name": "engineer",
+          "dailyCapUsd": 10,
+          "connectorsOff": [
+            "gmail"
+          ]
+        },
+        "title": "Set up verification skill",
+        "prompt": "Write the verify skill.",
+        "project": {
+          "githubRepo": "alex/web",
+          "name": "alex/web"
+        },
+        "where": "mac",
+        "isolate": "worktree",
+        "budgetUsd": 5,
+        "slash": null,
+        "initiator": {
+          "kind": "user"
+        },
+        "spentTodayUsd": 3.2
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "agent.message",
+        "intentId": "i_2",
+        "agentId": "a1",
+        "text": "Also cover the login page.",
+        "initiator": {
+          "kind": "bot",
+          "botId": "b1",
+          "hops": 1,
+          "origin": {
+            "kind": "routine",
+            "run": {
+              "routineId": "r1",
+              "runId": "run4"
+            },
+            "manual": false
+          }
+        }
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "agent.direct",
+        "intentId": "i_3",
+        "agentId": "a1",
+        "text": "Use port 4000.",
+        "clientId": "c9"
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "agent.stop",
+        "intentId": "i_4",
+        "agentId": "a1"
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "agent.removeWorktree",
+        "intentId": "i_5",
+        "agentId": "a1"
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "card.answer",
+        "intentId": "i_6",
+        "botId": "b1",
+        "cardId": "m30",
+        "reply": {
+          "kind": "permission",
+          "choice": "once"
+        },
+        "signed": null
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "bot.forget",
+        "intentId": "i_10",
+        "botId": "b1"
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "bot.update",
+        "intentId": "i_11",
+        "bot": {
+          "id": "b1",
+          "name": "engineer",
+          "dailyCapUsd": 12,
+          "connectorsOff": []
+        },
+        "spentTodayUsd": 3.2
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "snapshot",
+        "intentId": "i_7"
+      }
+    },
+    {
+      "t": "intent",
+      "intent": {
+        "kind": "projects",
+        "intentId": "i_8"
+      }
+    },
+    {
+      "t": "ack",
+      "seq": 10
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 10,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "agent",
+        "agent": {
+          "id": "a1",
+          "botId": "b1",
+          "title": "Set up verification skill",
+          "where": "mac",
+          "projectName": "web",
+          "status": "waiting",
+          "url": null,
+          "createdAt": "2026-10-16T12:00:00.000Z",
+          "updatedAt": "2026-10-16T12:00:00.000Z",
+          "evidence": null,
+          "worktree": null
+        },
+        "messages": [
+          {
+            "id": "m40",
+            "at": "2026-10-16T12:00:00.000Z",
+            "from": "bot",
+            "text": "Write the verify skill."
+          }
+        ]
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 11,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "report",
+        "agentId": "a1",
+        "botId": "b1",
+        "text": "Done: the skill runs.",
+        "by": {
+          "kind": "agent",
+          "agentId": "a1",
+          "hops": 1,
+          "origin": {
+            "kind": "user"
+          }
+        }
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 12,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "note",
+        "agentId": "a1",
+        "botId": "b1",
+        "text": "Worktree removed."
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 13,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "card",
+        "botId": "b1",
+        "message": {
+          "kind": "permission",
+          "id": "m30",
+          "at": "2026-10-16T14:00:00.000Z",
+          "from": {
+            "kind": "agent",
+            "id": "a1",
+            "title": "Set up verification skill"
+          },
+          "tool": "Bash",
+          "label": "Push to the default branch",
+          "detail": "git push origin main",
+          "always": "git push to main or master from engineer",
+          "answer": null,
+          "expiresAt": "2026-10-16T16:00:00.000Z"
+        }
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 14,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "usage",
+        "row": {
+          "at": "2026-10-16T12:00:00.000Z",
+          "actor": "agent:a1",
+          "botId": "b1",
+          "sessionId": "s_1",
+          "initiator": {
+            "kind": "user"
+          },
+          "cumulativeUsd": 0.4,
+          "deltaUsd": 0.25,
+          "day": "2026-10-16"
+        }
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 15,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "profile",
+        "profile": {
+          "name": "omarchy",
+          "platform": "linux",
+          "homedir": "/home/alex",
+          "username": "alex",
+          "rootHome": "/root",
+          "bridgeHome": "/home/alex/.claudiobot",
+          "managedMcpPath": "/etc/claude-code/managed-mcp.json",
+          "private": {
+            "bridge": [
+              ".claudiobot"
+            ],
+            "keys": [
+              ".ssh"
+            ],
+            "browser": [
+              ".config/google-chrome"
+            ],
+            "creds": [
+              ".netrc"
+            ],
+            "personal": []
+          },
+          "caches": [
+            ".npm"
+          ],
+          "pushReadable": [
+            ".ssh/*.pub"
+          ],
+          "tempDirs": [
+            "/tmp"
+          ],
+          "sandboxNeeds": [],
+          "access": {
+            "full": true,
+            "sandbox": false
+          },
+          "connectors": [
+            {
+              "name": "chrome-devtools",
+              "kind": "chrome"
+            },
+            {
+              "name": "linear",
+              "kind": "other"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 16,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "refused",
+        "intentId": "i_1",
+        "reason": "No project \"web\". Call list_projects for the names."
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 17,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "snapshot",
+        "agents": [],
+        "openCards": [
+          {
+            "botId": "b1",
+            "message": {
+              "kind": "permission",
+              "id": "m30",
+              "at": "2026-10-16T14:00:00.000Z",
+              "from": {
+                "kind": "agent",
+                "id": "a1",
+                "title": "Set up verification skill"
+              },
+              "tool": "Bash",
+              "label": "Push to the default branch",
+              "detail": "git push origin main",
+              "always": "git push to main or master from engineer",
+              "answer": null,
+              "expiresAt": "2026-10-16T16:00:00.000Z"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 18,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "reminder",
+        "botId": "b1",
+        "cardId": "m30"
+      }
+    },
+    {
+      "t": "event",
+      "event": {
+        "seq": 19,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "sessionCard",
+        "sessionId": "6f1c2b9e-0d2a-4c1e-9b7a-3e5d4c2b1a00",
+        "cardId": "m31"
+      }
+    },
+    {
+      "t": "ask",
+      "id": "i_9",
+      "frame": {
+        "type": "session_send",
+        "sessionId": "6f1c2b9e-0d2a-4c1e-9b7a-3e5d4c2b1a00",
+        "text": "Run the tests.",
+        "clientId": "c10",
+        "interrupt": false
+      }
+    },
+    {
+      "t": "reply",
+      "id": "i_9",
+      "frames": []
+    },
+    {
+      "t": "reply",
+      "id": "i_10",
+      "frames": [
+        {
+          "type": "error",
+          "message": "Unknown card"
+        }
+      ]
+    },
+    {
+      "t": "signal",
+      "frame": {
+        "type": "session_delta",
+        "sessionId": "6f1c2b9e-0d2a-4c1e-9b7a-3e5d4c2b1a00",
+        "itemId": "msg_1:0",
+        "offset": 0,
+        "text": "Running"
+      }
+    },
+    {
+      "t": "applied",
+      "intentId": "i_1",
+      "applied": {
+        "ok": true,
+        "reply": "Started agent a1 on web. It reports back to you when its turn ends."
+      }
+    },
+    {
+      "t": "applied",
+      "intentId": "i_4",
+      "applied": {
+        "ok": false,
+        "reason": "Nothing is running."
+      }
     }
   ]
 }

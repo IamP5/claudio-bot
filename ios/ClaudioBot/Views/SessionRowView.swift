@@ -4,6 +4,8 @@ import SwiftUI
 struct SessionRowView: View, Equatable {
     let row: SessionRow
     var avatar: Avatar?
+    /// The machine's name when the world has several.
+    var machine: String?
     var depth = 0
     var isLast = false
     var now: Date = .now
@@ -13,7 +15,7 @@ struct SessionRowView: View, Equatable {
     @ScaledMetric(relativeTo: .body) private var indent: CGFloat = 20
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
-        a.row == b.row && a.avatar == b.avatar && a.depth == b.depth && a.isLast == b.isLast && SessionText.age(a.row.lastAt, now: a.now) == SessionText.age(b.row.lastAt, now: b.now)
+        a.row == b.row && a.avatar == b.avatar && a.machine == b.machine && a.depth == b.depth && a.isLast == b.isLast && SessionText.age(a.row.lastAt, now: a.now) == SessionText.age(b.row.lastAt, now: b.now)
     }
 
     private var emphasized: Bool { row.unread || row.needsYou }
@@ -41,6 +43,7 @@ struct SessionRowView: View, Equatable {
                 if !accessible { Spacer(minLength: 0) }
                 HStack(spacing: 8) {
                     MirrorGlyph(mirror: row.mirror)
+                    if let machine { MachineChip(name: machine, compact: true) }
                     if let pr = row.pr { PullRequestChip(pr: pr) }
                     Text(SessionText.age(row.lastAt, now: now))
                         .font(.caption.monospacedDigit())

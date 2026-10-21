@@ -1,26 +1,23 @@
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
-import { homedir, userInfo } from "node:os";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { SDKMessage, Settings } from "@anthropic-ai/claude-agent-sdk";
 import { createActivity } from "./activity";
-import { createAgents } from "./agents";
 import { strictMcp, type UsageRead } from "./claudeCode";
 import { createClock, type Tickable } from "./clock";
 import { commandOf, createCommands, probeCommands, slashName } from "./commands";
-import { connectorSettings, createConnectors } from "./connectors";
-import { accessOf } from "./access";
-import { createGate } from "./gate";
+import { createConnectors } from "./connectors";
 import { chainBudget, createChains, GROUP_SIZE, mentionedIn, membersError, newGroup, targetsOf, transcript, typingLine } from "./groups";
 import type { Homes } from "./home";
-import { createLedger, localDay } from "./ledger";
+import { localDay } from "./ledger";
 import { createMemory, writeAtomic } from "./memory";
-import type { Scope } from "./policy";
-import { findProject, projectFolders, projectRoots, type Project } from "./projects";
+import { projectFolders, projectRoots, projectsText, type Project } from "./projects";
 import {
   PROTOCOL,
   isSessionRequest,
   type Agent,
   type AgentId,
+  type AgentMessage,
   type AgentView,
   type Avatar,
   type Bot,
@@ -28,27 +25,42 @@ import {
   type BotPatch,
   type ClientMessage,
   type Feature,
+  type MachineView,
   type Mention,
   type Message,
   type MessageId,
   type Peer,
   type ServerMessage,
+  type SessionClientMessage,
   type SessionId,
   type Signal,
   type StreamPosition,
+  type WorldId,
 } from "./protocol";
-import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, NO_AUTO_MEMORY, onboarding, persona, type Envelope } from "./prompts";
+import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, machinesBlock, onboarding, persona, type Envelope } from "./prompts";
 import { cardReply } from "./protocol2";
+import type { CardReply } from "./gate";
 import type { Push } from "./push";
 import type { Result } from "./result";
-import { gitDirsOf, sandboxFor } from "./sandbox";
+import { sandboxFor } from "./sandbox";
+import { sessionScope, type MachineProfile } from "./machine/profile";
+import type { Links } from "./machine/links";
+import { createLocalMachine, createMachines } from "./machine/machines";
+import { probeConnectors, watchConnectors } from "./machine/connectors";
+import { createMirror } from "./machine/mirror";
+import { createPlacements } from "./machine/placements";
+import { createRemoteSessions, isEmpty } from "./machine/remoteSessions";
+import { placeAgent } from "./machine/place";
+import { createDispatch, fileQueue, type Dispatched, type QueuedIntent } from "./machine/queue";
+import { memoryJournal } from "./machine/journal";
+import { createNode, settingsFor, trimThread } from "./machine/node";
+import { newAgentId, newIntentId, type Applied, type BotStandIn, type Event, type MachineId } from "./machine/wire";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { createSessions, type Sessions, type SessionsEnv } from "./sessions";
-import { transcriptExists } from "./transcript";
 import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { createSkills } from "./skills";
 import { createUsageMonitor } from "./usage";
-import { appendArchive, type Persist } from "./store";
+import type { Persist } from "./store";
 import { BOT_NAME_MAX, errorText, hasHiddenCharacters } from "./text";
 import { botToolServer, type BotActions } from "./tools";
 import { blockStart, freshTurn, readTurn, type Bubble, type Turn } from "./turn";
@@ -78,11 +90,10 @@ import {
   routinesText,
   routineView,
   sortBots,
-  splitHistory,
   toBot,
   toGroup,
-  type Actor,
   type BotRecord,
+  type Card,
   type ChatRecord,
   type GroupRecord,
   type EnvelopeId,
@@ -103,6 +114,8 @@ export type Hub = {
   handle(message: ClientMessage): Promise<ServerMessage[]>;
   /** Runs every stored-deadline owner once at `now`. One that throws is logged and the rest still run. */
   tick(now: Date): void;
+  /** The open cards other machines' gates hold, for push to catch up on once no phone is live. */
+  remoteCards(): { botId: BotId; cardId: MessageId }[];
   /** USER.md, the first bot on a first run, and sessions with queued envelopes (bots and agents). */
   boot(firstRun: boolean): void;
   startTicker(): () => void;
@@ -110,7 +123,11 @@ export type Hub = {
 };
 
 export type HubDeps = {
-  machine: string;
+  profile: MachineProfile;
+  /** This bridge's own machine id, from machine.json. */
+  machineId: MachineId;
+  /** The world this home holds, from machine.json. */
+  worldId: WorldId;
   userName: string;
   world: World;
   homes: Homes;
@@ -126,6 +143,8 @@ export type HubDeps = {
   webhookPort: number | null;
   /** Tests pass a fake SDK. The bridge uses the real query and the claude on PATH. */
   claude: Pick<SessionSpec, "query" | "executable">;
+  /** The machines enrolled into this home (machine/links.ts). Absent: no "machines" feature. */
+  links?: Pick<Links, "machines" | "onEvent" | "onChange" | "ask" | "onSignal" | "remove">;
   /** The plan's usage limits: how to read them, and whether a phone is live to see them. Absent: no "usage" feature. */
   usage?: { read: () => Promise<UsageRead>; watched: () => boolean };
   /** Claude Code's folders, the Claude app and the sockets' channels. Absent: no "sessions" feature. */
@@ -191,8 +210,6 @@ function section(doc: string, heading: string): string | null {
   return m ? m[1]!.trim() || null : null;
 }
 
-/** Ten years: as long as the bot lives, in practice. */
-const KEEP_TRANSCRIPTS = { cleanupPeriodDays: 3650 } as const;
 /** A turn still running this long after its push pushes its last bubble again when it ends. */
 const LONG_TURN_MS = 20_000;
 
@@ -223,14 +240,6 @@ export function createHub(deps: HubDeps): Hub {
   // The clock is created last, once every ticker exists; a module may report a change while the hub is being built.
   let poke = () => {};
 
-  const ledger = createLedger({
-    dir: join(root, "usage"),
-    capFor: (id) => world.bots.get(id)?.dailyCapUsd ?? null,
-    budgetFor: (id) => world.agents.get(id)?.budgetUsd ?? null,
-    now: clockNow,
-    log: deps.log,
-  });
-
   /** Claude Code's transcripts, which tell a new session from one to resume. */
   const projectsDir = deps.sessions?.projectsDir ?? join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects");
 
@@ -253,7 +262,7 @@ export function createHub(deps: HubDeps): Hub {
       unavailable: session?.unavailable ?? false,
       working: session?.working ?? false,
       held: session ? session.parkedFor !== null : holdOf(bot.session) !== null,
-      awaitingApproval: world.gate.open.some((c) => c.kind !== "question" && c.actor.botId === bot.id),
+      awaitingApproval: world.gate.open.some((c) => c.kind !== "question" && c.actor.botId === bot.id) || mirror.openCards(bot.id) > 0,
     });
     return { ...toBot(bot, status), ...ledger.botSpend(bot.id) };
   }
@@ -280,8 +289,16 @@ export function createHub(deps: HubDeps): Hub {
     for (const group of world.groups.values()) if (group.members.includes(botId)) retype(group);
   };
 
-  const agentView = (agent: Agent): AgentView =>
-    agent.where === "mac" ? { ...agent, ...ledger.agentSpend(agent.id) } : { ...agent, spentUsd: null, budgetUsd: null };
+  /** machine: where it runs. Another machine's agent spends against that machine's budget, which the home does not know. */
+  const agentView = (agent: Agent, machine: MachineId = deps.machineId): AgentView => ({
+    ...agent,
+    machine,
+    ...(agent.where !== "mac"
+      ? { spentUsd: null, budgetUsd: null }
+      : machine === deps.machineId
+        ? ledger.agentSpend(agent.id)
+        : { spentUsd: ledger.agentSpend(agent.id).spentUsd, budgetUsd: null }),
+  });
 
   /**
    * Every deadline change reaches the clock through here: say, note, scheduler and gate changes, and each session's
@@ -296,18 +313,7 @@ export function createHub(deps: HubDeps): Hub {
 
   const archiveOf = (botId: BotId, thread: string) => join(homes.homeOf(botId), ".history", `${thread}.jsonl`);
 
-  /** Moves a thread's oldest messages to its archive. Written there first: when that fails they stay in state. */
-  function trim<M>(messages: M[], file: string, pinned: (m: M) => boolean) {
-    const split = splitHistory(messages, pinned);
-    if (split === null) return;
-    try {
-      appendArchive(file, split.archived);
-    } catch (e) {
-      deps.log(`history: could not archive to ${file}, keeping it in state.json: ${errorText(e)}`);
-      return;
-    }
-    messages.splice(0, messages.length, ...split.kept);
-  }
+  const trim = <M>(messages: M[], file: string, pinned: (m: M) => boolean) => trimThread(messages, file, pinned, deps.log);
 
   function say(bot: BotRecord, message: Message) {
     const fresh = !bot.messages.some((m) => m.id === message.id);
@@ -378,7 +384,7 @@ export function createHub(deps: HubDeps): Hub {
   /** One member's turn on a message in the group. skip: the message itself, which the envelope carries apart. */
   function handTo(group: GroupRecord, member: BotRecord, message: { text: string; addressed: boolean; skip: ReadonlySet<MessageId> }, chain: MessageId, by: Extract<Envelope, { from: "group" }>["by"]) {
     const nameOf = (id: BotId) => world.bots.get(id)?.name ?? "a former member";
-    deliver(botActor(member.id), {
+    deliver(member.id, {
       from: "group",
       group: { id: group.id, name: group.name },
       chain,
@@ -428,36 +434,14 @@ export function createHub(deps: HubDeps): Hub {
     changed(bot);
   }
 
-  const sessionOf = (actor: Actor): Session | null =>
-    actor.kind === "bot" ? (brains.get(actor.botId) ?? null) : agents.session(actor.agentId);
-
   const initiatorNow = (bot: BotRecord): Initiator => brains.get(bot.id)?.current?.initiator ?? system;
 
-  function scopeOf(actor: Actor): Scope {
-    const bridgeHome = realpathSync(root);
-    const home = realpathSync(homedir());
-    // So ~name in a command resolves for the user and for root.
-    const users = { [userInfo().username]: home, root: process.platform === "darwin" ? "/var/root" : "/root" };
-    const { full } = accessOf(process.env);
-    if (actor.kind === "bot") return { bridgeHome, own: realpathSync(homes.homeOf(actor.botId)), userMd: join(bridgeHome, "USER.md"), homedir: home, users, full };
-    const rec = world.agents.get(actor.agentId);
-    if (!rec) throw new Error(`Unknown agent ${actor.agentId}`);
-    return { bridgeHome, own: realpathSync(rec.cwd), userMd: null, homedir: home, users, full };
-  }
-
-  function deliver(actor: Actor, e: Envelope) {
+  function deliver(botId: BotId, e: Envelope) {
+    const bot = world.bots.get(botId);
+    if (!bot) return;
     const input = inputOf(e, userName);
-    if (actor.kind === "bot") {
-      const bot = world.bots.get(actor.botId);
-      if (!bot) return;
-      deps.log(`envelope ${bot.id} ${input.text.split("\n")[0]}`);
-      brain(bot).push(input);
-      return;
-    }
-    const rec = world.agents.get(actor.agentId);
-    if (!rec) return;
-    deps.log(`envelope ${rec.agent.id} ${input.text.split("\n")[0]}`);
-    agents.deliver(rec, input);
+    deps.log(`envelope ${bot.id} ${input.text.split("\n")[0]}`);
+    brain(bot).push(input);
   }
 
   /** quiet: the turn called routine_no_update and asked nothing. */
@@ -505,14 +489,7 @@ export function createHub(deps: HubDeps): Hub {
     if (turn.settles !== null) scheduler.settle(bot.id, turn.settles, outcomeOf(end, quiet));
   }
 
-  /**
-   * The flag settings of every query the bot and its agents open. Claude Code deletes transcripts older than
-   * cleanupPeriodDays (30 by default) at startup, and a bot's session lives far longer. The user's own claude runs still
-   * sweep with their setting, so session.ts also recovers from a transcript that is gone.
-   */
-  function settingsFor(botId: BotId): Settings {
-    return { ...NO_AUTO_MEMORY, ...KEEP_TRANSCRIPTS, ...connectorSettings(world.bots.get(botId)?.connectorsOff ?? []) };
-  }
+  const settingsOf = (botId: BotId): Settings => settingsFor(world, botId);
 
   const claudeMdOf = (botId: BotId) => join(homes.homeOf(botId), "CLAUDE.md");
 
@@ -550,17 +527,28 @@ export function createHub(deps: HubDeps): Hub {
    */
   function standingBrief(bot: BotRecord): string {
     const job = section(readOwn(claudeMdOf(bot.id)) ?? "", "Job");
+    const machines = machinesOf(bot);
     return [
       "[Standing brief: this replaces what you were told before where they differ.]",
-      persona({ name: bot.name, userName }),
+      persona({ name: bot.name, userName, machine: deps.profile.name }),
       ...(job === null ? [] : [`\nYour job: ${job}`]),
+      ...(machines === "" ? [] : [`\n${machines}`]),
     ].join("\n");
+  }
+
+  /** The bot's Machines block: every linked machine and its access, once there is more than the home. */
+  function machinesOf(bot: BotRecord): string {
+    const views = machineViews();
+    const agentsOn = bot.agentsOn === null ? null : (views.find((m) => m.id === bot.agentsOn)?.name ?? null);
+    return machinesBlock(views.map((m) => ({ ...m, home: m.role === "home" })), agentsOn);
   }
 
   /** The bot's and its agents' live queries close at their next chance, so the next ones open with fresh options. */
   function reopenFor(botId: BotId, which: "agents" | "all") {
     if (which === "all") brains.get(botId)?.reopen();
-    for (const rec of world.agents.values()) if (rec.agent.botId === botId) agents.session(rec.agent.id)?.reopen();
+    for (const rec of world.agents.values()) if (rec.agent.botId === botId) localAgents.session(rec.agent.id)?.reopen();
+    const bot = world.bots.get(botId);
+    if (bot) updateMachines(bot);
   }
 
   const activity = createActivity({ signal: deps.signal, now: clockNow });
@@ -602,7 +590,7 @@ export function createHub(deps: HubDeps): Hub {
     // only an open query's list has MCP prompts.
     probe: (id) => {
       homes.ensureFolders(id);
-      return probeCommands(deps.claude, { cwd: homes.homeOf(id), settingSources: ["user", "project"], settings: settingsFor(id), ...strictMcp(), mcpServers: {} });
+      return probeCommands(deps.claude, { cwd: homes.homeOf(id), settingSources: ["user", "project"], settings: settingsOf(id), ...strictMcp(deps.profile.managedMcpPath), mcpServers: {} });
     },
     saved: (id) => skills.list(id),
     changed: (id, menu) => {
@@ -634,7 +622,7 @@ export function createHub(deps: HubDeps): Hub {
           cwd: homes.homeOf(bot.id),
           resume: bot.session.id ?? undefined,
           settingSources: ["user", "project"],
-          systemPrompt: { type: "preset", preset: "claude_code", append: persona({ name: bot.name, userName }) },
+          systemPrompt: { type: "preset", preset: "claude_code", append: [persona({ name: bot.name, userName, machine: deps.profile.name }), machinesOf(bot)].filter(Boolean).join("\n\n") },
           permissionMode: "auto",
           mcpServers: { claudio: botToolServer(bot.id, actions) },
           // A bot asks with its own ask tool, which posts a card instead of blocking the turn. Plan mode would wait for
@@ -643,8 +631,8 @@ export function createHub(deps: HubDeps): Hub {
           model: deps.model,
           hooks: gate.hooks(actor),
           canUseTool: gate.canUseTool(actor),
-          sandbox: sandboxFor(actor, scopeOf(actor), process.env),
-          settings: settingsFor(bot.id),
+          sandbox: sandboxFor(actor, node.scopeOf(actor), deps.profile, process.env),
+          settings: settingsOf(bot.id),
           // A block's start tells whether the text before it leads up to a question card (Reading.tail).
           includePartialMessages: true,
         };
@@ -737,73 +725,50 @@ export function createHub(deps: HubDeps): Hub {
     homes.create(bot.id, botMemory({ name: fields.name, job: fields.job }));
     world.bots.set(bot.id, bot);
     changed(bot);
-    deliver(botActor(bot.id), by);
+    deliver(bot.id, by);
     return bot;
   }
 
-  const gate = createGate({
-    world,
-    scopeOf,
-    turnOf(actor) {
-      const session = sessionOf(actor);
-      const current = session?.current;
-      return session && current ? { initiator: current.initiator, stopping: session.lifecycle.kind === "stopping" } : null;
-    },
-    headroom: (actor, initiator) => ledger.headroom(actor, initiator),
-    say,
-    deliver,
-    notice(actor, text) {
-      if (actor.kind === "bot") {
-        const bot = world.bots.get(actor.botId);
-        if (bot) brain(bot).notice(text);
-        return;
-      }
-      const rec = world.agents.get(actor.agentId);
-      if (rec) agents.notice(rec, text);
-    },
-    denied: (actor) => sessionOf(actor)?.denied(),
-    notify(bot, reason, id) {
-      deps.push.notify(bot, reason, id);
-      // The gate posts a card before it records it as open, so the bot frame say() sent did not count it yet.
-      if (reason === "card") changed(bot);
-    },
-    trusted: (root) => agents.trusted(root),
-    persist: deps.persist,
-    auditDir: join(root, "audit"),
-    userName,
-    now: clockNow,
+  /** Which machine each remote agent and card belongs to: the only ground a machine's events stand on. */
+  const placements = createPlacements({ path: join(root, "machine", "placements.json"), log: deps.log });
+  const mirror = createMirror({
+    path: join(root, "machine", "mirror.json"),
     log: deps.log,
+    owner: { agent: (id) => placements.of(id)?.machine ?? null, card: (id) => placements.cardOn(id) },
   });
 
-  const scheduler = createScheduler({
+  const node = createNode({
     world,
-    log: deps.log,
-    deliver: (bot, e) => deliver(botActor(bot.id), e),
-    note,
-    changed,
-    parked,
-    now: clockNow,
-  });
-
-  const agents = createAgents({
-    world,
+    profile: deps.profile,
     userName,
     model: deps.model,
-    ledger,
-    log: deps.log,
     claude: deps.claude,
-    hooks: (actor) => gate.hooks(actor),
-    canUseTool: (actor) => gate.canUseTool(actor),
-    beginTurn: (actor) => gate.beginTurn(actor),
-    sandbox(actor) {
-      const scope = scopeOf(actor);
-      return sandboxFor(actor, scope, process.env, gitDirsOf(scope.own));
+    persist: deps.persist,
+    log: deps.log,
+    now: clockNow,
+    root,
+    agentConfig: (id) => homes.agentConfig(id),
+    projectsDir,
+    scan: deps.scan,
+    // The home's own machine shares its World, so a bot's real record is its stand-in, and only the hub writes it.
+    standIn: (bot) => world.bots.has(bot.id),
+    journal: memoryJournal(),
+    elsewhere: (cardId) => mirror.cardOwner(cardId) !== null,
+    bots: {
+      folder: (botId) => homes.homeOf(botId),
+      session: (botId) => brains.get(botId) ?? null,
+      say,
+      deliver,
+      notice(botId, text) {
+        const bot = world.bots.get(botId);
+        if (bot) brain(bot).notice(text);
+      },
+      notify(bot, reason, id) {
+        deps.push.notify(bot, reason, id);
+        // The gate posts a card before it records it as open, so the bot frame say() sent did not count it yet.
+        if (reason === "card") changed(bot);
+      },
     },
-    configRoot: (id) => homes.agentConfig(id),
-    transcriptExists: (id, cwd) => transcriptExists(projectsDir, id, cwd),
-    turnDone: (rec) => sessions?.agentTurnDone(rec),
-    trustCard: (actor, repo) => gate.trustCard(actor, repo),
-    settings: (actor) => settingsFor(actor.botId),
     observe(actor, m) {
       metered(m);
       activity.observe(actor, m);
@@ -811,50 +776,271 @@ export function createHub(deps: HubDeps): Hub {
       if (id) sessions?.stream(id as SessionId, m);
     },
     idle: (actor) => activity.clear(actor),
-    persist: deps.persist,
-    now,
-    changed(rec) {
-      trim(rec.messages, archiveOf(rec.agent.botId, rec.agent.id), () => false);
-      deps.broadcast({ type: "agent", agent: agentView(rec.agent), messages: rec.messages });
-      deps.persist();
-      sessions?.agentChanged(rec);
-      poke();
+    turnDone: (rec) => sessions?.agentTurnDone(rec),
+  });
+  const { ledger, gate, runtime } = node;
+
+  const scheduler = createScheduler({
+    world,
+    log: deps.log,
+    deliver: (bot, e) => deliver(bot.id, e),
+    note,
+    changed,
+    parked,
+    now: clockNow,
+  });
+
+  /** The gate's wiring, the clock and boot: what reaches agents in this process only. Commands go through machines. */
+  const localAgents = runtime.local;
+  // Only a home that takes machines lists them, so only it probes its own connectors.
+  const ownConnectors =
+    deps.links &&
+    watchConnectors({
+      probe: () => probeConnectors(deps.claude, { cwd: deps.profile.homedir, settingSources: ["user"] }),
+      changed: () => deps.broadcast({ type: "machines", machines: machineViews() }),
+      log: deps.log,
+    });
+  const machines = createMachines(
+    createLocalMachine(deps.machineId, runtime, deps.profile, () => ownConnectors?.list() ?? []),
+    () => deps.links?.machines() ?? [],
+  );
+
+  /** A machine shows once it has linked: until then the home knows neither its platform nor its access. */
+  const machineViews = (): MachineView[] =>
+    machines.list().flatMap((m) => {
+      const profile = m.profile();
+      if (!profile) return [];
+      const status = m.status();
+      const role = m.id === deps.machineId ? "home" : "machine";
+      return [
+        { id: m.id, name: m.name, role, online: status.online, since: status.since, platform: profile.platform, access: { ...profile.access }, connectors: [...profile.connectors] },
+      ];
+    });
+  const nameOf = (id: MachineId) => machines.of(id)?.name ?? id;
+  const tell = (botId: BotId | null, text: string) => {
+    const bot = botId === null ? undefined : world.bots.get(botId);
+    if (bot) note(bot, text);
+  };
+
+  /** Intents for other machines, queued while they are offline. The home's own machine is always there. */
+  const dispatch = createDispatch({
+    queue: fileQueue(join(root, "machine", "queue.json"), deps.log),
+    machine: (id) => machines.of(id),
+    now: clockNow,
+    log: deps.log,
+    expired: (q) => {
+      if (q.intent.kind === "agent.start") placements.forgetAgent(q.intent.agentId);
+      tell(q.botId, `${q.what} expired while ${nameOf(q.machine)} was offline.`);
     },
-    reported(rec, text, by) {
-      const bot = world.bots.get(rec.agent.botId);
-      if (!bot) return;
-      exchange(bot, agentPeer(rec.agent), "received");
-      deliver(botActor(bot.id), { from: "agent", title: rec.agent.title, agentId: rec.agent.id, text, hops: hopsOf(by), origin: rootOf(by) });
-    },
-    note(rec, text) {
-      const bot = world.bots.get(rec.agent.botId);
-      if (bot) note(bot, `{0}: ${text}`, [agentPeer(rec.agent)]);
+    applied: (q, a) => {
+      if (a.ok) return;
+      if (q.intent.kind === "agent.start") placements.forgetAgent(q.intent.agentId);
+      tell(q.botId, `${q.what} on ${nameOf(q.machine)} did not go through: ${a.reason}`);
     },
   });
 
-  /** What the floors protect for a session the phone drives in cwd: the same private paths as for an agent. */
-  function scopeIn(cwd: string): Scope {
-    const home = realpathSync(homedir());
-    const users = { [userInfo().username]: home, root: process.platform === "darwin" ? "/var/root" : "/root" };
-    let own = cwd;
-    try {
-      own = realpathSync(cwd);
-    } catch {}
-    return { bridgeHome: realpathSync(root), own, userMd: null, homedir: home, users, full: false };
+  const standInOf = (bot: BotRecord): BotStandIn => ({ id: bot.id, name: bot.name, dailyCapUsd: bot.dailyCapUsd, connectorsOff: [...bot.connectorsOff] });
+
+  /**
+   * Each online machine with the bot's agents hears its stand-in and what the home counts against its cap today. One
+   * that is offline hears it as it links, so nothing waits in the queue.
+   */
+  function updateMachines(bot: BotRecord, only?: MachineId) {
+    for (const id of new Set(placements.ofBot(bot.id).map((p) => p.machine))) {
+      const m = only === undefined || id === only ? machines.of(id) : null;
+      if (!m?.status().online) continue;
+      const intent = { kind: "bot.update" as const, intentId: newIntentId(), bot: standInOf(bot), spentTodayUsd: ledger.botSpend(bot.id).spentTodayUsd };
+      void m.send(intent).then((a) => {
+        if (!a.ok) deps.log(`machine: ${m.name} did not take ${bot.name}'s update: ${a.reason}`);
+      });
+    }
   }
+
+  /** An agent on any machine: this one's record, or another machine's mirror. */
+  type Located = { machine: MachineId; agent: Agent; messages: AgentMessage[] };
+  function agentOf(id: AgentId): Located | null {
+    const rec = world.agents.get(id);
+    return rec ? { machine: deps.machineId, agent: rec.agent, messages: rec.messages } : mirror.agent(id);
+  }
+  const agentsOf = (botId: BotId): Located[] =>
+    [...[...world.agents.values()].map((rec) => ({ machine: deps.machineId, agent: rec.agent, messages: rec.messages })), ...mirror.agents()].filter((a) => a.agent.botId === botId);
+
+  /**
+   * An intent about an agent goes to the machine it runs on. An unknown agent is this machine's to refuse. A turn sent
+   * to another machine is recorded first, so the agent's report reaches its bot under this turn's initiator.
+   */
+  async function toAgent(intent: Extract<QueuedIntent, { agentId: AgentId }>, what: (title: string) => string): Promise<Dispatched> {
+    const found = agentOf(intent.agentId);
+    if (!found || found.machine === deps.machineId) return { kind: "applied", applied: await machines.self().send(intent) };
+    if (intent.kind === "agent.message") placements.turn(intent.agentId, intent.initiator);
+    if (intent.kind === "agent.direct") placements.turn(intent.agentId, { kind: "user" });
+    return dispatch.send(found.machine, intent, { botId: found.agent.botId, what: what(found.agent.title) });
+  }
+  const waiting = (d: Extract<Dispatched, { kind: "queued" }>, then: string) => `Waiting for ${d.machine}; ${then} when ${d.machine} is online.`;
+  /** For a caller that takes an Applied: queued is not done, and says what it waits for. */
+  const appliedOf = (d: Dispatched, then: string): Applied => (d.kind === "applied" ? d.applied : { ok: false, reason: waiting(d, then) });
+
+  /** A card another machine's gate posted or settled, shown in the bot's chat as the bot's own are. */
+  function showCard(botId: BotId, message: Card) {
+    const bot = world.bots.get(botId);
+    if (!bot) return deps.log(`machine: a card for bot ${botId}, which is not here, was not shown`);
+    const fresh = !bot.messages.some((m) => m.id === message.id);
+    say(bot, message);
+    if (fresh && message.answer === null) deps.push.notify(bot, "card", message.id);
+  }
+
+  function remoteEvent(machine: MachineId, heard: Event) {
+    const admitted = placements.admit(machine, heard, {
+      chatHas: (botId, id) => world.bots.get(botId)?.messages.some((m) => m.id === id) ?? false,
+      sessionOwner: (id) => remote.ownerOf(id),
+      days() {
+        const today = clockNow();
+        return { today: localDay(today), yesterday: localDay(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1)) };
+      },
+    });
+    if (!admitted.ok) return deps.log(`machine: dropped ${nameOf(machine)}'s ${heard.kind} event ${heard.seq}: ${admitted.reason}`);
+    const e = admitted.event;
+    const change = mirror.apply(machine, e);
+    if (change) {
+      for (const a of change.agents) if (world.bots.has(a.agent.botId)) deps.broadcast({ type: "agent", agent: agentView(a.agent, machine), messages: a.messages });
+      for (const c of change.cards) showCard(c.botId, c.message);
+      // The machine no longer holds them, and its events that closed them are gone: they can no longer be answered.
+      for (const c of change.closed) {
+        const card = world.bots.get(c.botId)?.messages.find((m) => m.id === c.cardId);
+        if (card && isOpenCard(card)) showCard(c.botId, { ...card, answer: "expired" });
+      }
+      return;
+    }
+    switch (e.kind) {
+      case "report": {
+        const bot = world.bots.get(e.botId);
+        const found = mirror.agent(e.agentId);
+        if (!bot || !found) return deps.log(`machine: a report from agent ${e.agentId} of bot ${e.botId} has nobody here to go to`);
+        exchange(bot, agentPeer(found.agent), "received");
+        deliver(bot.id, { from: "agent", title: found.agent.title, agentId: found.agent.id, text: e.text, hops: hopsOf(e.by), origin: rootOf(e.by) });
+        return;
+      }
+      case "note": {
+        const bot = world.bots.get(e.botId);
+        const found = mirror.agent(e.agentId);
+        if (bot && found) note(bot, `{0}: ${e.text}`, [agentPeer(found.agent)]);
+        return;
+      }
+      case "sessionCard":
+        deps.push.notifySession?.(e.sessionId, e.cardId);
+        return;
+      case "reminder": {
+        const bot = world.bots.get(e.botId);
+        const card = bot?.messages.find((m) => m.id === e.cardId);
+        if (bot && card && isOpenCard(card)) deps.push.notify(bot, "reminder", e.cardId);
+        return;
+      }
+      case "usage": {
+        ledger.record(e.row);
+        const bot = e.row.botId === null ? undefined : world.bots.get(e.row.botId);
+        if (bot) deps.broadcast({ type: "bot", bot: view(bot) });
+        return;
+      }
+      case "profile":
+        deps.broadcast({ type: "machines", machines: machineViews() });
+        return;
+      case "refused":
+        deps.log(`machine: ${nameOf(machine)} refused ${e.intentId}: ${e.reason}`);
+        return;
+    }
+  }
+
+  /**
+   * A machine that is no longer enrolled: its open cards expire in their bots' chats with a note, and the home forgets
+   * its agents, what waits for it and its sessions. Its own disk keeps its agents and files.
+   */
+  function forgetMachine(id: MachineId, name: string) {
+    const closed = mirror.forget(id);
+    const byBot = new Map<BotId, string[]>();
+    for (const c of closed) {
+      const bot = world.bots.get(c.botId);
+      const card = bot?.messages.find((m): m is Card => m.id === c.cardId && (m.kind === "permission" || m.kind === "question"));
+      if (!bot || !card || !isOpenCard(card)) continue;
+      showCard(bot.id, { ...card, answer: "expired" });
+      byBot.set(bot.id, [...(byBot.get(bot.id) ?? []), card.kind === "permission" ? card.label : card.question]);
+    }
+    for (const [botId, labels] of byBot) tell(botId, `${name} was removed, so ${labels.map((l) => `"${l}"`).join(", ")} can no longer be answered.`);
+    placements.forgetMachine(id);
+    dispatch.forgetMachine(id, `${name} was removed from this home.`);
+    const gone = remote.drop(id);
+    if (!isEmpty(gone)) deps.sessions?.signal.list(gone);
+    for (const bot of world.bots.values()) if (byBot.has(bot.id)) changed(bot);
+  }
+
+  const online = new Set<MachineId>();
+  deps.links?.onChange(() => {
+    deps.broadcast({ type: "machines", machines: machineViews() });
+    for (const m of machines.list()) {
+      if (m.id === deps.machineId) continue;
+      if (!m.status().online) {
+        online.delete(m.id);
+        continue;
+      }
+      // What waited for a machine goes first, then its snapshot (links.ts asks for that as it links).
+      dispatch.drain(m.id);
+      if (online.has(m.id)) continue;
+      online.add(m.id);
+      for (const bot of world.bots.values()) updateMachines(bot, m.id);
+    }
+  });
+  deps.links?.onEvent(remoteEvent);
+
+  // The runtime shares this World, so each event's record is the one in world.agents.
+  runtime.subscribe((e) => {
+    switch (e.kind) {
+      case "agent": {
+        const rec = world.agents.get(e.agent.id);
+        if (!rec) return;
+        trim(rec.messages, archiveOf(rec.agent.botId, rec.agent.id), () => false);
+        deps.broadcast({ type: "agent", agent: agentView(rec.agent), messages: rec.messages });
+        deps.persist();
+        sessions?.agentChanged(rec);
+        poke();
+        return;
+      }
+      case "report": {
+        const bot = world.bots.get(e.botId);
+        const rec = world.agents.get(e.agentId);
+        if (!bot || !rec) return;
+        exchange(bot, agentPeer(rec.agent), "received");
+        deliver(bot.id, { from: "agent", title: rec.agent.title, agentId: rec.agent.id, text: e.text, hops: hopsOf(e.by), origin: rootOf(e.by) });
+        return;
+      }
+      case "note": {
+        const bot = world.bots.get(e.botId);
+        const rec = world.agents.get(e.agentId);
+        if (bot && rec) note(bot, `{0}: ${e.text}`, [agentPeer(rec.agent)]);
+        return;
+      }
+      // The local machine shares the hub's gate and ledger, so its cards and usage are already here.
+      case "card":
+      case "usage":
+      case "profile":
+      case "refused":
+      case "snapshot":
+        return;
+    }
+  });
 
   const sessions: Sessions | null = deps.sessions
     ? createSessions({
         ...deps.sessions,
+        machine: deps.machineId,
         world,
         userName,
-        bridgeHome: realpathSync(root),
+        bridgeHome: deps.profile.bridgeHome,
         roots: projectRoots().filter(existsSync).map((r) => realpathSync(r)),
-        agents,
+        agents: localAgents,
+        send: async (intent) => ("agentId" in intent ? appliedOf(await toAgent(intent, (title) => `A turn for "${title}"`), "it runs") : machines.self().send(intent)),
         decideGate: (botId, cardId, choice) => gate.answer(botId as BotId, cardId, { kind: "permission", choice }),
         ledger,
         claude: deps.claude,
-        scope: scopeIn,
+        scope: (cwd) => sessionScope(deps.profile, cwd),
         notify: (id, cardId) => void deps.push.notifySession?.(id, cardId),
         folders: () => projectFolders().map((f) => f.path),
         persist: deps.persist,
@@ -863,10 +1049,115 @@ export function createHub(deps: HubDeps): Hub {
       })
     : null;
 
+  /** Every other machine's Sessions tab as it last listed it, and which machine holds each session. */
+  const remote = createRemoteSessions({ home: (id) => sessions?.owns(id) ?? false });
+
+  /** The machine a session request is for: null for this one, where an id no machine lists also goes to be refused. */
+  function machineFor(m: SessionClientMessage): MachineId | null {
+    switch (m.type) {
+      case "session_create":
+        return m.machine !== undefined && m.machine !== deps.machineId ? m.machine : null;
+      case "watch_sessions":
+      case "unwatch_sessions":
+      case "session_prefs":
+        return null;
+      default:
+        return remote.ownerOf(m.sessionId);
+    }
+  }
+
+  /** What a request to an unreachable machine says, so a user knows nothing ran there. */
+  const UNREACHED: Partial<Record<SessionClientMessage["type"], string>> = {
+    session_send: "your message was not sent. Send it again when it is back",
+    session_create: "the session did not start",
+    session_stop: "nothing was stopped",
+    session_decide: "your answer did not reach it",
+    session_answer: "your answer did not reach it",
+    watch_session: "this session opens when it is back",
+  };
+
+  async function onMachine(id: MachineId, m: SessionClientMessage): Promise<ServerMessage[]> {
+    const machine = machines.of(id);
+    if (!machine || !deps.links) return error("Unknown machine");
+    if (m.type === "unwatch_session") {
+      // The machine publishes a thread while any phone here watches it; the socket's topic drops after this returns.
+      setTimeout(() => {
+        if ((deps.sessions?.watchers(m.sessionId) ?? 0) === 0) void deps.links?.ask(id, m);
+      }, 0);
+      return [];
+    }
+    const asked = await deps.links.ask(id, m);
+    if (!asked.ok) {
+      if (machine.status().online) return error(`${machine.name} did not answer in time.`);
+      const then = UNREACHED[m.type];
+      return error(then ? `${machine.name} is offline, so ${then}.` : `${machine.name} is offline.`);
+    }
+    for (const f of asked.frames) if (f.type === "session_created") remote.claim(id, f.sessionId);
+    return asked.frames;
+  }
+
+  /** The home's own list with every other machine's, last known. The home's row wins an id both list. */
+  function withMachines(frames: ServerMessage[]): ServerMessage[] {
+    return frames.map((f) => {
+      if (f.type !== "sessions") return f;
+      const others = remote.list();
+      const own = new Set(f.projects.map((p) => p.id));
+      return { ...f, rows: [...f.rows, ...others.rows], projects: [...f.projects, ...others.projects.filter((p) => !own.has(p.id))] };
+    });
+  }
+
+  async function sessionRequest(m: SessionClientMessage): Promise<ServerMessage[]> {
+    if (!sessions) return error("This bridge does not serve sessions.");
+    // A remote agent's card is answered as it is from the bot's chat: through the card's machine, queued while offline.
+    if (m.type === "session_decide") {
+      const owner = mirror.cardOwner(m.cardId);
+      const bot = owner && world.bots.get(owner.botId);
+      if (bot) return answerCard(bot, m.cardId, { kind: "permission", choice: m.choice });
+    }
+    const machine = machineFor(m);
+    return machine === null ? withMachines(await sessions.handle(m)) : onMachine(machine, m);
+  }
+
+  /** A machine that links again lists its sessions afresh, and its threads a phone here still watches start over. */
+  async function relisted(id: MachineId) {
+    const asked = await deps.links!.ask(id, { type: "watch_sessions" });
+    const list = asked.ok ? asked.frames.find((f) => f.type === "sessions") : undefined;
+    if (!list || !deps.sessions) return;
+    const change = remote.replace(id, list);
+    if (!isEmpty(change)) deps.sessions.signal.list(change);
+    for (const sessionId of remote.idsOf(id)) {
+      if (deps.sessions.watchers(sessionId) === 0) continue;
+      const watched = await deps.links!.ask(id, { type: "watch_session", sessionId, after: null });
+      if (watched.ok) for (const f of watched.frames) if (f.type === "session" || f.type === "session_items" || f.type === "session_delta" || f.type === "session_removed") deps.sessions.signal.thread(sessionId, f);
+    }
+  }
+
+  const linked = new Set<MachineId>();
+  deps.links?.onChange(() => {
+    for (const m of machines.list()) {
+      if (m.id === deps.machineId) continue;
+      const online = m.status().online;
+      if (online && !linked.has(m.id) && sessions) void relisted(m.id).catch((e) => deps.log(`sessions: ${m.name}'s list could not be read: ${errorText(e)}`));
+      if (online) linked.add(m.id);
+      else linked.delete(m.id);
+    }
+  });
+  deps.links?.onSignal((id, f) => {
+    if (!deps.sessions) return;
+    if (f.type === "session_rows") {
+      const change = remote.apply(id, f);
+      if (!isEmpty(change)) deps.sessions.signal.list(change);
+      return;
+    }
+    if (f.type === "session_removed" && f.movedTo !== null) remote.claim(id, f.movedTo);
+    // A machine speaks only for its own sessions.
+    if (remote.ownerOf(f.sessionId) === id) deps.sessions.signal.thread(f.sessionId, f);
+  });
+
   const connectors = createConnectors({ world, live: (id) => brains.get(id)?.mcp() ?? null, reopen: reopenFor, persist: deps.persist, log: deps.log });
   const webhooks = createWebhooks({ world, scheduler, port: deps.webhookPort, now: clockNow, log: deps.log });
 
-  const allSessions = () => [...brains.values(), ...agents.sessions()];
+  const allSessions = () => [...brains.values(), ...localAgents.sessions()];
   const turns: Tickable = {
     tick: (at) => allSessions().forEach((s) => s.tick(at)),
     nextDeadline: () => earliest(allSessions().map((s) => s.nextDeadline())),
@@ -885,7 +1176,7 @@ export function createHub(deps: HubDeps): Hub {
       return next.toISOString();
     },
   };
-  const tickers = { scheduler, gate, sessions: turns, push: deps.push, midnight, ...(usage && { usage }), ...(sessions && { index: sessions }) };
+  const tickers = { scheduler, gate, sessions: turns, push: deps.push, midnight, queue: dispatch, ...(usage && { usage }), ...(sessions && { index: sessions }), ...(ownConnectors && { connectors: ownConnectors }) };
   const clock = createClock({ tickers: Object.values(tickers), now: clockNow, log: deps.log });
   poke = () => clock.poke();
 
@@ -899,35 +1190,77 @@ export function createHub(deps: HubDeps): Hub {
     ask: (botId, a) => gate.ask(botId, a),
 
     async startAgent(botId, a) {
-      const scanned = await deps.scan();
       const bot = owned(botId);
-      const project = findProject(scanned, a.project);
-      if (!project) return `No project "${a.project}". Call list_projects for the names.`;
-      if (a.where === "cloud" && !project.githubRepo) return `${project.name} has no GitHub remote, so start it with where "mac".`;
       const slash = a.slash?.trim().replace(/^\//, "") ?? null;
       if (slash !== null) {
         if (a.where === "cloud") return "slash works for mac agents only. Start it with where \"mac\", or put the request in the prompt.";
         if (slashName(`/${slash}`) !== slash) return "slash is one skill or command name, without spaces, such as code-review.";
         if (commands.hidden(botId, slash)) return `/${slash} changes or ends a Claude Code session, so an agent is not started with it.`;
       }
-      const rec = await agents.start(botId, { ...a, slash, project, botName: bot.name, initiator: initiatorNow(bot), budgetUsd: null });
-      exchange(bot, agentPeer(rec.agent), "sent");
-      if (rec.agent.where === "mac") return `Started agent ${rec.agent.id} on ${project.name}. It reports back to you when its turn ends.`;
-      if (rec.agent.status === "failed") return `The cloud agent failed to start: ${rec.messages.at(-1)?.text}`;
-      return `Started cloud agent ${rec.agent.id}: ${rec.agent.url}\nCloud agents do not report back. Tell ${userName} to follow the link.`;
+      const placed = placeAgent({
+        asked: a.machine ?? null,
+        preferred: bot.agentsOn,
+        self: deps.machineId,
+        where: a.where,
+        project: a.project,
+        machines: machines.list().map((m) => ({ id: m.id, name: m.name, online: m.status().online })),
+      });
+      if (!placed.ok) return placed.reason;
+      const agentId = newAgentId();
+      const intent: Extract<QueuedIntent, { kind: "agent.start" }> = {
+        kind: "agent.start",
+        intentId: newIntentId(),
+        agentId,
+        bot: standInOf(bot),
+        title: a.title,
+        prompt: a.prompt,
+        project: placed.project,
+        where: a.where,
+        isolate: a.isolate,
+        budgetUsd: null,
+        slash,
+        initiator: initiatorNow(bot),
+        spentTodayUsd: ledger.botSpend(bot.id).spentTodayUsd,
+      };
+      if (placed.machine !== deps.machineId) placements.place(agentId, { machine: placed.machine, botId, by: intent.initiator });
+      const sent: Dispatched =
+        placed.machine === deps.machineId
+          ? { kind: "applied", applied: await machines.self().send(intent) }
+          : await dispatch.send(placed.machine, intent, { botId, what: `Starting "${a.title}"` });
+      if (sent.kind === "applied" && !sent.applied.ok) placements.forgetAgent(agentId);
+      // The bot may have been deleted while the machine read its projects: that is the tool's error, as owned() makes it.
+      owned(botId);
+      const applied = appliedOf(sent, `agent ${agentId} starts`);
+      if (!applied.ok && sent.kind === "applied") return applied.reason;
+      exchange(bot, { kind: "agent", id: agentId, title: a.title }, "sent");
+      return applied.ok ? (applied.reply ?? "") : applied.reason;
     },
 
     async messageAgent(botId, a) {
       const bot = owned(botId);
-      const rec = world.agents.get(a.agentId as AgentId);
-      if (!rec || rec.agent.botId !== botId) return `No agent ${a.agentId} of yours.`;
-      exchange(bot, agentPeer(rec.agent), "sent");
-      return agents.message(rec, a.text, initiatorNow(bot));
+      const found = agentOf(a.agentId as AgentId);
+      if (!found || found.agent.botId !== botId) return `No agent ${a.agentId} of yours.`;
+      exchange(bot, agentPeer(found.agent), "sent");
+      const intent = { kind: "agent.message" as const, intentId: newIntentId(), agentId: found.agent.id, text: a.text, initiator: initiatorNow(bot) };
+      const applied = appliedOf(await toAgent(intent, (title) => `A message to "${title}"`), `${found.agent.title} gets it`);
+      return applied.ok ? (applied.reply ?? "") : applied.reason;
     },
 
-    async listProjects() {
-      const projects = await deps.scan();
-      return projects.length === 0 ? "No projects found." : JSON.stringify(projects, null, 1);
+    async listProjects(_, a) {
+      if (a.machine === undefined) return projectsText(await deps.scan());
+      const placed = placeAgent({
+        asked: a.machine,
+        preferred: null,
+        self: deps.machineId,
+        where: "mac",
+        project: ".",
+        machines: machines.list().map((m) => ({ id: m.id, name: m.name, online: m.status().online })),
+      });
+      if (!placed.ok) return placed.reason;
+      if (placed.machine === deps.machineId) return projectsText(await deps.scan());
+      if (!placed.online) return `${placed.name} is offline, so its projects cannot be listed now. A start there waits until it is back.`;
+      const applied = await machines.of(placed.machine)!.send({ kind: "projects", intentId: newIntentId() });
+      return applied.ok ? (applied.reply ?? "") : applied.reason;
     },
 
     messageBot(botId, a) {
@@ -939,7 +1272,7 @@ export function createHub(deps: HubDeps): Hub {
       exchange(from, botPeer(to), "sent");
       exchange(to, botPeer(from), "received");
       const by = initiatorNow(from);
-      deliver(botActor(to.id), { from: "bot", name: from.name, botId: from.id, hops: hopsAfter(by), origin: rootOf(by), text: a.text });
+      deliver(to.id, { from: "bot", name: from.name, botId: from.id, hops: hopsAfter(by), origin: rootOf(by), text: a.text });
       return `Delivered to ${to.name}.`;
     },
 
@@ -1020,12 +1353,13 @@ export function createHub(deps: HubDeps): Hub {
       ...(mentions.length > 0 && { mentions }),
     });
     const others = mentions.filter((x) => x.kind !== "bot" || x.id !== bot.id);
-    deliver(botActor(bot.id), command !== null ? { from: "command", line: m.text.trim() } : { from: "user", text: m.text, attachments, mentions: others });
+    deliver(bot.id, command !== null ? { from: "command", line: m.text.trim() } : { from: "user", text: m.text, attachments, mentions: others });
     return [];
   }
 
   const error = (message: string): ServerMessage[] => [{ type: "error", message }];
   const replyTo = (r: Result): ServerMessage[] => (r.ok ? [] : error(r.error));
+  const answered = (a: Applied): ServerMessage[] => (a.ok ? [] : error(a.reason));
   const done = (failure: string | null): ServerMessage[] => (failure === null ? [] : error(failure));
 
   /** A deleted bot leaves every group it was in. A group left with too few stays, and says so. */
@@ -1064,8 +1398,9 @@ export function createHub(deps: HubDeps): Hub {
   }
 
   function updateGroup(group: GroupRecord, patch: BotPatch): ServerMessage[] {
-    const { members, dailyCapUsd, ...rest } = patch;
+    const { members, dailyCapUsd, agentsOn, ...rest } = patch;
     if (dailyCapUsd !== undefined) return error("A group has no spending of its own: its bots do.");
+    if (agentsOn !== undefined) return error("A group has no agents of its own: its bots do.");
     if (rest.name !== undefined && !nameOk(rest.name)) return error(BAD_NAME);
     const why = members === undefined ? null : membersError(world, members);
     if (why !== null) return error(why);
@@ -1110,8 +1445,28 @@ export function createHub(deps: HubDeps): Hub {
     }
   }
 
+  /**
+   * A tap on a card. One that another machine's gate holds is answered there, so this gate never settles it: the
+   * machine's card event then updates the chat.
+   */
+  async function answerCard(bot: BotRecord, cardId: MessageId, reply: CardReply): Promise<ServerMessage[]> {
+    const owner = mirror.cardOwner(cardId);
+    if (!owner) return replyTo(gate.answer(bot.id, cardId, reply));
+    if (owner.botId !== bot.id) return error("Unknown card");
+    const card = bot.messages.find((m): m is Card => m.id === cardId && (m.kind === "permission" || m.kind === "question"));
+    const label = card?.kind === "permission" ? card.label : card?.kind === "question" ? card.question : "the request";
+    const sent = await dispatch.send(owner.machine, { kind: "card.answer", intentId: newIntentId(), botId: bot.id, cardId, reply, signed: null }, {
+      botId: bot.id,
+      what: `Your answer to "${label}"`,
+      cardExpiresAt: card?.expiresAt ?? null,
+    });
+    if (sent.kind === "applied") return answered(sent.applied);
+    note(bot, `${sent.machine} is offline, so your answer to "${label}" goes to it when it is back.`);
+    return [];
+  }
+
   async function handle(message: ClientMessage): Promise<ServerMessage[]> {
-    if (isSessionRequest(message)) return sessions ? sessions.handle(message) : error("This bridge does not serve sessions.");
+    if (isSessionRequest(message)) return sessionRequest(message);
     switch (message.type) {
       case "create_bot": {
         const bot = makeBot(
@@ -1121,17 +1476,16 @@ export function createHub(deps: HubDeps): Hub {
         return [{ type: "created", ref: message.ref, botId: bot.id }];
       }
       case "agent": {
-        const rec = world.agents.get(message.agentId);
-        return rec ? [{ type: "agent", agent: agentView(rec.agent), messages: rec.messages }] : error("Unknown agent");
+        const found = agentOf(message.agentId);
+        return found ? [{ type: "agent", agent: agentView(found.agent, found.machine), messages: found.messages }] : error("Unknown agent");
       }
       case "stop_agent": {
-        const rec = world.agents.get(message.agentId);
-        if (!rec) return error("Unknown agent");
-        return (await agents.stop(rec)) ? [] : error("Nothing is running.");
+        const sent = await toAgent({ kind: "agent.stop", intentId: newIntentId(), agentId: message.agentId }, (title) => `Stopping "${title}"`);
+        return answered(appliedOf(sent, "it stops"));
       }
       case "remove_worktree": {
-        const rec = world.agents.get(message.agentId);
-        return rec ? replyTo(await agents.removeWorktree(rec)) : error("Unknown agent");
+        const sent = await toAgent({ kind: "agent.removeWorktree", intentId: newIntentId(), agentId: message.agentId }, (title) => `Removing the worktree of "${title}"`);
+        return answered(appliedOf(sent, "it is removed"));
       }
       case "memory":
         return [{ type: "memory", facts: memory.facts() }];
@@ -1144,8 +1498,19 @@ export function createHub(deps: HubDeps): Hub {
       case "devices":
       case "revoke_device":
       case "pair_code":
+      case "machine_code":
       case "presence":
         return error("This bridge cannot manage devices yet.");
+      case "remove_machine": {
+        if (message.machineId === deps.machineId) return error("This is the home: it cannot be removed.");
+        const machine = machines.of(message.machineId);
+        if (!machine || !deps.links) return error("Unknown machine");
+        deps.links.remove(machine.id);
+        forgetMachine(machine.id, machine.name);
+        const frame: ServerMessage = { type: "machines", machines: machineViews() };
+        deps.broadcast(frame);
+        return [frame];
+      }
       case "refresh_usage":
         return usage ? [{ type: "usage", usage: await usage.refresh() }] : error("This bridge does not read plan usage.");
       case "create_group": {
@@ -1175,22 +1540,24 @@ export function createHub(deps: HubDeps): Hub {
       case "answer":
       case "dismiss": {
         const reply = cardReply(bot.messages.find((m) => m.id === message.messageId), message);
-        return reply ? replyTo(gate.answer(bot.id, message.messageId, reply)) : error("Unknown option");
+        return reply ? answerCard(bot, message.messageId, reply) : error("Unknown option");
       }
       case "decide":
-        return replyTo(gate.answer(bot.id, message.messageId, { kind: "permission", choice: message.choice }));
+        return answerCard(bot, message.messageId, { kind: "permission", choice: message.choice });
       case "stop":
         return (await brains.get(bot.id)?.interrupt()) ? [] : error("Nothing is running.");
       case "update_bot":
         if (message.patch.members !== undefined) return error("Only a group has members.");
         if (message.patch.name !== undefined && !nameOk(message.patch.name)) return error(BAD_NAME);
+        if (message.patch.agentsOn != null && machines.of(message.patch.agentsOn) === null) return error("Unknown machine");
         Object.assign(bot, message.patch, message.patch.name !== undefined && { name: message.patch.name.trim() });
         if (message.patch.name !== undefined) retitle(bot.id, bot.name);
         changed(bot);
+        if (message.patch.name !== undefined || message.patch.dailyCapUsd !== undefined) updateMachines(bot);
         // A raised cap may lift a daily-cap park at once instead of at the next tick.
         if (message.patch.dailyCapUsd !== undefined) {
           brains.get(bot.id)?.recheck();
-          for (const rec of world.agents.values()) if (rec.agent.botId === bot.id) agents.session(rec.agent.id)?.recheck();
+          for (const rec of world.agents.values()) if (rec.agent.botId === bot.id) localAgents.session(rec.agent.id)?.recheck();
         }
         return [];
       case "mark_unread":
@@ -1199,15 +1566,24 @@ export function createHub(deps: HubDeps): Hub {
         return [];
       case "delete_bot": {
         // Worktrees outlive the bot and no phone screen reaches them after it goes, so the phone lists them first.
-        const held = [...world.agents.values()].flatMap((rec) => (rec.agent.botId === bot.id && rec.agent.worktree ? [rec.agent.worktree.branch] : []));
+        const held = agentsOf(bot.id).flatMap((a) => (a.agent.worktree ? [a.agent.worktree.branch] : []));
         if (held.length > 0 && message.force !== true)
           return error(`${bot.name}'s agents still hold worktrees on ${held.join(", ")}. Remove them from each agent, or delete anyway to keep them on the Mac.`);
+        // What still waits for a machine on its behalf would start agents for a bot that is gone.
+        dispatch.forget(bot.id);
+        // Each machine with its agents forgets it, also one asleep now: the intent is no bot's, so the line above
+        // never drops it.
+        for (const machine of new Set(placements.ofBot(bot.id).map((p) => p.machine))) {
+          void dispatch.send(machine, { kind: "bot.forget", intentId: newIntentId(), botId: bot.id }, { botId: null, what: `Forgetting ${bot.name}` });
+        }
+        placements.forgetBot(bot.id);
+        mirror.forgetBot(bot.id);
         brains.get(bot.id)?.close();
         brains.delete(bot.id);
         readings.delete(bot.id);
         sending.delete(bot.id);
         commands.forget(bot.id);
-        agents.stopFor(bot.id);
+        localAgents.stopFor(bot.id);
         // Before the agents go: the gate finds the agents' grants through them.
         gate.forgetBot(bot.id);
         const doomed = [...world.agents.values()].filter((rec) => rec.agent.botId === bot.id).map((rec) => rec.agent.id);
@@ -1235,9 +1611,9 @@ export function createHub(deps: HubDeps): Hub {
       case "run_routine":
         return done(scheduler.runNow(bot.id, message.routineId));
       case "details": {
-        const own = [...world.agents.values()].filter((a) => a.agent.botId === bot.id).map((a) => a.agent);
-        own.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-        return [{ type: "details", botId: bot.id, library: homes.library(bot.id), links: linksOf(bot, own), agents: own.map(agentView), routines: bot.routines.map((r) => routineView(r)) }];
+        const own = agentsOf(bot.id).sort((a, b) => b.agent.updatedAt.localeCompare(a.agent.updatedAt));
+        const agents = own.map((a) => agentView(a.agent, a.machine));
+        return [{ type: "details", botId: bot.id, library: homes.library(bot.id), links: linksOf(bot, agents), agents, routines: bot.routines.map((r) => routineView(r)) }];
       }
       case "file": {
         const file = await homes.read(bot.id, message.path);
@@ -1267,15 +1643,24 @@ export function createHub(deps: HubDeps): Hub {
     }
   }
 
+  // A machine removed while this home was down (claudiobot machine remove edits machines.json) leaves what the home
+  // kept of it behind: nothing it holds can be answered or heard any more.
+  if (deps.links) {
+    const enrolled = new Set(machines.list().map((m) => m.id));
+    const kept = new Set([...mirror.agents().map((a) => a.machine), ...mirror.held().map((c) => c.machine), ...placements.machines()]);
+    for (const id of kept) if (!enrolled.has(id)) forgetMachine(id, "A machine no longer enrolled here");
+  }
+
   return {
     hello: (position) => ({
       type: "hello",
       protocol: PROTOCOL,
-      features: [...SERVED, ...(usage ? (["usage"] as const) : []), ...(sessions ? (["sessions"] as const) : [])],
+      features: [...SERVED, ...(usage ? (["usage"] as const) : []), ...(sessions ? (["sessions"] as const) : []), ...(deps.links ? (["machines"] as const) : [])],
       ...position,
-      machine: deps.machine,
+      machine: deps.profile.name,
       userName,
       bots: sortBots([...[...world.bots.values()].map(view), ...[...world.groups.values()].map(groupView)]),
+      ...(deps.links && { machines: machineViews(), world: { id: deps.worldId, name: `${userName}'s bots` } }),
     }),
     greeting() {
       const latest = usage?.opened() ?? null;
@@ -1283,6 +1668,7 @@ export function createHub(deps: HubDeps): Hub {
     },
     handle,
     tick: (at) => tickEach(tickers, at, deps.log),
+    remoteCards: () => mirror.held().map(({ botId, cardId }) => ({ botId, cardId })),
 
     boot(firstRun) {
       gate.resume(clockNow());
@@ -1301,7 +1687,7 @@ export function createHub(deps: HubDeps): Hub {
       for (const bot of world.bots.values()) {
         if (bot.session.pending.length > 0 || bot.session.lifecycle.kind !== "idle") brain(bot);
       }
-      agents.resume();
+      localAgents.resume();
       sessions?.resume();
       webhooks.start();
       void sessions?.start().catch((e) => deps.log(`sessions: the index could not start: ${errorText(e)}`));
@@ -1317,7 +1703,7 @@ export function createHub(deps: HubDeps): Hub {
       webhooks.stop();
       sessions?.stop();
       for (const session of brains.values()) session.close();
-      for (const bot of world.bots.values()) agents.stopFor(bot.id);
+      for (const bot of world.bots.values()) localAgents.stopFor(bot.id);
     },
   };
 }

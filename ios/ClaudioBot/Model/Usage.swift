@@ -48,13 +48,14 @@ enum UsageText {
         return "Claude \(raw.prefix(1).uppercased())\(raw.dropFirst())"
     }
 
-    static func unavailable(_ reason: UsageUnavailable) -> String {
+    /// computer: where Claude Code is logged in, the bridge's.
+    static func unavailable(_ reason: UsageUnavailable, on computer: String) -> String {
         switch reason {
-        case .loggedOut: "Log in to Claude Code on your Mac with your Claude subscription."
-        case .apiKey: "Claude Code on your Mac uses an API key, which has no plan limits. Log in with your Claude subscription to see them."
-        case .thirdParty: "Claude Code on your Mac uses Bedrock, Vertex or another provider, which has no plan limits."
-        case .noScope: "Claude Code's login on your Mac can't read usage. Run /login in Claude Code on your Mac to log in again."
-        case .failed, .unknown: "Your Mac couldn't read usage from Claude Code. Pull down to try again."
+        case .loggedOut: "Log in to Claude Code on \(computer) with your Claude subscription."
+        case .apiKey: "Claude Code on \(computer) uses an API key, which has no plan limits. Log in with your Claude subscription to see them."
+        case .thirdParty: "Claude Code on \(computer) uses Bedrock, Vertex or another provider, which has no plan limits."
+        case .noScope: "Claude Code's login on \(computer) can't read usage. Run /login in Claude Code there to log in again."
+        case .failed, .unknown: "The bridge on \(computer) couldn't read usage from Claude Code. Pull down to try again."
         }
     }
 

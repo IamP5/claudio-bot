@@ -126,6 +126,8 @@ final class AppStore {
     private(set) var protocolMismatch: ProtocolMismatch?
     /// From the last hello. Nil until this pairing has connected once.
     private(set) var bridgeProtocol: Int?
+    /// The bridge's computer, as its last hello named it. Kept while offline, so copy can still name it.
+    private(set) var bridgeName: String?
     /// Decisions sent and not yet echoed back by their card, so a second tap cannot send another.
     private(set) var pendingDecisions: [MessageID: PermissionChoice] = [:]
     /// The phones paired with this Mac, once Settings asked for them.
@@ -134,6 +136,13 @@ final class AppStore {
     private(set) var devicesHeard = 0
     /// The newest code for pairing another phone.
     private(set) var pairCode: PairCode?
+    /// The world of bots this bridge holds, from the last hello. Nil from a bridge without machines.
+    private(set) var world: World?
+    /// The computers that run this world's agents, the home first as the bridge lists them. Empty from a bridge
+    /// without machines.
+    private(set) var machines: [Machine] = []
+    /// The newest code for enrolling another computer as a machine.
+    private(set) var machineCode: PairCode?
     /// From the last hello. Empty for a bridge from before features.
     private(set) var features: Set<Feature> = []
     /// What each bot or agent is doing right now. Live only: cleared by every hello.
@@ -174,6 +183,35 @@ final class AppStore {
         if case .connected(let machine) = connection { machine } else { nil }
     }
 
+    /// Machine chips and pickers show only when there is a choice to make or to read.
+    var hasSeveralMachines: Bool {
+        machines.count > 1
+    }
+
+    func machine(_ id: MachineID?) -> Machine? {
+        id.flatMap { id in machines.first { $0.id == id } }
+    }
+
+    /// The name on a machine chip, only when the world has several machines to tell apart.
+    func chipName(_ id: MachineID?) -> String? {
+        hasSeveralMachines ? machine(id)?.name : nil
+    }
+
+    /// The computer copy names: the machine with this id, else the bridge's own, else `fallback` before any hello.
+    func computerName(_ id: MachineID? = nil, or fallback: String = "your computer") -> String {
+        machine(id)?.name ?? bridgeName ?? fallback
+    }
+
+    /// Where copy says an agent runs.
+    func place(of agent: Agent) -> String {
+        agent.where == .cloud ? "the cloud" : computerName(agent.machine)
+    }
+
+    /// A cloud agent runs on claude.ai, so it wears no machine chip even though a machine started it.
+    func chipName(for agent: Agent) -> String? {
+        agent.where == .cloud ? nil : chipName(agent.machine)
+    }
+
     /// Paired devices, pairing codes and Bearer tokens arrived with protocol 3.
     var bridgeManagesDevices: Bool {
         (bridgeProtocol ?? 0) >= 3
@@ -192,9 +230,13 @@ final class AppStore {
             created = [:]
             protocolMismatch = nil
             bridgeProtocol = nil
+            bridgeName = nil
             pendingDecisions = [:]
             devices = nil
             pairCode = nil
+            world = nil
+            machines = []
+            machineCode = nil
             features = []
             activity = [:]
             facts = nil
@@ -249,7 +291,7 @@ final class AppStore {
     /// The socket refused the frame, so the buttons come back.
     func decisionFailed(for card: MessageID) {
         pendingDecisions[card] = nil
-        lastError = ErrorNotice(message: "Your decision did not reach your Mac. Try again.")
+        lastError = ErrorNotice(message: "Your decision did not reach \(computerName()). Try again.")
     }
 
     func dismissError(_ notice: ErrorNotice) {
@@ -261,16 +303,23 @@ final class AppStore {
         pairCode = nil
     }
 
+    func discardMachineCode() {
+        machineCode = nil
+    }
+
     /// The reducer. Returns what the user should be notified about.
     @discardableResult
     func apply(_ msg: ServerMessage) -> [Alert] {
         switch msg {
         case let .hello(hello):
             connection = .connected(machine: hello.machine)
+            bridgeName = hello.machine
             userName = hello.userName
             protocolMismatch = ProtocolMismatch(bridge: hello.protocol)
             bridgeProtocol = hello.protocol
             features = Set(hello.features)
+            world = hello.world
+            machines = hello.machines ?? []
             activity = [:]
             if !features.contains(.usage) { usage = nil }
             // A decision in flight when the socket dropped either landed, and the card says so, or it is lost.
@@ -353,6 +402,14 @@ final class AppStore {
 
         case let .pairCode(code):
             pairCode = code
+            return []
+
+        case let .machines(machines):
+            self.machines = machines
+            return []
+
+        case let .machineCode(code):
+            machineCode = code
             return []
 
         case let .activity(botId, agentId, text, _):

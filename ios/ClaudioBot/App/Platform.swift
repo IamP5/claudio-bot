@@ -7,7 +7,7 @@ import AppKit
 
 /// The device this app runs on, in copy and in the name the bridge lists.
 enum ThisDevice {
-    /// "This iPhone was removed from your Mac."
+    /// "This iPhone was removed from omarchy."
     static var noun: String {
         #if os(iOS)
         "iPhone"

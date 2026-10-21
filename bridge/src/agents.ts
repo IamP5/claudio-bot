@@ -4,12 +4,12 @@ import { join } from "node:path";
 import { createCloudSession, followUpCloudSession } from "./cloud";
 import { readEvidence, reportText } from "./evidence";
 import type { Ledger } from "./ledger";
+import type { MachineProfile } from "./machine/profile";
 import type { AgentId, AgentStatus, BotId } from "./protocol";
 import { agentPrompt, agentRules, directHeader, type SessionInput } from "./prompts";
 import type { Project } from "./projects";
 import { createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { refused, type Result } from "./result";
-import { accessOf } from "./access";
 import { agentGitEnv } from "./sandbox";
 import type { Persist } from "./store";
 import { errorText } from "./text";
@@ -21,13 +21,14 @@ import { emptySession, newMessageId, repoTrust, type Actor, type AgentActor, typ
 // ledger. Cloud agents run on claude.ai: the bridge neither gates nor meters them.
 export type Agents = {
   /**
-   * initiator: the bot turn's, so an agent started by a routine runs as routine work; kept as startedBy. budgetUsd null:
-   * the bridge default, none unless CLAUDIOBOT_AGENT_USD sets one. slash (mac only): the agent's first turn is the
-   * command "/<slash> <prompt>" instead of the agent prompt.
+   * id: the home mints it (wire.newAgentId). initiator: the bot turn's, so an agent started by a routine runs as
+   * routine work; kept as startedBy. budgetUsd null: the bridge default, none unless CLAUDIOBOT_AGENT_USD sets one.
+   * slash (mac only): the agent's first turn is the command "/<slash> <prompt>" instead of the agent prompt.
    */
   start(
     botId: BotId,
     a: {
+      id: AgentId;
       title: string;
       prompt: string;
       project: Project;
@@ -100,6 +101,7 @@ const LIVE: ReadonlySet<AgentStatus> = new Set(["working", "parked", "awaiting_a
 
 export function createAgents(deps: {
   world: World;
+  profile: MachineProfile;
   userName: string;
   model: string | undefined;
   ledger: Ledger;
@@ -263,7 +265,7 @@ export function createAgents(deps: {
         const budgetLeft = deps.ledger.budgetLeft(id);
         const repo = repoOf(rec);
         // Full access loads every repo's own config, as the user's own Claude Code does.
-        const trusted = accessOf(process.env).full || repoTrust(deps.world.gate, repo, id) === true;
+        const trusted = deps.profile.access.full || repoTrust(deps.world.gate, repo, id) === true;
         const botName = deps.world.bots.get(rec.agent.botId)?.name ?? rec.agent.botId;
         // The id is chosen when the agent starts, so its row and transcript name it before Claude Code runs: the first
         // query creates the session under it with the agent's title, every later one resumes it.
@@ -320,7 +322,7 @@ export function createAgents(deps: {
 
   return {
     async start(botId, a) {
-      const id = `a_${crypto.randomUUID()}` as AgentId;
+      const id = a.id;
       const repo = realpathOr(a.project.path);
       // Another live agent in the project folder, or one still being placed, makes auto isolate. Cloud agents ignore isolate.
       const busy =
@@ -367,13 +369,13 @@ export function createAgents(deps: {
       if (a.where === "mac") {
         if (workspace.note) deps.note(rec, workspace.note);
         macSession(rec).push(command === null ? queued(a.prompt, a.initiator) : { kind: "command", text: command, initiator: a.initiator, settles: null });
-        const found = accessOf(process.env).full ? [] : projectConfigOf(repo);
+        const found = deps.profile.access.full ? [] : projectConfigOf(repo);
         if (found.length > 0) deps.trustCard({ kind: "agent", botId, agentId: rec.agent.id }, { root: repo, name: a.project.name, found });
         return rec;
       }
       await cloud(rec, async () => {
         try {
-          const created = await createCloudSession(rec.cwd, agentPrompt({ botName: a.botName, userName: deps.userName, prompt: a.prompt }));
+          const created = await createCloudSession(deps.profile, rec.cwd, agentPrompt({ botName: a.botName, userName: deps.userName, prompt: a.prompt }));
           rec.cloudSession = created.sessionId;
           rec.agent = { ...rec.agent, url: created.url };
           update(rec, "in_cloud");
@@ -399,7 +401,7 @@ export function createAgents(deps: {
       let result = "";
       await cloud(rec, async () => {
         try {
-          await followUpCloudSession(rec.cwd, cloudSession, text);
+          await followUpCloudSession(deps.profile, rec.cwd, cloudSession, text);
           result = `Sent to the cloud session. Follow it at ${rec.agent.url}`;
         } catch (e) {
           result = errorText(e);
@@ -463,6 +465,11 @@ export function createAgents(deps: {
     resume() {
       for (const rec of deps.world.agents.values()) {
         if (rec.agent.where !== "mac") continue;
+        // Its bot moved away and nothing stands in for it here: every call would be denied, and no report has a reader.
+        if (!deps.world.bots.has(rec.agent.botId)) {
+          deps.log(`agent ${rec.agent.id}: its bot ${rec.agent.botId} is not here, so it does not resume`);
+          continue;
+        }
         const unreported = rec.unreported ?? [];
         for (const r of unreported) deliverWithEvidence(rec, r);
         if (rec.session.pending.length > 0) macSession(rec);

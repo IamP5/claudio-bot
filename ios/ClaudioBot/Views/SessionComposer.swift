@@ -252,7 +252,7 @@ struct NewSessionSheet: View {
     @Environment(BridgeClient.self) private var client
     @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
-    @State private var project: ProjectID?
+    @State private var place: SessionPlace?
     @State private var draft = ComposerDraft()
     @State private var caret = 0
     @State private var model: String?
@@ -265,16 +265,53 @@ struct NewSessionSheet: View {
     }
 
     private var canStart: Bool {
-        project != nil && !draft.isBlank && !starting && store.machine != nil
+        place != nil && !draft.isBlank && !starting && store.machine != nil
+    }
+
+    /// Grouped by machine only when the world has several; otherwise one flat list on the home.
+    private var byMachine: [MachineProjects]? {
+        guard store.hasSeveralMachines else { return nil }
+        return MachineProjects.group(store.sessions.orderedProjects, machines: store.machines)
+    }
+
+    /// The projects on the chosen machine, or every project on a world with one machine.
+    private var projectChoices: [SessionPlace] {
+        guard let groups = byMachine else { return store.sessions.orderedProjects.map { SessionPlace(machine: nil, project: $0.id) } }
+        let group = groups.first { $0.machine.id == place?.machine } ?? groups.first
+        return group.map { group in group.projects.map { SessionPlace(machine: group.machine.id, project: $0.id) } } ?? []
+    }
+
+    private var firstPlace: SessionPlace? {
+        guard let groups = byMachine else {
+            return (projectId ?? store.sessions.orderedProjects.first?.id).map { SessionPlace(machine: nil, project: $0) }
+        }
+        if let projectId, let group = groups.first(where: { $0.projects.contains { $0.id == projectId } }) {
+            return SessionPlace(machine: group.machine.id, project: projectId)
+        }
+        return groups.first.flatMap { group in group.projects.first.map { SessionPlace(machine: group.machine.id, project: $0.id) } }
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    Picker("Project", selection: $project) {
-                        ForEach(store.sessions.orderedProjects) { project in
-                            Text(project.name).tag(Optional(project.id))
+                    // A navigation-link picker draws a section header as one more row, so the machine is its own
+                    // picker and the projects follow it.
+                    if let groups = byMachine {
+                        Picker("Computer", selection: Binding(
+                            get: { place?.machine },
+                            set: { machine in
+                                let projects = groups.first { $0.machine.id == machine }?.projects ?? []
+                                let kept = place.flatMap { place in projects.first { $0.id == place.project } } ?? projects.first
+                                place = kept.map { SessionPlace(machine: machine, project: $0.id) }
+                            }
+                        )) {
+                            ForEach(groups) { Text(MachineText.choice($0.machine)).tag(Optional($0.machine.id)) }
+                        }
+                    }
+                    Picker("Project", selection: $place) {
+                        ForEach(projectChoices, id: \.self) { choice in
+                            Text(store.sessions.projects[choice.project]?.name ?? choice.project.rawValue).tag(Optional(choice))
                         }
                     }
                     .pickerStyle(.navigationLink)
@@ -338,7 +375,7 @@ struct NewSessionSheet: View {
         #if os(macOS)
         .frame(minWidth: 480, idealWidth: 520, minHeight: 420, idealHeight: 460)
         #endif
-        .onAppear { project = projectId ?? store.sessions.orderedProjects.first?.id }
+        .onAppear { place = firstPlace }
         // A refused create comes back as an error frame, so the sheet lets the user try again.
         .onChange(of: store.lastError) {
             if starting {
@@ -356,15 +393,15 @@ struct NewSessionSheet: View {
     #endif
 
     private func start() {
-        guard let project, canStart else { return }
+        guard let place, canStart else { return }
         let ref = UUID().uuidString
         starting = true
         router.pendingSessionCreate = ref
         client.send(
             .sessionCreate(
-                ref: ref, projectId: project,
+                ref: ref, projectId: place.project,
                 text: draft.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                model: model, mode: mode, isolate: worktree ? .worktree : .inPlace
+                model: model, mode: mode, isolate: worktree ? .worktree : .inPlace, machine: place.machine
             ))
     }
 }

@@ -1,20 +1,34 @@
+import type { MachineId } from "../src/machine/wire";
 import { setSystemTime } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import type { McpSdkServerConfigWithInstance, Options, query, SDKMessage, SDKUserMessage, SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHomes } from "../src/home";
 import { createHub, type HubDeps } from "../src/hub";
+import { createPlacements } from "../src/machine/placements";
+import { platformOf, profileOf, type MachineProfile } from "../src/machine/profile";
 import type { Project } from "../src/projects";
-import type { BotId, MessageId, PlanUsage, ServerMessage, Signal, StreamPosition } from "../src/protocol";
+import type { BotId, MessageId, PlanUsage, ServerMessage, Signal, StreamPosition, WorldId } from "../src/protocol";
 import type { Push, PushReason } from "../src/push";
-import { newBot, type BotRecord, type World } from "../src/world";
+import { newBot, type BotRecord, type Initiator, type World } from "../src/world";
 
 // A hub over a fake Claude Code: the queries it opens, the frames and signals it sends, the pushes it makes.
 
 export const roots: string[] = [];
+
+/** This machine with its bridge home at `root`, in the access the test process runs with. */
+export const testProfile = (root: string): MachineProfile =>
+  profileOf({
+    env: process.env,
+    platform: platformOf(process.platform),
+    name: "Mac",
+    homedir: realpathSync(homedir()),
+    username: userInfo().username,
+    bridgeHome: realpathSync(root),
+  });
 /** Clears the fake clock and the temp folders a test made. Each test file calls it from its own afterEach. */
 export function cleanup() {
   setSystemTime();
@@ -125,10 +139,14 @@ export function hubOver(
     executable?: string | null;
     usage?: HubDeps["usage"];
     sessions?: HubDeps["sessions"];
+    links?: HubDeps["links"];
+    /** Files the bridge home holds before the hub starts, as after a restart. */
+    seed?: (root: string) => void;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "claudiobot-hub-"));
   roots.push(root);
+  opts.seed?.(root);
   const homes = createHomes(root);
   const events: string[] = [];
   const frames: ServerMessage[] = [];
@@ -138,7 +156,9 @@ export function hubOver(
   const attempts: PushCall[] = [];
   const queries: FakeQuery[] = [];
   const hub = createHub({
-    machine: "Mac",
+    machineId: "m_test" as MachineId,
+    worldId: "w_test" as WorldId,
+    profile: testProfile(root),
     userName: "Alex",
     world,
     homes: {
@@ -154,6 +174,7 @@ export function hubOver(
     signal: (s) => (s.type === "activity" ? signals.push(s) : usage.push(s.usage)),
     usage: opts.usage,
     ...(opts.sessions && { sessions: opts.sessions }),
+    ...(opts.links && { links: opts.links }),
     webhookPort: null,
     persist: (urgency) => {
       opts.persist?.(urgency);
@@ -200,3 +221,11 @@ export async function callTool(q: FakeQuery, name: string, args: Record<string, 
 }
 
 export const bot = (name: string, patch: Partial<BotRecord> = {}): BotRecord => ({ ...newBot({ id: `b_${name}` as BotId, name, avatar: { shape: "circle", color: "white" }, at }), ...patch });
+
+/** A seed: agents the home placed on machines before it restarted, as its dispatch records them. */
+export const placedOn =
+  (...agents: { agentId: string; machine: string; botId: string; by?: Initiator }[]) =>
+  (root: string) => {
+    const placements = createPlacements({ path: join(root, "machine", "placements.json"), log: () => {} });
+    for (const a of agents) placements.place(a.agentId as never, { machine: a.machine as MachineId, botId: a.botId as BotId, by: a.by ?? { kind: "user" } });
+  };

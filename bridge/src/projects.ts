@@ -170,3 +170,6 @@ export function createProjects(opts: { file: string | null }): { of(cwd: string)
     },
   };
 }
+
+/** What list_projects answers, from whichever machine scanned them. */
+export const projectsText = (projects: readonly Project[]) => (projects.length === 0 ? "No projects found." : JSON.stringify(projects, null, 1));

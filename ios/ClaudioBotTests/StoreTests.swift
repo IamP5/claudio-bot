@@ -412,7 +412,7 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         store.decisionSent(.always, for: MessageID("p1"))
         store.decisionFailed(for: MessageID("p1"))
         #expect(store.pendingDecisions.isEmpty)
-        #expect(store.lastError?.message == "Your decision did not reach your Mac. Try again.")
+        #expect(store.lastError?.message == "Your decision did not reach Mac. Try again.")
     }
 
     @Test func anErrorIsDismissedOnlyByItsOwnNotice() throws {
@@ -603,8 +603,8 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(ConnectorsSection.rows(store, b1) == .loading)
         store.apply(.connectors(botId: b1, connectors: [gmail]))
         #expect(ConnectorsSection.rows(store, b1) == .shown([gmail]))
-        #expect(ConnectorsSection.detail(gmail) == "Needs sign-in on your Mac")
-        #expect(ConnectorsSection.detail(Connector(name: "x", status: .connected, enabled: false)) == "Off for this Bot and its agents")
+        #expect(ConnectorsSection.detail(gmail, on: "omarchy") == "Needs sign-in on omarchy")
+        #expect(ConnectorsSection.detail(Connector(name: "x", status: .connected, enabled: false), on: "omarchy") == "Off for this Bot and its agents")
     }
 
     @Test func theSwitchSendsSetConnector() throws {
@@ -895,10 +895,13 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
 
     @Test func theDeleteDialogSaysTheFolderGoesToTrashAndNamesWorktreesLeftBehind() {
         let b = bot("b1")
-        #expect(HomeView.deleteMessage(b, worktrees: []).contains("trash folder on your Mac, where you can recover it"))
-        #expect(!HomeView.deleteMessage(b, worktrees: []).contains("can't be undone"))
-        #expect(HomeView.deleteMessage(b, worktrees: [Worktree(path: "/w/a", branch: "claudio/fix")]).contains("worktree on claudio/fix stays"))
-        #expect(HomeView.deleteMessage(b, worktrees: [Worktree(path: "/w/a", branch: "x"), Worktree(path: "/w/b", branch: "y")]).contains("2 worktrees stay"))
+        #expect(HomeView.deleteMessage(b, home: "omarchy").contains("trash folder on omarchy, where you can recover it"))
+        #expect(!HomeView.deleteMessage(b, home: "omarchy").contains("can't be undone"))
+        #expect(HomeView.deleteMessage(b, home: "omarchy", worktrees: [(Worktree(path: "/w/a", branch: "claudio/fix"), on: "mac")]).contains("worktree on claudio/fix stays on mac."))
+        let two = [(Worktree(path: "/w/a", branch: "x"), on: "mac"), (Worktree(path: "/w/b", branch: "y"), on: "mac")]
+        #expect(HomeView.deleteMessage(b, home: "omarchy", worktrees: two).contains("2 worktrees stay on mac."))
+        let apart = [(Worktree(path: "/w/a", branch: "x"), on: "mac"), (Worktree(path: "/w/b", branch: "y"), on: "omarchy")]
+        #expect(HomeView.deleteMessage(b, home: "omarchy", worktrees: apart).contains("2 worktrees stay on their machines."))
     }
 
     @Test func theDeleteDialogWaitsForDetailsAndForcesOnlyWhenWorktreesStayBehind() {
@@ -907,25 +910,26 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
             id: AgentID("a1"), botId: BotID("b1"), title: "Fix", where: .mac, projectName: "web", status: .waiting,
             url: nil, createdAt: at, updatedAt: at
         )
-        #expect(HomeView.Deletion(b, details: nil, detailsLate: false) == nil, "no details yet: still checking")
+        let store = AppStore()
+        #expect(HomeView.Deletion(b, details: nil, detailsLate: false, store: store) == nil, "no details yet: still checking")
 
-        let plain = HomeView.Deletion(b, details: BotDetails(library: [], links: [], agents: [agent], routines: []), detailsLate: false)
+        let plain = HomeView.Deletion(b, details: BotDetails(library: [], links: [], agents: [agent], routines: []), detailsLate: false, store: store)
         #expect(plain?.request == .deleteBot(botId: BotID("b1"), force: false))
-        #expect(plain?.message == HomeView.deleteMessage(b, worktrees: []))
+        #expect(plain?.message == HomeView.deleteMessage(b, home: "your computer"))
 
         agent.worktree = Worktree(path: "/w/a", branch: "claudio/fix")
-        let held = HomeView.Deletion(b, details: BotDetails(library: [], links: [], agents: [agent], routines: []), detailsLate: false)
+        let held = HomeView.Deletion(b, details: BotDetails(library: [], links: [], agents: [agent], routines: []), detailsLate: false, store: store)
         #expect(held?.request == .deleteBot(botId: BotID("b1"), force: true))
-        #expect(held?.message.contains("worktree on claudio/fix stays") == true)
+        #expect(held?.message.contains("worktree on claudio/fix stays on your computer.") == true)
 
-        let late = HomeView.Deletion(b, details: nil, detailsLate: true)
+        let late = HomeView.Deletion(b, details: nil, detailsLate: true, store: store)
         #expect(late?.request == .deleteBot(botId: BotID("b1"), force: false))
-        #expect(late?.message == HomeView.deleteMessage(b, worktrees: []))
+        #expect(late?.message == HomeView.deleteMessage(b, home: "your computer"))
     }
 
     @Test func theConnectionBannerOffersHelpAfterThreeFailedConnects() {
-        #expect(ConnectionBanner.help(failures: 2, address: "10.0.0.20:7878") == nil)
-        #expect(ConnectionBanner.help(failures: 3, address: "10.0.0.20:7878")?.contains("at 10.0.0.20:7878") == true)
+        #expect(ConnectionBanner.help(failures: 2, address: "10.0.0.20:7878", computer: "omarchy") == nil)
+        #expect(ConnectionBanner.help(failures: 3, address: "10.0.0.20:7878", computer: "omarchy")?.contains("on omarchy isn't answering at 10.0.0.20:7878") == true)
     }
 
     @Test func theOfflineBarShowsWhileTheMacIsOutOfReach() {

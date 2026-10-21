@@ -183,9 +183,16 @@ struct ExchangeView: View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
                 AgentStatusPill(status: agent.status)
-                Text("\(agent.projectName) on \(agent.where == .cloud ? "the cloud" : "your Mac")")
-                    .font(.ui(size: 13))
-                    .foregroundStyle(Theme.tertiary)
+                if let machine = store.chipName(for: agent) {
+                    Text(agent.projectName)
+                        .font(.ui(size: 13))
+                        .foregroundStyle(Theme.tertiary)
+                    MachineChip(name: machine)
+                } else {
+                    Text("\(agent.projectName) on \(store.place(of: agent))")
+                        .font(.ui(size: 13))
+                        .foregroundStyle(Theme.tertiary)
+                }
             }
             if let line = Self.spendLine(agent) {
                 Text(line)
@@ -193,7 +200,7 @@ struct ExchangeView: View {
                     .foregroundStyle(agent.spend?.nearLimit == true ? Theme.attention : Theme.tertiary)
             }
             if agent.where == .mac, store.lacks(.worktrees) {
-                Text("Update the bridge on your Mac to see what this agent changed in git.")
+                Text("Update the bridge on \(store.computerName()) to see what this agent changed in git.")
                     .font(.ui(size: 13))
                     .foregroundStyle(Theme.tertiary)
                     .multilineTextAlignment(.center)

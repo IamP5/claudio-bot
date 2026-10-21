@@ -77,6 +77,13 @@ private func unknowns(in message: ServerMessage) -> [String] {
         if case .unknown(let raw)? = row.pr?.state { found.append("pr state \(raw)") }
         return found
     }
+    func inMachine(_ machine: Machine) -> [String] {
+        var found: [String] = []
+        if case .unknown(let raw) = machine.role { found.append("machine role \(raw)") }
+        if case .unknown(let raw) = machine.platform { found.append("platform \(raw)") }
+        for connector in machine.connectors { if case .unknown(let raw) = connector.kind { found.append("connector kind \(raw)") } }
+        return found
+    }
     func inControls(_ controls: SessionControls?) -> [String] {
         guard let controls else { return [] }
         return ([controls.mode] + controls.modes).compactMap { if case .unknown(let raw) = $0 { "mode \(raw)" } else { nil } }
@@ -104,7 +111,8 @@ private func unknowns(in message: ServerMessage) -> [String] {
     }
     switch message {
     case .unknown(let type): return ["type \(type)"]
-    case .hello(let hello): return hello.bots.flatMap(inBot)
+    case .hello(let hello): return hello.bots.flatMap(inBot) + (hello.machines ?? []).flatMap(inMachine)
+    case .machines(let machines): return machines.flatMap(inMachine)
     case .bot(let b): return inBot(b)
     case .conversation(_, let messages): return messages.flatMap(inMessage)
     case .message(_, let m): return inMessage(m)
@@ -162,7 +170,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         guard case .hello(let hello) = try Fixture.server()[0].message else { Issue.record("not hello"); return }
         #expect(hello.protocol == 3)
         #expect(hello.position == StreamPosition(epoch: "e_7f3a", seq: 41, resumed: false))
-        #expect(hello.machine == "MacBook")
+        #expect(hello.machine == "omarchy")
         #expect(hello.userName == "Alex")
         let bot = try #require(hello.bots.first)
         #expect(bot.avatar == Avatar(shape: .hexagon, color: .orange))
@@ -214,6 +222,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         }
         #expect(projects.map(\.name) == ["solta-o-som", "claudio-bot"])
         #expect(projects[0].githubRepo == "IamP5/solta-o-som")
+        #expect(projects.map(\.machine) == Array(repeating: MachineID("m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c"), count: 2))
         #expect(mirror == .auto)
         #expect(rows.map(\.origin) == [.agent, .desktop, .cloud])
         #expect(rows[0].agent == SessionAgentLink(botId: BotID("b1"), agentId: AgentID("a3")))
@@ -289,6 +298,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
     @Test func theSessionRequestsTheAppBuildsAreTheFixtureFrames() throws {
         let fixtures = try Fixture.entries("client").map(jsonObject)
         let agent = SessionID("6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31")
+        let mac = MachineID("m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b")
         let built: [ClientMessage] = [
             .watchSessions,
             .unwatchSessions,
@@ -302,6 +312,10 @@ private func unknowns(in message: ServerMessage) -> [String] {
             .sessionAnswer(sessionId: agent, cardId: MessageID("m21"), answers: ["Which audio library should the fade use?": "Howler.js"]),
             .sessionAnswer(sessionId: agent, cardId: MessageID("m21"), answers: nil),
             .sessionCreate(ref: "s1", projectId: ProjectID("3f9a1c7e2b4d6a80"), text: "Add a mute button to the player", model: nil, mode: .plan, isolate: .worktree),
+            .sessionCreate(
+                ref: "s3", projectId: ProjectID("3f9a1c7e2b4d6a80"), text: "Profile the fade on the Mac", model: nil, mode: nil, isolate: .inPlace,
+                machine: mac
+            ),
             .sessionSet(sessionId: SessionID("b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40"), patch: SessionPatch(title: "Volume slider", hidden: true)),
             .sessionSet(sessionId: agent, patch: SessionPatch(model: .some(nil), mode: .acceptEdits)),
             .sessionOpenDesktop(sessionId: agent),
@@ -470,8 +484,11 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(AgentStatus.allCases.map(\.rawValue) == ["working", "waiting", "failed", "in_cloud", "awaiting_approval", "parked", "unavailable", "capped"])
         #expect(Feature.allCases.map(\.rawValue) == [
             "memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend",
-            "mentions", "commands", "exchanges", "groups", "usage", "sessions", "presence",
+            "mentions", "commands", "exchanges", "groups", "usage", "sessions", "presence", "machines",
         ])
+        #expect(MachineRole.allCases.map(\.rawValue) == ["home", "machine"])
+        #expect(MachinePlatform.allCases.map(\.rawValue) == ["darwin", "linux"])
+        #expect(ConnectorKind.allCases.map(\.rawValue) == ["chrome", "computer-use", "other"])
         #expect(SessionOrigin.allCases.map(\.rawValue) == ["phone", "agent", "desktop", "terminal", "sdk", "cloud"])
         #expect(SessionStatus.allCases.map(\.rawValue) == ["idle", "working", "awaiting_approval", "awaiting_input", "failed", "parked", "unavailable"])
         #expect(SessionHolder.allCases.map(\.rawValue) == ["none", "claudio", "desktop", "terminal", "other"])
@@ -495,6 +512,78 @@ private func unknowns(in message: ServerMessage) -> [String] {
         let old = try decode(ServerMessage.self, #"{"type":"hello","protocol":3,"machine":"Mac","userName":"Alex","bots":[]}"#)
         guard case .hello(let none) = old else { Issue.record("not hello"); return }
         #expect(none.features.isEmpty)
+    }
+
+    @Test func helloNamesTheWorldAndItsMachinesAndAnOlderHelloNamesNeither() throws {
+        guard case .hello(let hello) = try Fixture.server()[0].message else { Issue.record("not hello"); return }
+        #expect(hello.world == World(id: WorldID("w_2c9d4e1f-7a3b-4c5d-8e6f-0a1b2c3d4e5f"), name: "Alex's bots"))
+        let machines = try #require(hello.machines)
+        #expect(machines.map(\.role) == [.home, .machine])
+        #expect(machines.map(\.platform) == [.linux, .darwin])
+        #expect(machines[0].access == MachineAccess(full: true, sandbox: false) && machines[0].since == nil)
+        #expect(!machines[1].online && machines[1].since == at)
+        #expect(machines[1].connectors.map(\.kind) == [.chrome, .computerUse, .other])
+        #expect(try decode(ConnectorKind.self, #""figma""#) == .unknown("figma"))
+
+        let old = try decode(ServerMessage.self, #"{"type":"hello","protocol":3,"machine":"Mac","userName":"Alex","bots":[]}"#)
+        guard case .hello(let none) = old else { Issue.record("not hello"); return }
+        #expect(none.world == nil && none.machines == nil)
+        let encoded = try jsonObject(Wire.encoder().encode(ServerFrame(message: old)))
+        #expect(encoded["world"] == nil && encoded["machines"] == nil)
+    }
+
+    @Test func theMachineFramesDecodeTheListAndTheEnrollCode() throws {
+        let frames = try Fixture.server()
+        let lists = frames.compactMap { frame -> [Machine]? in
+            if case .machines(let m) = frame.message { #expect(frame.seq != nil, "machines is a broadcast"); return m } else { return nil }
+        }
+        #expect(lists.first?.map(\.online) == [true, true])
+        let code = frames.compactMap { if case .machineCode(let c) = $0.message { c } else { nil } }.first
+        #expect(code?.code == "R4TW-9HJC")
+        #expect(code?.urls?.first == "http://omarchy.tail1234.ts.net:7878")
+    }
+
+    @Test func eachAgentBotAndSessionNamesItsMachineAndAnOlderBridgeNamesNone() throws {
+        let frames = try Fixture.server().map(\.message)
+        let bot = frames.compactMap { if case .bot(let b) = $0 { b } else { nil } }.first
+        #expect(bot?.agentsOn == MachineID("m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b"))
+        let agents = frames.compactMap { if case .agent(let a, _) = $0 { a.machine } else { nil } }
+        #expect(agents.allSatisfy { $0 != nil })
+        let rows = frames.compactMap { message -> [SessionRow]? in
+            if case .sessions(.list(_, let rows, _)) = message { rows } else { nil }
+        }.first ?? []
+        #expect(rows.map { $0.machine?.rawValue } == [
+            "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c", "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b", "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
+        ])
+
+        let agent = try decode(Agent.self, #"{"id":"a1","botId":"b1","title":"t","where":"mac","projectName":"p","status":"waiting","url":null,"createdAt":"2026-10-16T12:00:00.000Z","updatedAt":"2026-10-16T12:00:00.000Z"}"#)
+        #expect(agent.machine == nil)
+        #expect(try jsonObject(Wire.encoder().encode(agent))["machine"] == nil)
+        let old = try decode(Bot.self, #"{"id":"b1","name":"n","title":null,"avatar":{"shape":"circle","color":"white"},"pinned":false,"hidden":false,"status":"idle","unread":0,"question":null,"preview":"","lastAt":"2026-10-16T12:00:00.000Z","createdAt":"2026-10-16T12:00:00.000Z","routines":[]}"#)
+        #expect(old.agentsOn == nil)
+    }
+
+    @Test func anAgentsOnPatchSendsTheMachineOrNullAndOtherwiseNothing() throws {
+        let mac = MachineID("m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b")
+        let fixtures = try Fixture.entries("client").map(jsonObject)
+        for patch in [BotPatch(agentsOn: .some(mac)), BotPatch(agentsOn: .some(nil))] {
+            let json = try jsonObject(Wire.encoder().encode(ClientMessage.updateBot(botId: BotID("b1"), patch: patch)))
+            #expect(fixtures.contains(json), "\(json)")
+        }
+        #expect(try jsonObject(Wire.encoder().encode(BotPatch(muted: true)))["agentsOn"] == nil)
+        #expect(try decode(BotPatch.self, #"{"agentsOn":null}"#).agentsOn == .some(nil))
+        #expect(try fixtures.contains(jsonObject(Wire.encoder().encode(ClientMessage.machineCode))))
+    }
+
+    @Test func removeMachineSendsTheMachineId() throws {
+        let json = try jsonObject(Wire.encoder().encode(ClientMessage.removeMachine(machineId: MachineID("m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b"))))
+        #expect(json == ["type": "remove_machine", "machineId": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b"])
+    }
+
+    @Test func aProjectFromABridgeWithoutMachinesNamesNoneAndEncodesNone() throws {
+        let old = try decode(SessionProject.self, #"{"id":"p1","name":"n","path":"/p","githubRepo":null,"lastAt":null,"canCloud":false}"#)
+        #expect(old.machine == nil)
+        #expect(try jsonObject(Wire.encoder().encode(old))["machine"] == nil)
     }
 
     @Test func aBotFromBeforeMuteIsNotMutedAndAnAgentFromBeforeEvidenceHasNone() throws {
@@ -592,6 +681,41 @@ private func unknowns(in message: ServerMessage) -> [String] {
 
 @Suite struct PairingTests {
     private let socket = URL(string: "ws://10.0.0.20:7878/ws")!
+    private let tailnet = URL(string: "ws://omarchy.tail1234.ts.net:7878/ws")!
+
+    @Test func aPairingSavedBeforeWorldsReadsAsItsOneAddressAndNoWorld() throws {
+        let saved = #"{"url":"ws://10.0.0.20:7878/ws","token":"t1","deviceId":"d1"}"#
+        let pairing = try JSONDecoder().decode(Pairing.self, from: Data(saved.utf8))
+        #expect(pairing.url == socket && pairing.urls == [socket] && pairing.world == nil)
+        #expect(pairing.credential == .device(DeviceID("d1"), token: "t1"))
+        let legacy = try JSONDecoder().decode(Pairing.self, from: Data(#"{"url":"ws://10.0.0.20:7878/ws","token":"shared"}"#.utf8))
+        #expect(legacy.urls == [socket] && legacy.credential == .legacy(token: "shared"))
+
+        let world = Pairing(url: socket, credential: pairing.credential, urls: [tailnet, socket], world: WorldID("w1"))
+        #expect(try JSONDecoder().decode(Pairing.self, from: JSONEncoder().encode(world)) == world)
+    }
+
+    @Test func aPairingKeepsTheAddressInUseAmongTheWorldsAddresses() {
+        let pairing = Pairing(url: socket, credential: .legacy(token: "t"), urls: [tailnet])
+        #expect(pairing.urls == [socket, tailnet])
+        let moved = pairing.at(tailnet)
+        #expect(moved.url == tailnet && moved.urls == [socket, tailnet])
+        let typed = URL(string: "ws://mac.local:7878/ws")!
+        #expect(moved.at(typed).urls == [socket, tailnet, typed])
+    }
+
+    @Test func theSameWorldAtAnotherAddressIsTheSameWorldAndAnotherWorldIsNot() {
+        let home = Pairing(url: socket, credential: .legacy(token: "t"), world: WorldID("w1"))
+        #expect(home.sameWorld(as: Pairing(url: tailnet, credential: .legacy(token: "t"), world: WorldID("w1"))))
+        #expect(!home.sameWorld(as: Pairing(url: socket, credential: .legacy(token: "t"), world: WorldID("w2"))))
+    }
+
+    @Test func withoutAWorldOnEitherSideTheAddressesDecide() {
+        let old = Pairing(url: socket, credential: .legacy(token: "t"))
+        #expect(old.sameWorld(as: Pairing(url: socket, credential: .legacy(token: "t"), world: WorldID("w1"))))
+        #expect(old.sameWorld(as: Pairing(url: tailnet, credential: .legacy(token: "t"), urls: [socket])))
+        #expect(!old.sameWorld(as: Pairing(url: tailnet, credential: .legacy(token: "t"))))
+    }
 
     @Test func pairLinkParsesTheAddressAndCode() {
         let link = URL(string: "claudiobot://pair?url=ws%3A%2F%2F10.0.0.20%3A7878%2Fws&code=k7qd-m2xp")!

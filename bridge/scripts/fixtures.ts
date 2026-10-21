@@ -1,6 +1,7 @@
+import type { HomeFrame, MachineFrame, Intent, EventBody } from "../src/machine/wire";
 import { FEATURES } from "../src/protocol";
 import type {
-  AgentView, Bot, Broadcast, ClientMessage, Message, Peer, Routine, ServerMessage, SessionControls, SessionItem, SessionProject, SessionRow,
+  AgentView, Bot, Broadcast, ClientMessage, MachineView, Message, Peer, Routine, ServerMessage, SessionControls, SessionItem, SessionProject, SessionRow,
 } from "../src/protocol";
 
 // The wire form of T: branded ids are plain strings, so fixtures type-check without casts.
@@ -9,6 +10,9 @@ type Wire<T> = T extends string & { readonly __brand: string } ? string : T exte
 const at = "2026-10-16T12:00:00.000Z";
 const later = "2026-10-16T14:00:00.000Z";
 const tomorrow = "2026-10-17T11:57:00.000Z";
+// The home, omarchy, and a machine enrolled into it, the MacBook.
+const HOME = "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c";
+const MAC = "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b";
 const routine: Wire<Routine> = {
   id: "r1", name: "morning-digest", schedule: "57 7 * * 1-5", describe: "Weekdays at 7:57 AM",
   prompt: "Post today's tech digest.", enabled: true, lastRunAt: at,
@@ -24,7 +28,7 @@ const bot: Wire<Bot> = {
   id: "b1", kind: "bot", members: [], name: "engineer", title: null, avatar: { shape: "hexagon", color: "orange" },
   pinned: false, hidden: false, status: "idle", unread: 2,
   question: "Want me to merge any of these now?", preview: "Want me to merge any of these now?",
-  lastAt: at, createdAt: at, routines: [routine], dailyCapUsd: null, muted: false,
+  lastAt: at, createdAt: at, routines: [routine], dailyCapUsd: null, muted: false, agentsOn: null,
   spentTodayUsd: 8.4, capUsd: 10,
 };
 const hookRoutine: Wire<Routine> = {
@@ -44,37 +48,37 @@ const agentPeer: Wire<Peer> = { kind: "agent", id: "a1", title: "Set up verifica
 const agent: Wire<AgentView> = {
   id: "a1", botId: "b1", title: "Set up verification skill", where: "mac", projectName: "web",
   status: "waiting", url: null, createdAt: at, updatedAt: at, evidence: null, worktree: null,
-  spentUsd: 1.2, budgetUsd: 5,
+  spentUsd: 1.2, budgetUsd: 5, machine: HOME,
 };
 
 // Sessions: solta-o-som (the GitHub name of ~/Dev/projects/br-soundless) holds an agent's session and one from the
 // Claude app; claudio-bot holds a cloud agent's.
 const solta: Wire<SessionProject> = {
-  id: "3f9a1c7e2b4d6a80", name: "solta-o-som", path: "/Users/alex/Dev/projects/br-soundless", githubRepo: "IamP5/solta-o-som", lastAt: later, canCloud: false,
+  id: "3f9a1c7e2b4d6a80", machine: HOME, name: "solta-o-som", path: "/Users/alex/Dev/projects/br-soundless", githubRepo: "IamP5/solta-o-som", lastAt: later, canCloud: false,
 };
 const claudio: Wire<SessionProject> = {
-  id: "9c2e5b7a1d3f4e60", name: "claudio-bot", path: "/Users/alex/Dev/projects/claudio-bot", githubRepo: "alex/claudio-bot", lastAt: at, canCloud: false,
+  id: "9c2e5b7a1d3f4e60", machine: HOME, name: "claudio-bot", path: "/Users/alex/Dev/projects/claudio-bot", githubRepo: "alex/claudio-bot", lastAt: at, canCloud: false,
 };
 const agentSession = "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31";
 const agentRow: Wire<SessionRow> = {
-  id: agentSession, projectId: solta.id, parentId: null, title: "Smooth the audio fade on iOS Safari", origin: "agent",
+  id: agentSession, machine: HOME, projectId: solta.id, parentId: null, title: "Smooth the audio fade on iOS Safari", origin: "agent",
   agent: { botId: "b1", agentId: "a3" }, status: "working", holder: "claudio", unread: false,
   branch: "claudio/6b1f3c2a", worktree: true, pr: null, mirror: "pending", hidden: false, url: null, createdAt: at, lastAt: later,
 };
 const desktopRow: Wire<SessionRow> = {
-  id: "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40", projectId: solta.id, parentId: null, title: "Add a volume slider to the player", origin: "desktop",
+  id: "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40", machine: MAC, projectId: solta.id, parentId: null, title: "Add a volume slider to the player", origin: "desktop",
   agent: null, status: "idle", holder: "desktop", unread: true,
   branch: "feat/volume-slider", worktree: false, pr: { number: 87, url: "https://github.com/IamP5/solta-o-som/pull/87", state: "open" },
   mirror: "imported", hidden: false, url: null, createdAt: "2026-10-15T09:30:00.000Z", lastAt: at,
 };
 const cloudRow: Wire<SessionRow> = {
-  id: "session_01Hq7vXk3mRt9wYpL2nB5cDe", projectId: claudio.id, parentId: null, title: "Add a changelog", origin: "cloud",
+  id: "session_01Hq7vXk3mRt9wYpL2nB5cDe", machine: HOME, projectId: claudio.id, parentId: null, title: "Add a changelog", origin: "cloud",
   agent: { botId: "b1", agentId: "a2" }, status: "idle", holder: "none", unread: false,
   branch: "claude/add-changelog", worktree: false, pr: { number: 12, url: "https://github.com/alex/claudio-bot/pull/12", state: "merged" },
   mirror: "none", hidden: false, url: "https://claude.ai/code/session_01Hq7vXk3mRt9wYpL2nB5cDe", createdAt: "2026-10-14T18:00:00.000Z", lastAt: at,
 };
 const childRow: Wire<SessionRow> = {
-  id: "d4e8a1b6-3c2f-4b9e-8a7d-1f6c5e3b2a90", projectId: solta.id, parentId: desktopRow.id, title: "Check the slider on iPad", origin: "terminal",
+  id: "d4e8a1b6-3c2f-4b9e-8a7d-1f6c5e3b2a90", machine: MAC, projectId: solta.id, parentId: desktopRow.id, title: "Check the slider on iPad", origin: "terminal",
   agent: null, status: "awaiting_input", holder: "terminal", unread: false,
   branch: "feat/volume-slider", worktree: false, pr: null, mirror: "none", hidden: false, url: null, createdAt: at, lastAt: later,
 };
@@ -111,9 +115,18 @@ const ask = {
   ] }],
 };
 
+const machines: Wire<MachineView>[] = [
+  { id: HOME, name: "omarchy", role: "home", online: true, since: null, platform: "linux", access: { full: true, sandbox: false }, connectors: [] },
+  {
+    id: MAC, name: "MacBook", role: "machine", online: false, since: at, platform: "darwin", access: { full: false, sandbox: true },
+    connectors: [{ name: "claude-in-chrome", kind: "chrome" }, { name: "computer-use", kind: "computer-use" }, { name: "github", kind: "other" }],
+  },
+];
+
 export const server = [
-  { type: "hello", protocol: 3, features: [...FEATURES], epoch: "e_7f3a", seq: 41, resumed: false, machine: "MacBook", userName: "Alex", bots: [bot] },
-  { type: "bot", seq: 42, bot: { ...bot, id: "b2", name: "news digest", title: "Morning digest", avatar: { shape: "pentagon", color: "teal" }, status: "working", unread: 0, question: null, pinned: true, dailyCapUsd: 5, spentTodayUsd: 0, capUsd: 5 } },
+  { type: "hello", protocol: 3, features: [...FEATURES], epoch: "e_7f3a", seq: 41, resumed: false, machine: "omarchy", userName: "Alex", bots: [bot], machines,
+    world: { id: "w_2c9d4e1f-7a3b-4c5d-8e6f-0a1b2c3d4e5f", name: "Alex's bots" } },
+  { type: "bot", seq: 42, bot: { ...bot, id: "b2", name: "news digest", title: "Morning digest", avatar: { shape: "pentagon", color: "teal" }, status: "working", unread: 0, question: null, pinned: true, dailyCapUsd: 5, spentTodayUsd: 0, capUsd: 5, agentsOn: MAC } },
   { type: "bot_removed", botId: "b2" },
   { type: "created", ref: "c1", botId: "b3" },
   {
@@ -157,11 +170,13 @@ export const server = [
     { id: "d0", name: "Paired before protocol 3", createdAt: at, lastSeenAt: null, legacy: true, current: false },
   ] },
   { type: "pair_code", code: "K7QD-M2XP", expiresAt: "2026-10-16T12:10:00.000Z", urls: ["ws://mac.tail1234.ts.net:7878/ws", "ws://Mac.local:7878/ws", "ws://192.168.1.20:7878/ws"] },
+  { type: "machines", seq: 43, machines: [machines[0]!, { ...machines[1]!, online: true, since: later }] },
+  { type: "machine_code", code: "R4TW-9HJC", expiresAt: "2026-10-16T12:10:00.000Z", urls: ["http://omarchy.tail1234.ts.net:7878", "http://192.168.1.30:7878"] },
   { type: "message", seq: 53, botId: "b1", message: { kind: "user", id: "m11", at, text: "Ship it", attachments: [], clientId: "c_9b1e" } },
   { type: "bot", seq: 54, bot: { ...bot, muted: true, spentTodayUsd: 1.25, capUsd: null } },
   {
     type: "agent", seq: 55, messages: [], agent: {
-      ...agent, status: "capped",
+      ...agent, status: "capped", machine: MAC,
       evidence: { at: later, branch: "claudio/verify-skill", head: "4f2a9c1", ahead: 3, changed: 5, insertions: 120, deletions: 14, dirty: false, pr: "https://github.com/acme/web/pull/142" },
       worktree: { path: "/Users/alex/.claudiobot-worktrees/web/a1", branch: "claudio/verify-skill" },
     },
@@ -242,9 +257,13 @@ export const client = [
   { type: "devices" },
   { type: "revoke_device", deviceId: "d0" },
   { type: "pair_code" },
+  { type: "machine_code" },
+  { type: "remove_machine", machineId: MAC },
   { type: "presence", attended: false },
   { type: "send", botId: "b1", text: "Ship it", uploads: [], clientId: "c_9b1e" },
   { type: "update_bot", botId: "b1", patch: { muted: true } },
+  { type: "update_bot", botId: "b1", patch: { agentsOn: MAC } },
+  { type: "update_bot", botId: "b1", patch: { agentsOn: null } },
   { type: "memory" },
   { type: "set_fact", factId: null, text: "Prefers short answers" },
   { type: "set_fact", factId: "f_2", text: "Works on acme/web and acme/api" },
@@ -276,12 +295,72 @@ export const client = [
   { type: "session_answer", sessionId: agentSession, cardId: "m21", answers: null },
   { type: "session_create", ref: "s1", projectId: solta.id, text: "Add a mute button to the player", model: null, mode: "plan", isolate: "worktree" },
   { type: "session_create", ref: "s2", projectId: claudio.id, text: "Why does the bridge log a gap?", model: "opus", mode: null, isolate: "none" },
+  { type: "session_create", ref: "s3", projectId: solta.id, text: "Profile the fade on the Mac", model: null, mode: null, isolate: "none", machine: MAC },
   { type: "session_set", sessionId: desktopRow.id, patch: { title: "Volume slider", hidden: true } },
   { type: "session_set", sessionId: agentSession, patch: { model: null, mode: "acceptEdits" } },
   { type: "session_open_desktop", sessionId: agentSession },
   { type: "session_tool", sessionId: agentSession, toolUseId: "toolu_01Ab5" },
   { type: "session_prefs", mirror: "tap" },
 ] satisfies Wire<ClientMessage>[];
+
+// The home-machine link (src/machine/wire.ts), one frame of each kind and every intent and event inside them. The
+// iOS app never reads these.
+const machineProfile = {
+  name: "omarchy", platform: "linux", homedir: "/home/alex", username: "alex", rootHome: "/root", bridgeHome: "/home/alex/.claudiobot",
+  managedMcpPath: "/etc/claude-code/managed-mcp.json",
+  private: { bridge: [".claudiobot"], keys: [".ssh"], browser: [".config/google-chrome"], creds: [".netrc"], personal: [] },
+  caches: [".npm"], pushReadable: [".ssh/*.pub"], tempDirs: ["/tmp"], sandboxNeeds: [], access: { full: true, sandbox: false },
+  connectors: [{ name: "chrome-devtools", kind: "chrome" }, { name: "linear", kind: "other" }],
+} as const;
+const fromBot = { kind: "bot", botId: "b1", hops: 1, origin: { kind: "routine", run: { routineId: "r1", runId: "run4" }, manual: false } } as const;
+const agentCard = { ...permission, id: "m30", from: agentPeer };
+// The machine's own record: spend is the ledger's, and the machine is the home's to say, on whichever side shows it.
+const { spentUsd, budgetUsd, machine: _, ...bareAgent } = agent;
+export const link = [
+  { t: "challenge", nonce: "9f".repeat(32) },
+  { t: "hello", machineId: MAC, sig: "c2lnbmF0dXJl", nonce: "4e".repeat(32), profile: machineProfile, lastSeq: 12 },
+  { t: "welcome", sig: "c2lnbmF0dXJl", ackedSeq: 9 },
+  {
+    t: "intent",
+    intent: {
+      kind: "agent.start", intentId: "i_1", agentId: "a1", bot: { id: "b1", name: "engineer", dailyCapUsd: 10, connectorsOff: ["gmail"] },
+      title: "Set up verification skill", prompt: "Write the verify skill.", project: { githubRepo: "alex/web", name: "alex/web" },
+      where: "mac", isolate: "worktree", budgetUsd: 5, slash: null, initiator: { kind: "user" }, spentTodayUsd: 3.2,
+    },
+  },
+  { t: "intent", intent: { kind: "agent.message", intentId: "i_2", agentId: "a1", text: "Also cover the login page.", initiator: fromBot } },
+  { t: "intent", intent: { kind: "agent.direct", intentId: "i_3", agentId: "a1", text: "Use port 4000.", clientId: "c9" } },
+  { t: "intent", intent: { kind: "agent.stop", intentId: "i_4", agentId: "a1" } },
+  { t: "intent", intent: { kind: "agent.removeWorktree", intentId: "i_5", agentId: "a1" } },
+  { t: "intent", intent: { kind: "card.answer", intentId: "i_6", botId: "b1", cardId: "m30", reply: { kind: "permission", choice: "once" }, signed: null } },
+  { t: "intent", intent: { kind: "bot.forget", intentId: "i_10", botId: "b1" } },
+  { t: "intent", intent: { kind: "bot.update", intentId: "i_11", bot: { id: "b1", name: "engineer", dailyCapUsd: 12, connectorsOff: [] }, spentTodayUsd: 3.2 } },
+  { t: "intent", intent: { kind: "snapshot", intentId: "i_7" } },
+  { t: "intent", intent: { kind: "projects", intentId: "i_8" } },
+  { t: "ack", seq: 10 },
+  { t: "event", event: { seq: 10, at, kind: "agent", agent: bareAgent, messages: [{ id: "m40", at, from: "bot", text: "Write the verify skill." }] } },
+  { t: "event", event: { seq: 11, at, kind: "report", agentId: "a1", botId: "b1", text: "Done: the skill runs.", by: { kind: "agent", agentId: "a1", hops: 1, origin: { kind: "user" } } } },
+  { t: "event", event: { seq: 12, at, kind: "note", agentId: "a1", botId: "b1", text: "Worktree removed." } },
+  { t: "event", event: { seq: 13, at, kind: "card", botId: "b1", message: agentCard } },
+  {
+    t: "event",
+    event: {
+      seq: 14, at, kind: "usage",
+      row: { at, actor: "agent:a1", botId: "b1", sessionId: "s_1", initiator: { kind: "user" }, cumulativeUsd: 0.4, deltaUsd: 0.25, day: "2026-10-16" },
+    },
+  },
+  { t: "event", event: { seq: 15, at, kind: "profile", profile: machineProfile } },
+  { t: "event", event: { seq: 16, at, kind: "refused", intentId: "i_1", reason: "No project \"web\". Call list_projects for the names." } },
+  { t: "event", event: { seq: 17, at, kind: "snapshot", agents: [], openCards: [{ botId: "b1", message: agentCard }] } },
+  { t: "event", event: { seq: 18, at, kind: "reminder", botId: "b1", cardId: "m30" } },
+  { t: "event", event: { seq: 19, at, kind: "sessionCard", sessionId: "6f1c2b9e-0d2a-4c1e-9b7a-3e5d4c2b1a00", cardId: "m31" } },
+  { t: "ask", id: "i_9", frame: { type: "session_send", sessionId: "6f1c2b9e-0d2a-4c1e-9b7a-3e5d4c2b1a00", text: "Run the tests.", clientId: "c10", interrupt: false } },
+  { t: "reply", id: "i_9", frames: [] },
+  { t: "reply", id: "i_10", frames: [{ type: "error", message: "Unknown card" }] },
+  { t: "signal", frame: { type: "session_delta", sessionId: "6f1c2b9e-0d2a-4c1e-9b7a-3e5d4c2b1a00", itemId: "msg_1:0", offset: 0, text: "Running" } },
+  { t: "applied", intentId: "i_1", applied: { ok: true, reply: "Started agent a1 on web. It reports back to you when its turn ends." } },
+  { t: "applied", intentId: "i_4", applied: { ok: false, reason: "Nothing is running." } },
+] satisfies Wire<HomeFrame | MachineFrame>[];
 
 // Compile-time coverage: every server type, client type, message kind and session item kind has a fixture, so the Swift mirror is pinned
 // for all of them. A missing one fails tsc with its name.
@@ -292,9 +371,13 @@ const everyClientType: Covered<ClientMessage["type"], (typeof client)[number]["t
 const everyMessageKind: Covered<Message["kind"], Kinds<(typeof server)[number]>> = true;
 type ItemKinds<F> = F extends { items: (infer I)[] } ? (I extends { kind: infer K } ? K : never) : never;
 const everySessionItemKind: Covered<SessionItem["kind"], ItemKinds<(typeof server)[number]>> = true;
-void [everyServerType, everyClientType, everyMessageKind, everySessionItemKind];
+type Frames = (typeof link)[number];
+const everyFrame: Covered<(HomeFrame | MachineFrame)["t"], Frames["t"]> = true;
+const everyIntent: Covered<Intent["kind"], Extract<Frames, { t: "intent" }>["intent"]["kind"]> = true;
+const everyEvent: Covered<EventBody["kind"], Extract<Frames, { t: "event" }>["event"]["kind"]> = true;
+void [everyServerType, everyClientType, everyMessageKind, everySessionItemKind, everyFrame, everyIntent, everyEvent];
 
-export const fixturesJson = () => JSON.stringify({ server, client }, null, 2) + "\n";
+export const fixturesJson = () => JSON.stringify({ server, client, link }, null, 2) + "\n";
 export const fixturesPath = new URL("../../fixtures/protocol.json", import.meta.url);
 
 if (import.meta.main) await Bun.write(fixturesPath, fixturesJson());

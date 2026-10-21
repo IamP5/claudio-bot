@@ -14,6 +14,7 @@ import {
   type Cursor,
   type DeviceId,
   type FactId,
+  type MachineId,
   type Mention,
   type MessageId,
   type ProjectId,
@@ -110,6 +111,7 @@ function patch(v: unknown): BotPatch {
   if (o.dailyCapUsd !== undefined) p.dailyCapUsd = usd(o, "dailyCapUsd");
   if (o.muted !== undefined) p.muted = bool(o, "muted");
   if (o.members !== undefined) p.members = members(o.members);
+  if (o.agentsOn !== undefined) p.agentsOn = o.agentsOn === null ? null : (str(o, "agentsOn") as MachineId);
   return p;
 }
 
@@ -186,6 +188,7 @@ const sessionParsers: Record<SessionClientMessage["type"], (o: Obj) => SessionCl
     model: nullable(o, "model", str),
     mode: nullable(o, "mode", (o, key) => oneOf(o, key, PHONE_MODES)),
     isolate: oneOf(o, "isolate", ["none", "worktree"] as const),
+    ...(o.machine !== undefined && { machine: str(o, "machine") as MachineId }),
   }),
   session_set: (o) => ({ type: "session_set", sessionId: sessionId(o), patch: sessionPatch(o.patch) }),
   session_open_desktop: (o) => ({ type: "session_open_desktop", sessionId: sessionId(o) }),
@@ -235,6 +238,8 @@ const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
   devices: () => ({ type: "devices" }),
   revoke_device: (o) => ({ type: "revoke_device", deviceId: str(o, "deviceId") as DeviceId }),
   pair_code: () => ({ type: "pair_code" }),
+  machine_code: () => ({ type: "machine_code" }),
+  remove_machine: (o) => ({ type: "remove_machine", machineId: str(o, "machineId") as MachineId }),
   presence: (o) => ({ type: "presence", attended: bool(o, "attended") }),
   ...sessionParsers,
 };

@@ -59,7 +59,7 @@ struct SessionThreadView: View {
                     ContentUnavailableView(
                         movedTo == nil ? "This session is gone" : "This session moved",
                         systemImage: "tray",
-                        description: Text(movedTo == nil ? "Its transcript is no longer on your Mac." : "Opening it where it continues…")
+                        description: Text(movedTo == nil ? "Its transcript is no longer on \(store.computerName(row?.machine))." : "Opening it where it continues…")
                     )
                     .foregroundStyle(Theme.secondary)
                     .task(id: movedTo) {
@@ -382,7 +382,7 @@ struct ToolOutputSheet: View {
                     }
                     .defaultScrollAnchor(.bottom)
                 } else {
-                    ProgressView("Reading the output from your Mac…")
+                    ProgressView("Reading the output from \(store.computerName(store.sessions.rows[sessionId]?.machine))…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }

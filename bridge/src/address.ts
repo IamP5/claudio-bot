@@ -24,6 +24,32 @@ export function bridgeUrls(names: Names, lan: string[], port: number): string[] 
   return [...new Set(hosts)].map((host) => `ws://${host}:${port}/ws`);
 }
 
+/** Tailscale hands out 100.64.0.0/10. */
+const isTailnetIp = (host: string) => {
+  const [a, b] = host.split(".").map(Number);
+  return a === 100 && b !== undefined && b >= 64 && b < 128;
+};
+
+export const LAN_ENROLL_WARNING =
+  "WARNING: no tailnet address, so a machine enrolls over plain http on this network: anyone on it who answers first can " +
+  "pin their key as the home's. Turn Tailscale on here to enroll over the tailnet.";
+
+/**
+ * Where `claudiobot machine enroll` reaches this home, as http:// bases. Enrollment pins the home's key, so with Tailscale
+ * up it is offered only over the tailnet; without it, every address, with the warning to print.
+ */
+export function enrollUrls(names: Names, lan: string[], port: number): { urls: string[]; warning: string | null } {
+  const base = (u: string) => u.replace(/^ws:/, "http:").replace(/\/ws$/, "");
+  if (names.tailnet !== null) return { urls: [names.tailnet, ...lan.filter(isTailnetIp)].map((h) => `http://${h}:${port}`), warning: null };
+  return { urls: bridgeUrls(names, lan, port).map(base), warning: LAN_ENROLL_WARNING };
+}
+
+export const onTailnet = (urls: readonly string[]) =>
+  urls.some((u) => {
+    const host = new URL(u).hostname;
+    return host.endsWith(".ts.net") || isTailnetIp(host);
+  });
+
 /** claudiobot://pair?url=…&url=…&code=…, one url per address. An app that reads only the first url still pairs. */
 export function pairLink(urls: string[], code: string): string {
   return `claudiobot://pair?${urls.map((u) => `url=${encodeURIComponent(u)}`).join("&")}&code=${code}`;

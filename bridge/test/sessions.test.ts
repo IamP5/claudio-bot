@@ -1,10 +1,11 @@
+import { PRIVATE } from "../src/private";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ClaudeApps, DesktopEntry, Live } from "../src/claudeApps";
-import type { AgentId, BotId, ServerMessage, SessionId, SessionItem, SessionRow, SessionsChannelFrame, ThreadChannelFrame } from "../src/protocol";
-import { createSessions, type Sessions } from "../src/sessions";
+import type { AgentId, BotId, ServerMessage, SessionId, SessionItem, SessionRow, SessionsChannelFrame, ThreadChannelFrame, MachineId } from "../src/protocol";
+import { createSessions, type Sessions, type ThreadSignal } from "../src/sessions";
 import { emptySession, emptyWorld, own, type AgentRecord, type SessionState, type World } from "../src/world";
 
 // The Sessions facade over a temp CLAUDE_CONFIG_DIR holding recorded transcripts, with the Claude app faked and the
@@ -21,7 +22,7 @@ let folder: string;
 let world: World;
 let sessions: Sessions;
 let list: SessionsChannelFrame[];
-let thread: { id: SessionId; frame: ThreadChannelFrame }[];
+let thread: { id: SessionId; frame: ThreadSignal }[];
 let watchers: Map<SessionId, number>;
 let holders: Map<SessionId, Live>;
 let changes: (() => void)[];
@@ -62,6 +63,7 @@ async function until<T>(get: () => T | undefined | false, what: string): Promise
 
 function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
   sessions = createSessions({
+    machine: "m_test" as MachineId,
     epoch: "e1",
     projectsDir: join(base, "projects"),
     apps: fakeApps(),
@@ -75,11 +77,12 @@ function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
     userName: "Alex",
     bridgeHome: join(base, "home"),
     roots: [base],
-    agents: { session: () => null, direct: () => "no agents here", stop: async () => false, message: async () => "" },
+    agents: { session: () => null },
+    send: async (i) => (i.kind === "agent.direct" ? { ok: false, reason: "no agents here" } : i.kind === "agent.stop" ? { ok: false, reason: "Nothing is running." } : { ok: true, reply: "" }),
     decideGate: () => ({ ok: false, error: "Unknown card" }),
     ledger: { add() {}, headroom: () => ({ ok: true, capReached: false }), budgetLeft: () => null, dailyLeft: () => null },
     claude: { query: (() => { throw new Error("no Claude Code in this test"); }) as never, executable: () => "/fake/claude" },
-    scope: (cwd) => ({ bridgeHome: join(base, "home"), own: cwd, userMd: null, homedir: base }),
+    scope: (cwd) => ({ bridgeHome: join(base, "home"), own: cwd, userMd: null, homedir: base, private: PRIVATE.darwin }),
     folders: () => [],
     persist: () => {},
     now: () => new Date(),
@@ -136,7 +139,7 @@ test("the list groups every transcript under its project, with what each row nee
   expect(frame.mirror).toBe("auto");
   expect(frame.projects).toEqual([expect.objectContaining({ name: "demo", path: repo, githubRepo: null, canCloud: false })]);
   expect(frame.rows.map((r) => r.id).sort()).toEqual([PERMISSION, ASK].sort());
-  expect(rowOf(frame.rows, ASK)).toMatchObject({ projectId: frame.projects[0]!.id, origin: "sdk", status: "idle", holder: "none", unread: false, worktree: false, mirror: "none", hidden: false, agent: null, parentId: null });
+  expect(rowOf(frame.rows, ASK)).toMatchObject({ machine: "m_test", projectId: frame.projects[0]!.id, origin: "sdk", status: "idle", holder: "none", unread: false, worktree: false, mirror: "none", hidden: false, agent: null, parentId: null });
 });
 
 test("a session another Claude Code holds busy shows working in the Claude app", async () => {

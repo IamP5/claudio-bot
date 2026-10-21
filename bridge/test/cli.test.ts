@@ -80,8 +80,18 @@ test.each([
   const m = machine();
   const r = await m.run(args);
   expect(r.code).toBe(expected);
-  expect(r.stderr).toContain("usage: claudiobot <install|uninstall|status|doctor|logs|pair|update>");
+  expect(r.stderr).toContain("usage: claudiobot <install|uninstall|status|doctor|logs|pair|update|world|machine>");
   expect(m.calls("launchctl")).toEqual([]);
+});
+
+test("world with no step prints its own usage, and export from an empty home says there is nothing to move", async () => {
+  const m = machine();
+  const usage = await m.run(["world"]);
+  expect(usage.code).toBe(2);
+  expect(usage.stdout).toStartWith("usage: claudiobot world <export");
+  const empty = await m.run(["world", "export"]);
+  expect(empty.code).toBe(1);
+  expect(empty.stdout).toBe(`No bots on ${join(m.root, "home")} to move.\n`);
 });
 
 test.each([

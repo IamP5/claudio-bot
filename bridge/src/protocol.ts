@@ -14,6 +14,9 @@ export type RoutineId = string & { readonly __brand: "RoutineId" };
 export type RunId = string & { readonly __brand: "RunId" };
 export type DeviceId = string & { readonly __brand: "DeviceId" };
 export type FactId = string & { readonly __brand: "FactId" };
+export type MachineId = string & { readonly __brand: "MachineId" };
+/** One world of bots: the home's, minted once and kept in its machine.json, so it outlives the home's address. */
+export type WorldId = string & { readonly __brand: "WorldId" };
 
 /**
  * What a bridge can do beyond protocol 3's base. hello.features lists the ones this bridge serves, which may be fewer
@@ -22,7 +25,7 @@ export type FactId = string & { readonly __brand: "FactId" };
  */
 export const FEATURES = [
   "memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend",
-  "mentions", "commands", "exchanges", "groups", "usage", "sessions", "presence",
+  "mentions", "commands", "exchanges", "groups", "usage", "sessions", "presence", "machines",
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 
@@ -106,6 +109,9 @@ export type Bot = {
   dailyCapUsd: number | null;
   // No message or result pushes for this bot. Cards still push: a held call waits on the user.
   muted: boolean;
+  // The machine this bot starts its agents on unless it names another. null: the bot picks, the home's own machine
+  // when it names none. Always null for a group.
+  agentsOn: MachineId | null;
 } & BotSpend;
 
 /**
@@ -224,6 +230,8 @@ export type Agent = {
 
 /** An agent as the phone sees it: its spend from the ledger, null for cloud agents, which the bridge does not meter. */
 export type AgentView = Agent & {
+  // The machine it runs on; for a cloud agent, the machine that started it.
+  machine: MachineId;
   // Lifetime, every turn of every session.
   spentUsd: number | null;
   // The lifetime budget in force; null for a cloud agent or when there is none.
@@ -357,11 +365,12 @@ export const PHONE_MODES = ["default", "acceptEdits", "plan", "dontAsk", "auto"]
 export type PhoneMode = (typeof PHONE_MODES)[number];
 
 /**
- * A project: a git repository's main checkout, which every worktree of it joins. name: the GitHub repo name when the
- * remote is on GitHub ("solta-o-som" for ~/Dev/projects/br-soundless), else the folder name. lastAt: the newest
- * lastAt of its sessions, null when it has none. canCloud: reserved for phone-started cloud sessions, false in v1.
+ * A project: a git repository's main checkout, which every worktree of it joins. machine: the machine whose disk holds
+ * it, where a session_create for it runs. name: the GitHub repo name when the remote is on GitHub ("solta-o-som" for
+ * ~/Dev/projects/br-soundless), else the folder name. lastAt: the newest lastAt of its sessions, null when it has none.
+ * canCloud: reserved for phone-started cloud sessions, false in v1.
  */
-export type SessionProject = { id: ProjectId; name: string; path: string; githubRepo: string | null; lastAt: string | null; canCloud: boolean };
+export type SessionProject = { id: ProjectId; machine: MachineId; name: string; path: string; githubRepo: string | null; lastAt: string | null; canCloud: boolean };
 
 /** state null: the transcript names the PR without its state. */
 export type SessionPr = { number: number; url: string; state: "open" | "merged" | "closed" | null };
@@ -370,10 +379,12 @@ export type SessionPr = { number: number; url: string; state: "open" | "merged" 
  * One session in the list. Status, unread, holder and mirror are computed when the row is built. parentId: the
  * session it was spawned from, so the app nests it. agent: set when a bot's agent owns the id. worktree: the cwd is a
  * git worktree, not the main checkout. unread: the bridge drives it or the user opened it before, its lastAt is past
- * that visit, and its last item is the assistant's. url: claude.ai for a cloud row, else null.
+ * that visit, and its last item is the assistant's. url: claude.ai for a cloud row, else null. machine: the machine
+ * whose Claude Code transcripts hold the session, since a transcript resumes only where it was written.
  */
 export type SessionRow = {
   id: SessionId;
+  machine: MachineId;
   projectId: ProjectId;
   parentId: SessionId | null;
   title: string;
@@ -524,8 +535,18 @@ export type SessionClientMessage =
   | { type: "session_decide"; sessionId: SessionId; cardId: MessageId; choice: PermissionChoice }
   // Answers an ask item by question text. null dismisses it.
   | { type: "session_answer"; sessionId: SessionId; cardId: MessageId; answers: Record<string, string> | null }
-  // Answered by session_created with the same ref. model and mode null: the user's Claude Code defaults.
-  | { type: "session_create"; ref: string; projectId: ProjectId; text: string; model: string | null; mode: PhoneMode | null; isolate: "none" | "worktree" }
+  // Answered by session_created with the same ref. model and mode null: the user's Claude Code defaults. machine:
+  // where it runs; absent, the home's own machine.
+  | {
+      type: "session_create";
+      ref: string;
+      projectId: ProjectId;
+      text: string;
+      model: string | null;
+      mode: PhoneMode | null;
+      isolate: "none" | "worktree";
+      machine?: MachineId;
+    }
   | { type: "session_set"; sessionId: SessionId; patch: SessionPatch }
   // Imports the session into the Claude app when needed, then brings the app forward.
   | { type: "session_open_desktop"; sessionId: SessionId }
@@ -549,7 +570,17 @@ export const isSessionRequest = (m: ClientMessage): m is SessionClientMessage =>
 
 export type ServerMessage =
   // The app shows "Update the bridge" or "Update the app" when protocol is outside the range it speaks.
-  | ({ type: "hello"; protocol: number; features: Feature[]; machine: string; userName: string; bots: Bot[] } & StreamPosition)
+  // machines and world: present when the bridge serves feature "machines". world.name is "<userName>'s bots".
+  | ({
+      type: "hello";
+      protocol: number;
+      features: Feature[];
+      machine: string;
+      userName: string;
+      bots: Bot[];
+      machines?: MachineView[];
+      world?: { id: WorldId; name: string };
+    } & StreamPosition)
   | { type: "bot"; bot: Bot }
   | { type: "bot_removed"; botId: BotId }
   // Answers create_bot with the ref the client sent, so the app can open the new bot.
@@ -565,6 +596,10 @@ export type ServerMessage =
   | { type: "file"; botId: BotId; path: string; mime: string; content: string | null; data: string | null }
   | { type: "devices"; devices: Device[] }
   | ({ type: "pair_code" } & PairOffer)
+  // Feature "machines": every machine, sent whenever one comes online, goes offline or enrolls.
+  | { type: "machines"; machines: MachineView[] }
+  // Feature "machines", in answer to machine_code: urls are the home's addresses for `claudiobot machine enroll`.
+  | ({ type: "machine_code" } & PairOffer)
   // What a bot or one of its agents is doing right now ("Reading hub.ts"). text null: it stopped. Live sockets only:
   // never sequenced, never replayed, never pushed.
   | { type: "activity"; botId: BotId; agentId: AgentId | null; text: string | null; at: string }
@@ -591,8 +626,8 @@ export type Broadcast = ServerMessage & { seq: number };
 
 export type Upload = { name: string; mime: string; data: string };
 
-// members applies to a group only.
-export type BotPatch = Partial<Pick<Bot, "name" | "title" | "avatar" | "pinned" | "hidden" | "dailyCapUsd" | "muted" | "members">>;
+// members applies to a group only; agentsOn, to a bot only, and names this home's own machine or one enrolled into it.
+export type BotPatch = Partial<Pick<Bot, "name" | "title" | "avatar" | "pinned" | "hidden" | "dailyCapUsd" | "muted" | "members" | "agentsOn">>;
 
 export type ClientMessage =
   | { type: "create_bot"; ref: string }
@@ -642,11 +677,40 @@ export type ClientMessage =
   | { type: "devices" }
   | { type: "revoke_device"; deviceId: DeviceId }
   | { type: "pair_code" }
+  // Feature "machines": a one-time code another computer enrolls with as a machine of this home.
+  | { type: "machine_code" }
+  // Feature "machines": unpins a machine from this home and closes its link. Its agents stop being reachable from the
+  // phone and its open cards expire; the machine keeps its files. Answered with the machines frame, which is also
+  // broadcast. Refused for the home itself.
+  | { type: "remove_machine"; machineId: MachineId }
   // Feature "presence". attended false: nobody is looking at this app, so its socket does not hold back a push. A
   // socket that never sends one counts as attended.
   | { type: "presence"; attended: boolean };
 
-export type TransportMessage = Extract<ClientMessage, { type: "devices" | "revoke_device" | "pair_code" | "presence" }>;
+export type TransportMessage = Extract<ClientMessage, { type: "devices" | "revoke_device" | "pair_code" | "machine_code" | "presence" }>;
+
+/**
+ * A computer that runs agents for this home (feature "machines"). role home: the bridge the phone is connected to.
+ * since: when it came online, or when it was last heard from while offline; null when never. access: the machine's
+ * own mode, which only its own environment sets. connectors: the MCP servers its agents can use, as it last reported
+ * them.
+ */
+export type MachineView = {
+  id: MachineId;
+  name: string;
+  role: "home" | "machine";
+  online: boolean;
+  since: string | null;
+  platform: "darwin" | "linux";
+  access: { full: boolean; sandbox: boolean };
+  connectors: MachineConnector[];
+};
+
+/**
+ * An MCP server on a machine, by name only. kind: chrome for a browser server (chrome, chrome-devtools,
+ * claude-in-chrome), computer-use for computer-use, other for the rest. The app treats an unknown kind as "other".
+ */
+export type MachineConnector = { name: string; kind: "chrome" | "computer-use" | "other" };
 
 /**
  * A one-time code another device can pair with, valid until expiresAt, with the bridge's socket URLs best first: what

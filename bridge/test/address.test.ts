@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { bonjourName, bridgeUrls, pairLink, tailnetName } from "../src/address";
+import { bonjourName, bridgeUrls, enrollUrls, pairLink, tailnetName } from "../src/address";
 
 test("the tailnet name comes first, then the Bonjour name, then each LAN address", () => {
   expect(bridgeUrls({ tailnet: "mac.tail-1234.ts.net", localHost: "Alexs-Mac.local" }, ["10.0.0.20", "100.64.0.3"], 7878)).toEqual([
@@ -38,4 +38,12 @@ test("the pairing link carries every address, best first, so the app can fall ba
   const link = pairLink(["ws://mac.tail-1234.ts.net:7878/ws", "ws://Alexs-Mac.local:7878/ws"], "7KQM-X2PD");
   expect(link).toBe("claudiobot://pair?url=ws%3A%2F%2Fmac.tail-1234.ts.net%3A7878%2Fws&url=ws%3A%2F%2FAlexs-Mac.local%3A7878%2Fws&code=7KQM-X2PD");
   expect(new URL(link).searchParams.getAll("url")).toEqual(["ws://mac.tail-1234.ts.net:7878/ws", "ws://Alexs-Mac.local:7878/ws"]);
+});
+
+test("a machine code offers only the tailnet when Tailscale is up, and every address with a warning when it is not", () => {
+  const names = { tailnet: "omarchy.tail-1234.ts.net", localHost: "omarchy.local" };
+  expect(enrollUrls(names, ["192.168.1.30", "100.101.2.3"], 7878)).toEqual({ urls: ["http://omarchy.tail-1234.ts.net:7878", "http://100.101.2.3:7878"], warning: null });
+  const lan = enrollUrls({ tailnet: null, localHost: "omarchy.local" }, ["192.168.1.30"], 7878);
+  expect(lan.urls).toEqual(["http://omarchy.local:7878", "http://192.168.1.30:7878"]);
+  expect(lan.warning).toContain("plain http");
 });

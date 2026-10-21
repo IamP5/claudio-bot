@@ -2,6 +2,8 @@ import type { Server, ServerWebSocket } from "bun";
 import { rejectsOrigin, type Devices } from "./devices";
 import type { Hub } from "./hub";
 import type { Legacy } from "./legacy";
+import type { Enrollment } from "./machine/enroll";
+import type { LinkSession, Links } from "./machine/links";
 import { parseClientMessage } from "./parse";
 import {
   isSessionRequest,
@@ -12,14 +14,15 @@ import {
   type SessionId,
   type SessionsChannelFrame,
   type Signal,
-  type ThreadChannelFrame,
   type TransportMessage,
 } from "./protocol";
 import { forProtocol2 } from "./protocol2";
+import type { ThreadSignal } from "./sessions";
 import type { Stream } from "./stream";
 import { errorText } from "./text";
 
-// HTTP and the socket: /health, POST /pair, /ws with resume, and the transport messages.
+// HTTP and the sockets: /health, POST /pair, /ws with resume and the transport messages, and on a home with machines,
+// POST /enroll and the machines' /link.
 
 // Broadcasts go out twice: as is to apps that connected with ?protocol=3, and with permission cards shown as questions
 // to a protocol 2 app, which sends no protocol and has no permission card.
@@ -53,7 +56,11 @@ type SocketData = {
   threads: Set<SessionId>;
   turns: Promise<void>;
 };
+/** A machine's link. It proves who it is in its handshake, so it upgrades with no token. */
+type LinkData = { link: LinkSession | null };
 type Socket = ServerWebSocket<SocketData>;
+type AnySocket = ServerWebSocket<SocketData | LinkData>;
+const isLink = (ws: AnySocket): ws is ServerWebSocket<LinkData> => "link" in ws.data;
 
 export type ServeDeps = {
   devices: Devices;
@@ -66,6 +73,8 @@ export type ServeDeps = {
   hostname?: string;
   /** The one way a code is minted for another device: pair_code here and the control socket both call it. */
   offer: () => PairOffer;
+  /** A home's machines: their links, enrollment, and join codes (machine_code). Absent: none of the three. */
+  machines?: { links: Links; enroll(body: unknown): Enrollment; offer(): PairOffer };
 };
 
 export type Transport = {
@@ -79,7 +88,7 @@ export type Transport = {
    */
   signal(message: Signal): void;
   signal(message: SessionsChannelFrame, topic: "sessions"): void;
-  signal(message: ThreadChannelFrame, topic: ThreadTopic): void;
+  signal(message: ThreadSignal, topic: ThreadTopic): void;
   watchers(sessionId: SessionId): number;
   /** Open authenticated sockets heard from within LIVE_WINDOW_MS whose app is attended. */
   live(): number;
@@ -112,7 +121,7 @@ function subscribe(ws: Socket, m: ClientMessage) {
 }
 
 const isTransport = (m: ClientMessage): m is TransportMessage =>
-  m.type === "devices" || m.type === "revoke_device" || m.type === "pair_code" || m.type === "presence";
+  m.type === "devices" || m.type === "revoke_device" || m.type === "pair_code" || m.type === "machine_code" || m.type === "presence";
 
 /**
  * What a socket may not send. A protocol 2 socket sends no session request: channel frames reach every subscriber
@@ -173,6 +182,13 @@ export function serve(deps: ServeDeps): Transport {
           return [{ type: "error", message: "This phone still uses the old shared token. Pair it with a code from the Mac before it can pair others." }];
         }
         return [{ type: "pair_code", ...deps.offer() }];
+      case "machine_code":
+        if (!deps.machines) return [{ type: "error", message: "This bridge does not take machines." }];
+        if (devices.list(self).find((d) => d.current)?.legacy) {
+          return [{ type: "error", message: "This phone still uses the old shared token. Pair it with a code from the Mac before it can add machines." }];
+        }
+        log("machine code minted from a phone");
+        return [{ type: "machine_code", ...deps.machines.offer() }];
       case "presence":
         ws.data.attended = message.attended;
         return [];
@@ -216,7 +232,30 @@ export function serve(deps: ServeDeps): Transport {
     return Response.json(result);
   }
 
-  const server: Server<SocketData> = Bun.serve<SocketData>({
+  async function enroll(req: Request, address: string): Promise<Response> {
+    if (!deps.machines) return new Response("Not found", { status: 404 });
+    if (req.method !== "POST") return new Response("Use POST", { status: 405 });
+    const at = deps.now().getTime();
+    if (limited(address, at)) {
+      return Response.json({ error: "Too many failed enrollments from this address. Wait ten minutes, then try again." }, { status: 429 });
+    }
+    let result: Enrollment;
+    try {
+      result = deps.machines.enroll(await req.json().catch(() => null));
+    } catch (e) {
+      log(`enrollment not saved: ${errorText(e)}`);
+      return Response.json({ error: "The home could not save the enrollment. Try the same code again." }, { status: 500 });
+    }
+    if (result.status === 401) failed(address, at);
+    if (result.status !== 200) return Response.json(result.body, { status: result.status });
+    if (result.created) {
+      log(`enrolled machine ${result.machine}`);
+      deps.machines.links.enrolled();
+    }
+    return Response.json(result.body);
+  }
+
+  const server: Server<SocketData | LinkData> = Bun.serve<SocketData | LinkData>({
     hostname: deps.hostname ?? "0.0.0.0",
     port: deps.port,
     maxRequestBodySize: 64 * 1024,
@@ -233,6 +272,11 @@ export function serve(deps: ServeDeps): Transport {
         return Response.json(proof === null ? { ok: true } : { ok: true, proof });
       }
       if (url.pathname === "/pair") return pair(req, server.requestIP(req)?.address ?? "");
+      if (url.pathname === "/enroll") return enroll(req, server.requestIP(req)?.address ?? "");
+      if (url.pathname === "/link" && deps.machines) {
+        if (server.upgrade(req, { data: { link: null } })) return;
+        return new Response("Expected a WebSocket upgrade", { status: 426 });
+      }
       if (url.pathname === "/ws") {
         const deviceId = devices.authenticate(req);
         if (deviceId === null) return new Response("Unauthorized", { status: 401 });
@@ -250,9 +294,15 @@ export function serve(deps: ServeDeps): Transport {
       maxPayloadLength: MAX_FRAME_BYTES,
       idleTimeout: IDLE_TIMEOUT_S,
       sendPings: true,
-      ping: heard,
-      pong: heard,
-      open(ws) {
+      ping: (ws) => void (isLink(ws) || heard(ws as Socket)),
+      pong: (ws) => void (isLink(ws) || heard(ws as Socket)),
+      open(any) {
+        if (isLink(any)) {
+          const links = deps.machines!.links;
+          any.data.link = links.open({ send: (text) => any.send(text), close: (code, reason) => any.close(code, reason) });
+          return;
+        }
+        const ws = any as Socket;
         const { deviceId, resume } = ws.data;
         if (!isPaired(deviceId)) return ws.close(4001, "revoked");
         const missed = resume ? stream.since(resume.epoch, resume.after) : null;
@@ -265,7 +315,12 @@ export function serve(deps: ServeDeps): Transport {
         sockets.set(deviceId, (sockets.get(deviceId) ?? new Set()).add(ws));
         devices.seen(deviceId);
       },
-      close(ws) {
+      close(any) {
+        if (isLink(any)) {
+          if (any.data.link) deps.machines!.links.closed(any.data.link);
+          return;
+        }
+        const ws = any as Socket;
         sockets.get(ws.data.deviceId)?.delete(ws);
         // Bun drops a closed socket's topics; the hub hears it left each thread, after the requests already sent.
         ws.data.turns = ws.data.turns.then(async () => {
@@ -273,7 +328,12 @@ export function serve(deps: ServeDeps): Transport {
           ws.data.threads.clear();
         });
       },
-      message(ws, raw) {
+      message(any, raw) {
+        if (isLink(any)) {
+          if (any.data.link) deps.machines!.links.message(any.data.link, String(raw));
+          return;
+        }
+        const ws = any as Socket;
         heard(ws);
         ws.data.turns = ws.data.turns.then(() => handle(ws, String(raw))).catch((e) => log(`serve: ${errorText(e)}`));
       },
@@ -306,7 +366,7 @@ export function serve(deps: ServeDeps): Transport {
       const old = forProtocol2(message);
       if (old !== null) server.publish(TOPIC[2], old === message ? frame : JSON.stringify({ ...old, seq: stream.seq }));
     },
-    signal: (message: Signal | SessionsChannelFrame | ThreadChannelFrame, topic?: string) => {
+    signal: (message: Signal | SessionsChannelFrame | ThreadSignal, topic?: string) => {
       server.publish(topic ?? TOPIC[3], JSON.stringify(message));
     },
     watchers: (sessionId) => server.subscriberCount(threadTopic(sessionId)),

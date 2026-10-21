@@ -1,3 +1,4 @@
+import type { MachineId } from "../src/machine/wire";
 import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,13 +9,13 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHomes } from "../src/home";
 import { createHub, tickEach } from "../src/hub";
 import type { Project } from "../src/projects";
-import type { AgentId, BotId, ClientMessage, Command, Message, MessageId, RoutineId, RunId, ServerMessage } from "../src/protocol";
+import type { AgentId, BotId, ClientMessage, Command, Message, MessageId, RoutineId, RunId, ServerMessage, WorldId } from "../src/protocol";
 import { createPush } from "../src/push";
 import { BREAKER_NOTE } from "../src/session";
 import type { UsageRead } from "../src/claudeCode";
 import { CLAUDIO_TOOLS } from "../src/tools";
 import { emptySession, emptyWorld, type AgentRecord, type BotRecord, type EnvelopeId, type Fingerprint, type GateState, type RoutineRecord, type Signature, type World } from "../src/world";
-import { assistant, at, bot, callTool, cleanup, COMMANDS, flush, hubOver, inAnHour, later, NO_RING, result, roots, runBash, text, toolUse } from "./hub-kit";
+import { assistant, at, bot, callTool, cleanup, COMMANDS, flush, hubOver, inAnHour, later, NO_RING, result, roots, runBash, testProfile, text, toolUse } from "./hub-kit";
 
 afterEach(cleanup);
 
@@ -1603,7 +1604,9 @@ test("boot carries on when USER.md cannot be created, and says why in the log", 
   const homes = createHomes(root);
   const logs: string[] = [];
   const hub = createHub({
-    machine: "Mac",
+    machineId: "m_test" as MachineId,
+    worldId: "w_test" as WorldId,
+    profile: testProfile(root),
     userName: "Alex",
     world,
     homes: { ...homes, ensureUserMd: () => { throw new Error("EACCES: permission denied"); } },

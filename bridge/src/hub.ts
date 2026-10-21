@@ -6,11 +6,10 @@ import { createActivity } from "./activity";
 import { strictMcp, type UsageRead } from "./claudeCode";
 import { createClock, type Tickable } from "./clock";
 import { commandOf, createCommands, probeCommands, slashName } from "./commands";
-import { connectorSettings, createConnectors } from "./connectors";
-import { createGate } from "./gate";
+import { createConnectors } from "./connectors";
 import { chainBudget, createChains, GROUP_SIZE, mentionedIn, membersError, newGroup, targetsOf, transcript, typingLine } from "./groups";
 import type { Homes } from "./home";
-import { createLedger, localDay } from "./ledger";
+import { localDay } from "./ledger";
 import { createMemory, writeAtomic } from "./memory";
 import type { Scope } from "./policy";
 import { projectFolders, projectRoots, type Project } from "./projects";
@@ -35,24 +34,23 @@ import {
   type Signal,
   type StreamPosition,
 } from "./protocol";
-import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, NO_AUTO_MEMORY, onboarding, persona, type Envelope } from "./prompts";
+import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, onboarding, persona, type Envelope } from "./prompts";
 import { cardReply } from "./protocol2";
 import type { Push } from "./push";
 import type { Result } from "./result";
-import { gitDirsOf, sandboxFor } from "./sandbox";
+import { sandboxFor } from "./sandbox";
 import { scopeFor, type MachineProfile } from "./machine/profile";
 import { createLocalMachine, createMachines } from "./machine/machines";
 import { placeAgent } from "./machine/place";
 import { memoryJournal } from "./machine/journal";
-import { createAgentRuntime } from "./machine/runtime";
+import { createNode, settingsFor, trimThread } from "./machine/node";
 import { newAgentId, newIntentId, type Applied } from "./machine/wire";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { createSessions, type Sessions, type SessionsEnv } from "./sessions";
-import { transcriptExists } from "./transcript";
 import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { createSkills } from "./skills";
 import { createUsageMonitor } from "./usage";
-import { appendArchive, type Persist } from "./store";
+import type { Persist } from "./store";
 import { BOT_NAME_MAX, errorText, hasHiddenCharacters } from "./text";
 import { botToolServer, type BotActions } from "./tools";
 import { blockStart, freshTurn, readTurn, type Bubble, type Turn } from "./turn";
@@ -82,10 +80,8 @@ import {
   routinesText,
   routineView,
   sortBots,
-  splitHistory,
   toBot,
   toGroup,
-  type Actor,
   type BotRecord,
   type ChatRecord,
   type GroupRecord,
@@ -195,8 +191,6 @@ function section(doc: string, heading: string): string | null {
   return m ? m[1]!.trim() || null : null;
 }
 
-/** Ten years: as long as the bot lives, in practice. */
-const KEEP_TRANSCRIPTS = { cleanupPeriodDays: 3650 } as const;
 /** A turn still running this long after its push pushes its last bubble again when it ends. */
 const LONG_TURN_MS = 20_000;
 
@@ -226,14 +220,6 @@ export function createHub(deps: HubDeps): Hub {
   const system: Initiator = { kind: "system" };
   // The clock is created last, once every ticker exists; a module may report a change while the hub is being built.
   let poke = () => {};
-
-  const ledger = createLedger({
-    dir: join(root, "usage"),
-    capFor: (id) => world.bots.get(id)?.dailyCapUsd ?? null,
-    budgetFor: (id) => world.agents.get(id)?.budgetUsd ?? null,
-    now: clockNow,
-    log: deps.log,
-  });
 
   /** Claude Code's transcripts, which tell a new session from one to resume. */
   const projectsDir = deps.sessions?.projectsDir ?? join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects");
@@ -300,18 +286,7 @@ export function createHub(deps: HubDeps): Hub {
 
   const archiveOf = (botId: BotId, thread: string) => join(homes.homeOf(botId), ".history", `${thread}.jsonl`);
 
-  /** Moves a thread's oldest messages to its archive. Written there first: when that fails they stay in state. */
-  function trim<M>(messages: M[], file: string, pinned: (m: M) => boolean) {
-    const split = splitHistory(messages, pinned);
-    if (split === null) return;
-    try {
-      appendArchive(file, split.archived);
-    } catch (e) {
-      deps.log(`history: could not archive to ${file}, keeping it in state.json: ${errorText(e)}`);
-      return;
-    }
-    messages.splice(0, messages.length, ...split.kept);
-  }
+  const trim = <M>(messages: M[], file: string, pinned: (m: M) => boolean) => trimThread(messages, file, pinned, deps.log);
 
   function say(bot: BotRecord, message: Message) {
     const fresh = !bot.messages.some((m) => m.id === message.id);
@@ -382,7 +357,7 @@ export function createHub(deps: HubDeps): Hub {
   /** One member's turn on a message in the group. skip: the message itself, which the envelope carries apart. */
   function handTo(group: GroupRecord, member: BotRecord, message: { text: string; addressed: boolean; skip: ReadonlySet<MessageId> }, chain: MessageId, by: Extract<Envelope, { from: "group" }>["by"]) {
     const nameOf = (id: BotId) => world.bots.get(id)?.name ?? "a former member";
-    deliver(botActor(member.id), {
+    deliver(member.id, {
       from: "group",
       group: { id: group.id, name: group.name },
       chain,
@@ -432,32 +407,14 @@ export function createHub(deps: HubDeps): Hub {
     changed(bot);
   }
 
-  const sessionOf = (actor: Actor): Session | null =>
-    actor.kind === "bot" ? (brains.get(actor.botId) ?? null) : localAgents.session(actor.agentId);
-
   const initiatorNow = (bot: BotRecord): Initiator => brains.get(bot.id)?.current?.initiator ?? system;
 
-  function scopeOf(actor: Actor): Scope {
-    const machine = scopeFor(deps.profile);
-    if (actor.kind === "bot") return { ...machine, own: realpathSync(homes.homeOf(actor.botId)), userMd: join(machine.bridgeHome, "USER.md") };
-    const rec = world.agents.get(actor.agentId);
-    if (!rec) throw new Error(`Unknown agent ${actor.agentId}`);
-    return { ...machine, own: realpathSync(rec.cwd), userMd: null };
-  }
-
-  function deliver(actor: Actor, e: Envelope) {
+  function deliver(botId: BotId, e: Envelope) {
+    const bot = world.bots.get(botId);
+    if (!bot) return;
     const input = inputOf(e, userName);
-    if (actor.kind === "bot") {
-      const bot = world.bots.get(actor.botId);
-      if (!bot) return;
-      deps.log(`envelope ${bot.id} ${input.text.split("\n")[0]}`);
-      brain(bot).push(input);
-      return;
-    }
-    const rec = world.agents.get(actor.agentId);
-    if (!rec) return;
-    deps.log(`envelope ${rec.agent.id} ${input.text.split("\n")[0]}`);
-    localAgents.deliver(rec, input);
+    deps.log(`envelope ${bot.id} ${input.text.split("\n")[0]}`);
+    brain(bot).push(input);
   }
 
   /** quiet: the turn called routine_no_update and asked nothing. */
@@ -505,14 +462,7 @@ export function createHub(deps: HubDeps): Hub {
     if (turn.settles !== null) scheduler.settle(bot.id, turn.settles, outcomeOf(end, quiet));
   }
 
-  /**
-   * The flag settings of every query the bot and its agents open. Claude Code deletes transcripts older than
-   * cleanupPeriodDays (30 by default) at startup, and a bot's session lives far longer. The user's own claude runs still
-   * sweep with their setting, so session.ts also recovers from a transcript that is gone.
-   */
-  function settingsFor(botId: BotId): Settings {
-    return { ...NO_AUTO_MEMORY, ...KEEP_TRANSCRIPTS, ...connectorSettings(world.bots.get(botId)?.connectorsOff ?? []) };
-  }
+  const settingsOf = (botId: BotId): Settings => settingsFor(world, botId);
 
   const claudeMdOf = (botId: BotId) => join(homes.homeOf(botId), "CLAUDE.md");
 
@@ -602,7 +552,7 @@ export function createHub(deps: HubDeps): Hub {
     // only an open query's list has MCP prompts.
     probe: (id) => {
       homes.ensureFolders(id);
-      return probeCommands(deps.claude, { cwd: homes.homeOf(id), settingSources: ["user", "project"], settings: settingsFor(id), ...strictMcp(deps.profile.managedMcpPath), mcpServers: {} });
+      return probeCommands(deps.claude, { cwd: homes.homeOf(id), settingSources: ["user", "project"], settings: settingsOf(id), ...strictMcp(deps.profile.managedMcpPath), mcpServers: {} });
     },
     saved: (id) => skills.list(id),
     changed: (id, menu) => {
@@ -643,8 +593,8 @@ export function createHub(deps: HubDeps): Hub {
           model: deps.model,
           hooks: gate.hooks(actor),
           canUseTool: gate.canUseTool(actor),
-          sandbox: sandboxFor(actor, scopeOf(actor), deps.profile, process.env),
-          settings: settingsFor(bot.id),
+          sandbox: sandboxFor(actor, node.scopeOf(actor), deps.profile, process.env),
+          settings: settingsOf(bot.id),
           // A block's start tells whether the text before it leads up to a question card (Reading.tail).
           includePartialMessages: true,
         };
@@ -737,74 +687,41 @@ export function createHub(deps: HubDeps): Hub {
     homes.create(bot.id, botMemory({ name: fields.name, job: fields.job }));
     world.bots.set(bot.id, bot);
     changed(bot);
-    deliver(botActor(bot.id), by);
+    deliver(bot.id, by);
     return bot;
   }
 
-  const gate = createGate({
-    world,
-    scopeOf,
-    turnOf(actor) {
-      const session = sessionOf(actor);
-      const current = session?.current;
-      return session && current ? { initiator: current.initiator, stopping: session.lifecycle.kind === "stopping" } : null;
-    },
-    headroom: (actor, initiator) => ledger.headroom(actor, initiator),
-    say,
-    deliver,
-    notice(actor, text) {
-      if (actor.kind === "bot") {
-        const bot = world.bots.get(actor.botId);
-        if (bot) brain(bot).notice(text);
-        return;
-      }
-      const rec = world.agents.get(actor.agentId);
-      if (rec) localAgents.notice(rec, text);
-    },
-    denied: (actor) => sessionOf(actor)?.denied(),
-    notify(bot, reason, id) {
-      deps.push.notify(bot, reason, id);
-      // The gate posts a card before it records it as open, so the bot frame say() sent did not count it yet.
-      if (reason === "card") changed(bot);
-    },
-    trusted: (root) => localAgents.trusted(root),
-    persist: deps.persist,
-    auditDir: join(root, "audit"),
-    userName,
-    now: clockNow,
-    log: deps.log,
-  });
-
-  const scheduler = createScheduler({
-    world,
-    log: deps.log,
-    deliver: (bot, e) => deliver(botActor(bot.id), e),
-    note,
-    changed,
-    parked,
-    now: clockNow,
-  });
-
-  const runtime = createAgentRuntime({
+  const node = createNode({
     world,
     profile: deps.profile,
     userName,
     model: deps.model,
-    ledger,
-    log: deps.log,
     claude: deps.claude,
-    hooks: (actor) => gate.hooks(actor),
-    canUseTool: (actor) => gate.canUseTool(actor),
-    beginTurn: (actor) => gate.beginTurn(actor),
-    sandbox(actor) {
-      const scope = scopeOf(actor);
-      return sandboxFor(actor, scope, deps.profile, process.env, gitDirsOf(scope.own));
+    persist: deps.persist,
+    log: deps.log,
+    now: clockNow,
+    root,
+    agentConfig: (id) => homes.agentConfig(id),
+    projectsDir,
+    scan: deps.scan,
+    // The home's own machine shares its World, so a bot's real record is its stand-in, and only the hub writes it.
+    standIn: (bot) => world.bots.has(bot.id),
+    journal: memoryJournal(),
+    bots: {
+      folder: (botId) => homes.homeOf(botId),
+      session: (botId) => brains.get(botId) ?? null,
+      say,
+      deliver,
+      notice(botId, text) {
+        const bot = world.bots.get(botId);
+        if (bot) brain(bot).notice(text);
+      },
+      notify(bot, reason, id) {
+        deps.push.notify(bot, reason, id);
+        // The gate posts a card before it records it as open, so the bot frame say() sent did not count it yet.
+        if (reason === "card") changed(bot);
+      },
     },
-    configRoot: (id) => homes.agentConfig(id),
-    transcriptExists: (id, cwd) => transcriptExists(projectsDir, id, cwd),
-    turnDone: (rec) => sessions?.agentTurnDone(rec),
-    trustCard: (actor, repo) => gate.trustCard(actor, repo),
-    settings: (actor) => settingsFor(actor.botId),
     observe(actor, m) {
       metered(m);
       activity.observe(actor, m);
@@ -812,14 +729,20 @@ export function createHub(deps: HubDeps): Hub {
       if (id) sessions?.stream(id as SessionId, m);
     },
     idle: (actor) => activity.clear(actor),
-    persist: deps.persist,
-    now,
-    scan: deps.scan,
-    answer: (botId, cardId, reply) => gate.answer(botId, cardId, reply),
-    // The home's own machine shares its World, so a bot's real record is its stand-in, and only the hub writes it.
-    standIn: (bot) => world.bots.has(bot.id),
-    journal: memoryJournal(),
+    turnDone: (rec) => sessions?.agentTurnDone(rec),
   });
+  const { ledger, gate, runtime } = node;
+
+  const scheduler = createScheduler({
+    world,
+    log: deps.log,
+    deliver: (bot, e) => deliver(bot.id, e),
+    note,
+    changed,
+    parked,
+    now: clockNow,
+  });
+
   /** The gate's wiring, the clock and boot: what reaches agents in this process only. Commands go through machines. */
   const localAgents = runtime.local;
   const machines = createMachines(createLocalMachine(runtime, deps.profile));
@@ -842,7 +765,7 @@ export function createHub(deps: HubDeps): Hub {
         const rec = world.agents.get(e.agentId);
         if (!bot || !rec) return;
         exchange(bot, agentPeer(rec.agent), "received");
-        deliver(botActor(bot.id), { from: "agent", title: rec.agent.title, agentId: rec.agent.id, text: e.text, hops: hopsOf(e.by), origin: rootOf(e.by) });
+        deliver(bot.id, { from: "agent", title: rec.agent.title, agentId: rec.agent.id, text: e.text, hops: hopsOf(e.by), origin: rootOf(e.by) });
         return;
       }
       case "note": {
@@ -988,7 +911,7 @@ export function createHub(deps: HubDeps): Hub {
       exchange(from, botPeer(to), "sent");
       exchange(to, botPeer(from), "received");
       const by = initiatorNow(from);
-      deliver(botActor(to.id), { from: "bot", name: from.name, botId: from.id, hops: hopsAfter(by), origin: rootOf(by), text: a.text });
+      deliver(to.id, { from: "bot", name: from.name, botId: from.id, hops: hopsAfter(by), origin: rootOf(by), text: a.text });
       return `Delivered to ${to.name}.`;
     },
 
@@ -1069,7 +992,7 @@ export function createHub(deps: HubDeps): Hub {
       ...(mentions.length > 0 && { mentions }),
     });
     const others = mentions.filter((x) => x.kind !== "bot" || x.id !== bot.id);
-    deliver(botActor(bot.id), command !== null ? { from: "command", line: m.text.trim() } : { from: "user", text: m.text, attachments, mentions: others });
+    deliver(bot.id, command !== null ? { from: "command", line: m.text.trim() } : { from: "user", text: m.text, attachments, mentions: others });
     return [];
   }
 

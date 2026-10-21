@@ -43,7 +43,7 @@ struct SessionRowView: View, Equatable {
                 if !accessible { Spacer(minLength: 0) }
                 HStack(spacing: 8) {
                     MirrorGlyph(mirror: row.mirror)
-                    if let machine { MachineChip(name: machine) }
+                    if let machine { MachineChip(name: machine, compact: true) }
                     if let pr = row.pr { PullRequestChip(pr: pr) }
                     Text(SessionText.age(row.lastAt, now: now))
                         .font(.caption.monospacedDigit())

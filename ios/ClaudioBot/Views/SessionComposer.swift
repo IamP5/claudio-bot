@@ -274,6 +274,13 @@ struct NewSessionSheet: View {
         return MachineProjects.group(store.sessions.orderedProjects, rows: store.sessions.rows.values, machines: store.machines)
     }
 
+    /// The projects on the chosen machine, or every project on a world with one machine.
+    private var projectChoices: [SessionPlace] {
+        guard let groups = byMachine else { return store.sessions.orderedProjects.map { SessionPlace(machine: nil, project: $0.id) } }
+        let group = groups.first { $0.machine.id == place?.machine } ?? groups.first
+        return group.map { group in group.projects.map { SessionPlace(machine: group.machine.id, project: $0.id) } } ?? []
+    }
+
     private var firstPlace: SessionPlace? {
         guard let groups = byMachine else {
             return (projectId ?? store.sessions.orderedProjects.first?.id).map { SessionPlace(machine: nil, project: $0) }
@@ -288,19 +295,23 @@ struct NewSessionSheet: View {
         NavigationStack {
             Form {
                 Section {
+                    // A navigation-link picker draws a section header as one more row, so the machine is its own
+                    // picker and the projects follow it.
+                    if let groups = byMachine {
+                        Picker("Computer", selection: Binding(
+                            get: { place?.machine },
+                            set: { machine in
+                                let projects = groups.first { $0.machine.id == machine }?.projects ?? []
+                                let kept = place.flatMap { place in projects.first { $0.id == place.project } } ?? projects.first
+                                place = kept.map { SessionPlace(machine: machine, project: $0.id) }
+                            }
+                        )) {
+                            ForEach(groups) { Text(MachineText.choice($0.machine)).tag(Optional($0.machine.id)) }
+                        }
+                    }
                     Picker("Project", selection: $place) {
-                        if let groups = byMachine {
-                            ForEach(groups) { group in
-                                Section(MachineText.choice(group.machine)) {
-                                    ForEach(group.projects) { project in
-                                        Text(project.name).tag(Optional(SessionPlace(machine: group.machine.id, project: project.id)))
-                                    }
-                                }
-                            }
-                        } else {
-                            ForEach(store.sessions.orderedProjects) { project in
-                                Text(project.name).tag(Optional(SessionPlace(machine: nil, project: project.id)))
-                            }
+                        ForEach(projectChoices, id: \.self) { choice in
+                            Text(store.sessions.projects[choice.project]?.name ?? choice.project.rawValue).tag(Optional(choice))
                         }
                     }
                     .pickerStyle(.navigationLink)

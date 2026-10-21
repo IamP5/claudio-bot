@@ -67,10 +67,26 @@ struct TagChip: View {
 /// The machine an agent or session runs on, beside it when the world has several.
 struct MachineChip: View {
     let name: String
+    /// A session row's chip: the glyph and the name in caption type, or the glyph alone when the title needs the room,
+    /// never a name cut to a letter.
+    var compact = false
 
     var body: some View {
-        TagChip(text: name, symbol: "desktopcomputer")
-            .accessibilityLabel("On \(name)")
+        Group {
+            if compact {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "desktopcomputer").font(.caption2)
+                        Text(name).font(.caption).lineLimit(1)
+                    }
+                    Image(systemName: "desktopcomputer").font(.caption2)
+                }
+                .foregroundStyle(Theme.tertiary)
+            } else {
+                TagChip(text: name, symbol: "desktopcomputer")
+            }
+        }
+        .accessibilityLabel("On \(name)")
     }
 }
 

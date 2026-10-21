@@ -67,7 +67,7 @@ const now = () => new Date();
 function readUsage() {
   const path = claudeExecutable();
   if (!path) return Promise.reject(new Error("claude was not found on PATH, or CLAUDIOBOT_CLAUDE does not name an executable"));
-  return readPlanUsage(query, { pathToClaudeCodeExecutable: path, cwd: homedir(), settingSources: [], ...strictMcp(), mcpServers: {} }, USAGE_TIMEOUT_MS);
+  return readPlanUsage(query, { pathToClaudeCodeExecutable: path, cwd: homedir(), settingSources: [], ...strictMcp(profile.managedMcpPath), mcpServers: {} }, USAGE_TIMEOUT_MS);
 }
 const log = (line: string) => console.log(line);
 

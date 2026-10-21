@@ -41,6 +41,14 @@ test("each machine reads its access from its own env", () => {
   expect(linux().access).toEqual({ full: false, sandbox: true });
 });
 
+test("the managed MCP config is where Claude Code reads it on each platform", () => {
+  expect([mac().managedMcpPath, linux().managedMcpPath]).toEqual(["/Library/Application Support/ClaudeCode/managed-mcp.json", "/etc/claude-code/managed-mcp.json"]);
+});
+
+test("bubblewrap and socat are needed on Linux only while the sandbox is on", () => {
+  expect([linux().sandboxNeeds, linux(FULL_NO_SANDBOX).sandboxNeeds, mac().sandboxNeeds]).toEqual([["bwrap", "socat"], [], []]);
+});
+
 test("only darwin and linux are platforms", () => {
   expect(["darwin", "linux"].map(platformOf)).toEqual(["darwin", "linux"] satisfies Platform[]);
   expect(() => platformOf("win32")).toThrow("macOS and Linux");

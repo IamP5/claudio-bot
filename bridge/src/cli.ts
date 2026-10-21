@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import * as fs from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname, userInfo } from "node:os";
 import { lanAddresses } from "./address";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -20,7 +20,7 @@ import {
   type Foreground,
   type ServiceDeps,
 } from "./service";
-import { platformOf } from "./machine/profile";
+import { platformOf, profileOf } from "./machine/profile";
 import { errorText } from "./text";
 
 const USAGE = `usage: claudiobot <install|uninstall|status|doctor|logs|pair|update> [--label <label>] [--log-dir <dir>]
@@ -101,6 +101,7 @@ const alive = (pid: number) => {
 async function main(argv: string[]): Promise<number> {
   const command = argv[0];
   const platform = platformOf(process.platform);
+  const profile = profileOf({ env: process.env, platform, name: hostname(), homedir: homedir(), username: userInfo().username });
   const label = flag(argv, "--label") ?? process.env.CLAUDIOBOT_SERVICE_LABEL ?? DEFAULT_LABEL[platform];
   const logDir = flag(argv, "--log-dir") ?? process.env.CLAUDIOBOT_LOG_DIR ?? defaultLogDir(platform);
   const target = serviceTarget({ platform, label, uid: process.getuid!(), logDir, bridgeDir: dirname(import.meta.dir) });
@@ -117,7 +118,7 @@ async function main(argv: string[]): Promise<number> {
     env: process.env,
     homeDir: homedir(),
     login: (claude, env) =>
-      readAccount(query, { pathToClaudeCodeExecutable: claude, env, cwd: homedir(), settingSources: ["user"], ...strictMcp(), mcpServers: {} }),
+      readAccount(query, { pathToClaudeCodeExecutable: claude, env, cwd: homedir(), settingSources: ["user"], ...strictMcp(profile.managedMcpPath), mcpServers: {} }),
   };
 
   switch (command) {

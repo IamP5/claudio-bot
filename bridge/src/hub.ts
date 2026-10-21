@@ -598,7 +598,7 @@ export function createHub(deps: HubDeps): Hub {
     // only an open query's list has MCP prompts.
     probe: (id) => {
       homes.ensureFolders(id);
-      return probeCommands(deps.claude, { cwd: homes.homeOf(id), settingSources: ["user", "project"], settings: settingsFor(id), ...strictMcp(), mcpServers: {} });
+      return probeCommands(deps.claude, { cwd: homes.homeOf(id), settingSources: ["user", "project"], settings: settingsFor(id), ...strictMcp(deps.profile.managedMcpPath), mcpServers: {} });
     },
     saved: (id) => skills.list(id),
     changed: (id, menu) => {

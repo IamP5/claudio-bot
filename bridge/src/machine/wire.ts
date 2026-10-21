@@ -180,7 +180,7 @@ const mention = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("connector"), name: text }),
 ]);
 const messageId = id<MessageId>();
-const message: z.ZodType<Message> = z.discriminatedUnion("kind", [
+export const messageSchema: z.ZodType<Message> = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("user"),
     id: messageId,
@@ -216,7 +216,7 @@ const message: z.ZodType<Message> = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("note"), id: messageId, at: iso, text, refs: z.array(peer) }),
 ]);
 
-const agent: z.ZodType<Agent> = z.object({
+export const agentSchema: z.ZodType<Agent> = z.object({
   id: agentId,
   botId: id<BotId>(),
   title: text,
@@ -241,8 +241,8 @@ const agent: z.ZodType<Agent> = z.object({
     .nullable(),
   worktree: z.object({ path: text, branch: text }).nullable(),
 });
-const agentMessage: z.ZodType<AgentMessage> = z.object({ id: messageId, at: iso, from: z.enum(["bot", "agent"]), text });
-const mirror = z.object({ agent, messages: z.array(agentMessage) });
+export const agentMessageSchema: z.ZodType<AgentMessage> = z.object({ id: messageId, at: iso, from: z.enum(["bot", "agent"]), text });
+const mirror = z.object({ agent: agentSchema, messages: z.array(agentMessageSchema) });
 
 const usageRow: z.ZodType<UsageRow> = z.object({
   at: iso,
@@ -277,14 +277,14 @@ export const profileViewSchema: z.ZodType<ProfileView> = z.object({
 
 const stamp = { seq, at: iso };
 export const eventSchema: z.ZodType<Event> = z.discriminatedUnion("kind", [
-  z.object({ ...stamp, kind: z.literal("agent"), agent, messages: z.array(agentMessage) }),
+  z.object({ ...stamp, kind: z.literal("agent"), agent: agentSchema, messages: z.array(agentMessageSchema) }),
   z.object({ ...stamp, kind: z.literal("report"), agentId, botId: id<BotId>(), text, by: initiator }),
   z.object({ ...stamp, kind: z.literal("note"), agentId, botId: id<BotId>(), text }),
-  z.object({ ...stamp, kind: z.literal("card"), botId: id<BotId>(), message }),
+  z.object({ ...stamp, kind: z.literal("card"), botId: id<BotId>(), message: messageSchema }),
   z.object({ ...stamp, kind: z.literal("usage"), row: usageRow }),
   z.object({ ...stamp, kind: z.literal("profile"), profile: profileViewSchema }),
   z.object({ ...stamp, kind: z.literal("refused"), intentId, reason: text }),
-  z.object({ ...stamp, kind: z.literal("snapshot"), agents: z.array(mirror), openCards: z.array(z.object({ botId: id<BotId>(), message })) }),
+  z.object({ ...stamp, kind: z.literal("snapshot"), agents: z.array(mirror), openCards: z.array(z.object({ botId: id<BotId>(), message: messageSchema })) }),
 ]);
 
 export const homeFrameSchema: z.ZodType<HomeFrame> = z.discriminatedUnion("t", [

@@ -1,0 +1,5 @@
+ts	role	group	branch	state	stuck_after	note
+2026-10-21T07:10:09Z	owner	G0	ux/sessions-g0-schema	running	3h	schema-only
+2026-10-21T07:10:09Z	owner	G9	ux/sessions-g9-connection	running	4h	app connection state
+2026-10-21T07:10:09Z	owner	G14	ux/sessions-g14-runner	running	3h	runner fixes
+2026-10-21T07:10:09Z	audit	sessions run 2	-	running	5h	workflow wf_b624bbd3-ea3

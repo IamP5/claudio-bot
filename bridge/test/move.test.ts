@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDevices } from "../src/devices";
 import { newGroup } from "../src/groups";
+import { lockPathOf } from "../src/lock";
 import { mergeFacts } from "../src/memory";
 import {
   arrive,
@@ -16,6 +17,7 @@ import {
   mergeMessages,
   parseBundle,
   unionLines,
+  worldCommand,
   type MoveBundle,
   type MoveDeps,
 } from "../src/move";
@@ -370,5 +372,64 @@ describe("export, import, finish", () => {
     const bad = { ...bundle, world: { ...bundle.world, bots: [{ ...bundle.world.bots[0], routines: "nope" }] } };
     expect(parseBundle(bad)).toMatchObject({ error: expect.stringContaining("bots[0].routines") });
     expect(parseBundle({ format: 2 })).toMatchObject({ error: expect.stringContaining("not a ClaudioBot world bundle") });
+  });
+});
+
+describe("claudiobot world", () => {
+  const run = (home: string, cwd: string, ...argv: string[]) => {
+    let printed = "";
+    const code = worldCommand(argv, { home, cwd, machine: "mac", now: () => new Date(at), out: (t) => (printed += t) });
+    return { code, printed };
+  };
+
+  test("export, import twice and finish, each printing what it did and what comes next", () => {
+    const mac = freshHome();
+    const omarchy = freshHome();
+    seedMac(mac);
+    const cwd = join(mac, "..");
+
+    const exported = run(mac, cwd, "export", "--out", "bundle.json");
+    expect(exported.code).toBe(0);
+    const moveId = /Move (mv_[\w-]+)/.exec(exported.printed)![1]!;
+    expect(exported.printed).toContain("Froze 2 bots (Scout, Mate)");
+    expect(exported.printed).toContain(`claudiobot world finish ${moveId}`);
+    expect(statSync(join(cwd, "bundle.json")).mode & 0o777).toBe(0o600);
+
+    const imported = run(omarchy, cwd, "import", "bundle.json");
+    expect(imported).toEqual({
+      code: 0,
+      printed: `Imported move ${moveId} from mac: 2 bots (Scout, Mate), 1 routines, 1 paired devices.\nStart the bridge. Then, on mac, run claudiobot world finish ${moveId}\n`,
+    });
+    expect(run(omarchy, cwd, "import", "bundle.json").printed).toBe(`Move ${moveId} was already imported at ${at}. Nothing changed.\n`);
+    expect(run(mac, cwd, "import", "bundle.json")).toMatchObject({ code: 1, printed: expect.stringContaining("This bridge exported") });
+
+    expect(run(mac, cwd, "finish", moveId)).toMatchObject({ code: 0, printed: expect.stringContaining(`Finished move ${moveId}`) });
+    expect(run(mac, cwd, "finish", moveId)).toMatchObject({ code: 0, printed: expect.stringContaining("already finished") });
+  });
+
+  test("every step refuses while a bridge holds the home, and changes nothing", async () => {
+    const mac = freshHome();
+    seedMac(mac);
+    const bridge = Bun.spawn(["sleep", "30"]);
+    try {
+      writeFileSync(lockPathOf(mac), `${bridge.pid}\n`);
+      const state = read(mac, "state.json");
+      for (const argv of [["export"], ["import", "x.json"], ["finish", "mv_x"]]) {
+        expect(run(mac, mac, ...argv)).toEqual({
+          code: 1,
+          printed: `A bridge (pid ${bridge.pid}) is running on ${mac}. Stop it first, then run this again: a move rewrites state.json, and a running bridge would overwrite it.\n`,
+        });
+      }
+      expect(read(mac, "state.json")).toBe(state);
+    } finally {
+      bridge.kill();
+      await bridge.exited;
+    }
+  });
+
+  test("a missing step or argument prints the usage", () => {
+    const home = freshHome();
+    expect(run(home, home).code).toBe(2);
+    expect(run(home, home, "import").printed).toStartWith("usage: claudiobot world");
   });
 });

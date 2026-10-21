@@ -1,7 +1,8 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, normalize, relative } from "node:path";
+import { dirname, join, normalize, relative, resolve } from "node:path";
 import { z } from "zod";
 import { createHomes } from "./home";
+import { lockHome } from "./lock";
 import { mergeFacts } from "./memory";
 import { notices } from "./prompts";
 import type { BotId } from "./protocol";
@@ -347,4 +348,106 @@ export function finishMove(deps: MoveDeps, moveId: string): Finished {
   moves[i] = { kind: "out", moveId: move.moveId, at: move.at, machine: move.machine, phase: "done" };
   flushNow(world, deps.home);
   return { kind: "finished", bots: move.held.bots.length };
+}
+
+// ---- claudiobot world <export|import|finish>.
+
+export type WorldCommandDeps = MoveDeps & { cwd: string; out: (text: string) => void };
+
+const WORLD_USAGE = `usage: claudiobot world <export [--out <file>] | import <file> | finish <moveId>>
+
+  export  freeze this bridge's bots and write them, with their files, to one bundle
+  import  union a bundle into this bridge's world; a bundle already imported changes nothing
+  finish  on the machine that exported: trash the frozen bots' homes once they answer on the new one
+`;
+
+/** Runs one step with the home locked, so no bridge rewrites state.json under it. */
+export function worldCommand(argv: string[], deps: WorldCommandDeps): number {
+  const [step, arg] = argv;
+  if ((step !== "export" && step !== "import" && step !== "finish") || (step !== "export" && arg === undefined)) {
+    deps.out(WORLD_USAGE);
+    return 2;
+  }
+  const lock = lockHome(deps.home);
+  if (lock.kind !== "held") {
+    const who = lock.kind === "busy" ? `A bridge (pid ${lock.pid}) is running on ${deps.home}` : `Something holds ${lock.path}`;
+    deps.out(`${who}. Stop it first, then run this again: a move rewrites state.json, and a running bridge would overwrite it.\n`);
+    return 1;
+  }
+  try {
+    if (step === "export") return exportStep(deps, argv.includes("--out") ? argv[argv.indexOf("--out") + 1] : undefined);
+    if (step === "import") return importStep(deps, arg!);
+    return finishStep(deps, arg!);
+  } finally {
+    lock.release();
+  }
+}
+
+function exportStep(deps: WorldCommandDeps, out: string | undefined): number {
+  const result = exportWorld(deps);
+  if (result.kind === "empty") {
+    deps.out(`No bots on ${deps.home} to move.\n`);
+    return 1;
+  }
+  const { bundle, moveId } = result;
+  const path = resolve(deps.cwd, out ?? `claudiobot-world-${moveId}.json`);
+  writeAtomic(path, JSON.stringify(bundle));
+  const names = bundle.world.bots.map((b) => b.name).join(", ");
+  deps.out(
+    (result.fresh
+      ? `Froze ${bundle.world.bots.length} bots (${names}). They no longer run, fire routines or push here. Agents stay on this machine.\n`
+      : `These bots were frozen earlier (${names}). This is the same move again.\n`) +
+      `Wrote ${path}\n` +
+      `Move ${moveId}. The file holds your chats and paired devices, so keep it private and delete it after the import.\n` +
+      (result.left > 0 ? `${result.left} bots made after the freeze stay here. Finish this move, then export again to move them.\n` : "") +
+      `\nNext:\n` +
+      `  1. Copy the file to the new home machine and stop the bridge there.\n` +
+      `  2. There, run claudiobot world import <file>, then start the bridge. Your phone's pairing works there too.\n` +
+      `  3. Here, once the bots answer there, run claudiobot world finish ${moveId}\n`,
+  );
+  return 0;
+}
+
+function importStep(deps: WorldCommandDeps, file: string): number {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(resolve(deps.cwd, file), "utf8"));
+  } catch (e) {
+    deps.out(`Could not read ${file}: ${e instanceof Error ? e.message : String(e)}\n`);
+    return 1;
+  }
+  const result = importWorld(deps, raw);
+  switch (result.kind) {
+    case "refused":
+      deps.out(`${result.error} Nothing was changed.\n`);
+      return 1;
+    case "own":
+      deps.out(`This bridge exported move ${result.moveId}. Import it on the other machine.\n`);
+      return 1;
+    case "already":
+      deps.out(`Move ${result.moveId} was already imported at ${result.at}. Nothing changed.\n`);
+      return 0;
+    case "imported":
+      deps.out(
+        `Imported move ${result.moveId} from ${result.from}: ${result.bots.length} bots (${result.bots.join(", ")}), ` +
+          `${result.routines} routines, ${result.devices} paired devices.\n` +
+          `Start the bridge. Then, on ${result.from}, run claudiobot world finish ${result.moveId}\n`,
+      );
+      return 0;
+  }
+}
+
+function finishStep(deps: WorldCommandDeps, moveId: string): number {
+  const result = finishMove(deps, moveId);
+  switch (result.kind) {
+    case "unknown":
+      deps.out(`This bridge never exported move ${moveId}.\n`);
+      return 1;
+    case "already":
+      deps.out(`Move ${moveId} was already finished. Nothing changed.\n`);
+      return 0;
+    case "finished":
+      deps.out(`Finished move ${moveId}. The homes of its ${result.bots} bots went to ${join(deps.home, "trash")}.\n`);
+      return 0;
+  }
 }

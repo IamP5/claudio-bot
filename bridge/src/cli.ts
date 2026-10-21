@@ -22,9 +22,11 @@ import {
 } from "./service";
 import { machineCommand } from "./machine/command";
 import { platformOf, profileOf } from "./machine/profile";
+import { worldCommand } from "./move";
+import { bridgeHome } from "./store";
 import { errorText } from "./text";
 
-const USAGE = `usage: claudiobot <install|uninstall|status|doctor|logs|pair|update> [--label <label>] [--log-dir <dir>]
+const USAGE = `usage: claudiobot <install|uninstall|status|doctor|logs|pair|update|world|machine> [--label <label>] [--log-dir <dir>]
 
   install    run the bridge as a service that starts at login (a LaunchAgent on macOS, a systemd user unit on
              Linux), and print the pairing code
@@ -34,6 +36,8 @@ const USAGE = `usage: claudiobot <install|uninstall|status|doctor|logs|pair|upda
   logs       follow the service log
   pair       stop the service, run the bridge here with --pair until a phone pairs, start it again
   update     fetch, show incoming commits, and on yes pull, install and restart
+  world      move this bridge's bots to another machine: world export, world import <file>, world finish <moveId>
+  machine    run agents for a home on another computer: machine show, machine invite, machine enroll <url> <code>
 
 --label and --log-dir (or CLAUDIOBOT_SERVICE_LABEL, CLAUDIOBOT_LOG_DIR) set up a separate, throwaway service.
 `;
@@ -167,6 +171,8 @@ async function main(argv: string[]): Promise<number> {
         out,
       });
     }
+    case "world":
+      return worldCommand(argv.slice(1), { home: bridgeHome(), machine: profile.name.replace(/\.local$/, ""), now: () => new Date(), cwd: process.cwd(), out });
     default:
       process.stderr.write(USAGE);
       return command === undefined || command === "help" || command === "--help" ? 0 : 2;

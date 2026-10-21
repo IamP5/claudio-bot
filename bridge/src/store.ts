@@ -176,8 +176,9 @@ const V3_FILE = z.looseObject({
   sessionPrefs: z.looseObject({ mirror: z.enum(MIRROR_PREFS) }).optional(),
   moves: z
     .array(
-      z.discriminatedUnion("kind", [
-        z.looseObject({ kind: z.literal("out"), moveId: text, at: text, phase: z.enum(["frozen", "done"]), held: z.looseObject({ bots: z.array(anyObject), groups: z.array(anyObject), exchanges: z.array(anyObject) }).optional() }),
+      z.union([
+        z.looseObject({ kind: z.literal("out"), moveId: text, at: text, phase: z.literal("frozen"), held: z.looseObject({ bots: z.array(anyObject), groups: z.array(anyObject), exchanges: z.array(anyObject) }) }),
+        z.looseObject({ kind: z.literal("out"), moveId: text, at: text, phase: z.literal("done") }),
         z.looseObject({ kind: z.literal("in"), moveId: text, at: text }),
       ]),
     )

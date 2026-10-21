@@ -404,6 +404,10 @@ test("world moves survive a save and a load; a file from before them reads as no
   const old = freshHome();
   writeState(old, v3({ bots: [v3Bot] }));
   expect(loadWorld(old).world.moves).toEqual([]);
+
+  const frozenWithNothingHeld = freshHome();
+  writeState(frozenWithNothingHeld, v3({ bots: [v3Bot], moves: [{ kind: "out", moveId: "mv_1", at, machine: "mac", phase: "frozen" }] }));
+  expect(() => loadWorld(frozenWithNothingHeld)).toThrow(StateFileError);
 });
 
 test("the saver debounces, and \"now\" writes before it returns", async () => {

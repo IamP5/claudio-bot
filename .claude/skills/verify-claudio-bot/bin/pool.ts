@@ -92,11 +92,14 @@ function shutdown(udid: string, why: string) {
 
 /** Removes one stale lease under a global reclaim mutex, so two reclaimers never both judge and remove the same one. */
 function reclaimIfStale(device: PoolDevice, udid: string): boolean {
-  mkdirSync(LEASES, { recursive: true });
+  if (heartbeatAge(join(LEASES, device)) <= STALE_MS) return false;
   try {
     mkdirSync(RECLAIM_LOCK);
   } catch {
-    if (Date.now() - statSync(RECLAIM_LOCK).mtimeMs > 60_000) rmSync(RECLAIM_LOCK, { recursive: true, force: true });
+    // Another waiter holds the mutex, or it just let go. A mutex older than a minute belongs to a reclaimer that died.
+    try {
+      if (Date.now() - statSync(RECLAIM_LOCK).mtimeMs > 60_000) rmSync(RECLAIM_LOCK, { recursive: true, force: true });
+    } catch {}
     return false;
   }
   try {

@@ -34,8 +34,10 @@ export type Action =
   | { do: "stop"; name: string; mark: string }
   | { do: "sleep"; s: number }
   | { do: "mark"; mark: string }
-  /** Unwatches the thread (the bridge counts that as a visit), then watches it again for evidence. */
+  /** Unwatches the thread, as the app does when the user goes back to the list; the bridge counts it as a visit. */
   | { do: "leave"; name: string }
+  /** Watches the thread again from the position the phone held, as the app does when the user reopens it. */
+  | { do: "return"; name: string }
   /** Drops the phone's socket, waits, reconnects, and resumes every thread from the position it held. */
   | { do: "reconnect"; afterS: number; mark: string; until?: { what: string; timeoutS: number; test: (ev: Ev) => boolean } }
   | { do: "screenshot"; shot: string }
@@ -65,6 +67,8 @@ export type Scenario = {
   setup: Action[];
   pre: Precondition[];
   rubric: RubricItem[];
+  /** Marks read from the evidence after the run (transcript times), merged in before the rubric is judged. */
+  derive?: (ev: Ev) => Record<string, number>;
 };
 
 // ---- reading the evidence
@@ -73,6 +77,8 @@ const AGENT_TOOLS = new Set(["Agent", "Task"]);
 const stepsOf = (s: Snap) => s.items.flatMap((i) => (i.kind === "work" ? (i.steps ?? []) : []));
 const snaps = (ev: Ev, name: string, from = 0, to = Infinity) => ev.history.filter((s) => s.name === name && s.at >= from && s.at <= to);
 const last = (ev: Ev, name: string, at = Infinity) => snaps(ev, name, 0, at).at(-1);
+/** Every state that was on screen during [from, to]: the one carried in from before `from`, then each change. */
+const during = (ev: Ev, name: string, from: number, to: number) => [last(ev, name, from), ...snaps(ev, name, from + 1, to)].filter((s): s is Snap => s !== undefined);
 const mark = (ev: Ev, m: string) => ev.marks[m];
 const span = (ev: Ev, from: string, to: string): [number, number] | null => {
   const a = mark(ev, from);
@@ -99,10 +105,14 @@ type Result = { id: string; isError: boolean; text: string; at: string };
 function blocks(lines: TranscriptLine[]) {
   const uses: Use[] = [];
   const results: Result[] = [];
+  const seen = new Set<string>();
   for (const l of lines) {
     const content = l.message?.content;
     if (!Array.isArray(content)) continue;
     for (const b of content as Record<string, unknown>[]) {
+      const key = `${b.type}:${String(b.id ?? b.tool_use_id)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       if (b.type === "tool_use") uses.push({ id: String(b.id), name: String(b.name), input: (b.input as Record<string, unknown>) ?? {}, at: l.timestamp ?? "" });
       if (b.type === "tool_result")
         results.push({ id: String(b.tool_use_id), isError: b.is_error === true, text: typeof b.content === "string" ? b.content : JSON.stringify(b.content ?? ""), at: l.timestamp ?? "" });
@@ -110,6 +120,25 @@ function blocks(lines: TranscriptLine[]) {
   }
   return { uses, results };
 }
+/** Each subagent's run, from the first to the last line of its own transcript, in scenario ms; keyed by agentId. */
+function subagentSpans(ev: Ev, name: string) {
+  const spans = new Map<string, { from: number; to: number }>();
+  for (const l of ev.transcript(name).subagents) {
+    const id = String(l.agentId ?? "");
+    if (!id || !l.timestamp) continue;
+    const at = ev.atOf(l.timestamp);
+    const s = spans.get(id) ?? { from: at, to: at };
+    spans.set(id, { from: Math.min(s.from, at), to: Math.max(s.to, at) });
+  }
+  return spans;
+}
+/** The Agent call's tool_use id for each agentId, read from the call's result ("agentId: …"). */
+const agentOfCall = (ev: Ev, name: string) =>
+  new Map(blocks(ev.transcript(name).main).results.flatMap((r) => {
+    const id = r.text.match(/agentId: (\w+)/)?.[1];
+    return id ? [[r.id, id] as const] : [];
+  }));
+
 const bgBash = (lines: TranscriptLine[]) => blocks(lines).uses.filter((u) => u.name === "Bash" && u.input.run_in_background === true);
 
 const ok = (why: string): Verdict => ({ ok: true, why });
@@ -118,7 +147,7 @@ const no = (why: string): Verdict => ({ ok: false, why });
 // ---- rubric items several scenarios share
 
 /** how-long: the wire gives each running step its own start, so elapsed time survives reopening the thread. */
-const startTime = (id: string, name: string, pick: (s: Step) => boolean, what: string): RubricItem => ({
+const startTime = (id: string, name: string, pick: (s: Step) => boolean, what: string, from?: string, to?: string): RubricItem => ({
   id,
   tell: "how-long",
   lane: "protocol",
@@ -126,8 +155,10 @@ const startTime = (id: string, name: string, pick: (s: Step) => boolean, what: s
   pass: "Every running step carries a start time (a step field), or is the first step of its work item, whose `at` is its start.",
   fail: "A running step has no start time on the wire, so elapsed time can only be counted from when the phone happened to see it.",
   check: (ev) => {
-    const running = snaps(ev, name).flatMap((s) => s.items.flatMap((i) => (i.kind === "work" ? (i.steps ?? []).map((st, k) => ({ st, k, item: i })) : []))).filter((x) => pick(x.st) && x.st.state === "running");
-    if (!running.length) return no(`not judged: no running step of ${what} was ever seen`);
+    const w = from && to ? span(ev, from, to) : ([0, Infinity] as [number, number]);
+    if (!w) return needMarks(ev, from!, to!)!;
+    const running = during(ev, name, w[0], w[1]).flatMap((s) => s.items.flatMap((i) => (i.kind === "work" ? (i.steps ?? []).map((st, k) => ({ st, k, item: i })) : []))).filter((x) => pick(x.st) && x.st.state === "running");
+    if (!running.length) return no(`no step of ${what} ever reads running${from ? ` at ${from}` : ""}, so nothing on the wire says how long it has run`);
     const fields = (st: Step) => Object.keys(st).filter((k) => /start|since|began|elapsed/i.test(k));
     const own = running.filter((x) => fields(x.st).length > 0);
     if (own.length === running.length) return ok(`steps carry ${fields(running[0]!.st).join(",")}`);
@@ -149,25 +180,29 @@ const stopOffered = (id: string, name: string, from: string, to: string, what: s
   check: (ev) => {
     const w = span(ev, from, to);
     if (!w) return needMarks(ev, from, to)!;
-    const xs = snaps(ev, name, w[0], w[1]).filter((s) => s.controls);
+    const xs = during(ev, name, w[0], w[1]).filter((s) => s.controls);
     const bad = xs.filter((s) => !s.controls!.working);
     if (!xs.length) return no(`not judged: no controls between ${from} and ${to}`);
-    return bad.length ? no(`${bad.length}/${xs.length} states had working=false, first at +${Math.round((bad[0]!.at - w[0]) / 1000)}s`) : ok(`${xs.length} states, all working=true`);
+    return bad.length ? no(`${bad.length}/${xs.length} states had working=false, first at +${Math.max(0, Math.round((bad[0]!.at - w[0]) / 1000))}s`) : ok(`${xs.length} states, all working=true`);
   },
 });
 
 /** state: the work is visibly still running in a window after the turn ended (background work). */
-const stillRunning = (id: string, name: string, from: string, to: string, what: string): RubricItem => ({
+const stillRunning = (id: string, name: string, at: string, where: "list" | "thread", what: string): RubricItem => ({
   id,
   tell: "state",
   lane: "protocol",
-  text: `After the turn ends and while ${what} still runs, the thread or the list says something is still running.`,
-  pass: `Between marks ${from} and ${to}, the latest state shows a running step, a working row, or controls.working true.`,
+  text: `After the turn ends and while ${what} still runs, the ${where} says something is still running.`,
+  pass:
+    where === "list"
+      ? `At mark ${at} (the user is on the list), the row reads working or another busy status.`
+      : `At mark ${at} (the user just reopened the thread), the thread shows a running step or controls.working true.`,
   fail: "The session looks finished (idle row, no running step) while its background work still runs.",
   check: (ev) => {
-    const w = span(ev, from, to);
-    if (!w) return needMarks(ev, from, to)!;
-    const s = last(ev, name, w[0] + (w[1] - w[0]) / 2);
+    const t = mark(ev, at);
+    if (t === undefined) return needMarks(ev, at)!;
+    const s = last(ev, name, t);
+    if (where === "list") return s?.row && s.row.status !== "idle" ? ok(`row ${s.row.status}`) : no(`row ${rowStatus(s)}`);
     if (!s) return no("no state seen");
     const running = stepsOf(s).filter((x) => x.state === "running");
     return running.length || isWorking(s)
@@ -199,10 +234,12 @@ const unreadAfter = (id: string, name: string, at: string): RubricItem => ({
   tell: "state",
   lane: "protocol",
   text: "Once the work finished while the user was away from the thread, the list marks the session as having news.",
-  pass: `The row is unread at the end of the scenario (the phone left the thread before mark ${at}).`,
+  pass: `At mark ${at}, with the phone away from the thread since the turn ended, the row is unread.`,
   fail: "The row is not unread, so the list gives no sign that something finished.",
   check: (ev) => {
-    const s = last(ev, name);
+    const t = mark(ev, at);
+    if (t === undefined) return needMarks(ev, at)!;
+    const s = last(ev, name, t);
     return s?.row?.unread ? ok("row unread=true") : no(`row unread=${s?.row?.unread}, status ${rowStatus(s)}`);
   },
 });
@@ -214,6 +251,25 @@ const fileMade = (rel: string): Precondition => ({ what: `${rel} exists in the s
 const turnEnded = (name: string) => (ev: Ev) => mark(ev, `${name}-started`) !== undefined && !isWorking(last(ev, name) ?? ({ controls: null, row: null } as Snap));
 const replied = (s: Snap | undefined) => !!s?.items.some((i) => i.kind === "assistant");
 const started = (name: string): Action => ({ do: "until", mark: `${name}-started`, what: `${name}'s turn to start`, timeoutS: 90, test: (ev) => snaps(ev, name).some((s) => isWorking(s) || replied(s)) });
+
+/** The user leaves the thread once the turn ended, looks at the list, reopens the thread, leaves again until it finished. */
+const awayAndBack = (name: string, doneFile: string): Action[] => [
+  { do: "leave", name },
+  { do: "sleep", s: 12 },
+  { do: "mark", mark: "list-mid" },
+  { do: "return", name },
+  { do: "sleep", s: 3 },
+  { do: "mark", mark: "mid-background" },
+  { do: "screenshot", shot: "background-running" },
+  { do: "leave", name },
+  { do: "until", mark: "bg-done", what: `${doneFile} to appear`, timeoutS: 150, test: (ev) => ev.exists(doneFile) },
+  { do: "sleep", s: 20 },
+  { do: "mark", mark: "list-after" },
+  { do: "return", name },
+  { do: "sleep", s: 3 },
+  { do: "mark", mark: "returned" },
+  { do: "screenshot", shot: "after" },
+];
 
 const BG = (cmd: string) =>
   `Use the Bash tool with run_in_background set to true to run exactly this command: ${cmd}\nDo not wait for it, do not check on it, do not run anything else. Reply with one line: started.`;
@@ -235,29 +291,32 @@ const S1: Scenario = {
       do: "create",
       name: "s1",
       prompt:
-        'Launch exactly 3 subagents in parallel, all in one message, with the Agent tool: subagent_type general-purpose, model haiku. Their descriptions are "sleeper one", "sleeper two" and "sleeper three". Each one\'s prompt is: "Run the Bash command `sleep 30` and then reply with the single word done." When all three have returned, reply with one line: all done.',
+        'Launch exactly 3 subagents in parallel, all in one message, with the Agent tool: subagent_type general-purpose, model haiku. Their descriptions are "sleeper one", "sleeper two" and "sleeper three". Each one\'s prompt is: "Run exactly this Bash command in the foreground: perl -e \'sleep 30\' . Then reply with the single word done." When all three have returned, reply with one line: all done.',
     },
     started("s1"),
-    { do: "until", mark: "agents-running", what: "a subagent step running", timeoutS: 120, test: (ev) => maxRunning(ev, "s1", (s) => AGENT_TOOLS.has(s.tool)) >= 1, optional: true },
+    { do: "until", mark: "agents-launched", what: "3 Agent calls in the transcript", timeoutS: 120, test: (ev) => blocks(ev.transcript("s1").main).uses.filter((u) => AGENT_TOOLS.has(u.name)).length >= 3 },
     { do: "sleep", s: 12 },
     { do: "mark", mark: "mid-run" },
     { do: "screenshot", shot: "running" },
-    { do: "until", mark: "s1-ended", what: "the turn to end", timeoutS: 300, test: turnEnded("s1") },
+    { do: "until", mark: "all-done", what: 'the "all done" reply', timeoutS: 240, test: (ev) => !!last(ev, "s1")?.items.some((i) => i.kind === "assistant" && /all done/i.test(i.text ?? "")) },
+    { do: "until", mark: "s1-ended", what: "the turn to end", timeoutS: 120, test: turnEnded("s1") },
     { do: "screenshot", shot: "done" },
   ],
   pre: [
     created("s1"),
     {
-      what: "the transcript starts 3 subagents before the first one returns",
+      what: "3 subagents ran at the same time (their own transcripts overlap)",
       check: (ev) => {
-        const { uses, results } = blocks(ev.transcript("s1").main);
-        const agents = uses.filter((u) => AGENT_TOOLS.has(u.name));
-        const firstDone = results.filter((r) => agents.some((a) => a.id === r.id)).map((r) => r.at).sort()[0] ?? "~";
-        const before = agents.filter((a) => a.at <= firstDone).length;
-        return before >= 3 ? ok(`${agents.length} Agent calls, ${before} before the first result`) : no(`${agents.length} Agent calls, ${before} before the first result`);
+        const spans = [...subagentSpans(ev, "s1").values()];
+        const overlap = Math.min(...spans.map((x) => x.to)) - Math.max(...spans.map((x) => x.from));
+        return spans.length >= 3 && overlap > 5000 ? ok(`${spans.length} subagents, all running together for ${Math.round(overlap / 1000)} s`) : no(`${spans.length} subagents, overlap ${Math.round(overlap / 1000)} s`);
       },
     },
   ],
+  derive: (ev): Record<string, number> => {
+    const spans = [...subagentSpans(ev, "s1").values()];
+    return spans.length ? { "agents-from": Math.min(...spans.map((x) => x.from)), "agents-to": Math.max(...spans.map((x) => x.to)) } : {};
+  },
   rubric: [
     {
       id: "S1.1",
@@ -289,29 +348,38 @@ const S1: Scenario = {
       tell: "state",
       lane: "protocol",
       text: "While the subagents run, the Sessions list shows the session as working.",
-      pass: "row.status is working in every state from agents-running to s1-ended.",
+      pass: "row.status is working in every state between agents-from and agents-to (the subagents' own transcripts).",
       fail: "The row reads idle (or another rest state) while subagents still run.",
       check: (ev) => {
-        const w = span(ev, "agents-running", "s1-ended");
-        if (!w) return needMarks(ev, "agents-running", "s1-ended")!;
-        const xs = snaps(ev, "s1", w[0], w[1] - 1).filter((s) => stepsOf(s).some((x) => AGENT_TOOLS.has(x.tool) && x.state === "running"));
-        const bad = xs.filter((s) => s.row && s.row.status !== "working");
-        return bad.length ? no(`row ${statuses(bad)} in ${bad.length}/${xs.length} states with a running subagent`) : ok(`row working in all ${xs.length} states with a running subagent`);
+        const w = span(ev, "agents-from", "agents-to");
+        if (!w) return needMarks(ev, "agents-from", "agents-to")!;
+        const xs = during(ev, "s1", w[0], w[1]).filter((s) => s.row);
+        const bad = xs.filter((s) => s.row!.status !== "working");
+        const idle = bad.reduce((n, s, i) => n + ((xs[xs.indexOf(s) + 1]?.at ?? w[1]) - Math.max(s.at, w[0])), 0);
+        return bad.length ? no(`row ${statuses(bad)} for about ${Math.round(idle / 1000)} of the ${Math.round((w[1] - w[0]) / 1000)} s the subagents ran`) : ok(`row working in all ${xs.length} states`);
       },
     },
     {
       id: "S1.4",
       tell: "state",
       lane: "protocol",
-      text: "Each subagent's step shows done when it returns, and none stays running after the turn.",
-      pass: "Every subagent step ends ok; none is running in the last state.",
-      fail: "A step stays running after the turn ended, or ends in error with no failure.",
+      text: "Each subagent's step reads done when that subagent finishes, not before, and none stays running after.",
+      pass: "Each Agent step first reads ok no earlier than 2 s before its subagent's transcript ends, and reads ok at the end.",
+      fail: "A step reads ok while its subagent still runs (or stays running after it ended).",
       check: (ev) => {
-        const s = last(ev, "s1");
-        const steps = s ? stepsOf(s).filter((x) => AGENT_TOOLS.has(x.tool)) : [];
-        if (!steps.length) return no("no subagent steps in the last state");
-        const bad = steps.filter((x) => x.state !== "ok");
-        return bad.length ? no(`end states: ${steps.map((x) => x.state).join(",")}`) : ok(`${steps.length} steps ok`);
+        const spans = subagentSpans(ev, "s1");
+        const calls = agentOfCall(ev, "s1");
+        const early: string[] = [];
+        const ids = [...new Set(snaps(ev, "s1").flatMap(stepsOf).filter((x) => AGENT_TOOLS.has(x.tool)).map((x) => x.id))];
+        for (const id of ids) {
+          const end = spans.get(calls.get(id) ?? "")?.to;
+          const firstOk = snaps(ev, "s1").find((s) => stepsOf(s).some((x) => x.id === id && x.state === "ok"))?.at;
+          const label = stepsOf(last(ev, "s1")!).find((x) => x.id === id)?.label ?? id;
+          if (end !== undefined && firstOk !== undefined && firstOk < end - 2000) early.push(`${label} read ok ${Math.round((end - firstOk) / 1000)} s before its subagent ended`);
+        }
+        const notOk = stepsOf(last(ev, "s1")!).filter((x) => AGENT_TOOLS.has(x.tool) && x.state !== "ok");
+        if (!ids.length) return no("no subagent steps");
+        return early.length || notOk.length ? no([...early, ...notOk.map((x) => `${x.label} ends ${x.state}`)].join("; ")) : ok(`${ids.length} steps read ok when their subagents ended`);
       },
     },
     startTime("S1.5", "s1", (s) => AGENT_TOOLS.has(s.tool), "a subagent"),
@@ -329,7 +397,7 @@ const S1: Scenario = {
         return child || progress ? ok(`child row: ${child}, progress output: ${progress}`) : no("no child row, no output while running");
       },
     },
-    stopOffered("S1.7", "s1", "agents-running", "s1-ended", "the subagents"),
+    stopOffered("S1.7", "s1", "agents-from", "agents-to", "the subagents"),
     review("S1.8", "how-many", "Mid-run, the thread shows three labeled subagent rows, each visibly running, and a Stop button.", "All three rows, a running indicator on each, Stop visible.", "Rows missing or merged, no running indicator, or no Stop.", ["running"]),
     review("S1.9", "state", "After the turn, the thread shows all three done and the session at rest.", "Three done rows, no spinner, composer ready.", "A spinner or running state remains.", ["done"]),
   ],
@@ -349,14 +417,7 @@ const S2: Scenario = {
     { do: "create", name: "s2", prompt: BG("sleep 75 && echo bg-done > bg.txt") },
     started("s2"),
     { do: "until", mark: "s2-ended", what: "the turn that starts the command to end", timeoutS: 180, test: turnEnded("s2") },
-    { do: "leave", name: "s2" },
-    { do: "sleep", s: 20 },
-    { do: "mark", mark: "mid-background" },
-    { do: "screenshot", shot: "background-running" },
-    { do: "until", mark: "bg-done", what: "bg.txt to appear", timeoutS: 150, test: (ev) => ev.exists("bg.txt") },
-    { do: "until", mark: "wake-ended", what: "a turn after the command finished to end", timeoutS: 90, optional: true, test: (ev) => snaps(ev, "s2", mark(ev, "bg-done")!).some(isWorking) && !isWorking(last(ev, "s2")!) },
-    { do: "sleep", s: 5 },
-    { do: "screenshot", shot: "after" },
+    ...awayAndBack("s2", "bg.txt"),
   ],
   pre: [
     created("s2"),
@@ -376,11 +437,12 @@ const S2: Scenario = {
         return s && /sleep 75|bg/i.test(s.label) ? ok(s.label) : no(s ? s.label : "no Bash step");
       },
     },
-    stillRunning("S2.2", "s2", "s2-ended", "bg-done", "the background command"),
-    startTime("S2.3", "s2", (s) => s.tool === "Bash", "the background command"),
+    stillRunning("S2.2a", "s2", "list-mid", "list", "the background command"),
+    stillRunning("S2.2b", "s2", "mid-background", "thread", "the background command"),
+    startTime("S2.3", "s2", (s) => s.tool === "Bash", "the background command", "mid-background", "mid-background"),
     finishShows("S2.4", "s2", "bg-done", "the background command"),
-    unreadAfter("S2.5", "s2", "bg-done"),
-    stopOffered("S2.6", "s2", "mid-background", "bg-done", "the background command"),
+    unreadAfter("S2.5", "s2", "list-after"),
+    stopOffered("S2.6", "s2", "mid-background", "mid-background", "the background command"),
     review("S2.7", "state", "Mid-background, the thread shows the command still running, with elapsed time and a Stop.", "Running indicator, elapsed time, Stop.", "The thread looks finished.", ["background-running"]),
     review("S2.8", "state", "After it finished, the thread shows the result.", "A done state or the wake turn's reply.", "Still shows running, or nothing changed.", ["after"]),
   ],
@@ -400,17 +462,20 @@ const S3: Scenario = {
     { do: "create", name: "s3", prompt: BG("sleep 60 && echo bg-done > bg3.txt") },
     started("s3"),
     { do: "until", mark: "s3-ended", what: "the turn that starts the command to end", timeoutS: 180, test: turnEnded("s3") },
+    { do: "leave", name: "s3" },
     { do: "open-thread", name: "s3" },
     { do: "sleep", s: 4 },
     { do: "screenshot", shot: "thread-before" },
     { do: "app", to: "background", mark: "backgrounded" },
     { do: "until", mark: "bg-done", what: "bg3.txt to appear", timeoutS: 150, test: (ev) => ev.exists("bg3.txt") },
-    { do: "until", mark: "wake-ended", what: "a turn after the command finished to end", timeoutS: 90, optional: true, test: (ev) => snaps(ev, "s3", mark(ev, "bg-done")!).some(isWorking) && !isWorking(last(ev, "s3")!) },
-    { do: "sleep", s: 5 },
+    { do: "sleep", s: 20 },
+    { do: "mark", mark: "list-after" },
     { do: "screenshot", shot: "home-screen" },
     { do: "app", to: "foreground", mark: "foregrounded" },
     { do: "sleep", s: 5 },
     { do: "screenshot", shot: "thread-after" },
+    { do: "return", name: "s3" },
+    { do: "sleep", s: 3 },
   ],
   pre: [
     { what: "the app on the leased simulator paired with the run's bridge", check: (ev) => (ev.paired ? ok("paired") : no("not paired: tap Pair on the confirmation (see runner.md)")) },
@@ -446,8 +511,8 @@ const S3: Scenario = {
         return p ? ok(p.click!) : no("no push links to the session");
       },
     },
-    unreadAfter("S3.3", "s3", "bg-done"),
-    stillRunning("S3.4", "s3", "s3-ended", "bg-done", "the background command"),
+    unreadAfter("S3.3", "s3", "list-after"),
+    finishShows("S3.4", "s3", "bg-done", "the background command"),
     review("S3.5", "state", "Before leaving, the thread shows the command running in the background.", "Running indicator with what runs.", "Looks finished.", ["thread-before"]),
     review("S3.6", "state", "On the home screen, a notification or badge says the work finished.", "Notification banner or badge.", "Nothing.", ["home-screen"]),
     review("S3.7", "state", "Back in the app, the thread shows the result, with no stale running indicator.", "Done state and the reply.", "Still running, or stale.", ["thread-after"]),
@@ -469,10 +534,10 @@ const S4: Scenario = {
       do: "create",
       name: "s4",
       prompt:
-        'In one message, launch 2 subagents in parallel with the Agent tool. The first: subagent_type "no-such-agent-type", description "broken helper", prompt "Say hi." The second: subagent_type general-purpose, model haiku, description "long sleeper", prompt "Run the Bash command `sleep 45 && echo late > late.txt` and then reply done." Use exactly these values even if one looks wrong. Then reply with one line saying what happened.',
+        'In one message, launch 2 subagents in parallel with the Agent tool. The first: subagent_type "no-such-agent-type", description "broken helper", prompt "Say hi." The second: subagent_type general-purpose, model haiku, description "long sleeper", prompt "Run exactly this Bash command in the foreground: perl -e \'sleep 45\' && echo late > late.txt . Then reply done." Use exactly these values even if one looks wrong. Then reply with one line saying what happened.',
     },
     started("s4"),
-    { do: "until", mark: "sleeper-running", what: "the sleeper's Bash call to start", timeoutS: 150, test: (ev) => blocks(ev.transcript("s4").subagents).uses.some((u) => u.name === "Bash" && String(u.input.command).includes("sleep 45")) },
+    { do: "until", mark: "sleeper-running", what: "the sleeper's Bash call to start", timeoutS: 150, test: (ev) => blocks(ev.transcript("s4").subagents).uses.some((u) => u.name === "Bash" && String(u.input.command).includes("sleep 45") && u.input.run_in_background !== true) },
     { do: "sleep", s: 8 },
     { do: "screenshot", shot: "running" },
     { do: "stop", name: "s4", mark: "stopped" },
@@ -586,7 +651,7 @@ const S5: Scenario = {
     "They watch the thread and must tell it is still alive, not stuck: what runs, for how long, and how to stop it.",
   ],
   setup: [
-    { do: "create", name: "s5", prompt: "Run this Bash command in the foreground (not in the background), with timeout 200000: sleep 120 && echo slept > slept.txt\nThen reply with one line: slept." },
+    { do: "create", name: "s5", prompt: "Run exactly this Bash command in the foreground (not in the background), with timeout 200000: perl -e 'sleep 120' && echo slept > slept.txt\nThen reply with one line: slept." },
     started("s5"),
     { do: "until", mark: "call-running", what: "the sleep step to run", timeoutS: 120, test: (ev) => snaps(ev, "s5").some((s) => stepsOf(s).some((x) => x.tool === "Bash" && x.state === "running")) },
     { do: "sleep", s: 30 },
@@ -620,7 +685,7 @@ const S5: Scenario = {
       fail: "No label, or a generic one.",
       check: (ev) => {
         const s = snaps(ev, "s5").flatMap(stepsOf).find((x) => x.tool === "Bash" && x.state === "running");
-        return s && /sleep/.test(s.label) ? ok(s.label) : no(s?.label ?? "never running");
+        return s && /sleep|perl|120/i.test(s.label) ? ok(s.label) : no(s?.label ?? "never running");
       },
     },
     {
@@ -684,7 +749,7 @@ const S6: Scenario = {
     "Each time, the thread must show the truth at once: still running, then done, with no duplicates.",
   ],
   setup: [
-    { do: "create", name: "s6", prompt: "Run the Bash command `sleep 40 && echo hi > s6.txt` in the foreground, then reply with one line: done." },
+    { do: "create", name: "s6", prompt: "Run exactly this Bash command in the foreground (not in the background): perl -e 'sleep 40' && echo hi > s6.txt\nThen reply with one line: done." },
     started("s6"),
     { do: "until", mark: "call-running", what: "the sleep step to run", timeoutS: 120, test: (ev) => snaps(ev, "s6").some((s) => stepsOf(s).some((x) => x.tool === "Bash" && x.state === "running")) },
     { do: "sleep", s: 3 },
@@ -772,7 +837,7 @@ const S7: Scenario = {
       (name, i): Action => ({
         do: "create",
         name,
-        prompt: i < SLEEPERS ? `Task ${name}: run the Bash command \`sleep 60\` in the foreground, then reply with one line: done.` : `Task ${name}: reply with the single word ok.`,
+        prompt: i < SLEEPERS ? `Task ${name}: run exactly this Bash command in the foreground (not in the background): perl -e 'sleep 60' . Then reply with one line: done.` : `Task ${name}: reply with the single word ok.`,
       }),
     ),
     {
@@ -866,13 +931,7 @@ const S8: Scenario = {
     },
     started("s8"),
     { do: "until", mark: "s8-ended", what: "the parent turn to end", timeoutS: 180, test: turnEnded("s8") },
-    { do: "leave", name: "s8" },
-    { do: "sleep", s: 15 },
-    { do: "mark", mark: "mid-background" },
-    { do: "screenshot", shot: "background-running" },
-    { do: "until", mark: "bg-done", what: "nested.txt to appear", timeoutS: 120, test: (ev) => ev.exists("nested.txt") },
-    { do: "until", mark: "wake-ended", what: "a turn after the command finished to end", timeoutS: 90, optional: true, test: (ev) => snaps(ev, "s8", mark(ev, "bg-done")!).some(isWorking) && !isWorking(last(ev, "s8")!) },
-    { do: "screenshot", shot: "after" },
+    ...awayAndBack("s8", "nested.txt"),
   ],
   pre: [
     created("s8"),
@@ -881,7 +940,8 @@ const S8: Scenario = {
     { what: "the parent turn ended before nested.txt appeared", check: (ev) => ((mark(ev, "s8-ended") ?? Infinity) < (mark(ev, "bg-done") ?? 0) ? ok("yes") : no("no")) },
   ],
   rubric: [
-    stillRunning("S8.1", "s8", "s8-ended", "bg-done", "the subagent's background command"),
+    stillRunning("S8.1a", "s8", "list-mid", "list", "the subagent's background command"),
+    stillRunning("S8.1b", "s8", "mid-background", "thread", "the subagent's background command"),
     {
       id: "S8.2",
       tell: "what",
@@ -898,8 +958,8 @@ const S8: Scenario = {
       },
     },
     finishShows("S8.3", "s8", "bg-done", "the subagent's background command"),
-    unreadAfter("S8.4", "s8", "bg-done"),
-    stopOffered("S8.5", "s8", "mid-background", "bg-done", "the subagent's background command"),
+    unreadAfter("S8.4", "s8", "list-after"),
+    stopOffered("S8.5", "s8", "mid-background", "mid-background", "the subagent's background command"),
     review("S8.6", "state", "Mid-background, the thread shows that something still runs and what.", "A running indicator with the command or the subagent.", "Looks finished.", ["background-running"]),
   ],
 };

@@ -32,6 +32,8 @@ class Phone {
   ownProjects = new Set<string>();
   demo: Project | null = null;
   decided = new Set<string>();
+  /** Threads the user left: not watched until they return, so the bridge can count news as unread. */
+  away = new Set<string>();
   onReply: ((sid: string, type: string) => void) | null = null;
   lastList: Row[] = [];
 
@@ -135,10 +137,13 @@ class Phone {
     c.send({ type: "watch_sessions" });
     await until(() => c.frames.slice(at).some((f) => f.type === "sessions"), "the sessions frame", 60);
     if (!this.demo) throw new Error("the run's demo project is not listed");
-    for (const [sid] of this.names) {
-      const t = this.thread(sid);
-      c.send({ type: "watch_session", sessionId: sid, after: resume && t.epoch ? { epoch: t.epoch, rev: t.rev } : null });
-    }
+    for (const [sid] of this.names) if (!this.away.has(sid)) this.watch(sid, resume);
+  }
+
+  watch(sid: string, resume: boolean) {
+    const t = this.thread(sid);
+    this.away.delete(sid);
+    this.send({ type: "watch_session", sessionId: sid, after: resume && t.epoch ? { epoch: t.epoch, rev: t.rev } : null });
   }
 
   drop() {
@@ -281,7 +286,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
       case "create": {
         p.send({ type: "session_create", ref: a.name, projectId: p.demo!.id, model: "haiku", mode: a.mode ?? "default", isolate: "none", text: a.prompt });
         const sid = await until(() => ev.ids[a.name], `session_created for ${a.name}`, 30);
-        p.send({ type: "watch_session", sessionId: sid, after: null });
+        p.watch(sid, false);
         return;
       }
       case "until":
@@ -300,13 +305,12 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
       case "stop":
         p.send({ type: "session_stop", sessionId: ev.ids[a.name]! });
         return markNow(a.mark);
-      case "leave": {
-        const sid = ev.ids[a.name]!;
-        p.send({ type: "unwatch_session", sessionId: sid });
-        const t = p.threads.get(sid);
-        p.send({ type: "watch_session", sessionId: sid, after: t?.epoch ? { epoch: t.epoch, rev: t.rev } : null });
+      case "leave":
+        p.send({ type: "unwatch_session", sessionId: ev.ids[a.name]! });
+        p.away.add(ev.ids[a.name]!);
         return;
-      }
+      case "return":
+        return p.watch(ev.ids[a.name]!, true);
       case "reconnect": {
         p.drop();
         markNow(`${a.mark}-dropped`);
@@ -315,11 +319,12 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
         const replies = new Map<string, string>();
         p.onReply = (sid, type) => replies.has(sid) || replies.set(sid, type);
         await p.open(true);
-        await until(() => replies.size === p.names.size, "a resume reply for every thread", 30);
+        await until(() => replies.size === p.names.size - p.away.size, "a resume reply for every watched thread", 30);
         p.onReply = null;
         await Bun.sleep(1500);
         markNow(a.mark);
         for (const [sid, name] of p.names) {
+          if (p.away.has(sid)) continue;
           const fresh = await connect(run!);
           const at = fresh.frames.length;
           fresh.send({ type: "watch_session", sessionId: sid, after: null });
@@ -349,6 +354,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
   }
 
   // Judge, then keep what the cleanup deletes.
+  if (outcome !== "error") Object.assign(ev.marks, safeMarks(() => sc.derive?.(ev) ?? {}));
   const pre = failure && outcome === "error" ? [] : sc.pre.map((p) => ({ what: p.what, ...safe(() => p.check(ev)) }));
   if (outcome === "judged" && pre.some((p) => !p.ok)) outcome = "precondition-failed";
   const rubric = sc.rubric.map((r) => {
@@ -393,6 +399,15 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number): Promi
   writeFileSync(join(out, "report.md"), reportMarkdown(sc, report));
   console.log(readFileSync(join(out, "report.md"), "utf8"));
   return outcome;
+}
+
+function safeMarks(f: () => Record<string, number>) {
+  try {
+    return f();
+  } catch (e) {
+    log(`derive failed: ${(e as Error).message}`);
+    return {};
+  }
 }
 
 function safe(f: () => { ok: boolean; why: string }) {
@@ -459,7 +474,9 @@ function describe(a: Action): string {
     case "mark":
       return `Mark \`${a.mark}\`.`;
     case "leave":
-      return `Leave \`${a.name}\`'s thread (unwatch_session, which the bridge counts as a visit).`;
+      return `Leave \`${a.name}\`'s thread for the list (unwatch_session; the bridge counts it as a visit, and a watched thread is never unread).`;
+    case "return":
+      return `Reopen \`${a.name}\`'s thread from the position the phone held (watch_session with after).`;
     case "reconnect":
       return `Drop the socket${a.until ? `, wait for ${a.until.what}` : ""}, wait ${a.afterS} s, reconnect and resume each thread from its last position; compare with a fresh open. Mark \`${a.mark}\`.`;
     case "screenshot":
@@ -542,4 +559,9 @@ See ../runner.md (docs/ux-program/runner.md).`);
   }
 }
 
-process.exit(await main());
+process.exit(
+  await main().catch((e: Error) => {
+    console.error(`error: ${e.message}`);
+    return 1;
+  }),
+);

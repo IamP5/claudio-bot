@@ -7,16 +7,13 @@ import { memoryJournal } from "../src/machine/journal";
 import { createMachineNode } from "../src/machine/node";
 import { newAgentId, newIntentId, type Event, type Intent } from "../src/machine/wire";
 import type { AgentId, BotId, Message, MessageId } from "../src/protocol";
-import { emptySession, emptyWorld, newBot, own, type AgentRecord, type MoveId, type MoveRecord } from "../src/world";
+import { emptySession, emptyWorld, HISTORY_KEEP, HISTORY_SLACK, newBot, own, type AgentRecord, type MoveId, type MoveRecord } from "../src/world";
 import { FakeQuery, cleanup, flush, later, result, roots, runBash, testProfile } from "./hub-kit";
 
 afterEach(cleanup);
 
 const B1 = "b_home" as BotId;
 const at = "2026-10-21T12:00:00.000Z";
-/** world.ts's HISTORY_KEEP and HISTORY_SLACK. */
-const HISTORY_KEEP = 1000;
-const HISTORY_SLACK = 100;
 
 function machine(persist: (urgency?: "now") => void = () => {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "claudiobot-node-")));

@@ -611,9 +611,9 @@ export const recordExchange = (bot: BotRecord, peer: Peer, direction: "sent" | "
   post(bot, exchangeFor(bot.messages.at(-1), peer, direction, { id: newMessageId(), at }));
 
 /** Messages a bot or agent thread keeps in state.json. Older ones move to the thread's archive. */
-const HISTORY_KEEP = 1000;
+export const HISTORY_KEEP = 1000;
 /** How far past HISTORY_KEEP a thread grows before the move, so the archive takes a batch at a time. */
-const HISTORY_SLACK = 100;
+export const HISTORY_SLACK = 100;
 
 /**
  * The move for a thread past HISTORY_KEEP + HISTORY_SLACK: what goes to the archive, oldest first, and what stays,

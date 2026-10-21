@@ -16,7 +16,8 @@ import { profileView } from "../src/machine/wire";
 import { createRegistry } from "../src/machine/registry";
 import type { PairOffer, PairResponse, ServerMessage, StreamPosition } from "../src/protocol";
 import { serve } from "../src/serve";
-import { createSaver, loadWorld } from "../src/store";
+import { createSaver, flushNow, loadWorld } from "../src/store";
+import { newBot } from "../src/world";
 import { createStream } from "../src/stream";
 
 const cleanups: (() => void)[] = [];
@@ -262,4 +263,18 @@ test("claudiobot machine remove with no bridge running unpins the machine in mac
   expect(await c.run("remove", mac.machineId)).toBe(0);
   expect(c.text()).toContain('Removed "MacBook"');
   expect(createRegistry({ bridgeHome: dir, now: () => new Date() }).list()).toEqual([]);
+});
+
+test("claudiobot machine enroll refuses a bridge that still has bots, and says how to move them to the home first", async () => {
+  const h = home();
+  const mac = tmp();
+  const { world } = loadWorld(mac);
+  world.bots.set("b_scout" as never, newBot({ id: "b_scout" as never, name: "Scout", avatar: { shape: "circle", color: "white" }, at: new Date().toISOString() }));
+  flushNow(world, mac);
+  const c = commandOn(mac);
+  expect(await c.run("enroll", h.http, "ANY-CODE")).toBe(1);
+  expect(c.text()).toContain("Scout");
+  expect(c.text()).toContain("claudiobot world export");
+  expect(h.registry.list()).toEqual([]);
+  expect(readIdentity(mac)?.home ?? null).toBeNull();
 });

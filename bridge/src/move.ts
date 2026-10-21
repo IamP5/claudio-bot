@@ -5,7 +5,10 @@ import { createHomes } from "./home";
 import { lockHome } from "./lock";
 import { mergeFacts } from "./memory";
 import { notices } from "./prompts";
-import type { BotId } from "./protocol";
+import { readIdentity } from "./machine/identity";
+import { createPlacements } from "./machine/placements";
+import type { MachineId } from "./machine/wire";
+import type { AgentId, BotId } from "./protocol";
 import { checkStateFile, flushNow, loadWorld, writeAtomic } from "./store";
 import {
   EXCHANGE_KEEP,
@@ -36,12 +39,17 @@ export type BundleWorld = {
 /** data: the file's bytes, base64. path: relative to the bridge home. */
 export type BundleFile = { path: string; data: string };
 
+/**
+ * from.machineId: the exporting bridge's id in its machine.json, when it has one. agents: the agents that stay on it, by
+ * their moved bot, so the importing home hears them once that bridge enrolls as its machine.
+ */
 export type MoveBundle = {
   format: 1;
   moveId: MoveId;
-  from: { machine: string; at: string };
+  from: { machine: string; at: string; machineId?: MachineId };
   world: BundleWorld;
   files: BundleFile[];
+  agents?: { id: AgentId; botId: BotId }[];
 };
 
 type Frozen = Extract<MoveRecord, { phase: "frozen" }>;
@@ -136,8 +144,26 @@ export function unionLines(local: string, incoming: string): string {
   return `${local}${local === "" || local.endsWith("\n") ? "" : "\n"}${add.join("\n")}\n`;
 }
 
+/**
+ * A bot or group coming back to the bridge that froze it (a round trip before finish) is live here again: it leaves the
+ * frozen move, and a move with nothing left frozen is done, so finish trashes nothing that came back.
+ */
+function thaw(world: World, ids: ReadonlySet<string>) {
+  const moves = own<MoveRecord[]>(world.moves);
+  moves.forEach((m, i) => {
+    if (m.kind !== "out" || m.phase !== "frozen") return;
+    const bots = m.held.bots.filter((b) => !ids.has(b.id));
+    const groups = m.held.groups.filter((g) => !ids.has(g.id));
+    moves[i] =
+      bots.length === 0 && groups.length === 0
+        ? { kind: "out", moveId: m.moveId, at: m.at, machine: m.machine, phase: "done" }
+        : { ...m, held: { ...m.held, bots, groups } };
+  });
+}
+
 /** The incoming world unioned into this one, and the move recorded. Mutates world. */
 export function applyBundle(world: World, bundle: MoveBundle, to: string, at: string) {
+  thaw(world, new Set([...bundle.world.bots.map((b) => b.id as string), ...bundle.world.groups.map((g) => g.id as string)]));
   const move = { from: bundle.from.machine, to, at };
   for (const bot of bundle.world.bots) world.bots.set(bot.id, mergeBot(world.bots.get(bot.id), arrive(bot, move)));
   for (const group of bundle.world.groups) {
@@ -244,7 +270,8 @@ function landFile(home: string, file: BundleFile) {
 const BUNDLE = z.object({
   format: z.literal(1),
   moveId: z.string().regex(/^mv_[\w-]+$/),
-  from: z.object({ machine: z.string(), at: z.string() }),
+  from: z.object({ machine: z.string(), at: z.string(), machineId: z.string().regex(/^m_[0-9a-f-]{36}$/).optional() }),
+  agents: z.array(z.object({ id: z.string().min(1), botId: z.string().min(1) })).optional(),
   world: z.object({
     bots: z.array(z.unknown()),
     groups: z.array(z.unknown()),
@@ -283,13 +310,15 @@ export function parseBundle(raw: unknown): MoveBundle | { error: string } {
 
 export type MoveDeps = { home: string; machine: string; now: () => Date };
 
-export type Exported = { kind: "exported"; moveId: MoveId; bundle: MoveBundle; fresh: boolean; left: number } | { kind: "empty" };
+export type Exported = { kind: "exported"; moveId: MoveId; bundle: MoveBundle; fresh: boolean; left: number } | { kind: "empty" } | { kind: "machine"; home: string };
 
 /**
  * Freezes this home's bots (once: a rerun packs the same frozen move again, with the same moveId) and returns the
  * bundle. The freeze is saved before the bundle is made, so a crash in between is finished by a rerun.
  */
 export function exportWorld(deps: MoveDeps): Exported {
+  const identity = readIdentity(deps.home);
+  if (identity?.home) return { kind: "machine", home: identity.home.name };
   const { world, firstRun } = loadWorld(deps.home);
   if (firstRun) return { kind: "empty" };
   let move = own<MoveRecord[]>(world.moves).find((m): m is Frozen => m.kind === "out" && m.phase === "frozen");
@@ -299,10 +328,12 @@ export function exportWorld(deps: MoveDeps): Exported {
     move = freeze(world, newMoveId(), deps.now().toISOString(), deps.machine);
     flushNow(world, deps.home);
   }
+  const moved = new Set<string>(move.held.bots.map((b) => b.id));
   const bundle: MoveBundle = {
     format: 1,
     moveId: move.moveId,
-    from: { machine: move.machine, at: move.at },
+    from: { machine: move.machine, at: move.at, ...(identity && { machineId: identity.machineId }) },
+    agents: [...world.agents.values()].flatMap((r) => (moved.has(r.agent.botId) ? [{ id: r.agent.id, botId: r.agent.botId }] : [])),
     world: {
       bots: move.held.bots,
       groups: move.held.groups,
@@ -336,6 +367,12 @@ export function importWorld(deps: MoveDeps, raw: unknown): Imported {
   for (const file of bundle.files) landFile(deps.home, file);
   const before = new Set(own<DeviceRecord[]>(world.devices).map((d) => d.id));
   applyBundle(world, bundle, deps.machine, deps.now().toISOString());
+  const from = bundle.from.machineId;
+  if (from) {
+    // Before the state save, so a crash in between is redone by the rerun, which places them again.
+    const placements = createPlacements({ path: join(deps.home, "machine", "placements.json"), log: () => {} });
+    for (const a of bundle.agents ?? []) placements.place(a.id, { machine: from, botId: a.botId, by: { kind: "system" } });
+  }
   flushNow(world, deps.home);
   return {
     kind: "imported",
@@ -362,10 +399,12 @@ export function finishMove(deps: MoveDeps, moveId: string): Finished {
   if (move.phase === "done") return { kind: "already" };
   const homes = createHomes(deps.home);
   const at = deps.now();
-  for (const bot of move.held.bots) homes.trash(bot.id as BotId, at);
+  // A bot that came back before finish runs here again, from the home finish would trash.
+  const gone = move.held.bots.filter((b) => !world.bots.has(b.id));
+  for (const bot of gone) homes.trash(bot.id as BotId, at);
   moves[i] = { kind: "out", moveId: move.moveId, at: move.at, machine: move.machine, phase: "done" };
   flushNow(world, deps.home);
-  return { kind: "finished", bots: move.held.bots.length };
+  return { kind: "finished", bots: gone.length };
 }
 
 // ---- claudiobot world <export|import|finish>.
@@ -407,6 +446,10 @@ function exportStep(deps: WorldCommandDeps, out: string | undefined): number {
   const result = exportWorld(deps);
   if (result.kind === "empty") {
     deps.out(`No bots on ${deps.home} to move.\n`);
+    return 1;
+  }
+  if (result.kind === "machine") {
+    deps.out(`This bridge is a machine of "${result.home}", which holds the world. Export from the home.\n`);
     return 1;
   }
   const { bundle, moveId } = result;

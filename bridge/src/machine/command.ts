@@ -3,6 +3,7 @@ import { z } from "zod";
 import { accessOf } from "../access";
 import type { MachineRemoval } from "../control";
 import { lockHome } from "../lock";
+import { loadWorld } from "../store";
 import { LAN_ENROLL_WARNING, onTailnet } from "../address";
 import type { PairOffer } from "../protocol";
 import { errorText } from "../text";
@@ -92,6 +93,17 @@ export async function machineCommand(argv: string[], deps: MachineCommandDeps): 
       if (!base || !code) {
         out(MACHINE_USAGE);
         return 2;
+      }
+      // A machine runs no bots, so bots here would stop answering the phone: they move to the home first.
+      const { world } = loadWorld(deps.bridgeHome);
+      const bots = [...world.bots.values(), ...world.groups.values()].map((b) => b.name);
+      if (bots.length > 0) {
+        out(
+          `This bridge still has ${bots.length === 1 ? "a bot" : `${bots.length} bots`} (${bots.join(", ")}), and a machine runs none of its own. Nothing was changed.\n` +
+            `Move them to the home first: stop the bridge here, run claudiobot world export, then claudiobot world import <file> on the home, ` +
+            `then claudiobot world finish <moveId> here once they answer there. Or delete them from the phone. Then enroll again.\n`,
+        );
+        return 1;
       }
       const me = loadIdentity(deps.bridgeHome, await computerName(deps.run));
       if (me.home && homeBase(me.home.url) !== base) {

@@ -21,7 +21,9 @@ import {
   type MoveBundle,
   type MoveDeps,
 } from "../src/move";
-import type { Agent, BotId, DeviceId, Message, MessageId, RoutineId } from "../src/protocol";
+import type { Agent, AgentId, BotId, DeviceId, Message, MessageId, RoutineId } from "../src/protocol";
+import { newIdentity, saveIdentity } from "../src/machine/identity";
+import { createPlacements } from "../src/machine/placements";
 import { createScheduler } from "../src/scheduler";
 import { flushNow, loadWorld } from "../src/store";
 import { emptySession, emptyWorld, newBot, own, type BotRecord, type DeviceRecord, type EnvelopeId, type Pending, type RoutineRecord, type SessionState, type World } from "../src/world";
@@ -350,6 +352,61 @@ describe("export, import, finish", () => {
     expect(finishMove({ home: mac, ...MAC }, moveId)).toEqual({ kind: "already" });
     expect(finishMove({ home: mac, ...MAC }, "mv_nope")).toEqual({ kind: "unknown" });
     expect(exportWorld({ home: mac, ...MAC })).toEqual({ kind: "empty" });
+  });
+
+  test("a round trip before finish (Mac to omarchy, then back): the Mac's import thaws its frozen move, and finish trashes nothing live", () => {
+    const mac = freshHome();
+    const omarchy = freshHome();
+    seedMac(mac);
+    seedOmarchy(omarchy);
+    const out = exported(mac);
+    importWorld({ home: omarchy, ...OMARCHY }, out);
+    const back = exportWorld({ home: omarchy, ...OMARCHY });
+    if (back.kind !== "exported") throw new Error(back.kind);
+    expect(importWorld({ home: mac, ...MAC }, JSON.parse(JSON.stringify(back.bundle))).kind).toBe("imported");
+
+    const world = loadWorld(mac).world;
+    expect([...world.bots.keys()].sort() as string[]).toEqual(["b_claudio", "b_mate", "b_scout"]);
+    expect(world.moves.find((m) => m.moveId === out.moveId)).toMatchObject({ kind: "out", phase: "done" });
+    expect(["already", "finished"]).toContain(finishMove({ home: mac, ...MAC }, out.moveId).kind);
+    expect(existsSync(join(mac, "bots/b_scout/CLAUDE.md"))).toBe(true);
+  });
+
+  test("finish never trashes the home of a frozen bot that is live in the world again", () => {
+    const mac = freshHome();
+    seedMac(mac);
+    const { moveId } = exported(mac);
+    const world = loadWorld(mac).world;
+    world.bots.set("b_scout" as BotId, newBot({ id: "b_scout" as BotId, name: "Scout", avatar, at }));
+    flushNow(world, mac);
+    expect(finishMove({ home: mac, ...MAC }, moveId)).toEqual({ kind: "finished", bots: 1 });
+    expect(existsSync(join(mac, "bots/b_scout/CLAUDE.md"))).toBe(true);
+    expect(existsSync(join(mac, "bots/b_mate"))).toBe(false);
+  });
+
+  test("a bridge that is a machine of a home refuses to export: its home holds the world", () => {
+    const mac = freshHome();
+    seedMac(mac);
+    const me = newIdentity("Tuba's Mac");
+    saveIdentity(mac, { ...me, home: { url: "http://omarchy:7878", machineId: newIdentity("omarchy").machineId, publicKey: me.publicKey, name: "omarchy" } });
+    expect(exportWorld({ home: mac, ...MAC })).toEqual({ kind: "machine", home: "omarchy" });
+    expect(loadWorld(mac).world.bots.size).toBe(2);
+  });
+
+  test("the agents that stay on the exporting machine are placed on it at the import, so the home hears them once it enrolls", () => {
+    const mac = freshHome();
+    const omarchy = freshHome();
+    seedMac(mac);
+    seedOmarchy(omarchy);
+    const me = newIdentity("Tuba's Mac");
+    saveIdentity(mac, me);
+    const world = loadWorld(mac).world;
+    const agent = { id: "a_1", botId: "b_scout", title: "fix", where: "mac", status: "idle", updatedAt: at, evidence: null, worktree: null } as unknown as Agent;
+    world.agents.set(agent.id, { agent, cwd: "/tmp", messages: [], session: emptySession(), cloudSession: null, budgetUsd: null, startedBy: { kind: "system" } });
+    flushNow(world, mac);
+    importWorld({ home: omarchy, ...OMARCHY }, exported(mac));
+    const placements = createPlacements({ path: join(omarchy, "machine", "placements.json"), log: () => {} });
+    expect(placements.of("a_1" as AgentId)).toMatchObject({ machine: me.machineId, botId: "b_scout" });
   });
 
   test.each([

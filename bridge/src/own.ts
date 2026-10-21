@@ -174,13 +174,25 @@ export function createOwn(deps: OwnDeps): Own {
 
   const working = (rec: SessionRecord) => (drivers.get(rec.id)?.working ?? false) || runs(activityOf(rec));
 
+  /** A new run starts: how the last one ended no longer shows. */
+  function begin(rec: SessionRecord) {
+    delete driveOf(rec).outcome;
+    stoppedBy.delete(rec.id);
+    lastTask.delete(rec.id);
+    deps.persist();
+  }
+
   /**
-   * Something the thread or the row shows changed. A run that just came to rest records how it ended, unless a stop or
-   * a failure already did; a task that ends a moment before the wake turn it announces rests it twice.
+   * Something the thread or the row shows changed. A turn of the user's that started after the last ending (a queued
+   * message) begins a new run. A run that just came to rest records how it ended, unless a stop or a failure already
+   * did; a task that ends a moment before the wake turn it announces rests it twice.
    */
   function changed(id: SessionId) {
     const rec = deps.world.sessions.get(id);
     if (rec?.own) {
+      const turn = activityOf(rec).turn;
+      const ended = rec.own.outcome;
+      if (ended && ended.kind !== "finished" && turn && !turn.wake && turn.startedAt > ended.at) begin(rec);
       if (working(rec)) underway.add(id);
       else if (underway.delete(id) && (!rec.own.outcome || rec.own.outcome.kind === "finished")) {
         rec.own.outcome = stoppedBy.has(id) ? { kind: "stopped", text: STOPPED_BY_YOU, at: now() } : { kind: "finished", text: lastTask.get(id) ?? "Finished", at: now() };
@@ -255,9 +267,9 @@ export function createOwn(deps: OwnDeps): Own {
         signal.removeEventListener("abort", aborted);
         resolve(r);
       };
-      // Stop answers the cards it ends before it interrupts, so a card still open when its query gives up lost the process.
+      // A card its query gives up on was ended by the user's stop, or its process died.
       const aborted = () => {
-        settle(rec, id, { kind: "closed" });
+        settle(rec, id, { kind: stoppedBy.has(rec.id) ? "stopped" : "closed" });
       };
       waiting.set(id, done);
       if (signal.aborted) aborted();
@@ -301,7 +313,7 @@ export function createOwn(deps: OwnDeps): Own {
           const card: OwnCard = { kind: "ask", cardId: newMessageId(), toolUseId: o.toolUseID, at: now(), expiresAt: expiresAt(), questions: questionsOf(input), answers: null };
           const r = await hold(rec, card, o.signal);
           if (r.kind === "answers") return { behavior: "allow", updatedInput: { ...input, answers: r.answers } };
-          return { behavior: "deny", message: r.kind === "dismissed" ? `${deps.userName} dismissed the question without answering.` : r.kind === "stopped" ? `${deps.userName} stopped the session.` : `The question expired unanswered; ${deps.userName} did not say no.` };
+          return { behavior: "deny", message: r.kind === "dismissed" ? `${deps.userName} dismissed the question without answering.` : r.kind === "stopped" ? `${deps.userName} stopped the session. It did not run.` : `The question expired unanswered; ${deps.userName} did not say no.` };
         }
         if (tool === "ExitPlanMode") {
           const drive = driveOf(rec);
@@ -482,19 +494,15 @@ export function createOwn(deps: OwnDeps): Own {
     const early = life.kind === "working" && !life.turn.output;
     const turn = one === null && (a.turn !== null || life.kind === "working" || life.kind === "stopping" || life.kind === "backoff");
     const named = a.tasks.filter((t) => ends(a, target, t.id));
-    for (const c of [...cards(rec)]) {
-      const agent = c.kind === "permission" ? (c.agent?.id as TaskId | undefined) : undefined;
-      if (isOpen(c) && (agent === undefined ? one === null : ends(a, target, agent))) settle(rec, cardIdOf(c), { kind: "stopped" });
-    }
+    // A task's own cards wait for Claude Code to take the stop, so a task it refuses to stop keeps its card.
+    if (one === null) for (const c of [...cards(rec)]) if (isOpen(c) && (c.kind !== "permission" || !c.agent || ends(a, target, c.agent.id as TaskId))) settle(rec, cardIdOf(c), { kind: "stopped" });
     const before = stoppedBy.has(rec.id);
     stoppedBy.add(rec.id);
     const r = await s.interrupt(target);
-    if (!r.ran) {
-      if (!before) stoppedBy.delete(rec.id);
-      return refused(one === null ? NOTHING_RUNS : "That task is not running.");
-    }
     const missed = named.filter((t) => r.refused.includes(t.id));
     const halted = named.filter((t) => !r.refused.includes(t.id));
+    if (!before && (!r.ran || (one !== null && halted.length === 0))) stoppedBy.delete(rec.id);
+    if (!r.ran) return refused(one === null ? NOTHING_RUNS : "That task is not running.");
     const steps = halted.flatMap((t) => (t.stepId === null ? [] : [t.stepId]));
     if (steps.length > 0) stoppedSteps.set(rec.id, [...(stoppedSteps.get(rec.id) ?? []), ...steps].slice(-STOPPED_STEPS_KEPT));
     const parts = [...(turn ? ["the turn"] : []), ...halted.map(taskName)];
@@ -515,11 +523,8 @@ export function createOwn(deps: OwnDeps): Own {
       if (drive.session.pending.some((p) => p.clientId === clientId)) return { ok: true };
       const s = driver(rec);
       if (interrupt) await stopRun(rec, "turn");
-      delete drive.outcome;
-      stoppedBy.delete(rec.id);
-      lastTask.delete(rec.id);
+      begin(rec);
       s.push({ kind: "envelope", text, initiator: { kind: "user" }, settles: null, clientId });
-      deps.persist();
       changed(rec.id);
       return { ok: true };
     },

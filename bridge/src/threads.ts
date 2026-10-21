@@ -63,6 +63,8 @@ const KEEP = 4;
 /** While a session works, its watchers hear from it at least this often, so a silent call never looks like a dead link. */
 export const BEAT_MS = 25_000;
 const CARD_WAIT_MS = 2_000;
+/** A failed turn's result follows Claude Code's API error entry within seconds; this leaves room for a slow Mac. */
+const ECHO_MS = 120_000;
 
 type Frame = { rev: number; items: SessionItem[]; removed: ItemId[]; bytes: number };
 
@@ -177,17 +179,19 @@ export function createThreads(deps: ThreadsDeps): Threads {
   function visible(s: State): SessionItem[] {
     const now = deps.now().getTime();
     const steps = new Set(s.items.flatMap((i) => (i.kind === "work" ? i.steps.map((st) => st.id) : [])));
-    // An API error is in the transcript already; the bridge's notice of the same failure would show it twice.
-    const errors = new Set(s.items.flatMap((i) => (i.kind === "notice" && i.tone === "error" ? [i.text] : [])));
     return deps.overlay(s.id).filter((item) => {
       if (s.shownByTranscript.has(item.id)) return false;
-      if (item.kind === "notice" && item.tone === "error" && errors.has(item.text)) return false;
+      if (item.kind === "notice" && item.tone === "error" && echoed(s, item)) return false;
       if (item.kind !== "permission" || item.card.answer !== null || item.stepId === undefined || item.subagent !== undefined) return true;
       const held = !steps.has(item.stepId) && now - Date.parse(item.at) < CARD_WAIT_MS;
       if (held) s.holding = true;
       return !held;
     });
   }
+
+  /** The transcript already shows this failure: Claude Code wrote an API error of the same words as the turn ended. */
+  const echoed = (s: State, notice: Extract<SessionItem, { kind: "notice" }>): boolean =>
+    s.items.some((i) => i.kind === "notice" && i.tone === "error" && i.text === notice.text && Math.abs(Date.parse(i.at) - Date.parse(notice.at)) <= ECHO_MS);
 
   /** The overlay as shown, recorded as published with the controls. */
   function absorbOverlay(s: State): SessionItem[] {

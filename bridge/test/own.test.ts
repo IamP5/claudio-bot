@@ -876,6 +876,23 @@ describe("how a run ends", () => {
     expect((await noticesNow()).map((n) => n.text)).toEqual(["Stopped by you: the turn."]);
   });
 
+  test("a message queued behind a stopped turn starts a new run, which ends finished", async () => {
+    await start();
+    await send("First");
+    await send("Second", "c_2");
+    const q = queries[0]!;
+    q.emit(toolCall("toolu_p", "Bash", { command: "perl -e 'sleep 40'" }));
+    await flush();
+    await handle({ type: "session_stop", sessionId: ASK, target: "turn" });
+    clock += 1_000;
+    q.emit(interrupted());
+    await flush();
+    expect((await rowOf(ASK)).outcome).toBeUndefined();
+    q.emit(result(0.01, { session_id: ASK }));
+    await flush();
+    expect(await rowOf(ASK)).toMatchObject({ status: "idle", outcome: { kind: "finished" } });
+  });
+
   test("a stop meant for an earlier turn never reaches a newer one", async () => {
     await start();
     await send("Go");
@@ -956,6 +973,7 @@ describe("how a run ends", () => {
     q.emit(taskStarted(shellTask("bk", "toolu_k", "sleep 600")), level(shellTask("bk", "toolu_k", "sleep 600")), result());
     await flush();
     await restart();
+    expect(queries).toHaveLength(0);
     expect((await noticesNow()).map((n) => [n.text, n.reason])).toEqual([["The bridge restarted, so Claude Code's background work stopped: sleep 600.", "restart"]]);
     expect(await rowOf(ASK)).toMatchObject({ status: "failed", outcome: { kind: "lost" } });
     expect(await stepOf("toolu_k")).toMatchObject({ state: "stopped", cause: "The bridge restarted" });

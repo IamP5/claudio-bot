@@ -1,9 +1,10 @@
 import { createAgents, type Agents } from "../agents";
 import type { CardReply } from "../gate";
 import { findProject, type Project } from "../projects";
-import type { AgentId, BotId, MessageId } from "../protocol";
+import type { AgentId, BotId, Message, MessageId } from "../protocol";
 import type { AgentRecord } from "../world";
-import type { Applied, Event, EventBody, Intent, IntentId, Seq } from "./wire";
+import type { Journal } from "./journal";
+import type { Applied, BotStandIn, Event, EventBody, Intent, IntentId, Seq } from "./wire";
 
 type AgentsDeps = Parameters<typeof createAgents>[0];
 
@@ -12,6 +13,12 @@ export type RuntimeDeps = Omit<AgentsDeps, "changed" | "reported" | "note"> & {
   scan: () => Promise<Project[]>;
   /** gate.answer, for card.answer. */
   answer: (botId: BotId, cardId: MessageId, reply: CardReply) => { ok: true } | { ok: false; error: string };
+  /**
+   * Makes sure agent.start's bot is there to hold the agent's cards, rules and cap. False: the bot is gone. On the home
+   * the bot's real record is its stand-in, and only the home writes it; a machine keeps a stand-in of its own.
+   */
+  standIn: (bot: BotStandIn) => boolean;
+  journal: Journal;
 };
 
 /**
@@ -23,31 +30,33 @@ export type LocalAgents = Pick<Agents, "deliver" | "notice" | "session" | "sessi
 export type AgentRuntime = {
   /** Applies an intent once: a repeated intentId gets the first application's result. */
   apply(intent: Intent): Promise<Applied>;
-  /** The outbox after seq, oldest first. It keeps the newest OUTBOX_SIZE events. */
+  /** The outbox after seq, oldest first: what the journal still keeps. */
   events(after: Seq): Event[];
+  /** The newest seq emitted, 0 for none. */
+  lastSeq(): Seq;
+  /** The home handled every event through seq, so the journal may drop them. */
+  ack(seq: Seq): void;
+  /** A message the gate posted on a stand-in, for the home's mirror of the bot's chat. */
+  card(botId: BotId, message: Message): void;
   /** Called with each event as it is emitted, in order. Returns the unsubscribe. */
   subscribe(f: (e: Event) => void): () => void;
   local: LocalAgents;
 };
 
-const OUTBOX_SIZE = 1000;
-const APPLIED_KEPT = 1000;
 const UNKNOWN_AGENT = "Unknown agent";
 
 const ok: Applied = { ok: true };
 const refuse = (reason: string): Applied => ({ ok: false, reason });
 
 export function createAgentRuntime(deps: RuntimeDeps): AgentRuntime {
-  const { scan, answer, ...agentDeps } = deps;
-  const outbox: Event[] = [];
-  let seq: Seq = 0;
+  const { scan, answer, standIn, journal, ...agentDeps } = deps;
   const subscribers = new Set<(e: Event) => void>();
-  const applied = new Map<IntentId, Promise<Applied>>();
+  /** Intents still being applied. A finished one's answer is in the journal. */
+  const applying = new Map<IntentId, Promise<Applied>>();
 
   function emit(body: EventBody) {
-    const e: Event = { seq: ++seq, at: deps.now(), ...body };
-    outbox.push(e);
-    if (outbox.length > OUTBOX_SIZE) outbox.shift();
+    const e: Event = { seq: journal.seq() + 1, at: deps.now(), ...body };
+    journal.append(e);
     for (const f of subscribers) f(e);
   }
 
@@ -70,8 +79,7 @@ export function createAgentRuntime(deps: RuntimeDeps): AgentRuntime {
     const replayed = deps.world.agents.get(i.agentId);
     if (replayed) return { ok: true, reply: started(replayed) };
     const projects = await scan();
-    // The home's own machine shares its World, so the bot's real record is its stand-in, and only the home writes it.
-    if (!deps.world.bots.has(i.bot.id)) return refuse("This bot no longer exists.");
+    if (!standIn(i.bot)) return refuse("This bot no longer exists.");
     const project = findProject(projects, i.project.name);
     if (!project) return refuse(`No project "${i.project.name}". Call list_projects for the names.`);
     if (i.where === "cloud" && !project.githubRepo) return refuse(`${project.name} has no GitHub remote, so start it with where "mac".`);
@@ -140,17 +148,23 @@ export function createAgentRuntime(deps: RuntimeDeps): AgentRuntime {
   return {
     apply(intent) {
       if (intent.kind === "snapshot") return run(intent);
-      const seen = applied.get(intent.intentId);
+      const done = journal.applied(intent.intentId);
+      if (done) return Promise.resolve(done);
+      const seen = applying.get(intent.intentId);
       if (seen) return seen;
       const result = run(intent).then((r) => {
         if (!r.ok) emit({ kind: "refused", intentId: intent.intentId, reason: r.reason });
+        journal.remember(intent.intentId, r);
         return r;
       });
-      applied.set(intent.intentId, result);
-      if (applied.size > APPLIED_KEPT) applied.delete(applied.keys().next().value!);
+      applying.set(intent.intentId, result);
+      void result.finally(() => applying.delete(intent.intentId)).catch(() => {});
       return result;
     },
-    events: (after) => outbox.filter((e) => e.seq > after),
+    events: (after) => journal.after(after),
+    lastSeq: () => journal.seq(),
+    ack: (seq) => journal.ack(seq),
+    card: (botId, message) => emit({ kind: "card", botId, message }),
     subscribe(f) {
       subscribers.add(f);
       return () => void subscribers.delete(f);

@@ -1,12 +1,16 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
+import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Options, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Ledger } from "../src/ledger";
 import { profileOf } from "../src/machine/profile";
-import { createAgentRuntime } from "../src/machine/runtime";
+import { fileJournal, memoryJournal, type Journal } from "../src/machine/journal";
+import { createAgentRuntime, type RuntimeDeps } from "../src/machine/runtime";
 import { newAgentId, newIntentId, type Event, type Intent } from "../src/machine/wire";
 import type { BotId } from "../src/protocol";
 import type { Project } from "../src/projects";
-import { emptyWorld, newBot, type Initiator } from "../src/world";
+import { emptyWorld, newBot, type Initiator, type World } from "../src/world";
 
 const AT = "2026-10-17T12:00:00.000Z";
 const B1 = "b_1" as BotId;
@@ -47,9 +51,9 @@ class FakeQuery {
   }
 }
 
-function runtime() {
-  const world = emptyWorld();
-  world.bots.set(B1, newBot({ id: B1, name: "Ana", avatar: { shape: "circle", color: "white" }, at: AT }));
+function runtime(opts: { journal?: Journal; world?: World; standIn?: RuntimeDeps["standIn"] } = {}) {
+  const world = opts.world ?? emptyWorld();
+  if (!opts.world) world.bots.set(B1, newBot({ id: B1, name: "Ana", avatar: { shape: "circle", color: "white" }, at: AT }));
   const queries: FakeQuery[] = [];
   const ledger: Ledger = { add: () => {}, headroom: () => ({ ok: true, capReached: false }), budgetLeft: () => null, dailyLeft: () => null };
   const rt = createAgentRuntime({
@@ -81,6 +85,8 @@ function runtime() {
     transcriptExists: () => false,
     scan: async () => [shop],
     answer: () => ({ ok: false, error: "Unknown card" }),
+    standIn: opts.standIn ?? ((bot) => world.bots.has(bot.id)),
+    journal: opts.journal ?? memoryJournal(),
   });
   const seen: Event[] = [];
   rt.subscribe((e) => seen.push(e));
@@ -158,4 +164,71 @@ test("events count up from 1 and events(after) returns only what came after", as
   expect(all.map((e) => e.seq)).toEqual(all.map((_, i) => i + 1));
   expect(h.rt.events(all.length - 1)).toEqual([all.at(-1)!]);
   expect(all.at(-1)).toMatchObject({ kind: "snapshot", agents: [{ agent: { title: "Fix tests" } }], openCards: [] });
+});
+
+function machineDir() {
+  const dir = mkdtempSync(join(tmpdir(), "claudiobot-journal-"));
+  dirs.push(dir);
+  return dir;
+}
+const dirs: string[] = [];
+afterEach(() => {
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
+
+test("after a kill, a machine replays exactly the events its home has not acked, and seq carries on", async () => {
+  const dir = machineDir();
+  const before = runtime({ journal: fileJournal(dir, () => {}) });
+  for (let i = 0; i < 5; i++) await before.rt.apply({ kind: "snapshot", intentId: newIntentId() });
+  const emitted = before.rt.events(0);
+  const acked = emitted.at(-3)!.seq;
+  before.rt.ack(acked);
+
+  const after = runtime({ journal: fileJournal(dir, () => {}) });
+  expect(after.rt.events(0)).toEqual(emitted.filter((e) => e.seq > acked));
+  expect(after.rt.lastSeq()).toBe(emitted.at(-1)!.seq);
+  await after.rt.apply({ kind: "snapshot", intentId: newIntentId() });
+  expect(after.rt.events(0).map((e) => e.seq)).toEqual([acked + 1, acked + 2, acked + 3]);
+});
+
+test("an outbox the home acked in full restarts empty but keeps counting from its last seq", async () => {
+  const dir = machineDir();
+  const before = runtime({ journal: fileJournal(dir, () => {}) });
+  await before.rt.apply({ kind: "snapshot", intentId: newIntentId() });
+  await before.rt.apply({ kind: "snapshot", intentId: newIntentId() });
+  before.rt.ack(2);
+  const after = runtime({ journal: fileJournal(dir, () => {}) });
+  expect([after.rt.events(0), after.rt.lastSeq()]).toEqual([[], 2]);
+});
+
+test("a torn last line in the outbox, from a kill mid-append, is skipped", async () => {
+  const dir = machineDir();
+  const before = runtime({ journal: fileJournal(dir, () => {}) });
+  await before.rt.apply({ kind: "snapshot", intentId: newIntentId() });
+  appendFileSync(join(dir, "outbox.jsonl"), '{"seq":2,"at":"2026-');
+  const after = runtime({ journal: fileJournal(dir, () => {}) });
+  expect(after.rt.events(0).map((e) => e.seq)).toEqual([1]);
+});
+
+test("an intent replayed after a restart gets its first answer from the journal and runs nothing", async () => {
+  const dir = machineDir();
+  const world = emptyWorld();
+  world.bots.set(B1, newBot({ id: B1, name: "Ana", avatar: { shape: "circle", color: "white" }, at: AT }));
+  const before = runtime({ world, journal: fileJournal(dir, () => {}) });
+  const refused = startOf({ project: { githubRepo: null, name: "nope" } });
+  const first = await before.rt.apply(refused);
+
+  const after = runtime({ world, journal: fileJournal(dir, () => {}) });
+  const seq = after.rt.lastSeq();
+  expect(await after.rt.apply(refused)).toEqual(first);
+  expect(after.rt.lastSeq()).toBe(seq);
+  expect(after.queries).toEqual([]);
+});
+
+test("a machine's stand-in hook decides whether agent.start may run for the bot", async () => {
+  const seen: string[] = [];
+  const h = runtime({ world: emptyWorld(), standIn: (bot) => (seen.push(bot.name), true) });
+  const intent = startOf();
+  expect((await h.rt.apply(intent)).ok).toBe(true);
+  expect(seen).toEqual(["Ana"]);
 });

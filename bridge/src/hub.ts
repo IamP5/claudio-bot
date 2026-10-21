@@ -43,6 +43,7 @@ import { gitDirsOf, sandboxFor } from "./sandbox";
 import { scopeFor, type MachineProfile } from "./machine/profile";
 import { createLocalMachine, createMachines } from "./machine/machines";
 import { placeAgent } from "./machine/place";
+import { memoryJournal } from "./machine/journal";
 import { createAgentRuntime } from "./machine/runtime";
 import { newAgentId, newIntentId, type Applied } from "./machine/wire";
 import { createScheduler, type RunOutcome } from "./scheduler";
@@ -815,6 +816,9 @@ export function createHub(deps: HubDeps): Hub {
     now,
     scan: deps.scan,
     answer: (botId, cardId, reply) => gate.answer(botId, cardId, reply),
+    // The home's own machine shares its World, so a bot's real record is its stand-in, and only the hub writes it.
+    standIn: (bot) => world.bots.has(bot.id),
+    journal: memoryJournal(),
   });
   /** The gate's wiring, the clock and boot: what reaches agents in this process only. Commands go through machines. */
   const localAgents = runtime.local;

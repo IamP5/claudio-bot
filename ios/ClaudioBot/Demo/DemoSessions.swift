@@ -16,6 +16,8 @@ enum DemoSessions {
     /// The approvalsexpiring screen sets sleeper two's deadline once, so it expires while the thread is open however often
     /// the thread is rebuilt.
     static var sleeperTwoDeadline: Date?
+    /// The background screen: the audit's turn is over, and one subagent and its command still run.
+    static var backgroundOnly = false
 
     static let soltaOSom = ProjectID("3f9a1c7e2b4d6a80")
     static let claudioBot = ProjectID("9c2e5b7a1d3f4e60")
@@ -312,6 +314,10 @@ enum DemoSessions {
             task("t-a3", "au-a3", .agent, "Audit catalog.ts for row status", 126, nil, 2, "Bash", 30, MessageID("card-audit")),
             task("t-b1", "au-b1", .command, "sleep 75", 41, "au-a1", nil, nil, 0, nil),
         ]
+        if backgroundOnly {
+            c.turn = nil
+            c.tasks = c.tasks?.filter { $0.id == TaskID("t-a1") || $0.id == TaskID("t-b1") }
+        }
         return c
     }
 
@@ -415,6 +421,7 @@ enum DemoSessions {
         case .unwatchSessions:
             break
         case let .watchSession(id, _):
+            guard case .connected = store.connection else { break }
             if store.threads[id]?.phase != .ready { store.apply(.thread(sessionId: id, .snapshot(snapshot(for: id)))) }
             update(store, id) { $0.unread = false }
         case let .unwatchSession(id):
@@ -427,9 +434,17 @@ enum DemoSessions {
             }
         case let .sessionSend(id, text, clientId, _):
             reply(to: text, clientId: clientId, in: id, store: store)
-        case let .sessionStop(id, _, _):
+        case let .sessionStop(id, target, _):
             var c = store.threads[id]?.controls ?? controls()
+            if case .task(let task) = target {
+                c.tasks = c.tasks?.filter { $0.id != task }
+                c.working = c.turn != nil || c.tasks?.isEmpty == false
+                items(store, id, [], controls: c)
+                break
+            }
             c.working = false
+            c.turn = nil
+            c.tasks = []
             let closed = (store.threads[id]?.items ?? []).compactMap { item -> SessionItem? in
                 guard case .permission(let itemId, let at, var permission) = item, permission.card.answer == nil else { return nil }
                 permission.card.answer = .stopped

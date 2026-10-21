@@ -234,21 +234,23 @@ final class BridgeClient {
     }
 
     /// Connects now instead of waiting out the backoff, tries a bridge that did not recognize this iPhone again, or
-    /// checks that a connected socket still answers. An attempt already under way is left to finish.
-    func retryNow() {
+    /// checks that a connected socket still answers. An attempt already under way is left to finish, unless the user
+    /// asked to restart it: one that hangs waits out its greeting deadline otherwise.
+    func retryNow(restartingAttempt: Bool = false) {
         guard let pairing else { return }
         switch store.connection {
         case .connected: if let socket { probe(socket, within: timing.probe) }
         case .disconnected: reconnect()
         case .unrecognized: start(pairing)
-        case .connecting, .unpaired: break
+        case .connecting: if restartingAttempt { reconnect() }
+        case .unpaired: break
         }
     }
 
     /// True once the Mac said hello.
-    func retryNowAndWait(within limit: Duration = .seconds(15)) async -> Bool {
+    func retryNowAndWait(within limit: Duration = .seconds(15), restartingAttempt: Bool = false) async -> Bool {
         let before = failures
-        retryNow()
+        retryNow(restartingAttempt: restartingAttempt)
         let deadline = ContinuousClock.now + limit
         while ContinuousClock.now < deadline, !Task.isCancelled, store.machine == nil {
             if failures > before || store.connection == .unrecognized { break }

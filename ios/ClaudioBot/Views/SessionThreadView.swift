@@ -28,6 +28,8 @@ struct SessionThreadView: View {
     @Environment(Router.self) private var router
     @Environment(\.openURL) private var openURL
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var followsBottom = true
     @State private var showsJump = false
@@ -39,6 +41,25 @@ struct SessionThreadView: View {
     @State private var revealed: HeldStep?
     @State private var renaming = false
     @State private var newTitle = ""
+    @State private var showsWork = false
+    @State private var lastRetryFailed = false
+    /// The skeleton waits at most a second for a Mac that is not there.
+    @State private var skeletonExpired = false
+    /// A connection that drops for less than 400 ms never shows as offline (P-CONN-4).
+    @State private var offlineShown = false
+    /// Set when the open card's deadline passes, so the status stops counting it.
+    @State private var cardClock = Date.now
+    @State private var announcer: Announcer
+    @State private var statuses: StatusAnnouncer
+    /// A tall window: an iPad in portrait, where the split view hides the list.
+    @State private var tall = false
+
+    init(sessionId: SessionID) {
+        self.sessionId = sessionId
+        let announcer = Announcer()
+        _announcer = State(initialValue: announcer)
+        _statuses = State(initialValue: StatusAnnouncer { announcer.post($0, first: $1) })
+    }
 
     private var row: SessionRow? { store.sessions.rows[sessionId] }
 
@@ -49,13 +70,17 @@ struct SessionThreadView: View {
     static let column: CGFloat = 760
     #endif
 
+    private var reach: Reach {
+        Reach(store.connection, failures: client.failures, greeted: store.bridgeProtocol != nil)
+    }
+
     var body: some View {
         Group {
             if let model = store.threads[sessionId] {
                 switch model.phase {
-                case .loading:
+                case .loading where !offlineShown || !skeletonExpired:
                     ThreadSkeleton()
-                case .ready:
+                case .loading, .ready:
                     thread(model)
                 case .removed(let movedTo):
                     ContentUnavailableView(
@@ -87,12 +112,35 @@ struct SessionThreadView: View {
                 if !title.isEmpty { client.send(.sessionSet(sessionId: sessionId, patch: SessionPatch(title: title))) }
             }
         }
+        .task {
+            try? await Task.sleep(for: .seconds(1))
+            skeletonExpired = true
+        }
+        .task(id: reach.online) {
+            guard !reach.online else { return offlineShown = false }
+            try? await Task.sleep(for: .milliseconds(400))
+            if !Task.isCancelled { offlineShown = true }
+        }
+        .onChange(of: store.machine) { lastRetryFailed = false }
+        .onGeometryChange(for: Bool.self) { $0.size.height > $0.size.width } action: { tall = $0 }
+    }
+
+    /// The thread's one status line. A drop shorter than 400 ms keeps the line it had.
+    private func status(_ model: ThreadModel, card: OpenCard?) -> ThreadStatus? {
+        var quietSince: Date?
+        if case .connected(_, let since) = store.connection { quietSince = since }
+        return ThreadStatus.of(
+            reach: reach.online || offlineShown ? reach : .connected(machine: ""), quietSince: quietSince, lastUpdate: model.phase == .ready ? store.heardAt : nil,
+            controls: model.controls, card: card, since: row?.since, outcome: row?.outcome
+        )
     }
 
     private func thread(_ model: ThreadModel) -> some View {
         let botName = row?.agent.flatMap { store.bots[$0.botId]?.name }
         let rows = model.rows
-        let openCard = Self.openCard(model.items)
+        let openCard = OpenCard.newest(in: model.items, at: max(cardClock, .now))
+        let status = status(model, card: openCard)
+        let banner = ThreadBanner.of(row: row, controls: model.controls)
         return ScrollView {
             // Not lazy: a lazy stack estimates the height of rows it has not drawn, and at the largest text sizes one
             // row can be several screens tall. Pinned to the bottom, a swipe moved the rows by those estimates and they
@@ -110,11 +158,10 @@ struct SessionThreadView: View {
                         .equatable()
                         .padding(.top, index == 0 ? 12 : Self.gap(between: rows[index - 1], and: row))
                 }
-                // Under a card that waits on the user, "Working" would say the opposite of what is happening.
-                StreamingTail(live: model.live, working: (model.controls?.working ?? false) && openCard == nil)
+                StreamingTail(live: model.live)
             }
-            // An answered card collapses with its own animation. Moving the rows and the Working line in the same
-            // transaction keeps them from snapping over the card while it shrinks.
+            // An answered card collapses with its own animation. Moving the rows in the same transaction keeps them from
+            // snapping over the card while it shrinks.
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: openCard?.id)
             .padding(.horizontal, 16)
             .padding(.bottom, 16)
@@ -123,12 +170,14 @@ struct SessionThreadView: View {
         }
         .environment(\.revealStep) { reveal($0, in: model) }
         .environment(\.revealedStep, revealed?.step.id)
+        .environment(\.runStateStale, status?.staleAt)
         .scrollPosition($position)
         .defaultScrollAnchor(.bottom)
         #if os(macOS)
         // The chips and the field float apart. A hard edge keeps the transcript from showing between them.
         .scrollEdgeEffectStyle(.hard, for: .bottom)
         #endif
+        .opaqueTopEdge()
         .onScrollPhaseChange { _, phase, context in
             switch phase {
             case .interacting: followsBottom = false
@@ -168,33 +217,91 @@ struct SessionThreadView: View {
             position.scrollTo(id: anchor, anchor: .top)
         }
         .scrollDismissesKeyboard(.interactively)
-        .topBar { banner(model) }
+        .topBar {
+            if let banner { HolderBanner(banner: banner).frame(maxWidth: Self.column) }
+        }
         .composerBar {
-            SessionComposer(sessionId: sessionId, controls: model.controls) {
-                followsBottom = true
-                withAnimation(reduceMotion ? nil : .snappy(duration: 0.3)) { position.scrollTo(edge: .bottom) }
+            VStack(spacing: 6) {
+                if let status {
+                    // A hanging attempt would hold Retry until its greeting deadline, so Retry starts a new one.
+                    ThreadStatusLine(status: status, cause: cause, onTap: tap(status)) {
+                        Task { lastRetryFailed = !(await ConnectionBanner.retry(client, restartingAttempt: true)) }
+                    }
+                    .padding(.horizontal, 16)
+                    .transition(.opacity)
+                }
+                SessionComposer(sessionId: sessionId, controls: model.controls) {
+                    followsBottom = true
+                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.3)) { position.scrollTo(edge: .bottom) }
+                }
             }
             .frame(maxWidth: Self.column)
+            .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: status?.word)
         }
-        .onChange(of: openCard) { old, new in
-            if let new, new.id != old?.id { AccessibilityNotification.Announcement(new.announcement).post() }
+        .sheet(isPresented: $showsWork) {
+            BackgroundWorkSheet(sessionId: sessionId, staleAt: status?.staleAt)
+        }
+        .task(id: openCard?.expiresAt) {
+            guard let at = openCard?.expiresAt, at > .now else { return }
+            try? await Task.sleep(for: .seconds(at.timeIntervalSinceNow))
+            if !Task.isCancelled { cardClock = .now }
+        }
+        .onChange(of: ThreadAnnouncement.key(status), initial: true) { statuses.update(status) }
+        .onChange(of: banner) { _, new in
+            if let new { announcer.post(new.spoken) }
         }
     }
 
-    @ViewBuilder
-    private func banner(_ model: ThreadModel) -> some View {
-        if OfflineBar.shows(store.connection) {
-            OfflineBar(state: store.connection).frame(maxWidth: Self.column)
-        } else if let banner = ThreadBanner.of(row: row, controls: model.controls) {
-            HolderBanner(banner: banner).frame(maxWidth: Self.column)
+    /// What the offline line says is wrong, in the words the Sessions banner uses. At accessibility sizes the address
+    /// goes: it would take more lines than the rest.
+    private var cause: String {
+        if reach == .unrecognized { return "Your Mac doesn't recognize this \(ThisDevice.noun). Pair again from the list." }
+        let address = typeSize.isAccessibilitySize ? nil : client.pairing?.url.bridgeAddress
+        return ConnectionBanner.cause(reach, address: address, lastRetryFailed: lastRetryFailed, brief: true)
+    }
+
+    /// A card scrolls into view; work with tasks opens the list of what runs.
+    private func tap(_ status: ThreadStatus) -> (() -> Void)? {
+        switch status {
+        case .needsYou(let card):
+            return {
+                followsBottom = false
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.35)) { position.scrollTo(id: card.id, anchor: .center) }
+            }
+        case .working, .background:
+            return status.tasks.isEmpty ? nil : { showsWork = true }
+        case .offline, .quiet, .ended:
+            return nil
         }
     }
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            ThreadHeader(row: row, project: row.flatMap { store.sessions.project(of: $0) }, avatar: row?.agent.flatMap { store.bots[$0.botId]?.avatar })
+            let state = store.threads[sessionId].flatMap { status($0, card: OpenCard.newest(in: $0.items, at: max(cardClock, .now))) }
+            ThreadHeader(
+                row: row, project: row.flatMap { store.sessions.project(of: $0) }, avatar: row?.agent.flatMap { store.bots[$0.botId]?.avatar },
+                state: state?.word
+            )
         }
+        #if os(iOS)
+        // iPad with the list out of sight: what else runs, and the way back to it.
+        if sizeClass == .regular, router.hasSidebar, router.columns == .detailOnly || (router.columns == .automatic && tall) {
+            let elsewhere = SessionsAtWork(store.sessions.rows.values, excluding: sessionId)
+            if let summary = elsewhere.summary {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { router.columns = .all } label: {
+                        Label(summary, systemImage: elsewhere.needsYou.isEmpty ? "circle.dotted" : "hand.raised")
+                            .labelStyle(.titleAndIcon)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(elsewhere.needsYou.isEmpty ? Theme.secondary : Theme.attention)
+                    }
+                    .accessibilityLabel("Other sessions: \(summary)")
+                    .accessibilityHint("Shows the sessions list")
+                }
+            }
+        }
+        #endif
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 if let row {
@@ -269,27 +376,6 @@ struct SessionThreadView: View {
         }
     }
 
-    /// The newest card waiting on the user, so VoiceOver can announce one when it arrives.
-    struct OpenCard: Equatable {
-        let id: ItemID
-        let announcement: String
-    }
-
-    static func openCard(_ items: [SessionItem]) -> OpenCard? {
-        for item in items.reversed() {
-            switch item {
-            case let .permission(id, _, permission) where permission.card.answer == nil:
-                return OpenCard(id: id, announcement: "Approval needed: \(permission.card.label)")
-            case let .ask(id, _, questions, nil, _?):
-                return OpenCard(id: id, announcement: "Question: \(questions.first?.question ?? "")")
-            case let .plan(id, _, _, .proposed, _?):
-                return OpenCard(id: id, announcement: "A plan is ready for your approval")
-            default:
-                continue
-            }
-        }
-        return nil
-    }
 }
 
 extension ThreadRow {
@@ -305,12 +391,183 @@ extension ThreadRow {
     }
 }
 
+extension Reach {
+    /// The socket is up, or there is no Mac to reach: nothing for the thread to say about the connection.
+    var online: Bool {
+        switch self {
+        case .connected, .unpaired: true
+        case .firstConnect, .unreachable, .retrying, .unrecognized: false
+        }
+    }
+}
+
+/// Speaks to VoiceOver at most once every two seconds; what arrives sooner joins the next announcement.
+@MainActor
+final class Announcer {
+    private let gap: TimeInterval
+    private let speak: (String) -> Void
+    private var last = Date.distantPast
+    private var pending: [String] = []
+    private var flush: Task<Void, Never>?
+
+    init(gap: TimeInterval = 2, speak: @escaping (String) -> Void = { AccessibilityNotification.Announcement($0).post() }) {
+        self.gap = gap
+        self.speak = speak
+    }
+
+    /// first: the screen just opened, and VoiceOver reads its title first, so the announcement waits a second for that.
+    func post(_ text: String, first: Bool = false) {
+        pending.append(text)
+        guard flush == nil else { return }
+        let wait = max(first ? 1 : 0, gap - Date.now.timeIntervalSince(last))
+        flush = Task { [weak self] in
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            self?.flushPending()
+        }
+    }
+
+    private func flushPending() {
+        flush = nil
+        guard !pending.isEmpty else { return }
+        speak(pending.joined(separator: " "))
+        pending = []
+        last = .now
+    }
+}
+
+/// Above the composer: the one line that says what the thread is doing (ThreadStatus), with the action it offers.
+struct ThreadStatusLine: View {
+    let status: ThreadStatus
+    /// The connection copy the Sessions banner uses.
+    let cause: String
+    let onTap: (() -> Void)?
+    let onRetry: () -> Void
+
+    @ScaledMetric(relativeTo: .subheadline) private var slot: CGFloat = 18
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private var ticks: Bool {
+        switch status {
+        case .offline(_, let at): at != nil
+        case .quiet, .working, .background: true
+        case .needsYou, .ended: false
+        }
+    }
+
+    var body: some View {
+        Group {
+            if ticks {
+                TimelineView(.periodic(from: .now, by: 1)) { context in line(now: context.date) }
+            } else {
+                line(now: .now)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, minHeight: HitTarget.minHeight, alignment: .leading)
+        .glass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var retries: Bool {
+        if case .offline(let reach, _) = status { reach.lost } else { false }
+    }
+
+    private func line(now: Date) -> some View {
+        // At accessibility sizes the words get the width: the glyph goes, and Retry goes under them. The ticking clock
+        // and the state word still say what runs.
+        let stacked = typeSize.isAccessibilitySize
+        let layout = stacked && retries ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 10))
+        return layout {
+            if !stacked { glyph.frame(width: slot, height: slot) }
+            Text(status.text(now: now, cause: cause))
+                .font(.subheadline)
+                .monospacedDigit()
+                .foregroundStyle(tint == Theme.secondary ? .white : tint)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if retries {
+                Button("Retry", action: onRetry)
+                    .font(.footnote.weight(.semibold))
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel("Retry connecting to your Mac")
+            } else if onTap != nil {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.tertiary)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onTap?() }
+        .accessibilityElement(children: .contain)
+        .accessibilityRepresentation {
+            if let onTap {
+                Button(status.spoken(now: now, cause: cause), action: onTap)
+                    .accessibilityHint(status.tasks.isEmpty ? "Shows the card" : "Lists what runs, with a Stop for each")
+            } else if retries {
+                Text(status.spoken(now: now, cause: cause))
+                Button("Retry connecting to your Mac", action: onRetry)
+            } else {
+                Text(status.spoken(now: now, cause: cause))
+            }
+        }
+    }
+
+    private var tint: Color {
+        switch status {
+        case .offline, .quiet: Theme.attention
+        case .needsYou: Theme.attention
+        case .ended(let outcome): outcome.kind == .stopped ? Theme.secondary : Theme.danger
+        case .working, .background: Theme.secondary
+        }
+    }
+
+    @ViewBuilder
+    private var glyph: some View {
+        switch status {
+        case .offline: Image(systemName: "wifi.slash").font(.footnote).foregroundStyle(Theme.attention)
+        case .quiet: Image(systemName: "circle.dotted").font(.footnote).foregroundStyle(Theme.attention)
+        case .needsYou: Image(systemName: "hand.raised").font(.footnote).foregroundStyle(Theme.attention)
+        case .working: WorkingRing(size: slot * 0.7)
+        case .background: WorkingRing(size: slot * 0.7, color: Theme.secondary)
+        case .ended(let outcome):
+            Image(systemName: outcome.kind == .stopped ? "stop.circle" : "exclamationmark.triangle")
+                .font(.footnote)
+                .foregroundStyle(tint)
+        }
+    }
+}
+
+extension View {
+    /// The band under the title is solid, so transcript words never show through beside the title.
+    @ViewBuilder
+    func opaqueTopEdge() -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            scrollEdgeEffectStyle(.hard, for: .top)
+                .toolbarBackground(Theme.background, for: .navigationBar)
+                .toolbarBackgroundVisibility(.visible, for: .navigationBar)
+        } else {
+            toolbarBackground(Theme.background, for: .navigationBar)
+                .toolbarBackgroundVisibility(.visible, for: .navigationBar)
+        }
+        #else
+        self
+        #endif
+    }
+}
+
 struct ThreadHeader: View {
     let row: SessionRow?
     let project: SessionProject?
     let avatar: Avatar?
+    /// The status line's word, spoken with the title and, on a wide layout, shown under it.
+    var state: String?
+
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
+        let wide = sizeClass == .regular
         VStack(spacing: 1) {
             Text(row?.title ?? "Session")
                 .font(.subheadline.weight(.semibold))
@@ -318,7 +575,7 @@ struct ThreadHeader: View {
                 .lineLimit(1)
             HStack(spacing: 4) {
                 if let row { OriginBadge(origin: row.origin, avatar: avatar, size: 12) }
-                Text([project?.name, row?.branch].compactMap { $0 }.joined(separator: " · "))
+                Text([project?.name, row?.branch, wide ? state : nil].compactMap { $0 }.joined(separator: " · "))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -329,12 +586,24 @@ struct ThreadHeader: View {
         .padding(.vertical, 5)
         #if os(macOS)
         // The toolbar item already sits on the toolbar's glass.
-        .frame(maxWidth: 360)
+        .frame(maxWidth: 520)
         #else
-        .frame(maxWidth: 260)
+        .frame(maxWidth: wide ? 520 : 260)
         .glass(in: Capsule())
         #endif
         .accessibilityElement(children: .combine)
+        // A wide header shows the state in its subtitle, which the combined label already reads.
+        .accessibilityValue(wide ? "" : state ?? "")
+    }
+}
+
+extension ThreadBanner {
+    var spoken: String {
+        switch self {
+        case .cloud: "Cloud session. Continue it on claude.ai."
+        case .waiting(let text), .busyElsewhere(let text): text
+        case .alsoInDesktop: "Also open in the Claude app."
+        }
     }
 }
 
@@ -344,29 +613,23 @@ struct HolderBanner: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            switch banner {
-            case .cloud(let url):
-                Image(systemName: "cloud").foregroundStyle(Theme.secondary)
-                Text("Cloud session. Continue it on claude.ai.").foregroundStyle(Theme.secondary)
-                Spacer(minLength: 0)
-                if let url {
-                    Button("Open") { openURL(url) }
-                        .font(.footnote.weight(.semibold))
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+            Group {
+                switch banner {
+                case .cloud: Image(systemName: "cloud").foregroundStyle(Theme.secondary)
+                case .waiting: Image(systemName: "pause.circle").foregroundStyle(Theme.secondary)
+                case .busyElsewhere: WorkingRing(size: 12)
+                case .alsoInDesktop: Image(systemName: "macwindow").foregroundStyle(Theme.secondary)
                 }
-            case .waiting(let text):
-                Image(systemName: "pause.circle").foregroundStyle(Theme.secondary)
-                Text(text).foregroundStyle(Theme.secondary)
-                Spacer(minLength: 0)
-            case .busyElsewhere(let text):
-                WorkingRing(size: 12)
-                Text(text).foregroundStyle(Theme.secondary)
-                Spacer(minLength: 0)
-            case .alsoInDesktop:
-                Image(systemName: "macwindow").foregroundStyle(Theme.secondary)
-                Text("Also open in the Claude app.").foregroundStyle(Theme.secondary)
-                Spacer(minLength: 0)
+            }
+            .accessibilityHidden(true)
+            Text(banner.spoken).foregroundStyle(Theme.secondary)
+            Spacer(minLength: 0)
+            if case .cloud(let url?) = banner {
+                Button("Open") { openURL(url) }
+                    .font(.footnote.weight(.semibold))
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel("Open on claude.ai")
             }
         }
         .font(.footnote)
@@ -375,7 +638,7 @@ struct HolderBanner: View {
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .padding(.horizontal, 16)
         .padding(.top, 4)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 }
 

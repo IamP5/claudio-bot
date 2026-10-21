@@ -145,7 +145,17 @@ struct DetailStack: View {
         }
     }
 
+    @ViewBuilder
     private var nothingSelected: some View {
+        let atWork = SessionsAtWork(store.sessions.rows.values)
+        if router.sidebar == .sessions, !atWork.isEmpty {
+            SessionsAtWorkView(atWork: atWork)
+        } else {
+            nothingToShow
+        }
+    }
+
+    private var nothingToShow: some View {
         ContentUnavailableView(
             router.sidebar == .sessions ? "No session selected" : "No chat selected",
             systemImage: router.sidebar == .sessions ? "chevron.left.forwardslash.chevron.right" : "bubble.left.and.bubble.right",
@@ -163,5 +173,61 @@ struct DetailStack: View {
             .foregroundStyle(Theme.secondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.background)
+    }
+}
+
+/// A wide layout's detail pane with no session chosen: the sessions that run or wait on the user, one button each.
+struct SessionsAtWorkView: View {
+    let atWork: SessionsAtWork
+    @Environment(Router.self) private var router
+
+    var body: some View {
+        let rows = atWork.needsYou + atWork.working
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(atWork.summary ?? "")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .accessibilityAddTraits(.isHeader)
+                VStack(spacing: 0) {
+                    ForEach(rows) { row in
+                        button(row, needsYou: row.status != .working)
+                        if row.id != rows.last?.id { Rectangle().fill(Theme.hairline).frame(height: 1) }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+            .padding(24)
+            .frame(maxWidth: 560)
+            .frame(maxWidth: .infinity)
+        }
+        .background(Theme.background)
+    }
+
+    private func button(_ row: SessionRow, needsYou: Bool) -> some View {
+        Button { router.open(.session(row.id)) } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Group {
+                    if needsYou { Image(systemName: "hand.raised").foregroundStyle(Theme.attention) } else { WorkingRing(size: 12) }
+                }
+                .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.title).font(.body).foregroundStyle(.white)
+                    Text(needsYou ? "Needs you" : row.activity ?? "Working")
+                        .font(.footnote)
+                        .foregroundStyle(needsYou ? Theme.attention : Theme.secondary)
+                }
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
+            }
+            .padding(.vertical, 10)
+            .frame(minHeight: HitTarget.minHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Opens the session")
     }
 }

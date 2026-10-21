@@ -201,9 +201,11 @@ export function leaseStatus() {
 
 /**
  * Holds a lease for this process: heartbeats every minute, and releases (shutting the device down) on exit, SIGINT,
- * SIGTERM and uncaught errors. onLost runs if the lease was reclaimed from under us.
+ * SIGTERM and uncaught errors. onLost runs if the lease was reclaimed from under us. beforeRelease runs on every one of
+ * those paths while the device is still booted (to undo settings that outlive a shutdown); if it throws, the release
+ * still happens.
  */
-export function holdForProcess(lease: Lease, onLost: () => void = () => process.exit(1)) {
+export function holdForProcess(lease: Lease, onLost: () => void = () => process.exit(1), beforeRelease: () => void = () => {}) {
   let done = false;
   const timer = setInterval(() => {
     if (!heartbeat(lease)) {
@@ -217,6 +219,11 @@ export function holdForProcess(lease: Lease, onLost: () => void = () => process.
     if (done) return;
     done = true;
     clearInterval(timer);
+    try {
+      beforeRelease();
+    } catch (e) {
+      log(`before releasing ${lease.device}: ${(e as Error).message}`);
+    }
     release(lease, why);
   };
   process.on("exit", () => free("process exit"));

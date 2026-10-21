@@ -1071,7 +1071,6 @@ const S6: Scenario = {
   ],
 };
 
-
 const SLEEPERS = 4;
 const QUICK = 8;
 const s7names = [...Array.from({ length: SLEEPERS }, (_, i) => `s7-sleep-${i + 1}`), ...Array.from({ length: QUICK }, (_, i) => `s7-quick-${i + 1}`)];

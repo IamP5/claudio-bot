@@ -32,6 +32,7 @@ type Thread = { items: Map<string, Item>; controls: Controls | null; epoch: stri
 class Relay {
   private server: Server | null = null;
   private live = new Set<{ down: Socket; up: Socket; dead: boolean }>();
+  private silenced = new Set<{ down: Socket; up: Socket; dead: boolean }>();
   private cut: Drop | null = null;
   port = 0;
 
@@ -69,6 +70,7 @@ class Relay {
   private silence(p: { down: Socket; up: Socket; dead: boolean }) {
     p.dead = true;
     this.live.delete(p);
+    this.silenced.add(p);
     p.down.unpipe(p.up);
     p.up.unpipe(p.down);
     // Read and discard, so each kernel keeps acknowledging and no side sees an error or a close.
@@ -76,7 +78,7 @@ class Relay {
   }
 
   close() {
-    for (const p of this.live) (p.down.destroy(), p.up.destroy());
+    for (const p of [...this.live, ...this.silenced]) (p.down.destroy(), p.up.destroy());
     this.server?.close();
   }
 }
@@ -347,7 +349,14 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
     app = sim ? await pool.buildApp() : null;
     if (sim) {
       lease = await pool.acquire(`scenario ${sc.id} pid ${process.pid}`);
-      held = pool.holdForProcess(lease);
+      const l = lease;
+      // simctl ui settings survive a shutdown, so every way out (end, signal, crash) puts them back before release.
+      held = pool.holdForProcess(l, undefined, () => {
+        if (!ui.contentSize && !ui.appearance) return;
+        pool.simctl(l, "ui", "content_size", "large");
+        pool.simctl(l, "ui", "appearance", "light");
+        log(`ui reset on ${l.device}: content_size ${pool.simctl(l, "ui", "content_size").out}, appearance ${pool.simctl(l, "ui", "appearance").out}`);
+      });
       report.device = lease.device;
       pool.boot(lease);
       if (ui.contentSize) pool.simctl(lease, "ui", "content_size", ui.contentSize);
@@ -493,7 +502,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
         return;
       case "kill-claude": {
         const sid = ev.ids[a.name]!;
-        const found = sh(["pgrep", "-f", sid]).out.split("\n").filter(Boolean).map(Number).filter((pid) => pid !== process.pid);
+        const found = sh(["pgrep", "-P", String(run!.bridgePid), "-f", sid]).out.split("\n").filter(Boolean).map(Number);
         const lines = found.map((pid) => `${pid} ${sh(["ps", "-p", String(pid), "-o", "command="]).out.trim()}`).filter((l) => /(^|\/)claude$/.test(l.split(" ")[1] ?? ""));
         if (!lines.length) throw new PreconditionFailed(`no Claude Code process names session ${sid}`);
         for (const l of lines) process.kill(Number(l.split(" ")[0]), "SIGKILL");
@@ -554,10 +563,6 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
   if (run) {
     const c = sh(["bun", CONTROL, "cleanup", "--run", run.id], join(out, "cleanup.log"));
     report.bridgeEvidence = c.out.match(/evidence kept at (\S+?):/)?.[1] ?? null;
-  }
-  if (lease && (ui.contentSize || ui.appearance)) {
-    pool.simctl(lease, "ui", "content_size", "large");
-    pool.simctl(lease, "ui", "appearance", "light");
   }
   held?.release("scenario done");
   writeFileSync(join(out, "report.json"), JSON.stringify(report, null, 2));

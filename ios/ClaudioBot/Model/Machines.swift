@@ -57,15 +57,13 @@ struct MachineProjects: Identifiable, Equatable {
     let projects: [SessionProject]
     var id: MachineID { machine.id }
 
-    /// Projects carry no machine, so a project belongs to each machine its sessions name, and one with no sessions
-    /// yet to the home, which lists them. Machines with no projects are left out; the home leads.
-    static func group(_ projects: [SessionProject], rows: some Collection<SessionRow>, machines: [Machine]) -> [MachineProjects] {
+    /// Each project under its own machine, or the home's when the bridge names none. Machines with no projects are left
+    /// out; the home leads.
+    static func group(_ projects: [SessionProject], machines: [Machine]) -> [MachineProjects] {
         let home = machines.first { $0.role == .home }?.id
-        var on: [ProjectID: Set<MachineID>] = [:]
-        for row in rows { if let machine = row.machine ?? home { on[row.projectId, default: []].insert(machine) } }
         let ordered = machines.filter { $0.role == .home } + machines.filter { $0.role != .home }
         return ordered.compactMap { machine in
-            let mine = projects.filter { on[$0.id].map { $0.contains(machine.id) } ?? (machine.id == home) }
+            let mine = projects.filter { ($0.machine ?? home) == machine.id }
             return mine.isEmpty ? nil : MachineProjects(machine: machine, projects: mine)
         }
     }

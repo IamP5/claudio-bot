@@ -271,7 +271,7 @@ struct NewSessionSheet: View {
     /// Grouped by machine only when the world has several; otherwise one flat list on the home.
     private var byMachine: [MachineProjects]? {
         guard store.hasSeveralMachines else { return nil }
-        return MachineProjects.group(store.sessions.orderedProjects, rows: store.sessions.rows.values, machines: store.machines)
+        return MachineProjects.group(store.sessions.orderedProjects, machines: store.machines)
     }
 
     /// The projects on the chosen machine, or every project on a world with one machine.

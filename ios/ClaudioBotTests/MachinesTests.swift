@@ -20,16 +20,8 @@ private func machine(
 private let home = machine("omarchy", role: .home)
 private let mac = machine("mac")
 
-private func project(_ id: String) -> SessionProject {
-    SessionProject(id: ProjectID(id), name: id, path: "/p/\(id)", githubRepo: nil, lastAt: nil, canCloud: false)
-}
-
-private func row(_ id: String, project: String, on machine: Machine?) -> SessionRow {
-    SessionRow(
-        id: SessionID(id), projectId: ProjectID(project), parentId: nil, title: id, origin: .terminal, agent: nil, status: .idle,
-        holder: .nobody, unread: false, branch: nil, worktree: false, pr: nil, mirror: .notMirrored, hidden: false, url: nil,
-        createdAt: at, lastAt: at, machine: machine?.id
-    )
+private func project(_ id: String, on machine: Machine?) -> SessionProject {
+    SessionProject(id: ProjectID(id), machine: machine?.id, name: id, path: "/p/\(id)", githubRepo: nil, lastAt: nil, canCloud: false)
 }
 
 @Suite struct MachineTextTests {
@@ -72,17 +64,21 @@ private func row(_ id: String, project: String, on machine: Machine?) -> Session
 }
 
 @Suite struct MachineProjectsTests {
-    @Test func projectsGoWhereTheirSessionsAreAndTheRestToTheHomeWhichLeads() {
-        let projects = [project("both"), project("macOnly"), project("fresh")]
-        let rows = [row("s1", project: "both", on: home), row("s2", project: "both", on: mac), row("s3", project: "macOnly", on: mac)]
-        let groups = MachineProjects.group(projects, rows: rows, machines: [mac, home])
+    @Test func eachProjectGoesToItsOwnMachineEvenWithNoSessionsAndTheHomeLeads() {
+        let projects = [project("macFresh", on: mac), project("homeOne", on: home), project("macOne", on: mac)]
+        let groups = MachineProjects.group(projects, machines: [mac, home])
         #expect(groups.map(\.machine.id) == [home.id, mac.id])
-        #expect(groups[0].projects.map(\.name) == ["both", "fresh"])
-        #expect(groups[1].projects.map(\.name) == ["both", "macOnly"])
+        #expect(groups[0].projects.map(\.name) == ["homeOne"])
+        #expect(groups[1].projects.map(\.name) == ["macFresh", "macOne"])
+    }
+
+    @Test func aProjectFromABridgeThatNamesNoMachineIsTheHomes() {
+        let groups = MachineProjects.group([project("old", on: nil), project("m", on: mac)], machines: [home, mac])
+        #expect(groups.map { $0.projects.map(\.name) } == [["old"], ["m"]])
     }
 
     @Test func aMachineWithNoProjectsIsLeftOut() {
-        let groups = MachineProjects.group([project("p")], rows: [], machines: [home, mac])
+        let groups = MachineProjects.group([project("p", on: home)], machines: [home, mac])
         #expect(groups.map(\.machine.id) == [home.id])
     }
 }

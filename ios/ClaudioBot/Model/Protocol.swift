@@ -1463,9 +1463,11 @@ enum SessionIsolation: String, Codable, Hashable, Sendable, CaseIterable {
     case worktree
 }
 
-/// A git repository's main checkout. name: the GitHub repo name, else the folder name. lastAt: nil when it has no sessions.
+/// A git repository's main checkout. machine: the machine whose disk holds it, nil from a bridge older than machines,
+/// whose projects are all the home's. name: the GitHub repo name, else the folder name. lastAt: nil when it has no sessions.
 struct SessionProject: Codable, Hashable, Sendable, Identifiable {
     let id: ProjectID
+    var machine: MachineID? = nil
     var name: String
     var path: String
     var githubRepo: String?
@@ -1473,11 +1475,12 @@ struct SessionProject: Codable, Hashable, Sendable, Identifiable {
     /// Reserved for phone-started cloud sessions; false for now.
     var canCloud: Bool
 
-    private enum CodingKeys: String, CodingKey { case id, name, path, githubRepo, lastAt, canCloud }
+    private enum CodingKeys: String, CodingKey { case id, machine, name, path, githubRepo, lastAt, canCloud }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
+        try c.encodeIfPresent(machine, forKey: .machine)
         try c.encode(name, forKey: .name)
         try c.encode(path, forKey: .path)
         try c.encode(githubRepo, forKey: .githubRepo)

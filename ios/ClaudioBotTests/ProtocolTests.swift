@@ -222,6 +222,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         }
         #expect(projects.map(\.name) == ["solta-o-som", "claudio-bot"])
         #expect(projects[0].githubRepo == "IamP5/solta-o-som")
+        #expect(projects.map(\.machine) == Array(repeating: MachineID("m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c"), count: 2))
         #expect(mirror == .auto)
         #expect(rows.map(\.origin) == [.agent, .desktop, .cloud])
         #expect(rows[0].agent == SessionAgentLink(botId: BotID("b1"), agentId: AgentID("a3")))
@@ -572,6 +573,12 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(try jsonObject(Wire.encoder().encode(BotPatch(muted: true)))["agentsOn"] == nil)
         #expect(try decode(BotPatch.self, #"{"agentsOn":null}"#).agentsOn == .some(nil))
         #expect(try fixtures.contains(jsonObject(Wire.encoder().encode(ClientMessage.machineCode))))
+    }
+
+    @Test func aProjectFromABridgeWithoutMachinesNamesNoneAndEncodesNone() throws {
+        let old = try decode(SessionProject.self, #"{"id":"p1","name":"n","path":"/p","githubRepo":null,"lastAt":null,"canCloud":false}"#)
+        #expect(old.machine == nil)
+        #expect(try jsonObject(Wire.encoder().encode(old))["machine"] == nil)
     }
 
     @Test func aBotFromBeforeMuteIsNotMutedAndAnAgentFromBeforeEvidenceHasNone() throws {

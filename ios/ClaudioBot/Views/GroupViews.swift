@@ -303,7 +303,7 @@ struct GroupDetails: View {
                 client.send(.deleteBot(botId: group.id, force: false))
             }
         } message: {
-            Text(HomeView.deleteMessage(group, worktrees: []))
+            Text(HomeView.deleteMessage(group, home: store.computerName()))
         }
     }
 

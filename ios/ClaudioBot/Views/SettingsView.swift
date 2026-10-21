@@ -66,7 +66,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Sessions")
                 } footer: {
-                    Text(Copy.sessionsFooter)
+                    Text(Copy.sessionsFooter(store.computerName(or: Copy.bridgeComputer)))
                 }
             }
 
@@ -163,7 +163,12 @@ struct SettingsView: View {
         static let unpairWarning = "To reach your bots again, pair this Mac with the bridge again."
         static let unpairFooter = "The bridge forgets this Mac when it is connected, then this Mac deletes the bridge address and token."
         static let devicesFooter = "Each device has its own token. Revoking one leaves the others paired."
-        static let sessionsFooter = "Sessions your bots' agents and this Mac start can appear in the Claude app on the bridge's Mac. Automatically adds them while you're away from that Mac; When I click adds one when you choose Open in Claude app."
+        /// "Your computer" would read as this Mac.
+        static let bridgeComputer = "the bridge's computer"
+
+        static func sessionsFooter(_ computer: String) -> String {
+            "Sessions your bots' agents and this Mac start can appear in the Claude app on \(computer). Automatically adds them while you're away from \(computer); When I click adds one when you choose Open in Claude app."
+        }
 
         static func mirror(_ pref: MirrorPref) -> String {
             pref == .tap ? "When I click" : SessionText.mirror(pref)
@@ -174,7 +179,11 @@ struct SettingsView: View {
         static let unpairWarning = "You will need a new pairing code from the bridge."
         static let unpairFooter = "Removes this \(ThisDevice.noun) from the bridge when it is connected, then deletes the bridge address and token from this \(ThisDevice.noun)."
         static let devicesFooter = "Each phone has its own token. Revoking one leaves the others paired."
-        static let sessionsFooter = "Sessions your bots' agents and this \(ThisDevice.casualNoun) start can appear in the Claude app on your Mac. Automatically adds them while you're away from the Mac; When I tap adds one when you choose Open in Claude app."
+        static let bridgeComputer = "your computer"
+
+        static func sessionsFooter(_ computer: String) -> String {
+            "Sessions your bots' agents and this \(ThisDevice.casualNoun) start can appear in the Claude app on \(computer). Automatically adds them while you're away from \(computer); When I tap adds one when you choose Open in Claude app."
+        }
 
         static func mirror(_ pref: MirrorPref) -> String { SessionText.mirror(pref) }
         #endif
@@ -313,7 +322,7 @@ struct PairAnotherView: View {
         ContentUnavailableView(
             "No address to share",
             systemImage: "network.slash",
-            description: Text("Your Mac reported only addresses another device cannot reach. Join it to Wi-Fi or Tailscale, then get a new code.")
+            description: Text("The bridge on \(store.computerName()) reported only addresses another device cannot reach. Join \(store.computerName()) to Wi-Fi or Tailscale, then get a new code.")
         )
     }
 

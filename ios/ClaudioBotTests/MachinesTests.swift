@@ -126,6 +126,32 @@ private func project(_ id: String, on machine: Machine?) -> SessionProject {
         #expect(store.chipName(for: agent) == nil)
     }
 
+    @Test func copyNamesTheBridgesComputerOnceKnownAndKeepsItWhileOffline() {
+        let store = AppStore()
+        #expect(store.computerName() == "your computer")
+        #expect(store.computerName(or: "the bridge's computer") == "the bridge's computer")
+        store.apply(hello(machines: nil))
+        #expect(store.computerName() == "omarchy")
+        store.setConnection(.disconnected(retryAt: at))
+        #expect(store.computerName() == "omarchy", "an offline notice still names it")
+        store.setConnection(.unpaired)
+        #expect(store.computerName() == "your computer")
+    }
+
+    @Test func anAgentRunsOnItsOwnMachineTheBridgesWhenUnnamedOrTheCloud() {
+        let store = AppStore()
+        store.apply(hello(machines: [home, mac]))
+        var agent = Agent(
+            id: AgentID("a1"), botId: BotID("b1"), title: "t", where: .mac, projectName: "p", status: .working, url: nil,
+            createdAt: at, updatedAt: at, machine: mac.id
+        )
+        #expect(store.place(of: agent) == "mac")
+        agent.machine = nil
+        #expect(store.place(of: agent) == "omarchy")
+        agent.where = .cloud
+        #expect(store.place(of: agent) == "the cloud")
+    }
+
     @Test func theEnrollCodeIsKeptUntilDiscardedAndUnpairingForgetsTheMachines() {
         let store = AppStore()
         store.apply(hello(machines: [home, mac]))

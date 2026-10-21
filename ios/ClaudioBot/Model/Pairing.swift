@@ -313,8 +313,8 @@ struct Pairing: Equatable, Sendable {
         var errorDescription: String? {
             switch self {
             case .legacy: "Pair again with a code to change the address."
-            case .unreachable(let url): "Your Mac did not answer at \(url.bridgeAddress). The old address is kept."
-            case .unproven(let url): "Something answered at \(url.bridgeAddress), but it could not prove it is your Mac. The old address is kept, and your pairing was not sent there."
+            case .unreachable(let url): "The bridge did not answer at \(url.bridgeAddress). The old address is kept."
+            case .unproven(let url): "Something answered at \(url.bridgeAddress), but it could not prove it is your bridge. The old address is kept, and your pairing was not sent there."
             }
         }
     }

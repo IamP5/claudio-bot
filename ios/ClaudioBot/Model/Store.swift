@@ -126,6 +126,8 @@ final class AppStore {
     private(set) var protocolMismatch: ProtocolMismatch?
     /// From the last hello. Nil until this pairing has connected once.
     private(set) var bridgeProtocol: Int?
+    /// The bridge's computer, as its last hello named it. Kept while offline, so copy can still name it.
+    private(set) var bridgeName: String?
     /// Decisions sent and not yet echoed back by their card, so a second tap cannot send another.
     private(set) var pendingDecisions: [MessageID: PermissionChoice] = [:]
     /// The phones paired with this Mac, once Settings asked for them.
@@ -195,6 +197,16 @@ final class AppStore {
         hasSeveralMachines ? machine(id)?.name : nil
     }
 
+    /// The computer copy names: the machine with this id, else the bridge's own, else `fallback` before any hello.
+    func computerName(_ id: MachineID? = nil, or fallback: String = "your computer") -> String {
+        machine(id)?.name ?? bridgeName ?? fallback
+    }
+
+    /// Where copy says an agent runs.
+    func place(of agent: Agent) -> String {
+        agent.where == .cloud ? "the cloud" : computerName(agent.machine)
+    }
+
     /// A cloud agent runs on claude.ai, so it wears no machine chip even though a machine started it.
     func chipName(for agent: Agent) -> String? {
         agent.where == .cloud ? nil : chipName(agent.machine)
@@ -218,6 +230,7 @@ final class AppStore {
             created = [:]
             protocolMismatch = nil
             bridgeProtocol = nil
+            bridgeName = nil
             pendingDecisions = [:]
             devices = nil
             pairCode = nil
@@ -278,7 +291,7 @@ final class AppStore {
     /// The socket refused the frame, so the buttons come back.
     func decisionFailed(for card: MessageID) {
         pendingDecisions[card] = nil
-        lastError = ErrorNotice(message: "Your decision did not reach your Mac. Try again.")
+        lastError = ErrorNotice(message: "Your decision did not reach \(computerName()). Try again.")
     }
 
     func dismissError(_ notice: ErrorNotice) {
@@ -300,6 +313,7 @@ final class AppStore {
         switch msg {
         case let .hello(hello):
             connection = .connected(machine: hello.machine)
+            bridgeName = hello.machine
             userName = hello.userName
             protocolMismatch = ProtocolMismatch(bridge: hello.protocol)
             bridgeProtocol = hello.protocol

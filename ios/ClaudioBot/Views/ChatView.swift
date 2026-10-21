@@ -57,7 +57,7 @@ struct ChatView: View {
                     case .working where !bot.isGroup:
                         ActivityLine(botId: botId)
                     case .unavailable:
-                        Text("Claude Code could not start on your Mac. Your messages wait, and the bridge keeps trying.")
+                        Text("Claude Code could not start on \(store.computerName()). Your messages wait, and the bridge keeps trying.")
                             .font(.ui(size: 13))
                             .foregroundStyle(Theme.tertiary)
                             .multilineTextAlignment(.center)

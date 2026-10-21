@@ -189,7 +189,7 @@ struct ExchangeView: View {
                         .foregroundStyle(Theme.tertiary)
                     MachineChip(name: machine)
                 } else {
-                    Text("\(agent.projectName) on \(agent.where == .cloud ? "the cloud" : "your Mac")")
+                    Text("\(agent.projectName) on \(store.place(of: agent))")
                         .font(.ui(size: 13))
                         .foregroundStyle(Theme.tertiary)
                 }
@@ -200,7 +200,7 @@ struct ExchangeView: View {
                     .foregroundStyle(agent.spend?.nearLimit == true ? Theme.attention : Theme.tertiary)
             }
             if agent.where == .mac, store.lacks(.worktrees) {
-                Text("Update the bridge on your Mac to see what this agent changed in git.")
+                Text("Update the bridge on \(store.computerName()) to see what this agent changed in git.")
                     .font(.ui(size: 13))
                     .foregroundStyle(Theme.tertiary)
                     .multilineTextAlignment(.center)

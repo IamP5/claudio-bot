@@ -73,7 +73,7 @@ struct SessionsSidebar: View {
                     .plainRow()
             } else if !index.loaded {
                 if store.machine == nil {
-                    Text("Connect to your Mac to see its Claude Code sessions.")
+                    Text("Connect to \(store.computerName()) to see its Claude Code sessions.")
                         .font(.subheadline)
                         .foregroundStyle(Theme.tertiary)
                         .frame(maxWidth: .infinity)
@@ -161,7 +161,7 @@ struct SessionsSidebar: View {
                 Image(systemName: "chevron.left.forwardslash.chevron.right")
                     .font(.ui(size: 30, weight: .light))
                     .foregroundStyle(Theme.tertiary)
-                Text("No Claude Code sessions on this Mac yet")
+                Text("No Claude Code sessions on \(store.hasSeveralMachines ? "your machines" : store.computerName()) yet")
                     .font(.headline)
                     .multilineTextAlignment(.center)
                 Text("Sessions from the Claude app, a terminal or your bots' agents show up here, grouped by project.")
@@ -612,12 +612,14 @@ struct StaleListBanner: View {
 }
 
 struct UpdateBridgeNote: View {
+    @Environment(AppStore.self) private var store
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Label("Update the bridge", systemImage: "arrow.triangle.2.circlepath")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Theme.attention)
-            Text("The bridge on your Mac doesn't serve Claude Code sessions yet. Update it to see your sessions here, grouped by project.")
+            Text("The bridge on \(store.computerName()) doesn't serve Claude Code sessions yet. Update it to see your sessions here, grouped by project.")
                 .font(.subheadline)
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)

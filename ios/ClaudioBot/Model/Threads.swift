@@ -100,9 +100,11 @@ enum ThreadLayout {
 }
 
 extension SessionItem {
+    /// A work item with a step still running or waiting stays out of a fold, so live work is never hidden.
     var folds: Bool {
         switch self {
-        case .thinking, .work, .assistant: true
+        case .thinking, .assistant: true
+        case .work(_, _, let steps): !steps.contains { $0.state.isLive }
         default: false
         }
     }
@@ -113,12 +115,13 @@ extension SessionItem {
 }
 
 enum WorkSummary {
+    /// An edit counts only once it is done: a failed, denied or stopped write changed nothing.
     static func text(_ steps: [ToolStep]) -> String {
         var edited = Set<String>()
         var counts: [String: Int] = [:]
         for step in steps {
             switch step.tool {
-            case "Edit", "Write", "MultiEdit", "NotebookEdit": edited.insert(step.diff?.path ?? step.label)
+            case "Edit", "Write", "MultiEdit", "NotebookEdit": if step.state == .ok { edited.insert(step.diff?.path ?? step.label) }
             case "Bash", "BashOutput": counts["command", default: 0] += 1
             case "Read": counts["read", default: 0] += 1
             case "Grep", "Glob", "WebSearch", "WebFetch", "ToolSearch": counts["search", default: 0] += 1
@@ -134,7 +137,7 @@ enum WorkSummary {
         if let n = counts["search"] { parts.append("searched \(plural(n, "time"))") }
         if let n = counts["agent"] { parts.append("ran \(plural(n, "agent"))") }
         if let n = counts["other"] { parts.append(plural(n, parts.isEmpty ? "step" : "other step")) }
-        guard let first = parts.first else { return "No steps" }
+        guard let first = parts.first else { return steps.isEmpty ? "No steps" : plural(steps.count, "step") }
         parts[0] = first.prefix(1).uppercased() + first.dropFirst()
         return parts.joined(separator: ", ")
     }
@@ -153,13 +156,180 @@ enum WorkSummary {
     }
 
     static func diff(_ steps: [ToolStep]) -> (added: Int, removed: Int)? {
-        let diffs = steps.compactMap(\.diff)
+        let diffs = steps.filter { $0.state == .ok }.compactMap(\.diff)
         guard !diffs.isEmpty else { return nil }
         return (diffs.reduce(0) { $0 + $1.added }, diffs.reduce(0) { $0 + $1.removed })
     }
 
     static func plural(_ n: Int, _ noun: String) -> String {
         "\(n) \(noun)\(n == 1 ? "" : "s")"
+    }
+}
+
+extension ToolStepState {
+    /// Not over yet: running, or held by an open approval card.
+    var isLive: Bool { self == .running || self == .waiting }
+}
+
+/// Elapsed times the way the thread shows and speaks them. Shown times use whole seconds, so they tick in step.
+enum RunClock {
+    /// "43s", "2m 05s", "1h 02m".
+    static func short(_ seconds: TimeInterval) -> String {
+        let s = max(0, Int(seconds))
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return "\(s / 60)m " + String(format: "%02ds", s % 60) }
+        return "\(s / 3600)h " + String(format: "%02dm", s % 3600 / 60)
+    }
+
+    /// "43 seconds", "2 minutes 5 seconds", "1 hour 2 minutes".
+    static func spoken(_ seconds: TimeInterval) -> String {
+        let s = max(0, Int(seconds))
+        let (big, small, units): (Int, Int, (String, String)) =
+            s < 60 ? (s, 0, ("second", "")) : s < 3600 ? (s / 60, s % 60, ("minute", "second")) : (s / 3600, s % 3600 / 60, ("hour", "minute"))
+        let head = WorkSummary.plural(big, units.0)
+        return small == 0 ? head : head + " " + WorkSummary.plural(small, units.1)
+    }
+
+    /// A quiet spell, to the minute past the first: "45s", "3m", "1h 10m".
+    static func coarse(_ seconds: TimeInterval) -> String {
+        let s = max(0, Int(seconds))
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return "\(s / 60)m" }
+        return "\(s / 3600)h \(s % 3600 / 60)m"
+    }
+}
+
+/// A work item read as one run: what is live, what went wrong, and since when. tasks: the session's live tasks by
+/// the step that started them, which carry a subagent's progress. heardAt: the last sign of life for the session.
+struct WorkRun {
+    /// How long a running step may go without a sign of life before it reads as quiet.
+    static let quietAfter: TimeInterval = 60
+
+    let steps: [ToolStep]
+    let tasks: [String: SessionTask]
+    let heardAt: Date?
+
+    init(steps: [ToolStep], controls: SessionControls? = nil) {
+        self.steps = steps
+        tasks = Dictionary((controls?.tasks ?? []).compactMap { task in task.stepId.map { ($0, task) } }, uniquingKeysWith: { a, _ in a })
+        heardAt = controls?.heardAt
+    }
+
+    var live: [ToolStep] { steps.filter(\.state.isLive) }
+    var isLive: Bool { steps.contains { $0.state.isLive } }
+
+    /// The run's clock: the earliest start among running steps. A waiting step has not started.
+    var since: Date? { steps.filter { $0.state == .running }.compactMap(\.startedAt).min() }
+
+    /// From the first start to the last end, once nothing is live and some step carries both.
+    var duration: TimeInterval? {
+        guard !isLive, let start = steps.compactMap(\.startedAt).min(), let end = steps.compactMap(\.endedAt).max(), end >= start else { return nil }
+        return end.timeIntervalSince(start)
+    }
+
+    /// "3 agents running · 1 waiting for approval · 1 stopped", or for a finished run "Ran 3 agents, 43s".
+    /// Spoken, the state leads: "Running: 3 agents, 1 waiting for approval".
+    func headline(spoken: Bool = false) -> String {
+        let format = spoken ? RunClock.spoken : RunClock.short
+        var parts: [String] = []
+        let running = steps.filter { $0.state == .running }
+        if !running.isEmpty { parts.append(spoken ? "Running: " + Self.nouns(running) : Self.nouns(running) + " running") }
+        let waiting = steps.count { $0.state == .waiting }
+        if waiting > 0 { parts.append("\(waiting) waiting for approval") }
+        if parts.isEmpty {
+            parts.append(WorkSummary.text(steps) + (duration.map { ", " + format($0) } ?? ""))
+        }
+        for (state, word) in [(ToolStepState.stopped, "stopped"), (.denied, "denied")] {
+            let n = steps.count { $0.state == state }
+            if n > 0 { parts.append("\(n) \(word)") }
+        }
+        return parts.joined(separator: spoken ? ", " : " · ")
+    }
+
+    /// The failed steps, named when there is one: "broken helper failed: Agent type not found".
+    var failure: String? {
+        let failed = steps.filter { $0.state == .error }
+        guard let first = failed.first else { return nil }
+        guard failed.count == 1 else { return "\(failed.count) failed" }
+        return "\(first.label) failed" + (first.cause.map { ": " + $0 } ?? "")
+    }
+
+    /// The header as VoiceOver speaks it: "Running: 3 agents, 2 minutes 5 seconds. broken helper failed: …".
+    func spoken(now: Date) -> String {
+        var line = headline(spoken: true)
+        if let since { line += ", " + RunClock.spoken(now.timeIntervalSince(since)) }
+        if let failure { line += ". " + failure }
+        return line
+    }
+
+    func task(for step: ToolStep) -> SessionTask? { tasks[step.id] }
+
+    /// The label of the subagent that made this call, when it is in the same run.
+    func owner(of step: ToolStep) -> String? {
+        step.owner.flatMap { id in steps.first { $0.id == id }?.label }
+    }
+
+    /// How long a running step has gone without a sign of life, once that passes `quietAfter`. A task's progress is
+    /// the sign when it reports one, otherwise the session's: a background command reports none while it runs. A task
+    /// held by an approval card waits on the user, so it is never quiet.
+    func quiet(_ step: ToolStep, now: Date) -> TimeInterval? {
+        guard step.state == .running else { return nil }
+        let task = tasks[step.id]
+        guard task?.waiting == nil, let last = task?.progress?.at ?? heardAt else { return nil }
+        let gap = now.timeIntervalSince(last)
+        return gap > Self.quietAfter ? gap : nil
+    }
+
+    /// One step's state and timing in words: "Running · 1m 12s · 3 tools, last Bash · started by sleeper two".
+    func status(_ step: ToolStep, now: Date, spoken: Bool = false) -> [String] {
+        let format = spoken ? RunClock.spoken : RunClock.short
+        let task = tasks[step.id]
+        var parts: [String] = []
+        switch step.state {
+        case .running:
+            parts.append("Running" + (step.startedAt.map { (spoken ? ", " : " · ") + format(now.timeIntervalSince($0)) } ?? ""))
+        case .waiting:
+            parts.append("Waiting for approval")
+        case .ok, .error:
+            var word = step.state == .ok ? "Done" : "Failed"
+            if let start = step.startedAt, let end = step.endedAt {
+                word += (spoken ? ", " : " · ") + format(end.timeIntervalSince(start))
+            } else if let ms = step.usage?.ms {
+                word += (spoken ? ", " : " · ") + format(Double(ms) / 1000)
+            }
+            parts.append(word)
+        case .stopped:
+            parts.append(step.cause ?? "Stopped")
+        case .denied:
+            parts.append("Denied")
+        case .unknown(let raw):
+            parts.append(raw.prefix(1).uppercased() + raw.dropFirst())
+        }
+        if task?.waiting != nil { parts.append("waiting for your approval") }
+        if let progress = task?.progress {
+            parts.append(WorkSummary.plural(progress.tools, "tool") + (progress.last.map { ", last \($0)" } ?? ""))
+        } else if let usage = step.usage, !step.state.isLive {
+            parts.append(WorkSummary.plural(usage.tools, "tool"))
+        }
+        if let owner = owner(of: step) { parts.append("started by \(owner)") }
+        if let quiet = quiet(step, now: now) {
+            parts.append("no activity for " + (spoken ? RunClock.spoken(quiet) : RunClock.coarse(quiet)))
+        }
+        return parts
+    }
+
+    /// "3 agents", "2 agents, 1 command", "1 step".
+    static func nouns(_ steps: [ToolStep]) -> String {
+        var counts: [(noun: String, n: Int)] = []
+        for step in steps {
+            let noun = switch step.tool {
+            case "Task", "Agent": "agent"
+            case "Bash": "command"
+            default: "step"
+            }
+            if let at = counts.firstIndex(where: { $0.noun == noun }) { counts[at].n += 1 } else { counts.append((noun, 1)) }
+        }
+        return counts.map { WorkSummary.plural($0.n, $0.noun) }.joined(separator: ", ")
     }
 }
 

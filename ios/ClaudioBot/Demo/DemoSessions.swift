@@ -322,7 +322,7 @@ enum DemoSessions {
                 items(store, id, [.ask(id: itemId, at: at, questions: questions, answers: answers.map(AskAnswers.answered) ?? .dismissed, cardId: nil)])
             }
             update(store, id) { $0.status = .working }
-        case let .sessionCreate(ref, projectId, text, _, _, _):
+        case let .sessionCreate(ref, projectId, text, _, _, _, _):
             let new = SessionID(UUID().uuidString.lowercased())
             let title = text.split(separator: "\n").first.map(String.init) ?? "New session"
             store.apply(.sessions(.changed(rows: [row(new, projectId, String(title.prefix(60)), origin: .phone, minutes: 0, status: .working, holder: .claudio, mirror: .notMirrored)], removed: [], projects: [])))

@@ -134,6 +134,13 @@ final class AppStore {
     private(set) var devicesHeard = 0
     /// The newest code for pairing another phone.
     private(set) var pairCode: PairCode?
+    /// The world of bots this bridge holds, from the last hello. Nil from a bridge without machines.
+    private(set) var world: World?
+    /// The computers that run this world's agents, the home first as the bridge lists them. Empty from a bridge
+    /// without machines.
+    private(set) var machines: [Machine] = []
+    /// The newest code for enrolling another computer as a machine.
+    private(set) var machineCode: PairCode?
     /// From the last hello. Empty for a bridge from before features.
     private(set) var features: Set<Feature> = []
     /// What each bot or agent is doing right now. Live only: cleared by every hello.
@@ -174,6 +181,15 @@ final class AppStore {
         if case .connected(let machine) = connection { machine } else { nil }
     }
 
+    /// Machine chips and pickers show only when there is a choice to make or to read.
+    var hasSeveralMachines: Bool {
+        machines.count > 1
+    }
+
+    func machine(_ id: MachineID?) -> Machine? {
+        id.flatMap { id in machines.first { $0.id == id } }
+    }
+
     /// Paired devices, pairing codes and Bearer tokens arrived with protocol 3.
     var bridgeManagesDevices: Bool {
         (bridgeProtocol ?? 0) >= 3
@@ -195,6 +211,9 @@ final class AppStore {
             pendingDecisions = [:]
             devices = nil
             pairCode = nil
+            world = nil
+            machines = []
+            machineCode = nil
             features = []
             activity = [:]
             facts = nil
@@ -261,6 +280,10 @@ final class AppStore {
         pairCode = nil
     }
 
+    func discardMachineCode() {
+        machineCode = nil
+    }
+
     /// The reducer. Returns what the user should be notified about.
     @discardableResult
     func apply(_ msg: ServerMessage) -> [Alert] {
@@ -271,6 +294,8 @@ final class AppStore {
             protocolMismatch = ProtocolMismatch(bridge: hello.protocol)
             bridgeProtocol = hello.protocol
             features = Set(hello.features)
+            world = hello.world
+            machines = hello.machines ?? []
             activity = [:]
             if !features.contains(.usage) { usage = nil }
             // A decision in flight when the socket dropped either landed, and the card says so, or it is lost.
@@ -353,6 +378,14 @@ final class AppStore {
 
         case let .pairCode(code):
             pairCode = code
+            return []
+
+        case let .machines(machines):
+            self.machines = machines
+            return []
+
+        case let .machineCode(code):
+            machineCode = code
             return []
 
         case let .activity(botId, agentId, text, _):

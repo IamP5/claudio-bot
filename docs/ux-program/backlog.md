@@ -7,3 +7,4 @@
 - Composer at accessibility sizes (from G2 sim verify): at AX5 the composer drops the "Ask before edits" chip, clips "Haiku" and truncates the placeholder to "Queue a me…" (G6 territory).
 - Runner rubric (S2.12, S8.10): noPhantomWork measures only to the next user/assistant transcript line; a real wake turn whose first line lands more than 5 s after its init could read as phantom work. Watch for flakes.
 - Chat (area 2, from G16): ChatView and ExchangeView use the same bottom-pinned LazyVStack; a very tall bot message at AX5 may hang like F-SES-170. Check in the Chat audit.
+- Swipe check (from G16 verify): if the app crashes during a swipe, no process is found and CPU averages 0, so a short swipe time passes. Fail when the app process is gone.

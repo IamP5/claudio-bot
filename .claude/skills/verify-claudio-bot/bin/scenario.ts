@@ -875,7 +875,7 @@ function describe(a: Action): string {
     case "lose-frame":
       return `The relay loses ${a.what} on its way to the app (simulator lane), within ${a.timeoutS} s. Mark \`${a.mark}\`.`;
     case "watch-list":
-      return "The list probe (an XCUITest that only reads the accessibility tree) reads the app's Sessions list every 0.3 s until the setup ends (simulator lane).";
+      return "The list probe (an XCUITest that only reads the accessibility tree) reads the app's Sessions list about once a second until the setup ends (simulator lane).";
   }
 }
 

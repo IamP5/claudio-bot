@@ -408,7 +408,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 **Setup.**
 
-- The list probe (an XCUITest that only reads the accessibility tree) reads the app's Sessions list every 0.3 s until the setup ends (simulator lane).
+- The list probe (an XCUITest that only reads the accessibility tree) reads the app's Sessions list about once a second until the setup ends (simulator lane).
 - New session `s7-sleep-1` in demo (haiku, mode default): "Task s7-sleep-1: run exactly this Bash command in the foreground (not in the background): perl -e 'sleep 60' . Then reply with one line: done."
 - New session `s7-sleep-2` in demo (haiku, mode default): "Task s7-sleep-2: run exactly this Bash command in the foreground (not in the background): perl -e 'sleep 60' . Then reply with one line: done."
 - New session `s7-sleep-3` in demo (haiku, mode default): "Task s7-sleep-3: run exactly this Bash command in the foreground (not in the background): perl -e 'sleep 60' . Then reply with one line: done."

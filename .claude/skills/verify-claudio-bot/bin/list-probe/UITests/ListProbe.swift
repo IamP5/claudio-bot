@@ -1,6 +1,6 @@
 import XCTest
 
-/// Reads the Sessions list as the running app draws it, without touching it: every few hundred ms, the spoken labels
+/// Reads the Sessions list as the running app draws it, without touching it: about once a second, the spoken labels
 /// of the buttons that start with "<PREFIX>, " (rows and the project header) and "Show " (the fold), top to bottom.
 /// Appends one JSON line per sample to OUT: {"t": epoch ms, "rows": [...], "more": [...]}. Runs until killed or for
 /// SECONDS.
@@ -28,7 +28,8 @@ final class ListProbe: XCTestCase {
             if let snap = try? app.snapshot() { collect(snap, prefix, &rows, &more) }
             let sample: [String: Any] = ["t": Int(Date().timeIntervalSince1970 * 1000), "rows": rows.sorted { $0.0 < $1.0 }.map(\.1), "more": more]
             handle.write(try JSONSerialization.data(withJSONObject: sample) + Data("\n".utf8))
-            usleep(300_000)
+            // A whole-tree snapshot is heavy; sampled faster, it slowed the bridge enough to fail S7.6's 1.5 s.
+            usleep(1_000_000)
         }
         try handle.close()
     }

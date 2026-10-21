@@ -231,7 +231,7 @@ export function upgradeV2(v2: StateFileV2): StateFileV3 {
  * one. That is the whole guarantee: on macOS fsync does not flush the drive's own cache (only F_FULLFSYNC does), so a
  * power loss can still lose the newest write.
  */
-function writeAtomic(path: string, body: string | Uint8Array) {
+export function writeAtomic(path: string, body: string | Uint8Array) {
   const dir = dirname(path);
   mkdirSync(dir, { recursive: true });
   const bytes = typeof body === "string" ? Buffer.from(body) : body;

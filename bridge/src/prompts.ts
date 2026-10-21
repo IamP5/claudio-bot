@@ -186,6 +186,10 @@ export const notices = {
   expiredQuestion: (userName: string, question: string) =>
     `[Your question "${question}" expired unanswered. ${userName} did not say no; do not act on it.]`,
   contextCleared: "[No facts about the user are on file now. The list sent earlier no longer applies.]",
+  moved: (from: string, to: string, expired: readonly { tool: string; detail: string }[]) =>
+    `[You moved from ${from} to ${to}. Your chat, notes, memory, routines and files came along. Your Claude Code ` +
+    `conversation stayed on ${from}, so this is a new one; ask if you need something from before.` +
+    (expired.length === 0 ? "]" : ` These requests were waiting for approval and expired in the move, so they did not run: ${expired.map((c) => call(c.tool, c.detail)).join("; ")}. Ask again if they still matter.]`),
   droppedByStop: (userName: string, envelopeText: string) =>
     `[${userName} pressed Stop, so this never ran: ${envelopeText.split("\n")[0]}]`,
 };

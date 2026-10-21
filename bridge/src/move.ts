@@ -1,0 +1,350 @@
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join, normalize, relative } from "node:path";
+import { z } from "zod";
+import { createHomes } from "./home";
+import { mergeFacts } from "./memory";
+import { notices } from "./prompts";
+import type { BotId } from "./protocol";
+import { checkStateFile, flushNow, loadWorld, writeAtomic } from "./store";
+import {
+  EXCHANGE_KEEP,
+  own,
+  type BotRecord,
+  type DeviceRecord,
+  type ExchangeLog,
+  type GroupRecord,
+  type MoveId,
+  type MoveRecord,
+  type PushState,
+  type SessionState,
+  type World,
+} from "./world";
+
+// Moving a world from one bridge home to another (docs/world-move.md). Export freezes this home's bots and packs them
+// with their files into one bundle; import unions it into another home by id; finish trashes the frozen bots' homes.
+// Each step runs with the bridge stopped and converges when rerun.
+
+export type BundleWorld = {
+  bots: BotRecord[];
+  groups: GroupRecord[];
+  exchanges: ExchangeLog[];
+  devices: DeviceRecord[];
+  push: PushState;
+};
+
+/** data: the file's bytes, base64. path: relative to the bridge home. */
+export type BundleFile = { path: string; data: string };
+
+export type MoveBundle = {
+  format: 1;
+  moveId: MoveId;
+  from: { machine: string; at: string };
+  world: BundleWorld;
+  files: BundleFile[];
+};
+
+type Frozen = Extract<MoveRecord, { phase: "frozen" }>;
+
+const newMoveId = () => `mv_${crypto.randomUUID()}` as MoveId;
+
+// ---- Pure merges over the slices. Incoming wins on a shared id, since the move is newer than any earlier copy.
+
+/** Union by id, oldest first. A message on both sides is the incoming one; no message on either side is dropped. */
+export function mergeMessages<M extends { id: string; at: string }>(local: readonly M[], incoming: readonly M[]): M[] {
+  const byId = new Map<string, M>();
+  for (const m of local) byId.set(m.id, m);
+  for (const m of incoming) byId.set(m.id, m);
+  return [...byId.values()].sort((a, b) => a.at.localeCompare(b.at));
+}
+
+/** Union by key: a record on both sides keeps the local one when `prefer` is "local", else the incoming one. */
+export function unionBy<T>(local: readonly T[], incoming: readonly T[], key: (t: T) => string, prefer: "local" | "incoming"): T[] {
+  const byKey = new Map<string, T>();
+  for (const t of local) byKey.set(key(t), t);
+  for (const t of incoming) if (prefer === "incoming" || !byKey.has(key(t))) byKey.set(key(t), t);
+  return [...byKey.values()];
+}
+
+/**
+ * The bot as it lands on the new machine. Its Claude Code transcript stayed behind, so the session starts fresh (id
+ * null) with a notice that says why, rather than failing a resume first. Its queued inbox comes along. Permission cards
+ * still open expire: the gate that held them is on the old machine. Open questions stay open, and the new gate adopts them.
+ */
+export function arrive(bot: BotRecord, move: { from: string; to: string; at: string }): BotRecord {
+  const expired: { tool: string; detail: string }[] = [];
+  const messages = bot.messages.map((m) => {
+    if (m.kind !== "permission" || m.answer !== null) return m;
+    if (m.from === null) expired.push({ tool: m.tool, detail: m.detail });
+    return { ...m, answer: "expired" as const };
+  });
+  const old = own<SessionState>(bot.session);
+  const session: SessionState = {
+    id: null,
+    pending: old.pending,
+    lifecycle: { kind: "idle" },
+    notices: [...old.notices, { at: move.at, text: notices.moved(move.from, move.to, expired) }],
+  };
+  return { ...bot, messages, session };
+}
+
+/** A bot on both sides: the incoming record, with every local message and queued envelope kept. */
+export function mergeBot(local: BotRecord | undefined, incoming: BotRecord): BotRecord {
+  if (!local) return incoming;
+  const session = own<SessionState>(incoming.session);
+  const pending = unionBy(own<SessionState>(local.session).pending, session.pending, (p) => p.id, "incoming");
+  return { ...incoming, messages: mergeMessages(local.messages, incoming.messages), session: { ...session, pending } };
+}
+
+export function mergeGroup(local: GroupRecord | undefined, incoming: GroupRecord): GroupRecord {
+  return local ? { ...incoming, messages: mergeMessages(local.messages, incoming.messages) } : incoming;
+}
+
+export function mergeExchanges(local: readonly ExchangeLog[], incoming: readonly ExchangeLog[]): ExchangeLog[] {
+  const key = (l: ExchangeLog) => l.bots.join("|");
+  const out = local.map((l) => ({ ...l }));
+  for (const log of incoming) {
+    const mine = out.find((l) => key(l) === key(log));
+    if (!mine) out.push(log);
+    else mine.messages = mergeMessages(mine.messages, log.messages).slice(-EXCHANGE_KEEP);
+  }
+  return out;
+}
+
+/** The phone's token works on both sides. Protocol 2's shared-token device stays with its token file and never moves. */
+export const mergeDevices = (local: readonly DeviceRecord[], incoming: readonly DeviceRecord[]): DeviceRecord[] =>
+  unionBy(
+    local,
+    incoming.filter((d) => !d.legacy),
+    (d) => d.id,
+    "local",
+  );
+
+/**
+ * An append-only jsonl file after a move: the local lines, then each incoming line not already there. Usage rows are
+ * summed on read with no dedupe (ledger.ts), so a replayed line must never be appended twice.
+ */
+export function unionLines(local: string, incoming: string): string {
+  const have = new Set(local.split("\n"));
+  const add: string[] = [];
+  for (const line of incoming.split("\n")) {
+    if (line === "" || have.has(line)) continue;
+    have.add(line);
+    add.push(line);
+  }
+  if (add.length === 0) return local;
+  return `${local}${local === "" || local.endsWith("\n") ? "" : "\n"}${add.join("\n")}\n`;
+}
+
+/** The incoming world unioned into this one, and the move recorded. Mutates world. */
+export function applyBundle(world: World, bundle: MoveBundle, to: string, at: string) {
+  const move = { from: bundle.from.machine, to, at };
+  for (const bot of bundle.world.bots) world.bots.set(bot.id, mergeBot(world.bots.get(bot.id), arrive(bot, move)));
+  for (const group of bundle.world.groups) {
+    const merged = mergeGroup(world.groups.get(group.id), group);
+    world.groups.set(group.id, { ...merged, members: merged.members.filter((id) => world.bots.has(id)) });
+  }
+  const swap = <T>(slice: T[], next: T[]) => slice.splice(0, slice.length, ...next);
+  swap(own<ExchangeLog[]>(world.exchanges), mergeExchanges(own<ExchangeLog[]>(world.exchanges), bundle.world.exchanges));
+  swap(own<DeviceRecord[]>(world.devices), mergeDevices(own<DeviceRecord[]>(world.devices), bundle.world.devices));
+  const push = own<PushState>(world.push);
+  swap(push.sent, unionBy(push.sent, bundle.world.push.sent, (s) => s.key, "local"));
+  own<MoveRecord[]>(world.moves).push({ kind: "in", moveId: bundle.moveId, at, from: bundle.from.machine });
+}
+
+/** Takes every bot, group and exchange out of World.bots into a frozen move. Mutates world. */
+export function freeze(world: World, moveId: MoveId, at: string, machine: string): Frozen {
+  const move: Frozen = {
+    kind: "out",
+    moveId,
+    at,
+    machine,
+    phase: "frozen",
+    held: { bots: [...world.bots.values()], groups: [...world.groups.values()], exchanges: [...own<ExchangeLog[]>(world.exchanges)] },
+  };
+  world.bots.clear();
+  world.groups.clear();
+  own<ExchangeLog[]>(world.exchanges).splice(0);
+  own<MoveRecord[]>(world.moves).push(move);
+  return move;
+}
+
+// ---- Files.
+
+/** A bot's scratch clones (work/) and Claude Code's own marker stay with the machine. */
+const STAYS = new Set(["work", ".claude/.cc-writes"]);
+
+function walk(root: string, dir: string, out: string[]) {
+  for (const name of readdirSync(dir).sort()) {
+    const path = join(dir, name);
+    if (STAYS.has(relative(root, path))) continue;
+    const stat = lstatSync(path);
+    if (stat.isDirectory()) walk(root, path, out);
+    else if (stat.isFile()) out.push(path);
+  }
+}
+
+function filesOf(home: string, bots: readonly BotRecord[]): BundleFile[] {
+  const paths: string[] = [];
+  if (lstatSync(join(home, "USER.md"), { throwIfNoEntry: false })?.isFile()) paths.push(join(home, "USER.md"));
+  for (const dir of ["usage", "audit", "groups"]) {
+    const full = join(home, dir);
+    if (!existsSync(full)) continue;
+    for (const name of readdirSync(full).sort()) if (name.endsWith(".jsonl") && lstatSync(join(full, name)).isFile()) paths.push(join(full, name));
+  }
+  for (const bot of bots) {
+    const root = join(home, "bots", bot.id);
+    if (existsSync(root)) walk(root, root, paths);
+  }
+  return paths.map((path) => ({ path: relative(home, path), data: readFileSync(path).toString("base64") }));
+}
+
+/** Where a bundle path may land: the kinds of file export packs, and only under a bot the bundle brings. */
+function allowedPath(path: string, bots: ReadonlySet<string>): boolean {
+  if (path !== normalize(path) || path.startsWith("/") || path.split("/").includes("..")) return false;
+  if (path === "USER.md" || /^(usage|audit|groups)\/[^/]+\.jsonl$/.test(path)) return true;
+  const m = /^bots\/([^/]+)\/.+/.exec(path);
+  return m !== null && bots.has(m[1]!);
+}
+
+function landFile(home: string, file: BundleFile) {
+  const path = join(home, file.path);
+  const incoming = Buffer.from(file.data, "base64");
+  const existing = lstatSync(path, { throwIfNoEntry: false });
+  if (existing && !existing.isFile()) throw new Error(`${path} is in the way: it is not a regular file`);
+  const local = existing ? readFileSync(path, "utf8") : null;
+  let body: string | Buffer = incoming;
+  if (local !== null && file.path === "USER.md") body = mergeFacts(local, incoming.toString("utf8"));
+  else if (local !== null && file.path.endsWith(".jsonl")) body = unionLines(local, incoming.toString("utf8"));
+  if (local !== null && Buffer.from(body).equals(Buffer.from(local))) return;
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeAtomic(path, body);
+}
+
+// ---- The bundle at the boundary.
+
+const BUNDLE = z.object({
+  format: z.literal(1),
+  moveId: z.string().regex(/^mv_[\w-]+$/),
+  from: z.object({ machine: z.string(), at: z.string() }),
+  world: z.object({
+    bots: z.array(z.unknown()),
+    groups: z.array(z.unknown()),
+    exchanges: z.array(z.unknown()),
+    devices: z.array(z.looseObject({ id: z.string(), tokenHash: z.string(), legacy: z.boolean() })),
+    push: z.object({ sent: z.array(z.object({ key: z.string(), at: z.string() })) }),
+  }),
+  files: z.array(z.object({ path: z.string(), data: z.string() })),
+});
+
+/** The bundle, once its envelope and every record have the shapes the bridge reads; else why not. */
+export function parseBundle(raw: unknown): MoveBundle | { error: string } {
+  const outer = BUNDLE.safeParse(raw);
+  if (!outer.success) return { error: `This is not a ClaudioBot world bundle (${outer.error.issues[0]!.message} at ${outer.error.issues[0]!.path.join(".")}).` };
+  const w = outer.data.world;
+  // The records go through the same check as a state.json, so an import never lands a record loadWorld would refuse.
+  const check = checkStateFile({
+    version: 3,
+    bots: w.bots,
+    groups: w.groups,
+    exchanges: w.exchanges,
+    devices: w.devices,
+    push: w.push,
+    agents: [],
+    gate: { open: [], grants: [], daily: [] },
+    account: { parkedUntil: null },
+  });
+  if (check.kind === "refused") return { error: `The bundle's world ${check.why}.` };
+  const bots = new Set((w.bots as BotRecord[]).map((b) => b.id as string));
+  const stray = outer.data.files.find((f) => !allowedPath(f.path, bots));
+  if (stray) return { error: `The bundle names a file outside what a move carries: ${stray.path}` };
+  return outer.data as unknown as MoveBundle;
+}
+
+// ---- The three commands. The caller holds the home lock.
+
+export type MoveDeps = { home: string; machine: string; now: () => Date };
+
+export type Exported = { kind: "exported"; moveId: MoveId; bundle: MoveBundle; fresh: boolean; left: number } | { kind: "empty" };
+
+/**
+ * Freezes this home's bots (once: a rerun packs the same frozen move again, with the same moveId) and returns the
+ * bundle. The freeze is saved before the bundle is made, so a crash in between is finished by a rerun.
+ */
+export function exportWorld(deps: MoveDeps): Exported {
+  const { world, firstRun } = loadWorld(deps.home);
+  if (firstRun) return { kind: "empty" };
+  let move = own<MoveRecord[]>(world.moves).find((m): m is Frozen => m.kind === "out" && m.phase === "frozen");
+  const fresh = move === undefined;
+  if (!move) {
+    if (world.bots.size === 0 && world.groups.size === 0) return { kind: "empty" };
+    move = freeze(world, newMoveId(), deps.now().toISOString(), deps.machine);
+    flushNow(world, deps.home);
+  }
+  const bundle: MoveBundle = {
+    format: 1,
+    moveId: move.moveId,
+    from: { machine: move.machine, at: move.at },
+    world: {
+      bots: move.held.bots,
+      groups: move.held.groups,
+      exchanges: move.held.exchanges,
+      devices: own<DeviceRecord[]>(world.devices).filter((d) => !d.legacy),
+      push: own<PushState>(world.push),
+    },
+    files: filesOf(deps.home, move.held.bots),
+  };
+  return { kind: "exported", moveId: move.moveId, bundle, fresh, left: world.bots.size };
+}
+
+export type Imported =
+  | { kind: "imported"; moveId: MoveId; from: string; bots: string[]; routines: number; devices: number }
+  | { kind: "already"; moveId: MoveId; at: string }
+  | { kind: "own"; moveId: MoveId }
+  | { kind: "refused"; error: string };
+
+/**
+ * Lands the files, then saves the merged state.json with the move recorded. The save is the commit point: a crash
+ * before it leaves a rerun to land the same files again, which changes nothing, and merge the state.
+ */
+export function importWorld(deps: MoveDeps, raw: unknown): Imported {
+  const bundle = parseBundle(raw);
+  if ("error" in bundle) return { kind: "refused", error: bundle.error };
+  const { world } = loadWorld(deps.home);
+  const seen = own<MoveRecord[]>(world.moves).find((m) => m.moveId === bundle.moveId);
+  if (seen?.kind === "in") return { kind: "already", moveId: bundle.moveId, at: seen.at };
+  if (seen?.kind === "out") return { kind: "own", moveId: bundle.moveId };
+  mkdirSync(deps.home, { recursive: true, mode: 0o700 });
+  for (const file of bundle.files) landFile(deps.home, file);
+  const before = new Set(own<DeviceRecord[]>(world.devices).map((d) => d.id));
+  applyBundle(world, bundle, deps.machine, deps.now().toISOString());
+  flushNow(world, deps.home);
+  return {
+    kind: "imported",
+    moveId: bundle.moveId,
+    from: bundle.from.machine,
+    bots: bundle.world.bots.map((b) => b.name),
+    routines: bundle.world.bots.reduce((n, b) => n + b.routines.length, 0),
+    devices: own<DeviceRecord[]>(world.devices).filter((d) => !before.has(d.id)).length,
+  };
+}
+
+export type Finished = { kind: "finished"; bots: number } | { kind: "already" } | { kind: "unknown" };
+
+/**
+ * Trashes the frozen bots' homes, as delete does, then marks the move done. Homes go first: a crash before the save
+ * leaves the move frozen, and a rerun finds the homes already gone. The agents of those bots stay, with their worktrees.
+ */
+export function finishMove(deps: MoveDeps, moveId: string): Finished {
+  const { world } = loadWorld(deps.home);
+  const moves = own<MoveRecord[]>(world.moves);
+  const i = moves.findIndex((m) => m.kind === "out" && m.moveId === moveId);
+  const move = moves[i];
+  if (move?.kind !== "out") return { kind: "unknown" };
+  if (move.phase === "done") return { kind: "already" };
+  const homes = createHomes(deps.home);
+  const at = deps.now();
+  for (const bot of move.held.bots) homes.trash(bot.id as BotId, at);
+  moves[i] = { kind: "out", moveId: move.moveId, at: move.at, machine: move.machine, phase: "done" };
+  flushNow(world, deps.home);
+  return { kind: "finished", bots: move.held.bots.length };
+}

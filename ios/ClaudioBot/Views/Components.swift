@@ -201,8 +201,11 @@ enum Reach: Equatable, Sendable {
 }
 
 /// The latest error, shown over whatever is on screen until it times out or is tapped away.
+/// An error with no screen of its own. It is spoken as it appears, and under VoiceOver it stays until dismissed, since
+/// five seconds may pass before the user reaches it (F-SES-002).
 struct ErrorToast: View {
     @Environment(AppStore.self) private var store
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
 
     var body: some View {
         if let notice = store.lastError {
@@ -216,9 +219,13 @@ struct ErrorToast: View {
                 .padding(.top, 4)
                 .onTapGesture { store.dismissError(notice) }
                 .task(id: notice.id) {
+                    AccessibilityNotification.Announcement("Error: " + notice.message).post()
+                    guard !voiceOver else { return }
                     try? await Task.sleep(for: .seconds(5))
                     store.dismissError(notice)
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Error: " + notice.message)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityHint("Dismisses the error")
         }

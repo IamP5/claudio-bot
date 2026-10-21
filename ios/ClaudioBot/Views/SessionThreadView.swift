@@ -154,7 +154,10 @@ struct SessionThreadView: View {
                     }
                 }
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                    ThreadRowView(row: row, sessionId: sessionId, model: model, botName: botName) { fullOutput = $0 }
+                    ThreadRowView(
+                        row: row, sessionId: sessionId, model: model, botName: botName,
+                        unanswered: model.unanswered.contains(row.id), withdraws: store.has(.sessionUnqueue)
+                    ) { fullOutput = $0 }
                         .equatable()
                         .padding(.top, index == 0 ? 12 : Self.gap(between: rows[index - 1], and: row))
                 }
@@ -230,7 +233,7 @@ struct SessionThreadView: View {
                     .padding(.horizontal, 16)
                     .transition(.opacity)
                 }
-                SessionComposer(sessionId: sessionId, controls: model.controls) {
+                SessionComposer(sessionId: sessionId, model: model, announce: { announcer.post($0) }) {
                     followsBottom = true
                     withAnimation(reduceMotion ? nil : .snappy(duration: 0.3)) { position.scrollTo(edge: .bottom) }
                 }

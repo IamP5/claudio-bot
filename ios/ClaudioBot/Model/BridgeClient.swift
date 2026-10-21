@@ -328,6 +328,7 @@ final class BridgeClient {
     func send(_ msg: ClientMessage) {
         if case let .decide(_, card, choice) = msg { store.decisionSent(choice, for: card) }
         if case let .sessionDecide(_, card, choice) = msg { store.decisionSent(choice, for: card) }
+        store.sessionRequestSent(msg)
         #if DEBUG
         if Demo.isEnabled { return Demo.respond(to: msg, store: store) }
         #endif

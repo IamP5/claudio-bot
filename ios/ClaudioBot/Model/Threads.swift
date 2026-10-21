@@ -360,6 +360,10 @@ final class ThreadModel {
     private(set) var expanded: Set<ItemID> = []
     /// Full tool outputs the user asked for, by tool_use id.
     private(set) var toolOutputs: [String: String] = [:]
+    /// The composer's text, kept with the thread so a queued message taken back for editing lands in it.
+    var draft = ComposerDraft()
+    /// The user's prompts a stop ended before Claude answered (UnansweredPrompts).
+    private(set) var unanswered: Set<ItemID> = []
     let live = LiveText()
     @ObservationIgnored private(set) var lost = false
     @ObservationIgnored private var index: [ItemID: Int] = [:]
@@ -504,6 +508,10 @@ final class ThreadModel {
         relayout()
     }
 
+    func has(_ id: ItemID) -> Bool {
+        index[id] != nil
+    }
+
     /// The cursor to ask for, once. Nil while a page is out or at the start of the transcript.
     func requestEarlier() -> Cursor? {
         guard !loadingEarlier, let before, phase == .ready else { return nil }
@@ -569,6 +577,13 @@ final class ThreadModel {
     private func relayout() {
         let next = ThreadLayout.rows(items, expanded: expanded, working: controls?.working ?? false)
         if next != rows { rows = next }
+        let prompts = UnansweredPrompts.of(items)
+        if prompts != unanswered { unanswered = prompts }
+    }
+
+    /// Puts a message back in the composer for editing, after whatever is typed there.
+    func edit(_ text: String) {
+        if draft.isBlank { draft = ComposerDraft(text: text) } else { draft.append("\n\n" + text) }
     }
 
     private static func settled(_ items: [SessionItem]) -> [MessageID] {

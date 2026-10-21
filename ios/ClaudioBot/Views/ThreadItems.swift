@@ -7,10 +7,16 @@ struct ThreadRowView: View, Equatable {
     let sessionId: SessionID
     let model: ThreadModel
     var botName: String?
+    /// A prompt a stop ended before Claude answered: it offers Edit and resend.
+    var unanswered = false
+    /// The bridge takes queued messages back.
+    var withdraws = false
     let onFullOutput: (ToolStep) -> Void
 
+    @Environment(BridgeClient.self) private var client
+
     nonisolated static func == (a: Self, b: Self) -> Bool {
-        a.row == b.row && a.sessionId == b.sessionId && a.botName == b.botName
+        a.row == b.row && a.sessionId == b.sessionId && a.botName == b.botName && a.unanswered == b.unanswered && a.withdraws == b.withdraws
     }
 
     var body: some View {
@@ -19,8 +25,8 @@ struct ThreadRowView: View, Equatable {
             FoldRow(items: items, expanded: expanded) { model.toggle(fold: id) }
         case .item(let item):
             switch item {
-            case let .user(_, _, text, from, queued):
-                SessionUserBubble(text: text, from: from, queued: queued, botName: botName)
+            case let .user(id, _, text, from, queued):
+                SessionUserBubble(text: text, from: from, queued: queued, botName: botName, actions: actions(id, text, queued: queued))
             case let .assistant(id, _, text):
                 RenderedMarkdownView(markdown: model.rendered(id, text))
                     .font(.ui(size: 16))
@@ -50,6 +56,18 @@ struct ThreadRowView: View, Equatable {
     }
 }
 
+extension ThreadRowView {
+    private func actions(_ id: ItemID, _ text: String, queued: Bool) -> SessionUserBubble.Actions? {
+        if queued, withdraws {
+            return .queued(
+                edit: { client.withdraw(id, text: text, from: model, edit: true) },
+                withdraw: { client.withdraw(id, text: text, from: model, edit: false) }
+            )
+        }
+        return unanswered && !queued ? .resend { model.edit(text) } : nil
+    }
+}
+
 /// The least height of a clickable row: a fingertip on iPhone, a pointer's regular control on a Mac.
 enum HitTarget {
     #if os(macOS)
@@ -60,15 +78,23 @@ enum HitTarget {
 }
 
 struct SessionUserBubble: View {
+    /// What the user can still do with the message: take a queued one back, or edit one a stop cut off and send it again.
+    enum Actions {
+        case queued(edit: () -> Void, withdraw: () -> Void)
+        case resend(() -> Void)
+    }
+
     let text: String
     let from: SessionAuthor
     let queued: Bool
     var botName: String?
+    var actions: Actions?
 
     var body: some View {
         if from == .system {
             NoticeLine(text: text, tone: .info)
         } else {
+            let rendered = MarkdownText.inline(text)
             VStack(alignment: .trailing, spacing: 5) {
                 if from == .bot {
                     Label(botName.map { "From \($0)" } ?? "From a bot", systemImage: "gearshape")
@@ -77,7 +103,7 @@ struct SessionUserBubble: View {
                 }
                 HStack(spacing: 0) {
                     Spacer(minLength: 48)
-                    Text(MarkdownText.inline(text))
+                    Text(rendered)
                         .font(.ui(size: 16))
                         .bubbleText()
                         .foregroundStyle(.white)
@@ -93,16 +119,58 @@ struct SessionUserBubble: View {
                         }
                         .opacity(queued ? 0.75 : 1)
                 }
-                if queued {
-                    Label("Queued", systemImage: "clock")
-                        .font(.caption)
-                        .foregroundStyle(Theme.tertiary)
-                }
+                caption
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel((from == .bot ? "From \(botName ?? "a bot"): " : "You: ") + text + (queued ? ". Queued" : ""))
+            .accessibilityLabel(Self.spoken(rendered, from: from, botName: botName, queued: queued))
+            .accessibilityActions {
+                switch actions {
+                case let .queued(edit, withdraw)?:
+                    Button("Edit", action: edit)
+                    Button("Withdraw", action: withdraw)
+                case .resend(let resend)?:
+                    Button("Edit and resend", action: resend)
+                case nil:
+                    EmptyView()
+                }
+            }
         }
+    }
+
+    @ViewBuilder
+    private var caption: some View {
+        switch actions {
+        case let .queued(edit, withdraw)?:
+            Menu {
+                Button(action: edit) { Label("Edit", systemImage: "pencil") }
+                Button(role: .destructive, action: withdraw) { Label("Withdraw", systemImage: "arrow.uturn.backward") }
+            } label: {
+                captionLabel("Queued · Edit or withdraw", symbol: "clock")
+            }
+        case .resend(let resend)?:
+            Button(action: resend) { captionLabel("Edit and resend", symbol: "arrow.uturn.up") }
+                .buttonStyle(.plain)
+        case nil:
+            if queued {
+                Label("Queued", systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(Theme.tertiary)
+            }
+        }
+    }
+
+    private func captionLabel(_ title: String, symbol: String) -> some View {
+        Label(title, systemImage: symbol)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(Theme.secondary)
+            .frame(minHeight: HitTarget.minHeight)
+            .contentShape(Rectangle())
+    }
+
+    /// The message as it reads on screen: link labels, not their addresses, and no markup characters (F-SES-168).
+    static func spoken(_ rendered: AttributedString, from: SessionAuthor, botName: String?, queued: Bool) -> String {
+        (from == .bot ? "From \(botName ?? "a bot"): " : "You: ") + String(rendered.characters) + (queued ? ". Queued" : "")
     }
 }
 
@@ -815,6 +883,8 @@ struct NoticeLine: View {
             .multilineTextAlignment(.center)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 24)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(tone == .error ? "Error: " + text : text)
     }
 }
 

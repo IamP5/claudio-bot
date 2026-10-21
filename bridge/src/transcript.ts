@@ -496,6 +496,8 @@ export type ProjectionTail = {
   tools: Map<string, ItemId>;
   /** Claude Code's task id to the tool_use id of the step that launched it. */
   tasks: Map<string, string>;
+  /** The model's description of each open Agent or Bash call, by tool_use id: a task summary quotes it. */
+  descriptions: Map<string, string>;
   /** Steps a bare reject just denied, by tool_use id: an interrupt as the next entry makes them stopped. */
   rejected: Map<string, ItemId>;
   /** The work item tool calls join until a text block or a prompt closes it. */
@@ -506,7 +508,7 @@ export type ProjectionTail = {
   blocks: Map<string, number>;
 };
 
-export const emptyTail = (): ProjectionTail => ({ open: new Map(), tools: new Map(), tasks: new Map(), rejected: new Map(), work: null, todo: null, blocks: new Map() });
+export const emptyTail = (): ProjectionTail => ({ open: new Map(), tools: new Map(), tasks: new Map(), descriptions: new Map(), rejected: new Map(), work: null, todo: null, blocks: new Map() });
 
 function resultText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -548,7 +550,7 @@ const middleCut = (s: string, max: number) => (s.length <= max ? s : `${s.slice(
 
 const AGENT_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
 const AGENT_LABEL_MAX = 120;
-const backgroundLabel = (label: string) => (/\bbackground\b/i.test(label) ? label : `Run in background: ${label.replace(/^Run /, "")}`);
+const backgroundLabel = (label: string) => (/\bin (?:the )?background\b/i.test(label) ? label : `Run in background: ${label.replace(/^Run /, "")}`);
 
 /** What a Bash step shows it runs: the command's first 3 lines, each capped, secrets masked. */
 const commandDetail = (command: string) =>
@@ -745,8 +747,18 @@ function parseNotes(text: string): TaskNote[] {
   });
 }
 
-/** Claude Code quotes a background command's description in its summary, and that is the raw command when the model gave none. */
-const maskSummary = (note: TaskNote, command: boolean) => (command || /^Background command\b/.test(note.summary) ? maskSecrets(note.summary) : maskProse(note.summary));
+/** `Agent "<description>" failed: <error>`, `Background command "<description or command>" completed (exit code 0)`. */
+const SUMMARY = /^([A-Z][\w ]* ")([\s\S]*?)(" (?:finished|completed|failed|was|is|stopped)\b[\s\S]*)$/;
+
+/**
+ * Claude Code quotes a task's description in its summary, and a background command's is the raw command when the model
+ * gave none. The quote is masked as prose only when it is the model's own description; what follows it is error text.
+ */
+function maskSummary(summary: string, description: string | null): string {
+  const m = summary.match(SUMMARY);
+  if (!m) return maskSecrets(summary);
+  return m[1]! + (m[2] === description ? maskProse(m[2]!) : maskSecrets(m[2]!)) + maskSecrets(m[3]!);
+}
 
 function noteOutcome(note: TaskNote, summary: string): Outcome {
   switch (note.status) {
@@ -864,6 +876,7 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
     open: new Map(prior.open),
     tools: new Map(prior.tools),
     tasks: new Map(prior.tasks),
+    descriptions: new Map(prior.descriptions),
     rejected: new Map(prior.rejected),
     work: prior.work,
     todo: prior.todo,
@@ -888,6 +901,7 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
     put({ ...item, steps }, tail.work === item.id || steps.some((s) => s.state === "running"));
     if (steps.some((s) => s.id === toolId && s.state === "running")) return;
     tail.tools.delete(toolId);
+    tail.descriptions.delete(toolId);
     for (const [task, tool] of tail.tasks) if (tool === toolId) tail.tasks.delete(task);
   };
   /** "background command: sleep 75", "agent: sleeper one": the task a control tool points at, as its step shows it. */
@@ -1017,6 +1031,8 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
     const work: SessionItem = current?.kind === "work" ? { ...current, steps: [...current.steps, step] } : { kind: "work", id, at, steps: [step] };
     tail.work = work.id;
     tail.tools.set(toolId, work.id);
+    const description = str(input.description);
+    if (description !== null && (name === "Bash" || AGENT_TOOLS.has(name))) tail.descriptions.set(toolId, description);
     put(work, true);
   }
 
@@ -1054,7 +1070,8 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
   function noted(note: TaskNote, id: string, at: string) {
     const toolId = [note.toolUseId, note.taskId === null ? undefined : tail.tasks.get(note.taskId)].find((t): t is string => typeof t === "string" && tail.tools.has(t));
     const item = toolId === undefined ? undefined : tail.open.get(tail.tools.get(toolId)!);
-    const summary = maskSummary(note, item?.kind === "work" && item.steps.some((s) => s.id === toolId && s.tool === "Bash"));
+    const description = toolId === undefined ? (/^Agent "/.test(note.summary) ? (note.summary.match(SUMMARY)?.[2] ?? null) : null) : (tail.descriptions.get(toolId) ?? null);
+    const summary = maskSummary(note.summary, description);
     const outcome = noteOutcome(note, summary);
     if (toolId !== undefined && item) updateStep(item.id, toolId, (s) => settleStep(s, outcome, at));
     closeWork();

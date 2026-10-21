@@ -41,7 +41,7 @@ const SECRET_PATTERNS: readonly RegExp[] = [
 /** A keyword (any `[\w-]*` prefix allowed, so AWS_SECRET_ACCESS_KEY= and MY_TOKEN= match) then its value after = or :. */
 const ASSIGNED = String.raw`\b[\w-]*(?:password|passwd|pwd|secret|token|access[_-]?key|api[_-]?key|client[_-]?secret)["']?\s*[=:]\s*["']?`;
 /** A credential spoken in a header or a command line: "Bearer <value>". In prose the word after "token" is a word. */
-const SPOKEN = String.raw`\b(?:Bearer|Basic|token)\s+`;
+const SPOKEN = String.raw`(?:\b(?:Bearer|Basic|token)\s+)+`;
 const keyed = (lead: string) => new RegExp(`(${lead})([^\\s"'&,;]{3,})`, "gi");
 /** A URL's user:password, curl's -u user:pass, and mysql's -p<password>. The value is masked; the user is kept. */
 const URL_CREDENTIAL = /(:\/\/[^\s:/@]+:)([^\s@/]+)(@)/g;
@@ -60,8 +60,11 @@ const SHAPES: readonly Rule[] = [
   [LONG_RUN, (m) => (/[a-z]/.test(m) && /[A-Z]/.test(m) && /[0-9]/.test(m) ? masked(m.length) : m)],
 ];
 // Keyed rules run first so a keyed value is masked once, not twice.
-const SECRET_RULES: readonly Rule[] = [[keyed(`${SPOKEN}|${ASSIGNED}`), maskValue], URL_RULE, [CURL_USER, maskValue], [MYSQL_PASSWORD, (_, pre, flag, value) => pre + flag + masked(value.length)], ...SHAPES];
-const PROSE_RULES: readonly Rule[] = [[keyed(ASSIGNED), maskValue], URL_RULE, ...SHAPES];
+const COMMAND_LINE: readonly Rule[] = [URL_RULE, [CURL_USER, maskValue], [MYSQL_PASSWORD, (_, pre, flag, value) => pre + flag + masked(value.length)]];
+const SECRET_RULES: readonly Rule[] = [[keyed(`${SPOKEN}|${ASSIGNED}`), maskValue], ...COMMAND_LINE, ...SHAPES];
+/** In prose the word after "token" is masked only when it does not read as a word: a digit, = + /, or a capital inside it. */
+const spokenInProse: Rule = [keyed(SPOKEN), (m, lead, value) => (/\d|[=+/]|.[A-Z]/.test(value) ? lead + masked(value.length) : m)];
+const PROSE_RULES: readonly Rule[] = [[keyed(ASSIGNED), maskValue], spokenInProse, ...COMMAND_LINE, ...SHAPES];
 
 const applying = (rules: readonly Rule[]) => (text: string) => rules.reduce((out, [re, to]) => out.replace(re, to), text);
 
@@ -69,8 +72,8 @@ const applying = (rules: readonly Rule[]) => (text: string) => rules.reduce((out
 export const maskSecrets = applying(SECRET_RULES);
 
 /**
- * maskSecrets for words a model wrote about a call (a description, a summary): assignments and key shapes are masked,
- * but not the word after "token", "Basic" or "Bearer", which in prose is an ordinary word.
+ * maskSecrets for words a model wrote about a call (a description, a summary): the word after "token", "Basic" or
+ * "Bearer" is masked only when it looks like a value, since in prose it is usually an ordinary word.
  */
 export const maskProse = applying(PROSE_RULES);
 

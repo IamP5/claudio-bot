@@ -25,6 +25,10 @@ describe("maskSecrets", () => {
     expect(out).toBe("auth failed for «redacted:37 chars» at 3f2a9c1e5b7d4a6f8e0c2b4d6f8a0c2e4b6d8f0a");
   });
 
+  test("masks the value after a repeated credential word", () => {
+    expect(maskSecrets("gh auth login --with-token token tk9Hq2ZzLm")).toBe("gh auth login --with-token token «redacted:10 chars»");
+  });
+
   test("masks a header's bearer value", () => {
     expect(maskSecrets("curl -H 'Authorization: Bearer tok123456'")).not.toContain("tok123456");
   });
@@ -32,7 +36,15 @@ describe("maskSecrets", () => {
 
 describe("maskProse", () => {
   test("keeps the word after token, Basic or Bearer in a description", () => {
-    for (const s of ["Check token refresh handling", "Basic setup of the app", "Bearer of bad news"]) expect(maskProse(s)).toBe(s);
+    for (const s of ["Check token refresh handling", "Basic Setup of the app", "Bearer of bad news", "Rotate the token for staging"]) expect(maskProse(s)).toBe(s);
+  });
+
+  test("masks a credential a description quotes from a command", () => {
+    expect(maskProse("Run curl -H 'Authorization: Bearer abc123xyz789secret' x")).toBe("Run curl -H 'Authorization: Bearer «redacted:18 chars»' x");
+    expect(maskProse("Run curl -H 'Authorization: Basic dXNlcjpwYXNzd29yZA' x")).toBe("Run curl -H 'Authorization: Basic «redacted:18 chars»' x");
+    expect(maskProse("Run gh auth login --with-token token tk9Hq2ZzLm")).toBe("Run gh auth login --with-token token «redacted:10 chars»");
+    expect(maskProse("Run curl -u admin:hunter2pass https://h")).toBe("Run curl -u admin:«redacted:11 chars» https://h");
+    expect(maskProse("Run mysql -u root -pMyp4ssw0rd db")).toBe("Run mysql -u root -p«redacted:10 chars» db");
   });
 
   test("masks an assignment and a key shape", () => {

@@ -4,17 +4,41 @@ import SwiftUI
 struct MachinesSection: View {
     let onAdd: () -> Void
     @Environment(AppStore.self) private var store
+    @Environment(BridgeClient.self) private var client
+    @State private var removing: Machine?
 
     var body: some View {
         if store.has(.machines) {
             Section {
-                ForEach(store.machines) { MachineRow(machine: $0) }
+                ForEach(store.machines) { machine in
+                    MachineRow(machine: machine)
+                        .swipeActions {
+                            if MachineText.removal(machine) != nil {
+                                Button("Remove", role: .destructive) { removing = machine }
+                            }
+                        }
+                        .contextMenu {
+                            if MachineText.removal(machine) != nil {
+                                Button("Remove", systemImage: "trash", role: .destructive) { removing = machine }
+                            }
+                        }
+                }
                 Button("Add a computer", action: onAdd)
                     .disabled(store.machine == nil)
             } header: {
                 Text("Machines")
             } footer: {
                 Text("Agents run on the computer a bot picks, or the one you choose, with that computer's projects, connectors and access.")
+            }
+            .alert(
+                removing.flatMap(MachineText.removal)?.title ?? "",
+                isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
+                presenting: removing
+            ) { machine in
+                Button("Remove", role: .destructive) { client.send(.removeMachine(machineId: machine.id)) }
+                Button("Cancel", role: .cancel) {}
+            } message: { machine in
+                Text(MachineText.removal(machine)?.message ?? "")
             }
         }
     }

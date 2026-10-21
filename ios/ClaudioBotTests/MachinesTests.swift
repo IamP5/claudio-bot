@@ -57,6 +57,13 @@ private func project(_ id: String, on machine: Machine?) -> SessionProject {
         #expect(MachineText.enrollCommand(PairCode(code: "X", expiresAt: at, urls: [])) == nil)
     }
 
+    @Test func onlyAnEnrolledMachineCanBeRemovedAndTheAskSaysItKeepsItsFiles() {
+        #expect(MachineText.removal(home) == nil)
+        let ask = MachineText.removal(mac)
+        #expect(ask?.title == "Remove mac?")
+        #expect(ask?.message == "Its agents stop being reachable from your \(ThisDevice.casualNoun). mac keeps its files and transcripts.")
+    }
+
     @Test func aPickerMarksAnOfflineMachine() {
         #expect(MachineText.choice(mac) == "mac")
         #expect(MachineText.choice(machine("mac", online: false)) == "mac (offline)")

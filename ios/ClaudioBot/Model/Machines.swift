@@ -38,6 +38,15 @@ enum MachineText {
         machine.online ? machine.name : "\(machine.name) (offline)"
     }
 
+    /// The confirmation before removing a machine, nil for the home, which cannot be removed.
+    static func removal(_ machine: Machine) -> (title: String, message: String)? {
+        guard machine.role != .home else { return nil }
+        return (
+            "Remove \(machine.name)?",
+            "Its agents stop being reachable from your \(ThisDevice.casualNoun). \(machine.name) keeps its files and transcripts."
+        )
+    }
+
     /// What another computer runs to enroll with this code, at the first address the home listed.
     static func enrollCommand(_ code: PairCode) -> String? {
         code.urls?.first.map { "claudiobot machine enroll \($0) \(code.code)" }

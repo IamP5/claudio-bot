@@ -37,7 +37,8 @@ enum Demo {
         default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions, .memory, .mute, .skills, .spend]
         }
         store.apply(.hello(Hello(
-            protocol: oldBridge ? 2 : Wire.protocolVersion, features: features, machine: "MacBook Pro", userName: "Alex", bots: bots,
+            protocol: oldBridge ? 2 : Wire.protocolVersion, features: features,
+            machine: features.contains(.machines) ? machines[0].name : "MacBook Pro", userName: "Alex", bots: bots,
             world: features.contains(.machines) ? World(id: WorldID("w_demo"), name: "Alex's bots") : nil,
             machines: features.contains(.machines) ? machines : nil
         )))
@@ -208,6 +209,9 @@ enum Demo {
             store.apply(.machineCode(PairCode(
                 code: "R4TW-9HJC", expiresAt: .now + 600, urls: ["http://omarchy.tail1234.ts.net:7878", "http://192.168.1.30:7878"]
             )))
+            return
+        case let .removeMachine(machineId):
+            store.apply(.machines(store.machines.filter { $0.id != machineId }))
             return
         case .refreshUsage:
             store.apply(.usage(usage(screen, ago: 0)))

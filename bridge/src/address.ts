@@ -44,7 +44,6 @@ export function enrollUrls(names: Names, lan: string[], port: number): { urls: s
   return { urls: bridgeUrls(names, lan, port).map(base), warning: LAN_ENROLL_WARNING };
 }
 
-/** Whether any of these enroll addresses is on the tailnet. */
 export const onTailnet = (urls: readonly string[]) =>
   urls.some((u) => {
     const host = new URL(u).hostname;

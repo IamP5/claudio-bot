@@ -67,7 +67,6 @@ struct MachineRow: View {
     }
 }
 
-/// A short label in a capsule, tinted by its color.
 struct TagChip: View {
     let text: String
     var color: Color = Theme.secondary

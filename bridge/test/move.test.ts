@@ -131,8 +131,6 @@ describe("pure merges", () => {
   });
 });
 
-// ---- Two homes on disk.
-
 const MAC: Omit<MoveDeps, "home"> = { machine: "Tuba's Mac", now: () => new Date(at) };
 const OMARCHY: Omit<MoveDeps, "home"> = { machine: "omarchy", now: () => new Date("2026-10-20T09:00:00.000Z") };
 const DIGEST_AT = "2026-10-21T07:00:00.000Z";

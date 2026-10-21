@@ -24,7 +24,6 @@ export type Registry = {
   get(id: MachineId): MachineRecord | null;
   /** Same id and key again: a no-op. Same id, another key: refused, since only a forged or swapped file does that. */
   enroll(m: { id: MachineId; name: string; publicKey: string }): Enrolled;
-  /** Updates the fields given and saves. */
   update(id: MachineId, patch: Partial<Pick<MachineRecord, "lastSeenAt" | "ackedSeq" | "profile" | "name">>): void;
   /** Unpins the machine, so its link is refused from then on. False: it was not enrolled. */
   remove(id: MachineId): boolean;

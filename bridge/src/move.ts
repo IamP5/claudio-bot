@@ -195,8 +195,6 @@ export function freeze(world: World, moveId: MoveId, at: string, machine: string
   return move;
 }
 
-// ---- Files.
-
 /** A bot's scratch clones (work/) and Claude Code's own marker stay with the machine. */
 const STAYS = new Set(["work", ".claude/.cc-writes"]);
 
@@ -264,8 +262,6 @@ function landFile(home: string, file: BundleFile) {
   if (local !== null && Buffer.from(body).equals(Buffer.from(local))) return;
   writeAtomic(path, body);
 }
-
-// ---- The bundle at the boundary.
 
 const BUNDLE = z.object({
   format: z.literal(1),
@@ -406,8 +402,6 @@ export function finishMove(deps: MoveDeps, moveId: string): Finished {
   flushNow(world, deps.home);
   return { kind: "finished", bots: gone.length };
 }
-
-// ---- claudiobot world <export|import|finish>.
 
 export type WorldCommandDeps = MoveDeps & { cwd: string; out: (text: string) => void };
 

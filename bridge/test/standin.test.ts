@@ -14,8 +14,8 @@ import { emptyWorld, newBot, post, type Actor, type AgentRecord, type World } fr
 import { PRIVATE } from "../src/private";
 import { FakeQuery, cleanup, flush, result, roots, runBash, testProfile } from "./hub-kit";
 
-// Phase 0 of docs/handoff-machines.md: a machine bridge holds no real bots, only a stand-in BotRecord per bot whose
-// agents run there. The real gate, agents and ledger run against it the way the hub wires them.
+// A machine bridge holds no real bots, only a stand-in BotRecord per bot whose agents run there. The real gate,
+// agents and ledger run against it the way the hub wires them.
 
 afterEach(cleanup);
 

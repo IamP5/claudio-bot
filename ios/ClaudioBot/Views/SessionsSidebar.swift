@@ -244,7 +244,7 @@ struct SessionsSidebar: View {
 
     private func sessionRow(_ row: SessionRow, depth: Int = 0, isLast: Bool = false) -> some View {
         let bot = row.agent.flatMap { store.bots[$0.botId] }
-        return SessionRowView(row: row, avatar: bot?.avatar, depth: depth, isLast: isLast, now: now)
+        return SessionRowView(row: row, avatar: bot?.avatar, machine: store.chipName(row.machine), depth: depth, isLast: isLast, now: now)
             .equatable()
             .tag(Selection.session(row.id))
         .listRowSeparator(.hidden)

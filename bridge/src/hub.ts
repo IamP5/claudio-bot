@@ -548,7 +548,7 @@ export function createHub(deps: HubDeps): Hub {
     const job = section(readOwn(claudeMdOf(bot.id)) ?? "", "Job");
     return [
       "[Standing brief: this replaces what you were told before where they differ.]",
-      persona({ name: bot.name, userName }),
+      persona({ name: bot.name, userName, machine: deps.profile.name }),
       ...(job === null ? [] : [`\nYour job: ${job}`]),
     ].join("\n");
   }
@@ -630,7 +630,7 @@ export function createHub(deps: HubDeps): Hub {
           cwd: homes.homeOf(bot.id),
           resume: bot.session.id ?? undefined,
           settingSources: ["user", "project"],
-          systemPrompt: { type: "preset", preset: "claude_code", append: persona({ name: bot.name, userName }) },
+          systemPrompt: { type: "preset", preset: "claude_code", append: persona({ name: bot.name, userName, machine: deps.profile.name }) },
           permissionMode: "auto",
           mcpServers: { claudio: botToolServer(bot.id, actions) },
           // A bot asks with its own ask tool, which posts a card instead of blocking the turn. Plan mode would wait for

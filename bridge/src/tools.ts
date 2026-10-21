@@ -92,7 +92,7 @@ export function botToolServer(botId: BotId, act: BotActions) {
       (a) => reply(() => act.messageAgent(botId, a)),
       always,
     ),
-    list_projects: tool("list_projects", "List the git projects on this Mac: name, path, branch and GitHub repo.", {}, () => reply(() => act.listProjects()), always),
+    list_projects: tool("list_projects", "List the git projects on this computer: name, path, branch and GitHub repo.", {}, () => reply(() => act.listProjects()), always),
     message_bot: tool(
       "message_bot",
       "Send a message to another bot, by name, title or id.",
@@ -116,7 +116,7 @@ export function botToolServer(botId: BotId, act: BotActions) {
     ),
     set_routine: tool(
       "set_routine",
-      "Create or update (by name) a routine: a prompt you receive when it fires. trigger cron (default) fires on schedule, a 5-field cron in the Mac's local time (minute hour day-of-month month day-of-week, Sunday 0). trigger webhook fires when a program on this Mac calls its webhook; the user makes its token on the phone, and the call's payload reaches you as data.",
+      "Create or update (by name) a routine: a prompt you receive when it fires. trigger cron (default) fires on schedule, a 5-field cron in this computer's local time (minute hour day-of-month month day-of-week, Sunday 0). trigger webhook fires when a program on this computer calls its webhook; the user makes its token on the phone, and the call's payload reaches you as data.",
       {
         name: z.string().min(1),
         trigger: z.enum(["cron", "webhook"]).default("cron"),

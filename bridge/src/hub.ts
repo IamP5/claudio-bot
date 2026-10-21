@@ -1356,6 +1356,8 @@ export function createHub(deps: HubDeps): Hub {
         const held = agentsOf(bot.id).flatMap((a) => (a.agent.worktree ? [a.agent.worktree.branch] : []));
         if (held.length > 0 && message.force !== true)
           return error(`${bot.name}'s agents still hold worktrees on ${held.join(", ")}. Remove them from each agent, or delete anyway to keep them on the Mac.`);
+        // What still waits for a machine on its behalf would start agents for a bot that is gone.
+        dispatch.forget(bot.id);
         // Another machine's agents of the bot stop there; their records stay on that machine.
         for (const a of mirror.agents()) {
           if (a.agent.botId === bot.id && a.agent.status === "working") void dispatch.send(a.machine, { kind: "agent.stop", intentId: newIntentId(), agentId: a.agent.id }, { botId: null, what: "" });

@@ -153,3 +153,20 @@ test("an intent past its TTL is dropped at the tick with its expiry, and never s
   await h.reply({ ok: true });
   expect(h.sent).toEqual(["later"]);
 });
+
+test("forgetting a bot drops what waits on its behalf, with no expiry, and leaves the rest", async () => {
+  const h = harness();
+  const d = h.open();
+  await d.send(MAC, message("for b1"), meta("A message"));
+  await d.send(MAC, stop(), { botId: null, what: "Stopping Fix" });
+  d.forget(B1);
+  expect(h.open().nextDeadline()).toBe(plus(10 * MIN));
+
+  h.at(new Date(plus(DAY + MIN)));
+  d.tick(new Date(plus(DAY + MIN)));
+  expect(h.expired.map((q) => q.what)).toEqual(["Stopping Fix"]);
+  h.set(true);
+  d.drain(MAC);
+  await h.tick();
+  expect(h.sent).toEqual([]);
+});

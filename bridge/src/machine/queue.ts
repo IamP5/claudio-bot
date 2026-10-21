@@ -98,6 +98,8 @@ export type Dispatch = Tickable & {
   send(machine: MachineId, intent: QueuedIntent, meta: { botId: BotId | null; what: string; cardExpiresAt?: string | null }): Promise<Dispatched>;
   /** Sends what waits for the machine, in order, while it stays online. Called when it links. */
   drain(machine: MachineId): void;
+  /** The bot was deleted: what waits on its behalf is dropped, with no expiry note, since its chat is gone. */
+  forget(botId: BotId): void;
 };
 
 export function createDispatch(deps: {
@@ -169,6 +171,15 @@ export function createDispatch(deps: {
       return answer;
     },
     drain: (id) => void drain(id),
+    forget(botId) {
+      for (const q of queue.list().filter((e) => e.botId === botId)) {
+        queue.remove(q.intent.intentId);
+        deps.log(`queue: ${q.what} dropped, since its bot was deleted`);
+        const waiter = waiters.get(q.intent.intentId);
+        waiters.delete(q.intent.intentId);
+        waiter?.({ kind: "applied", applied: { ok: false, reason: "This bot no longer exists." } });
+      }
+    },
     tick: (now) => expire(now.toISOString()),
     nextDeadline: () => queue.list().reduce<string | null>((min, q) => (min === null || q.expiresAt < min ? q.expiresAt : min), null),
   };

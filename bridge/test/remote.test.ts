@@ -237,3 +237,14 @@ test("the Machines block names chips for Chrome and computer use only, and is em
   const mac = { ...m, name: "Mac", home: false, platform: "darwin" as const, connectors: [{ kind: "chrome" as const }, { kind: "other" as const }, { kind: "computer-use" as const }] };
   expect(machinesBlock([m, mac], null).split("\n").slice(1)).toEqual(["- Omarchy (this computer, online): Linux, guarded, sandboxed.", "- Mac (online): macOS, guarded, sandboxed. Chrome, Computer use."]);
 });
+
+test("deleting a bot drops the start still waiting for its offline machine, so nothing starts when it links", async () => {
+  const r = home();
+  r.flip(false);
+  await turn(r);
+  await callTool(r.h.q(), "start_agent", { title: "Push fix", prompt: "Push it.", project: "shop", machine: "MacBook" });
+  expect(await r.h.hub.handle({ type: "delete_bot", botId: B })).toEqual([]);
+  r.flip(true);
+  await flush();
+  expect(r.intents).toEqual([]);
+});

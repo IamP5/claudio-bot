@@ -61,13 +61,17 @@ A lease is the directory `$CLAUDIOBOT_VERIFY_DIR/leases/<device>/`, made with `m
 
 ## The app on a leased device, and pairing
 
-`$R sim-build` (and `run --sim`) builds the Debug app once per `ios/` tree into `$CLAUDIOBOT_VERIFY_DIR/ios-build/` with `xcodebuild … -destination 'generic/platform=iOS Simulator'`, so the build touches no device; a lock keeps concurrent runs from building twice. The runner installs it and launches it with `-pairingVault claudiobot-ux-<device>`, a Debug launch argument that keeps the pairing in a throwaway Keychain item.
+`$R sim-build` (and `run --sim`) builds the Debug app once per `ios/` tree into `$CLAUDIOBOT_VERIFY_DIR/ios-build/` with `xcodebuild … -destination 'generic/platform=iOS Simulator'`, so the build touches no device; a lock keeps concurrent runs from building twice. The runner installs it and launches it with three Debug launch arguments:
 
-What is automated:
+- `-pairingVault claudiobot-ux-<device>` keeps the pairing in a throwaway Keychain item.
+- `-pairingAutoConfirm YES` confirms a pairing link as soon as the confirmation would show, since `simctl` cannot tap Pair. It is compiled out of Release.
+- `-sidebarMode sessions` opens on the Sessions list. It sets the sidebar choice the app already keeps in UserDefaults, through the launch-argument domain, so it needs no app code.
+
+The pairing:
 
 1. The runner asks its bridge for a one-time code over the socket (`pair_code`).
-2. It opens `claudiobot://pair?url=ws%3A%2F%2F127.0.0.1%3A<port>%2Fws&code=<code>` with `xcrun simctl openurl`. The app shows its confirmation ("Nothing reaches the bridge before you tap Pair"), captured as `screenshots/pair-confirm.png`.
+2. It opens `claudiobot://pair?url=ws%3A%2F%2F127.0.0.1%3A<port>%2Fws&code=<code>` with `xcrun simctl openurl`, and the app confirms it on its own. `screenshots/pair-link.png` is the app 3 s later.
 3. It polls the bridge's `devices` list for up to `--pair-wait` seconds (default 120). A new device means the app paired, and `paired` is true in the report.
 4. `open-thread` uses `claudiobot://session/<id>`, and `app background|foreground` launches Settings over the app, then the app again.
 
-What is not: the tap on **Pair**. `simctl` has no input command, no `idb` or similar is installed, and the app has no launch argument that confirms a pairing link on its own (`-demo`, `-demoScreen` and `-pairingVault` are the only Debug hooks; demo mode runs no bridge). An agent with the iOS Simulator tool taps Pair on the leased device while the runner prints `PAIR: tap "Pair" … within Ns`. Unpaired, every screenshot is still taken and the simulator items show the unpaired app, and a scenario that needs a paired app (S3) reports its precondition failed. Reaching the Sessions sidebar (S7.5) needs a tap too; threads open by deep link.
+A paired app lists every project on the Mac the bridge runs on, not only the run's seed project. A screenshot of the Sessions list (`pair-link`, `after-pairing`, S7's `mixed`) can show real session titles, so judge it in place and never copy it into the repo.

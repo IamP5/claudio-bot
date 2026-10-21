@@ -24,3 +24,19 @@ Behaviors the runs surfaced that shaped the scenarios:
 - The bridge never marks a watched thread unread, so scenarios leave a thread before judging unread and reopen it to judge the thread.
 
 Simulator lane, S3 on `ClaudioBot-UX-1`: lease, boot, install, launch with `-pairingVault`, the pairing link (`step0-reports/S3-screenshots/pair-confirm.png` shows "Pair with 127.0.0.1:55459?"), the deep link to the thread, Settings over the app and back, and five screenshots, then shutdown and release. The lease proof is `step0-lease-proof.txt`.
+
+## S3 paired unattended (`c11fb96`)
+
+`run S3 --sim` on `ClaudioBot-UX-1` with `-pairingAutoConfirm YES`: the app paired with the run's bridge with no tap, 0.3 s after the runner began polling the devices list. Every precondition held, so S3 was judged for the first time. 115 s, $0.0097. The report is `step0-reports/S3-sim-paired.md`, with `thread-before`, `while-away` and `thread-after` in `step0-reports/S3-sim-paired/`.
+
+| item | verdict | why |
+| --- | --- | --- |
+| S3.1 push says the work finished | fail | no push after `bg-done` (one push in the run, before it) |
+| S3.2 the push opens the session | fail | no push links to the session |
+| S3.3 the row turns unread | fail | the row read `unread=false`, status idle |
+| S3.4 the thread gains the result on return | pass | a new assistant message after `bg-done` |
+| S3.5 before leaving, the thread shows the command running | fail (judged from `thread-before`) | the thread reads "Ran 1 command" and "started" with no running indicator, so it looks finished while the 60 s command runs |
+| S3.6 a notification while away | fail (judged from `while-away`) | Settings in front, no banner |
+| S3.7 back in the app, the result and no stale indicator | pass (judged from `thread-after`) | the wake-turn reply says the command finished, and nothing reads running |
+
+`pair-link.png` and `after-pairing.png` were not copied here: the app lists every project on the Mac the bridge runs on, so they show real session titles. The same holds for any `--sim` screenshot of the Sessions list, S7's `mixed` included. All three pool devices read Shutdown after the run.

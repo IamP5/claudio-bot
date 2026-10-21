@@ -272,12 +272,44 @@ const STAMP_DIR = /^[0-9a-f]{40}(\+[0-9a-f]+)?$/;
 /** One ios/ tree's Debug build, in its own derived-data folder ios-build/<stamp>/ that no other tree writes. */
 export type Build = { stamp: string; dir: string; app: string };
 
-/** The ios/ tree's hash, plus a hash of any uncommitted change under ios/. */
+/** The ios/ tree's hash, plus a hash of the content of any uncommitted change under ios/, untracked files included. */
 export function treeStamp() {
   const tree = run(["git", "-C", REPO, "rev-parse", "HEAD:ios"]).out;
-  const dirty = run(["git", "-C", REPO, "status", "--porcelain", "--", "ios"]).out;
-  return `${tree}${dirty ? `+${Bun.hash(dirty).toString(16)}` : ""}`;
+  const diff = Bun.spawnSync(["git", "-C", REPO, "diff", "HEAD", "--binary", "--", "ios"], { stdout: "pipe" }).stdout;
+  const untracked = run(["git", "-C", REPO, "ls-files", "-o", "--exclude-standard", "-z", "--", "ios"]).out.split("\0").filter(Boolean);
+  if (!diff.length && !untracked.length) return tree;
+  const h = new Bun.CryptoHasher("sha256").update(diff);
+  for (const f of untracked.sort()) h.update(`\0${f}\0`).update(readFileSync(join(REPO, f)));
+  return `${tree}+${h.digest("hex").slice(0, 16)}`;
 }
+
+const users = (stamp: string) => join(BUILDS, `${stamp}.users`);
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+const marked = new Set<string>();
+/** Marks a build as used by this process until it exits, so no other run prunes it while this one waits for a lease. */
+function markInUse(stamp: string) {
+  if (marked.has(stamp)) return;
+  marked.add(stamp);
+  const f = join(users(stamp), String(process.pid));
+  mkdirSync(users(stamp), { recursive: true });
+  writeFileSync(f, new Date().toISOString());
+  process.on("exit", () => rmSync(f, { force: true }));
+}
+/** A build is in use while a live process holds a marker for it; markers of dead pids are ignored. */
+const inUse = (stamp: string) => {
+  try {
+    return readdirSync(users(stamp)).some((pid) => alive(Number(pid)));
+  } catch {
+    return false;
+  }
+};
 
 const buildFor = (stamp: string): Build => {
   const dir = join(BUILDS, stamp);
@@ -292,7 +324,7 @@ const builtStamp = (b: Build) => {
   }
 };
 
-/** Keeps the KEEP_BUILDS most recently used builds, and never removes one that is building. */
+/** Keeps the KEEP_BUILDS most recently used builds, and never removes one that is building or in use by a live run. */
 function pruneBuilds() {
   const used = (n: string) => {
     try {
@@ -301,9 +333,11 @@ function pruneBuilds() {
       return 0;
     }
   };
-  const idle = readdirSync(BUILDS).filter((n) => STAMP_DIR.test(n) && !existsSync(join(BUILDS, `${n}.lock`)));
-  for (const n of idle.sort((a, b) => used(b) - used(a)).slice(KEEP_BUILDS)) {
+  const stamps = readdirSync(BUILDS).filter((n) => STAMP_DIR.test(n)).sort((a, b) => used(b) - used(a));
+  for (const n of stamps.slice(KEEP_BUILDS)) {
+    if (existsSync(join(BUILDS, `${n}.lock`)) || inUse(n)) continue;
     rmSync(join(BUILDS, n), { recursive: true, force: true });
+    rmSync(users(n), { recursive: true, force: true });
     log(`pruned the iOS build ${n.slice(0, 12)}`);
   }
 }
@@ -317,6 +351,7 @@ export async function buildApp(): Promise<Build> {
   const b = buildFor(treeStamp());
   const lock = `${b.dir}.lock`;
   mkdirSync(BUILDS, { recursive: true });
+  markInUse(b.stamp);
   for (;;) {
     if (builtStamp(b) === b.stamp) {
       const now = new Date();

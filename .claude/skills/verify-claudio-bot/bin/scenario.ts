@@ -23,13 +23,13 @@ const log = (s: string) => console.log(`[${new Date().toISOString()}] ${s}`);
 class PreconditionFailed extends Error {}
 
 /** The run whose bridge is up, so every way out (the end, SIGINT, SIGTERM, a crash) stops it. */
-let live: { run: Run; out: string } | null = null;
+let live: { id: string; out: string } | null = null;
 function cleanupBridge() {
   if (!live) return null;
-  const { run, out } = live;
+  const { id, out } = live;
   live = null;
-  log(`cleaning up bridge run ${run.id}`);
-  return sh(["bun", CONTROL, "cleanup", "--run", run.id], join(out, "cleanup.log")).out;
+  log(`cleaning up bridge run ${id}`);
+  return sh(["bun", CONTROL, "cleanup", "--run", id], join(out, "cleanup.log")).out;
 }
 process.on("exit", cleanupBridge);
 for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]] as const) process.on(sig, () => process.exit(code));
@@ -376,10 +376,11 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
       if (ui.contentSize || ui.appearance) report.ui = ui;
     }
     const launched = sh(["bun", CONTROL, "launch", "--model", "haiku"], join(out, "launch.log"));
+    const started = launched.out.match(/STARTED run=(\S+)/)?.[1];
+    if (started) live = { id: started, out };
     const runId = launched.out.match(/READY run=(\S+)/)?.[1];
     if (!launched.ok || !runId) throw new Error(`launch failed; see ${join(out, "launch.log")}`);
     run = JSON.parse(readFileSync(join(BASE, "runs", runId, "run.json"), "utf8")) as Run;
-    live = { run, out };
     report.run = runId;
     report.build = run.rev;
     relay = new Relay(run.port);
@@ -573,7 +574,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
   }
   phone?.drop();
   relay?.close();
-  if (run) report.bridgeEvidence = cleanupBridge()?.match(/evidence kept at (\S+?):/)?.[1] ?? null;
+  report.bridgeEvidence = cleanupBridge()?.match(/evidence kept at (\S+?):/)?.[1] ?? null;
   held?.release("scenario done");
   writeFileSync(join(out, "report.json"), JSON.stringify(report, null, 2));
   writeFileSync(join(out, "report.md"), reportMarkdown(sc, report));

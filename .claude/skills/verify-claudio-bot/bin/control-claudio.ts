@@ -323,6 +323,8 @@ console.log("ntfy-sink " + s.port);
   const run: Run = { id, dir, home, roots, worktrees, port, webhookPort, ntfyPort, bridgePid: bridge.pid, ntfyPid: ntfy.pid, model, rev, dirty, startedAt: new Date().toISOString(), budgetUsd };
   writeFileSync(join(dir, "run.json"), JSON.stringify(run, null, 2));
   writeFileSync(CURRENT, id);
+  // Printed before the bridge is ready, so a caller can clean up the run even if launch fails or is interrupted from here on.
+  console.log(`STARTED run=${id}`);
 
   let code: string | undefined;
   for (let i = 0; i < 600 && !code; i++) {

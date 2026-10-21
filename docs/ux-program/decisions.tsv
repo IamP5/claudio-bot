@@ -85,3 +85,4 @@ ts	decision	why
 2026-10-21T22:12:05Z	G6: a stop refusal clears once nothing runs; the thread keeps the bridge notice as the record	Claude Code can take a stop late, so a refusal can stop being true
 2026-10-21T22:12:05Z	G6: Edit and resend / Edit on a queued message appends to the draft instead of replacing it	nothing the user typed is lost
 2026-10-21T22:12:05Z	G6: composer chips stop growing at AX2 and the error line at AX3; spoken labels unchanged	uncapped, AX5 pushed the text field off screen
+2026-10-21T23:19:23Z	G6: at accessibility sizes the composer field shows 2 lines and scrolls; the error line under the composer stops growing at AX1 and the status line at AX3	so a long draft never draws over chips or the refusal

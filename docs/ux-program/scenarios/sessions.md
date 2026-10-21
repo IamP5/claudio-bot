@@ -363,6 +363,40 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S6.8 | state | protocol | The failure outlives a bridge restart: the row and the thread still say the run failed. | At mark after-restart, the row reads failed (or its outcome is failed or lost) and the thread still holds a notice that says the run failed or that the bridge restarted. | After the restart the row reads idle, or the thread lost the notice. |
 | S6.9 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
 
+## S6b A thread frame lost on its way to the app
+
+Needs the simulator: yes.
+
+**User journey.**
+
+1. The user watches a command run in the app. The one frame that says it finished never reaches the phone, as a flaky link or a frame the app cannot read would lose it.
+2. The app must see the gap in the thread's revs on the next frame, ask for the thread again, and show the command done, as a fresh open would, with nothing for the user to do.
+
+**Setup.**
+
+- New session `s6b` in demo (haiku, mode default): "Run exactly this Bash command in the foreground (not in the background): perl -e 'sleep 12' && echo hi > s6b.txt Then reply with one line: done."
+- Wait up to 90 s for s6b's turn to start; mark `s6b-started`.
+- Open `s6b`'s thread: in the app by claudiobot://session/<id> (simulator lane), or watch it again if the phone had left it (protocol lane).
+- Wait up to 120 s for the sleep step to run; mark `call-running`.
+- The relay loses the frame that says the command is done on its way to the app (simulator lane), within 120 s. Mark `lost`.
+- Wait up to 90 s for the turn to end; mark `s6b-ended`.
+- Wait 4 s.
+- Screenshot `after-loss` (simulator lane).
+
+**Preconditions** (any failure fails the scenario):
+
+- session s6b was created
+- the app was paired
+- one frame was lost on its way to the app
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S6b.1 | state | protocol | The app notices the lost frame and asks for the thread again, from scratch. | The app sends watch_session for the session with after null within 2 s of the first thread frame that reached it after the loss. | The app never watches the thread again, asks to resume from a position past the loss, or waits longer than 2 s. |
+| S6b.2 | state | protocol | What the lost frame said reaches the app anyway. | After that watch, a snapshot of the session reaches the app with the Bash step ok. | No snapshot reaches the app, or it lacks the finished step. |
+| S6b.3 | state | simulator (after-loss) | The thread on screen shows the command done and the reply, with nothing left running. | A done step and the reply. | A step still running after the turn ended, or no reply. |
+
 ## S7 Twelve sessions at once
 
 Needs the simulator: no (simulator items run with `--sim`).

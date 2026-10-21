@@ -125,20 +125,127 @@ test("a routine run's bubbles wait for its result, then post together with one p
   expect(h.routine.runs.map((r) => r.status)).toEqual(["ok"]);
 });
 
-test("a routine run that asks posts what led up to the card at once, and is not quiet", async () => {
+test("a routine run that asks posts what led up to the card just ahead of the card, and is not quiet", async () => {
   const h = await fired();
 
-  h.q().emit(assistant(text("The deploy failed twice."), toolUse("mcp__claudio__ask"), toolUse("mcp__claudio__routine_no_update")));
+  h.q().emit(assistant(text("The deploy failed twice.")), assistant(toolUse("mcp__claudio__ask")));
   await flush();
-  expect(bubbles(h.bot)).toEqual(["The deploy failed twice."]);
+  expect(chatFrames(h.frames)).toEqual([]);
 
-  h.q().emit(result());
+  await callTool(h.q(), "ask", { question: "Roll back?", options: ["Yes", "No"] });
+  expect(chatFrames(h.frames)).toEqual(["bot The deploy failed twice.", "question Roll back?"]);
+
+  h.q().emit(assistant(toolUse("mcp__claudio__routine_no_update")), result());
   await flush();
-  expect(h.pushes.map((p) => p.reason)).toEqual(["message"]);
+  expect(h.pushes.map((p) => p.reason)).toEqual(["message", "card"]);
   expect(h.routine.runs.map((r) => r.status)).toEqual(["ok"]);
 });
 
-test("a user's turn posts each bubble as it arrives and pushes once", async () => {
+/** A user's turn on a fresh bot, sent and read. */
+async function asked(text: string) {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  await h.hub.handle({ type: "send", botId: b.id, text, uploads: [] });
+  await flush();
+  return { ...h, bot: b };
+}
+
+/** The bot's chat messages as the phone receives them, in order: kind and text or question. */
+const chatFrames = (frames: ServerMessage[]) =>
+  frames.flatMap((f) => (f.type !== "message" ? [] : f.message.kind === "bot" ? [`bot ${f.message.text}`] : f.message.kind === "question" ? [`question ${f.message.question}`] : []));
+
+test("text that leads up to a question card reaches the phone right before the card, never ahead of it", async () => {
+  const h = await asked("what next?");
+  h.q().emit(assistant(text("Two ways to go.")), assistant(toolUse("mcp__claudio__ask")));
+  await flush();
+  expect(chatFrames(h.frames)).toEqual([]);
+
+  await callTool(h.q(), "ask", { question: "Which first?", options: ["A", "B"] });
+  expect(chatFrames(h.frames)).toEqual(["bot Two ways to go.", "question Which first?"]);
+  const sent = h.frames.filter((f) => f.type === "message").map((f) => f.type === "message" && f.message.kind);
+  expect(sent.slice(-2)).toEqual(["bot", "question"]);
+
+  h.q().emit(assistant(text("I've posted the question.")), result());
+  await flush();
+  expect(chatFrames(h.frames)).toEqual(["bot Two ways to go.", "question Which first?"]);
+  expect(h.pushes.map((p) => p.reason)).toEqual(["message", "card"]);
+});
+
+test("text written before a tool call goes out once the call is read, ahead of a later question card", async () => {
+  const h = await asked("what next?");
+  h.q().emit(assistant(text("Checking the repo.")), assistant(toolUse("Read")));
+  await flush();
+  expect(chatFrames(h.frames)).toEqual(["bot Checking the repo."]);
+
+  h.q().emit(assistant(text("Found two branches.")), assistant(toolUse("mcp__claudio__ask")));
+  await flush();
+  expect(chatFrames(h.frames)).toEqual(["bot Checking the repo."]);
+
+  await callTool(h.q(), "ask", { question: "Which branch?", options: ["main", "dev"] });
+  expect(chatFrames(h.frames)).toEqual(["bot Checking the repo.", "bot Found two branches.", "question Which branch?"]);
+});
+
+/** The partial message that opens a block, as Claude Code streams it (test/transcripts/own-ask.ndjson). */
+const starts = (block: object, parent: string | null = null) =>
+  ({ type: "stream_event", event: { type: "content_block_start", index: 1, content_block: block }, parent_tool_use_id: parent, uuid: "e", session_id: "s_1" }) as unknown as SDKMessage;
+
+test("a bot's query streams partial messages", async () => {
+  const h = await asked("hi");
+  expect(h.q().options.includePartialMessages).toBe(true);
+});
+
+test("text before a tool call goes out when the call starts, not after its whole input streams, and only once", async () => {
+  const h = await asked("write it");
+  h.q().emit(assistant(text("Writing the brief.")), starts({ type: "tool_use", id: "t_sub", name: "Read", input: {} }, "t_agent"));
+  await flush();
+  expect(chatFrames(h.frames)).toEqual([]);
+
+  h.q().emit(starts({ type: "tool_use", id: "t_w", name: "Write", input: {} }));
+  await flush();
+  expect(chatFrames(h.frames)).toEqual(["bot Writing the brief."]);
+
+  h.q().emit(assistant(toolUse("Write")), assistant(text("Done.")), starts({ type: "text", text: "" }), result());
+  await flush();
+  expect(chatFrames(h.frames)).toEqual(["bot Writing the brief.", "bot Done."]);
+  expect(bubbles(h.bot)).toEqual(["Writing the brief.", "Done."]);
+});
+
+test("text before an ask's start waits for its card, then goes out just ahead of it, once", async () => {
+  const h = await asked("what next?");
+  h.q().emit(assistant(text("Two ways to go.")), starts({ type: "tool_use", id: "t_ask", name: "mcp__claudio__ask", input: {} }));
+  await flush();
+  expect(chatFrames(h.frames)).toEqual([]);
+
+  h.q().emit(assistant(toolUse("mcp__claudio__ask")));
+  await flush();
+  expect(chatFrames(h.frames)).toEqual([]);
+
+  await callTool(h.q(), "ask", { question: "Which first?", options: ["A", "B"] });
+  const sent = h.frames.filter((f) => f.type === "message").map((f) => f.type === "message" && f.message.kind);
+  expect(sent.slice(-2)).toEqual(["bot", "question"]);
+  expect(chatFrames(h.frames)).toEqual(["bot Two ways to go.", "question Which first?"]);
+
+  h.q().emit(result());
+  await flush();
+  expect(bubbles(h.bot)).toEqual(["Two ways to go."]);
+  expect(h.pushes.map((p) => p.reason)).toEqual(["message", "card"]);
+});
+
+test("text that led up to an ask that posted no card still reaches the chat when the turn ends, with its push", async () => {
+  const h = await asked("what next?");
+  h.q().emit(assistant(text("Two ways to go.")), assistant(toolUse("mcp__claudio__ask")));
+  await flush();
+  expect(bubbles(h.bot)).toEqual([]);
+
+  h.q().emit(result());
+  await flush();
+  expect(bubbles(h.bot)).toEqual(["Two ways to go."]);
+  expect(h.pushes.map((p) => p.reason)).toEqual(["message"]);
+});
+
+test("a user's turn posts each bubble once the model's next block arrives, and pushes once", async () => {
   const world = emptyWorld();
   const b = bot("eng");
   world.bots.set(b.id, b);
@@ -147,6 +254,9 @@ test("a user's turn posts each bubble as it arrives and pushes once", async () =
   await flush();
 
   h.q().emit(assistant(text("Looking.")));
+  await flush();
+  expect(bubbles(b)).toEqual([]);
+  h.q().emit(assistant(toolUse("Read")));
   await flush();
   expect(bubbles(b)).toEqual(["Looking."]);
   h.q().emit(assistant(text("All green.")), result());
@@ -166,7 +276,7 @@ test("a turn whose first bubble was not pushed tries again with the next one", a
 
   h.q().emit(assistant(text("Looking.")));
   await flush();
-  h.q().emit(assistant(text("All green.")));
+  h.q().emit(assistant(text("All green.")), result());
   await flush();
 
   const [looking, green] = b.messages.filter((m) => m.kind === "bot").map((m) => m.id);
@@ -204,7 +314,7 @@ test("a turn still running 20 s after its push pushes its last bubble when it en
   const h = hubOver(world);
   await h.hub.handle({ type: "send", botId: b.id, text: "fix the build", uploads: [] });
   await flush();
-  h.q().emit(assistant(text("On it.")));
+  h.q().emit(assistant(text("On it.")), assistant(toolUse("Bash")));
   await flush();
 
   later(25_000);

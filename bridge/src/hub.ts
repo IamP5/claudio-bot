@@ -51,7 +51,7 @@ import { createUsageMonitor } from "./usage";
 import { appendArchive, type Persist } from "./store";
 import { BOT_NAME_MAX, errorText, hasHiddenCharacters } from "./text";
 import { botToolServer, type BotActions } from "./tools";
-import { freshTurn, readTurn, type Bubble, type Turn } from "./turn";
+import { blockStart, freshTurn, readTurn, type Bubble, type Turn } from "./turn";
 import { createWebhooks } from "./webhook";
 import {
   agentPeer,
@@ -136,13 +136,17 @@ export type HubDeps = {
 const holdsBubbles = (p: Pending) => p.settles !== null && p.initiator.kind === "routine" && !p.initiator.manual;
 
 /**
- * What the hub has read of one turn's output. held is null once its bubbles go out as they arrive. pushed: the bubble
- * whose push went out, and when; until one does, each new bubble tries again. last: the newest bubble posted. carded:
+ * What the hub has read of one turn's output. held: bubbles waiting for the turn's own card, the breaker's note or the
+ * turn's end; null once they go out as they arrive. tail: the newest text of a turn whose bubbles go out as they arrive.
+ * Claude Code sends each content block as its own message, so the text that leads up to an ask comes before the ask;
+ * it waits for the next block to start (a partial message), and if that is an ask it moves to held, to go out with the
+ * card. Without partial messages the next block's full message decides, after that block's whole input. pushed: the
+ * bubble whose push went out, and when; until one does, each new bubble tries again. last: the newest bubble posted. carded:
  * the turn opened a permission card of its own, so the run has something to tell even if it then calls
  * routine_no_update. group: the group a group turn answers in (Pending.group), and said: what it posted there so far.
  * A group turn never settles a run, so its held is always null.
  */
-type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; carded: boolean; group: BotId | null; said: Bubble[] } & Pushes;
+type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; tail: Bubble[]; carded: boolean; group: BotId | null; said: Bubble[] } & Pushes;
 type Pushes = { pushed: { id: MessageId; at: number } | null; last: MessageId | null };
 
 /** What hello advertises: the FEATURES this bridge serves. Each new one joins when the hub implements it. */
@@ -306,13 +310,16 @@ export function createHub(deps: HubDeps): Hub {
   }
 
   function say(bot: BotRecord, message: Message) {
-    // A card the bot's own turn opens shows after what that turn wrote before it.
+    const fresh = !bot.messages.some((m) => m.id === message.id);
+    // A card the bot's own turn opens shows after what that turn wrote before it. A question card opens only from the
+    // ask of the turn in flight; a known id is the same card again (answered, expired, or its deadline moved).
     if (message.kind === "permission" && message.from === null && message.answer === null) {
       const r = readings.get(bot.id);
       if (r) r.carded = true;
       release(bot);
     }
-    const opened = isOpenCard(message) && (message.kind === "question" || message.from === null) && !bot.messages.some((m) => m.id === message.id);
+    if (message.kind === "question" && message.answer === null && fresh) release(bot);
+    const opened = isOpenCard(message) && (message.kind === "question" || message.from === null) && fresh;
     deps.broadcast({ type: "message", botId: bot.id, message: post(bot, message) });
     trim(bot.messages, archiveOf(bot.id, "bot"), isOpenCard);
     changed(bot);
@@ -404,13 +411,14 @@ export function createHub(deps: HubDeps): Hub {
     }
   }
 
-  /** The turn's held bubbles go out now, ahead of a card or note it caused; the rest of the turn posts as it arrives. */
+  /** The turn's waiting bubbles go out now, ahead of a card or note it caused; the rest of the turn posts as it arrives. */
   function release(bot: BotRecord) {
     const r = readings.get(bot.id);
-    if (!r || r.held === null) return;
-    const held = r.held;
+    if (!r) return;
+    const waiting = [...(r.held ?? []), ...r.tail];
     r.held = null;
-    postBubbles(bot, r, held);
+    r.tail = [];
+    postBubbles(bot, r, waiting);
   }
 
   const note = (bot: BotRecord, text: string, refs: Peer[] = []) => say(bot, { kind: "note", id: newMessageId(), at: now(), text, refs });
@@ -637,6 +645,8 @@ export function createHub(deps: HubDeps): Hub {
           canUseTool: gate.canUseTool(actor),
           sandbox: sandboxFor(actor, scopeOf(actor), process.env),
           settings: settingsFor(bot.id),
+          // A block's start tells whether the text before it leads up to a question card (Reading.tail).
+          includePartialMessages: true,
         };
       },
       onMessage(m, pending) {
@@ -651,12 +661,14 @@ export function createHub(deps: HubDeps): Hub {
         let r = readings.get(bot.id);
         if (r?.id !== pending.id) {
           const group = pending.group ?? null;
-          r = { id: pending.id, turn: freshTurn, held: holdsBubbles(pending) ? [] : null, pushed: null, last: null, carded: false, group, said: [] };
+          r = { id: pending.id, turn: freshTurn, held: holdsBubbles(pending) ? [] : null, tail: [], pushed: null, last: null, carded: false, group, said: [] };
           readings.set(bot.id, r);
           // A turn that follows the last without a pause changes no session status, so its first output tells.
           retypeFor(bot.id);
         }
         const read = readTurn(r.turn, m);
+        const next = blockStart(m);
+        const asking = next === "ask" || (read.turn.asked && !r.turn.asked);
         r.turn = read.turn;
         if (r.group !== null) {
           // The group went, or the bot left it, mid-turn: what it says there goes nowhere.
@@ -666,10 +678,19 @@ export function createHub(deps: HubDeps): Hub {
           r.said.push(...read.bubbles);
           return;
         }
-        if (r.held === null) return postBubbles(bot, r, read.bubbles);
-        r.held.push(...read.bubbles);
-        // A question card is the last thing a turn shows, so what led up to it goes out before the card does.
-        if (r.turn.asked) release(bot);
+        // What leads up to a question card goes out with the card (say releases it), so the phone never shows a
+        // bubble it then folds into the card. The ask's start and its full message both pass here; the first moves it.
+        if (asking && r.tail.length > 0) {
+          r.held = [...(r.held ?? []), ...r.tail];
+          r.tail = [];
+        }
+        if (r.held !== null) return void r.held.push(...read.bubbles);
+        // Only the model's next block says whether an ask follows; Claude Code's own frames come in between. Its start
+        // decides at once; its full message, the fallback without partial messages, comes after its whole input.
+        if (next === "other" || (m.type === "assistant" && m.parent_tool_use_id === null)) {
+          postBubbles(bot, r, r.tail);
+          r.tail = read.bubbles;
+        }
       },
       onTurnEnd(pending, end) {
         if (world.bots.has(bot.id)) {
@@ -681,6 +702,7 @@ export function createHub(deps: HubDeps): Hub {
             readings.delete(bot.id);
             quiet = r.turn.quiet && !r.turn.asked && !r.carded;
             if (r.held !== null && !quiet) postBubbles(bot, r, r.held);
+            postBubbles(bot, r, r.tail);
             const chat = r.group === null ? bot : groupFor(r.group, bot);
             if (chat && !quiet) pushEnd(chat, r);
             if (end.kind === "done") relay(bot, pending, r.said);

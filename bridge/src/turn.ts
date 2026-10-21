@@ -34,3 +34,10 @@ export function readTurn(turn: Turn, m: SDKMessage): { turn: Turn; bubbles: Bubb
   });
   return { turn: { asked, quiet }, bubbles };
 }
+
+/** The kind of block the model starts writing, read from a main-thread partial message; null for any other message. */
+export function blockStart(m: SDKMessage): "ask" | "other" | null {
+  if (m.type !== "stream_event" || m.parent_tool_use_id !== null || m.event.type !== "content_block_start") return null;
+  const block = m.event.content_block;
+  return block.type === "tool_use" && block.name === ASK_TOOL ? "ask" : "other";
+}

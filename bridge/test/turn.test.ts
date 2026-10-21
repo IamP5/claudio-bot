@@ -1,40 +1,8 @@
 import { expect, test } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { BotId } from "../src/protocol";
-import { ASK_TOOL, QUIET_TOOL, freshTurn, readTurn, splitBubbles, type Turn } from "../src/turn";
+import { ASK_TOOL, QUIET_TOOL, freshTurn, readTurn, type Turn } from "../src/turn";
 import { newBot, post } from "../src/world";
-
-test("paragraphs become separate bubbles", () => {
-  expect(splitBubbles("Hey Alex.\n\nI looked at the PR.\n\n\nIt is ready to merge.")).toEqual([
-    "Hey Alex.",
-    "I looked at the PR.",
-    "It is ready to merge.",
-  ]);
-});
-
-test("a single paragraph stays as it is", () => {
-  expect(splitBubbles("The build is green.\nTwo tests were flaky.")).toEqual(["The build is green.\nTwo tests were flaky."]);
-});
-
-test("a fenced code block with blank lines inside is never split", () => {
-  const code = "```ts\nconst a = 1;\n\nconst b = 2;\n```";
-  expect(splitBubbles(`Here is the diff.\n\n${code}\n\nShip it?`)).toEqual(["Here is the diff.", code, "Ship it?"]);
-});
-
-test("list items separated by blank lines stay in one bubble", () => {
-  expect(splitBubbles("- First PR\n\n- Second PR\n\n1. Third\n\nThat is all.")).toEqual([
-    "- First PR\n\n- Second PR\n\n1. Third",
-    "That is all.",
-  ]);
-});
-
-test("a line ending in a colon stays with the list it introduces", () => {
-  expect(splitBubbles("Done.\n\nThree things changed:\n\n- login\n- signup\n\n- logout\n\nAnything else?")).toEqual([
-    "Done.",
-    "Three things changed:\n\n- login\n- signup\n\n- logout",
-    "Anything else?",
-  ]);
-});
 
 let n = 0;
 const assistant = (...content: object[]) =>
@@ -66,6 +34,18 @@ function chat(script: (SDKMessage | typeof turnEnd)[]): { said: string[]; ends: 
   return { said, ends };
 }
 
+test("a text block with several paragraphs, a list and code is one bubble", () => {
+  const body = "Done.\n\nThree things changed:\n\n- login\n\n- signup\n\n```ts\nconst a = 1;\n\nconst b = 2;\n```\n\nAnything else?";
+  expect(chat([assistant(text(`\n${body}\n\n`))]).said).toEqual([body]);
+});
+
+test("each text block is its own bubble, and a block with only whitespace is none", () => {
+  expect(chat([assistant(text("First."), otherTool, text(" \n\t\n"), text("Second.\n\nStill second."))]).said).toEqual([
+    "First.",
+    "Second.\n\nStill second.",
+  ]);
+});
+
 test("text after ask in the same turn never reaches the chat, and the next turn speaks again", () => {
   expect(
     chat([
@@ -77,7 +57,7 @@ test("text after ask in the same turn never reaches the chat, and the next turn 
       turnEnd,
       assistant(text("Great, coding it is.")),
     ]).said,
-  ).toEqual(["Hey Alex.", "I can help with code or research.", "One more thing.", "Great, coding it is."]);
+  ).toEqual(["Hey Alex.\n\nI can help with code or research.", "One more thing.", "Great, coding it is."]);
 });
 
 test("a turn that called routine_no_update ends quiet, and the flags are still set after its result", () => {
@@ -103,6 +83,6 @@ test("replaying an assistant message rewrites the same bubbles", () => {
   for (let i = 0; i < 2; i++) {
     for (const b of readTurn(freshTurn, m).bubbles) post(bot, { kind: "bot", id: b.id, at: "2026-10-17T12:01:00.000Z", text: b.text });
   }
-  expect(bot.messages.map((x) => x.kind === "bot" && x.text)).toEqual(["One.", "Two."]);
-  expect(bot.unread).toBe(2);
+  expect(bot.messages.map((x) => x.kind === "bot" && x.text)).toEqual(["One.\n\nTwo."]);
+  expect(bot.unread).toBe(1);
 });

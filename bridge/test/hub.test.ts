@@ -113,7 +113,7 @@ test("a routine run that calls routine_no_update posts nothing, pushes nothing a
 test("a routine run's bubbles wait for its result, then post together with one push", async () => {
   const h = await fired();
 
-  h.q().emit(assistant(text("Two PRs merged.\n\nBoth are green.")));
+  h.q().emit(assistant(text("Two PRs merged."), text("Both are green.")));
   await flush();
   expect(bubbles(h.bot)).toEqual([]);
 

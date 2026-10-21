@@ -10,6 +10,9 @@ enum DemoSessions {
     static let catalog = SessionID("7d3e1b9c-2a4f-4c8e-9b1d-6e5f3a2c8d70")
     static let changelog = SessionID("session_01Hq7vXk3mRt9wYpL2nB5cDe")
     static let audit = SessionID("5a9c3e71-1b4d-4f2a-8e6c-3d7b9f1a2c50")
+    static let sleepers = SessionID("5e2c8a14-9b3d-4f6e-8a1c-3d7b9e2f4a60")
+    /// The approvalsanswered screen: sleeper two's card is answered too, so every card is folded.
+    static var sleepersAnswered = false
 
     static let soltaOSom = ProjectID("3f9a1c7e2b4d6a80")
     static let claudioBot = ProjectID("9c2e5b7a1d3f4e60")
@@ -47,6 +50,7 @@ enum DemoSessions {
         row(fade, soltaOSom, "Smooth the audio fade on iOS Safari", origin: .agent, minutes: 1, status: .awaitingApproval, holder: .claudio,
             agent: SessionAgentLink(botId: BotID("engineer"), agentId: AgentID("a1")), branch: "claudio/6b1f3c2a", worktree: true, mirror: .pending),
         row(playlist, soltaOSom, "Plan the playlist import", origin: .phone, minutes: 6, status: .awaitingApproval, holder: .claudio, branch: "main"),
+        row(sleepers, soltaOSom, "Sleepers in parallel", origin: .phone, minutes: 2, status: .awaitingApproval, holder: .claudio, branch: "main"),
         row(id(11), soltaOSom, "Bridge with Tailscale for iPhone", origin: .desktop, minutes: 50, unread: true, branch: "main"),
         row(id(12), soltaOSom, "Song of the day genre misses", origin: .terminal, minutes: 180, branch: "fix/genre"),
         row(id(13), soltaOSom, "PR #34 merge to main", origin: .desktop, minutes: 60 * 20, branch: "main", pr: (34, .merged)),
@@ -167,6 +171,41 @@ enum DemoSessions {
                     AskOption(label: "Age", description: "5m, 3h, 2d"),
                 ], multiSelect: true),
             ], answers: nil, cardId: MessageID("card-ask")),
+        ]
+    }
+
+    /// Four subagents, each asking to run a command: one allowed, one allowed and then stopped, one stopped before
+    /// anyone answered, and one still waiting.
+    static func sleeperItems() -> [SessionItem] {
+        func sleeper(_ n: Int, _ name: String, _ state: ToolStepState, cause: String? = nil) -> ToolStep {
+            ToolStep(id: "sl-a\(n)", tool: "Agent", label: name, state: state, diff: nil, output: nil, detail: "general-purpose",
+                     startedAt: ago(1.8), cause: cause)
+        }
+        func call(_ n: Int, _ command: String, _ state: ToolStepState, cause: String? = nil) -> ToolStep {
+            ToolStep(id: "sl-b\(n)", tool: "Bash", label: "Run \(command)", state: state, diff: nil, output: nil, detail: command,
+                     startedAt: state == .waiting ? nil : ago(1.5), owner: "sl-a\(n)", cause: cause)
+        }
+        func card(_ n: Int, _ name: String, _ command: String, _ answer: PermissionAnswer?) -> SessionItem {
+            .permission(id: ItemID("sl-p\(n)"), at: ago(1.6), permission: SessionPermission(
+                cardId: MessageID("card-sleeper-\(n)"), at: ago(1.6), card: PermissionCard(
+                    from: nil, tool: "Bash", label: "Bash", detail: command, always: "perl in solta-o-som, for this session",
+                    answer: answer, expiresAt: .now + 2 * 3600
+                ), stepId: "sl-b\(n)", subagent: name
+            ))
+        }
+        return [
+            user("sl-u1", 2, "Start three subagents. Each one runs perl -e 'sleep 30' and reports back."),
+            work("sl-w1", 1.8, [
+                sleeper(1, "sleeper one", .running), sleeper(2, "sleeper two", .running),
+                sleeper(3, "sleeper three", .stopped, cause: "Stopped by you"), sleeper(4, "sleeper four", .stopped, cause: "Stopped by you"),
+                call(1, "perl -e 'sleep 30'", .running), call(2, "perl -e 'sleep 30'", sleepersAnswered ? .running : .waiting),
+                call(3, "perl -e 'sleep 45' && echo late > late.txt", .stopped, cause: "Stopped by you"),
+                call(4, "perl -e 'sleep 60'", .stopped, cause: "Stopped by you"),
+            ]),
+            card(1, "sleeper one", "perl -e 'sleep 30'", .chose(.once)),
+            card(3, "sleeper three", "perl -e 'sleep 45' && echo late > late.txt", .chose(.once)),
+            card(4, "sleeper four", "perl -e 'sleep 60'", .stopped),
+            card(2, "sleeper two", "perl -e 'sleep 30'", sleepersAnswered ? .chose(.once) : nil),
         ]
     }
 
@@ -291,6 +330,8 @@ enum DemoSessions {
             return SessionSnapshot(epoch: "demo", rev: 1, items: sidebarItems(), before: nil, controls: controls(), live: nil)
         case playlist:
             return SessionSnapshot(epoch: "demo", rev: 1, items: playlistItems(), before: nil, controls: controls(working: true, mode: .plan), live: nil)
+        case sleepers:
+            return SessionSnapshot(epoch: "demo", rev: 1, items: sleeperItems(), before: nil, controls: controls(working: true), live: nil)
         case parity:
             return SessionSnapshot(
                 epoch: "demo", rev: 1, items: parityItems(), before: nil,
@@ -417,10 +458,9 @@ enum DemoSessions {
         guard let model = store.threads[id] else { return }
         for item in model.items {
             switch item {
-            case let .permission(itemId, at, permission) where permission.cardId == cardId:
-                var card = permission.card
-                card.answer = .chose(choice)
-                items(store, id, [.permission(id: itemId, at: at, permission: SessionPermission(cardId: cardId, at: permission.at, card: card))])
+            case .permission(let itemId, let at, var permission) where permission.cardId == cardId:
+                permission.card.answer = .chose(choice)
+                items(store, id, [.permission(id: itemId, at: at, permission: permission)])
             case let .plan(itemId, at, text, _, card) where card == cardId:
                 items(store, id, [.plan(id: itemId, at: at, text: text, state: choice.allows ? .approved : .rejected, cardId: nil)])
             default:

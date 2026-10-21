@@ -59,6 +59,7 @@
 		50F15E24DCBA56CA8C72B8DF /* FileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A929F97F49B2C78A33813AAA /* FileView.swift */; };
 		51E6B4B6CF1753A9EB55B989 /* GroupViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7820C0044FEE201808CA15BD /* GroupViews.swift */; };
 		536D4AC12412A81BB722100A /* FakeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 097EB76BEE0A213D3217C7AC /* FakeBridge.swift */; };
+		5377102E92CCFF82C76D55D7 /* ApprovalCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0B62E0514191256711E3296 /* ApprovalCardTests.swift */; };
 		53819A4D7E98B8AAD0DBB86A /* Sessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458D4E72664733CA07544FD5 /* Sessions.swift */; };
 		570D7D03933CFC4188B4BBAC /* QuestionRepeatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 696BB01D7BFA7385C09C39B1 /* QuestionRepeatTests.swift */; };
 		5F2A2773D7A467D481B385EA /* ChatItems.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06280DC6DF2D564FD10301E5 /* ChatItems.swift */; };
@@ -119,6 +120,7 @@
 		C133FC61B6F5B8F58A1773DA /* ThreadWorkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9075DD4B11D99F8110DFA1ED /* ThreadWorkTests.swift */; };
 		C1BAACAF45074976D7D9BDFC /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64F093F0E46C0BAC5BE987F1 /* MainView.swift */; };
 		C2DA6E69FD78B035FD432B9A /* ConnectorsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8852760CD0E7465CD1204064 /* ConnectorsView.swift */; };
+		C3AC6D6A5E7C8459DA94A750 /* ApprovalCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0B62E0514191256711E3296 /* ApprovalCardTests.swift */; };
 		C3EC6FA685AE4D2689BEB1B8 /* Sessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458D4E72664733CA07544FD5 /* Sessions.swift */; };
 		C46ABADDA6372AA4E61C0D0C /* MuteSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7484803AFDE8CD7EF2707E6 /* MuteSection.swift */; };
 		C4D1C6705A84AF3D5E134452 /* BridgeClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A043FD6FEC842D94A260F35E /* BridgeClientTests.swift */; };
@@ -247,6 +249,7 @@
 		C44F435CF1C5391694E09FA6 /* Dictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dictation.swift; sourceTree = "<group>"; };
 		C5B3A683A87EDE6B0692EC79 /* Demo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Demo.swift; sourceTree = "<group>"; };
 		C5DB853F507FAAC2088B4B45 /* Notifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notifier.swift; sourceTree = "<group>"; };
+		D0B62E0514191256711E3296 /* ApprovalCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalCardTests.swift; sourceTree = "<group>"; };
 		D0D1687E09903FB1B7174792 /* ClaudioBotMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClaudioBotMac.entitlements; sourceTree = "<group>"; };
 		D148F81D82C17B498089BEA7 /* LocalBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalBridgeTests.swift; sourceTree = "<group>"; };
 		D784CF4F0E9AD11C9698E1B8 /* DeepLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLink.swift; sourceTree = "<group>"; };
@@ -325,6 +328,7 @@
 		8F63FA456E3B018B3C798894 /* ClaudioBotTests */ = {
 			isa = PBXGroup;
 			children = (
+				D0B62E0514191256711E3296 /* ApprovalCardTests.swift */,
 				A043FD6FEC842D94A260F35E /* BridgeClientTests.swift */,
 				097EB76BEE0A213D3217C7AC /* FakeBridge.swift */,
 				9A5E4966422B7F7675BCF9E8 /* MentionsTests.swift */,
@@ -722,6 +726,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C3AC6D6A5E7C8459DA94A750 /* ApprovalCardTests.swift in Sources */,
 				00856B227ECFDFD264CF6F1E /* BridgeClientTests.swift in Sources */,
 				536D4AC12412A81BB722100A /* FakeBridge.swift in Sources */,
 				0F2A29F13D0B77FADCB229DC /* LocalBridgeTests.swift in Sources */,
@@ -743,6 +748,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5377102E92CCFF82C76D55D7 /* ApprovalCardTests.swift in Sources */,
 				C4D1C6705A84AF3D5E134452 /* BridgeClientTests.swift in Sources */,
 				D71C8C4D37722592EF686761 /* FakeBridge.swift in Sources */,
 				F07EB03CAF5E01F8AFB0904F /* MentionsTests.swift in Sources */,

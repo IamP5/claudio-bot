@@ -35,6 +35,8 @@ struct SessionThreadView: View {
     /// The row on top when an earlier page was asked for. Once the page lands above it, the list scrolls back to it,
     /// so reading continues where it was.
     @State private var pageAnchor: ItemID?
+    /// The step a card's "Show the step" scrolled to, tinted for a moment so the eye lands on it.
+    @State private var revealed: HeldStep?
     @State private var renaming = false
     @State private var newTitle = ""
 
@@ -119,6 +121,8 @@ struct SessionThreadView: View {
             .frame(maxWidth: Self.column)
             .frame(maxWidth: .infinity)
         }
+        .environment(\.revealStep) { reveal($0, in: model) }
+        .environment(\.revealedStep, revealed?.step.id)
         .scrollPosition($position)
         .defaultScrollAnchor(.bottom)
         #if os(macOS)
@@ -227,6 +231,27 @@ struct SessionThreadView: View {
         guard let cursor = model.requestEarlier() else { return }
         pageAnchor = model.rows.first?.id
         client.send(.sessionPage(sessionId: sessionId, before: cursor))
+    }
+
+    /// Opens the fold that hides the step's work run, scrolls to it and tints the step for a moment. The run opens
+    /// itself when it sees the step marked.
+    private func reveal(_ held: HeldStep, in model: ThreadModel) {
+        let fold = model.rows.first { row in
+            if case let .fold(_, items, false) = row { items.contains { $0.id == held.row } } else { false }
+        }
+        if let fold { model.toggle(fold: fold.id) }
+        followsBottom = false
+        withAnimation(reduceMotion ? nil : .snappy(duration: 0.35)) {
+            position.scrollTo(id: held.row, anchor: .center)
+            revealed = held
+        }
+        Task {
+            // The run opens a frame after it sees the step marked, and only then is the step there to center on.
+            try? await Task.sleep(for: .milliseconds(150))
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.35)) { position.scrollTo(id: held.step.id, anchor: .center) }
+            try? await Task.sleep(for: .seconds(2))
+            if revealed == held { withAnimation(.easeOut(duration: 0.4)) { revealed = nil } }
+        }
     }
 
     private static func bottomGap(_ geometry: ScrollGeometry) -> CGFloat {

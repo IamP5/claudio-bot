@@ -10,7 +10,8 @@ import Foundation
 /// `usagehot` with the session near its limit and `usageoff` with no plan limits to read. The pairing and connection states have their own:
 /// `pairconfirm|outdated` (unpaired), `confirm|unrecognized|error|oldbridge` (paired). Sessions: `sessions` (the sidebar),
 /// `thread` (work runs and a permission card), `workrun` (subagents running, one failed, a background command), `ask`,
-/// `plan`, `streaming`, `cloud`, `longthread` (500 items), `newsession`,
+/// `plan`, `approvals` (subagents' cards, open and answered), `approvalsanswered` (all answered), `streaming`, `cloud`,
+/// `longthread` (500 items), `newsession`,
 /// `sessionsempty` and `sessionsoffline`.
 @MainActor
 enum Demo {
@@ -135,6 +136,10 @@ enum Demo {
         case "workrun": router.open(.session(DemoSessions.audit))
         case "ask": router.open(.session(DemoSessions.sidebar))
         case "plan": router.open(.session(DemoSessions.playlist))
+        case "approvals": router.open(.session(DemoSessions.sleepers))
+        case "approvalsanswered":
+            DemoSessions.sleepersAnswered = true
+            router.open(.session(DemoSessions.sleepers))
         case "streaming": router.open(.session(DemoSessions.parity))
         case "cloud": router.open(.session(DemoSessions.changelog))
         case "longthread": router.open(.session(DemoSessions.catalog))

@@ -335,20 +335,156 @@ private struct QuestionCardBody: View {
     }
 }
 
-/// A tool call held for approval: the exact call, what Always would cover, and the four choices. A bot's chat and a
-/// session's thread show the same card; each says which frame a choice sends.
+/// A tool call held for approval in a bot's chat: the exact call, what Always would cover, and the four choices.
 struct PermissionCardView: View {
     let messageId: MessageID
     let card: PermissionCard
     let decision: (PermissionChoice) -> ClientMessage
-    /// In a session's thread the card spans the column, like the cards around it.
-    var fillsColumn = false
 
     var body: some View {
         TimelineView(.deadline(card.expiresAt)) { _ in
             Settling(card.answer(at: .now)) { answer in
-                PermissionCardBody(messageId: messageId, card: card, answer: answer, decision: decision, fillsColumn: fillsColumn)
+                PermissionCardBody(messageId: messageId, card: card, title: card.label, answer: answer, decision: decision)
             }
+        }
+        .announcesDecision(messageId, outcome: card.answer?.outcome())
+    }
+}
+
+/// The work row that shows the step a session's card holds back, and that step.
+struct HeldStep: Equatable, Sendable {
+    let row: ItemID
+    let step: ToolStep
+
+    static func find(_ stepId: String?, in items: [SessionItem]) -> HeldStep? {
+        guard let stepId else { return nil }
+        for case let .work(row, _, steps) in items.reversed() {
+            if let step = steps.first(where: { $0.id == stepId }) { return HeldStep(row: row, step: step) }
+        }
+        return nil
+    }
+}
+
+extension EnvironmentValues {
+    /// Scrolls a session's thread to a step and marks it for a moment. nil outside a thread.
+    @Entry var revealStep: (@MainActor @Sendable (HeldStep) -> Void)? = nil
+    /// The step id "Show the step" marked. Its work run opens and tints it.
+    @Entry var revealedStep: String? = nil
+}
+
+/// A permission card in a session's thread. It names the subagent that asked and links to the step it holds back.
+/// Once closed it folds to one line, so answered cards never push the running work off screen; a tap opens it again.
+struct SessionPermissionCard: View {
+    let sessionId: SessionID
+    let permission: SessionPermission
+    let model: ThreadModel
+
+    @State private var opened = false
+    @Environment(\.revealStep) private var revealStep
+
+    var body: some View {
+        let card = permission.card
+        let held = HeldStep.find(permission.stepId, in: model.items)
+        TimelineView(.deadline(card.expiresAt)) { _ in
+            Settling(card.answer(at: .now)) { answer in
+                if let answer, !opened {
+                    ClosedApprovalRow(permission: permission, outcome: answer.outcome(step: held?.step)) { opened = true }
+                } else {
+                    PermissionCardBody(
+                        messageId: permission.cardId, card: card, title: permission.title, answer: answer,
+                        decision: { .sessionDecide(sessionId: sessionId, cardId: permission.cardId, choice: $0) },
+                        step: held?.step, fillsColumn: true,
+                        reveal: held.flatMap { held in revealStep.map { reveal in { reveal(held) } } },
+                        collapse: answer == nil ? nil : { opened = false }
+                    )
+                }
+            }
+        }
+        .announcesDecision(permission.cardId, outcome: card.answer?.outcome(step: held?.step))
+    }
+}
+
+/// An answered card folded to its outcome and command: "sleeper two · Allowed once" over "perl -e 'sleep 30'". At the
+/// accessibility sizes the command and the chevron wait for a tap, and the text stops growing at the second
+/// accessibility size: past that, three folded cards alone fill the screen and push the running work off it.
+private struct ClosedApprovalRow: View {
+    let permission: SessionPermission
+    let outcome: PermissionOutcome
+    let open: () -> Void
+
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        Button(action: open) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                glyph
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(permission.subagent.map { "\($0) · " } ?? "")\(outcome.short)")
+                        .foregroundStyle(Theme.secondary)
+                        .lineLimit(3)
+                    if !typeSize.isAccessibilitySize {
+                        Text(permission.card.detail)
+                            .font(.ui(.footnote, design: .monospaced))
+                            .foregroundStyle(Theme.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if !typeSize.isAccessibilitySize { chevron }
+            }
+            .font(.ui(.subheadline))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(minHeight: HitTarget.minHeight)
+            .transcriptCard(fillsColumn: true)
+        }
+        .buttonStyle(.pressable)
+        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([permission.title, outcome.text, permission.card.detail].map { $0.hasSuffix(".") ? String($0.dropLast()) : $0 }.joined(separator: ". "))
+        .accessibilityValue("Collapsed")
+        .accessibilityHint("Shows the whole request")
+    }
+
+    private var glyph: some View {
+        Image(systemName: outcome.glyph).foregroundStyle(outcome.color)
+    }
+
+    private var chevron: some View {
+        Image(systemName: "chevron.down")
+            .font(.ui(.footnote, weight: .semibold))
+            .foregroundStyle(Theme.tertiary)
+    }
+}
+
+extension PermissionOutcome {
+    var color: Color {
+        switch tone {
+        case .allowed: AvatarColor.green.color
+        case .refused, .failed: Theme.danger
+        case .ended: Theme.tertiary
+        }
+    }
+}
+
+extension View {
+    /// Says the result of a decision this phone sent once the bridge confirms it, so a VoiceOver user hears more than
+    /// the buttons going away.
+    func announcesDecision(_ cardId: MessageID, outcome: PermissionOutcome?) -> some View {
+        modifier(DecisionAnnouncer(cardId: cardId, outcome: outcome))
+    }
+}
+
+private struct DecisionAnnouncer: ViewModifier {
+    let cardId: MessageID
+    let outcome: PermissionOutcome?
+
+    @Environment(AppStore.self) private var store
+
+    func body(content: Content) -> some View {
+        content.onChange(of: store.pendingDecisions[cardId]) { sent, now in
+            if sent != nil, now == nil, let outcome { AccessibilityNotification.Announcement(outcome.text).post() }
         }
     }
 }
@@ -356,38 +492,72 @@ struct PermissionCardView: View {
 private struct PermissionCardBody: View {
     let messageId: MessageID
     let card: PermissionCard
+    let title: String
     let answer: PermissionAnswer?
     let decision: (PermissionChoice) -> ClientMessage
-    let fillsColumn: Bool
+    var step: ToolStep?
+    var fillsColumn = false
+    var reveal: (() -> Void)?
+    var collapse: (() -> Void)?
 
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var sent: PermissionChoice? { store.pendingDecisions[messageId] }
+
+    private func send(_ choice: PermissionChoice) {
+        client.send(decision(choice))
+        AccessibilityNotification.Announcement("\(choice.button), sending").post()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: "hand.raised.fill")
-                    .font(.ui(size: 14, weight: .semibold))
+                    .font(.ui(.subheadline, weight: .semibold))
                     .foregroundStyle(answer == nil ? Theme.attention : Theme.tertiary)
-                Text(card.label)
-                    .font(.ui(size: 17, weight: .semibold))
+                Text(title)
+                    .font(.ui(.headline, weight: .semibold))
                     .foregroundStyle(answer == nil ? .white : Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityAddTraits(.isHeader)
+                if let collapse {
+                    Button(action: collapse) {
+                        Image(systemName: "chevron.up")
+                            .font(.ui(.footnote, weight: .semibold))
+                            .foregroundStyle(Theme.tertiary)
+                            .frame(minWidth: HitTarget.minHeight, minHeight: HitTarget.minHeight)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Collapse")
+                }
             }
             if case .agent(_, let title) = card.from {
                 Label(title, systemImage: "gearshape.fill")
-                    .font(.ui(size: 13))
+                    .font(.ui(.footnote))
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
             }
+            if let reveal {
+                Button(action: reveal) {
+                    Label("Show the step", systemImage: "arrow.up.forward")
+                        .font(.ui(.footnote, weight: .semibold))
+                        .foregroundStyle(Theme.link)
+                        .frame(minHeight: HitTarget.minHeight)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Scrolls to where it runs in the thread")
+            }
             VStack(alignment: .leading, spacing: 6) {
                 Text(card.tool)
-                    .font(.ui(size: 12, weight: .medium))
+                    .font(.ui(.caption, weight: .medium))
                     .foregroundStyle(Theme.tertiary)
                 Text(card.detail)
-                    .font(.ui(size: 15, design: .monospaced))
+                    .font(.ui(.subheadline, design: .monospaced))
                     .foregroundStyle(answer == nil ? .white : Theme.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -399,29 +569,26 @@ private struct PermissionCardBody: View {
             .accessibilityLabel("\(card.tool): \(card.detail)")
 
             Group {
-                switch answer {
-                case nil:
+                if let answer {
+                    let outcome = answer.outcome(step: step)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: outcome.glyph)
+                            .foregroundStyle(outcome.color)
+                        Text(outcome.text)
+                            .font(.ui(.subheadline, weight: outcome.tone == .ended ? .regular : .semibold))
+                            .foregroundStyle(outcome.tone == .ended ? Theme.tertiary : Theme.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                } else {
                     VStack(alignment: .leading, spacing: 12) {
                         buttons
                         Text("Always allows \(card.always).")
-                            .font(.ui(size: 13))
+                            .font(.ui(.footnote))
                             .foregroundStyle(Theme.tertiary)
                             .fixedSize(horizontal: false, vertical: true)
                         ExpiryLine(expiresAt: card.expiresAt)
                     }
-                case .chose(let choice):
-                    HStack(spacing: 8) {
-                        Image(systemName: choice.allows ? "checkmark.circle.fill" : "xmark.circle.fill")
-                            .foregroundStyle(choice.allows ? AvatarColor.green.color : Theme.danger)
-                        Text(choice.outcome)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.secondary)
-                    }
-                    .accessibilityElement(children: .combine)
-                case .expired:
-                    ClosedLine(text: "Expired. It did not run.")
-                case .stopped, .closed:
-                    ClosedLine(text: "Closed. It did not run.")
                 }
             }
             .transition(Card.swap)
@@ -451,13 +618,14 @@ private struct PermissionCardBody: View {
     @ViewBuilder
     private func choiceButton(_ choice: PermissionChoice) -> some View {
         let button = Button {
-            client.send(decision(choice))
+            send(choice)
         } label: {
             HStack(spacing: 6) {
-                if sent == choice { ProgressView().controlSize(.mini) }
+                if sent == choice { SendingSpinner() }
                 Text(choice.button)
             }
         }
+        .sending(sent == choice)
         switch choice {
         case .once:
             button.buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
@@ -468,29 +636,38 @@ private struct PermissionCardBody: View {
         }
     }
     #else
+    /// Two by two, or one per row once the words no longer fit half the card.
+    @ViewBuilder
     private var buttons: some View {
-        Grid(horizontalSpacing: 8, verticalSpacing: 8) {
-            GridRow {
-                choiceButton(.once)
-                choiceButton(.always)
+        if typeSize.isAccessibilitySize {
+            VStack(spacing: 8) {
+                ForEach([PermissionChoice.once, .always, .deny, .never], id: \.self) { choiceButton($0) }
             }
-            GridRow {
-                choiceButton(.deny)
-                choiceButton(.never)
+            .disabled(sent != nil)
+        } else {
+            Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+                GridRow {
+                    choiceButton(.once)
+                    choiceButton(.always)
+                }
+                GridRow {
+                    choiceButton(.deny)
+                    choiceButton(.never)
+                }
             }
+            .disabled(sent != nil)
         }
-        .disabled(sent != nil)
     }
 
     private func choiceButton(_ choice: PermissionChoice) -> some View {
         Button {
-            client.send(decision(choice))
+            send(choice)
         } label: {
             HStack(spacing: 6) {
-                if sent == choice { ProgressView().controlSize(.mini) }
+                if sent == choice { SendingSpinner() }
                 Text(choice.button)
             }
-            .font(.ui(size: 15, weight: .semibold))
+            .font(.ui(.subheadline, weight: .semibold))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 11)
             .foregroundStyle(foreground(choice))
@@ -498,6 +675,7 @@ private struct PermissionCardBody: View {
             .opacity(sent == nil || sent == choice ? 1 : 0.5)
         }
         .buttonStyle(.pressable)
+        .sending(sent == choice)
     }
 
     private func foreground(_ choice: PermissionChoice) -> Color {
@@ -514,6 +692,19 @@ private struct PermissionCardBody: View {
     #endif
 }
 
+/// The spinner on a tapped choice. The button's value says "Sending", so the spinner itself stays silent.
+struct SendingSpinner: View {
+    var body: some View {
+        ProgressView().controlSize(.mini).accessibilityHidden(true)
+    }
+}
+
+extension View {
+    func sending(_ isSending: Bool) -> some View {
+        accessibilityValue(isSending ? "Sending" : "")
+    }
+}
+
 extension TimelineSchedule where Self == ExplicitTimelineSchedule<[Date]> {
     /// Redraws now and once more at the deadline, so a card closes on time without a bridge frame.
     /// The past entry matters: before its first entry a timeline reports that entry's date, not the clock.
@@ -528,7 +719,7 @@ private struct ExpiryLine: View {
 
     var body: some View {
         Text("Expires in \(Text(expiresAt, style: .relative))")
-            .font(.ui(size: 13))
+            .font(.ui(.footnote))
             .foregroundStyle(Theme.tertiary)
     }
 }

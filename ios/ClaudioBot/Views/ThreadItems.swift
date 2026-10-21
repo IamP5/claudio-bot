@@ -36,9 +36,7 @@ struct ThreadRowView: View, Equatable {
             case let .plan(id, _, text, state, cardId):
                 PlanCard(sessionId: sessionId, markdown: model.rendered(id, text), state: state, cardId: cardId)
             case let .permission(_, _, permission):
-                PermissionCardView(messageId: permission.cardId, card: permission.card, decision: {
-                    .sessionDecide(sessionId: sessionId, cardId: permission.cardId, choice: $0)
-                }, fillsColumn: true)
+                SessionPermissionCard(sessionId: sessionId, permission: permission, model: model)
             case let .ask(_, _, questions, answers, cardId):
                 AskCard(sessionId: sessionId, questions: questions, answers: answers, cardId: cardId)
             case let .notice(_, _, text, tone, _):
@@ -218,6 +216,7 @@ struct WorkRunRow: View {
     @Environment(\.runStateStale) private var staleAt
     @State private var onScreen = true
     @ScaledMetric(relativeTo: .subheadline) private var slot: CGFloat = 20
+    @Environment(\.revealedStep) private var revealedStep
 
     var body: some View {
         Group {
@@ -230,6 +229,9 @@ struct WorkRunRow: View {
             }
         }
         .onScrollVisibilityChange { onScreen = $0 }
+        .onChange(of: revealedStep, initial: true) { _, id in
+            if let id, run.steps.contains(where: { $0.id == id }) { open = true }
+        }
     }
 
     private func content(now: Date) -> some View {
@@ -248,6 +250,8 @@ struct WorkRunRow: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(shown) { step in
                         ToolStepRow(step: step, run: run, now: now, onFullOutput: onFullOutput)
+                            .background { if step.id == revealedStep { Theme.attention.opacity(0.14) } }
+                            .id(step.id)
                         if step.id != shown.last?.id { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 34) }
                     }
                 }
@@ -565,7 +569,7 @@ struct PlanCard: View {
             client.send(.sessionDecide(sessionId: sessionId, cardId: cardId, choice: choice))
         } label: {
             HStack(spacing: 6) {
-                if sent == choice { ProgressView().controlSize(.mini) }
+                if sent == choice { SendingSpinner() }
                 Text(title)
             }
             .font(.ui(size: 15, weight: .semibold))
@@ -575,6 +579,7 @@ struct PlanCard: View {
             .background(primary ? Color.white : Theme.inset, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.pressable)
+        .sending(sent == choice)
     }
 }
 
@@ -698,7 +703,7 @@ struct AskCard: View {
                         client.send(.sessionAnswer(sessionId: sessionId, cardId: cardId, answers: draft))
                     } label: {
                         HStack(spacing: 6) {
-                            if sent { ProgressView().controlSize(.mini) }
+                            if sent { SendingSpinner() }
                             Text(questions.count == 1 ? "Send answer" : "Send answers")
                         }
                         .font(.ui(size: 15, weight: .semibold))
@@ -709,6 +714,7 @@ struct AskCard: View {
                         .opacity(draft.count == questions.count ? 1 : 0.4)
                     }
                     .buttonStyle(.pressable)
+                    .sending(sent)
                     .disabled(sent || draft.count != questions.count)
                 }
             } else {

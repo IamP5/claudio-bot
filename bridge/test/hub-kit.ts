@@ -61,6 +61,13 @@ export class FakeQuery {
   async interrupt() {
     this.interrupts++;
   }
+  readonly stoppedTasks: string[] = [];
+  /** Claude Code refuses to stop a task, as when it already ended. */
+  refuseStop = false;
+  async stopTask(id: string) {
+    if (this.refuseStop) throw new Error(`no task ${id}`);
+    this.stoppedTasks.push(id);
+  }
   async mcpServerStatus() {
     return [
       { name: "claudio", status: "connected", source: "sdk" },

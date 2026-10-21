@@ -1,5 +1,6 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Cursor, ItemId, ServerMessage, SessionControls, SessionId, SessionItem, ThreadChannelFrame, ThreadLive, ThreadPosition } from "./protocol";
+import { patchStep, type StepPatch } from "./tasks";
 import { emptyTail, extend, follow, pageOf, project, readThread, sdkReaders, statOf, toolOutput, type Chain, type Head, type ProjectContext, type ProjectionTail, type SdkReaders } from "./transcript";
 
 // Watching one session's thread: the newest page as a snapshot, older pages by cursor, every change after as upserts
@@ -13,9 +14,12 @@ export type ThreadsDeps = {
   head(id: SessionId): Head | null;
   context(id: SessionId, head: Head | null): ProjectContext;
   overlay(id: SessionId): SessionItem[];
+  /** How the live query changes transcript steps, by tool_use id. */
+  steps(id: SessionId): ReadonlyMap<string, StepPatch>;
   controls(id: SessionId): SessionControls;
   publish(id: SessionId, frame: ThreadChannelFrame): void;
   watched(id: SessionId): boolean;
+  now(): Date;
   log(line: string): void;
   sdk?: SdkReaders;
   /** Threads nobody watches that stay read, newest first, so reopening one is instant. */
@@ -29,6 +33,8 @@ export type Threads = {
   tool(id: SessionId, toolUseId: string): ServerMessage[];
   /** The overlay or the controls of a session may have changed: an open thread publishes what did. */
   refresh(id: SessionId): void;
+  /** A watched thread whose session works and has sent nothing for BEAT_MS sends its controls again. */
+  beat(): void;
   /** A transcript grew: its open thread reads the new lines. */
   appended(path: string): void;
   /** Every open thread whose transcript grew, or appeared, reads it now: what a missed watch event would have done. */
@@ -51,6 +57,9 @@ const RING_ITEMS = 256;
 export const DELTA_COALESCE_MS = 60;
 const RING_BYTES = 1 << 20;
 const KEEP = 4;
+/** While a session works, its watchers hear from it at least this often, so a silent call never looks like a dead link. */
+export const BEAT_MS = 25_000;
+const CARD_WAIT_MS = 2_000;
 
 type Frame = { rev: number; items: SessionItem[]; removed: ItemId[]; bytes: number };
 
@@ -67,6 +76,13 @@ type State = {
   /** The overlay items last published, by id, as JSON; and the controls likewise. */
   overlay: Map<ItemId, string>;
   controls: string;
+  /** A card is held back until the transcript shows its call. */
+  holding: boolean;
+  /** What the published controls say. */
+  working: boolean;
+  /** The step patches last published, by step id, as JSON. */
+  steps: Map<string, string>;
+  sentAt: number;
   /** Overlay user items the transcript now shows, so they are not shown twice. */
   shownByTranscript: Set<ItemId>;
   rev: number;
@@ -103,7 +119,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
 
   const indexOf = (items: readonly SessionItem[]) => new Map(items.map((item, i) => [item.id, i] as const));
 
-  async function read(id: SessionId): Promise<Omit<State, "overlay" | "controls" | "shownByTranscript" | "rev" | "ring" | "live" | "queue" | "usedAt" | "epoch">> {
+  async function read(id: SessionId): Promise<Omit<State, "overlay" | "controls" | "steps" | "holding" | "working" | "sentAt" | "shownByTranscript" | "rev" | "ring" | "live" | "queue" | "usedAt" | "epoch">> {
     const head = deps.head(id);
     const ctx = deps.context(id, head);
     if (!head) return { id, path: null, ctx, items: [], index: new Map(), tail: emptyTail(), chain: { uuids: new Set(), leaf: null }, offset: 0 };
@@ -124,6 +140,10 @@ export function createThreads(deps: ThreadsDeps): Threads {
           epoch: `${deps.epoch}.${++generation}`,
           overlay: new Map(),
           controls: "",
+          steps: new Map(),
+          holding: false,
+          working: false,
+          sentAt: deps.now().getTime(),
           shownByTranscript: new Set(),
           rev: 0,
           ring: [],
@@ -133,6 +153,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
         };
         suppress(s, s.items);
         absorbOverlay(s);
+        absorbSteps(s);
         // A thread opened mid-block starts from what already went out, so the next delta's offset fits.
         const st = streams.get(id);
         if (st?.itemId && st.sent > 0 && !s.index.has(st.itemId)) s.live = { itemId: st.itemId, text: st.text.slice(0, st.sent) };
@@ -144,36 +165,76 @@ export function createThreads(deps: ThreadsDeps): Threads {
     return made;
   }
 
-  /** The overlay as it should show: suppressed items left out. Records it as published. */
+  /**
+   * The overlay as shown: suppressed items left out. A card for a main-thread call waits, up to CARD_WAIT_MS, for the
+   * transcript to show the call, which Claude Code can write a moment after it asks, so the card goes out with its step.
+   */
+  function visible(s: State): SessionItem[] {
+    const now = deps.now().getTime();
+    const steps = new Set(s.items.flatMap((i) => (i.kind === "work" ? i.steps.map((st) => st.id) : [])));
+    return deps.overlay(s.id).filter((item) => {
+      if (s.shownByTranscript.has(item.id)) return false;
+      if (item.kind !== "permission" || item.card.answer !== null || item.stepId === undefined || item.subagent !== undefined) return true;
+      const held = !steps.has(item.stepId) && now - Date.parse(item.at) < CARD_WAIT_MS;
+      if (held) s.holding = true;
+      return !held;
+    });
+  }
+
+  /** The overlay as shown, recorded as published with the controls. */
   function absorbOverlay(s: State): SessionItem[] {
-    const overlay = deps.overlay(s.id).filter((item) => !s.shownByTranscript.has(item.id));
+    s.holding = false;
+    const overlay = visible(s);
     s.overlay = new Map(overlay.map((item) => [item.id, JSON.stringify(item)]));
-    s.controls = JSON.stringify(deps.controls(s.id));
+    absorbControls(s, deps.controls(s.id));
     return overlay;
   }
 
-  /** The transcript's items with the overlay's replacements applied, then the overlay's own. */
+  function absorbControls(s: State, controls: SessionControls) {
+    s.controls = JSON.stringify(controls);
+    s.working = controls.working;
+  }
+
+  /** Records the step patches as published; returns the transcript's work items whose patches changed. */
+  function absorbSteps(s: State): SessionItem[] {
+    const before = s.steps;
+    s.steps = new Map([...deps.steps(s.id)].map(([id, p]) => [id, JSON.stringify(p)]));
+    const touched = new Set([...before.keys(), ...s.steps.keys()].filter((id) => before.get(id) !== s.steps.get(id)));
+    return touched.size === 0 ? [] : s.items.filter((i) => i.kind === "work" && i.steps.some((st) => touched.has(st.id)));
+  }
+
+  function patched(item: SessionItem, patches: ReadonlyMap<string, StepPatch>): SessionItem {
+    if (item.kind !== "work" || !item.steps.some((st) => patches.has(st.id))) return item;
+    return { ...item, steps: item.steps.map((st) => (patches.has(st.id) ? patchStep(st, patches.get(st.id)!) : st)) };
+  }
+
+  /** The transcript's items with the overlay's replacements and step patches applied, then the overlay's own. */
   function merged(s: State): SessionItem[] {
-    const overlay = deps.overlay(s.id).filter((item) => !s.shownByTranscript.has(item.id));
+    const overlay = visible(s);
     const byId = new Map(overlay.map((item) => [item.id, item]));
+    const patches = deps.steps(s.id);
     const out = s.items.map((item) => {
       const over = byId.get(item.id);
       if (over) byId.delete(item.id);
-      return over ?? item;
+      return over ?? patched(item, patches);
     });
     return [...out, ...byId.values()];
   }
 
-  function emit(s: State, items: SessionItem[], removed: ItemId[], controls: SessionControls | null) {
+  function emit(s: State, all: SessionItem[], removed: ItemId[], controls: SessionControls | null) {
+    const items = [...new Map(all.map((i) => [i.id, i])).values()];
     if (items.length === 0 && removed.length === 0 && controls === null) return;
     s.rev++;
+    s.sentAt = deps.now().getTime();
     const frame: Frame = { rev: s.rev, items, removed, bytes: JSON.stringify(items).length };
     s.ring.push(frame);
-    let count = s.ring.reduce((n, f) => n + f.items.length + f.removed.length, 0);
+    // A controls-only frame counts as one, so heartbeats cannot grow the ring without bound.
+    const size = (f: Frame) => Math.max(1, f.items.length + f.removed.length);
+    let count = s.ring.reduce((n, f) => n + size(f), 0);
     let bytes = s.ring.reduce((n, f) => n + f.bytes, 0);
     while (s.ring.length > 1 && (count > RING_ITEMS || bytes > RING_BYTES)) {
       const dropped = s.ring.shift()!;
-      count -= dropped.items.length + dropped.removed.length;
+      count -= size(dropped);
       bytes -= dropped.bytes;
     }
     // An upsert brings the item's whole text, so its streaming text is done.
@@ -205,13 +266,14 @@ export function createThreads(deps: ThreadsDeps): Threads {
     // An overlay item that replaced a transcript item and went away brings the transcript's back.
     const restored = [...before.keys()].filter((id) => !s.overlay.has(id) && s.index.has(id)).map((id) => s.items[s.index.get(id)!]!);
     const controls = s.controls === beforeControls ? null : (JSON.parse(s.controls) as SessionControls);
-    return { items: [...items, ...restored], removed, controls };
+    return { items: [...items, ...restored, ...shown(s, absorbSteps(s))], removed, controls };
   }
 
-  /** Transcript items as shown: an overlay item of the same id wins. */
+  /** Transcript items as shown: an overlay item of the same id wins, and the step patches apply. */
   const shown = (s: State, items: readonly SessionItem[]) => {
     const overlay = new Map(deps.overlay(s.id).map((item) => [item.id, item]));
-    return items.map((item) => overlay.get(item.id) ?? item);
+    const patches = deps.steps(s.id);
+    return items.map((item) => overlay.get(item.id) ?? patched(item, patches));
   };
 
   function upsertTranscript(s: State, changed: readonly SessionItem[]) {
@@ -222,6 +284,13 @@ export function createThreads(deps: ThreadsDeps): Threads {
         s.items.push(item);
       } else s.items[at] = item;
     }
+  }
+
+  /** The transcript has lines the thread has not read, or has appeared. */
+  function behind(s: State): boolean {
+    if (s.path === null) return deps.head(s.id) !== null;
+    const f = statOf(s.path);
+    return f === null || f.size > s.offset;
   }
 
   async function catchUp(s: State) {
@@ -343,10 +412,27 @@ export function createThreads(deps: ThreadsDeps): Threads {
     refresh(id) {
       const s = states.get(id);
       if (!s) return;
-      void serial(s, () => {
+      void serial(s, async () => {
+        // A card's call may be in the transcript already, so the thread reads it first and the two go out together.
+        if (behind(s)) await catchUp(s);
+        if (states.get(s.id) !== s) return;
         const o = overlayDiff(s, []);
         emit(s, o.items, o.removed, o.controls);
       });
+    },
+
+    beat() {
+      const now = deps.now().getTime();
+      for (const s of states.values()) {
+        if (!s.working || now - s.sentAt < BEAT_MS || !deps.watched(s.id)) continue;
+        s.sentAt = now;
+        void serial(s, () => {
+          const controls = deps.controls(s.id);
+          if (!controls.working) return;
+          absorbControls(s, controls);
+          emit(s, [], [], controls);
+        });
+      }
     },
 
     appended(path) {
@@ -356,12 +442,18 @@ export function createThreads(deps: ThreadsDeps): Threads {
     },
 
     async poll() {
-      const due = [...states.values()].filter((s) => {
-        if (s.path === null) return deps.head(s.id) !== null;
-        const f = statOf(s.path);
-        return f === null || f.size > s.offset;
-      });
-      await Promise.all(due.map((s) => serial(s, () => catchUp(s))));
+      await Promise.all(
+        [...states.values()].flatMap((s) => {
+          if (behind(s)) return [serial(s, () => catchUp(s))];
+          if (!s.holding) return [];
+          return [
+            serial(s, () => {
+              const o = overlayDiff(s, []);
+              emit(s, o.items, o.removed, o.controls);
+            }),
+          ];
+        }),
+      );
     },
 
     removed,

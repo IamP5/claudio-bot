@@ -1,4 +1,5 @@
 import type { CanUseTool, HookCallbackMatcher, Options, PermissionResult, PermissionUpdate, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
+import type { Driven } from "./catalog";
 import type { Tickable } from "./clock";
 import { failClosed, resolveReal, toCall, toHookOutput } from "./gate";
 import type { Ledger } from "./ledger";
@@ -8,6 +9,7 @@ import {
   type AskQuestion,
   type ItemId,
   type MessageId,
+  type NoticeReason,
   type PermissionChoice,
   type PermissionMessage,
   type PermissionMode,
@@ -15,13 +17,16 @@ import {
   type SessionControls,
   type SessionId,
   type SessionItem,
-  type SessionStatus,
+  type StopTarget,
+  type TaskId,
 } from "./protocol";
 import type { Result } from "./result";
 import { refused } from "./result";
 import { createSession, type Session, type SessionSpec, type TurnEnd } from "./session";
 import type { Persist } from "./store";
+import { RESTING, rowRun, runControls, runningSteps, runs, type Activity, type StepPatch } from "./tasks";
 import { errorText } from "./text";
+import { stepLabel } from "./transcript";
 import { emptySession, newMessageId, ownCardId, ownCardOpen, type OwnCard, type OwnDrive, type SessionRecord, type World } from "./world";
 
 // The drivers of sessions the user drives from the phone: one session.ts Session per id, opened in the transcript's
@@ -58,14 +63,16 @@ export type OwnDeps = {
 export type Own = Tickable & {
   /** The phone sends to the session: queued, after a Stop when interrupt. */
   send(rec: SessionRecord, text: string, clientId: string, interrupt: boolean): Promise<Result>;
-  stop(rec: SessionRecord): Promise<boolean>;
+  stop(rec: SessionRecord, target?: StopTarget): Promise<boolean>;
   decide(rec: SessionRecord, cardId: MessageId, choice: PermissionChoice): Result;
   answer(rec: SessionRecord, cardId: MessageId, answers: Record<string, string> | null): Result;
   set(rec: SessionRecord, patch: { model?: string | null; mode?: PhoneMode }): Promise<Result>;
   /** What the thread shows on top of the transcript: cards, the user's queued messages, notices. */
   overlay(rec: SessionRecord): SessionItem[];
   controls(rec: SessionRecord): SessionControls;
-  status(rec: SessionRecord): { status: SessionStatus; working: boolean };
+  status(rec: SessionRecord): Driven;
+  /** How the thread shows transcript steps the live query knows more about, by tool_use id. */
+  steps(rec: SessionRecord): Map<string, StepPatch>;
   /** The live query of a session that another process now works on closes, so the bridge yields. */
   yieldTo(id: SessionId): void;
   /** The other process let go: a turn that waited on it goes now. */
@@ -128,10 +135,11 @@ export function createOwn(deps: OwnDeps): Own {
     return rec.own;
   };
   const cards = (rec: SessionRecord) => driveOf(rec).cards;
+  const activityOf = (rec: SessionRecord): Activity => drivers.get(rec.id)?.activity() ?? RESTING;
 
-  function notice(id: SessionId, text: string, tone: "info" | "error" = "info") {
+  function notice(id: SessionId, text: string, tone: "info" | "error" = "info", reason?: NoticeReason) {
     const list = notices.get(id) ?? [];
-    list.push({ kind: "notice", id: `n_${crypto.randomUUID()}` as ItemId, at: now(), text, tone });
+    list.push({ kind: "notice", id: `n_${crypto.randomUUID()}` as ItemId, at: now(), text, tone, ...(reason && { reason }) });
     notices.set(id, list.slice(-NOTICES_KEPT));
     deps.changed(id);
   }
@@ -175,6 +183,7 @@ export function createOwn(deps: OwnDeps): Own {
       case "permission":
         if (reply.kind !== "choice" && reply.kind !== "expired") return refused("A permission card takes a choice");
         card.card = { ...card.card, answer: reply.kind === "choice" ? reply.choice : "expired" };
+        if (reply.kind === "choice" && (reply.choice === "once" || reply.choice === "always")) card.allowedAt = now();
         break;
       case "ask":
         if (reply.kind === "choice") return refused("A question takes answers");
@@ -229,7 +238,9 @@ export function createOwn(deps: OwnDeps): Own {
           answer: null,
           expiresAt: expiresAt(),
         };
-        const r = await hold(rec, { kind: "permission", card: message, toolUseId: o.toolUseID, suggestions }, o.signal);
+        const task = o.agentID ? drivers.get(rec.id)?.activity().all.get(o.agentID as TaskId) : undefined;
+        const agent = o.agentID ? { id: o.agentID, label: task?.label ?? null, stepId: task?.stepId ?? null } : null;
+        const r = await hold(rec, { kind: "permission", card: message, toolUseId: o.toolUseID, suggestions, ...(agent && { agent }) }, o.signal);
         if (r.kind !== "choice") return { behavior: "deny", message: `The request expired unanswered; ${deps.userName} did not say no. It did not run.` };
         switch (r.choice) {
           case "once":
@@ -338,8 +349,9 @@ export function createOwn(deps: OwnDeps): Own {
         void pending;
       },
       onChange: () => deps.changed(id),
+      onActivity: () => deps.changed(id),
       // A start held by another Claude Code is what the composer already says; the retry note would only repeat it.
-      note: (text) => (deps.blocked(id) !== null && text.startsWith("Claude Code could not start") ? undefined : notice(id, text)),
+      note: (text, reason) => (deps.blocked(id) !== null && text.startsWith("Claude Code could not start") ? undefined : notice(id, text, "info", reason)),
       onDormant() {
         drivers.delete(id);
         session.close();
@@ -361,9 +373,9 @@ export function createOwn(deps: OwnDeps): Own {
       return { ok: true };
     },
 
-    async stop(rec) {
+    async stop(rec, target) {
       const s = drivers.get(rec.id);
-      return s ? s.interrupt() : false;
+      return s ? s.interrupt(target) : false;
     },
 
     decide(rec, cardId, choice) {
@@ -402,7 +414,15 @@ export function createOwn(deps: OwnDeps): Own {
       for (const c of drive.cards) {
         switch (c.kind) {
           case "permission":
-            items.push({ kind: "permission", id: c.card.id as string as ItemId, at: c.card.at, card: { ...c.card } });
+            items.push({
+              kind: "permission",
+              id: c.card.id as string as ItemId,
+              at: c.card.at,
+              card: { ...c.card },
+              // Claude Code writes a subagent's calls to its sidechain, not the thread, so the card sits on the subagent's Agent step.
+              stepId: c.agent ? (c.agent.stepId ?? c.toolUseId) : c.toolUseId,
+              ...(c.agent?.label && { subagent: c.agent.label }),
+            });
             break;
           case "ask":
             items.push({ kind: "ask", id: c.toolUseId as ItemId, at: c.at, questions: c.questions.map((q) => ({ ...q })), answers: c.answers, cardId: c.answers === null ? c.cardId : null });
@@ -427,30 +447,51 @@ export function createOwn(deps: OwnDeps): Own {
       const life = rec.own?.session.lifecycle;
       const inFlight = life && (life.kind === "working" || life.kind === "stopping") ? 1 : 0;
       const wait = deps.blocked(rec.id);
+      const a = activityOf(rec);
+      const open = rec.own?.cards.filter((c) => c.kind === "permission" && isOpen(c) && c.agent) ?? [];
       return {
         canSend: wait === null,
         reason: wait,
-        working: wait === null && (s?.working ?? false),
+        working: (wait === null && (s?.working ?? false)) || runs(a),
         queued: Math.max(0, pending.length - inFlight),
         model: rec.own?.model ?? null,
         models: MODELS,
         mode: modeOf(rec),
         modes: [...PHONE_MODES],
+        ...runControls(a, (t) => {
+          const card = open.find((c) => c.kind === "permission" && c.agent?.id === t.id);
+          return card ? cardIdOf(card) : null;
+        }),
       };
     },
 
     status(rec) {
       const s = drivers.get(rec.id);
       const open = rec.own?.cards.filter(isOpen) ?? [];
-      const working = s?.working ?? false;
+      const a = activityOf(rec);
+      const working = (s?.working ?? false) || runs(a);
+      const asking = open.find((c) => c.kind === "permission");
+      const cwd = rec.own?.cwd ?? "";
+      const run = rowRun(a, asking?.kind === "permission" ? asking.card.tool : null, (c, target) => stepLabel(c.tool, c.input, cwd, target));
       if (s?.unavailable && deps.blocked(rec.id) === null) return { status: "unavailable", working };
-      if (open.some((c) => c.kind !== "ask")) return { status: "awaiting_approval", working };
-      if (open.length > 0) return { status: "awaiting_input", working };
+      if (open.some((c) => c.kind !== "ask")) return { status: "awaiting_approval", working, ...run };
+      if (open.length > 0) return { status: "awaiting_input", working, ...run };
       if ((rec.own?.session.pending.length ?? 0) > 0 && deps.blocked(rec.id) !== null) return { status: "parked", working: false };
-      if (working) return { status: "working", working };
+      if (working) return { status: "working", working, ...run };
       if (s?.parkedFor) return { status: "parked", working };
       if (failed.has(rec.id)) return { status: "failed", working };
       return { status: "idle", working };
+    },
+
+    steps(rec) {
+      const out = new Map<string, StepPatch>();
+      for (const c of rec.own?.cards ?? []) {
+        if (c.kind !== "permission" || c.agent) continue;
+        if (isOpen(c)) out.set(c.toolUseId, { state: "waiting" });
+        else if (c.allowedAt) out.set(c.toolUseId, { startedAt: c.allowedAt });
+      }
+      for (const [id, p] of runningSteps(activityOf(rec))) out.set(id, { ...p, ...out.get(id), state: "running" });
+      return out;
     },
 
     yieldTo(id) {

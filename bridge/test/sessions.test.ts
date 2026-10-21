@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ClaudeApps, DesktopEntry, Live } from "../src/claudeApps";
 import type { AgentId, BotId, ServerMessage, SessionId, SessionItem, SessionRow, SessionsChannelFrame, ThreadChannelFrame, MachineId } from "../src/protocol";
-import { createSessions, type Sessions } from "../src/sessions";
+import { createSessions, type Sessions, type ThreadSignal } from "../src/sessions";
 import { emptySession, emptyWorld, own, type AgentRecord, type SessionState, type World } from "../src/world";
 
 // The Sessions facade over a temp CLAUDE_CONFIG_DIR holding recorded transcripts, with the Claude app faked and the
@@ -22,7 +22,7 @@ let folder: string;
 let world: World;
 let sessions: Sessions;
 let list: SessionsChannelFrame[];
-let thread: { id: SessionId; frame: ThreadChannelFrame }[];
+let thread: { id: SessionId; frame: ThreadSignal }[];
 let watchers: Map<SessionId, number>;
 let holders: Map<SessionId, Live>;
 let changes: (() => void)[];

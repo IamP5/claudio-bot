@@ -20,6 +20,7 @@ import {
   type PhoneMode,
   type ServerMessage,
   type SessionClientMessage,
+  type SessionServerMessage,
   type SessionControls,
   type SessionId,
   type SessionItem,
@@ -47,13 +48,19 @@ export type SessionsEnv = {
   apps: ClaudeApps;
   /** Where the index and the project cache are kept between starts. */
   cacheDir: string;
-  signal: { list(frame: SessionsChannelFrame): void; thread(id: SessionId, frame: ThreadChannelFrame): void };
+  signal: { list(frame: SessionsChannelFrame): void; thread(id: SessionId, frame: ThreadSignal): void };
   watchers(id: SessionId): number;
   sdk?: SdkReaders & { renameSession?: typeof renameSession };
   coalesceMs?: number;
   /** false: no fs.watch on the projects folder (tests). */
   watch?: boolean;
 };
+
+/**
+ * What goes on a thread's channel. A snapshot goes there only from the home, for a machine's thread the phones were
+ * watching when that machine linked again: the app applies a session frame whenever it gets one.
+ */
+export type ThreadSignal = ThreadChannelFrame | Extract<SessionServerMessage, { type: "session" }>;
 
 export type SessionsDeps = SessionsEnv & {
   /** This bridge's own machine: the one whose transcripts the list reads. */
@@ -88,6 +95,8 @@ export type Sessions = Tickable & {
   /** Reads the transcripts again now, as the sweep and the open threads' polls do. */
   sync(): Promise<void>;
   handle(m: SessionClientMessage): Promise<ServerMessage[]>;
+  /** This bridge's own list holds the session: its transcript, an agent's or a cloud agent's id, or a phone draft. */
+  owns(id: SessionId): boolean;
   /** An agent record changed: its row and its thread's controls follow. */
   agentChanged(rec: AgentRecord): void;
   /** A mac agent's turn ended done: its session becomes due for the Claude app (the mirror policy). */
@@ -596,6 +605,8 @@ export function createSessions(deps: SessionsDeps): Sessions {
           return create(m);
       }
     },
+
+    owns: known,
 
     agentChanged(rec) {
       catalog.touch();

@@ -31,6 +31,7 @@ import {
   type MessageId,
   type Peer,
   type ServerMessage,
+  type SessionClientMessage,
   type SessionId,
   type Signal,
   type StreamPosition,
@@ -46,6 +47,7 @@ import { sessionScope, type MachineProfile } from "./machine/profile";
 import type { Links } from "./machine/links";
 import { createLocalMachine, createMachines } from "./machine/machines";
 import { createMirror } from "./machine/mirror";
+import { createRemoteSessions, isEmpty } from "./machine/remoteSessions";
 import { placeAgent } from "./machine/place";
 import { createDispatch, fileQueue, type Dispatched, type QueuedIntent } from "./machine/queue";
 import { memoryJournal } from "./machine/journal";
@@ -138,7 +140,7 @@ export type HubDeps = {
   /** Tests pass a fake SDK. The bridge uses the real query and the claude on PATH. */
   claude: Pick<SessionSpec, "query" | "executable">;
   /** The machines enrolled into this home (machine/links.ts). Absent: no "machines" feature. */
-  links?: Pick<Links, "machines" | "onEvent" | "onChange">;
+  links?: Pick<Links, "machines" | "onEvent" | "onChange" | "ask" | "onSignal">;
   /** The plan's usage limits: how to read them, and whether a phone is live to see them. Absent: no "usage" feature. */
   usage?: { read: () => Promise<UsageRead>; watched: () => boolean };
   /** Claude Code's folders, the Claude app and the sockets' channels. Absent: no "sessions" feature. */
@@ -864,6 +866,9 @@ export function createHub(deps: HubDeps): Hub {
         if (bot && found) note(bot, `{0}: ${e.text}`, [agentPeer(found.agent)]);
         return;
       }
+      case "sessionCard":
+        deps.push.notifySession?.(e.sessionId, e.cardId);
+        return;
       case "reminder": {
         const bot = world.bots.get(e.botId);
         const card = bot?.messages.find((m) => m.id === e.cardId);
@@ -950,6 +955,111 @@ export function createHub(deps: HubDeps): Hub {
         log: deps.log,
       })
     : null;
+
+  /** Every other machine's Sessions tab as it last listed it, and which machine holds each session. */
+  const remote = createRemoteSessions({ home: (id) => sessions?.owns(id) ?? false });
+
+  /** The machine a session request is for: null for this one, where an id no machine lists also goes to be refused. */
+  function machineFor(m: SessionClientMessage): MachineId | null {
+    switch (m.type) {
+      case "session_create":
+        return m.machine !== undefined && m.machine !== deps.machineId ? m.machine : null;
+      case "watch_sessions":
+      case "unwatch_sessions":
+      case "session_prefs":
+        return null;
+      default:
+        return remote.ownerOf(m.sessionId);
+    }
+  }
+
+  /** What a request to an unreachable machine says, so a user knows nothing ran there. */
+  const UNREACHED: Partial<Record<SessionClientMessage["type"], string>> = {
+    session_send: "your message was not sent. Send it again when it is back",
+    session_create: "the session did not start",
+    session_stop: "nothing was stopped",
+    session_decide: "your answer did not reach it",
+    session_answer: "your answer did not reach it",
+    watch_session: "this session opens when it is back",
+  };
+
+  async function onMachine(id: MachineId, m: SessionClientMessage): Promise<ServerMessage[]> {
+    const machine = machines.of(id);
+    if (!machine || !deps.links) return error("Unknown machine");
+    if (m.type === "unwatch_session") {
+      // The machine publishes a thread while any phone here watches it; the socket's topic drops after this returns.
+      setTimeout(() => {
+        if ((deps.sessions?.watchers(m.sessionId) ?? 0) === 0) void deps.links?.ask(id, m);
+      }, 0);
+      return [];
+    }
+    const asked = await deps.links.ask(id, m);
+    if (!asked.ok) {
+      if (machine.status().online) return error(`${machine.name} did not answer in time.`);
+      const then = UNREACHED[m.type];
+      return error(then ? `${machine.name} is offline, so ${then}.` : `${machine.name} is offline.`);
+    }
+    for (const f of asked.frames) if (f.type === "session_created") remote.claim(id, f.sessionId);
+    return asked.frames;
+  }
+
+  /** The home's own list with every other machine's, last known. The home's row wins an id both list. */
+  function withMachines(frames: ServerMessage[]): ServerMessage[] {
+    return frames.map((f) => {
+      if (f.type !== "sessions") return f;
+      const others = remote.list();
+      const own = new Set(f.projects.map((p) => p.id));
+      return { ...f, rows: [...f.rows, ...others.rows], projects: [...f.projects, ...others.projects.filter((p) => !own.has(p.id))] };
+    });
+  }
+
+  async function sessionRequest(m: SessionClientMessage): Promise<ServerMessage[]> {
+    if (!sessions) return error("This bridge does not serve sessions.");
+    // A remote agent's card is answered as it is from the bot's chat: through the card's machine, queued while offline.
+    if (m.type === "session_decide") {
+      const owner = mirror.cardOwner(m.cardId);
+      const bot = owner && world.bots.get(owner.botId);
+      if (bot) return answerCard(bot, m.cardId, { kind: "permission", choice: m.choice });
+    }
+    const machine = machineFor(m);
+    return machine === null ? withMachines(await sessions.handle(m)) : onMachine(machine, m);
+  }
+
+  /** A machine that links again lists its sessions afresh, and its threads a phone here still watches start over. */
+  async function relisted(id: MachineId) {
+    const asked = await deps.links!.ask(id, { type: "watch_sessions" });
+    const list = asked.ok ? asked.frames.find((f) => f.type === "sessions") : undefined;
+    if (!list || !deps.sessions) return;
+    const change = remote.replace(id, list);
+    if (!isEmpty(change)) deps.sessions.signal.list(change);
+    for (const sessionId of remote.idsOf(id)) {
+      if (deps.sessions.watchers(sessionId) === 0) continue;
+      const watched = await deps.links!.ask(id, { type: "watch_session", sessionId, after: null });
+      if (watched.ok) for (const f of watched.frames) if (f.type === "session" || f.type === "session_items" || f.type === "session_delta" || f.type === "session_removed") deps.sessions.signal.thread(sessionId, f);
+    }
+  }
+
+  const linked = new Set<MachineId>();
+  deps.links?.onChange(() => {
+    for (const m of machines.list()) {
+      if (m.id === deps.machineId) continue;
+      const online = m.status().online;
+      if (online && !linked.has(m.id) && sessions) void relisted(m.id).catch((e) => deps.log(`sessions: ${m.name}'s list could not be read: ${errorText(e)}`));
+      if (online) linked.add(m.id);
+      else linked.delete(m.id);
+    }
+  });
+  deps.links?.onSignal((id, f) => {
+    if (!deps.sessions) return;
+    if (f.type === "session_rows") {
+      const change = remote.apply(id, f);
+      if (!isEmpty(change)) deps.sessions.signal.list(change);
+      return;
+    }
+    if (f.type === "session_removed" && f.movedTo !== null) remote.claim(id, f.movedTo);
+    // A machine speaks only for its own sessions.
+    if (remote.ownerOf(f.sessionId) === id) deps.sessions.signal.thread(f.sessionId, f);
+  });
 
   const connectors = createConnectors({ world, live: (id) => brains.get(id)?.mcp() ?? null, reopen: reopenFor, persist: deps.persist, log: deps.log });
   const webhooks = createWebhooks({ world, scheduler, port: deps.webhookPort, now: clockNow, log: deps.log });
@@ -1260,7 +1370,7 @@ export function createHub(deps: HubDeps): Hub {
   }
 
   async function handle(message: ClientMessage): Promise<ServerMessage[]> {
-    if (isSessionRequest(message)) return sessions ? sessions.handle(message) : error("This bridge does not serve sessions.");
+    if (isSessionRequest(message)) return sessionRequest(message);
     switch (message.type) {
       case "create_bot": {
         const bot = makeBot(

@@ -14,10 +14,10 @@ import {
   type SessionId,
   type SessionsChannelFrame,
   type Signal,
-  type ThreadChannelFrame,
   type TransportMessage,
 } from "./protocol";
 import { forProtocol2 } from "./protocol2";
+import type { ThreadSignal } from "./sessions";
 import type { Stream } from "./stream";
 import { errorText } from "./text";
 
@@ -88,7 +88,7 @@ export type Transport = {
    */
   signal(message: Signal): void;
   signal(message: SessionsChannelFrame, topic: "sessions"): void;
-  signal(message: ThreadChannelFrame, topic: ThreadTopic): void;
+  signal(message: ThreadSignal, topic: ThreadTopic): void;
   watchers(sessionId: SessionId): number;
   /** Open authenticated sockets heard from within LIVE_WINDOW_MS whose app is attended. */
   live(): number;
@@ -366,7 +366,7 @@ export function serve(deps: ServeDeps): Transport {
       const old = forProtocol2(message);
       if (old !== null) server.publish(TOPIC[2], old === message ? frame : JSON.stringify({ ...old, seq: stream.seq }));
     },
-    signal: (message: Signal | SessionsChannelFrame | ThreadChannelFrame, topic?: string) => {
+    signal: (message: Signal | SessionsChannelFrame | ThreadSignal, topic?: string) => {
       server.publish(topic ?? TOPIC[3], JSON.stringify(message));
     },
     watchers: (sessionId) => server.subscriberCount(threadTopic(sessionId)),

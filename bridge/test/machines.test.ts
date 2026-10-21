@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import type { Links } from "../src/machine/links";
+import type { HubDeps } from "../src/hub";
 import type { Machine } from "../src/machine/machines";
 import { profileOf } from "../src/machine/profile";
 import { profileView, type Event, type MachineId, type ProfileView } from "../src/machine/wire";
@@ -28,10 +28,12 @@ function fakeLinks() {
     status: () => (online ? { online: true, since: "2026-10-21T10:00:00.000Z" } : { online: false, since: "2026-10-21T09:00:00.000Z" }),
     send: async () => ({ ok: false, reason: "MacBook is offline" }),
   };
-  const links: Pick<Links, "machines" | "onEvent" | "onChange"> = {
+  const links: NonNullable<HubDeps["links"]> = {
     machines: () => [mac],
     onChange: (f) => void change.push(f),
     onEvent: (f) => void events.push(f),
+    ask: async () => ({ ok: false, reason: "MacBook is offline" }),
+    onSignal: () => {},
   };
   return {
     links,

@@ -24,8 +24,8 @@ import {
   type SessionId,
   type SessionServerMessage,
   type SessionsChannelFrame,
-  type ThreadChannelFrame,
 } from "../protocol";
+import type { ThreadSignal } from "../sessions";
 import type { Isolate } from "../tools";
 import type { Initiator } from "../world";
 import type { MachineProfile } from "./profile";
@@ -117,7 +117,7 @@ export type Event = { seq: Seq; at: string } & EventBody;
 /** What a machine's sessions answer a phone's request with: session frames, or an error frame. */
 export type SessionReply = SessionServerMessage | Extract<ServerMessage, { type: "error" }>;
 /** A frame a machine's sessions put on a channel: the list's, or one thread's. */
-export type SessionSignal = SessionsChannelFrame | ThreadChannelFrame;
+export type SessionSignal = SessionsChannelFrame | ThreadSignal;
 
 /**
  * What the home sends on the link. challenge and welcome are the handshake; the rest flow once it is live. ask: a
@@ -347,14 +347,16 @@ const sessionId = z.string().min(1);
 const rowsFrame = z.looseObject({ type: z.literal("session_rows"), rows: z.array(keyed), removed: z.array(sessionId), projects: z.array(keyed) });
 const threadFrame = z.looseObject({ type: z.enum(["session_items", "session_delta"]), sessionId });
 const removedFrame = z.looseObject({ type: z.literal("session_removed"), sessionId, movedTo: sessionId.nullable() });
-const signalSchema = z.union([rowsFrame, threadFrame, removedFrame]) as unknown as z.ZodType<SessionSignal>;
+const snapshotFrame = z.looseObject({ type: z.literal("session"), sessionId });
+const signalSchema = z.union([rowsFrame, threadFrame, removedFrame, snapshotFrame]) as unknown as z.ZodType<SessionSignal>;
 const replySchema = z.union([
   rowsFrame,
   threadFrame,
   removedFrame,
   z.looseObject({ type: z.literal("sessions"), rows: z.array(keyed), projects: z.array(keyed), mirror: z.enum(MIRROR_PREFS) }),
   z.looseObject({ type: z.literal("session_created"), ref: z.string(), sessionId }),
-  z.looseObject({ type: z.enum(["session", "session_page", "session_tool_output"]), sessionId }),
+  snapshotFrame,
+  z.looseObject({ type: z.enum(["session_page", "session_tool_output"]), sessionId }),
   z.looseObject({ type: z.literal("error"), message: z.string() }),
 ]) as unknown as z.ZodType<SessionReply>;
 

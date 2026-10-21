@@ -1151,11 +1151,17 @@ const S6: Scenario = {
 };
 
 const bashDone = (f: Frame) => ((f.items as Item[] | undefined) ?? []).some((i) => (i.steps ?? []).some((x) => x.tool === "Bash" && x.state === "ok"));
+/** The frame lost on its way to the app, and what passed after it, in the order the relay saw them (several can share a millisecond). */
 const lossAndRewatch = (ev: Ev) => {
   const sid = ev.ids.s6b;
-  const lost = ev.app.find((x) => x.dir === "lost" && x.frame.sessionId === sid);
-  const watch = lost && ev.app.find((x) => x.at > lost.at && x.dir === "out" && x.frame.type === "watch_session" && x.frame.sessionId === sid);
-  return { sid, lost, watch };
+  const at = ev.app.findIndex((x) => x.dir === "lost" && x.frame.sessionId === sid);
+  const lost = at === -1 ? undefined : ev.app[at];
+  const later = at === -1 ? [] : ev.app.slice(at + 1).filter((x) => x.frame.sessionId === sid);
+  const w = later.findIndex((x) => x.dir === "out" && x.frame.type === "watch_session");
+  const watch = w === -1 ? undefined : later[w];
+  const next = later.find((x) => x.dir === "in" && x.frame.type === "session_items");
+  const snap = w === -1 ? undefined : later.slice(w + 1).find((x) => x.dir === "in" && x.frame.type === "session");
+  return { lost, next, watch, snap };
 };
 
 const S6b: Scenario = {
@@ -1192,9 +1198,8 @@ const S6b: Scenario = {
       pass: "The app sends watch_session for the session with after null within 2 s of the first thread frame that reached it after the loss.",
       fail: "The app never watches the thread again, asks to resume from a position past the loss, or waits longer than 2 s.",
       check: (ev) => {
-        const { sid, lost, watch } = lossAndRewatch(ev);
+        const { lost, next, watch } = lossAndRewatch(ev);
         if (!lost) return no("not judged: nothing was lost");
-        const next = ev.app.find((x) => x.at > lost.at && x.dir === "in" && x.frame.sessionId === sid && x.frame.type === "session_items");
         if (!watch) return no(`the app never watched the thread again${next ? `; rev ${next.frame.rev} reached it` : ""}`);
         if (watch.frame.after !== null) return no(`it asked to resume after ${JSON.stringify(watch.frame.after)}`);
         const lag = watch.at - (next?.at ?? lost.at);
@@ -1209,9 +1214,8 @@ const S6b: Scenario = {
       pass: "After that watch, a snapshot of the session reaches the app with the Bash step ok.",
       fail: "No snapshot reaches the app, or it lacks the finished step.",
       check: (ev) => {
-        const { sid, watch } = lossAndRewatch(ev);
+        const { watch, snap } = lossAndRewatch(ev);
         if (!watch) return no("not judged: the app never watched again");
-        const snap = ev.app.find((x) => x.at > watch.at && x.dir === "in" && x.frame.type === "session" && x.frame.sessionId === sid);
         if (!snap) return no("no snapshot reached the app");
         return bashDone(snap.frame) ? ok(`snapshot rev ${snap.frame.rev} with the command done, ${((snap.at - watch.at) / 1000).toFixed(1)} s after the watch`) : no("the snapshot has no finished Bash step");
       },

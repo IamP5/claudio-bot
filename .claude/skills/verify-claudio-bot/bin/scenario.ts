@@ -60,12 +60,16 @@ function wsFrames(onFrame: (raw: Buffer, text: string | null) => void) {
   let upgraded = false;
   return (chunk: Buffer) => {
     buf = Buffer.concat([buf, chunk]);
-    if (!upgraded) {
+    // CFNetwork keeps the connection of POST /pair alive and upgrades it later, so plain HTTP may come first.
+    while (!upgraded) {
       const end = buf.indexOf("\r\n\r\n");
       if (end === -1) return;
-      onFrame(Buffer.from(buf.subarray(0, end + 4)), null);
-      buf = buf.subarray(end + 4);
-      upgraded = true;
+      const head = buf.subarray(0, end).toString("latin1");
+      const size = end + 4 + Number(head.match(/^content-length:\s*(\d+)/im)?.[1] ?? 0);
+      if (buf.length < size) return;
+      onFrame(Buffer.from(buf.subarray(0, size)), null);
+      buf = buf.subarray(size);
+      upgraded = /^HTTP\/1\.1 101/.test(head) || (/^GET /.test(head) && /^upgrade:\s*websocket/im.test(head));
     }
     for (;;) {
       if (buf.length < 2) return;

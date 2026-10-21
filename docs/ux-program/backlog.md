@@ -1,1 +1,1 @@
-- Runner: an interrupted scenario run (SIGINT) leaves its bridge running; cleanup runs only on the normal path. Seen during G14. Fix: run control-claudio cleanup from the exit handler.
+Nothing open.

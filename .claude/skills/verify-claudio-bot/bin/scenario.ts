@@ -22,6 +22,18 @@ const flag = (name: string, boolean = false) => {
 const log = (s: string) => console.log(`[${new Date().toISOString()}] ${s}`);
 class PreconditionFailed extends Error {}
 
+/** The run whose bridge is up, so every way out (the end, SIGINT, SIGTERM, a crash) stops it. */
+let live: { run: Run; out: string } | null = null;
+function cleanupBridge() {
+  if (!live) return null;
+  const { run, out } = live;
+  live = null;
+  log(`cleaning up bridge run ${run.id}`);
+  return sh(["bun", CONTROL, "cleanup", "--run", run.id], join(out, "cleanup.log")).out;
+}
+process.on("exit", cleanupBridge);
+for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]] as const) process.on(sig, () => process.exit(code));
+
 type Thread = { items: Map<string, Item>; controls: Controls | null; epoch: string | null; rev: number };
 
 /**
@@ -338,7 +350,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
   };
   let phone: Phone | null = null;
   let relay: Relay | null = null;
-  let app: string | null = null;
+  let app: pool.Build | null = null;
   const markNow = (m: string) => {
     ev.marks[m] = ev.now();
     log(`mark ${m} at +${(ev.marks[m]! / 1000).toFixed(1)}s`);
@@ -367,6 +379,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
     const runId = launched.out.match(/READY run=(\S+)/)?.[1];
     if (!launched.ok || !runId) throw new Error(`launch failed; see ${join(out, "launch.log")}`);
     run = JSON.parse(readFileSync(join(BASE, "runs", runId, "run.json"), "utf8")) as Run;
+    live = { run, out };
     report.run = runId;
     report.build = run.rev;
     relay = new Relay(run.port);
@@ -377,7 +390,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
     await phone.open(false);
 
     if (sim && lease && app) {
-      pool.installAndLaunch(lease, app);
+      report.app = { stamp: app.stamp, bundle: pool.installAndLaunch(lease, app) };
       await Bun.sleep(3000);
       const before = ((await phone.request({ type: "devices" }, "devices")).devices as unknown[]).length;
       const offer = await phone.request({ type: "pair_code" }, "pair_code");
@@ -560,10 +573,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
   }
   phone?.drop();
   relay?.close();
-  if (run) {
-    const c = sh(["bun", CONTROL, "cleanup", "--run", run.id], join(out, "cleanup.log"));
-    report.bridgeEvidence = c.out.match(/evidence kept at (\S+?):/)?.[1] ?? null;
-  }
+  if (run) report.bridgeEvidence = cleanupBridge()?.match(/evidence kept at (\S+?):/)?.[1] ?? null;
   held?.release("scenario done");
   writeFileSync(join(out, "report.json"), JSON.stringify(report, null, 2));
   writeFileSync(join(out, "report.md"), reportMarkdown(sc, report));
@@ -595,7 +605,7 @@ function reportMarkdown(sc: Scenario, r: Record<string, unknown>) {
   return [
     `# ${sc.id} ${sc.title}`,
     "",
-    `outcome **${r.outcome}**${r.failure ? ` (${r.failure})` : ""}; lane ${r.lane}${r.device ? ` on ${r.device}` : ""}; run ${r.run ?? "-"} build ${String(r.build ?? "").slice(0, 10)}; ${r.durationS} s; $${r.spentUsd}`,
+    `outcome **${r.outcome}**${r.failure ? ` (${r.failure})` : ""}; lane ${r.lane}${r.device ? ` on ${r.device}` : ""}${r.app ? ` app ${(r.app as { stamp: string }).stamp.slice(0, 12)}` : ""}; run ${r.run ?? "-"} build ${String(r.build ?? "").slice(0, 10)}; ${r.durationS} s; $${r.spentUsd}`,
     `rubric: ${count("pass")} pass, ${count("fail")} fail, ${count("review")} review, ${count("not-judged")} not judged, ${count("skipped")} skipped`,
     "",
     "## Preconditions",
@@ -717,9 +727,11 @@ async function main() {
       if (sub === "release") return pool.release(lease), 0;
       return die(`unknown lease command ${sub}`);
     }
-    case "sim-build":
-      console.log(await pool.buildApp());
+    case "sim-build": {
+      const b = await pool.buildApp();
+      console.log(`${b.app} stamp ${b.stamp}`);
       return 0;
+    }
     case "sim-job": {
       // A dummy simulator job: lease, boot, screenshot, hold, release. Proves the pool's limits under contention.
       const label = flag("label") ?? `job ${process.pid}`;

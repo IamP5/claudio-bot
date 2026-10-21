@@ -431,8 +431,12 @@ export type OwnDrive = {
   /** Open cards and the newest settled ones. Writer: own.ts. */
   cards: OwnCard[];
   // How runs end, kept across bridge restarts. Writer: own.ts.
-  /** How the last run ended, until the next send. */
+  /** How the last run ended, until a new run starts: the next send, or a queued turn after the one that ended. */
   outcome?: SessionOutcome;
+  /** The envelope whose turn that ending ended; a turn of any other envelope starts a new run. */
+  endedTurn?: string;
+  /** The steps of tasks the user stopped: they read stopped once the task is gone, before the transcript says so. */
+  stoppedSteps?: string[];
   /** The last time work was cut off, kept across sends: steps that started before it never end. */
   cut?: Cut;
   /** The bridge's own lines in the thread (stops, failures, restarts), the newest few. */

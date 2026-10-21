@@ -17,8 +17,8 @@ export type ThreadsDeps = {
   overlay(id: SessionId): SessionItem[];
   /** How the live query changes transcript steps, by tool_use id. */
   steps(id: SessionId): ReadonlyMap<string, StepPatch>;
-  /** When the session's work was cut off: a step the transcript leaves running from before then reads ended. */
-  cut(id: SessionId): Cut | null;
+  /** When the session's work was cut off: a step the transcript leaves running from before one reads ended. */
+  cuts(id: SessionId): readonly Cut[];
   controls(id: SessionId): SessionControls;
   publish(id: SessionId, frame: ThreadChannelFrame): void;
   watched(id: SessionId): boolean;
@@ -63,8 +63,6 @@ const KEEP = 4;
 /** While a session works, its watchers hear from it at least this often, so a silent call never looks like a dead link. */
 export const BEAT_MS = 25_000;
 const CARD_WAIT_MS = 2_000;
-/** A failed turn's result follows Claude Code's API error entry within seconds; this leaves room for a slow Mac. */
-const ECHO_MS = 120_000;
 
 type Frame = { rev: number; items: SessionItem[]; removed: ItemId[]; bytes: number };
 
@@ -179,9 +177,11 @@ export function createThreads(deps: ThreadsDeps): Threads {
   function visible(s: State): SessionItem[] {
     const now = deps.now().getTime();
     const steps = new Set(s.items.flatMap((i) => (i.kind === "work" ? i.steps.map((st) => st.id) : [])));
-    return deps.overlay(s.id).filter((item) => {
+    const overlay = deps.overlay(s.id);
+    const users = overlay.filter((i) => i.kind === "user");
+    return overlay.filter((item) => {
       if (s.shownByTranscript.has(item.id)) return false;
-      if (item.kind === "notice" && item.tone === "error" && echoed(s, item)) return false;
+      if (item.kind === "notice" && item.tone === "error" && echoed(s, item, users)) return false;
       if (item.kind !== "permission" || item.card.answer !== null || item.stepId === undefined || item.subagent !== undefined) return true;
       const held = !steps.has(item.stepId) && now - Date.parse(item.at) < CARD_WAIT_MS;
       if (held) s.holding = true;
@@ -189,9 +189,25 @@ export function createThreads(deps: ThreadsDeps): Threads {
     });
   }
 
-  /** The transcript already shows this failure: Claude Code wrote an API error of the same words as the turn ended. */
-  const echoed = (s: State, notice: Extract<SessionItem, { kind: "notice" }>): boolean =>
-    s.items.some((i) => i.kind === "notice" && i.tone === "error" && i.text === notice.text && Math.abs(Date.parse(i.at) - Date.parse(notice.at)) <= ECHO_MS);
+  /**
+   * The transcript already shows this failure: the last thing said before it, the user's own prompts included, is
+   * Claude Code's API error in the same words, so the error belongs to the same turn.
+   */
+  function echoed(s: State, notice: Extract<SessionItem, { kind: "notice" }>, users: readonly SessionItem[]): boolean {
+    let last: SessionItem | null = null;
+    for (const i of [...users, ...s.items]) {
+      if (i.at > notice.at || (i.kind === "notice" && i.tone !== "error")) continue;
+      if (last === null || i.at >= last.at) last = i;
+    }
+    return last?.kind === "notice" && last.tone === "error" && last.text === notice.text;
+  }
+
+  /** Claude Code's word that the user stopped a task the bridge already named in its own stop notice. */
+  function restated(item: SessionItem, overlay: readonly SessionItem[]): boolean {
+    if (item.kind !== "notice" || item.reason !== "task" || !/stopped by user/i.test(item.text)) return false;
+    const quoted = item.text.match(/"[^"]*"/)?.[0];
+    return quoted !== undefined && overlay.some((o) => o.kind === "notice" && o.reason === "stop" && o.at <= item.at && o.text.includes(quoted));
+  }
 
   /** The overlay as shown, recorded as published with the controls. */
   function absorbOverlay(s: State): SessionItem[] {
@@ -213,37 +229,46 @@ export function createThreads(deps: ThreadsDeps): Threads {
     s.steps = new Map([...deps.steps(s.id)].map(([id, p]) => [id, JSON.stringify(p)]));
     const touched = new Set([...before.keys(), ...s.steps.keys()].filter((id) => before.get(id) !== s.steps.get(id)));
     const cutBefore = s.cut;
-    s.cut = JSON.stringify(deps.cut(s.id));
+    s.cut = JSON.stringify(deps.cuts(s.id));
     const recut = s.cut !== cutBefore;
     if (touched.size === 0 && !recut) return [];
     return s.items.filter((i) => i.kind === "work" && i.steps.some((st) => touched.has(st.id) || (recut && st.state === "running")));
   }
 
-  type View = { patches: ReadonlyMap<string, StepPatch>; cut: Cut | null };
-  const viewOf = (id: SessionId): View => ({ patches: deps.steps(id), cut: deps.cut(id) });
+  type View = { patches: ReadonlyMap<string, StepPatch>; cuts: readonly Cut[] };
+  const viewOf = (id: SessionId): View => ({ patches: deps.steps(id), cuts: deps.cuts(id) });
 
-  /** A transcript item as shown: its steps patched by the live view, then ended by the cut unless the live view holds them. */
-  function patched(item: SessionItem, { patches, cut }: View): SessionItem {
+  /** A transcript item as shown: its steps patched by the live view, then ended by a cut unless the live view holds them. */
+  function patched(item: SessionItem, { patches, cuts }: View): SessionItem {
     if (item.kind !== "work") return item;
     const steps = item.steps.map((st) => {
       const p = patches.get(st.id);
       const shown = p ? patchStep(st, p) : st;
-      return cut && p?.state === undefined ? cutStep(shown, cut) : shown;
+      return p?.state === undefined ? cutStep(shown, cuts) : shown;
     });
     return steps.every((st, i) => st === item.steps[i]) ? item : { ...item, steps };
   }
 
-  /** The transcript's items with the overlay's replacements and step patches applied, then the overlay's own. */
+  /**
+   * The transcript's items with the overlay's replacements and step patches applied. The bridge's notices and the
+   * user's sent prompts go in where their time falls; cards and queued messages follow.
+   */
   function merged(s: State): SessionItem[] {
     const overlay = visible(s);
     const byId = new Map(overlay.map((item) => [item.id, item]));
     const view = viewOf(s.id);
-    const out = s.items.map((item) => {
+    const out = s.items.flatMap((item) => {
       const over = byId.get(item.id);
       if (over) byId.delete(item.id);
-      return over ?? patched(item, view);
+      return over ? [over] : restated(item, overlay) ? [] : [patched(item, view)];
     });
-    return [...out, ...byId.values()];
+    const rest = [...byId.values()];
+    const timed = rest.filter((i) => i.kind === "notice" || (i.kind === "user" && !i.queued));
+    for (const item of timed) {
+      const i = out.findIndex((o) => o.at > item.at);
+      out.splice(i === -1 ? out.length : i, 0, item);
+    }
+    return [...out, ...rest.filter((i) => !timed.includes(i))];
   }
 
   function emit(s: State, all: SessionItem[], removed: ItemId[], controls: SessionControls | null) {
@@ -296,9 +321,13 @@ export function createThreads(deps: ThreadsDeps): Threads {
 
   /** Transcript items as shown: an overlay item of the same id wins, and the step patches apply. */
   const shown = (s: State, items: readonly SessionItem[]) => {
-    const overlay = new Map(deps.overlay(s.id).map((item) => [item.id, item]));
+    const overlay = deps.overlay(s.id);
+    const byId = new Map(overlay.map((item) => [item.id, item]));
     const view = viewOf(s.id);
-    return items.map((item) => overlay.get(item.id) ?? patched(item, view));
+    return items.flatMap((item) => {
+      const over = byId.get(item.id);
+      return over ? [over] : restated(item, overlay) ? [] : [patched(item, view)];
+    });
   };
 
   function upsertTranscript(s: State, changed: readonly SessionItem[]) {

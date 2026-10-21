@@ -1763,12 +1763,12 @@ describe("background work", () => {
     const { h } = await started("[a]");
     h.q().emit(said("Working."), tasks(build, lint));
     await flush();
-    expect(await h.session.interrupt("turn")).toEqual({ ran: true, refused: [] });
+    expect(await h.session.interrupt("turn")).toEqual({ ran: true, refused: [], late: [] });
     expect(h.q().stoppedTasks).toEqual([]);
     h.q().emit(interruptedResult(0.1));
     await flush();
     h.q().refusing.add("t2");
-    expect(await h.session.interrupt("all")).toEqual({ ran: true, refused: ["t2" as TaskId] });
+    expect(await h.session.interrupt("all")).toEqual({ ran: true, refused: ["t2" as TaskId], late: [] });
     expect(h.q().stoppedTasks).toEqual(["t1"]);
   });
 

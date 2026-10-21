@@ -304,6 +304,10 @@ export function patchStep(step: ToolStep, p: StepPatch): ToolStep {
   return { ...step, state, ...(p.startedAt !== undefined && { startedAt: p.startedAt }), ...(state === "running" && step.state === "ok" && { output: null }) };
 }
 
-/** A transcript step as shown once its work was cut off: one that started before the cut and still reads running. */
-export const cutStep = (step: ToolStep, cut: Cut): ToolStep =>
-  step.state === "running" && step.startedAt !== undefined && step.startedAt <= cut.at ? { ...step, state: cut.state, cause: cut.cause, endedAt: step.endedAt ?? cut.at } : step;
+/** A transcript step as shown once its work was cut off: one that still reads running takes the first cut after its start. */
+export function cutStep(step: ToolStep, cuts: readonly Cut[]): ToolStep {
+  const started = step.startedAt;
+  if (step.state !== "running" || started === undefined) return step;
+  const cut = cuts.filter((c) => started <= c.at).sort((a, b) => a.at.localeCompare(b.at))[0];
+  return cut ? { ...step, state: cut.state, cause: cut.cause, endedAt: step.endedAt ?? cut.at } : step;
+}

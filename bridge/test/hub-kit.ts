@@ -64,8 +64,11 @@ export class FakeQuery {
   readonly stoppedTasks: string[] = [];
   /** Claude Code refuses to stop a task, as when it already ended. */
   refuseStop = false;
+  /** Claude Code takes a stop only when the test lets it go, as a stopped process that resumes late. */
+  holdStop: Promise<void> | null = null;
   async stopTask(id: string) {
     if (this.refuseStop) throw new Error(`no task ${id}`);
+    if (this.holdStop) await this.holdStop;
     this.stoppedTasks.push(id);
   }
   async mcpServerStatus() {

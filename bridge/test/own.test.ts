@@ -45,7 +45,9 @@ const apps = (): ClaudeApps => ({
 });
 
 const fileOf = (id: SessionId) => join(folder, `${id}.jsonl`);
-const install = (name: string, id: SessionId) => writeFileSync(fileOf(id), readFileSync(join(FIXTURES, `${name}.jsonl`), "utf8").replaceAll("<cwd>", repo));
+/** The recording's history is moved to the hour before the tests' clock, so what a test adds comes after it, as live. */
+const install = (name: string, id: SessionId) =>
+  writeFileSync(fileOf(id), readFileSync(join(FIXTURES, `${name}.jsonl`), "utf8").replaceAll("<cwd>", repo).replaceAll('"2026-10-18T19:', '"2026-10-18T11:'));
 const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 
 function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
@@ -150,8 +152,13 @@ describe("taking on a session from the phone", () => {
     await send("Sleep for a minute");
     await send("Then tidy up", "c_tidy");
     expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk2x9q7" as TaskId } })).toEqual([{ type: "error", message: "That task is not running.", about: { kind: "stop", sessionId: ASK } }]);
-    expect(await handle({ type: "session_unqueue", sessionId: ASK, clientId: "c_Sleep for a minute" })).toEqual([{ type: "error", message: expect.stringContaining("already went to Claude") }]);
+    expect(await handle({ type: "session_unqueue", sessionId: ASK, clientId: "c_Sleep for a minute" })).toEqual([
+      { type: "error", message: expect.stringContaining("already went to Claude"), about: { kind: "send", sessionId: ASK, clientId: "c_Sleep for a minute" } },
+    ]);
     expect(await handle({ type: "session_unqueue", sessionId: ASK, clientId: "c_tidy" })).toEqual([]);
+    expect(await handle({ type: "session_unqueue", sessionId: ASK, clientId: "c_tidy" })).toEqual([
+      { type: "error", message: "That message was already withdrawn.", about: { kind: "send", sessionId: ASK, clientId: "c_tidy" } },
+    ]);
     expect([(await snapshot(ASK)).items.some((i) => i.id === ("c_tidy" as never)), (await snapshot(ASK)).controls.queued]).toEqual([false, 0]);
     queries[0]!.emit(result(0.01, { session_id: ASK }));
     await flush();
@@ -389,7 +396,7 @@ describe("what Claude Code asks", () => {
     await start();
     const items = (await snapshot(ASK)).items;
     expect((items.find((i) => i.kind === "permission") as Extract<SessionItem, { kind: "permission" }>).card.answer).toBe("expired");
-    expect(items.at(-1)).toMatchObject({ kind: "notice", text: expect.stringContaining("expired") });
+    expect(items.find((i) => i.kind === "notice")).toMatchObject({ text: expect.stringContaining("expired"), reason: "restart" });
   });
 });
 
@@ -1027,6 +1034,189 @@ describe("how a run ends", () => {
     ]);
     expect((await controlsNow()).mode).toBe("default");
     expect(world.sessions.get(ASK)?.own?.mode).toBeNull();
+  });
+
+  test("a queued message that runs after a failed turn, or after a restart cut the turn off, starts a new run", async () => {
+    await start();
+    await send("First");
+    await send("Second", "c_2");
+    queries[0]!.emit(result(0, { is_error: true, result: "API Error: 400 bad request" }));
+    await flush();
+    expect(queries[0]!.received).toEqual(["First", "Second"]);
+    queries[0]!.emit(result(0.01, { session_id: ASK }));
+    await flush();
+    expect(await rowOf(ASK)).toMatchObject({ status: "idle", outcome: { kind: "finished" } });
+
+    await send("Third", "c_3");
+    await send("Fourth", "c_4");
+    queries[0]!.emit(toolCall("toolu_p", "Bash", { command: "perl -e 'sleep 40'" }));
+    await flush();
+    await restart();
+    queries[0]!.emit(result(0.01, { session_id: ASK }));
+    await flush();
+    expect(await rowOf(ASK)).toMatchObject({ status: "idle", outcome: { kind: "finished" } });
+  });
+
+  test("a Stop that Claude Code refused stops nothing, so the run still ends finished", async () => {
+    await start();
+    await send("Start it");
+    const q = queries[0]!;
+    q.emit(taskStarted(shellTask("bk", "toolu_k", "sleep 30")), level(shellTask("bk", "toolu_k", "sleep 30")), result());
+    await flush();
+    q.refuseStop = true;
+    expect(await handle({ type: "session_stop", sessionId: ASK, target: "all" })).toEqual([{ type: "error", message: expect.stringContaining("did not stop"), about: { kind: "stop", sessionId: ASK } }]);
+    expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } })).toHaveLength(1);
+    q.emit(completed("bk"), level());
+    await flush();
+    expect((await rowOf(ASK)).outcome?.kind).toBe("finished");
+    expect(world.sessions.get(ASK)?.own?.cut).toBeUndefined();
+  });
+
+  test("a subagent's card that Claude Code abandons after a stop of the turn alone reads closed", async () => {
+    await start();
+    await send("Fan out");
+    const q = queries[0]!;
+    q.emit(taskStarted(agentTask("a2", "toolu_a2", "sleeper two")), level(agentTask("a2", "toolu_a2", "sleeper two")));
+    await flush();
+    await handle({ type: "session_stop", sessionId: ASK, target: "turn" });
+    q.emit(interrupted());
+    await flush();
+    const signal = new AbortController();
+    void call(q, "Bash", { command: "make" }, { signal: signal.signal, agentID: "a2" });
+    await flush();
+    q.crash("Claude Code process terminated by signal SIGKILL");
+    signal.abort();
+    await flush();
+    expect((await cardItem()).card.answer).toBe("closed");
+  });
+
+  test("a task stop Claude Code takes late counts once the task is gone: its card and step read stopped", async () => {
+    await start();
+    await send("Fan out");
+    const q = queries[0]!;
+    await transcribe(calledEntry("toolu_a1", "Agent", { description: "sleeper one", subagent_type: "general-purpose", prompt: "Sleep." }));
+    q.emit(taskStarted(agentTask("a1", "toolu_a1", "sleeper one")), level(agentTask("a1", "toolu_a1", "sleeper one")), result());
+    await flush();
+    const signal = new AbortController();
+    void call(q, "Bash", { command: "make" }, { signal: signal.signal, agentID: "a1" });
+    await flush();
+    let take = () => {};
+    q.holdStop = new Promise<void>((r) => (take = r));
+    expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "a1" as TaskId } })).toEqual([
+      { type: "error", message: expect.stringContaining("not confirmed"), about: { kind: "stop", sessionId: ASK } },
+    ]);
+    expect((await cardItem()).card.answer).toBeNull();
+    take();
+    signal.abort();
+    q.emit(sys("task_updated", { task_id: "a1", patch: { status: "killed" } }), level());
+    await flush();
+    expect((await cardItem()).card.answer).toBe("stopped");
+    expect(await stepOf("toolu_a1")).toMatchObject({ state: "stopped", cause: "Stopped by you" });
+    expect((await noticesNow()).map((n) => n.text).at(-1)).toBe('Stopped by you: agent "sleeper one".');
+    expect((await rowOf(ASK)).outcome).toMatchObject({ kind: "stopped" });
+  }, 10_000);
+
+  test("a stopped task's step still reads stopped after a bridge restart, and a step left running at rest ends", async () => {
+    await start();
+    await send("Start it");
+    const q = queries[0]!;
+    await transcribe(
+      calledEntry("toolu_k", "Bash", { command: "sleep 600", run_in_background: true }),
+      resultEntry("toolu_k", "Command running in background with ID: bk."),
+      calledEntry("toolu_w", "Bash", { command: "sleep 700", run_in_background: true }),
+      resultEntry("toolu_w", "Command running in background with ID: bw."),
+    );
+    const shells = [shellTask("bk", "toolu_k", "sleep 600"), shellTask("bw", "toolu_w", "sleep 700")];
+    q.emit(...shells.map(taskStarted), level(...shells), result());
+    await flush();
+    await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } });
+    q.emit(sys("task_updated", { task_id: "bk", patch: { status: "killed" } }), level(shells[1]!), sys("task_updated", { task_id: "bw", patch: { status: "killed" } }), level());
+    await flush();
+    await restart();
+    expect(await stepOf("toolu_k")).toMatchObject({ state: "stopped", cause: "Stopped by you" });
+    expect(await stepOf("toolu_w")).toMatchObject({ state: "stopped", cause: "It ended without a result" });
+  });
+
+  test("a denied subagent command's step cause keeps its secrets masked", async () => {
+    await start();
+    await send("Delegate it");
+    const q = queries[0]!;
+    await transcribe(calledEntry("toolu_af", "Agent", { description: "long sleeper", subagent_type: "general-purpose", prompt: "Sleep." }));
+    q.emit(taskStarted({ ...agentTask("af", "toolu_af", "long sleeper"), is_backgrounded: false }));
+    await flush();
+    const denied = call(q, "Bash", { command: "curl -H 'Authorization: Bearer sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH' https://x.test" }, { agentID: "af" });
+    await flush();
+    await handle({ type: "session_decide", sessionId: ASK, cardId: (await cardItem()).card.id, choice: "deny" });
+    await denied;
+    q.emit(completed("af"), notifiedOf("af", "toolu_af"));
+    await transcribe(resultEntry("toolu_af", "I could not run the command."));
+    expect((await stepOf("toolu_af")).cause).not.toContain("sk-ant-api03");
+  });
+
+  test("a Stop aimed at an announced wake turn still reaches it once it runs", async () => {
+    await start();
+    await send("Fan out");
+    const q = queries[0]!;
+    q.emit(taskStarted(agentTask("a1", "toolu_a1", "sleeper one")), level(agentTask("a1", "toolu_a1", "sleeper one")), result());
+    await flush();
+    clock += 10_000;
+    q.emit(completed("a1"), notifiedOf("a1", "toolu_a1"), level());
+    await flush();
+    const seen = (await controlsNow()).turn!;
+    clock += 2_000;
+    q.emit(wakeInit());
+    await flush();
+    expect(await handle({ type: "session_stop", sessionId: ASK, turnStartedAt: seen.startedAt })).toEqual([]);
+  });
+
+  test("the same failure twice in two turns shows twice; once, when the transcript already has it", async () => {
+    await start();
+    await send("Hello");
+    const said = "There's an issue with the selected model (claude-nope).";
+    await transcribe({ type: "assistant", isApiErrorMessage: true, message: { role: "assistant", id: "msg_err", content: [{ type: "text", text: said }] } });
+    queries[0]!.emit(result(0, { is_error: true, result: said }));
+    await flush();
+    clock += 60_000;
+    await send("Again", "c_again");
+    queries[0]!.emit(result(0, { is_error: true, result: said }));
+    await flush();
+    expect((await noticesNow()).filter((n) => n.text === said)).toHaveLength(2);
+  });
+
+  test("a kept prompt and its stop notice stay where they happened when a later turn follows", async () => {
+    await start();
+    await send("Write a haiku", "c_haiku");
+    await handle({ type: "session_stop", sessionId: ASK });
+    queries[0]!.emit(interrupted());
+    await flush();
+    clock += 60_000;
+    await send("Next one", "c_next");
+    await transcribe({ type: "user", message: { role: "user", content: "Next one" } }, { type: "assistant", message: { role: "assistant", id: "msg_r", content: [{ type: "text", text: "Here it is." }] } });
+    queries[0]!.emit(result(0.01, { session_id: ASK }));
+    await flush();
+    const tail = (await snapshot(ASK)).items.slice(-4).map((i) => [i.kind, "text" in i ? i.text : ""]);
+    expect(tail).toEqual([
+      ["user", "Write a haiku"],
+      ["notice", "Stopped by you before Claude replied."],
+      ["user", "Next one"],
+      ["assistant", "Here it is."],
+    ]);
+  });
+
+  test("one stop of a background agent shows one stop line", async () => {
+    await start();
+    await send("Fan out");
+    const q = queries[0]!;
+    await transcribe(calledEntry("toolu_a1", "Agent", { description: "long sleeper", subagent_type: "general-purpose", prompt: "Sleep.", run_in_background: true }));
+    q.emit(taskStarted(agentTask("a1", "toolu_a1", "long sleeper")), level(agentTask("a1", "toolu_a1", "long sleeper")), result());
+    await flush();
+    clock += 1000;
+    await handle({ type: "session_stop", sessionId: ASK });
+    q.emit(sys("task_updated", { task_id: "a1", patch: { status: "killed" } }), level());
+    await flush();
+    clock += 1000;
+    await transcribe({ type: "user", message: { role: "user", content: '<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_a1</tool-use-id>\n<status>killed</status>\n<summary>Agent "long sleeper" was stopped by user</summary>\n</task-notification>' } });
+    expect((await noticesNow()).map((n) => n.reason)).toEqual(["stop"]);
   });
 
   test("Always names the tool once and lists each rule as its own item", () => {

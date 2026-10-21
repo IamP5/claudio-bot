@@ -360,9 +360,9 @@ export function createSessions(deps: SessionsDeps): Sessions {
     context: (id, head) => ({ cwd: head?.cwd ?? agentOf(id)?.cwd ?? deps.world.sessions.get(id)?.own?.cwd ?? "", userName: deps.userName, agent: agentOf(id) !== null }),
     overlay,
     steps,
-    cut: (id) => {
+    cuts: (id) => {
       const w = driverOf(id);
-      return w.kind === "own" ? drivers.cut(w.rec) : null;
+      return w.kind === "own" ? drivers.cuts(w.rec) : [];
     },
     controls,
     publish: deps.signal.thread,
@@ -460,8 +460,10 @@ export function createSessions(deps: SessionsDeps): Sessions {
 
   function unqueue(m: Extract<SessionClientMessage, { type: "session_unqueue" }>): ServerMessage[] {
     const w = driverOf(m.sessionId);
-    if (w.kind !== "own") return error("Only a message you queued in this session can be withdrawn.");
-    return reply(drivers.unqueue(w.rec, m.clientId));
+    const about: ErrorAbout = { kind: "send", sessionId: m.sessionId, clientId: m.clientId };
+    if (w.kind !== "own") return error("Only a message you queued in this session can be withdrawn.", about);
+    const r = drivers.unqueue(w.rec, m.clientId);
+    return r.ok ? [] : error(r.error, about);
   }
 
   function decide(m: Extract<SessionClientMessage, { type: "session_decide" }>): ServerMessage[] {

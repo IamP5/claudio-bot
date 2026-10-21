@@ -118,7 +118,8 @@ const machines: Wire<MachineView>[] = [
 ];
 
 export const server = [
-  { type: "hello", protocol: 3, features: [...FEATURES], epoch: "e_7f3a", seq: 41, resumed: false, machine: "omarchy", userName: "Alex", bots: [bot], machines },
+  { type: "hello", protocol: 3, features: [...FEATURES], epoch: "e_7f3a", seq: 41, resumed: false, machine: "omarchy", userName: "Alex", bots: [bot], machines,
+    world: { id: "w_2c9d4e1f-7a3b-4c5d-8e6f-0a1b2c3d4e5f", name: "Alex's bots" } },
   { type: "bot", seq: 42, bot: { ...bot, id: "b2", name: "news digest", title: "Morning digest", avatar: { shape: "pentagon", color: "teal" }, status: "working", unread: 0, question: null, pinned: true, dailyCapUsd: 5, spentTodayUsd: 0, capUsd: 5 } },
   { type: "bot_removed", botId: "b2" },
   { type: "created", ref: "c1", botId: "b3" },

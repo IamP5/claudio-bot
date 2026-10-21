@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { createHomes } from "../src/home";
 import { createHub } from "../src/hub";
 import type { UsageRow } from "../src/ledger";
-import type { AgentId, BotId, ServerMessage } from "../src/protocol";
+import type { AgentId, BotId, ServerMessage, WorldId } from "../src/protocol";
 import { emptySession, emptyWorld, newBot, type AgentRecord } from "../src/world";
 
 const roots: string[] = [];
@@ -53,6 +53,7 @@ function hubWith(rows: UsageRow[]) {
   const frames: ServerMessage[] = [];
   const hub = createHub({
     machineId: "m_test" as MachineId,
+    worldId: "w_test" as WorldId,
     profile: testProfile(root),
     userName: "Alex",
     world,

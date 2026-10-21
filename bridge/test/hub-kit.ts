@@ -10,7 +10,7 @@ import { createHomes } from "../src/home";
 import { createHub, type HubDeps } from "../src/hub";
 import { platformOf, profileOf, type MachineProfile } from "../src/machine/profile";
 import type { Project } from "../src/projects";
-import type { BotId, MessageId, PlanUsage, ServerMessage, Signal, StreamPosition } from "../src/protocol";
+import type { BotId, MessageId, PlanUsage, ServerMessage, Signal, StreamPosition, WorldId } from "../src/protocol";
 import type { Push, PushReason } from "../src/push";
 import { newBot, type BotRecord, type World } from "../src/world";
 
@@ -153,6 +153,7 @@ export function hubOver(
   const queries: FakeQuery[] = [];
   const hub = createHub({
     machineId: "m_test" as MachineId,
+    worldId: "w_test" as WorldId,
     profile: testProfile(root),
     userName: "Alex",
     world,

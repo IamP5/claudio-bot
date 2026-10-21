@@ -34,6 +34,7 @@ import {
   type SessionId,
   type Signal,
   type StreamPosition,
+  type WorldId,
 } from "./protocol";
 import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, onboarding, persona, type Envelope } from "./prompts";
 import { cardReply } from "./protocol2";
@@ -115,6 +116,8 @@ export type HubDeps = {
   profile: MachineProfile;
   /** This bridge's own machine id, from machine.json. */
   machineId: MachineId;
+  /** The world this home holds, from machine.json. */
+  worldId: WorldId;
   userName: string;
   world: World;
   homes: Homes;
@@ -1267,7 +1270,7 @@ export function createHub(deps: HubDeps): Hub {
       machine: deps.profile.name,
       userName,
       bots: sortBots([...[...world.bots.values()].map(view), ...[...world.groups.values()].map(groupView)]),
-      ...(deps.links && { machines: machineViews() }),
+      ...(deps.links && { machines: machineViews(), world: { id: deps.worldId, name: `${userName}'s bots` } }),
     }),
     greeting() {
       const latest = usage?.opened() ?? null;

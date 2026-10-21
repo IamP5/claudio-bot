@@ -15,6 +15,8 @@ export type RunId = string & { readonly __brand: "RunId" };
 export type DeviceId = string & { readonly __brand: "DeviceId" };
 export type FactId = string & { readonly __brand: "FactId" };
 export type MachineId = string & { readonly __brand: "MachineId" };
+/** One world of bots: the home's, minted once and kept in its machine.json, so it outlives the home's address. */
+export type WorldId = string & { readonly __brand: "WorldId" };
 
 /**
  * What a bridge can do beyond protocol 3's base. hello.features lists the ones this bridge serves, which may be fewer
@@ -550,8 +552,17 @@ export const isSessionRequest = (m: ClientMessage): m is SessionClientMessage =>
 
 export type ServerMessage =
   // The app shows "Update the bridge" or "Update the app" when protocol is outside the range it speaks.
-  // machines: present when the bridge serves feature "machines".
-  | ({ type: "hello"; protocol: number; features: Feature[]; machine: string; userName: string; bots: Bot[]; machines?: MachineView[] } & StreamPosition)
+  // machines and world: present when the bridge serves feature "machines". world.name is "<userName>'s bots".
+  | ({
+      type: "hello";
+      protocol: number;
+      features: Feature[];
+      machine: string;
+      userName: string;
+      bots: Bot[];
+      machines?: MachineView[];
+      world?: { id: WorldId; name: string };
+    } & StreamPosition)
   | { type: "bot"; bot: Bot }
   | { type: "bot_removed"; botId: BotId }
   // Answers create_bot with the ref the client sent, so the app can open the new bot.

@@ -9,7 +9,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHomes } from "../src/home";
 import { createHub, tickEach } from "../src/hub";
 import type { Project } from "../src/projects";
-import type { AgentId, BotId, ClientMessage, Command, Message, MessageId, RoutineId, RunId, ServerMessage } from "../src/protocol";
+import type { AgentId, BotId, ClientMessage, Command, Message, MessageId, RoutineId, RunId, ServerMessage, WorldId } from "../src/protocol";
 import { createPush } from "../src/push";
 import { BREAKER_NOTE } from "../src/session";
 import type { UsageRead } from "../src/claudeCode";
@@ -1605,6 +1605,7 @@ test("boot carries on when USER.md cannot be created, and says why in the log", 
   const logs: string[] = [];
   const hub = createHub({
     machineId: "m_test" as MachineId,
+    worldId: "w_test" as WorldId,
     profile: testProfile(root),
     userName: "Alex",
     world,

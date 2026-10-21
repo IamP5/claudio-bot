@@ -11,7 +11,7 @@ import { createHomes } from "./home";
 import { createHub } from "./hub";
 import { bootMachine } from "./machine/boot";
 import { enroll } from "./machine/enroll";
-import { computerName, loadIdentity } from "./machine/identity";
+import { computerName, loadIdentity, worldOf } from "./machine/identity";
 import { createJoinCodes } from "./machine/joinCodes";
 import { createLinks } from "./machine/links";
 import { createRegistry } from "./machine/registry";
@@ -163,6 +163,7 @@ function bootHome() {
   const hub = createHub({
     profile,
     machineId: identity.machineId,
+    worldId: worldOf(home, identity),
     links,
     userName,
     world,

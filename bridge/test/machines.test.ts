@@ -55,6 +55,12 @@ test("a home that takes machines lists itself and each linked machine in hello, 
   ]);
 });
 
+test("a home that takes machines names its world in hello, from machine.json and the user's name", () => {
+  const h = hubOver(emptyWorld(), { links: fakeLinks().links });
+  const hello = h.hub.hello(NO_RING);
+  expect(hello.type === "hello" && (hello.world as unknown)).toEqual({ id: "w_test", name: "Alex's bots" });
+});
+
 test("a machine coming online or going offline sends every phone a machines frame", () => {
   const f = fakeLinks();
   const h = hubOver(emptyWorld(), { links: f.links });
@@ -75,4 +81,5 @@ test("a bridge without machines keeps hello as it was: no feature, no machines k
   const hello = h.hub.hello(NO_RING);
   expect(hello.type === "hello" && hello.features).not.toContain("machines");
   expect("machines" in hello).toBe(false);
+  expect("world" in hello).toBe(false);
 });

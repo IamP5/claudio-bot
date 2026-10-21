@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { identityPath, loadIdentity, newIdentity, readIdentity, saveIdentity, signWith, verifyWith } from "../src/machine/identity";
+import { identityPath, loadIdentity, newIdentity, readIdentity, saveIdentity, signWith, verifyWith, worldOf } from "../src/machine/identity";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -44,4 +44,16 @@ test("a machine.json that does not parse stops the boot instead of being replace
   const h = home();
   writeFileSync(identityPath(h), JSON.stringify({ machineId: "x" }), { mode: 0o600 });
   expect(() => loadIdentity(h, "MacBook")).toThrow("is not a machine identity");
+});
+
+test("a home mints its world id once and keeps it in machine.json; a file from before it reads as no world", () => {
+  const h = home();
+  const { world: _, ...old } = loadIdentity(h, "omarchy");
+  writeFileSync(identityPath(h), JSON.stringify(old), { mode: 0o600 });
+  const before = readIdentity(h)!;
+  expect(before.world).toBeNull();
+  const world = worldOf(h, before);
+  expect(world).toMatch(/^w_[0-9a-f-]{36}$/);
+  expect(readIdentity(h)?.world).toBe(world);
+  expect(worldOf(h, readIdentity(h)!)).toBe(world);
 });

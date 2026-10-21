@@ -11,7 +11,7 @@ import { createHomes } from "../src/home";
 import { createHub } from "../src/hub";
 import { createMemory, FACTS_MAX, MEMORY_CONTEXT_MAX, writeAtomic } from "../src/memory";
 import { botMemory } from "../src/prompts";
-import type { BotId, FactId, ServerMessage } from "../src/protocol";
+import type { BotId, FactId, ServerMessage, WorldId } from "../src/protocol";
 import { emptyWorld, newBot, type Initiator } from "../src/world";
 
 const roots: string[] = [];
@@ -488,6 +488,7 @@ test("hub: remember in a user turn has no card, stays with that bot, and reaches
   ]);
   const hub = createHub({
     machineId: "m_test" as MachineId,
+    worldId: "w_test" as WorldId,
     profile: testProfile(root),
     userName: "Alex",
     world,

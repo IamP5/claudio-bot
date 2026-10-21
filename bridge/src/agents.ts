@@ -21,13 +21,14 @@ import { emptySession, newMessageId, repoTrust, type Actor, type AgentActor, typ
 // ledger. Cloud agents run on claude.ai: the bridge neither gates nor meters them.
 export type Agents = {
   /**
-   * initiator: the bot turn's, so an agent started by a routine runs as routine work; kept as startedBy. budgetUsd null:
-   * the bridge default, none unless CLAUDIOBOT_AGENT_USD sets one. slash (mac only): the agent's first turn is the
-   * command "/<slash> <prompt>" instead of the agent prompt.
+   * id: the home mints it (wire.newAgentId). initiator: the bot turn's, so an agent started by a routine runs as
+   * routine work; kept as startedBy. budgetUsd null: the bridge default, none unless CLAUDIOBOT_AGENT_USD sets one.
+   * slash (mac only): the agent's first turn is the command "/<slash> <prompt>" instead of the agent prompt.
    */
   start(
     botId: BotId,
     a: {
+      id: AgentId;
       title: string;
       prompt: string;
       project: Project;
@@ -321,7 +322,7 @@ export function createAgents(deps: {
 
   return {
     async start(botId, a) {
-      const id = `a_${crypto.randomUUID()}` as AgentId;
+      const id = a.id;
       const repo = realpathOr(a.project.path);
       // Another live agent in the project folder, or one still being placed, makes auto isolate. Cloud agents ignore isolate.
       const busy =

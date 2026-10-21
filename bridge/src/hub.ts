@@ -42,6 +42,7 @@ import type { Push } from "./push";
 import type { Result } from "./result";
 import { gitDirsOf, sandboxFor } from "./sandbox";
 import { scopeFor, type MachineProfile } from "./machine/profile";
+import { newAgentId } from "./machine/wire";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { createSessions, type Sessions, type SessionsEnv } from "./sessions";
 import { transcriptExists } from "./transcript";
@@ -905,7 +906,7 @@ export function createHub(deps: HubDeps): Hub {
         if (slashName(`/${slash}`) !== slash) return "slash is one skill or command name, without spaces, such as code-review.";
         if (commands.hidden(botId, slash)) return `/${slash} changes or ends a Claude Code session, so an agent is not started with it.`;
       }
-      const rec = await agents.start(botId, { ...a, slash, project, botName: bot.name, initiator: initiatorNow(bot), budgetUsd: null });
+      const rec = await agents.start(botId, { ...a, id: newAgentId(), slash, project, botName: bot.name, initiator: initiatorNow(bot), budgetUsd: null });
       exchange(bot, agentPeer(rec.agent), "sent");
       if (rec.agent.where === "mac") return `Started agent ${rec.agent.id} on ${project.name}. It reports back to you when its turn ends.`;
       if (rec.agent.status === "failed") return `The cloud agent failed to start: ${rec.messages.at(-1)?.text}`;

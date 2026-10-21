@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Options, query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createAgents } from "../src/agents";
+import { newAgentId } from "../src/machine/wire";
 import { connectorSettings } from "../src/connectors";
 import { createGate } from "../src/gate";
 import { createLedger } from "../src/ledger";
@@ -104,6 +105,7 @@ function machine() {
   /** agent.start as the home would send it: the agent's first turn is open and holds a push to the default branch. */
   async function heldPush() {
     const rec = await agents.start(B1, {
+      id: newAgentId(),
       title: "Fix tests",
       prompt: "Make the suite green.",
       project: { name: "shop", path: project, branch: "main", githubRepo: null },

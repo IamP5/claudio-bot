@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Options, query, SandboxSettings, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createAgents, projectConfigOf } from "../src/agents";
+import { newAgentId } from "../src/machine/wire";
 import type { Headroom, Ledger } from "../src/ledger";
 import type { AgentEvidence, AgentId, AgentStatus, BotId, RoutineId, RunId } from "../src/protocol";
 import type { Project } from "../src/projects";
@@ -135,7 +136,7 @@ function harness(
     turnDone: (rec) => done.push(rec.agent.id),
   });
   const start = (where: "mac" | "cloud" = "mac", initiator: Initiator = user, botId: BotId = B1) =>
-    agents.start(botId, { title: "Fix tests", prompt: "Make the suite green.", project: where === "cloud" ? cloudProject : (opts.project ?? project), where, isolate: "auto", botName: "Ana", initiator, budgetUsd: null });
+    agents.start(botId, { id: newAgentId(), title: "Fix tests", prompt: "Make the suite green.", project: where === "cloud" ? cloudProject : (opts.project ?? project), where, isolate: "auto", botName: "Ana", initiator, budgetUsd: null });
   return { world, agents, queries, reports, notes, statuses, evidence, begun, trustCards, transcripts, done, start, q: () => queries.at(-1)! };
 }
 
@@ -191,7 +192,7 @@ test("a mac agent starts on its project with its standing rules in the system pr
 
 test("a mac agent started with a slash opens with that command as its bare first turn, shown in its thread", async () => {
   const h = harness();
-  const rec = await h.agents.start(B1, { title: "Review", prompt: "PR 12, focus on auth", project, where: "mac", isolate: "auto", botName: "Ana", initiator: user, budgetUsd: null, slash: "code-review" });
+  const rec = await h.agents.start(B1, { id: newAgentId(), title: "Review", prompt: "PR 12, focus on auth", project, where: "mac", isolate: "auto", botName: "Ana", initiator: user, budgetUsd: null, slash: "code-review" });
   await flush();
   expect(h.q().received).toEqual(["/code-review PR 12, focus on auth"]);
   expect(rec.messages).toMatchObject([{ from: "bot", text: "/code-review PR 12, focus on auth" }]);
@@ -679,7 +680,7 @@ function worktreeHarness(opts: { world?: World; dir?: string; path?: string } = 
   const shop: Project = { name: "shop", path: opts.path ?? dir, branch: "main", githubRepo: null };
   const h = harness({ ...opts, project: shop });
   const startIn = (isolate: "auto" | "none" | "worktree", where: "mac" | "cloud" = "mac") =>
-    h.agents.start(B1, { title: "Fix tests", prompt: "Make the suite green.", project: shop, where, isolate, botName: "Ana", initiator: user, budgetUsd: null });
+    h.agents.start(B1, { id: newAgentId(), title: "Fix tests", prompt: "Make the suite green.", project: shop, where, isolate, botName: "Ana", initiator: user, budgetUsd: null });
   return { ...h, dir, worktrees, startIn };
 }
 

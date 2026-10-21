@@ -23,7 +23,8 @@ Every step converges when it runs again, after a crash or by hand.
   `state.json` `moves[]` as `{ kind: "out", phase: "frozen", held }`. A frozen bot is not in the world the bridge
   loads, so nothing runs, fires or pushes for it. The freeze is saved before the bundle is written. A second
   export finds the frozen move and writes the same bundle again, with the same moveId.
-- **Pack.** The bundle is one JSON file (mode 0600): `{ format: 1, moveId, from: { machine, at }, world, files }`.
+- **Pack.** The bundle is one JSON file (mode 0600): `{ format: 1, moveId, from: { machine, at, machineId }, world,
+  files, agents }`. `machineId` and `agents` are optional, as bundles from before them have neither.
   `world` holds the bots, groups, exchanges, devices (not the protocol 2 shared-token device) and `push.sent`.
   `files` holds each bot's home except `work/`, `USER.md`, and the `usage/`, `audit/` and `groups/` logs, base64.
 - **Import.** The bundle is checked like a `state.json` and every file path is checked against what export packs.
@@ -31,7 +32,14 @@ Every step converges when it runs again, after a crash or by hand.
   replaced. Then the state is unioned by id and saved with `{ kind: "in", moveId }`. That save is the commit point.
   An import of a moveId already recorded answers "already imported" and changes nothing.
 - **Finish.** The frozen homes go to `trash/` first, then the move is saved as `phase: "done"`. A rerun says it is
-  already finished.
+  already finished. A bot that is live in the world again is skipped: its home stays.
+- **Round trip.** A bundle that brings back bots this bridge still holds frozen (Mac to Omarchy, then back before
+  finish) takes them out of that move, and a move with nothing left frozen is done, so finish trashes nothing that
+  came back.
+- **Machines.** A bridge that is a machine of a home refuses to export: the home holds the world. `claudiobot machine
+  enroll` refuses a bridge that still has bots and names these steps. The bundle carries the exporting bridge's
+  machine id and the agents that stay on it, and the import places them on that machine, so the home hears them once
+  it enrolls.
 
 ## What moves and what stays
 

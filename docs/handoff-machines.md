@@ -151,9 +151,46 @@ Done so far: phases 0, 1, 2, 3, 6, 4 and 5, in that order. Phase 7 is next.
     - Guarded, sandbox on. The same create, card and stream. A bot then started an agent on Studio. The phone opened
       the agent's session in the Sessions tab and answered its `git push` card there, and the push landed on Studio's
       origin. Evidence: `claudiobot-verify/evidence/20261021-050135-9b39/run3-guarded-sandbox-on`.
-  - Open for Phase 7. `SessionProject` has no machine, so the phone learns a project's machine from its rows. A
-    `session_create` that names one machine and another machine's project gets "Unknown project" from that machine.
-    `session_prefs` (the Claude app mirror setting) applies to the home only.
+  - Open for Phase 7. `SessionProject` had no machine, so the phone learned a project's machine from its rows (closed
+    by the review fixes below). `session_prefs` (the Claude app mirror setting) applies to the home only.
+- **Review fixes.** Built from `2825fa4` to `1ae785e`, after two independent reviews of `75a6bca..8c7ff58`.
+  - Trust. One table on the home, `machine/placements.ts` (`<bridgeHome>/machine/placements.json`), records each
+    remote agent's machine, its bot and the initiator of the last turn sent to it, and which machine posted each card.
+    Every event a machine sends passes one rule per kind against it (`admit`): agent, report and note need an agent
+    placed there for that bot; a report goes to its bot under the home's recorded initiator; a card needs that bot's
+    agent there and an id the chat does not hold already; a usage row must be a placed agent's, never negative, counts
+    under a session id of the machine's own, and its day is clamped to today or yesterday. The mirror resolves through
+    the table. A home from before it adopts what its mirror held.
+  - Removing a machine. `remove_machine { machineId }` from the phone and `claudiobot machine remove <name|id>` on the
+    home unpin it and close its link with 4006, so it stops dialing and is refused from then on. Its open cards expire
+    in their bots' chats with a note, and the home forgets its agents, queue and sessions. The machine keeps its
+    files. At boot the home drops what it kept of a machine no longer enrolled. The app has Remove in Settings >
+    Machines, behind a confirm.
+  - Enrollment and the link. With Tailscale up a machine code offers only tailnet addresses; without it, every
+    address with a printed warning. Each handshake proof names its signer ("machine-proof v1", "home-proof v1"), so a
+    home and its machines upgrade together. A code is spent only once the registry saved the enrollment. A 4005 close
+    stops a machine dialing only on a live link.
+  - Bots across machines. Deleting a bot queues `bot.forget` to each machine with its agents; the machine stops them
+    and drops its stand-in and their records. `bot.update` carries the stand-in and the home's spend today on a cap
+    change, a rename, a connector toggle and each link; one cap across machines is in
+    [vps-design.md](vps-design.md), overspend bounded by one update interval.
+  - Delivery. A send that did not reach a machine still online is retried with backoff. A queued card answer waits at
+    least 24 hours, and the machine's gate judges an expired card. The home saves an effectful event's seq before it
+    acts, and a machine saves its world at once on a report, so neither side hears a report twice after a crash. A
+    snapshot carries each agent's newest 200 messages.
+  - Moves. A round trip before finish thaws the frozen move instead of trashing live bots; a machine refuses to
+    export; `machine enroll` refuses a bridge that still has bots. The bundle names the exporting machine and its
+    agents, so the home places them.
+  - Sessions. `SessionProject.machine` is on the phone protocol, and the app groups New Session by it. Among
+    machines, the first to list a session id or project keeps it. Two machines with the same project path (two Macs,
+    one username) share its project id, so only the first lists it: a known limit.
+  - Files. A world import refuses symlinks on its way into the bridge home; `appendLine` opens with `O_NOFOLLOW`.
+  - Live run on one Mac, home and machine Studio, full access, sandbox off. The machine code offered only the
+    tailnet. A bot started an agent on Studio; a cap change reached Studio's stand-in; deleting the bot stopped the
+    agent there, and after a restart Studio resumed nothing. A second bot's agent raised a `git push` card; removing
+    Studio from the phone expired it with a note, Studio stopped dialing, and a restart was refused as not enrolled.
+    Evidence: `claudiobot-verify/evidence/20261021-055540-85e4/review-fixes-full-sandbox-off`. The guarded,
+    sandbox-on pass of the matrix was not rerun for these fixes.
 
 ## Traps found during design
 

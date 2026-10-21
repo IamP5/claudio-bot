@@ -11,7 +11,7 @@
  * user: a prompt line to the first frame with its item; gaps: the phone's own message left the thread before its
  *   transcript copy arrived (count, and how long the thread had neither).
  * rest→row: a thread's controls.working turning false to its row leaving working.
- * lastAt: the final idle row's lastAt minus the last assistant line (negative: the row reads older than the reply).
+ * lastAt: the final idle row's lastAt minus the last prompt, reply or tool result (negative: the row reads older than the conversation; positive: a later write moved it).
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -81,7 +81,7 @@ function measure(dir: string) {
         }
       }
     }
-    const replied = entries.filter((e) => e.type === "assistant").map((e) => Date.parse(e.timestamp!));
+    const replied = entries.filter((e) => e.type === "assistant" || e.type === "user").map((e) => Date.parse(e.timestamp!));
     const rows = incoming.flatMap((l) => (l.frame.type === "sessions" || l.frame.type === "session_rows" ? (l.frame.rows as { id: string; status: string; lastAt: string }[]).filter((r) => r.id === sid) : []));
     const end = rows.at(-1);
     if (end && end.status === "idle" && replied.length) lastAt.push(Date.parse(end.lastAt) - Math.max(...replied));

@@ -233,22 +233,19 @@ struct SessionThreadView: View {
         client.send(.sessionPage(sessionId: sessionId, before: cursor))
     }
 
-    /// Opens the fold that hides the step's work run, scrolls to it and tints the step for a moment. The run opens
-    /// itself when it sees the step marked.
+    /// Opens the fold that hides the step's work run and marks the step, which opens the run. On the next pass, once the
+    /// run has laid out its steps, it scrolls to the step and the mark fades after two seconds.
     private func reveal(_ held: HeldStep, in model: ThreadModel) {
         let fold = model.rows.first { row in
             if case let .fold(_, items, false) = row { items.contains { $0.id == held.row } } else { false }
         }
         if let fold { model.toggle(fold: fold.id) }
         followsBottom = false
-        withAnimation(reduceMotion ? nil : .snappy(duration: 0.35)) {
-            position.scrollTo(id: held.row, anchor: .center)
-            revealed = held
+        revealed = held
+        DispatchQueue.main.async {
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.35)) { position.scrollTo(id: held.step.id, anchor: .center) }
         }
         Task {
-            // The run opens a frame after it sees the step marked, and only then is the step there to center on.
-            try? await Task.sleep(for: .milliseconds(150))
-            withAnimation(reduceMotion ? nil : .snappy(duration: 0.35)) { position.scrollTo(id: held.step.id, anchor: .center) }
             try? await Task.sleep(for: .seconds(2))
             if revealed == held { withAnimation(.easeOut(duration: 0.4)) { revealed = nil } }
         }

@@ -373,32 +373,27 @@ extension EnvironmentValues {
 }
 
 /// A permission card in a session's thread. It names the subagent that asked and links to the step it holds back.
-/// Once closed it folds to one line, so answered cards never push the running work off screen. A tap opens it again
-/// in place, or at the accessibility sizes in a sheet: there the whole card is taller than the screen, and the thread,
-/// which keeps its bottom still, would grow it upward past the top.
+/// Once closed it folds to one line, so answered cards never push the running work off screen. A tap opens the whole
+/// card in a sheet: the thread keeps its bottom still, so a card opened in place would grow upward under the top bar.
 struct SessionPermissionCard: View {
     let sessionId: SessionID
     let permission: SessionPermission
     let model: ThreadModel
 
-    @State private var opened = false
     @State private var sheet = false
     /// The step "Show the step" asked for from the sheet, revealed once the sheet is gone.
     @State private var pendingReveal: HeldStep?
     @Environment(\.revealStep) private var revealStep
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let card = permission.card
         let held = HeldStep.find(permission.stepId, in: model.items)
         TimelineView(.deadline(card.expiresAt)) { _ in
             Settling(card.answer(at: .now)) { answer in
-                if let answer, !opened {
-                    ClosedApprovalRow(permission: permission, outcome: answer.outcome(step: held?.step)) {
-                        if typeSize.isAccessibilitySize { sheet = true } else { opened = true }
-                    }
+                if let answer {
+                    ClosedApprovalRow(permission: permission, outcome: answer.outcome(step: held?.step)) { sheet = true }
                 } else {
-                    full(answer: answer, held: held, collapse: answer == nil ? nil : { opened = false })
+                    full(answer: nil, held: held)
                 }
             }
         }
@@ -408,7 +403,7 @@ struct SessionPermissionCard: View {
             pendingReveal = nil
         }) {
             ScrollView {
-                full(answer: card.answer, held: held, collapse: { sheet = false }, reveal: revealStep.map { _ in
+                full(answer: card.answer, held: held, close: { sheet = false }, reveal: revealStep.map { _ in
                     { held in
                         pendingReveal = held
                         sheet = false
@@ -422,7 +417,7 @@ struct SessionPermissionCard: View {
 
     /// reveal: what "Show the step" does. In the thread it scrolls there; from the sheet it closes the sheet first.
     private func full(
-        answer: PermissionAnswer?, held: HeldStep?, collapse: (() -> Void)?, reveal: ((HeldStep) -> Void)? = nil
+        answer: PermissionAnswer?, held: HeldStep?, close: (() -> Void)? = nil, reveal: ((HeldStep) -> Void)? = nil
     ) -> some View {
         let reveal = reveal ?? revealStep
         return PermissionCardBody(
@@ -430,15 +425,15 @@ struct SessionPermissionCard: View {
             decision: { .sessionDecide(sessionId: sessionId, cardId: permission.cardId, choice: $0) },
             step: held?.step, fillsColumn: true,
             reveal: held.flatMap { held in reveal.map { reveal in { reveal(held) } } },
-            collapse: collapse
+            close: close
         )
     }
 }
 
 /// An answered card folded to its outcome and command: "sleeper two · Allowed once" over "perl -e 'sleep 30'", or
-/// "Bash · Allowed once" when the main thread asked. At the accessibility sizes the command and the chevron wait for
-/// a tap, and the text stops growing at the second accessibility size: past that, three folded cards alone fill the
-/// screen and push the running work off it.
+/// "Bash · Allowed once" when the main thread asked. A tap opens the whole card in a sheet. At the accessibility sizes
+/// the command and the chevron wait for that sheet, and the text stops growing at the second accessibility size: past
+/// that, three folded cards alone fill the screen and push the running work off it.
 private struct ClosedApprovalRow: View {
     let permission: SessionPermission
     let outcome: PermissionOutcome
@@ -474,7 +469,6 @@ private struct ClosedApprovalRow: View {
         .buttonStyle(.pressable)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .accessibilityLabel([permission.title, outcome.text, permission.card.detail].map { $0.hasSuffix(".") ? String($0.dropLast()) : $0 }.joined(separator: ". "))
-        .accessibilityValue("Collapsed")
         .accessibilityHint("Shows the whole request")
     }
 
@@ -483,7 +477,7 @@ private struct ClosedApprovalRow: View {
     }
 
     private var chevron: some View {
-        Image(systemName: "chevron.down")
+        Image(systemName: "chevron.right")
             .font(.ui(.footnote, weight: .semibold))
             .foregroundStyle(Theme.tertiary)
             .accessibilityHidden(true)
@@ -530,7 +524,8 @@ private struct PermissionCardBody: View {
     var step: ToolStep?
     var fillsColumn = false
     var reveal: (() -> Void)?
-    var collapse: (() -> Void)?
+    /// Set when the card shows in a sheet.
+    var close: (() -> Void)?
 
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
@@ -555,16 +550,16 @@ private struct PermissionCardBody: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityAddTraits(.isHeader)
-                if let collapse {
-                    Button(action: collapse) {
-                        Image(systemName: "chevron.up")
+                if let close {
+                    Button(action: close) {
+                        Image(systemName: "xmark")
                             .font(.ui(.footnote, weight: .semibold))
                             .foregroundStyle(Theme.tertiary)
                             .frame(minWidth: HitTarget.minHeight, minHeight: HitTarget.minHeight)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Collapse")
+                    .accessibilityLabel("Close")
                 }
             }
             if case .agent(_, let title) = card.from {

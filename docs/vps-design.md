@@ -151,6 +151,33 @@ created by `agent.start` and updated only by the laptop's runtime. That keeps on
 - The VPS bot chat shows a mirror of those cards, written only by `card` events through `hub.say`. A phone tap
   never settles anything on the VPS.
 
+#### Stand-in fields (Phase 0 result)
+
+`bridge/test/standin.test.ts` runs the real gate, agents and ledger on a World with no real bot. The stand-in is
+`newBot(...)` with a few fields overridden, and `src/` needed no change. An agent's held push posts its card on
+the stand-in. The card survives a tick, Allow once runs the call exactly once, and an unanswered card expires
+and its notice rides on the agent's next turn.
+
+The machine fills these fields from the `agent.start` intent, and updates them when the home sends a change:
+
+- `id` is the home's bot id. Every card, grant, daily count and agent record is keyed by it.
+- `name` goes into the agent's system prompt ("You were started by the bot Ana").
+- `dailyCapUsd` is read by the ledger through `capFor`. Null means the machine's default cap.
+- `connectorsOff` becomes the agent's flag settings.
+
+The machine owns these fields and never takes them from the home:
+
+- `messages` holds the cards. The gate writes them, and the home only sees them as `card` events.
+- `rules` holds the standing rules that Always and Never write.
+
+Every other field keeps its `newBot` default, and nothing on the agent path reads it. These are `title`,
+`avatar`, `pinned`, `hidden`, `createdAt`, `unread`, `muted`, `session` and `routines`. The stand-in never has a
+bot session or routines. `muted` only matters to push, and only the home pushes.
+
+Two things the machine must still do, which the test does not cover. The hub's `say` trims old messages, so the
+machine's own `say` must trim the stand-in's messages the same way. And the open-card limit of 10 per bot counts
+per machine, not across the bot's machines.
+
 ### Offline, sleep, latency
 
 - **Gate latency.** Hooks and `canUseTool` run on the laptop, with no network per tool call. Only "ask" crosses

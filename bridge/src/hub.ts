@@ -141,7 +141,7 @@ export type HubDeps = {
   /** Tests pass a fake SDK. The bridge uses the real query and the claude on PATH. */
   claude: Pick<SessionSpec, "query" | "executable">;
   /** The machines enrolled into this home (machine/links.ts). Absent: no "machines" feature. */
-  links?: Pick<Links, "machines" | "onEvent" | "onChange" | "ask" | "onSignal">;
+  links?: Pick<Links, "machines" | "onEvent" | "onChange" | "ask" | "onSignal" | "remove">;
   /** The plan's usage limits: how to read them, and whether a phone is live to see them. Absent: no "usage" feature. */
   usage?: { read: () => Promise<UsageRead>; watched: () => boolean };
   /** Claude Code's folders, the Claude app and the sockets' channels. Absent: no "sessions" feature. */
@@ -920,6 +920,28 @@ export function createHub(deps: HubDeps): Hub {
     }
   }
 
+  /**
+   * A machine that is no longer enrolled: its open cards expire in their bots' chats with a note, and the home forgets
+   * its agents, what waits for it and its sessions. Its own disk keeps its agents and files.
+   */
+  function forgetMachine(id: MachineId, name: string) {
+    const closed = mirror.forget(id);
+    const byBot = new Map<BotId, string[]>();
+    for (const c of closed) {
+      const bot = world.bots.get(c.botId);
+      const card = bot?.messages.find((m): m is Card => m.id === c.cardId && (m.kind === "permission" || m.kind === "question"));
+      if (!bot || !card || !isOpenCard(card)) continue;
+      showCard(bot.id, { ...card, answer: "expired" });
+      byBot.set(bot.id, [...(byBot.get(bot.id) ?? []), card.kind === "permission" ? card.label : card.question]);
+    }
+    for (const [botId, labels] of byBot) tell(botId, `${name} was removed, so ${labels.map((l) => `"${l}"`).join(", ")} can no longer be answered.`);
+    placements.forgetMachine(id);
+    dispatch.forgetMachine(id, `${name} was removed from this home.`);
+    const gone = remote.drop(id);
+    if (!isEmpty(gone)) deps.sessions?.signal.list(gone);
+    for (const bot of world.bots.values()) if (byBot.has(bot.id)) changed(bot);
+  }
+
   deps.links?.onChange(() => {
     deps.broadcast({ type: "machines", machines: machineViews() });
     // What waited for a machine goes first, then its snapshot (links.ts asks for that as it links).
@@ -1437,6 +1459,16 @@ export function createHub(deps: HubDeps): Hub {
       case "machine_code":
       case "presence":
         return error("This bridge cannot manage devices yet.");
+      case "remove_machine": {
+        if (message.machineId === deps.machineId) return error("This is the home: it cannot be removed.");
+        const machine = machines.of(message.machineId);
+        if (!machine || !deps.links) return error("Unknown machine");
+        deps.links.remove(machine.id);
+        forgetMachine(machine.id, machine.name);
+        const frame: ServerMessage = { type: "machines", machines: machineViews() };
+        deps.broadcast(frame);
+        return [frame];
+      }
       case "refresh_usage":
         return usage ? [{ type: "usage", usage: await usage.refresh() }] : error("This bridge does not read plan usage.");
       case "create_group": {
@@ -1563,6 +1595,14 @@ export function createHub(deps: HubDeps): Hub {
       case "exchange":
         return [{ type: "exchange", botId: bot.id, peer: message.peer, messages: exchangeBetween(world, bot.id, message.peer) }];
     }
+  }
+
+  // A machine removed while this home was down (claudiobot machine remove edits machines.json) leaves what the home
+  // kept of it behind: nothing it holds can be answered or heard any more.
+  if (deps.links) {
+    const enrolled = new Set(machines.list().map((m) => m.id));
+    const kept = new Set([...mirror.agents().map((a) => a.machine), ...mirror.held().map((c) => c.machine), ...placements.machines()]);
+    for (const id of kept) if (!enrolled.has(id)) forgetMachine(id, "A machine no longer enrolled here");
   }
 
   return {

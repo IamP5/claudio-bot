@@ -76,6 +76,8 @@ export type Mirror = {
   openCards(botId: BotId): number;
   /** Every open card each machine's gate holds, by machine. */
   held(): { machine: MachineId; cardId: MessageId; botId: BotId }[];
+  /** Drops the machine's slice and saves. Returns the open cards it held, which can no longer be answered. */
+  forget(machine: MachineId): { botId: BotId; cardId: MessageId }[];
 };
 
 function load(path: string, log: (line: string) => void): MirrorState {
@@ -129,6 +131,13 @@ export function createMirror(deps: {
       return machine !== null && botId ? { machine, botId } : null;
     },
     openCards: (botId) => slices().reduce((n, [, s]) => n + Object.values(s.cards).filter((b) => b === botId).length, 0),
+    forget(machine) {
+      const slice = state.machines[machine];
+      if (!slice) return [];
+      delete state.machines[machine];
+      save();
+      return (Object.entries(slice.cards) as [MessageId, BotId][]).map(([cardId, botId]) => ({ botId, cardId }));
+    },
     held: () => slices().flatMap(([machine, s]) => (Object.entries(s.cards) as [MessageId, BotId][]).map(([cardId, botId]) => ({ machine, cardId, botId }))),
   };
 }

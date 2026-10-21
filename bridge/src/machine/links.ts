@@ -45,12 +45,15 @@ export type Links = {
   onSignal(f: (machine: MachineId, frame: SessionSignal) => void): void;
   /** After registry.enroll, so the phone sees the new machine. */
   enrolled(): void;
+  /** Unpins the machine and closes its link: from then on its handshake is refused. False: it was not enrolled. */
+  remove(machine: MachineId): boolean;
 };
 
 /** Close codes: a refused handshake, a malformed frame, a link replaced by a newer one from the same machine. */
 export const LINK_REFUSED = 4003;
 export const LINK_BAD_FRAME = 4004;
 export const LINK_REPLACED = 4005;
+export const LINK_REMOVED = 4006;
 const HANDSHAKE_MS = 10_000;
 /** How long the home waits for a machine to apply an intent. A start scans the machine's projects and may make a worktree. */
 const APPLY_MS = 120_000;
@@ -262,5 +265,16 @@ export function createLinks(deps: { identity: Identity; registry: Registry; log:
     onEvent: (f) => void eventSubscribers.push(f),
     onChange: (f) => void changeSubscribers.push(f),
     enrolled: changed,
+    remove(machine) {
+      const session = live.get(machine);
+      const removed = registry.remove(machine);
+      handled.delete(machine);
+      if (session) close(session, LINK_REMOVED, "removed from the home");
+      if (removed) {
+        log(`link: ${machine} removed`);
+        changed();
+      }
+      return removed;
+    },
   };
 }

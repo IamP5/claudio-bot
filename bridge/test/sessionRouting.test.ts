@@ -115,6 +115,7 @@ function setup(world: World = emptyWorld(), seed?: (root: string) => void) {
     onChange: (f) => void change.push(f),
     onEvent: (f) => void events.push(f),
     onSignal: (f) => void signals.push(f),
+    remove: () => false,
     async ask(_, m) {
       if (!online) return { ok: false, reason: "MacBook is offline" };
       asked.push(m);

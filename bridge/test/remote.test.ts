@@ -36,8 +36,16 @@ function remote() {
       return answer(intent);
     },
   };
+  let enrolled = true;
+  const removed: MachineId[] = [];
   const links: NonNullable<HubDeps["links"]> = {
-    machines: () => [mac],
+    machines: () => (enrolled ? [mac] : []),
+    remove(id) {
+      removed.push(id);
+      enrolled = false;
+      online = false;
+      return true;
+    },
     onChange: (f) => void change.push(f),
     onEvent: (f) => void events.push(f),
     ask: async () => ({ ok: false, reason: "MacBook is offline" }),
@@ -45,6 +53,7 @@ function remote() {
   };
   return {
     links,
+    removed,
     intents,
     answers: (f: (i: Intent) => Sent) => (answer = f),
     flip(to: boolean) {
@@ -387,4 +396,51 @@ test("a home from before placements keeps hearing the agents and cards its mirro
   r.send({ kind: "card", botId: B, message: card("once") });
   expect(r.h.frames.findLast((f) => f.type === "agent")).toMatchObject({ agent: { id: A, status: "waiting" } });
   expect(r.world.bots.get(B)!.messages.findLast((m) => m.id === "c_mac1")).toMatchObject({ answer: "once" });
+});
+
+test("remove_machine closes its link, expires its open cards with a note, drops what waits for it, and stops hearing it", async () => {
+  const r = placed();
+  r.send({ kind: "agent", agent: agent(), messages: [] });
+  r.send({ kind: "card", botId: B, message: card() });
+  r.flip(false);
+  await turn(r);
+  await callTool(r.h.q(), "message_agent", { agentId: A, text: "Also tag it." });
+  expect(await r.h.hub.handle({ type: "remove_machine", machineId: MAC })).toEqual([{ type: "machines", machines: [expect.objectContaining({ role: "home" })] }]);
+  expect(r.removed).toEqual([MAC]);
+  expect(r.h.frames.at(-1)).toMatchObject({ type: "machines" });
+  const chat = r.world.bots.get(B)!.messages;
+  expect(chat.find((m) => m.id === "c_mac1")).toMatchObject({ answer: "expired" });
+  expect(chat.at(-1)).toMatchObject({ kind: "note", text: expect.stringContaining("MacBook was removed") });
+  expect(await r.h.hub.handle({ type: "agent", agentId: A })).toEqual([{ type: "error", message: "Unknown agent" }]);
+  const [details] = await r.h.hub.handle({ type: "details", botId: B });
+  expect(details?.type === "details" && details.agents).toEqual([]);
+
+  r.send({ kind: "agent", agent: agent(), messages: [] });
+  expect(await r.h.hub.handle({ type: "agent", agentId: A })).toEqual([{ type: "error", message: "Unknown agent" }]);
+  r.flip(true);
+  await flush();
+  expect(r.intents).toEqual([]);
+});
+
+test("remove_machine refuses the home itself and a machine it does not know", async () => {
+  const r = home();
+  expect(await r.h.hub.handle({ type: "remove_machine", machineId: "m_test" as MachineId })).toEqual([{ type: "error", message: "This is the home: it cannot be removed." }]);
+  expect(await r.h.hub.handle({ type: "remove_machine", machineId: "m_nope" as MachineId })).toEqual([{ type: "error", message: "Unknown machine" }]);
+  expect(r.removed).toEqual([]);
+});
+
+test("at boot, a mirror slice of a machine no longer enrolled is dropped and its open cards expire", () => {
+  const GONE = "m_gone" as MachineId;
+  const before = (root: string) => {
+    placedOn({ agentId: A, machine: GONE, botId: B })(root);
+    const mirror = createMirror({ path: join(root, "machine", "mirror.json"), log: () => {}, owner: { agent: () => GONE, card: () => GONE } });
+    mirror.apply(GONE, { seq: 1, at, kind: "agent", agent: agent(), messages: [] });
+    mirror.apply(GONE, { seq: 2, at, kind: "card", botId: B, message: card() });
+    world.bots.get(B)!.messages.push(card());
+  };
+  const world = emptyWorld();
+  const r = home(world, before);
+  expect(r.world.bots.get(B)!.messages.find((m) => m.id === "c_mac1")).toMatchObject({ answer: "expired" });
+  const hello = r.h.hub.hello({ epoch: "", seq: 0, resumed: false });
+  expect(hello.type === "hello" && hello.bots.find((b) => b.id === B)?.status).toBe("idle");
 });

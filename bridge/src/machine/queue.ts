@@ -105,6 +105,8 @@ export type Dispatch = Tickable & {
   drain(machine: MachineId): void;
   /** The bot was deleted: what waits on its behalf is dropped, with no expiry note, since its chat is gone. */
   forget(botId: BotId): void;
+  /** The machine was removed: what waits for it is dropped, and whoever waits on it hears why. */
+  forgetMachine(machine: MachineId, why: string): void;
 };
 
 export function createDispatch(deps: {
@@ -213,6 +215,18 @@ export function createDispatch(deps: {
         waiters.delete(q.intent.intentId);
         waiter?.({ kind: "applied", applied: { ok: false, reason: "This bot no longer exists." } });
       }
+    },
+    forgetMachine(machine, why) {
+      for (const q of queue.list().filter((e) => e.machine === machine)) {
+        queue.remove(q.intent.intentId);
+        deps.log(`queue: ${q.what} dropped: ${why}`);
+        const waiter = waiters.get(q.intent.intentId);
+        waiters.delete(q.intent.intentId);
+        waiter?.({ kind: "applied", applied: { ok: false, reason: why } });
+      }
+      const r = retries.get(machine);
+      if (r?.timer) clearTimeout(r.timer);
+      retries.delete(machine);
     },
     tick: (now) => expire(now.toISOString()),
     nextDeadline: () => queue.list().reduce<string | null>((min, q) => (min === null || q.expiresAt < min ? q.expiresAt : min), null),

@@ -60,7 +60,13 @@ function home(opts: { machines?: boolean } = {}) {
     offer: () => ({ ...devices.newCode(), urls: [] }),
     ...(opts.machines !== false && { machines: { links, enroll: (body: unknown) => enroll({ identity, registry, codes }, body), offer: machineOffer } }),
   });
-  const control = serveControl({ home: dir, offer: () => ({ ...devices.newCode(), urls: [] }), machineOffer, log: (l) => log.push(l) });
+  const removeMachine = (named: string) => {
+    const found = registry.list().find((m) => m.id === named || m.name.toLowerCase() === named.trim().toLowerCase());
+    if (!found) return { ok: false as const, error: `No machine "${named}".` };
+    links.remove(found.id);
+    return { ok: true as const, name: found.name };
+  };
+  const control = serveControl({ home: dir, offer: () => ({ ...devices.newCode(), urls: [] }), machineOffer, removeMachine, log: (l) => log.push(l) });
   cleanups.push(() => {
     control?.stop();
     transport.stop();
@@ -234,4 +240,26 @@ test("claudiobot machine invite warns when the home offers no tailnet address", 
   const code = await machineCommand(["invite"], { bridgeHome: tmp(), env: {}, run: async () => "", fetch: async () => Response.json(offer), out: (t) => lines.push(t) });
   expect(code).toBe(0);
   expect(lines.join("")).toContain("plain http");
+});
+
+test("claudiobot machine remove on the home unpins the machine by name through the running bridge, and refuses a name it does not know", async () => {
+  const h = home();
+  const mac = newIdentity("MacBook");
+  h.registry.enroll({ id: mac.machineId, name: "MacBook", publicKey: mac.publicKey });
+  const c = commandOn(h.dir);
+  expect(await c.run("remove", "nope")).toBe(1);
+  expect(c.text()).toContain('No machine "nope"');
+  expect(await c.run("remove", "macbook")).toBe(0);
+  expect(c.text()).toContain('Removed "MacBook"');
+  expect(h.registry.list()).toEqual([]);
+});
+
+test("claudiobot machine remove with no bridge running unpins the machine in machines.json, for the home to forget at its next start", async () => {
+  const dir = tmp();
+  const mac = newIdentity("MacBook");
+  createRegistry({ bridgeHome: dir, now: () => new Date() }).enroll({ id: mac.machineId, name: "MacBook", publicKey: mac.publicKey });
+  const c = commandOn(dir);
+  expect(await c.run("remove", mac.machineId)).toBe(0);
+  expect(c.text()).toContain('Removed "MacBook"');
+  expect(createRegistry({ bridgeHome: dir, now: () => new Date() }).list()).toEqual([]);
 });

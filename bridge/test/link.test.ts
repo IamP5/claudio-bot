@@ -382,3 +382,21 @@ test("the home saves an event's seq before it acts on it, so after a crash befor
   first.links.closed(first.session);
   second.links.closed(second.session);
 });
+
+test("a removed machine's live link closes, it stops dialing, and its handshake is refused from then on", async () => {
+  const pair = enrolledPair();
+  const registry = createRegistry({ bridgeHome: tmp(), now: () => new Date() });
+  registry.enroll({ id: pair.mac.machineId, name: "MacBook", publicKey: pair.mac.publicKey });
+  const h = homeServer(pair.home, registry);
+  const m = machineAt(h.url, pair, tmp());
+  await until("online", () => h.links.machines()[0]?.status().online === true);
+  h.links.remove(pair.mac.machineId);
+  expect(h.links.machines()).toEqual([]);
+  expect(registry.get(pair.mac.machineId)).toBeNull();
+  await until("the machine heard it was removed", () => m.log.some((l) => l.includes("removed")));
+  await Bun.sleep(100);
+  expect(m.dialer.state().kind).toBe("closed");
+  const again = machineAt(h.url, pair, tmp());
+  await until("refused", () => h.log.some((l) => l.includes("is not enrolled")));
+  expect(again.dialer.state().kind).not.toBe("live");
+});

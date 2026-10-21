@@ -34,6 +34,7 @@ function fakeLinks() {
     onEvent: (f) => void events.push(f),
     ask: async () => ({ ok: false, reason: "MacBook is offline" }),
     onSignal: () => {},
+    remove: () => false,
   };
   return {
     links,

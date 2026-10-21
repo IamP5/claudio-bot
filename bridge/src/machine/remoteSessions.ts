@@ -24,6 +24,8 @@ export type RemoteSessions = {
   apply(machine: MachineId, frame: SessionsChannelFrame): SessionsChannelFrame;
   /** The machine answered for a session its rows do not name yet. */
   claim(machine: MachineId, id: SessionId): void;
+  /** The machine was removed: its rows go, as the phone's channel frame. */
+  drop(machine: MachineId): SessionsChannelFrame;
 };
 
 export const isEmpty = (f: SessionsChannelFrame) => f.rows.length === 0 && f.removed.length === 0 && f.projects.length === 0;
@@ -77,6 +79,11 @@ export function createRemoteSessions(deps: { home: (id: SessionId) => boolean })
       return fold(machine, frame.rows, [...s.rows.keys()].filter((id) => !listed.has(id)), frame.projects);
     },
     apply: (machine, frame) => fold(machine, frame.rows, frame.removed, frame.projects),
+    drop(machine) {
+      const s = slices.get(machine);
+      slices.delete(machine);
+      return { type: "session_rows", rows: [], removed: s ? [...s.rows.keys()] : [], projects: [] };
+    },
     claim(machine, id) {
       if (!deps.home(id) && !heldElsewhere(machine, id)) sliceOf(machine).claimed.add(id);
     },

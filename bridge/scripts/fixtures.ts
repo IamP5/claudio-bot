@@ -258,6 +258,7 @@ export const client = [
   { type: "revoke_device", deviceId: "d0" },
   { type: "pair_code" },
   { type: "machine_code" },
+  { type: "remove_machine", machineId: MAC },
   { type: "presence", attended: false },
   { type: "send", botId: "b1", text: "Ship it", uploads: [], clientId: "c_9b1e" },
   { type: "update_bot", botId: "b1", patch: { muted: true } },

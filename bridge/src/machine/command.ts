@@ -1,21 +1,26 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { accessOf } from "../access";
+import type { MachineRemoval } from "../control";
+import { lockHome } from "../lock";
 import { LAN_ENROLL_WARNING, onTailnet } from "../address";
 import type { PairOffer } from "../protocol";
 import { errorText } from "../text";
 import type { EnrollResponse } from "./enroll";
 import { computerName, loadIdentity, saveIdentity } from "./identity";
+import { createRegistry } from "./registry";
 import type { MachineId } from "./wire";
 
 // `claudiobot machine …`: what a person types on the home to invite a computer, and on that computer to enroll it.
 
-export const MACHINE_USAGE = `usage: claudiobot machine <show|invite|enroll <home-url> <code>>
+export const MACHINE_USAGE = `usage: claudiobot machine <show|invite|enroll <home-url> <code>|remove <name|id>>
 
   show     this bridge's machine id, and the home it is enrolled into, if any
   invite   on the home: a one-time code another computer enrolls with (the bridge must be running)
   enroll   on another computer: become a machine of that home. Its agents then run here, under this computer's
            own access mode, and the home's bots start them
+  remove   on the home: unpin a machine and close its link. Its agents stop being reachable from the phone; the
+           machine keeps its files
 `;
 
 export type MachineCommandDeps = {
@@ -126,8 +131,56 @@ export async function machineCommand(argv: string[], deps: MachineCommandDeps): 
       return 0;
     }
 
+    case "remove": {
+      const named = argv.slice(1).join(" ").trim();
+      if (named === "") {
+        out(MACHINE_USAGE);
+        return 2;
+      }
+      return removeMachine(named, deps);
+    }
+
     default:
       out(MACHINE_USAGE);
       return argv[0] === "help" ? 0 : 2;
   }
+}
+
+/**
+ * Through the running bridge, which also closes the link and forgets the machine's agents and cards. With none running,
+ * in machines.json under the home lock; the home forgets the rest when it starts.
+ */
+async function removeMachine(named: string, deps: MachineCommandDeps): Promise<number> {
+  const { out } = deps;
+  let answer: MachineRemoval | null = null;
+  try {
+    const res = await deps.fetch("http://localhost/machine-remove", {
+      method: "POST",
+      body: JSON.stringify({ machine: named }),
+      unix: join(deps.bridgeHome, "run", "control.sock"),
+    } as RequestInit);
+    answer = (await res.json()) as MachineRemoval;
+  } catch {
+    answer = null;
+  }
+  if (answer === null) {
+    const lock = lockHome(deps.bridgeHome);
+    if (lock.kind !== "held") {
+      out(`A bridge holds ${deps.bridgeHome} but did not answer on its control socket. Stop it, then try again.\n`);
+      return 1;
+    }
+    try {
+      const registry = createRegistry({ bridgeHome: deps.bridgeHome, now: () => new Date() });
+      const found = registry.list().find((m) => m.id === named || m.name.toLowerCase() === named.toLowerCase());
+      answer = found && registry.remove(found.id) ? { ok: true, name: found.name } : { ok: false, error: `No machine "${named}". Machines: ${registry.list().map((m) => m.name).join(", ") || "none"}.` };
+    } finally {
+      lock.release();
+    }
+  }
+  if (!answer.ok) {
+    out(`${answer.error}\n`);
+    return 1;
+  }
+  out(`Removed "${answer.name}". Its agents are no longer reachable from your phone, and it keeps its files. To add it again, enroll it with a new code.\n`);
+  return 0;
 }

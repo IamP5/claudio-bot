@@ -679,6 +679,10 @@ export type ClientMessage =
   | { type: "pair_code" }
   // Feature "machines": a one-time code another computer enrolls with as a machine of this home.
   | { type: "machine_code" }
+  // Feature "machines": unpins a machine from this home and closes its link. Its agents stop being reachable from the
+  // phone and its open cards expire; the machine keeps its files. Answered with the machines frame, which is also
+  // broadcast. Refused for the home itself.
+  | { type: "remove_machine"; machineId: MachineId }
   // Feature "presence". attended false: nobody is looking at this app, so its socket does not hold back a push. A
   // socket that never sends one counts as attended.
   | { type: "presence"; attended: boolean };

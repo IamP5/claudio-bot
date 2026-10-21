@@ -239,6 +239,7 @@ const parsers: Record<ClientMessage["type"], (o: Obj) => ClientMessage> = {
   revoke_device: (o) => ({ type: "revoke_device", deviceId: str(o, "deviceId") as DeviceId }),
   pair_code: () => ({ type: "pair_code" }),
   machine_code: () => ({ type: "machine_code" }),
+  remove_machine: (o) => ({ type: "remove_machine", machineId: str(o, "machineId") as MachineId }),
   presence: (o) => ({ type: "presence", attended: bool(o, "attended") }),
   ...sessionParsers,
 };

@@ -23,7 +23,7 @@ import { scanProjects } from "./projects";
 import { createPush, senderFromEnv } from "./push";
 import { serve, threadTopic } from "./serve";
 import { createClaudeApps, fakeDesktop, realAppsDeps } from "./claudeApps";
-import { serveControl } from "./control";
+import { serveControl, type MachineRemoval } from "./control";
 import type { PairOffer } from "./protocol";
 import { claudeExecutable, ownPids } from "./session";
 import { bridgeHome, createSaver, loadWorld } from "./store";
@@ -204,7 +204,14 @@ function bootHome() {
     machines: { links, enroll: (body) => enroll({ identity, registry, codes: joinCodes }, body), offer: machineOffer },
   });
   const urls = bridgeUrls(names, lanAddresses(), transport.port);
-  const control = serveControl({ home, offer, machineOffer, log });
+  const control = serveControl({ home, offer, machineOffer, removeMachine, log });
+
+  function removeMachine(named: string): MachineRemoval {
+    const found = registry.list().find((m) => m.id === named || m.name.toLowerCase() === named.trim().toLowerCase());
+    if (!found) return { ok: false, error: `No machine "${named}". Machines: ${registry.list().map((m) => m.name).join(", ") || "none"}.` };
+    void hub.handle({ type: "remove_machine", machineId: found.id });
+    return { ok: true, name: found.name };
+  }
 
   function offer(): PairOffer {
     return { ...devices.newCode(), urls };

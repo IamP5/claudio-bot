@@ -1,7 +1,7 @@
 import { errorText } from "../text";
 import type { HomeRef, Identity } from "./identity";
 import { machineHears, type LinkState } from "./link";
-import { LINK_REPLACED } from "./links";
+import { LINK_REMOVED, LINK_REPLACED } from "./links";
 import type { AgentRuntime } from "./runtime";
 import { isSessionFrame, type ServerMessage, type SessionClientMessage, type SessionId } from "../protocol";
 import { parseHomeFrame, type Event, type IntentId, type MachineFrame, type ProfileView, type SessionReply, type SessionSignal } from "./wire";
@@ -162,6 +162,10 @@ export function dialHub(deps: {
       if (e.code === LINK_REPLACED && socket === s && state.kind === "live") {
         stopped = true;
         log(`link: another bridge with this machine's identity linked to ${home.name}, so this one stops dialing. Run one bridge per machine.json.`);
+      }
+      if (e.code === LINK_REMOVED && socket === s && state.kind === "live") {
+        stopped = true;
+        log(`link: ${home.name} removed this machine, so it stops dialing. Its agents and files stay here. To join again, run claudiobot machine enroll with a new code.`);
       }
       drop(s, e.reason || `closed with code ${e.code}`);
     };

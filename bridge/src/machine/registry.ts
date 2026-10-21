@@ -26,6 +26,8 @@ export type Registry = {
   enroll(m: { id: MachineId; name: string; publicKey: string }): Enrolled;
   /** Updates the fields given and saves. */
   update(id: MachineId, patch: Partial<Pick<MachineRecord, "lastSeenAt" | "ackedSeq" | "profile" | "name">>): void;
+  /** Unpins the machine, so its link is refused from then on. False: it was not enrolled. */
+  remove(id: MachineId): boolean;
 };
 
 const FILE = z.object({
@@ -75,6 +77,18 @@ export function createRegistry(deps: { bridgeHome: string; now: () => Date }): R
         throw e;
       }
       return { ok: true, record, created: true };
+    },
+    remove(id) {
+      const i = machines.findIndex((m) => m.id === id);
+      if (i === -1) return false;
+      const [gone] = machines.splice(i, 1);
+      try {
+        save();
+      } catch (e) {
+        machines.splice(i, 0, gone!);
+        throw e;
+      }
+      return true;
     },
     update(id, patch) {
       const record = machines.find((m) => m.id === id);

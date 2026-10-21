@@ -133,6 +133,8 @@ export type Placements = {
   forgetAgent(agentId: AgentId): void;
   forgetBot(botId: BotId): void;
   forgetMachine(machine: MachineId): void;
+  /** Every machine some agent or card is placed on. */
+  machines(): MachineId[];
   /** The event checked against the table: dropped, or as the home may believe it. A card it admits becomes the machine's. */
   admit(machine: MachineId, e: Event, ctx: AdmitContext): Admitted;
 };
@@ -186,6 +188,7 @@ export function createPlacements(deps: { path: string; log: (line: string) => vo
       for (const [id, m] of Object.entries(state.cards)) if (m === machine) delete state.cards[id as MessageId];
       save();
     },
+    machines: () => [...new Set([...Object.values(state.agents).map((p) => p.machine), ...Object.values(state.cards)])],
     admit(machine, e, ctx) {
       const cards = Object.keys(state.cards).length;
       const admitted = admit(state, machine, e, ctx);

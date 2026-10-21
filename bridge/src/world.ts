@@ -15,6 +15,7 @@ import {
   type BotStatus,
   type DeviceId,
   type ExchangeMessage,
+  type ItemId,
   type Link,
   type Mention,
   type Message,
@@ -30,6 +31,8 @@ import {
   type RoutineRun,
   type RunId,
   type SessionId,
+  type SessionItem,
+  type SessionOutcome,
 } from "./protocol";
 
 // The records in state.json (version 3) and the pure rules over them. Every persisted shape is declared here, so the
@@ -427,7 +430,22 @@ export type OwnDrive = {
   readonly session: Owned<SessionState>;
   /** Open cards and the newest settled ones. Writer: own.ts. */
   cards: OwnCard[];
+  // How runs end, kept across bridge restarts. Writer: own.ts.
+  /** How the last run ended, until the next send. */
+  outcome?: SessionOutcome;
+  /** The last time work was cut off, kept across sends: steps that started before it never end. */
+  cut?: Cut;
+  /** The bridge's own lines in the thread (stops, failures, restarts), the newest few. */
+  notices?: Extract<SessionItem, { kind: "notice" }>[];
+  /** Prompts a stop ended before Claude Code wrote them down, shown until the transcript has their words. */
+  kept?: { id: ItemId; at: string; text: string }[];
 };
+
+/**
+ * When work on a session was cut off (a stop of everything, Claude Code exiting, a bridge restart) and how it reads:
+ * a step that started before then and still reads running will never get its result.
+ */
+export type Cut = { at: string; state: "stopped" | "error"; cause: string };
 
 /**
  * What Claude Code asked the phone. Live only on the SDK side: the query waiting on it dies with the bridge, so at

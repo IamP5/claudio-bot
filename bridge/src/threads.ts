@@ -1,7 +1,8 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Cursor, ItemId, ServerMessage, SessionControls, SessionId, SessionItem, ThreadChannelFrame, ThreadLive, ThreadPosition } from "./protocol";
-import { patchStep, type StepPatch } from "./tasks";
+import { cutStep, patchStep, type StepPatch } from "./tasks";
 import { emptyTail, extend, follow, pageOf, project, readThread, sdkReaders, statOf, toolOutput, type Chain, type Head, type ProjectContext, type ProjectionTail, type SdkReaders } from "./transcript";
+import type { Cut } from "./world";
 
 // Watching one session's thread: the newest page as a snapshot, older pages by cursor, every change after as upserts
 // on channel s:<id> with a per-thread rev and a ring to replay a reconnect from, and the streaming text of the item
@@ -16,6 +17,8 @@ export type ThreadsDeps = {
   overlay(id: SessionId): SessionItem[];
   /** How the live query changes transcript steps, by tool_use id. */
   steps(id: SessionId): ReadonlyMap<string, StepPatch>;
+  /** When the session's work was cut off: a step the transcript leaves running from before then reads ended. */
+  cut(id: SessionId): Cut | null;
   controls(id: SessionId): SessionControls;
   publish(id: SessionId, frame: ThreadChannelFrame): void;
   watched(id: SessionId): boolean;
@@ -80,8 +83,9 @@ type State = {
   holding: boolean;
   /** What the published controls say. */
   working: boolean;
-  /** The step patches last published, by step id, as JSON. */
+  /** The step patches last published, by step id, as JSON, and the cut likewise. */
   steps: Map<string, string>;
+  cut: string;
   sentAt: number;
   /** Overlay user items the transcript now shows, so they are not shown twice. */
   shownByTranscript: Set<ItemId>;
@@ -119,7 +123,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
 
   const indexOf = (items: readonly SessionItem[]) => new Map(items.map((item, i) => [item.id, i] as const));
 
-  async function read(id: SessionId): Promise<Omit<State, "overlay" | "controls" | "steps" | "holding" | "working" | "sentAt" | "shownByTranscript" | "rev" | "ring" | "live" | "queue" | "usedAt" | "epoch">> {
+  async function read(id: SessionId): Promise<Omit<State, "overlay" | "controls" | "steps" | "cut" | "holding" | "working" | "sentAt" | "shownByTranscript" | "rev" | "ring" | "live" | "queue" | "usedAt" | "epoch">> {
     const head = deps.head(id);
     const ctx = deps.context(id, head);
     if (!head) return { id, path: null, ctx, items: [], index: new Map(), tail: emptyTail(), chain: { uuids: new Set(), leaf: null }, offset: 0 };
@@ -141,6 +145,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
           overlay: new Map(),
           controls: "",
           steps: new Map(),
+          cut: "null",
           holding: false,
           working: false,
           sentAt: deps.now().getTime(),
@@ -172,8 +177,11 @@ export function createThreads(deps: ThreadsDeps): Threads {
   function visible(s: State): SessionItem[] {
     const now = deps.now().getTime();
     const steps = new Set(s.items.flatMap((i) => (i.kind === "work" ? i.steps.map((st) => st.id) : [])));
+    // An API error is in the transcript already; the bridge's notice of the same failure would show it twice.
+    const errors = new Set(s.items.flatMap((i) => (i.kind === "notice" && i.tone === "error" ? [i.text] : [])));
     return deps.overlay(s.id).filter((item) => {
       if (s.shownByTranscript.has(item.id)) return false;
+      if (item.kind === "notice" && item.tone === "error" && errors.has(item.text)) return false;
       if (item.kind !== "permission" || item.card.answer !== null || item.stepId === undefined || item.subagent !== undefined) return true;
       const held = !steps.has(item.stepId) && now - Date.parse(item.at) < CARD_WAIT_MS;
       if (held) s.holding = true;
@@ -195,28 +203,41 @@ export function createThreads(deps: ThreadsDeps): Threads {
     s.working = controls.working;
   }
 
-  /** Records the step patches as published; returns the transcript's work items whose patches changed. */
+  /** Records the step patches and the cut as published; returns the transcript's work items they now show otherwise. */
   function absorbSteps(s: State): SessionItem[] {
     const before = s.steps;
     s.steps = new Map([...deps.steps(s.id)].map(([id, p]) => [id, JSON.stringify(p)]));
     const touched = new Set([...before.keys(), ...s.steps.keys()].filter((id) => before.get(id) !== s.steps.get(id)));
-    return touched.size === 0 ? [] : s.items.filter((i) => i.kind === "work" && i.steps.some((st) => touched.has(st.id)));
+    const cutBefore = s.cut;
+    s.cut = JSON.stringify(deps.cut(s.id));
+    const recut = s.cut !== cutBefore;
+    if (touched.size === 0 && !recut) return [];
+    return s.items.filter((i) => i.kind === "work" && i.steps.some((st) => touched.has(st.id) || (recut && st.state === "running")));
   }
 
-  function patched(item: SessionItem, patches: ReadonlyMap<string, StepPatch>): SessionItem {
-    if (item.kind !== "work" || !item.steps.some((st) => patches.has(st.id))) return item;
-    return { ...item, steps: item.steps.map((st) => (patches.has(st.id) ? patchStep(st, patches.get(st.id)!) : st)) };
+  type View = { patches: ReadonlyMap<string, StepPatch>; cut: Cut | null };
+  const viewOf = (id: SessionId): View => ({ patches: deps.steps(id), cut: deps.cut(id) });
+
+  /** A transcript item as shown: its steps patched by the live view, then ended by the cut unless the live view holds them. */
+  function patched(item: SessionItem, { patches, cut }: View): SessionItem {
+    if (item.kind !== "work") return item;
+    const steps = item.steps.map((st) => {
+      const p = patches.get(st.id);
+      const shown = p ? patchStep(st, p) : st;
+      return cut && p?.state === undefined ? cutStep(shown, cut) : shown;
+    });
+    return steps.every((st, i) => st === item.steps[i]) ? item : { ...item, steps };
   }
 
   /** The transcript's items with the overlay's replacements and step patches applied, then the overlay's own. */
   function merged(s: State): SessionItem[] {
     const overlay = visible(s);
     const byId = new Map(overlay.map((item) => [item.id, item]));
-    const patches = deps.steps(s.id);
+    const view = viewOf(s.id);
     const out = s.items.map((item) => {
       const over = byId.get(item.id);
       if (over) byId.delete(item.id);
-      return over ?? patched(item, patches);
+      return over ?? patched(item, view);
     });
     return [...out, ...byId.values()];
   }
@@ -272,8 +293,8 @@ export function createThreads(deps: ThreadsDeps): Threads {
   /** Transcript items as shown: an overlay item of the same id wins, and the step patches apply. */
   const shown = (s: State, items: readonly SessionItem[]) => {
     const overlay = new Map(deps.overlay(s.id).map((item) => [item.id, item]));
-    const patches = deps.steps(s.id);
-    return items.map((item) => overlay.get(item.id) ?? patched(item, patches));
+    const view = viewOf(s.id);
+    return items.map((item) => overlay.get(item.id) ?? patched(item, view));
   };
 
   function upsertTranscript(s: State, changed: readonly SessionItem[]) {

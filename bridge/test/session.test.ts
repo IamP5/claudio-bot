@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Options, query, SDKMessage, SDKResultMessage, SDKUserMessage, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import type { Headroom, Ledger } from "../src/ledger";
-import type { AgentId, BotId, RoutineId, RunId } from "../src/protocol";
+import type { AgentId, BotId, RoutineId, RunId, TaskId } from "../src/protocol";
 import {
   BACKGROUND_WAIT_MS,
   BREAKER_NOTE,
@@ -599,7 +599,10 @@ class FakeQuery {
   async interrupt() {
     this.interrupts++;
   }
+  /** Tasks Claude Code refuses to stop. */
+  readonly refusing = new Set<string>();
   async stopTask(id: string) {
+    if (this.refusing.has(id)) throw new Error(`no task ${id}`);
     this.stoppedTasks.push(id);
   }
   close() {
@@ -1054,7 +1057,7 @@ describe("session", () => {
     const { h, id } = await started("[a]");
     h.q().emit(said("Running the migration."));
     await flush();
-    expect(await h.session.interrupt()).toBe(true);
+    expect((await h.session.interrupt()).ran).toBe(true);
     expect(h.q().interrupts).toBe(1);
     expect(h.session.lifecycle.kind).toBe("stopping");
     expect(h.session.current?.id).toBe(id as EnvelopeId);
@@ -1063,7 +1066,7 @@ describe("session", () => {
     expect(h.ends).toMatchObject([{ id, end: { kind: "stopped", by: "user" } }]);
     expect(h.usage).toMatchObject([{ cumulativeUsd: 0.3 }]);
     expect([h.session.nextDeadline(), h.session.working, h.sent().length]).toEqual([later(15 * 60_000), false, 1]);
-    expect(await h.session.interrupt()).toBe(false);
+    expect((await h.session.interrupt()).ran).toBe(false);
   });
 
   test("while stopping nothing new is sent; queued unattended mail is dropped and the user's queued message runs after", async () => {
@@ -1249,7 +1252,7 @@ describe("session", () => {
 
   test("Stop when nothing runs resolves false and changes nothing", async () => {
     const h = harness();
-    expect(await h.session.interrupt()).toBe(false);
+    expect((await h.session.interrupt()).ran).toBe(false);
     expect(h.state).toEqual(emptySession());
   });
 
@@ -1384,7 +1387,7 @@ describe("session", () => {
     const r = h.push("[r]", routine, false, fired);
     await flush();
     expect(h.session.parkedFor).toBe("usage_limit");
-    expect(await h.session.interrupt()).toBe(true);
+    expect((await h.session.interrupt()).ran).toBe(true);
     expect([h.finals(u), h.finals(r)]).toMatchObject([[], [{ end: { kind: "dropped" } }]]);
     expect(h.state.pending.map((p) => p.id as string)).toEqual([u]);
   });
@@ -1756,6 +1759,31 @@ const allowed = (status: "allowed" | "allowed_warning", info: object = {}) =>
   ({ type: "rate_limit_event", uuid: "rl", session_id: "s_1", rate_limit_info: { status, ...info } }) as unknown as SDKMessage;
 
 describe("background work", () => {
+  test("Stop of the turn leaves background work running; Stop of everything waits on each task and names those not stopped", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(said("Working."), tasks(build, lint));
+    await flush();
+    expect(await h.session.interrupt("turn")).toEqual({ ran: true, refused: [] });
+    expect(h.q().stoppedTasks).toEqual([]);
+    h.q().emit(interruptedResult(0.1));
+    await flush();
+    h.q().refusing.add("t2");
+    expect(await h.session.interrupt("all")).toEqual({ ran: true, refused: ["t2" as TaskId] });
+    expect(h.q().stoppedTasks).toEqual(["t1"]);
+  });
+
+  test("a queued message the phone withdraws never runs, and the one in flight cannot be withdrawn", async () => {
+    const h = harness();
+    h.session.push({ kind: "envelope", text: "[a]", initiator: user, settles: null, clientId: "c_a" });
+    h.session.push({ kind: "envelope", text: "[b]", initiator: user, settles: null, clientId: "c_b" });
+    await flush();
+    expect([h.session.unqueue("c_a"), h.session.unqueue("c_b"), h.session.unqueue("c_b")]).toEqual([false, true, false]);
+    expect(h.ends.filter((e) => e.text === "[b]").map((e) => e.end.kind)).toEqual(["dropped"]);
+    h.q().emit(resultMsg(0.1));
+    await flush();
+    expect(h.sent()).toEqual(["[a]"]);
+  });
+
   test("a query with background work is not closed when idle; the 15 minutes start once the work is done", async () => {
     const { h } = await started("[a]");
     h.q().emit(tasks(build), resultMsg(0.1));
@@ -1867,14 +1895,14 @@ describe("background work", () => {
     const { h, id } = await started("[a]");
     h.q().emit(tasks(build, lint));
     await flush();
-    expect(await h.session.interrupt()).toBe(true);
+    expect((await h.session.interrupt()).ran).toBe(true);
     expect(h.q().stoppedTasks).toEqual(["t1", "t2"]);
     h.q().emit(interruptedResult(0.1));
     await flush();
     expect(h.finals(id)).toMatchObject([{ end: { kind: "stopped" } }]);
     h.q().emit(tasks(lint));
     await flush();
-    expect(await h.session.interrupt()).toBe(true);
+    expect((await h.session.interrupt()).ran).toBe(true);
     expect(h.q().stoppedTasks).toEqual(["t1", "t2", "t2"]);
   });
 

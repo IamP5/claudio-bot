@@ -905,7 +905,7 @@ test("one ticker throwing is logged, and the tickers after it still run", () => 
 
 test("hello lists every feature this bridge has, and usage only with a usage reader", () => {
   const hello = hubOver(emptyWorld()).hub.hello(NO_RING);
-  expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups", "presence", "session_tasks"]);
+  expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups", "presence", "session_tasks", "session_unqueue"]);
   const reading = hubOver(emptyWorld(), { usage: { read: () => new Promise(() => {}), watched: () => true } }).hub.hello(NO_RING);
   expect(reading.type === "hello" && reading.features.at(-1)).toBe("usage");
 });

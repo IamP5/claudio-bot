@@ -455,7 +455,7 @@ export function createAgents(deps: {
 
     async stop(rec) {
       const session = sessions.get(rec.agent.id);
-      return session ? session.interrupt() : false;
+      return session ? (await session.interrupt()).ran : false;
     },
 
     session: (id) => sessions.get(id) ?? null,

@@ -12,6 +12,7 @@ import type { Scope } from "./policy";
 import { createProjects } from "./projects";
 import {
   PHONE_MODES,
+  type ErrorAbout,
   type ItemId,
   type MessageId,
   type PermissionChoice,
@@ -23,7 +24,6 @@ import {
   type SessionItem,
   type SessionsChannelFrame,
   type SessionStatus,
-  type StopTarget,
   type ThreadChannelFrame,
 } from "./protocol";
 import type { Result } from "./result";
@@ -360,6 +360,10 @@ export function createSessions(deps: SessionsDeps): Sessions {
     context: (id, head) => ({ cwd: head?.cwd ?? agentOf(id)?.cwd ?? deps.world.sessions.get(id)?.own?.cwd ?? "", userName: deps.userName, agent: agentOf(id) !== null }),
     overlay,
     steps,
+    cut: (id) => {
+      const w = driverOf(id);
+      return w.kind === "own" ? drivers.cut(w.rec) : null;
+    },
     controls,
     publish: deps.signal.thread,
     watched,
@@ -377,7 +381,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   const listFrame = (): ServerMessage => ({ type: "sessions", ...catalog.snapshot(), mirror: deps.world.sessionPrefs.mirror });
   const known = (id: SessionId) => catalog.head(id) !== null || agentOf(id) !== null || cloudOf(id) !== null || deps.world.sessions.get(id)?.own?.created === true;
   const gone = (id: SessionId): ServerMessage[] => [{ type: "session_removed", sessionId: id, movedTo: null }];
-  const error = (message: string): ServerMessage[] => [{ type: "error", message }];
+  const error = (message: string, about?: ErrorAbout): ServerMessage[] => [{ type: "error", message, ...(about && { about }) }];
 
   async function rename(id: SessionId, title: string): Promise<ServerMessage[]> {
     const head = catalog.head(id);
@@ -435,14 +439,29 @@ export function createSessions(deps: SessionsDeps): Sessions {
     }
   }
 
-  async function stop(id: SessionId, target: StopTarget): Promise<ServerMessage[]> {
-    const w = driverOf(id);
-    if (w.kind === "cloud") return error("A cloud session runs on claude.ai; stop it there.");
-    if (w.kind === "agent" && target !== "all") return error("An agent's session stops as a whole.");
-    const live = typeof target === "object" && w.kind === "own" && (drivers.controls(w.rec).tasks ?? []).some((t) => t.id === target.task);
-    const stopped = w.kind === "agent" ? await deps.agents.stop(w.rec) : w.kind === "own" ? await drivers.stop(w.rec, target) : false;
-    if (stopped) return [];
-    return error(typeof target !== "object" ? "Nothing is running." : live ? "Claude Code did not stop that task." : "That task is not running.");
+  async function stop(m: Extract<SessionClientMessage, { type: "session_stop" }>): Promise<ServerMessage[]> {
+    const target = m.target ?? "all";
+    const about: ErrorAbout = { kind: "stop", sessionId: m.sessionId };
+    const w = driverOf(m.sessionId);
+    if (w.kind === "cloud") return error("A cloud session runs on claude.ai; stop it there.", about);
+    if (w.kind === "agent") {
+      if (target !== "all") return error("An agent's session stops as a whole.", about);
+      return (await deps.agents.stop(w.rec)) ? [] : error("Nothing is running.", about);
+    }
+    if (w.kind !== "own") return error("Nothing is running.", about);
+    // A stop is aimed at the run the phone saw: one meant for a turn that has since ended never reaches a newer one.
+    const turn = drivers.controls(w.rec).turn ?? null;
+    if (m.turnStartedAt !== undefined && (turn !== null ? turn.startedAt !== m.turnStartedAt : target === "turn")) {
+      return error(turn !== null ? "That turn ended, and a newer one runs now. Stop again to stop it." : "That turn already ended.", about);
+    }
+    const r = await drivers.stop(w.rec, target);
+    return r.ok ? [] : error(r.error, about);
+  }
+
+  function unqueue(m: Extract<SessionClientMessage, { type: "session_unqueue" }>): ServerMessage[] {
+    const w = driverOf(m.sessionId);
+    if (w.kind !== "own") return error("Only a message you queued in this session can be withdrawn.");
+    return reply(drivers.unqueue(w.rec, m.clientId));
   }
 
   function decide(m: Extract<SessionClientMessage, { type: "session_decide" }>): ServerMessage[] {
@@ -483,7 +502,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
       if (w.kind === "none") return error(w.reason);
       const rec = w.kind === "own" ? w.rec : take(id, w.head);
       const r = await drivers.set(rec, { ...(model !== undefined && { model }), ...(mode !== undefined && { mode }) });
-      if (!r.ok) return error(r.error);
+      if (!r.ok) return error(r.error, { kind: "set", sessionId: id });
     }
     if (hidden !== undefined) {
       recordOf(id).hidden = hidden;
@@ -596,9 +615,9 @@ export function createSessions(deps: SessionsDeps): Sessions {
         case "session_send":
           return send(m);
         case "session_stop":
-          return stop(m.sessionId, m.target ?? "all");
+          return stop(m);
         case "session_unqueue":
-          return error("This bridge cannot withdraw a queued message yet.");
+          return unqueue(m);
         case "session_decide":
           return decide(m);
         case "session_answer": {

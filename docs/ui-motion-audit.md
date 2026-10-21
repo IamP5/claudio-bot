@@ -147,3 +147,11 @@ The bridge can deliver several messages in one tick: a turn's held bubbles at it
 - A Maestro flow on `chat` (open the keyboard, send, wait for the reply) still follows the bottom above the keyboard.
 - Before the delayed fade, the typing row slid down through each fading bubble for two or three frames. The delayed fade removed it.
 - Not seen: a real bridge burst, the reveal running in the Mac app, and a reconnect catch-up.
+
+## Checked against a real bridge (20 October 2026)
+
+The iPhone simulator and a Mac Debug build paired with a throwaway bridge on real Claude Code (`verify-claudio-bot`). The Mac build used `-pairingVault`, so the installed app's pairing stayed as it was.
+
+- A three-paragraph reply arrived as one bubble on both. The lead-in text and its question card arrived in the same millisecond, so nothing showed and then folded away.
+- A bot that restates the question writes it as the closing paragraph of its bubble, not as a bubble of its own. On iPhone that paragraph is now left out, and the bubble only when nothing else is left. The Mac keeps it. `live-question-repeat.png` shows both.
+- Seen and left: when the turn ends, "Typing…" leaves and the list settles down by about one row.

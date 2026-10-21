@@ -28,6 +28,25 @@ import Testing
         }
     }
 
+    private func texts(_ messages: [Message], hides: Bool) -> [String] {
+        Timeline.rows(messages, hidesRepeatedQuestion: hides).compactMap { if case .message(.bot(_, _, let text, _)) = $0 { text } else { nil } }
+    }
+
+    @Test func iPhoneDropsARestatedClosingParagraph() {
+        let bubble = bot("b", "The tea facts are done.\n\nMore below.\n\n**\(ask)**")
+        #expect(texts([bubble, card("q")], hides: true) == ["The tea facts are done.\n\nMore below."])
+        #expect(ids([bubble, card("q")], hides: true) == ["b", "q"])
+    }
+
+    @Test func macKeepsARestatedClosingParagraph() {
+        #expect(texts([bot("b", "Done.\n\n\(ask)"), card("q")], hides: false) == ["Done.\n\n\(ask)"])
+    }
+
+    @Test func aQuestionInsideAParagraphStays() {
+        let text = "Done. \(ask)"
+        #expect(texts([bot("b", text), card("q")], hides: true) == [text])
+    }
+
     @Test func aDifferentBubbleStays() {
         #expect(ids([bot("b", "Two PRs are green."), card("q")], hides: true) == ["b", "q"])
     }

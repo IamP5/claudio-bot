@@ -79,7 +79,7 @@ enum ChatRow: Identifiable, Equatable {
 enum Timeline {
     static let gap: TimeInterval = 60 * 60
 
-    /// The iPhone omits a bubble that only repeats the question card right after it; the Mac shows it, as Grok Bot does.
+    /// The iPhone omits the question a bubble repeats right above its card; the Mac shows it, as Grok Bot does.
     static var hidesRepeatedQuestion: Bool {
         #if os(macOS)
         false
@@ -92,8 +92,9 @@ enum Timeline {
     static func rows(_ messages: [Message], hidesRepeatedQuestion: Bool = Timeline.hidesRepeatedQuestion) -> [ChatRow] {
         var rows: [ChatRow] = []
         var last: Date?
-        for (index, message) in messages.enumerated() {
-            if hidesRepeatedQuestion, messages.indices.contains(index + 1), repeats(message, messages[index + 1]) { continue }
+        for (index, original) in messages.enumerated() {
+            let next = messages.indices.contains(index + 1) ? messages[index + 1] : nil
+            guard let message = hidesRepeatedQuestion ? withoutRepeatedQuestion(original, before: next) : original else { continue }
             if last.map({ message.at.timeIntervalSince($0) > gap }) ?? true {
                 rows.append(.separator(message.at))
             }
@@ -103,9 +104,16 @@ enum Timeline {
         return rows
     }
 
-    private static func repeats(_ message: Message, _ next: Message) -> Bool {
-        guard case .bot(_, _, let text, nil) = message, case .question(_, _, let card) = next else { return false }
-        return normalized(text) == normalized(card.question)
+    /// The bubble without a closing paragraph that restates the next card's question, or nil when nothing else is left.
+    /// One bubble holds a whole message, so the restated question is usually its last paragraph.
+    private static func withoutRepeatedQuestion(_ message: Message, before next: Message?) -> Message? {
+        guard case let .bot(id, at, text, nil) = message, case .question(_, _, let card)? = next else { return message }
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let split = body.range(of: "\n\n", options: .backwards)
+        let last = split.map { String(body[$0.upperBound...]) } ?? body
+        guard normalized(last) == normalized(card.question) else { return message }
+        guard let split else { return nil }
+        return .bot(id: id, at: at, text: String(body[..<split.lowerBound]), from: nil)
     }
 
     /// Bots often bold the restated question, so emphasis marks don't count.

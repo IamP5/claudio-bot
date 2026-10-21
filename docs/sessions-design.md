@@ -206,11 +206,11 @@ type SessionControls = { /* as before */ turn?: { startedAt: string; wake: boole
 type SessionRow = { /* as before */ since?: string; running?: { agents: number; commands: number }; activity?: string;
   outcome?: { kind: "finished" | "failed" | "stopped" | "lost"; text: string; at: string } };
 // SessionItem: permission + stepId?, subagent?; notice + reason?: "stop" | "task" | "restart" | "failure" | "approval"
-// PermissionMessage.answer + "stopped"
+// PermissionMessage.answer + "stopped" (the user stopped what asked) + "closed" (Claude Code exited while it waited)
 // Client: session_stop + target?: "all" | "turn" | { task: TaskId }, turnStartedAt?; session_unqueue { sessionId, clientId }
 // Server: hello + push?; push_state { push: PushState } (a live signal, like usage); error + about?: ErrorAbout
 type PushState = { state: "on" } | { state: "off" } | { state: "failing"; error: string; at: string };
-type ErrorAbout = { kind: "stop"; sessionId } | { kind: "send"; sessionId; clientId } | { kind: "tool"; sessionId; toolUseId } | { kind: "create"; ref };
+type ErrorAbout = { kind: "stop"; sessionId } | { kind: "set"; sessionId } | { kind: "send"; sessionId; clientId } | { kind: "tool"; sessionId; toolUseId } | { kind: "create"; ref };
 ```
 
 Rules:
@@ -218,6 +218,9 @@ Rules:
 - With `session_tasks`, `controls.working` means something runs (a turn, a wake turn, or a live task), and Stop follows it. `controls.turn` says whether a turn runs, and queue-versus-send follows it. Without the feature, `working` is the turn alone and `turn` is never sent.
 - A failed full-output fetch is an `error` with `about: { kind: "tool" }`. `session_tool_output.output` stays a string, so an older app never meets a `null` there.
 - Until a bridge serves `session_tasks`, a `session_stop` aimed at `"turn"` or a task is refused with an error, and `session_unqueue` is refused the same way.
+- How a run ends is recorded on the session's drive in `state.json`, so it outlives a bridge restart: `outcome` (the row's, cleared by the next send), `cut` (when work was cut off, kept across sends), the bridge's own `notices` (the newest 10) and `kept` (prompts a stop ended before Claude Code wrote them down). Stop answers the open cards of what it stops as `"stopped"`, then posts a `reason: "stop"` notice that names what stopped and what Claude Code would not stop.
+- A transcript step that started before `cut.at` and still reads running reads `cut.state` with `cut.cause` once no turn from before the cut runs: `error` after Claude Code exited, `stopped` after a stop of everything or a bridge restart. A task the live query still runs keeps its step running.
+- A `session_set` that Claude Code refuses changes nothing the controls report, and answers with `error` and `about: { kind: "set" }`.
 
 ## 4. Bridge modules
 

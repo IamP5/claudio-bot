@@ -22,16 +22,21 @@ struct ConnectorsSection: View {
         .setConnector(botId: botId, name: connector.name, enabled: enabled)
     }
 
-    static func detail(_ connector: Connector) -> String {
+    static func detail(_ connector: Connector, on computer: String) -> String {
         guard connector.enabled else { return "Off for this Bot and its agents" }
         switch connector.status {
         case .connected: return "Connected"
         case .pending: return "Connecting"
         case .failed: return "Could not connect"
-        case .needsAuth: return "Needs sign-in on your Mac"
+        case .needsAuth: return "Needs sign-in on \(computer)"
         case .unchecked: return "Not checked yet"
         case .unknown(let raw): return raw
         }
+    }
+
+    /// Where the bot runs: the bridge's own computer, by the name it gives.
+    private var computer: String {
+        store.machine ?? "the bridge's computer"
     }
 
     var body: some View {
@@ -39,7 +44,7 @@ struct ConnectorsSection: View {
         if rows != .hidden {
             CardSection(
                 title: "Connectors",
-                footer: "The MCP servers this Bot loads on your Mac. Turning one off covers its agents too and saves the tokens it would cost."
+                footer: "The MCP servers this Bot loads on \(computer). Turning one off covers its agents too and saves the tokens it would cost."
             ) {
                 switch rows {
                 case .hidden:
@@ -65,7 +70,7 @@ struct ConnectorsSection: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(connector.name).font(.ui(size: 16)).foregroundStyle(.white)
-                Text(Self.detail(connector)).font(.ui(size: 13)).foregroundStyle(Theme.secondary)
+                Text(Self.detail(connector, on: computer)).font(.ui(size: 13)).foregroundStyle(Theme.secondary)
             }
             Spacer(minLength: 0)
             Toggle(connector.name, isOn: Binding(

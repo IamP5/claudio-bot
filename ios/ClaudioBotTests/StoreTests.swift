@@ -603,8 +603,8 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(ConnectorsSection.rows(store, b1) == .loading)
         store.apply(.connectors(botId: b1, connectors: [gmail]))
         #expect(ConnectorsSection.rows(store, b1) == .shown([gmail]))
-        #expect(ConnectorsSection.detail(gmail) == "Needs sign-in on your Mac")
-        #expect(ConnectorsSection.detail(Connector(name: "x", status: .connected, enabled: false)) == "Off for this Bot and its agents")
+        #expect(ConnectorsSection.detail(gmail, on: "omarchy") == "Needs sign-in on omarchy")
+        #expect(ConnectorsSection.detail(Connector(name: "x", status: .connected, enabled: false), on: "omarchy") == "Off for this Bot and its agents")
     }
 
     @Test func theSwitchSendsSetConnector() throws {

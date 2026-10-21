@@ -32,11 +32,11 @@ struct SettingsView: View {
 
     private var form: some View {
         Form {
-            Section("Mac") {
+            Section("This bridge") {
                 LabeledContent("Status", value: store.connection.summary)
                 LabeledContent("Machine", value: store.machine ?? "Unknown")
                 if let url = client.pairing?.url {
-                    LabeledContent("Bridge") {
+                    LabeledContent("Address") {
                         Text(url.absoluteString)
                             .font(.footnote.monospaced())
                             .lineLimit(1)
@@ -80,7 +80,7 @@ struct SettingsView: View {
                     .tint(AvatarColor.green.color)
                     #endif
             } footer: {
-                Text("Alerts for bot messages, questions and approvals arrive while ClaudioBot is connected to your Mac. A question alert lets you pick one of its first two answers.")
+                Text("Alerts for bot messages, questions and approvals arrive while ClaudioBot is connected to the bridge. A question alert lets you pick one of its first two answers.")
             }
 
             Section {
@@ -134,8 +134,8 @@ struct SettingsView: View {
         Section {
             if !store.bridgeManagesDevices {
                 Text(store.bridgeProtocol == nil
-                     ? "Connect to your Mac to see the devices paired with it."
-                     : "Update the bridge on your Mac to see and revoke paired devices.")
+                     ? "Connect to the bridge to see the devices paired with it."
+                     : "Update the bridge to see and revoke paired devices.")
                     .foregroundStyle(Theme.secondary)
             } else if let devices = store.devices {
                 ForEach(devices) { device in
@@ -169,10 +169,10 @@ struct SettingsView: View {
             pref == .tap ? "When I click" : SessionText.mirror(pref)
         }
         #else
-        static let unpair = "Unpair this Mac"
-        static let unpairQuestion = "Unpair this Mac?"
-        static let unpairWarning = "You will need a new pairing code from your Mac."
-        static let unpairFooter = "Removes this \(ThisDevice.noun) from your Mac when it is connected, then deletes the bridge address and token from this \(ThisDevice.noun)."
+        static let unpair = "Unpair from the bridge"
+        static let unpairQuestion = "Unpair from the bridge?"
+        static let unpairWarning = "You will need a new pairing code from the bridge."
+        static let unpairFooter = "Removes this \(ThisDevice.noun) from the bridge when it is connected, then deletes the bridge address and token from this \(ThisDevice.noun)."
         static let devicesFooter = "Each phone has its own token. Revoking one leaves the others paired."
         static let sessionsFooter = "Sessions your bots' agents and this \(ThisDevice.casualNoun) start can appear in the Claude app on your Mac. Automatically adds them while you're away from the Mac; When I tap adds one when you choose Open in Claude app."
 

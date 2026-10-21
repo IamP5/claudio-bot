@@ -26,13 +26,13 @@ export type HomeStep =
   | { kind: "close"; reason: string }
   /** ackedSeq: where the machine's replay starts. */
   | { kind: "welcome"; state: Extract<LinkState, { kind: "live" }>; send: HomeFrame; hello: Hello; ackedSeq: Seq }
-  | { kind: "frame"; peer: MachineId; frame: Live<MachineFrame, "event" | "applied"> };
+  | { kind: "frame"; peer: MachineId; frame: Live<MachineFrame, "event" | "applied" | "reply" | "signal"> };
 
 export type MachineStep =
   | { kind: "close"; reason: string }
   | { kind: "hello"; state: Extract<LinkState, { kind: "challenged" }>; send: MachineFrame }
   | { kind: "live"; state: Extract<LinkState, { kind: "live" }>; ackedSeq: Seq }
-  | { kind: "frame"; frame: Live<HomeFrame, "intent" | "ack"> };
+  | { kind: "frame"; frame: Live<HomeFrame, "intent" | "ack" | "ask"> };
 
 export function homeOpens(nonce = newNonce()): { state: LinkState; send: HomeFrame } {
   return { state: { kind: "challenged", nonce }, send: { t: "challenge", nonce } };
@@ -62,7 +62,7 @@ export function homeHears(
       };
     }
     case "live":
-      if (frame.t === "event" || frame.t === "applied") return { kind: "frame", peer: state.peer, frame };
+      if (frame.t === "event" || frame.t === "applied" || frame.t === "reply" || frame.t === "signal") return { kind: "frame", peer: state.peer, frame };
       return { kind: "close", reason: `unexpected ${frame.t} on a live link` };
     case "connecting":
     case "closed":
@@ -92,7 +92,7 @@ export function machineHears(
       if (!verifyWith(me.home.publicKey, proofOf(state.nonce, me.machineId), frame.sig)) return { kind: "close", reason: "the home did not prove its enrolled key" };
       return { kind: "live", state: { kind: "live", peer: me.home.machineId }, ackedSeq: frame.ackedSeq };
     case "live":
-      if (frame.t === "intent" || frame.t === "ack") return { kind: "frame", frame };
+      if (frame.t === "intent" || frame.t === "ack" || frame.t === "ask") return { kind: "frame", frame };
       return { kind: "close", reason: `unexpected ${frame.t} on a live link` };
     case "closed":
       return { kind: "close", reason: `unexpected ${frame.t} after close` };

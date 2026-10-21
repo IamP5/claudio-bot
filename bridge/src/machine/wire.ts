@@ -1,7 +1,31 @@
 import { z } from "zod";
 import type { CardReply } from "../gate";
 import type { UsageRow } from "../ledger";
-import { PERMISSION_CHOICES, SHAPES, COLORS, type Agent, type AgentId, type AgentMessage, type BotId, type DeviceId, type MachineConnector, type Message, type MachineId, type MessageId, type RoutineId, type RunId } from "../protocol";
+import { parseClientMessage } from "../parse";
+import {
+  COLORS,
+  isSessionRequest,
+  MIRROR_PREFS,
+  PERMISSION_CHOICES,
+  SHAPES,
+  type Agent,
+  type AgentId,
+  type AgentMessage,
+  type BotId,
+  type DeviceId,
+  type MachineConnector,
+  type MachineId,
+  type Message,
+  type MessageId,
+  type RoutineId,
+  type RunId,
+  type ServerMessage,
+  type SessionClientMessage,
+  type SessionId,
+  type SessionServerMessage,
+  type SessionsChannelFrame,
+  type ThreadChannelFrame,
+} from "../protocol";
 import type { Isolate } from "../tools";
 import type { Initiator } from "../world";
 import type { MachineProfile } from "./profile";
@@ -81,6 +105,8 @@ export type EventBody =
   | { kind: "card"; botId: BotId; message: Message }
   /** The gate reminds once at half a card's life; only the home pushes, so the reminder rides here. */
   | { kind: "reminder"; botId: BotId; cardId: MessageId }
+  /** A card opened in a session the phone drives on this machine: the home pushes that a session needs the user. */
+  | { kind: "sessionCard"; sessionId: SessionId; cardId: MessageId }
   | { kind: "usage"; row: UsageRow }
   | { kind: "profile"; profile: ProfileView }
   | { kind: "refused"; intentId: IntentId; reason: string }
@@ -88,21 +114,36 @@ export type EventBody =
 
 export type Event = { seq: Seq; at: string } & EventBody;
 
-/** What the home sends on the link. challenge and welcome are the handshake; intent and ack flow once it is live. */
+/** What a machine's sessions answer a phone's request with: session frames, or an error frame. */
+export type SessionReply = SessionServerMessage | Extract<ServerMessage, { type: "error" }>;
+/** A frame a machine's sessions put on a channel: the list's, or one thread's. */
+export type SessionSignal = SessionsChannelFrame | ThreadChannelFrame;
+
+/**
+ * What the home sends on the link. challenge and welcome are the handshake; the rest flow once it is live. ask: a
+ * phone's request for the machine's Sessions tab, answered by reply with the same id. Unlike an intent it is never
+ * queued, journaled or applied once: a session is driven live, and session_send carries its own clientId.
+ */
 export type HomeFrame =
   | { t: "challenge"; nonce: string }
   /** sig: the home's signature over the machine's nonce and the machine's id. ackedSeq: replay events after it. */
   | { t: "welcome"; sig: string; ackedSeq: Seq }
   | { t: "intent"; intent: Intent }
   /** The home handled every event through seq and saved that, so the machine may drop them. */
-  | { t: "ack"; seq: Seq };
+  | { t: "ack"; seq: Seq }
+  | { t: "ask"; id: IntentId; frame: SessionClientMessage };
 
-/** What a machine sends on the link. hello answers the challenge; event and applied flow once it is live. */
+/**
+ * What a machine sends on the link. hello answers the challenge; the rest flow once it is live. signal: a sessions
+ * channel frame, never journaled or replayed, as the phone protocol has them; the home asks afresh when it links.
+ */
 export type MachineFrame =
   /** sig: the machine's signature over the home's nonce and the home's id. lastSeq: the newest seq in its outbox. */
   | { t: "hello"; machineId: MachineId; sig: string; nonce: string; profile: ProfileView; lastSeq: Seq }
   | { t: "event"; event: Event }
-  | { t: "applied"; intentId: IntentId; applied: Applied };
+  | { t: "applied"; intentId: IntentId; applied: Applied }
+  | { t: "reply"; id: IntentId; frames: SessionReply[] }
+  | { t: "signal"; frame: SessionSignal };
 
 // Schemas. Each is annotated with its type, so tsc fails when a type and its schema drift apart.
 
@@ -284,23 +325,53 @@ export const eventSchema: z.ZodType<Event> = z.discriminatedUnion("kind", [
   z.object({ ...stamp, kind: z.literal("note"), agentId, botId: id<BotId>(), text }),
   z.object({ ...stamp, kind: z.literal("card"), botId: id<BotId>(), message: messageSchema }),
   z.object({ ...stamp, kind: z.literal("reminder"), botId: id<BotId>(), cardId: messageId }),
+  z.object({ ...stamp, kind: z.literal("sessionCard"), sessionId: id<SessionId>(), cardId: messageId }),
   z.object({ ...stamp, kind: z.literal("usage"), row: usageRow }),
   z.object({ ...stamp, kind: z.literal("profile"), profile: profileViewSchema }),
   z.object({ ...stamp, kind: z.literal("refused"), intentId, reason: text }),
   z.object({ ...stamp, kind: z.literal("snapshot"), agents: z.array(mirror), openCards: z.array(z.object({ botId: id<BotId>(), message: messageSchema })) }),
 ]);
 
+/** The phone's own parser, so a machine reads a forwarded request exactly as a phone socket's. */
+const sessionRequest: z.ZodType<SessionClientMessage> = z.unknown().transform((v, ctx) => {
+  const parsed = parseClientMessage(JSON.stringify(v));
+  if (parsed.ok && isSessionRequest(parsed.message)) return parsed.message;
+  ctx.addIssue({ code: "custom", message: parsed.ok ? `${parsed.message.type} is not a session request` : parsed.error });
+  return z.NEVER;
+});
+
+// Shallow on purpose: the home reads only these fields (ids to route by, the rows it caches and re-stamps), and passes
+// the rest to the phone, which parses its own frames.
+const keyed = z.looseObject({ id: z.string().min(1) });
+const sessionId = z.string().min(1);
+const rowsFrame = z.looseObject({ type: z.literal("session_rows"), rows: z.array(keyed), removed: z.array(sessionId), projects: z.array(keyed) });
+const threadFrame = z.looseObject({ type: z.enum(["session_items", "session_delta"]), sessionId });
+const removedFrame = z.looseObject({ type: z.literal("session_removed"), sessionId, movedTo: sessionId.nullable() });
+const signalSchema = z.union([rowsFrame, threadFrame, removedFrame]) as unknown as z.ZodType<SessionSignal>;
+const replySchema = z.union([
+  rowsFrame,
+  threadFrame,
+  removedFrame,
+  z.looseObject({ type: z.literal("sessions"), rows: z.array(keyed), projects: z.array(keyed), mirror: z.enum(MIRROR_PREFS) }),
+  z.looseObject({ type: z.literal("session_created"), ref: z.string(), sessionId }),
+  z.looseObject({ type: z.enum(["session", "session_page", "session_tool_output"]), sessionId }),
+  z.looseObject({ type: z.literal("error"), message: z.string() }),
+]) as unknown as z.ZodType<SessionReply>;
+
 export const homeFrameSchema: z.ZodType<HomeFrame> = z.discriminatedUnion("t", [
   z.object({ t: z.literal("challenge"), nonce }),
   z.object({ t: z.literal("welcome"), sig: base64, ackedSeq: seq }),
   z.object({ t: z.literal("intent"), intent: intentSchema }),
   z.object({ t: z.literal("ack"), seq }),
+  z.object({ t: z.literal("ask"), id: intentId, frame: sessionRequest }),
 ]);
 
 export const machineFrameSchema: z.ZodType<MachineFrame> = z.discriminatedUnion("t", [
   z.object({ t: z.literal("hello"), machineId: id<MachineId>(), sig: base64, nonce, profile: profileViewSchema, lastSeq: seq }),
   z.object({ t: z.literal("event"), event: eventSchema }),
   z.object({ t: z.literal("applied"), intentId, applied: appliedSchema }),
+  z.object({ t: z.literal("reply"), id: intentId, frames: z.array(replySchema) }),
+  z.object({ t: z.literal("signal"), frame: signalSchema }),
 ]);
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };

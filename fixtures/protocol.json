@@ -2512,6 +2512,52 @@
       }
     },
     {
+      "t": "event",
+      "event": {
+        "seq": 19,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "sessionCard",
+        "sessionId": "6f1c2b9e-0d2a-4c1e-9b7a-3e5d4c2b1a00",
+        "cardId": "m31"
+      }
+    },
+    {
+      "t": "ask",
+      "id": "i_9",
+      "frame": {
+        "type": "session_send",
+        "sessionId": "6f1c2b9e-0d2a-4c1e-9b7a-3e5d4c2b1a00",
+        "text": "Run the tests.",
+        "clientId": "c10",
+        "interrupt": false
+      }
+    },
+    {
+      "t": "reply",
+      "id": "i_9",
+      "frames": []
+    },
+    {
+      "t": "reply",
+      "id": "i_10",
+      "frames": [
+        {
+          "type": "error",
+          "message": "Unknown card"
+        }
+      ]
+    },
+    {
+      "t": "signal",
+      "frame": {
+        "type": "session_delta",
+        "sessionId": "6f1c2b9e-0d2a-4c1e-9b7a-3e5d4c2b1a00",
+        "itemId": "msg_1:0",
+        "offset": 0,
+        "text": "Running"
+      }
+    },
+    {
       "t": "applied",
       "intentId": "i_1",
       "applied": {

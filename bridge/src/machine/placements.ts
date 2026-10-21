@@ -91,7 +91,7 @@ const RULES: { [K in Event["kind"]]: Rule<K> } = {
   usage(state, machine, e, ctx) {
     const { row } = e;
     const agentId = row.actor.startsWith("agent:") ? (row.actor.slice("agent:".length) as AgentId) : null;
-    if (agentId === null || row.botId === null) return drop(`a ${row.actor.split(":")[0]} row is the machine's own`);
+    if (agentId === null || row.botId === null) return drop(`a usage row for ${row.actor} is the machine's own`);
     const p = placed(state, machine, agentId, row.botId);
     if (typeof p === "string") return drop(p);
     // Its own session ids, so a row never moves the baseline of a session on the home or another machine.

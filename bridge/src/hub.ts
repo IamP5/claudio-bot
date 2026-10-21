@@ -12,7 +12,7 @@ import type { Homes } from "./home";
 import { localDay } from "./ledger";
 import { createMemory, writeAtomic } from "./memory";
 import type { Scope } from "./policy";
-import { projectFolders, projectRoots, type Project } from "./projects";
+import { projectFolders, projectRoots, projectsText, type Project } from "./projects";
 import {
   PROTOCOL,
   isSessionRequest,
@@ -930,8 +930,7 @@ export function createHub(deps: HubDeps): Hub {
     },
 
     async listProjects() {
-      const projects = await deps.scan();
-      return projects.length === 0 ? "No projects found." : JSON.stringify(projects, null, 1);
+      return projectsText(await deps.scan());
     },
 
     messageBot(botId, a) {

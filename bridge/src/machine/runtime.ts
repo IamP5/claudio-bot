@@ -1,6 +1,6 @@
 import { createAgents, type Agents } from "../agents";
 import type { CardReply } from "../gate";
-import { findProject, type Project } from "../projects";
+import { findProject, projectsText, type Project } from "../projects";
 import type { AgentId, BotId, MessageId } from "../protocol";
 import type { AgentRecord } from "../world";
 import type { Journal } from "./journal";
@@ -38,9 +38,9 @@ export type AgentRuntime = {
   ack(seq: Seq): void;
   /**
    * An event from outside the agents: a message the gate posted on a stand-in, for the home's mirror of the bot's chat,
-   * or this machine's profile at boot.
+   * a row the ledger charged, or this machine's profile at boot.
    */
-  emit(body: Extract<EventBody, { kind: "card" | "profile" }>): void;
+  emit(body: Extract<EventBody, { kind: "card" | "usage" | "profile" }>): void;
   /** Called with each event as it is emitted, in order. Returns the unsubscribe. */
   subscribe(f: (e: Event) => void): () => void;
   local: LocalAgents;
@@ -141,6 +141,8 @@ export function createAgentRuntime(deps: RuntimeDeps): AgentRuntime {
       case "snapshot":
         emit(snapshot());
         return ok;
+      case "projects":
+        return { ok: true, reply: projectsText(await scan()) };
       default: {
         const unhandled: never = intent;
         throw new Error(`Unknown intent ${JSON.stringify(unhandled)}`);
@@ -150,7 +152,7 @@ export function createAgentRuntime(deps: RuntimeDeps): AgentRuntime {
 
   return {
     apply(intent) {
-      if (intent.kind === "snapshot") return run(intent);
+      if (intent.kind === "snapshot" || intent.kind === "projects") return run(intent);
       const done = journal.applied(intent.intentId);
       if (done) return Promise.resolve(done);
       const seen = applying.get(intent.intentId);

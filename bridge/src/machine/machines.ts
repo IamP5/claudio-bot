@@ -5,13 +5,19 @@ import { profileView, type Applied, type Intent, type MachineId, type ProfileVie
 /** since: when it came online, or while offline when it was last heard from; null when not known. */
 export type MachineStatus = { online: boolean; since: string | null };
 
+/**
+ * What became of an intent sent to a machine. undelivered: the machine was offline, went offline, or did not answer in
+ * time, so it may never have seen the intent; sending it again is safe, since a machine applies an intentId once.
+ */
+export type Sent = Applied | { ok: false; reason: string; undelivered: true };
+
 export type Machine = {
   id: MachineId;
   name: string;
   /** As it last reported it; null for a machine that never linked. */
   profile(): ProfileView | null;
   status(): MachineStatus;
-  send(intent: Intent): Promise<Applied>;
+  send(intent: Intent): Promise<Sent>;
 };
 
 export type Machines = {

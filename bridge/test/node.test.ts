@@ -107,3 +107,20 @@ test("a stand-in's chat is trimmed like a bot's: old messages go to the machine'
   expect(standIn.messages.at(-1)).toMatchObject({ kind: "permission", answer: null });
   expect(readFileSync(join(m.root, "machine", "history", `${B1}.jsonl`), "utf8").split("\n").filter(Boolean)).toHaveLength(HISTORY_SLACK + 1);
 });
+
+test("each usage row the machine's ledger charges goes to the home as a usage event, under the stand-in's bot", async () => {
+  const m = machine();
+  await m.node.runtime.apply(start({ name: "Ana", dailyCapUsd: null, connectorsOff: [] }));
+  await flush();
+  m.queries[0]!.emit(result(0.4));
+  await flush();
+  expect(m.events.filter((e) => e.kind === "usage")).toMatchObject([{ row: { actor: expect.stringMatching(/^agent:a_/), botId: B1, deltaUsd: 0.4 } }]);
+});
+
+test("projects lists this machine's own projects in the reply, applied afresh each time", async () => {
+  const m = machine();
+  const ask = { kind: "projects", intentId: newIntentId() } as const;
+  const first = await m.node.runtime.apply(ask);
+  expect(first).toMatchObject({ ok: true, reply: expect.stringContaining('"name": "shop"') });
+  expect(await m.node.runtime.apply(ask)).toEqual(first);
+});

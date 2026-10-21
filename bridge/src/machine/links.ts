@@ -1,8 +1,8 @@
 import type { Identity } from "./identity";
 import { homeHears, homeOpens, type LinkState } from "./link";
-import type { Machine } from "./machines";
+import type { Machine, Sent } from "./machines";
 import type { Registry } from "./registry";
-import { newIntentId, parseMachineFrame, type Applied, type Event, type HomeFrame, type IntentId, type MachineId, type ProfileView, type Seq } from "./wire";
+import { newIntentId, parseMachineFrame, type Event, type HomeFrame, type IntentId, type MachineId, type ProfileView, type Seq } from "./wire";
 
 // The home's end of every machine's link (GET /link): the handshake, the remote Machine each enrolled machine is, its
 // events in, and acks out once the registry has saved them.
@@ -16,7 +16,7 @@ export type LinkSession = {
   profile: ProfileView | null;
   since: string;
   /** Intents sent and not yet answered, by id. */
-  pending: Map<IntentId, (a: Applied) => void>;
+  pending: Map<IntentId, (a: Sent) => void>;
   handshake: ReturnType<typeof setTimeout> | null;
   flush: ReturnType<typeof setTimeout> | null;
 };
@@ -72,7 +72,7 @@ export function createLinks(deps: { identity: Identity; registry: Registry; log:
     if (session.handshake) clearTimeout(session.handshake);
     if (was.kind !== "live") return;
     save(session, was.peer);
-    for (const resolve of session.pending.values()) resolve({ ok: false, reason: `${nameOf(was.peer)} went offline` });
+    for (const resolve of session.pending.values()) resolve({ ok: false, reason: `${nameOf(was.peer)} went offline`, undelivered: true });
     session.pending.clear();
     if (live.get(was.peer) === session) {
       live.delete(was.peer);
@@ -120,11 +120,11 @@ export function createLinks(deps: { identity: Identity; registry: Registry; log:
       },
       send(intent) {
         const s = session();
-        if (!s) return Promise.resolve({ ok: false, reason: `${nameOf(id)} is offline` });
-        return new Promise<Applied>((resolve) => {
+        if (!s) return Promise.resolve({ ok: false, reason: `${nameOf(id)} is offline`, undelivered: true });
+        return new Promise<Sent>((resolve) => {
           const timer = setTimeout(() => {
             s.pending.delete(intent.intentId);
-            resolve({ ok: false, reason: `${nameOf(id)} did not answer` });
+            resolve({ ok: false, reason: `${nameOf(id)} did not answer`, undelivered: true });
           }, deps.applyMs ?? APPLY_MS);
           s.pending.set(intent.intentId, (a) => {
             clearTimeout(timer);

@@ -81,6 +81,11 @@ export type SpendView = {
   agentSpend(agentId: AgentId): { spentUsd: number; budgetUsd: number | null };
 };
 
+export type Recorder = {
+  /** A row another machine's ledger decided, counted as it was charged there, so its bot's daily cap includes it. */
+  record(row: UsageRow): void;
+};
+
 type Index = {
   /** The baseline per session: its last positive cumulative, or 0 for a fresh session with no positive result yet. */
   baseline: Map<string, number>;
@@ -158,7 +163,9 @@ export function createLedger(deps: {
   budgetFor: (agentId: AgentId) => number | null;
   now: () => Date;
   log: (line: string) => void;
-}): Ledger & SpendView {
+  /** Each row this ledger decides, after it is counted: a machine sends it to its home. */
+  rowed?: (row: UsageRow) => void;
+}): Ledger & SpendView & Recorder {
   const defaultCap = usdFromEnv("CLAUDIOBOT_DAILY_USD");
   const defaultBudget = usdFromEnv("CLAUDIOBOT_AGENT_USD");
   const ix: Index = { baseline: new Map(), spend: new Map(), byAgent: new Map() };
@@ -184,6 +191,16 @@ export function createLedger(deps: {
   const left = (limit: number | null, spent: number) => (limit === null ? null : Math.max(0, limit - spent));
   const budgetLeft = (agentId: AgentId) => left(budget(agentId), spentBy(agentId));
 
+  function append(row: UsageRow) {
+    const name = monthFile(row.day);
+    try {
+      appendFileSync(join(deps.dir, name), `${torn.has(name) ? "\n" : ""}${JSON.stringify(row)}\n`, { mode: 0o600 });
+      torn.delete(name);
+    } catch (e) {
+      deps.log(`usage: could not append to ${name}, the spend counts only until restart: ${errorText(e)}`);
+    }
+  }
+
   return {
     add({ actor, sessionId, initiator, cumulativeUsd, fresh }) {
       const now = deps.now();
@@ -208,14 +225,13 @@ export function createLedger(deps: {
       }
       fold(ix, row);
       deps.log(`result ${row.actor.replace(":", " ")} session=${sessionId} totalCostUsd=${cumulative} deltaUsd=${deltaUsd}`);
+      append(row);
+      deps.rowed?.(row);
+    },
 
-      const name = monthFile(row.day);
-      try {
-        appendFileSync(join(deps.dir, name), `${torn.has(name) ? "\n" : ""}${JSON.stringify(row)}\n`, { mode: 0o600 });
-        torn.delete(name);
-      } catch (e) {
-        deps.log(`usage: could not append to ${name}, the spend counts only until restart: ${errorText(e)}`);
-      }
+    record(row) {
+      fold(ix, row);
+      append(row);
     },
 
     headroom(actor, initiator) {

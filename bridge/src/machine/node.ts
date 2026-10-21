@@ -4,7 +4,7 @@ import type { SDKMessage, Settings } from "@anthropic-ai/claude-agent-sdk";
 import type { Tickable } from "../clock";
 import { connectorSettings } from "../connectors";
 import { createGate, type Gate, type GateDeps } from "../gate";
-import { createLedger } from "../ledger";
+import { createLedger, type UsageRow } from "../ledger";
 import type { Scope } from "../policy";
 import type { Project } from "../projects";
 import type { AgentId, BotId, Message } from "../protocol";
@@ -80,6 +80,8 @@ export type NodeDeps = {
   journal: Journal;
   standIn: (bot: BotStandIn) => boolean;
   bots: BotSide;
+  /** Each usage row the ledger charges. */
+  rowed?: (row: UsageRow) => void;
   observe?: (actor: AgentActor, m: SDKMessage) => void;
   idle?: (actor: AgentActor) => void;
   turnDone?: (rec: AgentRecord) => void;
@@ -103,6 +105,7 @@ export function createNode(deps: NodeDeps): Node {
     budgetFor: (id) => world.agents.get(id)?.budgetUsd ?? null,
     now: deps.now,
     log: deps.log,
+    rowed: deps.rowed,
   });
 
   function scopeOf(actor: Actor): Scope {
@@ -203,11 +206,13 @@ export type MachineNode = Node & {
  * A machine: no bots, only a stand-in per bot that has agents here. A stand-in's chat holds the cards this machine's
  * gate posts, which go to the home as card events; the home pushes and shows them. Nothing a bot does runs here.
  */
-export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "observe" | "idle" | "turnDone">): MachineNode {
+export function createMachineNode(deps: Omit<NodeDeps, "bots" | "standIn" | "rowed" | "observe" | "idle" | "turnDone">): MachineNode {
   const { world } = deps;
   const archiveOf = (botId: BotId) => join(deps.root, "machine", "history", `${botId}.jsonl`);
   const node: Node = createNode({
     ...deps,
+    // The home counts the row toward the bot's daily cap; this machine's ledger already holds it to its own.
+    rowed: (row) => node.runtime.emit({ kind: "usage", row }),
     standIn(bot) {
       upsertStandIn(world, bot, deps.now().toISOString());
       deps.persist();

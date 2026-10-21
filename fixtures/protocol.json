@@ -2291,6 +2291,13 @@
       }
     },
     {
+      "t": "intent",
+      "intent": {
+        "kind": "projects",
+        "intentId": "i_8"
+      }
+    },
+    {
       "t": "ack",
       "seq": 10
     },

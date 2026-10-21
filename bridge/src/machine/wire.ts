@@ -54,7 +54,9 @@ export type Intent =
   | { kind: "agent.removeWorktree"; intentId: IntentId; agentId: AgentId }
   | { kind: "card.answer"; intentId: IntentId; botId: BotId; cardId: MessageId; reply: CardReply; signed: SignedAnswer | null }
   /** Always applied afresh: its intentId only pairs it with its applied frame. */
-  | { kind: "snapshot"; intentId: IntentId };
+  | { kind: "snapshot"; intentId: IntentId }
+  /** The projects under the machine's roots, as the reply's text. Always applied afresh, as snapshot. */
+  | { kind: "projects"; intentId: IntentId };
 
 /** reply: what the bot or the phone is told, such as "Sent. Fix tests will report back." */
 export type Applied = { ok: true; reply?: string } | { ok: false; reason: string };
@@ -158,6 +160,7 @@ export const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("agent.removeWorktree"), intentId, agentId }),
   z.object({ kind: z.literal("card.answer"), intentId, botId: id<BotId>(), cardId: id<MessageId>(), reply: cardReply, signed: signedAnswer.nullable() }),
   z.object({ kind: z.literal("snapshot"), intentId }),
+  z.object({ kind: z.literal("projects"), intentId }),
 ]);
 
 export const appliedSchema: z.ZodType<Applied> = z.union([

@@ -190,7 +190,7 @@ test("an enrolled machine comes online, answers an intent over the link, and goe
   m.dialer.stop();
   await until("offline", () => !h.links.machines()[0]!.status().online);
   expect(changes).toBe(2);
-  expect(await h.links.machines()[0]!.send({ kind: "snapshot", intentId: newIntentId() })).toEqual({ ok: false, reason: "MacBook is offline" });
+  expect(await h.links.machines()[0]!.send({ kind: "snapshot", intentId: newIntentId() })).toEqual({ ok: false, reason: "MacBook is offline", undelivered: true });
   expect(h.links.machines()[0]!.status().since).toBe(registry.get(pair.mac.machineId)!.lastSeenAt);
 });
 

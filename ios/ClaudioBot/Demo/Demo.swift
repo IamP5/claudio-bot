@@ -14,7 +14,7 @@ import Foundation
 /// card expires 20 s in), `approvalselsewhere` (another device denies it 15 s in), `streaming`, `cloud`,
 /// `longthread` (500 items), `newsession`, `background` (the turn over, a subagent and its command still running),
 /// `threadoffline` (the Mac lost after the thread loaded), `threadwaiting` (a thread opened with the Mac out of reach),
-/// `composerdraft`, `composerrefused`, `composermode`, `composerqueued`, `stoppedearly` (DemoSessions.stageComposer),
+/// `composerdraft`, `composerlong`, `composerrefused`, `composermode`, `composerqueued`, `stoppedearly` (DemoSessions.stageComposer),
 /// `sessionsempty` and `sessionsoffline`.
 @MainActor
 enum Demo {
@@ -173,7 +173,8 @@ enum Demo {
         case "threadwaiting":
             store.setConnection(.disconnected(retryAt: .now + 25))
             router.open(.session(DemoSessions.audit))
-        case "composerdraft", "composerrefused", "composermode", "composerqueued", "stoppedearly":
+        case "composerdraft", "composerlong", "composerrefused", "composermode", "composerqueued", "stoppedearly":
+            DemoSessions.backgroundOnly = screen == "composerlong"
             router.open(.session(DemoSessions.audit))
             DemoSessions.stageComposer(screen ?? "", in: store)
         default: break

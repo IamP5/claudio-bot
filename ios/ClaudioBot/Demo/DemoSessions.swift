@@ -402,6 +402,7 @@ enum DemoSessions {
     }
 
     /// The composer's states over the audit thread, once its snapshot is in: a draft typed while work runs (`composerdraft`),
+    /// a three-paragraph draft under a refused stop (`composerlong`),
     /// a stop Claude Code refused (`composerrefused`), a mode change it refused (`composermode`), a queued message
     /// (`composerqueued`), and a prompt a stop cut off before Claude answered (`stoppedearly`).
     static func stageComposer(_ screen: String, in store: AppStore) {
@@ -411,6 +412,10 @@ enum DemoSessions {
             switch screen {
             case "composerdraft":
                 model.draft = ComposerDraft(text: "Also check the fade test")
+            case "composerlong":
+                model.draft = ComposerDraft(text: "Also check the fade test against the old curve.\n\nThen open a PR with the fixes and list what changed.\n\nWrite a short haiku about the release while it builds.")
+                store.sessionRequestSent(.sessionStop(sessionId: audit, target: .all, turnStartedAt: c.turn?.startedAt))
+                store.apply(.error(message: "Claude Code has not confirmed the stop of sleep 75 yet.", about: .stop(sessionId: audit)))
             case "composerrefused":
                 store.sessionRequestSent(.sessionStop(sessionId: audit, target: .all, turnStartedAt: c.turn?.startedAt))
                 store.apply(.error(message: "Claude Code did not stop sleep 75.", about: .stop(sessionId: audit)))

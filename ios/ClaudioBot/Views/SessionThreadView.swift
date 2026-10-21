@@ -484,6 +484,8 @@ struct ThreadStatusLine: View {
             if !stacked { glyph.frame(width: slot, height: slot) }
             Text(status.text(now: now, cause: cause))
                 .font(.subheadline)
+                // It shares the bottom bar with the composer, which must stay on screen at the largest sizes.
+                .dynamicTypeSize(...DynamicTypeSize.accessibility3)
                 .monospacedDigit()
                 .foregroundStyle(tint == Theme.secondary ? .white : tint)
                 .fixedSize(horizontal: false, vertical: true)

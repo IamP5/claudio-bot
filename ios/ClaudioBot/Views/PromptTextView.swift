@@ -25,26 +25,23 @@ struct PromptTextView: View {
 
     var body: some View {
         Representable(
-            draft: $draft, caret: $caret, minLines: minLines, maxLines: maxLines, autofocus: autofocus,
-            tokenColor: tokenColor, onReturn: onReturn, onEscape: onEscape
+            draft: $draft, caret: $caret, label: label ?? placeholder, placeholder: placeholder, minLines: minLines, maxLines: maxLines,
+            autofocus: autofocus, tokenColor: tokenColor, onReturn: onReturn, onEscape: onEscape
         )
-        .accessibilityLabel(label ?? placeholder)
-        .overlay(alignment: .topLeading) {
-            // Hidden with no animation, so a menu opening on the first "@" never fades it under the typed text.
-            Text(placeholder)
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .opacity(draft.text.isEmpty ? 1 : 0)
-                .animation(nil, value: draft.text.isEmpty)
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
-        }
     }
 }
 
 /// Escape closes the composer's menu from a hardware keyboard.
 private final class PromptUITextView: UITextView {
     var onEscape: () -> Void = {}
+    /// Drawn in UIKit and kept out of the accessibility tree: a SwiftUI overlay stayed there, so VoiceOver read the
+    /// placeholder beside the field's own label. Hidden at once, so a menu opening on the first "@" never fades it
+    /// under the typed text.
+    let placeholder = UILabel()
+
+    func showPlaceholder() {
+        placeholder.isHidden = !text.isEmpty
+    }
 
     override var keyCommands: [UIKeyCommand]? {
         [UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(escape))]
@@ -56,6 +53,8 @@ private final class PromptUITextView: UITextView {
 private struct Representable: UIViewRepresentable {
     @Binding var draft: ComposerDraft
     @Binding var caret: Int
+    let label: String
+    let placeholder: String
     let minLines: Int
     let maxLines: Int?
     let autofocus: Bool
@@ -69,6 +68,7 @@ private struct Representable: UIViewRepresentable {
         view.font = .preferredFont(forTextStyle: .body)
         view.adjustsFontForContentSizeCategory = true
         view.backgroundColor = .clear
+        view.clipsToBounds = true
         view.textContainerInset = .zero
         view.textContainer.lineFragmentPadding = 0
         view.smartQuotesType = .no
@@ -79,6 +79,18 @@ private struct Representable: UIViewRepresentable {
         view.autocapitalizationType = .none
         view.setContentHuggingPriority(.defaultLow, for: .horizontal)
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let hint = view.placeholder
+        hint.font = .preferredFont(forTextStyle: .body)
+        hint.adjustsFontForContentSizeCategory = true
+        hint.textColor = .tertiaryLabel
+        hint.isAccessibilityElement = false
+        hint.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(hint)
+        NSLayoutConstraint.activate([
+            hint.topAnchor.constraint(equalTo: view.contentLayoutGuide.topAnchor),
+            hint.leadingAnchor.constraint(equalTo: view.frameLayoutGuide.leadingAnchor),
+            hint.trailingAnchor.constraint(lessThanOrEqualTo: view.frameLayoutGuide.trailingAnchor),
+        ])
         if autofocus { DispatchQueue.main.async { view.becomeFirstResponder() } }
         return view
     }
@@ -86,6 +98,9 @@ private struct Representable: UIViewRepresentable {
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.parent = self
         (view as? PromptUITextView)?.onEscape = onEscape
+        (view as? PromptUITextView)?.placeholder.text = placeholder
+        view.accessibilityLabel = label
+        defer { (view as? PromptUITextView)?.showPlaceholder() }
         guard view.markedTextRange == nil else { return }
         context.coordinator.applying = true
         defer { context.coordinator.applying = false }
@@ -100,7 +115,8 @@ private struct Representable: UIViewRepresentable {
         guard let width = proposal.width else { return nil }
         let line = view.font?.lineHeight ?? 17
         let content = view.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
-        let upper = maxLines.map { CGFloat($0) * line } ?? .greatestFiniteMagnitude
+        // A bar with less room than the lines proposes less height: the field scrolls instead of drawing over its neighbors.
+        let upper = min(maxLines.map { CGFloat($0) * line } ?? .greatestFiniteMagnitude, max(line, proposal.height ?? .greatestFiniteMagnitude))
         let height = min(max(content, CGFloat(minLines) * line), upper)
         view.isScrollEnabled = content > upper
         return CGSize(width: width, height: height.rounded(.up))
@@ -135,6 +151,7 @@ private struct Representable: UIViewRepresentable {
             }
             parent.draft = draft
             parent.caret = view.selectedRange.location
+            (view as? PromptUITextView)?.showPlaceholder()
             if view.markedTextRange == nil { restyle(view, draft) }
         }
 

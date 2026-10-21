@@ -316,7 +316,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         }
         guard frames.count == 2 else { Issue.record("not a running frame then a wake turn: \(frames.count)"); return }
         let (items, controls) = frames[0]
-        #expect(controls.working && controls.turn == SessionTurn(startedAt: at, wake: false))
+        #expect(controls.working && controls.turn == SessionTurn(startedAt: "2026-10-16T12:00:00.000Z", wake: false))
         #expect(controls.heardAt == at.addingTimeInterval(7200))
         let tasks = try #require(controls.tasks)
         #expect(tasks.map(\.kind) == [.agent, .command])
@@ -373,6 +373,14 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(stop == .sessionStop(sessionId: SessionID("s1"), target: nil, turnStartedAt: nil))
     }
 
+    @Test(arguments: ["2026-10-21T07:21:24.608Z", "2026-10-21T07:21:24.6081Z", "2026-10-21T07:21:24Z"])
+    func aStopSendsBackTheTurnStartExactlyAsTheBridgeWroteIt(startedAt: String) throws {
+        let json = #"{"canSend":true,"reason":null,"working":true,"queued":0,"model":null,"models":[],"mode":"default","modes":[],"turn":{"startedAt":"\#(startedAt)","wake":false}}"#
+        let turn = try #require(try decode(SessionControls.self, json).turn)
+        let stop = ClientMessage.sessionStop(sessionId: SessionID("s1"), target: .turn, turnStartedAt: turn.startedAt)
+        #expect(try jsonObject(Wire.encoder().encode(stop))["turnStartedAt"] as? String == startedAt)
+    }
+
     @Test func runStateValuesANewerBridgeInventsDecodeAndKeepTheirWireStrings() throws {
         let step = try decode(ToolStep.self, #"{"id":"t1","tool":"Bash","label":"Run ls","state":"paused","diff":null,"output":null}"#)
         #expect(step.state == .unknown("paused"))
@@ -397,8 +405,8 @@ private func unknowns(in message: ServerMessage) -> [String] {
             .sessionPage(sessionId: agent, before: Cursor("8812331:2b7c9e41")),
             .sessionSend(sessionId: agent, text: "Also check it on Firefox", clientId: "c_4d2a", interrupt: false),
             .sessionStop(sessionId: agent),
-            .sessionStop(sessionId: agent, target: .turn, turnStartedAt: at),
-            .sessionStop(sessionId: agent, target: .task(TaskID("bk2x9q7")), turnStartedAt: at),
+            .sessionStop(sessionId: agent, target: .turn, turnStartedAt: "2026-10-16T12:00:00.000Z"),
+            .sessionStop(sessionId: agent, target: .task(TaskID("bk2x9q7")), turnStartedAt: "2026-10-16T12:00:00.000Z"),
             .sessionUnqueue(sessionId: agent, clientId: "c_4d2a"),
             .sessionDecide(sessionId: agent, cardId: MessageID("m20"), choice: .once),
             .sessionAnswer(sessionId: agent, cardId: MessageID("m21"), answers: ["Which audio library should the fade use?": "Howler.js"]),

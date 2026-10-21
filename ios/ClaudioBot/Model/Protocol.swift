@@ -2054,9 +2054,10 @@ struct SessionModelOption: Codable, Hashable, Sendable, Identifiable {
     var label: String
 }
 
-/// The foreground turn. wake: Claude Code started it on its own after background work ended.
+/// The foreground turn. wake: Claude Code started it on its own after background work ended. startedAt stays the
+/// bridge's string, so sessionStop can send it back exactly as the bridge compares it.
 struct SessionTurn: Codable, Hashable, Sendable {
-    var startedAt: Date
+    var startedAt: String
     var wake: Bool
 }
 
@@ -2697,9 +2698,9 @@ enum ClientMessage: Codable, Hashable, Sendable {
     case sessionPage(sessionId: SessionID, before: Cursor)
     /// clientId: the queued user item's id until the transcript's own entry replaces it. interrupt: "Stop and send".
     case sessionSend(sessionId: SessionID, text: String, clientId: String, interrupt: Bool)
-    /// target nil: everything, as on a bridge without sessionTasks. turnStartedAt: controls.turn's start as the app saw
-    /// it, so the bridge refuses a stop meant for an earlier run.
-    case sessionStop(sessionId: SessionID, target: StopTarget? = nil, turnStartedAt: Date? = nil)
+    /// target nil: everything, as on a bridge without sessionTasks. turnStartedAt: controls.turn.startedAt as received,
+    /// so the bridge refuses a stop meant for an earlier run.
+    case sessionStop(sessionId: SessionID, target: StopTarget? = nil, turnStartedAt: String? = nil)
     /// Feature sessionUnqueue: withdraws a queued message, by its clientId, before it runs.
     case sessionUnqueue(sessionId: SessionID, clientId: String)
     /// Answers a permission item (its cardId) or a plan item (once approves, deny keeps planning).
@@ -2789,7 +2790,7 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case "session_stop":
             self = .sessionStop(
                 sessionId: try session(), target: try c.decodeIfPresent(StopTarget.self, forKey: .target),
-                turnStartedAt: try c.decodeIfPresent(Date.self, forKey: .turnStartedAt)
+                turnStartedAt: try c.decodeIfPresent(String.self, forKey: .turnStartedAt)
             )
         case "session_unqueue": self = .sessionUnqueue(sessionId: try session(), clientId: try c.decode(String.self, forKey: .clientId))
         case "session_decide":

@@ -28,6 +28,7 @@ test.each([
   ["deny", 1],
   ["never", 1],
   ["expired", "expired"],
+  ["stopped", "dismissed"],
 ] as const)("a protocol 2 app sees a permission card answered %p as a question answered %p", (answer, shown) => {
   expect(forProtocol2({ type: "message", botId, message: permission(answer) })).toEqual({
     type: "message",

@@ -1374,9 +1374,10 @@ const S7: Scenario = {
       tell: "how-many",
       lane: "simulator",
       text: "The list keeps its order while the user reads it: rows move only when their status changes.",
-      pass: "In the app's own list, read by the list probe from creation to rest, a row whose spoken status (needs you, working, or neither) held between two samples never changes its place among the other rows whose status held.",
+      pass: "In the app's own list, read by the list probe from creation to rest, a row whose spoken status (needs you, working, or neither) held between two samples never changes its place among the other rows whose status held. Not judged unless the probe saw at least two of the run's rows at once and at least one status change among them.",
       fail: "A row moves past another while neither changed status (a title rewrite, a transcript write, a ticking age reordered the list).",
       check: (ev) => {
+        if (!ev.list.length) return no("not judged: the list probe did not run (see the run's log)");
         const xs = appList(ev, s7names);
         if (xs.length < 10) return no(`not judged: ${xs.length} probe samples showed the run's rows`);
         let reorders = 0;
@@ -1392,7 +1393,9 @@ const S7: Scenario = {
           reorders++;
           if (order(a, (n) => !changed.has(n)) !== order(b, (n) => !changed.has(n))) bad.push(`+${(b.at / 1000).toFixed(1)}s`);
         }
-        const seen = `${xs.length} samples, up to ${Math.max(...xs.map((x) => x.rows.length))} of the run's rows on screen, ${changes} status changes, ${reorders} reorders`;
+        const most = Math.max(...xs.map((x) => x.rows.length));
+        const seen = `${xs.length} samples, up to ${most} of the run's rows on screen, ${changes} status changes, ${reorders} reorders`;
+        if (!bad.length && (most < 2 || !changes)) return no(`not judged: nothing could have moved (${seen})`);
         return bad.length ? no(`${bad.length} reorders moved a row whose status held, at ${bad.slice(0, 6).join(", ")}; ${seen}`) : ok(`no row whose status held moved; ${seen}`);
       },
     },
@@ -1407,6 +1410,7 @@ const S7: Scenario = {
       check: (ev) => {
         const range = span(ev, "mixed", "s7-ended");
         if (!range) return needMarks(ev, "mixed", "s7-ended")!;
+        if (!ev.list.length) return no("not judged: the list probe did not run (see the run's log)");
         const busy = (n: string, at: number) => ["working", "awaiting_approval", "awaiting_input"].includes(last(ev, n, at)?.row?.status ?? "");
         const xs = appList(ev, s7names).filter((x) => x.at >= range[0] && x.at <= range[1] && x.more.length);
         if (!xs.length) return no("not judged: the probe never saw the project's Show more on screen between mixed and s7-ended, so what it folds cannot be read");

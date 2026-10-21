@@ -209,6 +209,8 @@ class Phone {
   names = new Map<string, string>();
   ownProjects = new Set<string>();
   demo: Project | null = null;
+  /** Projects outside the run that share the seed project's name, which the list probe could not tell apart. */
+  namesakes = 0;
   decided = new Set<string>();
   /** Threads the user left: not watched until they return, so the bridge can count news as unread. */
   away = new Set<string>();
@@ -269,6 +271,7 @@ class Phone {
     if (typeof f.seq === "number" && this.cursor) this.cursor.seq = f.seq;
     if (f.type === "sessions" || f.type === "session_rows") {
       if (f.type === "sessions") for (const p of f.projects as Project[]) if (ownProject(this.run, p)) (this.ownProjects.add(p.id), p.name === "demo" && (this.demo = p));
+      if (f.type === "sessions") this.namesakes = (f.projects as Project[]).filter((p) => p.name === "demo" && !ownProject(this.run, p)).length;
       const mine = (f.rows as Row[]).filter((r) => this.ownProjects.has(r.projectId));
       if (f.type === "sessions") this.lastList = mine;
       const touched = new Set<string>();
@@ -704,6 +707,8 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
       }
       case "watch-list": {
         if (!lease || !p.demo) return void skipped.push("watch-list");
+        // The app's labels carry the project's name, not its id, so a namesake's rows and fold would read as the run's.
+        if (p.namesakes) return void (skipped.push("watch-list"), log(`watch-list skipped: ${p.namesakes} other project(s) named ${p.demo.name}`));
         const dir = await buildListProbe();
         const file = join(out, "app-list.jsonl");
         probe.run = {

@@ -46,3 +46,4 @@
 - A failed card push is never retried after its 3 tries (~10 s) until the reminder at TTL/2 (1 h in production) (G13 P2-5).
 - Guess: a frontmost Mac app counts as attended and may hold every phone push while the user is away from the desk (G13 P2-6; verify).
 - push.ts lastCards never pruned (small); S3b.3 banner screenshot 1.5 s after alert is fragile under load; dark-mode Settings Memory "Confirm" pill renders blank (pre-existing, Settings area).
+- G18 gaps: a foreground command younger than ~5 s is not a task yet and is cut after a restart/crash; lsof hanging at boot leaves really-running commands unsure; a restart within ~20 s of an alert can push one held ending once (G18 owner).

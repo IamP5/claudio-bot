@@ -388,10 +388,15 @@ test("only an attended socket heard from recently reads a thread it watches, and
   await until(() => b.transport.watchers(id) === 1, "the watch");
   expect(b.transport.readers(id)).toBe(1);
 
+  b.advance(1_000);
   phone.send({ type: "presence", attended: false });
   await until(() => b.presences() === 1, "the presence change");
   expect([b.transport.watchers(id), b.transport.readers(id)]).toEqual([1, 0]);
+  expect(b.left).toEqual([{ id, at: "2026-10-17T09:00:01.000Z" }]);
+  b.advance(1_000);
   phone.send({ type: "presence", attended: false });
+  phone.send({ type: "devices" });
+  await phone.next("devices");
   phone.send({ type: "presence", attended: true });
   await until(() => b.presences() === 2, "the second change");
   expect(b.transport.readers(id)).toBe(1);
@@ -399,9 +404,11 @@ test("only an attended socket heard from recently reads a thread it watches, and
   b.advance(45_000);
   expect(b.transport.readers(id)).toBe(0);
   phone.raw.close();
-  await until(() => b.left.length === 1, "the close");
-  expect(b.left).toEqual([{ id, at: "2026-10-17T09:00:00.000Z" }]);
-  expect(b.presences()).toBe(3);
+  await until(() => b.presences() === 3, "the close");
+  expect(b.left).toEqual([
+    { id, at: "2026-10-17T09:00:01.000Z" },
+    { id, at: "2026-10-17T09:00:02.000Z" },
+  ]);
 });
 
 test("seen moves when an attended app is heard, including the presence(false) it leaves with, and not after", async () => {

@@ -48,6 +48,8 @@ type SocketData = {
   protocol: 2 | 3;
   resume: { epoch: string; after: number } | null;
   heardAt: number;
+  /** When it was last heard from while attended: the user last saw its threads then. */
+  readAt: number;
   attended: boolean;
   limited: boolean;
   threads: Set<SessionId>;
@@ -163,7 +165,7 @@ export function serve(deps: ServeDeps): Transport {
   // Before a presence(false) is handled, so the app that sends it counts as having seen what came before it.
   const heard = (ws: Socket) => {
     ws.data.heardAt = deps.now().getTime();
-    if (ws.data.attended) seenAt = ws.data.heardAt;
+    if (ws.data.attended) seenAt = ws.data.readAt = ws.data.heardAt;
   };
   const open = () => [...sockets.values()].flatMap((set) => [...set]);
   const quietAt = () => open().filter((ws) => ws.data.attended).map((ws) => ws.data.heardAt + LIVE_WINDOW_MS);
@@ -186,6 +188,9 @@ export function serve(deps: ServeDeps): Transport {
       case "presence":
         if (ws.data.attended !== message.attended) {
           ws.data.attended = message.attended;
+          if (message.attended) seenAt = ws.data.readAt = ws.data.heardAt;
+          // Nobody looks at its threads any more, so what lands in them from now on is news.
+          if (!message.attended) for (const id of ws.data.threads) void hub.left(id, new Date(ws.data.readAt)).catch(() => {});
           deps.presence?.();
         }
         return [];
@@ -254,7 +259,7 @@ export function serve(deps: ServeDeps): Transport {
         // The ring holds protocol 3 frames, and a protocol 2 app never asks to resume.
         const resume = epoch && protocol === 3 ? { epoch, after: Number(url.searchParams.get("after") ?? NaN) } : null;
         const limited = protocol === 2 || devices.list(null).some((d) => d.id === deviceId && d.legacy);
-        if (server.upgrade(req, { data: { deviceId, protocol, resume, heardAt: deps.now().getTime(), attended: true, limited, threads: new Set(), turns: Promise.resolve() } })) return;
+        if (server.upgrade(req, { data: { deviceId, protocol, resume, heardAt: deps.now().getTime(), readAt: deps.now().getTime(), attended: true, limited, threads: new Set(), turns: Promise.resolve() } })) return;
         return new Response("Expected a WebSocket upgrade", { status: 426 });
       }
       return new Response("Not found", { status: 404 });
@@ -280,12 +285,13 @@ export function serve(deps: ServeDeps): Transport {
       },
       close(ws) {
         sockets.get(ws.data.deviceId)?.delete(ws);
-        if (ws.data.attended) deps.presence?.();
         // Bun drops a closed socket's topics; the hub hears it left each thread, after the requests already sent. A
-        // socket that went silent left when it was last heard, not when its close finally came.
+        // socket that went silent, or nobody looked at, left when it was last heard attended, not when its close came.
+        // The visits land before who looks is judged again, so no row reads unread in between.
         ws.data.turns = ws.data.turns.then(async () => {
-          for (const sessionId of ws.data.threads) await hub.left(sessionId, new Date(ws.data.heardAt)).catch(() => {});
+          for (const sessionId of ws.data.threads) await hub.left(sessionId, new Date(ws.data.readAt)).catch(() => {});
           ws.data.threads.clear();
+          if (ws.data.attended) deps.presence?.();
         });
       },
       message(ws, raw) {

@@ -15,8 +15,9 @@ import { chatOf, own, ownCardId, ownCardOpen, type OwnCard, type PushState, type
 // session's run that came to rest at `at`. A send that fails is tried twice more, then the push state reads failing
 // until a send gets through.
 // A turn's first bubble pushes at most once per bot per 10 minutes; nothing else counts toward that or is held by it.
-// A session's cards that open within 2 s of each other share one push; a later card waits while that push's cards
-// stay open, at most 10 minutes. A card's reminder pushes at half its time.
+// A session's cards that open within 2 s of the one before share one push (the burst waits at most 6 s); a later card
+// waits while that push's cards stay open, at most 10 minutes. A card's reminder pushes at half its time. A retry is
+// dropped once nothing is owed: its cards were answered, or a phone came back.
 // While a phone is live (an attended socket heard from recently, which the transport decides) nothing pushes. A bot
 // card, or a session card, still open when every socket has gone quiet pushes then. A session's other events are sent
 // to the sockets as a session_alert, for a local notification, and push once the phone goes quiet only if no attended
@@ -51,9 +52,13 @@ export const MESSAGE_THROTTLE_MS = 10 * 60_000;
 const RETAIN_MS = 7 * 24 * 60 * 60_000;
 const SEND_TIMEOUT_MS = 10_000;
 export const START_GRACE_MS = 60_000;
-/** Cards of one session that open this close together share a push. */
+/** A session's card that opens this soon after the one before joins its push, which waits this long for more... */
 export const COALESCE_MS = 2_000;
+/** ...but never longer than this after its first card. */
+export const COALESCE_MAX_MS = 6_000;
 export const SEND_TRIES = 3;
+/** Longer than any card waits, so an alert is never forgotten while its card can still push. */
+const ALERTS_KEPT_MS = 24 * 3_600_000;
 /** The wait before the second try; each later one waits four times longer. */
 export const RETRY_MS = 2_000;
 
@@ -127,6 +132,8 @@ const idOf = (key: string) => key.slice(0, key.lastIndexOf("|"));
 const cardAt = (c: OwnCard) => Date.parse(c.kind === "permission" ? c.card.at : c.at);
 const cardUntil = (c: OwnCard) => Date.parse(c.kind === "permission" ? c.card.expiresAt : c.expiresAt);
 const remindAt = (c: OwnCard) => cardAt(c) + (cardUntil(c) - cardAt(c)) / 2;
+/** When a burst of cards goes out: 2 s after its newest card, at most 6 s after its first. */
+const burstDue = (cards: readonly OwnCard[]) => Math.min(Math.max(...cards.map(cardAt)) + COALESCE_MS, Math.min(...cards.map(cardAt)) + COALESCE_MAX_MS);
 
 export function createPush(deps: {
   world: World;
@@ -198,8 +205,8 @@ export function createPush(deps: {
     }
   }
 
-  /** Never throws into the caller, whatever the sender does. */
-  async function deliver(n: Notification, what: string) {
+  /** Never throws into the caller, whatever the sender does. owed: a retry goes out only while it still holds. */
+  async function deliver(n: Notification, what: string, owed: () => boolean = () => true) {
     for (let tries = 1; ; tries++) {
       try {
         await sender!(n);
@@ -213,6 +220,7 @@ export function createPush(deps: {
           return;
         }
         await wait(RETRY_MS * 4 ** (tries - 1));
+        if (!owed()) return;
       }
     }
   }
@@ -245,13 +253,15 @@ export function createPush(deps: {
     const what = `${reason} for session ${id}`;
     if (!record(ids.map((c) => `${c}|${reason}`), what, now)) return;
     if (reason === "card") lastCards.set(id, { at: now, cards: ids });
-    void deliver({ botId: null, text: `${SESSION} ${cardsText(reason, cards)}`, link: sessionLink(id, ids[0]), high: true }, what);
+    // Answered, or the phone came back, while a try failed: nothing is owed any more.
+    const owed = () => !live(deps.now().getTime()) && ids.some((c) => isOpen(id, c));
+    void deliver({ botId: null, text: `${SESSION} ${cardsText(reason, cards)}`, link: sessionLink(id, ids[0]), high: true }, what, owed);
   }
 
   function pushEnd(id: SessionId, end: SessionEnd, key: string, now: number) {
     const what = `${end} for session ${id}`;
     if (!record([key], what, now)) return;
-    void deliver({ botId: null, text: ENDED[end], link: sessionLink(id), high: false }, what);
+    void deliver({ botId: null, text: ENDED[end], link: sessionLink(id), high: false }, what, () => !live(deps.now().getTime()));
   }
 
   const isOpen = (id: SessionId, card: MessageId) => world.sessions.get(id)?.own?.cards.some((c) => ownCardId(c) === card && ownCardOpen(c)) ?? false;
@@ -277,14 +287,17 @@ export function createPush(deps: {
       if (open.length === 0) continue;
       const id = rec.id;
       const fresh = open.filter((c) => !pushed(`${ownCardId(c)}|card`));
-      if (fresh.length > 0) {
-        const due = Math.min(...fresh.map(cardAt)) + COALESCE_MS;
+      const unalerted = fresh.filter((c) => !alerted.has(`${ownCardId(c)}|card`));
+      if (isLive || sender === null) {
+        // Alerts group the way pushes do, counting every card still owed.
+        if (unalerted.length > 0 && now < burstDue(unalerted)) later(burstDue(unalerted));
+        else if (unalerted.length > 0 && act) alert(id, "card", fresh.map((c) => `${ownCardId(c)}|card`), fresh.length, ownCardId(fresh[0]!), now);
+        if (fresh.length > 0) hold();
+      } else if (fresh.length > 0) {
+        const due = burstDue(fresh);
         const free = cardsFree(id);
         if (now < due) later(due);
-        else if (isLive || sender === null) {
-          if (act) alert(id, "card", fresh.map((c) => `${ownCardId(c)}|card`), fresh.length, ownCardId(fresh[0]!), now);
-          hold();
-        } else if (free > now) later(free);
+        else if (free > now) later(free);
         else if (act) pushCards(id, "card", fresh, now);
       }
       const unreminded = open.filter((c) => !pushed(`${ownCardId(c)}|reminder`));
@@ -337,6 +350,7 @@ export function createPush(deps: {
         const bot = world.bots.get(card.actor.botId);
         if (bot) notify(bot, "card", card.cardId, now.getTime());
       }
+      for (const [key, at] of alerted) if (now.getTime() - at > ALERTS_KEPT_MS) alerted.delete(key);
       sweep(now.getTime(), true);
     },
     nextDeadline() {

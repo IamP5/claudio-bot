@@ -493,17 +493,50 @@ const at = (h: ReturnType<typeof harness>, t: number) => {
   h.push.tick(new Date(t));
 };
 
-test("a session's cards that open within 2 s share one high-priority push that counts them and names nothing", async () => {
+test("a session's cards that open within 2 s of the one before share one high-priority push that counts them and names nothing", async () => {
   const h = harness();
   drive(h, [permission("m_a", T0), permission("m_b", T0 + 3), permission("m_c", T0 + 1_500)]);
-  expect(h.push.nextDeadline()).toBe(iso(T0 + 2_000));
-  at(h, T0 + 1_999);
-  at(h, T0 + 2_000);
-  at(h, T0 + 2_001);
+  expect(h.push.nextDeadline()).toBe(iso(T0 + 3_500));
+  at(h, T0 + 3_499);
+  at(h, T0 + 3_500);
+  at(h, T0 + 3_501);
   await settle();
   expect(sent(h)).toEqual([["A Claude Code session needs 3 approvals", `claudiobot://session/${SID}?card=m_a`, "high"]]);
   expect(keys(h.world)).toEqual(["m_a|card", "m_b|card", "m_c|card"]);
   expect(JSON.stringify(h.calls)).not.toContain("git push");
+});
+
+test("a burst of cards that keeps growing still pushes 6 s after its first card", async () => {
+  const h = harness();
+  const cards = drive(h, [permission("m_0", T0)]);
+  for (let i = 1; i <= 4; i++) cards.push(permission(`m_${i}`, T0 + i * 1_500));
+  expect(h.push.nextDeadline()).toBe(iso(T0 + 6_000));
+  at(h, T0 + 6_000);
+  await settle();
+  expect(sent(h).map((s) => s[0])).toEqual(["A Claude Code session needs 5 approvals"]);
+});
+
+test("a retry is dropped once its card was answered, or once a phone came back", async () => {
+  const h = harness();
+  const [card] = drive(h, [permission("m_a", T0)]);
+  const tries: string[] = [];
+  const logs: string[] = [];
+  const failing: Sender = async (n) => {
+    tries.push(n.text);
+    throw new Error("The push server answered 503");
+  };
+  const phone = { until: null as Date | null };
+  const push = (wait: () => void) =>
+    createPush({ world: h.world, persist: () => {}, sender: failing, liveUntil: () => phone.until, now: () => new Date(T0 + 2_000), log: (l) => logs.push(l), wait: async () => wait() });
+
+  const answered = push(() => answer(card!));
+  answered.tick(new Date(T0 + 2_000));
+  await drain();
+  const back = push(() => void (phone.until = new Date(T0 + 60_000)));
+  back.sessionEnded!(SID, "finished", iso(T0));
+  await drain();
+  expect(tries).toEqual(["A Claude Code session needs your approval", "A Claude Code session finished"]);
+  expect([answered.state!(), back.state!(), logs]).toEqual([{ state: "on" }, { state: "on" }, []]);
 });
 
 test("a later card waits while the last push's cards are open, and goes in 2 s once they are answered", async () => {

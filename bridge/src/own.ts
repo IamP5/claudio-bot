@@ -1174,7 +1174,12 @@ export function createOwn(deps: OwnDeps): Own {
       for (const rec of deps.world.sessions.values())
         for (const c of rec.own?.cards ?? []) if (isOpen(c)) consider(c.kind === "permission" ? c.card.expiresAt : c.expiresAt);
       for (const s of drivers.values()) consider(s.nextDeadline());
-      for (const since of ending.values()) consider(new Date(since + END_SETTLE_MS).toISOString());
+      // An ending held by an announced wake turn or a lookup waits for the session's own next deadline (the wake's), or
+      // the clock's next look, rather than a deadline already past that would have it look every second.
+      for (const [id, since] of ending) {
+        const s = drivers.get(id);
+        if (!(s?.wakeDue || s?.settling)) consider(new Date(since + END_SETTLE_MS).toISOString());
+      }
       if ([...deps.world.sessions.values()].some((rec) => allOutlived(rec).some((o) => o.over === undefined || o.over === "unsure")))
         consider(new Date(nextOutlivedLook).toISOString());
       return next;

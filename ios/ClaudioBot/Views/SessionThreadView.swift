@@ -202,7 +202,9 @@ struct SessionThreadView: View {
                 position.scrollTo(id: revealed.step.id, anchor: .center)
             }
         }
-        .onScrollGeometryChange(for: Bool.self) { Self.bottomGap($0) > 200 } action: { _, far in
+        // Only where the transcript shows between the bars (the container's height): a bar that fills the screen would put
+        // the button under the navigation bar.
+        .onScrollGeometryChange(for: Bool.self) { Self.bottomGap($0) > 200 && $0.containerSize.height >= 80 } action: { _, far in
             withAnimation(.easeOut(duration: 0.2)) { showsJump = far }
         }
         .overlay(alignment: .bottomTrailing) {

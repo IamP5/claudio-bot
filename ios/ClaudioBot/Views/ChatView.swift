@@ -355,7 +355,9 @@ struct JumpToLatestButton: View {
                 .foregroundStyle(.white)
                 .frame(width: 40, height: 40)
                 .glass(in: Circle(), interactive: true)
-                // The glass isn't hit-testable on its own, so without this a tap falls through to the list.
+                // A fingertip around the circle. The glass isn't hit-testable on its own, so without this a tap falls
+                // through to the list.
+                .frame(width: HitTarget.minHeight, height: HitTarget.minHeight)
                 .contentShape(Circle())
         }
         .buttonStyle(.pressable)

@@ -324,7 +324,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(tasks[1].owner == "toolu_01Ac1" && tasks[1].progress == nil && tasks[1].background)
 
         guard case let .work(_, _, steps) = items.first else { Issue.record("no work item first"); return }
-        #expect(steps.map(\.state) == [.running, .waiting, .running, .error, .stopped, .unsure])
+        #expect(steps.map(\.state) == [.running, .waiting, .running, .error, .stopped, .unsure, .ended])
         #expect(tasks.compactMap(\.stepId).allSatisfy { id in steps.contains { $0.id == id } }, "every task names a step in the thread")
         #expect(steps[0].background && steps[0].detail == "general-purpose" && steps[0].startedAt == at)
         #expect(!steps[1].background && steps[1].owner == "toolu_01Ac1" && steps[1].startedAt == nil)
@@ -584,7 +584,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
             "mentions", "commands", "exchanges", "groups", "usage", "sessions", "presence",
             "session_tasks", "session_unqueue", "push_state",
         ])
-        #expect(ToolStepState.allCases.map(\.rawValue) == ["running", "waiting", "ok", "error", "denied", "stopped", "unsure"])
+        #expect(ToolStepState.allCases.map(\.rawValue) == ["running", "waiting", "ok", "error", "denied", "stopped", "unsure", "ended"])
         #expect(SessionTaskKind.allCases.map(\.rawValue) == ["agent", "command", "other"])
         #expect(SessionOutcomeKind.allCases.map(\.rawValue) == ["finished", "failed", "stopped", "lost"])
         #expect(NoticeReason.allCases.map(\.rawValue) == ["stop", "task", "restart", "failure", "approval"])

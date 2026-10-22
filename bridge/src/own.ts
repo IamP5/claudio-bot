@@ -172,6 +172,8 @@ type TurnEnding = "stopped" | "finished" | "failed";
 type TurnStop = { envelope: string | null; early: boolean; at: string; said: Task[]; covered: Task[]; whole: boolean; asking: number; ended?: TurnEnding };
 
 const upper = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/** A few names, then how many more: "a, b and 3 more". */
+const fewOf = (names: readonly string[], few = 3) => (names.length <= few ? listed(names) : `${names.slice(0, few - 1).join(", ")} and ${names.length - few + 1} more`);
 /** The SDK's words for a request its query closed under, as the user reads them. */
 const plainSdkError = (text: string) => (/Query closed before response received/i.test(text) ? "Claude Code stopped before it answered. Try again." : text);
 const addNew = (to: Task[], tasks: readonly Task[]) => to.push(...tasks.filter((t) => !to.some((x) => x.id === t.id)));
@@ -198,6 +200,11 @@ export function createOwn(deps: OwnDeps): Own {
   const turnStops = new Map<SessionId, TurnStop>();
   /** Tasks a Stop is ending right now: a second Stop of one leaves the saying to the first. */
   const beingStopped = new Map<SessionId, Set<TaskId>>();
+  /**
+   * Sessions with background work the bridge cannot check and has no group to look at: until the user starts a new run,
+   * a Stop that finds nothing says it cannot tell rather than that nothing runs.
+   */
+  const unsureUnchecked = new Set<SessionId>();
   /** When the user's Stop last ended each task, so a Stop of it that comes after is not refused. */
   const stoppedAt = new Map<SessionId, Map<TaskId, number>>();
   let nextOutlivedLook = 0;
@@ -230,6 +237,7 @@ export function createOwn(deps: OwnDeps): Own {
     delete drive.endedTurn;
     stoppedBy.delete(rec.id);
     lastTask.delete(rec.id);
+    unsureUnchecked.delete(rec.id);
     deps.persist("now");
   }
 
@@ -365,6 +373,7 @@ export function createOwn(deps: OwnDeps): Own {
   /** Background work the bridge cannot check and cannot look at again: its steps say the bridge cannot tell. */
   function markUnsure(rec: SessionRecord, tasks: readonly BackgroundTask[]) {
     if (tasks.length === 0) return;
+    unsureUnchecked.add(rec.id);
     const drive = driveOf(rec);
     drive.unsure = [...(drive.unsure ?? []), ...tasks.map((t) => t.stepId ?? `task:${t.id}`)].slice(-STOPPED_STEPS_KEPT);
     deps.persist("now");
@@ -400,16 +409,16 @@ export function createOwn(deps: OwnDeps): Own {
    */
   function cantStop(rec: SessionRecord, one: TaskId | null): string | null {
     const unsure = allOutlived(rec).filter((o) => o.over === "unsure" && (one === null || o.id === one));
-    const unnamed = one === null ? (rec.own?.unsure ?? []).length : (rec.own?.unsure ?? []).includes(`task:${one}`) ? 1 : 0;
-    if (unsure.length === 0 && unnamed === 0) return null;
-    const what = unsure.length > 0 ? listed(unsure.map(nameOf)) : "its background work";
+    const unnamed = one === null ? unsureUnchecked.has(rec.id) : (rec.own?.unsure ?? []).includes(`task:${one}`);
+    if (unsure.length === 0 && !unnamed) return null;
+    const what = unsure.length > 0 ? fewOf(unsure.map(nameOf)) : "its background work";
     return `The bridge can't tell whether ${what} still ${unsure.length > 1 ? "run" : "runs"} on your Mac, so it has nothing it can stop.`;
   }
 
   const endedText = (tasks: readonly Outlived[]) =>
     `${upper(listed(tasks.map(nameOf)))} ended. Claude Code no longer followed ${pick(tasks.length, "it", "them")}, so how ${pick(tasks.length, "it", "they")} ended is not known.`;
   const unsureText = (tasks: readonly Outlived[]) =>
-    `The bridge can no longer tell that ${listed(tasks.map(nameOf))} ${pick(tasks.length, "is", "are")} still the command it followed, so it no longer shows ${pick(tasks.length, "it", "them")}. ${pick(tasks.length, "It", "They")} may still run on this Mac.`;
+    `The bridge can no longer tell that ${fewOf(tasks.map(nameOf))} ${pick(tasks.length, "is still the command", "are still the commands")} it followed, so it no longer shows ${pick(tasks.length, "it", "them")}. ${pick(tasks.length, "It", "They")} may still run on this Mac.`;
 
   /** When each command the bridge cannot tell about is next looked at, and the wait after that. */
   const unsureLooks = new Map<string, { at: number; gap: number }>();
@@ -1040,7 +1049,9 @@ export function createOwn(deps: OwnDeps): Own {
       const out = drive.cut && !(turn !== null && turn.startedAt <= drive.cut.at) ? [drive.cut] : [];
       // At rest nothing runs, so a step the transcript still leaves running never got its result.
       // While Claude Code has announced a turn of its own, the work it reports on may not have its result written yet.
-      if (!working(rec) && !deps.elsewhere(rec.id) && !drivers.get(rec.id)?.wakeDue) out.push({ at: rested.get(rec.id) ?? bootAt, state: "stopped", cause: UNSEEN_END });
+      const s = drivers.get(rec.id);
+      // Nor while what became of a gone query's work is still being looked up: it may turn out to run.
+      if (!working(rec) && !deps.elsewhere(rec.id) && !s?.wakeDue && !s?.settling) out.push({ at: rested.get(rec.id) ?? bootAt, state: "stopped", cause: UNSEEN_END });
       return out;
     },
 

@@ -49,10 +49,10 @@ private func date(_ wire: String) -> Date {
 
         #expect(run.isLive)
         #expect(run.since == noon)
-        #expect(run.headline() == "1 agent, 1 command running · 1 waiting for approval · 1 stopped · 1 may still run")
+        #expect(run.headline() == "1 agent, 1 command running · 1 waiting for approval · 1 stopped · 1 may still run · 1 ended")
         #expect(run.failure == "List the late files failed: Exit code 1: ls: late.txt: No such file or directory")
         #expect(run.spoken(now: noon + 125) ==
-            "Running: 1 agent, 1 command, 1 waiting for approval, 1 stopped, 1 may still run, 2 minutes 5 seconds. List the late files failed: Exit code 1: ls: late.txt: No such file or directory")
+            "Running: 1 agent, 1 command, 1 waiting for approval, 1 stopped, 1 may still run, 1 ended, 2 minutes 5 seconds. List the late files failed: Exit code 1: ls: late.txt: No such file or directory")
     }
 
     @Test func eachFixtureStepSaysItsStateTimeAndOwner() throws {
@@ -213,6 +213,15 @@ private func date(_ wire: String) -> Date {
         #expect(run.headline(spoken: true).hasSuffix(", 1 may still run"))
         #expect(run.status(run.steps[0], now: start + 60) == ["May still run on your Mac"])
         #expect(run.status(run.steps[0], now: start + 60, spoken: true) == ["May still run on your Mac"])
+    }
+
+    @Test func aCommandThatEndedUnseenReadsEndedWithResultUnknownNeitherStoppedNorDone() throws {
+        let run = WorkRun(steps: [step("1", state: .ended, started: 0, cause: "It ended without a result")])
+        #expect(!run.isLive && !run.isRunning)
+        #expect(run.headline().hasSuffix(" · 1 ended") && !run.headline().contains("stopped"))
+        #expect(run.status(run.steps[0], now: start + 60) == ["Ended · result unknown"])
+        #expect(run.status(run.steps[0], now: start + 60, spoken: true) == ["Ended, result unknown"])
+        #expect(ToolStepState(wire: "ended") == .ended)
     }
 
     @Test func theWireStateDecodesAndAnOlderUnknownOneStillDegrades() throws {

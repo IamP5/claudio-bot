@@ -33,6 +33,8 @@ export type Tasks = {
   listed: Set<TaskId>;
   /** Bash commands by their call's tool_use id, so a command task is named by what it runs; kept while it can. */
   commands: Map<string, string>;
+  /** Each Bash call's command as Claude Code was given it, by tool_use id: only compared, never shown, logged or saved. */
+  raw: Map<string, string>;
   /** Main-thread tool calls still waiting for their result. */
   calls: Map<string, { tool: string; input: Record<string, unknown> }>;
   /** Tasks the bridge stopped: their end is the user's doing. */
@@ -44,7 +46,7 @@ export type Tasks = {
 /** A background task that ended without Claude Code saying it completed or failed. killed: Claude Code stopped it. */
 export type Lost = { task: Task; command: string | null; owner: Task | null; killed: boolean };
 
-export const emptyTasks = (): Tasks => ({ all: new Map(), listed: new Set(), commands: new Map(), calls: new Map(), stopped: new Set(), rev: 0 });
+export const emptyTasks = (): Tasks => ({ all: new Map(), listed: new Set(), commands: new Map(), raw: new Map(), calls: new Map(), stopped: new Set(), rev: 0 });
 
 const LABEL_MAX = 80;
 const label = (text: string) => displayName(maskSecrets(text), LABEL_MAX);
@@ -81,6 +83,7 @@ function prune(t: Tasks) {
     t.all.delete(task.id);
     t.stopped.delete(task.id);
     if (task.stepId !== null) t.commands.delete(task.stepId);
+    if (task.stepId !== null) t.raw.delete(task.stepId);
   }
 }
 
@@ -93,7 +96,10 @@ export function observe(t: Tasks, m: SDKMessage, at: string): Lost[] {
   if (m.type === "assistant") {
     for (const b of m.message.content) {
       if (b.type !== "tool_use" || !isRecord(b.input)) continue;
-      if (b.name === "Bash" && typeof b.input.command === "string") t.commands.set(b.id, firstLine(b.input.command));
+      if (b.name === "Bash" && typeof b.input.command === "string") {
+        t.commands.set(b.id, firstLine(b.input.command));
+        t.raw.set(b.id, b.input.command);
+      }
       if (m.parent_tool_use_id === null) {
         t.calls.set(b.id, { tool: b.name, input: b.input });
         t.rev++;
@@ -104,6 +110,7 @@ export function observe(t: Tasks, m: SDKMessage, at: string): Lost[] {
     for (const b of m.message.content) {
       if (b.type !== "tool_result") continue;
       if (!running.has(b.tool_use_id)) t.commands.delete(b.tool_use_id);
+      if (!running.has(b.tool_use_id)) t.raw.delete(b.tool_use_id);
       if (m.parent_tool_use_id === null && t.calls.delete(b.tool_use_id)) t.rev++;
     }
   } else if (m.type === "result") {
@@ -281,7 +288,7 @@ export function rowRun(a: Activity, card: string | null, call: CallLabel): Pick<
 export type StepPatch = {
   state?: "waiting" | "running";
   startedAt?: string;
-  ended?: { state: "stopped" | "denied" | "unsure"; cause: string };
+  ended?: { state: "stopped" | "denied" | "unsure" | "ended"; cause: string };
   /** The step of a command that outlived its Claude Code: a later Claude Code's "stopped" does not hold. */
   outlived?: true;
   /** Claude Code said its task completed or failed, so its result is on its way to the transcript: no cut ends it. */

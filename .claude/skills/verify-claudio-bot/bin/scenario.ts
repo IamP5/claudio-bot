@@ -39,7 +39,12 @@ function cleanupBridge() {
   return sh(["bun", CONTROL, "cleanup", "--run", id], join(out, "cleanup.log")).out;
 }
 process.on("exit", cleanupBridge);
-for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]] as const) process.on(sig, () => process.exit(code));
+for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129], ["SIGQUIT", 131]] as const) process.on(sig, () => process.exit(code));
+for (const event of ["uncaughtException", "unhandledRejection"] as const)
+  process.on(event, (e) => {
+    console.error(e);
+    process.exit(1);
+  });
 
 /** seen: the order each item was first seen in. */
 type Thread = { items: Map<string, Item>; seen: Map<string, number>; controls: Controls | null; epoch: string | null; rev: number };

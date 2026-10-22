@@ -248,7 +248,7 @@ struct WorkRun {
         if parts.isEmpty {
             parts.append(WorkSummary.text(steps) + (duration.map { ", " + format($0) } ?? ""))
         }
-        for (state, word) in [(ToolStepState.stopped, "stopped"), (.denied, "denied"), (.unsure, "may still run")] {
+        for (state, word) in [(ToolStepState.stopped, "stopped"), (.denied, "denied"), (.unsure, "may still run"), (.ended, "ended")] {
             let n = steps.count { $0.state == state }
             if n > 0 { parts.append("\(n) \(word)") }
         }
@@ -313,6 +313,8 @@ struct WorkRun {
             parts.append("Denied")
         case .unsure:
             parts.append(ToolStep.mayStillRun)
+        case .ended:
+            parts.append(spoken ? "Ended, result unknown" : "Ended · result unknown")
         case .unknown(let raw):
             parts.append(raw.prefix(1).uppercased() + raw.dropFirst())
         }

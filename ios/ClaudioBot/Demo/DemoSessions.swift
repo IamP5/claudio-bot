@@ -220,7 +220,7 @@ enum DemoSessions {
                 sleeper(3, "sleeper three", .stopped, cause: "Stopped by you"), sleeper(4, "sleeper four", .stopped, cause: "Stopped by you"),
                 sleepersUnsure ? call(1, "perl -e 'sleep 30'", .unsure, cause: "Can't tell whether this still runs on your Mac") : call(1, "perl -e 'sleep 30'", .running), call(2, "perl -e 'sleep 30'", sleepersAnswered ? .running : .waiting),
                 call(3, "perl -e 'sleep 45' && echo late > late.txt", .stopped, cause: "Stopped by you"),
-                call(4, "perl -e 'sleep 60'", .stopped, cause: "Stopped by you"),
+                sleepersUnsure ? call(4, "perl -e 'sleep 60'", .ended, cause: "It ended without a result") : call(4, "perl -e 'sleep 60'", .stopped, cause: "Stopped by you"),
             ]),
             card(1, "sleeper one", "perl -e 'sleep 30'", .chose(.once)),
             card(3, "sleeper three", "perl -e 'sleep 45' && echo late > late.txt", .chose(.once)),

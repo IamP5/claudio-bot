@@ -337,7 +337,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | id | tells | lane | the user can tell | pass | fail |
 | --- | --- | --- | --- | --- | --- |
 | S4c.1 | stop | protocol | While Claude Code is frozen, nothing says the turn stopped. | No notice with reason stop appears between Stop and the resume. | A stop notice appears while Claude Code is still frozen. |
-| S4c.2 | stop | protocol | The stopped prompt does not run once Claude Code resumes. | The transcript has no Bash call for echo s4cone, s4ctwo or s4cthree. | Claude Code ran any of the prompt's commands. |
+| S4c.2 | stop | protocol | The stopped prompt does not run once Claude Code resumes, and Claude does not answer it. | The transcript has no Bash call for echo s4cone, s4ctwo or s4cthree, and no assistant text after the prompt. | Claude Code ran any of the prompt's commands, or Claude replied to it. |
 | S4c.3 | stop | protocol | Once the turn ended, the thread says the user stopped it, in the bridge's own words. | After the resume, a notice with reason "stop" starts "Stopped by you". | No such notice. |
 
 ## S5 A silent two-minute tool call
@@ -543,6 +543,8 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Restart the bridge on the same port and home; the phone reconnects. Mark `restarted`.
 - Wait 8 s.
 - Mark `after-restart`.
+- Wait up to 150 s for vu1's command to end; mark `vu1-gone`.
+- Wait up to 150 s for vu2's command to end; mark `vu2-gone`.
 - Wait up to 150 s for both commands to end; mark `all-gone`.
 - Wait 10 s.
 - Mark `after-ended`.
@@ -562,9 +564,9 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 | id | tells | lane | the user can tell | pass | fail |
 | --- | --- | --- | --- | --- | --- |
-| S6d.1 | state | protocol | Once the bridge cannot tell whether a command still runs, its step stops spinning and says so, and the session rests. | At mark after-restart, vu1's Bash step is in state "unsure" with a cause that says the bridge cannot tell, and vu1 is not working. | vu1's step reads running, or stopped as if it surely ended, or any state but unsure; or vu1 reads working. |
+| S6d.1 | state | protocol | Once the bridge cannot tell whether a command still runs, its step stops spinning and says so, and the session rests; one it still follows reads running. | At mark after-restart, vu1's Bash step is in state "unsure" with a cause that says the bridge cannot tell, and vu1 is not working; vu2's step is running with a task that names it, or already unsure; neither reads stopped. | vu1's step reads anything but unsure, or vu1 reads working; or vu2's step reads stopped, or running with no task. |
 | S6d.2 | state | protocol | After both commands ended, neither thread shows a step running and neither session works, 10 s and 40 s later. | At marks after-ended and after-ended-40s, no Bash step of vu1 or vu2 reads running, and neither reads working. | A step still reads running, or a session reads working. |
-| S6d.3 | state | protocol | Each command's end is said once, whether the bridge knew its process group or found it only by its command line. | By mark after-said, vu1 and vu2 each hold exactly one notice that the command "ended", and each Bash step reads stopped, no longer unsure. | A thread never says its command ended, says it twice, or its step still reads unsure. |
+| S6d.3 | state | protocol | Each command's end is said once, whether the bridge knew its process group or found it only by its command line. | By mark after-said, vu1 and vu2 each hold exactly one notice that the command "ended", said no earlier than 1 s before the run saw that command's process gone, and each Bash step is in state "ended", neither stopped nor unsure. | A thread never says its command ended, says it twice, says it while the process still ran, or its step reads anything but ended. |
 
 ## S7 Twelve sessions at once
 

@@ -316,6 +316,8 @@ extension PermissionAnswer {
                 PermissionOutcome(short: "\(choice.outcome), then failed", text: "\(choice.outcome). It failed.", tone: .failed)
             case .unsure?:
                 PermissionOutcome(short: "\(choice.outcome) · may still run", text: "\(choice.outcome). \(ToolStep.mayStillRun).", tone: .unsure)
+            case .ended?:
+                PermissionOutcome(short: "\(choice.outcome) · ended, result unknown", text: "\(choice.outcome). It ended; its result is unknown.", tone: .unsure)
             default:
                 PermissionOutcome(short: choice.outcome, text: choice.outcome, tone: .allowed)
             }

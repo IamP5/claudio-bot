@@ -1448,7 +1448,7 @@ describe("the thread says what stopped only once it did", () => {
       await until(async () => (await controlsNow()).working === false);
       expect((await noticesNow()).at(-1)?.text).toBe('Command "sleep bk" ended. Claude Code no longer followed it, so how it ended is not known.');
       expect((await rowOf(ASK)).status).toBe("idle");
-      expect(await stepOf("toolu_bk")).toMatchObject({ state: "stopped", cause: "It ended without a result" });
+      expect(await stepOf("toolu_bk")).toMatchObject({ state: "ended", cause: "It ended without a result" });
     } finally {
       await running.end();
     }
@@ -1474,7 +1474,7 @@ describe("the thread says what stopped only once it did", () => {
         await until(async () => (await noticesNow()).some((n) => n.text.includes("ended.")));
       }
       expect((await noticesNow()).filter((n) => n.text.includes("ended.")).map((n) => n.text)).toEqual(['Command "sleep bk" ended. Claude Code no longer followed it, so how it ended is not known.']);
-      expect(await stepOf("toolu_bk")).toMatchObject({ state: "stopped", cause: "It ended without a result" });
+      expect(await stepOf("toolu_bk")).toMatchObject({ state: "ended", cause: "It ended without a result" });
     } finally {
       await other.end();
     }
@@ -1675,7 +1675,7 @@ describe("the thread says what stopped only once it did", () => {
         await until(async () => (await noticesNow()).some((n) => n.text.includes("ended.")));
       }
       expect((await noticesNow()).filter((n) => n.text.includes("ended.")).map((n) => n.text)).toEqual(['Command "sleep bk" ended. Claude Code no longer followed it, so how it ended is not known.']);
-      expect(await stepOf("toolu_bk")).toMatchObject({ state: "stopped", cause: "It ended without a result" });
+      expect(await stepOf("toolu_bk")).toMatchObject({ state: "ended", cause: "It ended without a result" });
     } finally {
       await shell.end();
     }
@@ -1709,6 +1709,106 @@ describe("the thread says what stopped only once it did", () => {
     expect(await handle({ type: "session_set", sessionId: ASK, patch: { model: "opus" } })).toEqual([
       { type: "error", message: "Claude Code did not take the change: Claude Code stopped before it answered. Try again.", about: { kind: "set", sessionId: ASK } },
     ]);
+  });
+
+  test("a shell is paired with a command only when it runs exactly that command, so a near twin never takes another's end", async () => {
+    const a = backgroundCommand("not-a");
+    const b = backgroundCommand("not-b");
+    try {
+      const evalOf = (cmd: string) => `/bin/zsh -c source snap.sh && eval '${cmd}' < /dev/null && pwd -P >| /tmp/cwd`;
+      leaders = async () => [
+        { group: a.pid, command: evalOf("exec >/dev/null 2>&1;  sleep 3431") },
+        { group: b.pid, command: evalOf("exec >/dev/null 2>&1; sleep 34312") },
+      ];
+      await start();
+      await send("Start them");
+      const q = queries[0]!;
+      const cmds = { ba: "exec >/dev/null 2>&1;  sleep 3431", bb: "exec >/dev/null 2>&1; sleep 34312" };
+      await transcribe(...Object.entries(cmds).flatMap(([id, command]) => [calledEntry(`toolu_${id}`, "Bash", { command, run_in_background: true }), resultEntry(`toolu_${id}`, `Command running in background with ID: ${id}.`)]));
+      const listed = Object.keys(cmds).map((id) => shellTask(id, `toolu_${id}`, "Sleep"));
+      q.emit(...Object.entries(cmds).map(([id, command]) => toolCall(`toolu_${id}`, "Bash", { command })), ...listed.map(taskStarted), level(...listed), result());
+      await flush();
+      await flush();
+      await restart();
+      await until(async () => (await restartLines()).length === 1);
+      await b.end();
+      for (const gap of [40_000, 40_000]) {
+        clock += gap;
+        sessions.tick(new Date(clock));
+        await until(async () => (await noticesNow()).some((n) => n.text.includes("ended.")));
+      }
+      expect((await noticesNow()).filter((n) => n.text.includes("ended.")).map((n) => n.text)).toEqual([
+        'Command "exec >/dev/null 2>&1; sleep 34312" ended. Claude Code no longer followed it, so how it ended is not known.',
+      ]);
+      expect([(await stepOf("toolu_ba")).state, (await stepOf("toolu_bb")).state, alive(a.pid)]).toEqual(["unsure", "ended", true]);
+    } finally {
+      await a.end();
+      await b.end();
+    }
+  });
+
+  test("two shells running the same command are paired with neither", async () => {
+    const a = backgroundCommand("not-a");
+    const b = backgroundCommand("not-b");
+    try {
+      const line = "/bin/zsh -c source snap.sh && eval 'sleep twin' < /dev/null";
+      leaders = async () => [
+        { group: a.pid, command: line },
+        { group: b.pid, command: line },
+      ];
+      await start();
+      await send("Start them");
+      const q = queries[0]!;
+      const ids = ["ba", "bb"];
+      const listed = ids.map((id) => shellTask(id, `toolu_${id}`, "Sleep"));
+      q.emit(...ids.map((id) => toolCall(`toolu_${id}`, "Bash", { command: "sleep twin" })), ...listed.map(taskStarted), level(...listed), result());
+      await flush();
+      await flush();
+      await a.end();
+      await restart();
+      await until(async () => (await restartLines()).length === 1);
+      expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: Sleep; Sleep."]);
+    } finally {
+      await a.end();
+      await b.end();
+    }
+  });
+
+  test("each background command gets its own lookups, so a fourth one started later is still followed", async () => {
+    const cmds = ["b1", "b2", "b3", "b4"].map((id) => [id, backgroundCommand(id)] as const);
+    try {
+      shells = async () => new Map(cmds.map(([id, c]) => [id, c.pid]));
+      await start();
+      await send("Start them");
+      const q = queries[0]!;
+      for (const [id] of cmds) {
+        q.emit(taskStarted(shellTask(id, `toolu_${id}`, `sleep ${id}`)), level(...cmds.slice(0, cmds.findIndex(([x]) => x === id) + 1).map(([x]) => shellTask(x, `toolu_${x}`, `sleep ${x}`))));
+        await flush();
+        await flush();
+      }
+      q.emit(result());
+      await flush();
+      await restart();
+      await until(async () => (await restartLines()).length === 1);
+      expect((await controlsNow()).tasks?.map((t) => t.id)).toEqual(["b1", "b2", "b3", "b4"] as TaskId[]);
+    } finally {
+      for (const [, c] of cmds) await c.end();
+    }
+  });
+
+  test("while what became of a crashed Claude Code's background work is looked up, its step is not cut off as ended", async () => {
+    const running = backgroundCommand("bk");
+    try {
+      const q = await startedInBackground({ bk: running.pid });
+      q.crash("Claude Code process terminated by signal SIGKILL");
+      await flush();
+      await flush();
+      expect([(await stepOf("toolu_bk")).state, (await rowOf(ASK)).status]).toEqual(["running", "idle"]);
+      await until(async () => (await noticesNow()).some((n) => n.text.includes("still runs")));
+      expect([(await stepOf("toolu_bk")).state, (await controlsNow()).working]).toEqual(["running", true]);
+    } finally {
+      await running.end();
+    }
   });
 
   test("two Stops of one outlived command at once name it once", async () => {

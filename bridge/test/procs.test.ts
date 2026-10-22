@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { endGroup, groupAlive, shellGroups, taskRun } from "../src/procs";
+import { endGroup, evalArg, groupAlive, shellGroups, taskRun } from "../src/procs";
 import { backgroundCommand } from "./shells";
 
 const started: number[] = [];
@@ -87,4 +87,12 @@ test("a process table that cannot be read is said so, after a few tries, and one
     process.env.PATH = path;
     rmSync(bin, { recursive: true, force: true });
   }
+});
+
+test("the command a Claude Code shell runs is read back exactly, single quotes included, and nothing else is", () => {
+  const line = (arg: string) => `/bin/zsh -c source /x/snapshot.sh 2>/dev/null || true && eval '${arg}' < /dev/null && pwd -P >| /tmp/claude-1-cwd`;
+  expect(evalArg(line("exec >/dev/null 2>&1;  sleep 3431"))).toBe("exec >/dev/null 2>&1;  sleep 3431");
+  expect(evalArg(line(`echo '"'"'a b'"'"'`))).toBe("echo 'a b'");
+  expect(evalArg(line(`echo '\\''a'\\''`))).toBe("echo 'a'");
+  expect(evalArg("sleep 30")).toBeNull();
 });

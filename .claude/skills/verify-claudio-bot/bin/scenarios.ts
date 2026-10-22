@@ -1406,6 +1406,8 @@ const S6d: Scenario = {
     { do: "restart-bridge", mark: "restarted" },
     { do: "sleep", s: 8 },
     { do: "mark", mark: "after-restart" },
+    { do: "until", mark: "vu1-gone", what: "vu1's command to end", timeoutS: 150, test: (ev) => ev.procs("sleep 51").length === 0 },
+    { do: "until", mark: "vu2-gone", what: "vu2's command to end", timeoutS: 150, test: (ev) => ev.procs("sleep 52").length === 0 && ev.procs("sleep 25").length === 0 },
     { do: "until", mark: "all-gone", what: "both commands to end", timeoutS: 150, test: (ev) => ev.procs("sleep 51").length === 0 && ev.procs("sleep 52").length === 0 && ev.procs("sleep 25").length === 0 },
     { do: "sleep", s: 10 },
     { do: "mark", mark: "after-ended" },
@@ -1421,9 +1423,9 @@ const S6d: Scenario = {
       id: "S6d.1",
       tell: "state",
       lane: "protocol",
-      text: "Once the bridge cannot tell whether a command still runs, its step stops spinning and says so, and the session rests.",
-      pass: 'At mark after-restart, vu1\'s Bash step is in state "unsure" with a cause that says the bridge cannot tell, and vu1 is not working.',
-      fail: "vu1's step reads running, or stopped as if it surely ended, or any state but unsure; or vu1 reads working.",
+      text: "Once the bridge cannot tell whether a command still runs, its step stops spinning and says so, and the session rests; one it still follows reads running.",
+      pass: 'At mark after-restart, vu1\'s Bash step is in state "unsure" with a cause that says the bridge cannot tell, and vu1 is not working; vu2\'s step is running with a task that names it, or already unsure; neither reads stopped.',
+      fail: "vu1's step reads anything but unsure, or vu1 reads working; or vu2's step reads stopped, or running with no task.",
       check: (ev) => {
         const at = mark(ev, "after-restart");
         if (at === undefined) return needMarks(ev, "after-restart")!;
@@ -1431,7 +1433,12 @@ const S6d: Scenario = {
         const s = last(ev, "vu1", at);
         if (!step) return no("no Bash step for vu1");
         if (step.state !== "unsure" || !/can.t tell/i.test(step.cause ?? "")) return no(`vu1 step ${step.state} ${step.cause ?? ""}`);
-        return s && !isWorking(s) ? ok(`vu1: ${step.cause}`) : no(`vu1 reads working: row ${rowStatus(s)}, working ${s?.controls?.working}`);
+        if (!s || isWorking(s)) return no(`vu1 reads working: row ${rowStatus(s)}, working ${s?.controls?.working}`);
+        const step2 = bashSteps(ev, "vu2", at)[0];
+        const s2 = last(ev, "vu2", at);
+        const task2 = (s2?.controls?.tasks ?? []).some((t) => /sleep 25/.test(String((t as { label?: unknown }).label)));
+        const vu2ok = step2?.state === "unsure" || (step2?.state === "running" && task2);
+        return vu2ok ? ok(`vu1: ${step.cause}; vu2: ${step2!.state}`) : no(`vu2 step ${step2?.state} ${step2?.cause ?? ""}, task ${task2}`);
       },
     },
     {
@@ -1459,15 +1466,20 @@ const S6d: Scenario = {
       tell: "state",
       lane: "protocol",
       text: "Each command's end is said once, whether the bridge knew its process group or found it only by its command line.",
-      pass: 'By mark after-said, vu1 and vu2 each hold exactly one notice that the command "ended", and each Bash step reads stopped, no longer unsure.',
-      fail: "A thread never says its command ended, says it twice, or its step still reads unsure.",
+      pass: 'By mark after-said, vu1 and vu2 each hold exactly one notice that the command "ended", said no earlier than 1 s before the run saw that command\'s process gone, and each Bash step is in state "ended", neither stopped nor unsure.',
+      fail: "A thread never says its command ended, says it twice, says it while the process still ran, or its step reads anything but ended.",
       check: (ev) => {
         const at = mark(ev, "after-said");
         if (at === undefined) return no("the bridge never said both commands ended (mark ended-said not reached)");
         const bad = ["vu1", "vu2"].flatMap((n) => {
           const said = endedSaid(ev, n);
+          const gone = mark(ev, `${n}-gone`);
           const step = bashSteps(ev, n, at)[0];
-          return [...(said.length === 1 ? [] : [`${n}: ${said.length} ended notices`]), ...(step?.state === "stopped" ? [] : [`${n}: step ${step?.state}`])];
+          return [
+            ...(said.length === 1 ? [] : [`${n}: ${said.length} ended notices`]),
+            ...(gone === undefined ? [`${n}: never seen gone`] : said.some((i) => ev.atOf(i.at) < gone - 1000) ? [`${n}: said ended ${((gone - ev.atOf(said[0]!.at)) / 1000).toFixed(1)} s before its process was gone`] : []),
+            ...(step?.state === "ended" ? [] : [`${n}: step ${step?.state}`]),
+          ];
         });
         return bad.length ? no(bad.join("; ")) : ok("each said ended once; steps stopped");
       },
@@ -1568,13 +1580,17 @@ const S4c: Scenario = {
       id: "S4c.2",
       tell: "stop",
       lane: "protocol",
-      text: "The stopped prompt does not run once Claude Code resumes.",
-      pass: "The transcript has no Bash call for echo s4cone, s4ctwo or s4cthree.",
-      fail: "Claude Code ran any of the prompt's commands.",
+      text: "The stopped prompt does not run once Claude Code resumes, and Claude does not answer it.",
+      pass: "The transcript has no Bash call for echo s4cone, s4ctwo or s4cthree, and no assistant text after the prompt.",
+      fail: "Claude Code ran any of the prompt's commands, or Claude replied to it.",
       check: (ev) => {
         if (mark(ev, "after") === undefined) return needMarks(ev, "after")!;
-        const ran = blocks(ev.transcript("s4c").main).uses.filter((u) => u.name === "Bash" && /s4c(one|two|three)/.test(String(u.input.command ?? "")));
-        return ran.length ? no(`ran: ${ran.map((u) => String(u.input.command)).join("; ")}`) : ok("no command of the stopped prompt ran");
+        const main = ev.transcript("s4c").main;
+        const ran = blocks(main).uses.filter((u) => u.name === "Bash" && /s4c(one|two|three)/.test(String(u.input.command ?? "")));
+        const asked = main.findIndex((l) => l.type === "user" && JSON.stringify(l.message?.content ?? "").includes("echo s4cone"));
+        const replies = asked === -1 ? [] : main.slice(asked + 1).filter((l) => l.type === "assistant" && Array.isArray(l.message?.content) && (l.message!.content as { type?: string; text?: string }[]).some((b) => b.type === "text" && (b.text ?? "").trim() !== ""));
+        if (ran.length) return no(`ran: ${ran.map((u) => String(u.input.command)).join("; ")}`);
+        return replies.length ? no(`Claude replied: ${JSON.stringify(replies[0]!.message?.content).slice(0, 100)}`) : ok("no command ran and no reply");
       },
     },
     {

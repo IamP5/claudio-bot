@@ -15,7 +15,7 @@ import type {
 import type { Tickable } from "./clock";
 import type { Headroom, Ledger } from "./ledger";
 import { notices as noticeText, withNotices, type SessionInput } from "./prompts";
-import { groupAlive, shellGroups, shellLeaders, taskRun } from "./procs";
+import { evalArg, groupAlive, shellGroups, shellLeaders, taskRun } from "./procs";
 import type { NoticeReason, StopTarget, TaskId } from "./protocol";
 import { sandboxFailure } from "./sandbox";
 import type { Persist } from "./store";
@@ -704,6 +704,8 @@ export type Session = Tickable & {
   readonly parkedFor: ParkReason | null;
   /** Claude Code announced a turn of its own that has not begun: the work it reports may still show as running. */
   readonly wakeDue: boolean;
+  /** What became of a gone query's background work is still being looked up: none of it is known to have ended. */
+  readonly settling: boolean;
   /** Claude Code could not be started on the last try and the session waits to try again. working stays true meanwhile. */
   readonly unavailable: boolean;
   /** The envelope in flight. The gate reads its initiator. */
@@ -831,8 +833,8 @@ type Live = {
   groups: Map<string, number>;
   /** The group of the one shell whose command line holds a command whose output file could not be found, by task id. */
   loose: Map<string, number>;
-  /** Searches of the process table for those groups so far, and whether one is under way. */
-  searches: number;
+  /** Searches of the process table for each task's group so far, and whether one is under way. */
+  searches: Map<string, number>;
   searching: boolean;
   /** Claude Code's process id; null until it is spawned, or when it never was. */
   pid(): number | null;
@@ -930,6 +932,8 @@ export function createSession(spec: SessionSpec): Session {
   let closing: Live | null = null;
   /** The look at what a gone query's background work became, due once Claude Code has had time to stop its commands. */
   let exitCheck: { timer: ReturnType<typeof setTimeout>; run: () => void } | null = null;
+  /** Reports of a gone query's background work still looking at the process table. */
+  let reporting = 0;
 
   /** Claude Code said the id the options name for a new session is taken: from now on that id is resumed. */
   let takenId: string | null = null;
@@ -1249,7 +1253,7 @@ export function createSession(spec: SessionSpec): Session {
       background: [],
       groups: new Map(),
       loose: new Map(),
-      searches: 0,
+      searches: new Map(),
       searching: false,
       pid: () => pid,
       wakeStop: null,
@@ -1315,19 +1319,27 @@ export function createSession(spec: SessionSpec): Session {
 
   /** Says what became of a gone query's background work, from the process table: the owner does, or notes do. */
   async function reportGone(tasks: Background[], cause: GoneCause) {
-    const fate = await fateOf(tasks);
-    if (spec.gone) return guard("gone", () => spec.gone!(fate, cause));
-    for (const kind of ["stopped", "running", "unknown"] as const)
-      if (fate[kind].length > 0) guard("note", () => spec.note(goneNote(spec.name?.() ?? "Claude Code", cause, kind, fate[kind]), cause === "restart" ? "restart" : undefined));
+    reporting++;
+    try {
+      const fate = await fateOf(tasks);
+      if (spec.gone) return guard("gone", () => spec.gone!(fate, cause));
+      for (const kind of ["stopped", "running", "unknown"] as const)
+        if (fate[kind].length > 0) guard("note", () => spec.note(goneNote(spec.name?.() ?? "Claude Code", cause, kind, fate[kind]), cause === "restart" ? "restart" : undefined));
+    } finally {
+      reporting--;
+      guard("onChange", () => spec.onChange());
+    }
   }
 
-  /** Saves the live query's background work, and looks up the shell of each command not yet found, a few times. */
+  /** Saves the live query's background work, and looks up the shell of each command not yet found, a few times each. */
   function saveBackground(l: Live) {
     remember(savedBackground(l));
-    const missing = () => l.background.filter((b) => !l.groups.has(b.id) && l.tasks.all.get(b.id as TaskId)?.kind !== "agent");
-    if (l.searching || l.searches >= SHELL_SEARCHES || missing().length === 0) return;
+    const missing = () =>
+      l.background.filter((b) => !l.groups.has(b.id) && l.tasks.all.get(b.id as TaskId)?.kind !== "agent" && (l.searches.get(b.id) ?? 0) < SHELL_SEARCHES);
+    const now = missing();
+    if (l.searching || now.length === 0) return;
     l.searching = true;
-    l.searches++;
+    for (const b of now) l.searches.set(b.id, (l.searches.get(b.id) ?? 0) + 1);
     const pid = l.pid();
     Promise.all([shells(pid), leaders(pid)]).then(
       ([found, shellsOf]) => {
@@ -1347,18 +1359,18 @@ export function createSession(spec: SessionSpec): Session {
 
   /**
    * A command whose shell sent its output elsewhere before the bridge looked has no output file to find it by. When
-   * exactly one of Claude Code's shells, not already another task's, has the command in its command line, that shell is
-   * taken as the command's, loosely: to see it end, never to signal it.
+   * exactly one of Claude Code's shells runs exactly the command Claude Code was given, and no other task has it, that
+   * shell is taken as the command's, loosely: to see it end, never to signal it. Two alike, or none exact, stay unpaired.
    */
   function pairLoose(l: Live, shellsOf: readonly { group: number; command: string }[]) {
     const taken = new Set([...l.groups.values(), ...l.loose.values()]);
+    const runs = shellsOf.map((s) => ({ group: s.group, command: evalArg(s.command) }));
     for (const b of l.background) {
       const t = l.tasks.all.get(b.id as TaskId);
-      if (l.groups.has(b.id) || l.loose.has(b.id) || t?.kind !== "command") continue;
-      const core = t.label.replace(/…$/, "");
-      if (core.length < 4) continue;
-      const hits = shellsOf.filter((s) => !taken.has(s.group) && s.command.includes(core));
-      if (hits.length !== 1) continue;
+      if (l.groups.has(b.id) || l.loose.has(b.id) || t?.kind !== "command" || t.stepId === null) continue;
+      const given = l.tasks.raw.get(t.stepId);
+      const hits = given === undefined ? [] : runs.filter((r) => r.command === given);
+      if (hits.length !== 1 || taken.has(hits[0]!.group)) continue;
       l.loose.set(b.id, hits[0]!.group);
       taken.add(hits[0]!.group);
     }
@@ -1555,8 +1567,8 @@ export function createSession(spec: SessionSpec): Session {
     recovered = null;
     for (const e of fx ?? []) perform(e);
     const left = lost;
-    lost = [];
     if (left.length > 0) void reportGone(left, "restart");
+    lost = [];
   }
   // The caller registers the session before any callback fires, so the recovered TurnEnds wait for the first dispatch,
   // close(), or this microtask, whichever comes first.
@@ -1652,6 +1664,9 @@ export function createSession(spec: SessionSpec): Session {
     activity,
     get wakeDue() {
       return live?.cli.kind === "due";
+    },
+    get settling() {
+      return exitCheck !== null || reporting > 0 || lost.length > 0;
     },
     get parkedFor() {
       return parkedFor();

@@ -56,6 +56,15 @@ export async function shellLeaders(pid: number): Promise<{ group: number; comman
     .map((m) => ({ group: Number(m[1]), command: m[4]! }));
 }
 
+/**
+ * The command a shell Claude Code started runs, from its command line: Claude Code hands it to `eval '<command>'` with
+ * each single quote written as '"'"' or '\''. null when the line is not of that form.
+ */
+export function evalArg(commandLine: string): string | null {
+  const m = /\beval '((?:[^']|'"'"'|'\\'')*)' < \/dev\/null/.exec(commandLine);
+  return m ? m[1]!.replace(/'"'"'|'\\''/g, "'") : null;
+}
+
 /** By task id, the process group of each background shell Claude Code (process `pid`) runs. Empty when none is found. */
 export async function shellGroups(pid: number): Promise<Map<string, number>> {
   const leaders = (await shellLeaders(pid)).map((l) => l.group);

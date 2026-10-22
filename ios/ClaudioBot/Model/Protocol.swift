@@ -1601,12 +1601,13 @@ struct SessionOutcome: Codable, Hashable, Sendable {
 }
 
 /// waiting: an approval card for the call is open, so it has not started. stopped: cut off by the user or a restart.
-/// unsure: the bridge can no longer tell whether its command still runs on the Mac.
+/// unsure: the bridge can no longer tell whether its command still runs on the Mac. ended: such a command ended, and
+/// how is not known.
 enum ToolStepState: OpenEnum {
-    case running, waiting, ok, error, denied, stopped, unsure
+    case running, waiting, ok, error, denied, stopped, unsure, ended
     case unknown(String)
 
-    static let allCases: [ToolStepState] = [.running, .waiting, .ok, .error, .denied, .stopped, .unsure]
+    static let allCases: [ToolStepState] = [.running, .waiting, .ok, .error, .denied, .stopped, .unsure, .ended]
     init?(rawValue: String) { self.init(wire: rawValue) }
 
     var rawValue: String {
@@ -1618,6 +1619,7 @@ enum ToolStepState: OpenEnum {
         case .denied: "denied"
         case .stopped: "stopped"
         case .unsure: "unsure"
+        case .ended: "ended"
         case .unknown(let raw): raw
         }
     }

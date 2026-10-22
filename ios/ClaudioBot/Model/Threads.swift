@@ -348,9 +348,7 @@ final class ThreadModel {
     }
 
     let id: SessionID
-    private(set) var items: [SessionItem] = [] {
-        didSet { if !withdrawing.isEmpty { withdrawing.formIntersection(queuedIds) } }
-    }
+    private(set) var items: [SessionItem] = []
     /// What the thread shows, recomputed when items, folds or working change, never by a delta.
     private(set) var rows: [ThreadRow] = []
     private(set) var before: Cursor?
@@ -364,9 +362,11 @@ final class ThreadModel {
     private(set) var toolOutputs: [String: String] = [:]
     /// The composer's text, kept with the thread so a queued message taken back for editing lands in it.
     var draft = ComposerDraft()
-    /// Queued messages the user took back: gone from the queue at once, until the bridge's items drop them or it
-    /// refuses (a Claude Code that hangs answers neither).
-    private(set) var withdrawing: Set<ItemID> = []
+    /// Queued messages the user took back, until the bridge's items drop them or it refuses (a Claude Code that hangs
+    /// answers neither, so each also gives up after Withdrawal.patience).
+    private(set) var withdrawals: [ItemID: Withdrawal] = [:]
+    /// Messages taken back that went to Claude anyway, and whether their text went to the composer too.
+    private(set) var sentAnyway: [ItemID: Bool] = [:]
     /// The user's prompts a stop ended before Claude answered (UnansweredPrompts), less the ones already taken back.
     private(set) var unanswered: Set<ItemID> = []
     @ObservationIgnored private var resent: Set<ItemID> = []
@@ -577,6 +577,7 @@ final class ThreadModel {
     }
 
     private func relayout() {
+        if !withdrawals.isEmpty { settleWithdrawals() }
         let next = ThreadLayout.rows(items, expanded: expanded, working: controls?.working ?? false)
         if next != rows { rows = next }
         let prompts = UnansweredPrompts.of(items, turnRuns: ComposerState.queues(controls)).subtracting(resent)
@@ -591,17 +592,46 @@ final class ThreadModel {
         relayout()
     }
 
-    func withdraw(_ id: ItemID) {
-        withdrawing.insert(id)
+    /// The messages on their way out of the queue: not lapsed.
+    var withdrawing: Set<ItemID> {
+        Set(withdrawals.compactMap { $0.value.lapsed ? nil : $0.key })
+    }
+
+    /// The messages that wait for the turn as this phone counts them: the bridge's count, less the ones on their way out.
+    var queuedCount: Int {
+        max(0, (controls?.queued ?? 0) - withdrawing.count)
+    }
+
+    /// edited: its text went to the composer (now or on an earlier try), so it never goes there twice.
+    func withdraw(_ id: ItemID, edited: Bool, at now: Date = .now) {
+        withdrawals[id] = Withdrawal(at: now, edited: edited || withdrawals[id]?.edited == true)
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Withdrawal.patience))
+            self?.lapseWithdrawals(at: .now)
+        }
+    }
+
+    /// Withdrawals with no word from the Mac within the patience: the message may still be queued.
+    func lapseWithdrawals(at now: Date) {
+        for (id, withdrawal) in withdrawals where !withdrawal.lapsed && now.timeIntervalSince(withdrawal.at) >= Withdrawal.patience {
+            withdrawals[id]?.lapsed = true
+        }
     }
 
     /// The bridge would not take the message back: it is queued, or went to Claude, as the items say.
     func withdrawRefused(_ id: ItemID) {
-        withdrawing.remove(id)
+        withdrawals[id] = nil
     }
 
-    private var queuedIds: Set<ItemID> {
-        Set(items.compactMap { if case let .user(id, _, _, .user, true) = $0 { id } else { nil } })
+    /// A message still queued keeps its withdrawal. One gone from the items was dropped. One that is no longer queued
+    /// went to Claude before the withdrawal reached it.
+    private func settleWithdrawals() {
+        var queued: [ItemID: Bool] = [:]
+        for case let .user(id, _, _, .user, isQueued) in items { queued[id] = isQueued }
+        for (id, withdrawal) in withdrawals where queued[id] != true {
+            withdrawals[id] = nil
+            if queued[id] == false { sentAnyway[id] = withdrawal.edited }
+        }
     }
 
     /// Puts a message back in the composer for editing, after whatever is typed there.

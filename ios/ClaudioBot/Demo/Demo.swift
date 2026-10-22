@@ -14,7 +14,7 @@ import Foundation
 /// card expires 20 s in), `approvalselsewhere` (another device denies it 15 s in), `streaming`, `cloud`,
 /// `longthread` (500 items), `newsession`, `background` (the turn over, a subagent and its command still running),
 /// `threadoffline` (the Mac lost after the thread loaded), `threadwaiting` (a thread opened with the Mac out of reach),
-/// `composerdraft`, `composerlong`, `composerlapse`, `composersix`, `composerrefused`, `composermode`, `composerqueued`, `stoppedearly` (DemoSessions.stageComposer;
+/// `composerdraft`, `composerlong`, `composerlapse`, `composersix`, `composerrefused`, `composermode`, `composerqueued`, `composerwithdraw`, `stoppedearly` (DemoSessions.stageComposer;
 /// add "kb" for the same with the keyboard up, or "kbgone" for the keyboard up and then put away 8 s in),
 /// `sessionsempty` and `sessionsoffline`.
 @MainActor

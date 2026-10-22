@@ -182,17 +182,35 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
     }
 
     @Test func aWithdrawnMessageLeavesTheQueueAtOnceEvenWhileClaudeCodeHangs() throws {
-        let store = store(controls(queued: 1), items: [user("q1", "Also run lint", queued: true)])
+        let store = store(controls(tasks: [sleep75], queued: 1), items: [user("q1", "Also run lint", queued: true)])
         let model = try #require(store.threads[sid])
-        model.withdraw(ItemID("q1"))
-        #expect(model.queuedMessages.isEmpty, "the chip drops it before the bridge answers")
-        frame(store, rev: 2, items: [user("q1", "Also run lint", queued: true)], controls: controls(queued: 1))
-        #expect(model.withdrawing == [ItemID("q1")], "a frame that still has it queued keeps it withdrawing")
+        let scope = StopScope(controls(tasks: [sleep75]))
+        #expect(model.queuedCount == 1 && scope.confirmMessage(queued: model.queuedCount).hasSuffix("Your queued message still runs."))
+        model.withdraw(ItemID("q1"), edited: true, at: at)
+        #expect(model.queuedCount == 0 && model.queuedMessages.isEmpty, "the chip goes before the bridge answers")
+        #expect(scope.confirmMessage(queued: model.queuedCount) == "sleep 75 keeps running in the background unless you stop everything.")
+        frame(store, rev: 2, items: [user("q1", "Also run lint", queued: true)], controls: controls(tasks: [sleep75], queued: 1))
+        #expect(model.withdrawing == [ItemID("q1")] && model.queuedCount == 0, "a frame that still has it queued keeps it on its way out")
         store.apply(.error(message: "That message is no longer queued: it already went to Claude.", about: .send(sessionId: sid, clientId: "q1")))
-        #expect(model.withdrawing.isEmpty, "a refusal gives it back to the items")
-        model.withdraw(ItemID("q1"))
-        store.apply(.thread(sessionId: sid, .items(rev: 3, items: [], removed: [ItemID("q1")], controls: controls(queued: 0))), at: at)
-        #expect(model.withdrawing.isEmpty && model.queuedMessages.isEmpty, "the bridge dropped it: settled")
+        #expect(model.withdrawals.isEmpty && model.queuedCount == 1, "a refusal gives it back to what the items say")
+
+        model.withdraw(ItemID("q1"), edited: true, at: at)
+        model.lapseWithdrawals(at: at + Withdrawal.patience - 1)
+        #expect(model.withdrawing == [ItemID("q1")])
+        model.lapseWithdrawals(at: at + Withdrawal.patience)
+        #expect(model.withdrawals[ItemID("q1")]?.lapsed == true && model.queuedCount == 1, "no word in time: it may still be queued")
+        model.withdraw(ItemID("q1"), edited: false, at: at + 11)
+        #expect(model.withdrawals[ItemID("q1")]?.edited == true, "Try again keeps that its text is already in the composer")
+        frame(store, rev: 3, items: [user("q1", "Also run lint", queued: false)], controls: controls(tasks: [sleep75], queued: 0))
+        #expect(model.withdrawals.isEmpty && model.sentAnyway[ItemID("q1")] == true, "it went to Claude anyway, and says so")
+    }
+
+    @Test func aWithdrawalSettlesWhenTheBridgeDropsTheMessage() throws {
+        let store = store(controls(queued: 1), items: [user("q2", "Then lint", queued: true)])
+        let model = try #require(store.threads[sid])
+        model.withdraw(ItemID("q2"), edited: false, at: at)
+        store.apply(.thread(sessionId: sid, .items(rev: 2, items: [], removed: [ItemID("q2")], controls: controls(queued: 0))), at: at)
+        #expect(model.withdrawals.isEmpty && model.sentAnyway.isEmpty && model.queuedCount == 0)
     }
 
     /// The bar as the thread drives it: each layout reports what the rows need at the density they were laid out at,

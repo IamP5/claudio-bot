@@ -27,8 +27,7 @@ struct ThreadRowView: View, Equatable {
             switch item {
             case let .user(id, _, text, from, queued):
                 SessionUserBubble(
-                    text: text, from: from, queued: queued, withdrawing: model.withdrawing.contains(id), botName: botName,
-                    actions: model.withdrawing.contains(id) ? nil : actions(id, text, queued: queued)
+                    text: text, from: from, queued: queued, taken: taken(id), botName: botName, actions: actions(id, text, queued: queued)
                 )
             case let .assistant(id, _, text):
                 RenderedMarkdownView(markdown: model.rendered(id, text))
@@ -60,7 +59,19 @@ struct ThreadRowView: View, Equatable {
 }
 
 extension ThreadRowView {
+    private func taken(_ id: ItemID) -> SessionUserBubble.Taken? {
+        if let withdrawal = model.withdrawals[id] { return withdrawal.lapsed ? .unconfirmed : .withdrawing }
+        return model.sentAnyway[id].map { .sentAnyway(edited: $0) }
+    }
+
     private func actions(_ id: ItemID, _ text: String, queued: Bool) -> SessionUserBubble.Actions? {
+        if let withdrawal = model.withdrawals[id] {
+            guard withdrawal.lapsed else { return nil }
+            return .unconfirmed(
+                retry: { client.withdraw(id, text: text, from: model, edit: withdrawal.edited) },
+                edit: withdrawal.edited ? nil : { client.withdraw(id, text: text, from: model, edit: true) }
+            )
+        }
         if queued, withdraws {
             return .queued(
                 edit: { client.withdraw(id, text: text, from: model, edit: true) },
@@ -85,13 +96,31 @@ struct SessionUserBubble: View {
     enum Actions {
         case queued(edit: () -> Void, withdraw: () -> Void)
         case resend(() -> Void)
+        /// A withdrawal the Mac never confirmed: try it again, or, when the text is not in the composer yet, edit it.
+        case unconfirmed(retry: () -> Void, edit: (() -> Void)?)
+    }
+
+    /// Where a message the user took back stands.
+    enum Taken: Equatable {
+        case withdrawing
+        /// No word from the Mac within Withdrawal.patience: it may still be queued.
+        case unconfirmed
+        /// It reached Claude before the withdrawal reached the Mac.
+        case sentAnyway(edited: Bool)
+
+        var words: String {
+            switch self {
+            case .withdrawing: "Withdrawing…"
+            case .unconfirmed: "Couldn't confirm the withdraw"
+            case .sentAnyway(let edited): "Sent before it could be withdrawn" + (edited ? ". Its text is also in the composer." : "")
+            }
+        }
     }
 
     let text: String
     let from: SessionAuthor
     let queued: Bool
-    /// Taken back, and the bridge has not dropped it yet.
-    var withdrawing = false
+    var taken: Taken?
     var botName: String?
     var actions: Actions?
 
@@ -128,7 +157,7 @@ struct SessionUserBubble: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(Self.spoken(rendered, from: from, botName: botName, queued: queued) + (withdrawing ? ", withdrawing" : ""))
+            .accessibilityLabel(Self.spoken(rendered, from: from, botName: botName, queued: queued) + (taken.map { ". " + $0.words } ?? ""))
             .accessibilityActions {
                 switch actions {
                 case let .queued(edit, withdraw)?:
@@ -136,6 +165,9 @@ struct SessionUserBubble: View {
                     Button("Withdraw", action: withdraw)
                 case .resend(let resend)?:
                     Button("Edit and resend", action: resend)
+                case let .unconfirmed(retry, edit)?:
+                    Button("Try again", action: retry)
+                    if let edit { Button("Edit", action: edit) }
                 case nil:
                     EmptyView()
                 }
@@ -154,11 +186,21 @@ struct SessionUserBubble: View {
                 captionLabel("Queued · Edit or withdraw", symbol: "clock")
             }
         case .resend(let resend)?:
-            Button(action: resend) { captionLabel("Edit and resend", symbol: "arrow.uturn.up") }
-                .buttonStyle(.plain)
+            VStack(alignment: .trailing, spacing: 0) {
+                if let taken { Label(taken.words, systemImage: "info.circle").font(.caption).foregroundStyle(Theme.tertiary) }
+                Button(action: resend) { captionLabel("Edit and resend", symbol: "arrow.uturn.up") }
+                    .buttonStyle(.plain)
+            }
+        case let .unconfirmed(retry, edit)?:
+            Menu {
+                Button(action: retry) { Label("Try again", systemImage: "arrow.uturn.backward") }
+                if let edit { Button(action: edit) { Label("Edit", systemImage: "pencil") } }
+            } label: {
+                captionLabel("Couldn't confirm the withdraw · Try again", symbol: "exclamationmark.triangle")
+            }
         case nil:
-            if withdrawing {
-                Label("Withdrawing…", systemImage: "arrow.uturn.backward")
+            if let taken {
+                Label(taken.words, systemImage: taken == .withdrawing ? "arrow.uturn.backward" : "info.circle")
                     .font(.caption)
                     .foregroundStyle(Theme.tertiary)
             } else if queued {

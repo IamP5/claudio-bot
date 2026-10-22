@@ -89,7 +89,7 @@ struct SessionComposer: View {
             if scope.turn { Button("Stop the turn only") { stop(.turn) } }
             Button("Cancel", role: .cancel) {}
         } message: { scope in
-            Text(scope.confirmMessage(queued: controls?.queued ?? 0))
+            Text(scope.confirmMessage(queued: model.queuedCount))
         }
         .task(id: sentAt) {
             guard let sentAt else { return }
@@ -368,7 +368,7 @@ struct SessionComposer: View {
                     .accessibilityLabel("Mode, \(SessionText.mode(controls.mode))" + Self.changingWords(changing, model: false))
                     .help("Permission Mode")
                 }
-                if controls.queued > 0 { queuedChip(controls.queued) }
+                if model.queuedCount > 0 { queuedChip(model.queuedCount) }
                 if stacked { usage }
             }
             .padding(.horizontal, 4)
@@ -559,10 +559,11 @@ extension ThreadModel {
 }
 
 extension BridgeClient {
-    /// Takes a queued message back before it runs. edit: its text goes back in the composer.
+    /// Takes a queued message back before it runs. edit: its text goes back in the composer, once, however often the
+    /// withdrawal is tried.
     func withdraw(_ id: ItemID, text: String, from model: ThreadModel, edit: Bool) {
-        if edit { model.edit(text) }
-        model.withdraw(id)
+        if edit, model.withdrawals[id]?.edited != true { model.edit(text) }
+        model.withdraw(id, edited: edit)
         send(.sessionUnqueue(sessionId: model.id, clientId: id.rawValue))
     }
 }

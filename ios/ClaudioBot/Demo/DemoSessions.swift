@@ -406,8 +406,12 @@ enum DemoSessions {
     /// Code has not taken (`composerlapse`), a stop of six commands refused with every one named, as an older bridge
     /// words it (`composersix`),
     /// a stop Claude Code refused (`composerrefused`), a mode change it refused (`composermode`), a queued message
-    /// (`composerqueued`), and a prompt a stop cut off before Claude answered (`stoppedearly`).
-    static let composerScreens: Set<String> = ["composerdraft", "composerlong", "composerlapse", "composersix", "composerrefused", "composermode", "composerqueued", "stoppedearly"]
+    /// (`composerqueued`), the same taken back for editing a second in, with the Mac's answer 8 s late
+    /// (`composerwithdraw`), and a prompt a stop cut off before Claude answered (`stoppedearly`).
+    static let composerScreens: Set<String> = [
+        "composerdraft", "composerlong", "composerlapse", "composersix", "composerrefused", "composermode", "composerqueued", "composerwithdraw",
+        "stoppedearly",
+    ]
 
     static func stageComposer(_ screen: String, in store: AppStore) {
         Task {
@@ -439,6 +443,14 @@ enum DemoSessions {
             case "composerqueued":
                 c.queued = 1
                 items(store, audit, [.user(id: ItemID("demo-queued"), at: .now, text: "Then open a PR with the fixes", from: .user, queued: true)], controls: c)
+            case "composerwithdraw":
+                c.queued = 1
+                items(store, audit, [.user(id: ItemID("demo-queued"), at: .now, text: "Then open a PR with the fixes", from: .user, queued: true)], controls: c)
+                try? await Task.sleep(for: .seconds(1))
+                model.edit("Then open a PR with the fixes")
+                model.withdraw(ItemID("demo-queued"), edited: true)
+                try? await Task.sleep(for: .seconds(8))
+                _ = respond(to: .sessionUnqueue(sessionId: audit, clientId: "demo-queued"), store: store)
             case "stoppedearly":
                 c.working = false
                 c.turn = nil

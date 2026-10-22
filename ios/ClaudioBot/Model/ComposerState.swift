@@ -1,5 +1,16 @@
 import Foundation
 
+/// A queued message the user took back, from the tap until the bridge drops it or refuses (F-SES-040).
+struct Withdrawal: Equatable, Sendable {
+    /// As long as a Stop waits before it says it is unconfirmed.
+    static let patience = StopRequest.patience
+    let at: Date
+    /// Its text went to the composer.
+    let edited: Bool
+    /// No word from the Mac within the patience: the message may still be queued.
+    var lapsed = false
+}
+
 /// What the composer's Stop ends (P-A11Y-2): the turn, if one runs, and every live task.
 struct StopScope: Equatable, Sendable {
     let turn: Bool

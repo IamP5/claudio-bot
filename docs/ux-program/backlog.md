@@ -39,3 +39,4 @@
 - G11: "Sent before it could be withdrawn" note never shows on the real bridge: settleWithdrawals marks sentAnyway[clientId] but the bridge then re-keys the item to its transcript id, so taken(id) misses; a single replacement frame would read as a drop. Test must send the re-key frame (G6 verifier r6, shots/sa.png).
 - G11: sentAnyway map is never pruned (negligible).
 - (G17/G18) After a stop Claude Code never confirms, the bridge closes Claude Code at 15 s and says "Claude Code's background work stopped: …sleep 6002" while it is alive (seen on main); "Stop again" adds a second identical "Stopped by you" notice.
+- S4.9 (error on the wire within 2 s) flakes on main too: 2/3 fails on main 6f1f4ea, 2/10 on G17 head; machine load is high. Investigate threshold vs load before Step 4.

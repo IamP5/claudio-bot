@@ -140,12 +140,14 @@ export const goneNote = (name: string, cause: GoneCause, kind: keyof Fate, tasks
 const FATE_OF_RUN = { runs: "running", gone: "stopped", unsure: "unknown", unread: "unknown" } as const;
 async function fateOf(tasks: readonly Background[], run: (group: number, id: string) => Promise<TaskRun>): Promise<Fate> {
   const fate: Fate = { stopped: [], running: [], unknown: [] };
-  for (const t of tasks) {
-    if (typeof t.group === "number") fate[FATE_OF_RUN[await run(t.group, t.id)]].push(t);
-    else if (typeof t.loose === "number") fate[groupAlive(t.loose) ? "unknown" : "stopped"].push(t);
-    else if (t.kind === "agent" && t.claude !== undefined && !groupAlive(t.claude)) fate.stopped.push(t);
-    else fate.unknown.push(t);
-  }
+  const kinds = await Promise.all(
+    tasks.map(async (t): Promise<keyof Fate> => {
+      if (typeof t.group === "number") return FATE_OF_RUN[await run(t.group, t.id)];
+      if (typeof t.loose === "number") return groupAlive(t.loose) ? "unknown" : "stopped";
+      return t.kind === "agent" && t.claude !== undefined && !groupAlive(t.claude) ? "stopped" : "unknown";
+    }),
+  );
+  tasks.forEach((t, i) => fate[kinds[i]!].push(t));
   return fate;
 }
 /** A Claude Code that exits on its own stops its commands first; the bridge looks at what still runs this much later. */

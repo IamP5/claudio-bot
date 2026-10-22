@@ -1109,11 +1109,11 @@ export function createOwn(deps: OwnDeps): Own {
       const drive = rec.own;
       if (!drive) return [];
       const turn = activityOf(rec).turn;
-      const out = drive.cut && !(turn !== null && turn.startedAt <= drive.cut.at) ? [drive.cut] : [];
+      const s = drivers.get(rec.id);
+      // While what became of a gone query's work is still being looked up, it may turn out to run, so nothing is cut.
+      const out = drive.cut && !(turn !== null && turn.startedAt <= drive.cut.at) && !s?.settling ? [drive.cut] : [];
       // At rest nothing runs, so a step the transcript still leaves running never got its result.
       // While Claude Code has announced a turn of its own, the work it reports on may not have its result written yet.
-      const s = drivers.get(rec.id);
-      // Nor while what became of a gone query's work is still being looked up: it may turn out to run.
       if (!working(rec) && !deps.elsewhere(rec.id) && !s?.wakeDue && !s?.settling) out.push({ at: rested.get(rec.id) ?? bootAt, state: "stopped", cause: UNSEEN_END });
       return out;
     },

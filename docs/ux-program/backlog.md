@@ -28,3 +28,7 @@
 - (for G17) A turn-only stop on a hung Claude Code ended with the bridge killing the process; notices said "Stopped by you: command sleep 2003…" and "Claude Code's background work stopped" while the six sleeps kept running as orphans (ppid 1); the mode refusal showed raw "Query closed before response received" (G6 verifier r4, on main-based #21 bridge).
 - Merge order note: #21 and #22 conflict in bridge/src/own.ts (refusal returns ~590 and fewOf near 103-115); second to merge resolves and re-tests.
 - ClaudioBot-UX-1 has AutomaticMinimizationEnabled=NO set by a verifier (software keyboard had stopped showing).
+- Composer at xxxLarge/AX5 worst combo with keyboard up: keyboard can only be dismissed by a drag from a 3-7 pt transcript strip (better than main; consider a visible Dismiss keyboard control) (G6 verifier r5).
+- "Stop the turn and 2 commands" counts the turn's own foreground command while the dialog names only the background one (G6 verifier r5; check whether pre-existing).
+- tasks.ts cuts task labels at 80 characters, which can split a «redacted» mask in the Running panel (G6 verifier r5).
+- #21 and #22 also conflict in ios/scripts/swipe-check.sh (both add screens; keep both).

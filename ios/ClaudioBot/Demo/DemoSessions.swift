@@ -402,9 +402,12 @@ enum DemoSessions {
     }
 
     /// The composer's states over the audit thread, once its snapshot is in: a draft typed while work runs (`composerdraft`),
-    /// a three-paragraph draft under a refused stop (`composerlong`),
+    /// a three-paragraph draft under a refused stop (`composerlong`), the same with a queued message and a mode change Claude
+    /// Code has not taken (`composerlapse`),
     /// a stop Claude Code refused (`composerrefused`), a mode change it refused (`composermode`), a queued message
     /// (`composerqueued`), and a prompt a stop cut off before Claude answered (`stoppedearly`).
+    static let composerScreens: Set<String> = ["composerdraft", "composerlong", "composerlapse", "composerrefused", "composermode", "composerqueued", "stoppedearly"]
+
     static func stageComposer(_ screen: String, in store: AppStore) {
         Task {
             try? await Task.sleep(for: .seconds(1))
@@ -416,6 +419,11 @@ enum DemoSessions {
                 model.draft = ComposerDraft(text: "Also check the fade test against the old curve.\n\nThen open a PR with the fixes and list what changed.\n\nWrite a short haiku about the release while it builds.")
                 store.sessionRequestSent(.sessionStop(sessionId: audit, target: .all, turnStartedAt: c.turn?.startedAt))
                 store.apply(.error(message: "Claude Code has not confirmed the stop of sleep 75 yet.", about: .stop(sessionId: audit)))
+            case "composerlapse":
+                model.draft = ComposerDraft(text: "Also check the fade test against the old curve.\n\nThen open a PR with the fixes and list what changed.\n\nWrite a short haiku about the release while it builds.")
+                c.queued = 1
+                items(store, audit, [.user(id: ItemID("demo-queued"), at: .now, text: "Then open a PR with the fixes", from: .user, queued: true)], controls: c)
+                store.sessionRequestSent(.sessionSet(sessionId: audit, patch: SessionPatch(mode: .acceptEdits)), at: .now - SetRequest.patience - 5)
             case "composerrefused":
                 store.sessionRequestSent(.sessionStop(sessionId: audit, target: .all, turnStartedAt: c.turn?.startedAt))
                 store.apply(.error(message: "Claude Code did not stop sleep 75.", about: .stop(sessionId: audit)))

@@ -14,7 +14,8 @@ import Foundation
 /// card expires 20 s in), `approvalselsewhere` (another device denies it 15 s in), `streaming`, `cloud`,
 /// `longthread` (500 items), `newsession`, `background` (the turn over, a subagent and its command still running),
 /// `threadoffline` (the Mac lost after the thread loaded), `threadwaiting` (a thread opened with the Mac out of reach),
-/// `composerdraft`, `composerlong`, `composerrefused`, `composermode`, `composerqueued`, `stoppedearly` (DemoSessions.stageComposer),
+/// `composerdraft`, `composerlong`, `composerlapse`, `composerrefused`, `composermode`, `composerqueued`, `stoppedearly` (DemoSessions.stageComposer;
+/// add "kb" for the same with the keyboard up),
 /// `sessionsempty` and `sessionsoffline`.
 @MainActor
 enum Demo {
@@ -173,10 +174,11 @@ enum Demo {
         case "threadwaiting":
             store.setConnection(.disconnected(retryAt: .now + 25))
             router.open(.session(DemoSessions.audit))
-        case "composerdraft", "composerlong", "composerrefused", "composermode", "composerqueued", "stoppedearly":
-            DemoSessions.backgroundOnly = screen == "composerlong"
+        case let composer? where DemoSessions.composerScreens.contains(composer.replacing(/kb$/, with: "")):
+            let staged = composer.replacing(/kb$/, with: "")
+            DemoSessions.backgroundOnly = staged == "composerlong"
             router.open(.session(DemoSessions.audit))
-            DemoSessions.stageComposer(screen ?? "", in: store)
+            DemoSessions.stageComposer(staged, in: store)
         default: break
         }
     }
@@ -188,6 +190,11 @@ enum Demo {
     /// The bots already ticked when `newgroup` opens the group picker.
     static var groupPick: [BotID]? {
         screen == "newgroup" ? [BotID("engineer"), BotID("news")] : nil
+    }
+
+    /// A composer screen whose name ends in "kb" opens with the field focused, so the keyboard is up.
+    static var focusesComposer: Bool {
+        screen.map { $0.hasSuffix("kb") && DemoSessions.composerScreens.contains(String($0.dropLast(2))) } ?? false
     }
 
     /// What the composer holds when a screen opens mid-sentence: the "@" menu, a picked token, or the "/" menu.

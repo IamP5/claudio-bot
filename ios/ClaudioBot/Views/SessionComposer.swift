@@ -3,6 +3,8 @@ import SwiftUI
 struct SessionComposer: View {
     let sessionId: SessionID
     @Bindable var model: ThreadModel
+    /// The keyboard is up at an accessibility size: the chips show their icons and Dismiss its glyph, so the bar fits.
+    var compact = false
     /// The thread's announcer, so what the composer says keeps the thread's spacing and never talks over the status line.
     let announce: (String) -> Void
     var onSend: () -> Void = {}
@@ -24,6 +26,8 @@ struct SessionComposer: View {
     /// Redraws the composer when Sent or a pending stop runs out of time.
     @State private var clock = Date.now
     @State private var confirming: StopScope?
+    /// The change whose lapse was spoken, so a redraw of the same lapse is not spoken again.
+    @State private var lapseSpoken: Date?
 
     private var controls: SessionControls? { model.controls }
     private var canSend: Bool { controls?.canSend ?? false }
@@ -94,7 +98,9 @@ struct SessionComposer: View {
             announce(text)
         }
         .onChange(of: note) { _, note in
-            if let note, note.announced { announce(note.text) }
+            guard case let .changeUnconfirmed(set, text)? = note, lapseSpoken != set.at else { return }
+            lapseSpoken = set.at
+            announce(text)
         }
         .onChange(of: store.sets[sessionId]) { old, new in
             if let old, new == nil, let controls, old.landed(in: controls) { announce(old.landedLine) }
@@ -136,7 +142,7 @@ struct SessionComposer: View {
     private func field(_ state: ComposerState) -> some View {
         let text = PromptTextView(
             draft: $model.draft, caret: $caret, placeholder: ComposerState.placeholder(controls), label: ComposerState.fieldLabel(controls),
-            maxLines: typeSize.isAccessibilitySize ? 2 : 6, onSubmit: { send(interrupt: false) }
+            maxLines: typeSize.isAccessibilitySize ? 2 : 6, autofocus: Self.autofocus, onSubmit: { send(interrupt: false) }
         )
         .padding(.vertical, 8)
         .frame(minHeight: Composer.field)
@@ -222,7 +228,7 @@ struct SessionComposer: View {
 
     /// At accessibility sizes Dismiss goes under the words, so they keep the row's width.
     private func noteLine(_ note: ComposerNote) -> some View {
-        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
+        let layout = typeSize.isAccessibilitySize && !compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
         return layout {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 switch note {
@@ -238,10 +244,15 @@ struct SessionComposer: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(note.spoken)
             if let dismiss = dismiss(note) {
-                Button("Dismiss", action: dismiss)
-                    .font(.footnote.weight(.semibold))
-                    .buttonStyle(.borderless)
+                Button(action: dismiss) {
+                    if compact { Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.tertiary) } else { Text("Dismiss") }
+                }
+                .font(.footnote.weight(.semibold))
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Dismiss")
             }
         }
         .font(.footnote)
@@ -249,10 +260,6 @@ struct SessionComposer: View {
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .padding(.horizontal, 16)
         .accessibilityElement(children: .contain)
-        .accessibilityRepresentation {
-            Text(note.spoken)
-            if let dismiss = dismiss(note) { Button("Dismiss", action: dismiss) }
-        }
     }
 
     /// An error, or a change that never landed, stays until the user puts it away.
@@ -267,7 +274,7 @@ struct SessionComposer: View {
     private func controlsRow(_ controls: SessionControls) -> some View {
         let changing = store.sets[sessionId].flatMap { Date.now.timeIntervalSince($0.at) < SetRequest.patience ? $0.change : nil }
         // At accessibility sizes the usage ring joins the chips, so they get the row's width.
-        let stacked = typeSize.isAccessibilitySize
+        let stacked = typeSize.isAccessibilitySize && !compact
         return HStack(spacing: 8) {
             ChipFlow(spacing: 8, lineSpacing: 0) {
                 if !controls.models.isEmpty {
@@ -356,26 +363,29 @@ struct SessionComposer: View {
                     }
                 }
             } label: {
-                chip(label, symbol: "clock", tint: Theme.secondary)
+                chip(label, short: "\(count)", symbol: "clock", tint: Theme.secondary)
             }
             .chipMenu()
             .accessibilityLabel(label)
             .accessibilityHint("Edit or withdraw before it runs")
         } else {
-            chip(label, symbol: "clock", tint: Theme.secondary, menu: false)
+            chip(label, short: "\(count)", symbol: "clock", tint: Theme.secondary, menu: false)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(label)
         }
     }
 
-    private func chip(_ title: String, symbol: String, tint: Color = .white, busy: Bool = false, menu: Bool = true) -> some View {
+    /// short: the words kept in compact mode; none by default, so the chip shows its icon. Its spoken label stays whole.
+    private func chip(_ title: String, short: String? = nil, symbol: String, tint: Color = .white, busy: Bool = false, menu: Bool = true) -> some View {
         HStack(spacing: 5) {
             if busy {
                 ProgressView().controlSize(.mini)
             } else {
                 Image(systemName: symbol).font(.caption)
             }
-            Text(title).font(.footnote.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+            if let words = compact ? short : title {
+                Text(words).font(.footnote.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+            }
             if menu {
                 Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(Theme.tertiary)
             }
@@ -408,10 +418,11 @@ struct SessionComposer: View {
         onSend()
     }
 
-    /// Only a stop that would end background work asks first (P-STOP-3). Trying again after a refusal does not ask twice.
+    /// Only a stop that would end background work asks first (P-STOP-3). Trying again after a refusal does not ask twice: it
+    /// asks again for exactly what was refused, aimed at the same turn.
     private func tapStop(_ scope: StopScope, _ phase: StopPhase) {
-        if phase.retries {
-            stop(stopRequest?.target ?? .all)
+        if phase.retries, let request = stopRequest {
+            stop(request.target, turn: request.turnStartedAt)
         } else if scope.asks {
             confirming = scope
         } else {
@@ -420,11 +431,18 @@ struct SessionComposer: View {
     }
 
     /// A bridge without tasks stops everything and knows no turn identity, so the frame stays as it always was there.
-    private func stop(_ target: StopTarget) {
+    private func stop(_ target: StopTarget, turn: String?? = .none) {
         let aimed = store.has(.sessionTasks)
-        client.send(.sessionStop(sessionId: sessionId, target: aimed ? target : nil, turnStartedAt: aimed ? controls?.turn?.startedAt : nil))
+        let turnStartedAt = turn ?? controls?.turn?.startedAt
+        client.send(.sessionStop(sessionId: sessionId, target: aimed ? target : nil, turnStartedAt: aimed ? turnStartedAt : nil))
         stops += 1
     }
+
+    #if DEBUG
+    private static let autofocus = Demo.focusesComposer
+    #else
+    private static let autofocus = false
+    #endif
 }
 
 /// Chips in rows: one that does not fit goes to the next row, so none is cut or scrolled out of sight (F-SES-134).

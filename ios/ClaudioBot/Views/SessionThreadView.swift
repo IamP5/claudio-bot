@@ -53,6 +53,7 @@ struct SessionThreadView: View {
     @State private var statuses: StatusAnnouncer
     /// A tall window: an iPad in portrait, where the split view hides the list.
     @State private var tall = false
+    @State private var keyboardUp = false
 
     init(sessionId: SessionID) {
         self.sessionId = sessionId
@@ -123,6 +124,10 @@ struct SessionThreadView: View {
         }
         .onChange(of: store.machine) { lastRetryFailed = false }
         .onGeometryChange(for: Bool.self) { $0.size.height > $0.size.width } action: { tall = $0 }
+        #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
+        #endif
     }
 
     /// The thread's one status line. A drop shorter than 400 ms keeps the line it had.
@@ -227,13 +232,13 @@ struct SessionThreadView: View {
             VStack(spacing: 6) {
                 if let status {
                     // A hanging attempt would hold Retry until its greeting deadline, so Retry starts a new one.
-                    ThreadStatusLine(status: status, cause: cause, onTap: tap(status)) {
+                    ThreadStatusLine(status: status, cause: cause, compact: compact, onTap: tap(status)) {
                         Task { lastRetryFailed = !(await ConnectionBanner.retry(client, restartingAttempt: true)) }
                     }
                     .padding(.horizontal, 16)
                     .transition(.opacity)
                 }
-                SessionComposer(sessionId: sessionId, model: model, announce: { announcer.post($0) }) {
+                SessionComposer(sessionId: sessionId, model: model, compact: compact, announce: { announcer.post($0) }) {
                     followsBottom = true
                     withAnimation(reduceMotion ? nil : .snappy(duration: 0.3)) { position.scrollTo(edge: .bottom) }
                 }
@@ -253,6 +258,12 @@ struct SessionThreadView: View {
         .onChange(of: banner) { _, new in
             if let new { announcer.post(new.spoken) }
         }
+    }
+
+    /// Typing at an accessibility size: the keyboard leaves the bar too little room, so the status line keeps one line
+    /// and the chips their icons. Their full words return when the keyboard goes.
+    private var compact: Bool {
+        keyboardUp && typeSize.isAccessibilitySize
     }
 
     /// What the offline line says is wrong, in the words the Sessions banner uses. At accessibility sizes the address
@@ -443,6 +454,8 @@ struct ThreadStatusLine: View {
     let status: ThreadStatus
     /// The connection copy the Sessions banner uses.
     let cause: String
+    /// One line only, while the keyboard leaves no room. VoiceOver still reads the whole line.
+    var compact = false
     let onTap: (() -> Void)?
     let onRetry: () -> Void
 
@@ -484,6 +497,7 @@ struct ThreadStatusLine: View {
             if !stacked { glyph.frame(width: slot, height: slot) }
             Text(status.text(now: now, cause: cause))
                 .font(.subheadline)
+                .lineLimit(compact ? 1 : nil)
                 // It shares the bottom bar with the composer, which must stay on screen at the largest sizes.
                 .dynamicTypeSize(...DynamicTypeSize.accessibility3)
                 .monospacedDigit()

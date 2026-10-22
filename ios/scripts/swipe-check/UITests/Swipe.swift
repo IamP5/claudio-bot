@@ -16,6 +16,12 @@ final class Swipe: XCTestCase {
             app.launch()
         }
         sleep(3)
+        // A screen named "...kb" is swiped with the keyboard up, which typing is what brings up.
+        if screen.hasSuffix("kb") {
+            app.textViews.firstMatch.tap()
+            app.textViews.firstMatch.typeText("x")
+            sleep(1)
+        }
         let start = Date()
         app.swipeDown()
         let seconds = Date().timeIntervalSince(start)

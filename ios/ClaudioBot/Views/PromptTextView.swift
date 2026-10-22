@@ -116,7 +116,9 @@ private struct Representable: UIViewRepresentable {
         let line = view.font?.lineHeight ?? 17
         let content = view.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
         // A bar with less room than the lines proposes less height: the field scrolls instead of drawing over its neighbors.
-        let upper = min(maxLines.map { CGFloat($0) * line } ?? .greatestFiniteMagnitude, max(line, proposal.height ?? .greatestFiniteMagnitude))
+        // Whole lines only, so a squeezed field never shows the top of a line it cuts off.
+        let room = proposal.height.map { max(1, ($0 / line).rounded(.down)) * line } ?? .greatestFiniteMagnitude
+        let upper = min(maxLines.map { CGFloat($0) * line } ?? .greatestFiniteMagnitude, room)
         let height = min(max(content, CGFloat(minLines) * line), upper)
         view.isScrollEnabled = content > upper
         return CGSize(width: width, height: height.rounded(.up))

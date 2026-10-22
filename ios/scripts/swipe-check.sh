@@ -33,7 +33,7 @@ app_cpu() {
   ps -o %cpu= -p "$pid" | tr -d ' ' || true
 }
 
-screens="${SCREENS:-workrun thread plan streaming longthread approvals approvalsanswered}"
+screens="${SCREENS:-workrun thread plan streaming longthread approvals approvalsanswered composerdraft composerlong composerlapse composerrefused composermode composerqueued stoppedearly composerlongkb composerlapsekb composerrefusedkb}"
 sizes="${SIZES:-large accessibility-extra-large accessibility-extra-extra-extra-large}"
 [ "$attach" = 1 ] && screens=live && sizes=current
 failed=0

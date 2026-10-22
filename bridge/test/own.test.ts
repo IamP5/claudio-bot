@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CanUseTool, HookCallback, Options, PermissionResult, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeApps, DesktopEntry, Live } from "../src/claudeApps";
-import { alwaysText, OWN_CARD_TTL_MS } from "../src/own";
+import { alwaysText, END_SETTLE_MS, OWN_CARD_TTL_MS } from "../src/own";
 import type { TaskRun } from "../src/procs";
 import type { AgentId, BotId, MessageId, ServerMessage, SessionId, SessionItem, SessionRow, TaskId, ThreadChannelFrame } from "../src/protocol";
 import { EXIT_SETTLE_MS, GONE_ERROR, GONE_LOOK_MAX_MS } from "../src/session";
@@ -1323,6 +1323,88 @@ describe("how a run ends", () => {
     ];
     expect(alwaysText([{ type: "addRules", rules, behavior: "allow", destination: "localSettings" }])).toBe("Bash: perl -e 'sleep 45' · echo late *");
     expect(alwaysText([])).toBe("this");
+  });
+});
+
+describe("telling the phone how a run ended", () => {
+  let endings: [string, string][];
+  const begin = () => {
+    endings = [];
+    return start({ ended: (_, end, at) => void endings.push([end, at]) });
+  };
+  const wait = (ms: number) => {
+    clock += ms;
+    sessions.tick(new Date(clock));
+  };
+  const interrupted = () => result(0, { subtype: "error_during_execution", is_error: true, errors: [] });
+
+  test("a background command's run is told finished once, after its wake turn, never while the command runs", async () => {
+    await begin();
+    await send("Start it");
+    const q = queries[0]!;
+    q.emit(taskStarted(shellTask("bp4", "toolu_bg", "Sleep")), level(shellTask("bp4", "toolu_bg", "Sleep")), result());
+    await flush();
+    wait(END_SETTLE_MS + 1);
+    q.emit(completed("bp4"), notifiedOf("bp4", "toolu_bg"), level());
+    await flush();
+    wait(END_SETTLE_MS + 1);
+    expect(endings).toEqual([]);
+    q.emit(wakeInit(), result());
+    await flush();
+    const restedAt = new Date(clock).toISOString();
+    wait(END_SETTLE_MS - 1);
+    expect(endings).toEqual([]);
+    wait(1);
+    wait(END_SETTLE_MS);
+    expect(endings).toEqual([["finished", restedAt]]);
+  });
+
+  test("a run the user stopped is never told; one where they stopped only a task is told finished", async () => {
+    await begin();
+    await send("Work");
+    const q = queries[0]!;
+    q.emit(toolCall("toolu_p", "Bash", { command: "perl -e 'sleep 40'" }));
+    await flush();
+    await handle({ type: "session_stop", sessionId: ASK, target: "turn" });
+    q.emit(interrupted());
+    await flush();
+    wait(END_SETTLE_MS);
+    expect(endings).toEqual([]);
+
+    await send("Again", "c_again");
+    const shell = shellTask("bk", "toolu_k", "sleep 600");
+    q.emit(taskStarted(shell), level(shell), result());
+    await flush();
+    await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } });
+    q.emit(sys("task_updated", { task_id: "bk", patch: { status: "killed" } }), level());
+    await flush();
+    wait(END_SETTLE_MS);
+    expect(endings.map(([end]) => end)).toEqual(["finished"]);
+  });
+
+  test("a failed run is told failed", async () => {
+    await begin();
+    await send("Work");
+    queries[0]!.emit(result(0, { subtype: "error_during_execution", is_error: true, errors: ["overloaded"] }));
+    await flush();
+    wait(END_SETTLE_MS);
+    expect(endings.map(([end]) => end)).toEqual(["failed"]);
+  });
+
+  test("a card nobody answers is denied at its time, with a notice that names what was refused, secrets masked", async () => {
+    await start({ cardTtlMs: 90_000 });
+    await send("Deploy");
+    const late = asked(queries[0]!, "Bash", { command: "curl -H 'Authorization: Bearer sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123' https://x.test" });
+    await flush();
+    const card = (await openCard("permission")) as Extract<SessionItem, { kind: "permission" }>;
+    expect(Date.parse(card.card.expiresAt) - clock).toBe(90_000);
+    clock += 90_000;
+    sessions.tick(new Date(clock));
+    expect(await late).toMatchObject({ behavior: "deny" });
+    const [notice] = (await noticesNow()).map((n) => [n.text, n.reason]);
+    expect(notice![1]).toBe("approval");
+    expect(notice![0]).toMatch(/^The request to allow ".+" waited 2 minutes unanswered, so it was denied\. You did not say no\.$/);
+    expect(notice![0]).not.toContain("sk-ant-api03");
   });
 });
 

@@ -101,6 +101,12 @@ export type Hub = {
   greeting(): ServerMessage[];
   /** Every client message. The transport ones (devices, revoke_device, pair_code) belong to main.ts, which answers them first. */
   handle(message: ClientMessage): Promise<ServerMessage[]>;
+  /** A socket that watched the session's thread went away; the user last saw it at `at`. */
+  left(sessionId: SessionId, at: Date): Promise<void>;
+  /** Who looks at an app changed: a held push may be due, and what reads as unread may differ. */
+  presence(): void;
+  /** The title a session's row shows, for a session alert. */
+  sessionTitle(id: SessionId): string;
   /** Runs every stored-deadline owner once at `now`. One that throws is logged and the rest still run. */
   tick(now: Date): void;
   /** USER.md, the first bot on a first run, and sessions with queued envelopes (bots and agents). */
@@ -124,6 +130,8 @@ export type HubDeps = {
   push: Push;
   /** The loopback port webhook routines answer on; null: no listener. */
   webhookPort: number | null;
+  /** How long a card in a session the phone drives waits for an answer; absent: two hours. */
+  cardTtlMs?: number;
   /** Tests pass a fake SDK. The bridge uses the real query and the claude on PATH. */
   claude: Pick<SessionSpec, "query" | "executable">;
   /** The plan's usage limits: how to read them, and whether a phone is live to see them. Absent: no "usage" feature. */
@@ -150,7 +158,7 @@ type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; tail: Bubble
 type Pushes = { pushed: { id: MessageId; at: number } | null; last: MessageId | null };
 
 /** What hello advertises: the FEATURES this bridge serves. Each new one joins when the hub implements it. */
-const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups", "presence", "session_tasks", "session_unqueue"];
+const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups", "presence", "session_tasks", "session_unqueue", "push_state"];
 
 /** A client request about one chat: a bot's, or a group's. */
 type ChatRequest = Extract<ClientMessage, { botId: BotId }>;
@@ -855,7 +863,10 @@ export function createHub(deps: HubDeps): Hub {
         ledger,
         claude: deps.claude,
         scope: scopeIn,
-        notify: (id, cardId) => void deps.push.notifySession?.(id, cardId),
+        // The push module reads open cards from the world; a new one only moves its deadline earlier.
+        notify: () => poke(),
+        ended: (id, end, at) => deps.push.sessionEnded?.(id, end, at),
+        ...(deps.cardTtlMs !== undefined && { cardTtlMs: deps.cardTtlMs }),
         folders: () => projectFolders().map((f) => f.path),
         persist: deps.persist,
         now: clockNow,
@@ -1276,12 +1287,19 @@ export function createHub(deps: HubDeps): Hub {
       machine: deps.machine,
       userName,
       bots: sortBots([...[...world.bots.values()].map(view), ...[...world.groups.values()].map(groupView)]),
+      ...(deps.push.state && { push: deps.push.state() }),
     }),
     greeting() {
       const latest = usage?.opened() ?? null;
       return latest ? [{ type: "usage", usage: latest }] : [];
     },
     handle,
+    left: async (id, at) => sessions?.left(id, at),
+    presence() {
+      sessions?.presence();
+      poke();
+    },
+    sessionTitle: (id) => sessions?.title(id) ?? "Claude Code session",
     tick: (at) => tickEach(tickers, at, deps.log),
 
     boot(firstRun) {

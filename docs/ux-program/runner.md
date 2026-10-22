@@ -19,10 +19,11 @@ $R run S1,S4,S5               # several, one after another
 $R run S3 --sim               # simulator lane: also leases a device, installs the app, takes screenshots
 $R run S3 --sim --pair-wait 180
 $R run S1 --sim --content-size accessibility-extra-extra-extra-large --appearance dark   # simctl ui for the run, reset after
+$R run S1b,S4 --away          # the phone says nobody looks at it from the start, so pushes go out; it allows cards after 5 s
 $R doc sessions > docs/ux-program/scenarios/sessions.md   # regenerate the rubric doc
 ```
 
-Scenarios live in `bin/scenarios.ts` as data: setup actions, preconditions and rubric items, each item with its lane and, for protocol items, a mechanical check. `docs/ux-program/scenarios/sessions.md` is generated from it, so edit the registry, never the doc. Every scenario runs on the protocol lane; S3 judges its push and unread items there through the run's push sink (`pushes.jsonl`), and its screenshots need `--sim`.
+Scenarios live in `bin/scenarios.ts` as data: setup actions, preconditions and rubric items, each item with its lane and, for protocol items, a mechanical check. `docs/ux-program/scenarios/sessions.md` is generated from it, so edit the registry, never the doc. Every scenario runs on the protocol lane; S3 judges its push and unread items there through the run's push sink (`pushes.jsonl`), and its screenshots need `--sim`. Push items (S1b.11, S4.11) are judged only with `--away`: an attended phone holds every push. A scenario may set `away`, `pushOff` (the bridge runs with `--push off`) and `cardTtlS` (`--card-ttl`: session cards wait that long, so S9 sees the reminder at half). The phone records `session_alert` frames in `ev.alerts` and the push state from each hello and `push_state` frame in `ev.pushStates`.
 
 Exit code 0 means the scenario was judged (rubric failures are findings, not runner failures). 2 means a precondition failed: the scenario could not produce its situation, and its rubric is reported not judged. 1 means the runner itself failed. Every session turn runs on haiku. Each permission card a scenario raises is answered Allow once, and the timeline records the tap. A scenario with `holdCardsS` (S5) taps it that many seconds after the card appears, so the waiting state is on the wire.
 
@@ -36,7 +37,8 @@ The phone, and with `--sim` the app, reach the bridge through a TCP relay the ru
 | `until`, `sleep`, `mark` | wait for a condition on the evidence, wait, or mark the time |
 | `leave`, `return` | the phone unwatches a thread, or watches it again from its position |
 | `open-thread`, `show-list` | with `--sim`, the app opens the thread by its link (then 3 s to draw) or is relaunched on the Sessions list; on the protocol lane `open-thread` watches the thread again if the phone had left it |
-| `app background`, `app foreground` | with `--sim`, Settings over the app and back; on the protocol lane the phone's socket goes half-open, then the phone reconnects (mark `<mark>-list` when the list arrives, before any thread is watched) |
+| `app background`, `app foreground` | with `--sim`, Settings over the app and back; on the protocol lane the phone does what the app does as it leaves (presence false, unwatch each open thread), then its socket goes half-open; on foreground it reconnects (mark `<mark>-list` when the list arrives, before any thread is watched) |
+| `sink` | `fail: true` makes the push sink answer 500 (a `sink-fail` file in the run folder) until `fail: false`; each line of `pushes.jsonl` has the `status` it got and the `priority` header |
 | `reconnect` | drop (`close` or `half-open`), optional `send` while down, reconnect with resume, compare each thread with a fresh open as JSON in order (unless `compare: false`) |
 | `ps` | sample the Mac's processes matching a pattern whose working directory is the seed project; the report lists every sample |
 | `kill-claude` | SIGKILL the Claude Code process whose command line names the session |

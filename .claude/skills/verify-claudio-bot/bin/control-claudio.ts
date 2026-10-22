@@ -35,6 +35,10 @@ export type Run = {
   dirty: boolean;
   startedAt: string;
   budgetUsd: number;
+  /** --push off: the bridge has no push URL. */
+  pushOff?: boolean;
+  /** --card-ttl: seconds a session card waits, so its reminder at half of it can be seen. */
+  cardTtlS?: number;
 };
 type Msg = { kind: string; id: string; at: string; text?: string; [k: string]: unknown };
 type Bot = { id: string; name: string; status: string; question: string | null; [k: string]: unknown };
@@ -185,7 +189,7 @@ function detach(argv: string[], logFile: string, env: Record<string, string | un
 }
 
 /** The bridge's environment for a run, everything pointing into the run folder. launch and restart share it. */
-function bridgeEnv(run: Pick<Run, "dir" | "home" | "roots" | "port" | "webhookPort" | "ntfyPort" | "model">) {
+function bridgeEnv(run: Pick<Run, "dir" | "home" | "roots" | "port" | "webhookPort" | "ntfyPort" | "model" | "pushOff" | "cardTtlS">) {
   const bin = join(run.dir, "bin");
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -200,14 +204,16 @@ function bridgeEnv(run: Pick<Run, "dir" | "home" | "roots" | "port" | "webhookPo
     CLAUDIOBOT_CLAUDE: join(bin, "claude"),
     PATH: `${bin}:${process.env.PATH ?? ""}`,
     ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+    ...(run.cardTtlS && { CLAUDIOBOT_SESSION_CARD_TTL_S: String(run.cardTtlS) }),
   };
+  if (run.pushOff) delete env.CLAUDIOBOT_PUSH_URL;
   for (const k of ["CLAUDEBOT_HOME", "SSH_AUTH_SOCK", "GH_TOKEN", "GITHUB_TOKEN", "CLAUDIOBOT_ALLOWED_DOMAINS", "CLAUDIOBOT_SANDBOX_STRICT_NETWORK", "CLAUDIOBOT_SANDBOX_GH"]) delete env[k];
   // A Claude Code this helper runs inside (the desktop app, a terminal) leaves its session id, entrypoint and messaging
   // socket in the environment; the bridge's own Claude Code children must not inherit them.
   for (const k of Object.keys(env)) if (/^(CLAUDE_CODE_|CLAUDE_AGENT_SDK_|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDECODE$|AI_AGENT$)/.test(k)) delete env[k];
   // Inherited CLAUDIOBOT_* settings would leak the user's own configuration into the run. Access and sandbox modes pass
   // through on purpose, so full access can be verified by setting them for one launch.
-  const ours = new Set(["CLAUDIOBOT_PORT", "CLAUDIOBOT_ROOTS", "CLAUDIOBOT_HOME", "CLAUDIOBOT_MODEL", "CLAUDIOBOT_USER_NAME", "CLAUDIOBOT_PUSH_URL", "CLAUDIOBOT_DESKTOP_FAKE", "CLAUDIOBOT_WEBHOOK_PORT", "CLAUDIOBOT_CLAUDE", "CLAUDIOBOT_ACCESS", "CLAUDIOBOT_SANDBOX"]);
+  const ours = new Set(["CLAUDIOBOT_PORT", "CLAUDIOBOT_ROOTS", "CLAUDIOBOT_HOME", "CLAUDIOBOT_MODEL", "CLAUDIOBOT_USER_NAME", "CLAUDIOBOT_PUSH_URL", "CLAUDIOBOT_DESKTOP_FAKE", "CLAUDIOBOT_WEBHOOK_PORT", "CLAUDIOBOT_CLAUDE", "CLAUDIOBOT_ACCESS", "CLAUDIOBOT_SANDBOX", "CLAUDIOBOT_SESSION_CARD_TTL_S"]);
   for (const k of Object.keys(env)) if (k.startsWith("CLAUDIOBOT_") && !ours.has(k)) delete env[k];
   return env;
 }
@@ -276,14 +282,16 @@ async function launch() {
   );
   chmodSync(wrapper, 0o755);
 
-  // The ntfy stand-in: every push the bridge sends becomes one JSON line in pushes.jsonl.
+  // The ntfy stand-in: every push the bridge sends becomes one JSON line in pushes.jsonl. While the run folder holds
+  // sink-fail, it answers 500, as a broken push server would, and the line says so.
   const sink = join(dir, "ntfy-sink.ts");
   writeFileSync(
     sink,
-    `import { appendFileSync } from "node:fs";
+    `import { appendFileSync, existsSync } from "node:fs";
 const s = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async (req) => {
-  appendFileSync(${JSON.stringify(join(dir, "pushes.jsonl"))}, JSON.stringify({ at: new Date().toISOString(), path: new URL(req.url).pathname, title: req.headers.get("title"), click: req.headers.get("click"), body: await req.text() }) + "\\n");
-  return new Response("{}");
+  const status = existsSync(${JSON.stringify(join(dir, "sink-fail"))}) ? 500 : 200;
+  appendFileSync(${JSON.stringify(join(dir, "pushes.jsonl"))}, JSON.stringify({ at: new Date().toISOString(), path: new URL(req.url).pathname, title: req.headers.get("title"), click: req.headers.get("click"), priority: req.headers.get("priority"), status, body: await req.text() }) + "\\n");
+  return new Response("{}", { status });
 } });
 console.log("ntfy-sink " + s.port);
 `,
@@ -298,7 +306,9 @@ console.log("ntfy-sink " + s.port);
 
   const port = freePort();
   const webhookPort = freePort();
-  const env = bridgeEnv({ dir, home, roots, port, webhookPort, ntfyPort, model });
+  const pushOff = flag("push") === "off";
+  const cardTtlS = Number(flag("card-ttl") ?? 0) || undefined;
+  const env = bridgeEnv({ dir, home, roots, port, webhookPort, ntfyPort, model, pushOff, cardTtlS });
   for (const k of ["CLAUDIOBOT_ACCESS", "CLAUDIOBOT_SANDBOX"]) if (process.env[k] !== undefined) console.log(`note: ${k}=${process.env[k]} is passed through from your shell`);
 
   const inRun = (v: string | undefined) => v !== undefined && v.startsWith(`${dir}/`);
@@ -310,7 +320,9 @@ console.log("ntfy-sink " + s.port);
     [env.GH_TOKEN === undefined && env.GITHUB_TOKEN === undefined, "GH_TOKEN and GITHUB_TOKEN are unset"],
     [env.ENABLE_CLAUDEAI_MCP_SERVERS === "false", "claude.ai connectors are off"],
     [env.CLAUDIOBOT_CLAUDE === wrapper && env.PATH!.startsWith(`${bin}:`), "claude is the --cloud-refusing wrapper"],
-    [env.CLAUDIOBOT_PUSH_URL!.startsWith("http://127.0.0.1:"), "push goes to the local sink"],
+    pushOff
+      ? [env.CLAUDIOBOT_PUSH_URL === undefined, "push is off (--push off): no push URL"]
+      : [env.CLAUDIOBOT_PUSH_URL?.startsWith("http://127.0.0.1:") === true, "push goes to the local sink"],
     [port !== 7878 && webhookPort !== 7879, `ports ${port}/${webhookPort} are not the real bridge's 7878/7879`],
     [!Object.keys(env).some((k) => k.startsWith("CLAUDE_CODE_") || k === "CLAUDECODE"), "no CLAUDE_CODE_* variable of a surrounding Claude Code"],
   ];
@@ -323,7 +335,7 @@ console.log("ntfy-sink " + s.port);
   const rev = sh(["git", "-C", REPO, "rev-parse", "HEAD"]).out;
   const dirty = sh(["git", "-C", REPO, "status", "--porcelain", "--", "bridge"]).out !== "";
   const bridge = detach(["bun", "run", MAIN], join(dir, "bridge.log"), env);
-  const run: Run = { id, dir, home, roots, worktrees, port, webhookPort, ntfyPort, bridgePid: bridge.pid, ntfyPid: ntfy.pid, model, rev, dirty, startedAt: new Date().toISOString(), budgetUsd };
+  const run: Run = { id, dir, home, roots, worktrees, port, webhookPort, ntfyPort, bridgePid: bridge.pid, ntfyPid: ntfy.pid, model, rev, dirty, startedAt: new Date().toISOString(), budgetUsd, ...(pushOff && { pushOff }), ...(cardTtlS && { cardTtlS }) };
   writeFileSync(join(dir, "run.json"), JSON.stringify(run, null, 2));
   writeFileSync(CURRENT, id);
   // Printed before the bridge is ready, so a caller can clean up the run even if launch fails or is interrupted from here on.

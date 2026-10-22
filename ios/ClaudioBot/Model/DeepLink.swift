@@ -9,8 +9,9 @@ enum DeepLink: Equatable {
     case outdatedBridge
     /// `claudiobot://bot/<id>?message=<id>`, from a push notification.
     case bot(BotID, message: MessageID?)
-    /// `claudiobot://session/<id>`, from a push about a session's card.
-    case session(SessionID)
+    /// `claudiobot://session/<id>?card=<id>`, from a push about a session. card: the card the push was about, absent
+    /// for an ending and from an older bridge.
+    case session(SessionID, card: MessageID?)
 
     static let outdatedBridgeMessage = "This bridge is older than the app. Update the bridge."
 
@@ -27,14 +28,17 @@ enum DeepLink: Equatable {
             }
         case "bot":
             guard let id = url.pathComponents.dropFirst().first, !id.isEmpty else { return nil }
-            let message = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?.first(where: { $0.name == "message" })?.value
-            self = .bot(BotID(id), message: message.map { MessageID($0) })
+            self = .bot(BotID(id), message: Self.query("message", in: url).map { MessageID($0) })
         case "session":
             guard let id = url.pathComponents.dropFirst().first, !id.isEmpty else { return nil }
-            self = .session(SessionID(id))
+            self = .session(SessionID(id), card: Self.query("card", in: url).map { MessageID($0) })
         default:
             return nil
         }
+    }
+
+    private static func query(_ name: String, in url: URL) -> String? {
+        let value = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == name }?.value
+        return value?.isEmpty == false ? value : nil
     }
 }

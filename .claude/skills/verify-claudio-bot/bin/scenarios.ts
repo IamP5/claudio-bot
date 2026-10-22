@@ -17,6 +17,8 @@ export type Resume = { mark: string; how: Drop; resumed: boolean; replayed: numb
 /** How the network loses the phone: a closed socket the app notices, or a half-open one where nothing passes and no close arrives. */
 export type Drop = "close" | "half-open";
 
+export type Push = { at: string; title: string | null; click: string | null; priority?: string | null; status?: number; body: string };
+
 /** What a scenario run captured, live while it runs and complete when the rubric is judged. */
 export type Ev = {
   now(): number;
@@ -29,7 +31,14 @@ export type Ev = {
   paired: boolean;
   transcript(name: string): { main: TranscriptLine[]; subagents: TranscriptLine[] };
   exists(rel: string): boolean;
-  pushes(): { at: string; title: string | null; click: string | null; body: string }[];
+  /** What the push sink received; status is what it answered (500 while it was made to fail). */
+  pushes(): Push[];
+  /** --away (or a scenario that says so): the phone said from the start that nobody looks at it, so pushes go out. */
+  away: boolean;
+  /** session_alert frames about the scenario's sessions, as the phone received them. */
+  alerts: { at: number; name: string; frame: Frame }[];
+  /** The push state, from each hello and push_state frame. */
+  pushStates: { at: number; via: "hello" | "push_state"; push: { state: string; error?: string; at?: string } }[];
   /** Elapsed ms of the scenario at a wall-clock ISO time. */
   atOf(iso: string): number;
   /** Processes on the Mac whose command line matches `pattern` and whose working directory is the seed project: "pid command". */
@@ -82,7 +91,9 @@ export type Action =
   /** With --sim and tapApp, the next frame for the session that passes test is lost on its way to the app, as a flaky link or an unreadable frame loses it. */
   | { do: "lose-frame"; name: string; mark: string; what: string; timeoutS: number; test: (f: Frame) => boolean }
   /** With --sim, the list probe reads the app's Sessions list as it draws it until the setup ends, into ev.list. */
-  | { do: "watch-list" };
+  | { do: "watch-list" }
+  /** The push sink answers 500 from now on (fail), or 200 again. */
+  | { do: "sink"; fail: boolean };
 
 export type Tell = "what" | "how-many" | "how-long" | "state" | "stop";
 export type Verdict = { ok: boolean; why: string };
@@ -113,6 +124,12 @@ export type Scenario = {
   holdCardsS?: number;
   /** With --sim, the relay reads the app's own socket frame by frame, so lose-frame can lose one on its way to the app. */
   tapApp?: boolean;
+  /** The phone says from the start that nobody looks at it, as --away does. */
+  away?: boolean;
+  /** The bridge runs with no push URL. */
+  pushOff?: boolean;
+  /** Seconds a session card waits before it expires; its reminder is at half. */
+  cardTtlS?: number;
 };
 
 // ---- reading the evidence
@@ -450,6 +467,16 @@ const turnRan = (ev: Ev, name: string, from: string) => {
   return ss.some((s) => s.controls?.turn != null) && ss.at(-1)?.controls?.turn == null;
 };
 
+/** The bridge's words for a session that came to rest, as its push says them. */
+const FINISHED = /^A Claude Code session finished$/;
+const ENDED = /^A Claude Code session (finished|stopped with an error)$/;
+/** A push about cards: its count, 1 when it names one card. */
+const cardCount = (p: Push) => {
+  const m = p.body.match(/^A Claude Code session (needs (your approval|(\d+) approvals)|has (a question|(\d+) questions) for you|has a plan for you to review|needs you: (\d+) requests)$/);
+  return m ? Number(m[3] ?? m[5] ?? m[6] ?? 1) : null;
+};
+const awayOnly = (ev: Ev): Verdict | null => (ev.away ? null : { ok: false, why: "not judged: the phone was attended, so the bridge held every push (run with --away)" });
+
 const BG = (cmd: string) =>
   `Use the Bash tool with run_in_background set to true to run exactly this command: ${cmd}\nDo not wait for it, do not check on it, do not run anything else. Reply with one line: started.`;
 
@@ -606,9 +633,47 @@ const fanOut = (id: "S1" | "S1b", background: boolean): Scenario => {
       review(`${id}.8`, "how-many", "Mid-run, the thread shows three labeled subagent rows, each visibly running, and a Stop button.", "All three rows, a running indicator on each, Stop visible.", "Rows missing or merged, no running indicator, or no Stop.", ["running"]),
       review(`${id}.9`, "state", "After the turn, the thread shows all three done and the session at rest.", "Three done rows, no spinner, composer ready.", "A spinner or running state remains.", ["done"]),
       noAckOutput(`${id}.10`, [n]),
+      coalescedCards(`${id}.11`, n),
     ],
   };
 };
+
+/**
+ * The session's cards, by when each opened, grouped as the bridge groups them: a card within 2 s of the one before
+ * joins its burst, while the burst is under 6 s old.
+ */
+const cardBursts = (ev: Ev, name: string) => {
+  const opened = [...new Map(snaps(ev, name).flatMap((s) => s.items).filter((i) => i.kind === "permission" && i.card).map((i) => [i.card!.id, ev.atOf(i.at)])).values()].sort((a, b) => a - b);
+  const bursts: number[][] = [];
+  for (const t of opened) {
+    const b = bursts.at(-1);
+    if (b && t - b.at(-1)! <= 2_000 && t - b[0]! <= 6_000) b.push(t);
+    else bursts.push([t]);
+  }
+  return bursts;
+};
+
+/** With the phone away, cards that open together send one push that counts them (run 2, F-SES-149). */
+const coalescedCards = (id: string, name: string): RubricItem => ({
+  id,
+  tell: "how-many",
+  lane: "protocol",
+  text: "With the phone away, approvals that open together arrive as one push that counts them, not one buzz each.",
+  pass: "With --away, each burst of cards (each within 2 s of the one before, the burst under 6 s) gets exactly one card push, in order, counting the burst's cards; no push names a command.",
+  fail: "A burst sends a push per card, a count that does not match, or no push at all.",
+  check: (ev) => {
+    const away = awayOnly(ev);
+    if (away) return away;
+    const sid = ev.ids[name] ?? "-";
+    const pushes = ev.pushes().filter((p) => cardCount(p) !== null && (p.click ?? "").includes(sid));
+    const bursts = cardBursts(ev, name);
+    if (!bursts.length) return no("no cards opened");
+    const sizes = bursts.map((b) => b.length).join(", ");
+    const counts = pushes.map((p) => cardCount(p)).join(", ");
+    if (pushes.some((p) => /perl|sleep/.test(p.body))) return no(`content in a push: ${pushes.map((p) => p.body).join(" | ")}`);
+    return sizes === counts ? ok(`bursts of ${sizes}: ${pushes.map((p) => p.body).join(" | ")}`) : no(`bursts of ${sizes}, pushes counting ${counts || "none"}: ${pushes.map((p) => p.body).join(" | ")}`);
+  },
+});
 
 const S2: Scenario = {
   id: "S2",
@@ -730,14 +795,19 @@ const S3: Scenario = {
       id: "S3.1",
       tell: "state",
       lane: "protocol",
-      text: "A push tells the user the background work finished.",
-      pass: "pushes.jsonl has a push sent after bg-done.",
-      fail: "No push after the work finished.",
+      text: "A push tells the user the background work finished, and only once it did.",
+      pass: "After bg-done, a push says a session finished, without the command or any other content; no push said finished while the command still ran.",
+      fail: "No finished push after the work finished, one before it, or one that carries content.",
       check: (ev) => {
         const at = mark(ev, "bg-done");
         if (at === undefined) return needMarks(ev, "bg-done")!;
-        const p = ev.pushes().filter((x) => ev.atOf(x.at) >= at - 2000);
-        return p.length ? ok(p.map((x) => `${x.title ?? ""} ${x.body}`.trim()).join(" | ")) : no(`no push after bg-done (${ev.pushes().length} pushes in the run)`);
+        const done = ev.pushes().filter((x) => FINISHED.test(x.body));
+        const early = done.filter((x) => ev.atOf(x.at) < at - 2000);
+        const after = done.filter((x) => ev.atOf(x.at) >= at - 2000);
+        const leaky = ev.pushes().filter((x) => /sleep|bg3|bg-done|started/.test(`${x.title} ${x.body}`));
+        if (early.length) return no(`a finished push ${Math.round((at - ev.atOf(early[0]!.at)) / 1000)} s before the command ended`);
+        if (leaky.length) return no(`a push carries content: ${leaky[0]!.body}`);
+        return after.length ? ok(after.map((x) => `${x.title ?? ""} ${x.body}`.trim()).join(" | ")) : no(`no finished push after bg-done (${ev.pushes().map((x) => x.body).join(" | ") || "no pushes"})`);
       },
     },
     {
@@ -745,11 +815,11 @@ const S3: Scenario = {
       tell: "what",
       lane: "protocol",
       text: "Tapping that push opens the session.",
-      pass: "The push's link is claudiobot://session/<the session id>.",
-      fail: "No push, or a link elsewhere.",
+      pass: "The finished push's link is claudiobot://session/<the session id>.",
+      fail: "No finished push, or a link elsewhere.",
       check: (ev) => {
-        const p = ev.pushes().find((x) => (x.click ?? "").includes(ev.ids.s3 ?? "-"));
-        return p ? ok(p.click!) : no("no push links to the session");
+        const p = ev.pushes().find((x) => FINISHED.test(x.body));
+        return !p ? no("no finished push") : p.click === `claudiobot://session/${ev.ids.s3}` ? ok(p.click!) : no(`links to ${p.click}`);
       },
     },
     {
@@ -916,6 +986,25 @@ const S4: Scenario = {
       },
     },
     noAckOutput("S4.10", ["s4"]),
+    {
+      id: "S4.11",
+      tell: "state",
+      lane: "protocol",
+      text: "After the user stops the session, no push claims it finished or failed.",
+      pass: "With --away, no push after mark stopped says the session finished or stopped with an error.",
+      fail: "A finished or failed push follows the user's own Stop.",
+      check: (ev) => {
+        const away = awayOnly(ev);
+        if (away) return away;
+        const at = mark(ev, "stopped");
+        if (at === undefined) return needMarks(ev, "stopped")!;
+        const after = ev.pushes().filter((p) => ENDED.test(p.body) && ev.atOf(p.at) >= at);
+        if (after.length) return no(`"${after[0]!.body}" ${Math.round((ev.atOf(after[0]!.at) - at) / 1000)} s after Stop`);
+        // A run where nothing pushed at all cannot tell a held push from a broken one.
+        if (!ev.pushes().length) return no("no push went out in the whole run, so the silence after Stop proves nothing");
+        return ok(`${ev.pushes().map((p) => p.body).join(" | ")}; none an ending after Stop`);
+      },
+    },
   ],
 };
 
@@ -1930,4 +2019,242 @@ const S8fg: Scenario = {
   ],
 };
 
-export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S4, S4b, S4c, S5, S6, S6b, S6c, S6d, S7, S8, S8fg];
+const S3b: Scenario = {
+  id: "S3b",
+  area: "sessions",
+  title: "Background work finishes while the user is elsewhere in the app",
+  needsSimulator: false,
+  journey: [
+    "The user starts a background command from the phone, then goes back to the Sessions list with the app still open.",
+    "The command finishes on the Mac while the list is on screen.",
+    "A notification on the phone says the session finished; nothing is pushed from outside, since the app is open.",
+  ],
+  setup: [
+    { do: "create", name: "s3b", prompt: BG("sleep 20 && echo bg-done > bg3b.txt") },
+    started("s3b"),
+    { do: "until", mark: "s3b-ended", what: "the turn that starts the command to end", timeoutS: 180, test: turnEnded("s3b") },
+    { do: "leave", name: "s3b" },
+    { do: "open-thread", name: "s3b" },
+    { do: "sleep", s: 3 },
+    { do: "show-list" },
+    { do: "until", mark: "bg-done", what: "bg3b.txt to appear", timeoutS: 90, test: (ev) => ev.exists("bg3b.txt") },
+    { do: "until", mark: "alerted", what: "a session_alert that s3b finished", timeoutS: 60, test: (ev) => ev.alerts.some((a) => a.name === "s3b" && a.frame.reason === "finished") },
+    // A banner slides in over about half a second and stays about five.
+    { do: "sleep", s: 1.5 },
+    { do: "screenshot", shot: "alert" },
+    { do: "sleep", s: 50 },
+    { do: "mark", mark: "window-over" },
+  ],
+  pre: [
+    { what: "with --sim, the app on the leased simulator paired with the run's bridge", check: (ev) => (!ev.sim ? ok("protocol lane: the runner is the phone") : ev.paired ? ok("paired") : no("not paired within --pair-wait (see runner.md)")) },
+    created("s3b"),
+    fileMade("bg3b.txt"),
+  ],
+  rubric: [
+    {
+      id: "S3b.1",
+      tell: "state",
+      lane: "protocol",
+      text: "While the app is open on another screen, it is told the session finished, so it can show a notification.",
+      pass: "After bg-done, the phone gets a session_alert for s3b with reason finished and the session's title.",
+      fail: "No session_alert, so an open app on another screen gives no sign that the work finished.",
+      check: (ev) => {
+        const at = mark(ev, "bg-done");
+        if (at === undefined) return needMarks(ev, "bg-done")!;
+        const a = ev.alerts.find((x) => x.name === "s3b" && x.frame.reason === "finished" && x.at >= at - 2000);
+        return a ? ok(`+${Math.round((a.at - at) / 1000)} s after bg-done: "${a.frame.title}"`) : no(`no finished alert (${ev.alerts.map((x) => x.frame.reason).join(", ") || "none"})`);
+      },
+    },
+    {
+      id: "S3b.2",
+      tell: "state",
+      lane: "protocol",
+      text: "While the app is open, nothing is pushed from outside on top of it.",
+      pass: "pushes.jsonl has no push about s3b, through 50 s after the alert (past the 45 s a phone counts as live without being heard).",
+      fail: "A remote push also went out, so the user gets the news twice.",
+      check: (ev) => {
+        const p = ev.pushes().filter((x) => (x.click ?? "").includes(ev.ids.s3b ?? "-"));
+        return p.length ? no(p.map((x) => x.body).join(" | ")) : ok("no push for s3b");
+      },
+    },
+    review("S3b.3", "state", "With the Sessions list on screen, a notification says the session finished.", "A banner that names the session and says it finished.", "No banner.", ["alert"]),
+  ],
+};
+
+const WAITED = "echo waited > waited.txt";
+const cardOf = (ev: Ev, name: string) => snaps(ev, name).flatMap((s) => s.items).find((i) => i.kind === "permission" && i.card);
+const cardIs = (name: string, answer: unknown) => (ev: Ev) => last(ev, name)?.items.some((i) => i.kind === "permission" && i.card?.answer === answer) === true;
+
+const S9: Scenario = {
+  id: "S9",
+  area: "sessions",
+  title: "A card waits while the user is away: push, failing push server, reminder, expiry",
+  needsSimulator: false,
+  away: true,
+  cardTtlS: 60,
+  holdCardsS: 600,
+  journey: [
+    "The user is away from the phone when a session asks for approval; the push server is down at that moment.",
+    "The push server comes back. Half the card's time later the user is reminded.",
+    "Nobody answers, so the card expires, and the thread says what was refused.",
+  ],
+  setup: [
+    { do: "create", name: "s9", prompt: `Use the Bash tool to run exactly this command: ${WAITED}\nThen reply with one line: done.` },
+    { do: "until", mark: "card-open", what: "s9's permission card to open", timeoutS: 120, test: cardIs("s9", null) },
+    // Within the 2 s the card's push waits for others. The bot's greeting may push into the failing sink too.
+    { do: "sink", fail: true },
+    { do: "until", mark: "card-failed", what: "the card push to fail three times", timeoutS: 40, test: (ev) => ev.pushes().filter((p) => p.status === 500 && cardCount(p) !== null).length >= 3 },
+    { do: "sleep", s: 1 },
+    { do: "sink", fail: false },
+    { do: "until", mark: "reminded", what: "a reminder push", timeoutS: 60, test: (ev) => ev.pushes().some((p) => /still waiting/.test(p.body) && p.status === 200) },
+    { do: "until", mark: "recovered", what: "the push state to read on again", timeoutS: 15, test: (ev) => ev.pushStates.at(-1)?.push.state === "on" },
+    { do: "until", mark: "expired", what: "the card to expire", timeoutS: 60, test: cardIs("s9", "expired") },
+    { do: "sleep", s: 3 },
+  ],
+  pre: [created("s9"), { what: "a permission card opened", check: (ev) => (cardOf(ev, "s9") ? ok(cardOf(ev, "s9")!.card!.label) : no("no card")) }],
+  rubric: [
+    {
+      id: "S9.1",
+      tell: "state",
+      lane: "protocol",
+      text: "When the push server fails, the phone is told that alerts are failing, and why.",
+      pass: "The card push is tried three times, 2 s then 8 s apart; within 2 s of its third 500, a push_state frame reads failing with \"The push server answered 500\".",
+      fail: "No failing state after the card's tries, the wrong cause, or other than three tries.",
+      check: (ev) => {
+        // The bot's greeting turn pushes too; only the card push's tries count.
+        const tries = ev.pushes().filter((p) => p.status === 500 && cardCount(p) !== null).map((p) => ev.atOf(p.at));
+        if (tries.length !== 3) return no(`${tries.length} failed tries of the card push`);
+        const gaps = [tries[1]! - tries[0]!, tries[2]! - tries[1]!].map((g) => Math.round(g / 100) / 10);
+        const failing = ev.pushStates.find((p) => p.push.state === "failing" && p.at >= tries[2]! - 500 && p.at <= tries[2]! + 2_000);
+        if (!failing) return no(`no failing state within 2 s of the third try (${ev.pushStates.map((p) => p.push.state).join(" → ")})`);
+        if (failing.push.error !== "The push server answered 500") return no(`error "${failing.push.error}"`);
+        return Math.abs(gaps[0]! - 2) < 1 && Math.abs(gaps[1]! - 8) < 1 ? ok(`tries ${gaps.join(" s, ")} s apart, then failing`) : no(`tries ${gaps.join(" s, ")} s apart`);
+      },
+    },
+    {
+      id: "S9.2",
+      tell: "what",
+      lane: "protocol",
+      text: "The card's push says what waits, at high priority, and opens the session at that card.",
+      pass: 'The card push reads "A Claude Code session needs your approval", priority high, link claudiobot://session/<id>?card=<the card id>.',
+      fail: "Another text, priority or link.",
+      check: (ev) => {
+        const card = cardOf(ev, "s9")?.card;
+        const p = ev.pushes().find((x) => cardCount(x) !== null);
+        if (!card || !p) return no(`card ${card?.id ?? "none"}, push ${p?.body ?? "none"}`);
+        const want = `claudiobot://session/${ev.ids.s9}?card=${card.id}`;
+        return p.body === "A Claude Code session needs your approval" && p.priority === "high" && p.click === want ? ok(`${p.body}, ${p.priority}, ${p.click}`) : no(`${p.body}, ${p.priority}, ${p.click} (want ${want})`);
+      },
+    },
+    {
+      id: "S9.3",
+      tell: "state",
+      lane: "protocol",
+      text: "A card nobody answers reminds the user once, at half its time.",
+      pass: "One reminder push, 30 s (half the 60 s card time) after the card opened, give or take 3 s, linking to the card.",
+      fail: "No reminder, more than one, or one at another time.",
+      check: (ev) => {
+        const card = cardOf(ev, "s9");
+        const r = ev.pushes().filter((p) => /still waiting/.test(p.body));
+        if (!card || r.length !== 1) return no(`${r.length} reminders`);
+        const after = (ev.atOf(r[0]!.at) - ev.atOf(card.at)) / 1000;
+        return Math.abs(after - 30) <= 3 && (r[0]!.click ?? "").endsWith(`?card=${card.card!.id}`) ? ok(`"${r[0]!.body}" ${after.toFixed(1)} s after the card opened`) : no(`${after.toFixed(1)} s after the card, link ${r[0]!.click}`);
+      },
+    },
+    {
+      id: "S9.4",
+      tell: "state",
+      lane: "protocol",
+      text: "Once a push gets through again, the phone hears that alerts work.",
+      pass: "After the failing state, a push_state frame reads on within 2 s of the first push the sink answered 200, and not before it.",
+      fail: "The state stays failing after a push got through, or reads on before any did.",
+      check: (ev) => {
+        const failing = ev.pushStates.findIndex((p) => p.push.state === "failing");
+        if (failing < 0) return no("never failing");
+        const since = ev.pushStates[failing]!.at;
+        const through = ev.pushes().find((p) => p.status === 200 && ev.atOf(p.at) >= since);
+        const on = ev.pushStates.slice(failing + 1).find((p) => p.push.state === "on");
+        if (!through || !on) return no(`${ev.pushStates.map((p) => p.push.state).join(" → ")}; first good push ${through?.body ?? "none"}`);
+        const lag = on.at - ev.atOf(through.at);
+        return lag >= -500 && lag <= 2_000 ? ok(`on ${(lag / 1000).toFixed(1)} s after "${through.body}" got through`) : no(`on ${(lag / 1000).toFixed(1)} s after the first good push`);
+      },
+    },
+    {
+      id: "S9.5",
+      tell: "state",
+      lane: "protocol",
+      text: "When the card expires, the thread says what was refused, and that the user did not say no.",
+      pass: 'The card reads expired and a notice (reason approval) names the command and says "You did not say no."',
+      fail: "No notice, or one that does not say what was refused.",
+      check: (ev) => {
+        const n = notices(ev, "s9").find((i) => i.reason === "approval");
+        if (!cardIs("s9", "expired")(ev)) return no("the card never read expired");
+        return n && /echo waited/.test(n.text ?? "") && /You did not say no\./.test(n.text ?? "") ? ok(n.text!) : no(n?.text ?? "no approval notice");
+      },
+    },
+    {
+      id: "S9.6",
+      tell: "what",
+      lane: "protocol",
+      text: "No push carries the command or anything else from the session.",
+      pass: "No push title, body or link contains the command.",
+      fail: "A push carries content.",
+      check: (ev) => {
+        const leaky = ev.pushes().filter((p) => /echo|waited/.test(`${p.title} ${p.body} ${p.click}`));
+        return leaky.length ? no(leaky[0]!.body) : ok(ev.pushes().map((p) => p.body).join(" | "));
+      },
+    },
+  ],
+};
+
+const S9b: Scenario = {
+  id: "S9b",
+  area: "sessions",
+  title: "Push is off: the phone can tell, and the app still hears what finished",
+  needsSimulator: false,
+  pushOff: true,
+  journey: [
+    "The Mac has no push URL set, so nothing can reach the phone when the app is closed.",
+    "The user can tell this from the app, and while the app is open it still hears that a session finished.",
+  ],
+  setup: [
+    { do: "create", name: "s9b", prompt: BG("sleep 10 && echo bg-done > off.txt") },
+    started("s9b"),
+    { do: "until", mark: "s9b-ended", what: "the turn that starts the command to end", timeoutS: 180, test: turnEnded("s9b") },
+    { do: "leave", name: "s9b" },
+    { do: "until", mark: "bg-done", what: "off.txt to appear", timeoutS: 90, test: (ev) => ev.exists("off.txt") },
+    { do: "until", mark: "alerted", what: "a session_alert that s9b finished", timeoutS: 60, test: (ev) => ev.alerts.some((a) => a.name === "s9b" && a.frame.reason === "finished") },
+  ],
+  pre: [created("s9b"), fileMade("off.txt")],
+  rubric: [
+    {
+      id: "S9b.1",
+      tell: "state",
+      lane: "protocol",
+      text: "The app can tell that alerts when away are off.",
+      pass: "hello carries push state off.",
+      fail: "No push state, or it reads on.",
+      check: (ev) => {
+        const h = ev.pushStates.find((p) => p.via === "hello");
+        return h?.push.state === "off" ? ok("off") : no(h ? h.push.state : "hello has no push state");
+      },
+    },
+    {
+      id: "S9b.2",
+      tell: "state",
+      lane: "protocol",
+      text: "With push off, the open app still hears that the session finished.",
+      pass: "A session_alert for s9b with reason finished arrives after bg-done, and the sink got nothing.",
+      fail: "No alert, or something was pushed.",
+      check: (ev) => {
+        const at = mark(ev, "bg-done");
+        if (at === undefined) return needMarks(ev, "bg-done")!;
+        const a = ev.alerts.find((x) => x.name === "s9b" && x.frame.reason === "finished" && x.at >= at - 2000);
+        if (ev.pushes().length) return no(`${ev.pushes().length} pushes reached the sink`);
+        return a ? ok(`+${Math.round((a.at - at) / 1000)} s after bg-done`) : no("no finished alert");
+      },
+    },
+  ],
+};
+
+export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S3b, S4, S4b, S4c, S5, S6, S6b, S6c, S6d, S7, S8, S8fg, S9, S9b];

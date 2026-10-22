@@ -89,6 +89,8 @@ final class BridgeClient {
 
     let store: AppStore
     @ObservationIgnored var onAlerts: ([Alert]) -> Void = { _ in }
+    /// Threads newly on screen, so their notifications can go.
+    @ObservationIgnored var onThreadsShown: ([SessionID]) -> Void = { _ in }
     /// The client dropped everything from a Mac: the user unpaired, the Mac revoked this iPhone, or another bridge replaced it.
     @ObservationIgnored var onForget: () -> Void = {}
 
@@ -109,6 +111,7 @@ final class BridgeClient {
         let change = onScreen.set(viewing, for: lease)
         guard !change.isEmpty else { return }
         store.threads.keep(onScreen.sessions)
+        if !change.watched.isEmpty { onThreadsShown(change.watched) }
         change.opened.forEach { transmitIfConnected(.open(botId: $0)) }
         guard store.has(.sessions) else {
             change.watched.forEach { store.threads.open($0) }

@@ -236,12 +236,32 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
     @Test func aNewBotMessageOrOpenQuestionAlertsAndNothingElseDoes() {
         let store = store()
         let b1 = BotID("b1")
-        #expect(store.apply(.message(botId: b1, message: botMessage("m1", "Done"))).map(\.reason) == [.message("Done")])
-        #expect(store.apply(.message(botId: b1, message: question("q1"))).map(\.reason)
-            == [.question(id: MessageID("q1"), question: "Merge?", options: ["Yes", "Not yet"])])
+        let b = store.bots[b1]!
+        #expect(store.apply(.message(botId: b1, message: botMessage("m1", "Done"))) == [.bot(b, .message("Done"))])
+        #expect(store.apply(.message(botId: b1, message: question("q1")))
+            == [.bot(b, .question(id: MessageID("q1"), question: "Merge?", options: ["Yes", "Not yet"]))])
         #expect(store.apply(.message(botId: b1, message: question("q2", answer: .dismissed))).isEmpty)
         #expect(store.apply(.message(botId: b1, message: .user(id: MessageID("u1"), at: at, text: "ok", attachments: []))).isEmpty)
         #expect(store.apply(.message(botId: b1, message: botMessage("m1", "Done, edited"))).isEmpty)
+    }
+
+    @Test func pushStateComesFromHelloAndFollowsItsFrames() {
+        let store = AppStore()
+        store.apply(.hello(Hello(features: [.pushState], machine: "Mac", userName: "Alex", bots: [], push: .off)))
+        #expect(store.pushState == .off)
+        store.apply(.pushState(.failing(error: "HTTP 500", at: at)))
+        #expect(store.pushState == .failing(error: "HTTP 500", at: at))
+        #expect(store.pushState?.listNote == "Alerts when away are failing")
+        store.apply(.pushState(.on))
+        #expect(store.pushState?.listNote == nil)
+        store.apply(hello([]))
+        #expect(store.pushState == nil)
+    }
+
+    @Test func aSessionAlertIsPostedAsIs() {
+        let store = store()
+        let alert = SessionAlert(sessionId: SessionID("s1"), reason: .card, count: 2, title: "Fix login", cardId: MessageID("m1"))
+        #expect(store.apply(.sessionAlert(alert)) == [.session(alert)])
     }
 
     @Test func openQuestionIsTheNewestUnansweredCard() {
@@ -326,7 +346,7 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
     @Test func aNewPermissionCardAlertsOnceWithItsLabel() {
         let store = store()
         let alerts = store.apply(.message(botId: BotID("b1"), message: permission("p1")))
-        #expect(alerts.map(\.reason) == [.permission(id: MessageID("p1"), label: "Push to the default branch")])
+        #expect(alerts == [.bot(store.bots[BotID("b1")]!, .permission(id: MessageID("p1"), label: "Push to the default branch"))])
         #expect(store.apply(.message(botId: BotID("b1"), message: permission("p1"))).isEmpty)
         guard case .permission(_, _, let card)? = store.conversations[BotID("b1")]?[MessageID("p1")] else {
             Issue.record("card missing"); return

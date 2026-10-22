@@ -58,6 +58,8 @@ struct SessionThreadView: View {
     /// The bar's last layout: what its rows needed, the room it had, and the density they were laid out at.
     @State private var bar = BarMeasure()
     @State private var fitting: Task<Void, Never>?
+    /// Said once when a push link's card no longer waits, until dismissed.
+    @State private var linkNote: String?
 
     init(sessionId: SessionID) {
         self.sessionId = sessionId
@@ -146,6 +148,9 @@ struct SessionThreadView: View {
         let openCard = OpenCard.newest(in: model.items, at: max(cardClock, .now))
         let status = status(model, card: openCard)
         let banner = ThreadBanner.of(row: row, controls: model.controls)
+        let linked = router.linkedCard.flatMap { link in
+            link.sessionId == sessionId ? link.note(in: model.items, decidedHere: store.decidedHere, at: max(cardClock, .now)) : nil
+        }
         return ScrollView {
             // Not lazy: a lazy stack estimates the height of rows it has not drawn, and at the largest text sizes one
             // row can be several screens tall. Pinned to the bottom, a swipe moved the rows by those estimates and they
@@ -228,8 +233,19 @@ struct SessionThreadView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .topBar {
-            if let banner { HolderBanner(banner: banner).frame(maxWidth: Self.column) }
+            VStack(spacing: 0) {
+                if let banner { HolderBanner(banner: banner) }
+                if let linkNote { LinkNote(text: linkNote) { self.linkNote = nil } }
+            }
+            .frame(maxWidth: Self.column)
         }
+        .onChange(of: linked, initial: true) { _, note in
+            guard let note else { return }
+            linkNote = note
+            router.linkedCard = nil
+            announcer.post(note)
+        }
+        .onChange(of: sessionId) { linkNote = nil }
         .composerBar {
             // The bar never takes more than its room, and gives up detail (BarDensity) until its rows fit in it.
             let density = fit.density
@@ -702,6 +718,40 @@ struct HolderBanner: View {
         .font(.footnote)
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// The thread was opened from a push about a card that no longer waits on the user.
+struct LinkNote: View {
+    let text: String
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle").foregroundStyle(Theme.secondary).accessibilityHidden(true)
+            Text(text)
+                .foregroundStyle(Theme.secondary)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: dismiss) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(Theme.tertiary)
+                    .frame(minWidth: HitTarget.minHeight, minHeight: HitTarget.minHeight)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+        }
+        .font(.footnote)
+        // Above the transcript and the composer: past this size it would take the screen.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+        .padding(.leading, 14)
+        .padding(.trailing, 4)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .padding(.horizontal, 16)
         .padding(.top, 4)

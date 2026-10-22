@@ -57,8 +57,13 @@ final class Router {
 
     /// A new pick shows its own chat or thread, never a screen pushed over the last one, however it was picked.
     var selection: Selection? {
-        didSet { if selection != oldValue { path = [] } }
+        didSet {
+            if selection != oldValue { path = [] }
+            if selection?.session != linkedCard?.sessionId { linkedCard = nil }
+        }
     }
+    /// The card the link that opened the selected session named, until its thread says whether it still waits.
+    var linkedCard: LinkedCard?
     /// Whether this window has the sidebar. A Mac window opened for one chat or session has none.
     let hasSidebar: Bool
     var sidebar: SidebarMode {
@@ -105,7 +110,7 @@ final class Router {
         open(.bot(bot))
     }
 
-    func open(_ target: Selection) {
+    func open(_ target: Selection, card: MessageID? = nil) {
         showingNewChat = false
         showingSettings = false
         showingUsage = false
@@ -113,6 +118,7 @@ final class Router {
         path = []
         if case .session = target { sidebar = .sessions }
         selection = target
+        linkedCard = target.session.flatMap { session in card.map { LinkedCard(sessionId: session, cardId: $0) } }
     }
 }
 
@@ -140,9 +146,11 @@ final class AppModel {
         self.client = client
         let notifier = notifier
         let router = router
-        client.onAlerts = { notifier.post($0, viewing: client.onScreen.bots) }
+        client.onAlerts = { notifier.post($0, onScreen: client.onScreen) }
         client.onForget = { notifier.clearAll() }
+        client.onThreadsShown = { $0.forEach(notifier.clear(session:)) }
         notifier.onOpenBot = { router.open($0) }
+        notifier.onOpenSession = { router.open(.session($0), card: $1) }
         notifier.onAnswer = { bot, message, option in
             client.send(.answer(botId: bot, messageId: message, option: option))
             await client.waitUntilSent()
@@ -215,7 +223,7 @@ final class AppModel {
         case .pair(let invite): propose(invite)
         case .outdatedBridge: showPairingFailure(DeepLink.outdatedBridgeMessage)
         case .bot(let bot, _): router.open(bot)
-        case .session(let session): router.open(.session(session))
+        case let .session(session, card): router.open(.session(session), card: card)
         case nil: break
         }
     }
@@ -230,13 +238,14 @@ final class AppModel {
         switch phase {
         #if os(iOS)
         case .background:
-            client.leave()
-            // Keeps the socket alive for the short grace period iOS allows, so an answer
-            // tapped on a notification still reaches the Mac.
-            guard backgroundTask == .invalid else { return }
-            backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "bridge") { [weak self] in
-                MainActor.assumeIsolated { self?.endBackgroundTask() }
+            // Keeps the socket alive for the short grace period iOS allows: first so presence false and the unwatches
+            // leave before the socket can be suspended, then so an answer tapped on a notification still reaches the Mac.
+            if backgroundTask == .invalid {
+                backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "bridge") { [weak self] in
+                    MainActor.assumeIsolated { self?.endBackgroundTask() }
+                }
             }
+            client.leave()
         #endif
         case .active:
             #if os(iOS)
@@ -244,6 +253,7 @@ final class AppModel {
             #endif
             client.comeBack()
             client.onScreen.bots.forEach { notifier.clear(bot: $0) }
+            client.onScreen.sessions.forEach { notifier.clear(session: $0) }
         default:
             break
         }

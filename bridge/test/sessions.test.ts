@@ -198,6 +198,39 @@ test("leaving a thread marks it visited; a later answer makes it unread until it
   expect(rowOf(await rowsOf(), PERMISSION).unread).toBe(false);
 });
 
+test("an unread row reads at once when its thread opens, and news reads unread when only an app nobody looks at watches it", async () => {
+  const readers = new Map<SessionId, number>();
+  await start({ readers: (id) => readers.get(id) ?? 0 });
+  sessions.left(ASK, new Date(Date.now() - 60_000));
+  continueWith(ASK, { type: "assistant", message: { id: "msg_late", role: "assistant", model: "claude-haiku-5-5", content: [{ type: "text", text: "Also done." }] }, apiBlockIndex: 0 });
+  await sessions.sync();
+  expect(rowOf(await rowsOf(), ASK).unread).toBe(true);
+
+  watchers.set(ASK, 1);
+  await sessions.handle({ type: "watch_session", sessionId: ASK, after: null });
+  await sessions.sync();
+  expect(rowOf(await rowsOf(), ASK).unread).toBe(true);
+  readers.set(ASK, 1);
+  list.splice(0);
+  await sessions.handle({ type: "watch_session", sessionId: ASK, after: null });
+  await sessions.sync();
+  expect(list.flatMap((f) => f.rows).find((r) => r.id === ASK)?.unread).toBe(false);
+
+  readers.set(ASK, 0);
+  sessions.presence();
+  await sessions.sync();
+  expect(rowOf(await rowsOf(), ASK).unread).toBe(true);
+});
+
+test("a socket that went away leaves its threads when it was last heard, and a visit never moves back", async () => {
+  await start();
+  const heard = new Date(Date.now() - 30_000);
+  sessions.left(ASK, heard);
+  expect(world.sessions.get(ASK)?.visitedAt).toBe(heard.toISOString());
+  sessions.left(ASK, new Date(heard.getTime() - 10_000));
+  expect(world.sessions.get(ASK)?.visitedAt).toBe(heard.toISOString());
+});
+
 test("Mark as Read on a session never opened records the visit, and watching the list again answers the list as it is now", async () => {
   await start();
   expect(world.sessions.get(PERMISSION)?.visitedAt ?? null).toBeNull();

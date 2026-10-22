@@ -2,7 +2,7 @@
 // Runs a named UX scenario (scenarios.ts) against a throwaway bridge launched by control-claudio, records what the
 // phone would see, and judges the scenario's rubric. With --sim it also leases a pool simulator (pool.ts), installs the
 // app, pairs it with the run's bridge when someone taps Pair, and takes the scenario's screenshots.
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, connect as tcp, type Server, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -11,6 +11,8 @@ import * as pool from "./pool";
 import { SCENARIOS, type Action, type Controls, type Drop, type Ev, type Item, type Resume, type Scenario, type Snap } from "./scenarios";
 
 const CONTROL = join(import.meta.dir, "control-claudio.ts");
+const AWAY_HOLD_S = 5;
+const PING_MS = 20_000;
 const args = process.argv.slice(2);
 const cmd = args.shift() ?? "help";
 const flag = (name: string, boolean = false) => {
@@ -234,6 +236,7 @@ class Phone {
   outbox: Frame[] = [];
   /** Seconds the user takes to allow a card. */
   holdS = 0;
+  private pinger: ReturnType<typeof setInterval> | null = null;
   private frameNo = 0;
 
   constructor(
@@ -278,6 +281,17 @@ class Phone {
     this.frameNo++;
     if (f.type === "hello") {
       if (!(f.resumed === true && f.epoch === this.cursor?.epoch)) this.cursor = { epoch: f.epoch as string, seq: f.seq as number };
+      if (f.push) this.ev.pushStates.push({ at: this.ev.now(), via: "hello", push: f.push as Ev["pushStates"][number]["push"] });
+      return;
+    }
+    if (f.type === "push_state") {
+      this.ev.pushStates.push({ at: this.ev.now(), via: "push_state", push: f.push as Ev["pushStates"][number]["push"] });
+      this.record("in", "push", f);
+      return;
+    }
+    if (f.type === "session_alert" && this.names.has(f.sessionId as string)) {
+      this.ev.alerts.push({ at: this.ev.now(), name: this.names.get(f.sessionId as string)!, frame: f });
+      this.record("in", this.names.get(f.sessionId as string)!, f);
       return;
     }
     if (typeof f.seq === "number" && this.cursor) this.cursor.seq = f.seq;
@@ -355,6 +369,10 @@ class Phone {
       this.apply(JSON.parse(String(e.data)) as Frame);
     };
     for (const f of early) this.apply(f);
+    // The app pings every 20 s while it is on screen, which is how the bridge tells it is still looked at.
+    if (this.pinger) clearInterval(this.pinger);
+    this.pinger = setInterval(() => this.c === c && (c.ws as unknown as { ping(): void }).ping(), PING_MS);
+    this.pinger.unref();
     // With the simulator, the app is the phone the user looks at; this socket only watches, so it must not hold back pushes.
     if (!this.attended) c.send({ type: "presence", attended: false });
     const at = c.frames.length;
@@ -368,6 +386,14 @@ class Phone {
     return { resumed: hello.resumed === true, replayed: early.filter((f) => typeof f.seq === "number").length };
   }
 
+  /** The app leaves the screen: it says nobody is looking and leaves its threads, which it watches again on return. */
+  background() {
+    if (this.pinger) clearInterval(this.pinger);
+    if (!this.c) return;
+    if (this.attended) this.c.send({ type: "presence", attended: false });
+    for (const [sid] of this.names) if (!this.away.has(sid)) this.send({ type: "unwatch_session", sessionId: sid });
+  }
+
   watch(sid: string, resume: boolean) {
     const t = this.thread(sid);
     this.away.delete(sid);
@@ -378,6 +404,7 @@ class Phone {
   drop() {
     const c = this.c;
     this.c = null;
+    if (this.pinger) clearInterval(this.pinger);
     if (!c) return;
     c.ws.onmessage = null;
     c.close();
@@ -441,12 +468,13 @@ type Outcome = "judged" | "precondition-failed" | "error";
 /** simctl ui settings for a leased device during a run: Dynamic Type and appearance. Reset to large and light at the end. */
 type Ui = { contentSize?: string; appearance?: string };
 
-async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui): Promise<Outcome> {
+async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui, awayFlag = false): Promise<Outcome> {
+  const away = awayFlag || sc.away === true;
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
   const out = resolve(flag("out") ?? join(BASE, "scenarios", sc.id, `${stamp}${sim ? "-sim" : ""}`));
   mkdirSync(join(out, "screenshots"), { recursive: true });
   log(`scenario ${sc.id} "${sc.title}" lane ${sim ? "simulator" : "protocol"}; evidence ${out}`);
-  const report: Record<string, unknown> = { scenario: sc.id, title: sc.title, lane: sim ? "simulator" : "protocol", evidence: out, startedAt: new Date().toISOString() };
+  const report: Record<string, unknown> = { scenario: sc.id, title: sc.title, lane: sim ? "simulator" : "protocol", ...(away && { away }), evidence: out, startedAt: new Date().toISOString() };
   const shots: Record<string, string> = {};
   const skipped: string[] = [];
   const t0 = Date.now();
@@ -497,6 +525,9 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
     samples: {},
     app: [],
     list: [],
+    away,
+    alerts: [],
+    pushStates: [],
   };
   const probe: { run: { proc: ReturnType<typeof Bun.spawn>; file: string } | null } = { run: null };
   let phone: Phone | null = null;
@@ -527,7 +558,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
       if (ui.appearance) pool.simctl(lease, "ui", "appearance", ui.appearance);
       if (ui.contentSize || ui.appearance) report.ui = ui;
     }
-    const launched = sh(["bun", CONTROL, "launch", "--model", "haiku"], join(out, "launch.log"));
+    const launched = sh(["bun", CONTROL, "launch", "--model", "haiku", ...(sc.pushOff ? ["--push", "off"] : []), ...(sc.cardTtlS ? ["--card-ttl", String(sc.cardTtlS)] : [])], join(out, "launch.log"));
     const started = launched.out.match(/STARTED run=(\S+)/)?.[1];
     if (started) live = { id: started, out };
     // Ctrl-C reaches launch too; the runner's own handler would only run after this scenario is judged.
@@ -554,8 +585,9 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
       };
     await relay.start();
     log(`bridge run ${runId} on :${run.port}; the phone${sim ? " and the app" : ""} reach it through the relay on :${relay.port}`);
-    phone = new Phone(run, ev, out, !sim, relay);
-    phone.holdS = sc.holdCardsS ?? 0;
+    phone = new Phone(run, ev, out, !sim && !away, relay);
+    // A user who is away answers a card when they come back to it, not the moment it opens.
+    phone.holdS = sc.holdCardsS ?? (away ? AWAY_HOLD_S : 0);
     await phone.open(false);
 
     if (sim && lease && app) {
@@ -695,13 +727,22 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
         return Bun.sleep(4000);
       case "app":
         if (lease) pool.simctl(lease, "launch", a.to === "background" ? "com.apple.Preferences" : pool.BUNDLE);
-        else if (a.to === "background") relay!.drop("half-open");
+        else if (a.to === "background") {
+          // As the app does before iOS suspends it, then its socket goes quiet without a close.
+          p.background();
+          await Bun.sleep(500);
+          relay!.drop("half-open");
+        }
         else {
           relay!.restore();
           p.drop();
           await p.open(true, () => markNow(`${a.mark}-list`));
         }
         return markNow(a.mark);
+      case "sink":
+        if (a.fail) writeFileSync(join(run!.dir, "sink-fail"), "");
+        else rmSync(join(run!.dir, "sink-fail"), { force: true });
+        return log(`push sink ${a.fail ? "fails" : "works"}`);
       case "ps":
         ev.samples[a.as] = ev.procs(a.pattern);
         log(`ps ${a.as}: ${ev.samples[a.as]!.join(" | ") || "none"}`);
@@ -903,7 +944,7 @@ function describe(a: Action): string {
     case "show-list":
       return "The app goes back to the Sessions list (simulator lane: relaunched on the list).";
     case "app":
-      return `Send the app to the ${a.to}${a.to === "background" ? " (simulator: Settings over it; protocol: the socket goes half-open)" : " (simulator: launch it again; protocol: reconnect and resume, mark `" + a.mark + "-list` when the list arrives)"}; mark \`${a.mark}\`.`;
+      return `Send the app to the ${a.to}${a.to === "background" ? " (simulator: Settings over it; protocol: as the app does, the phone says nobody is looking and leaves its threads, then its socket goes half-open)" : " (simulator: launch it again; protocol: reconnect and resume, mark `" + a.mark + "-list` when the list arrives)"}; mark \`${a.mark}\`.`;
     case "ps":
       return `Sample the Mac's processes matching \`${a.pattern}\` in the seed project as \`${a.as}\`.`;
     case "kill-claude":
@@ -914,6 +955,8 @@ function describe(a: Action): string {
       return `Restart the bridge on the same port and home; the phone reconnects. Mark \`${a.mark}\`.`;
     case "lose-frame":
       return `The relay loses ${a.what} on its way to the app (simulator lane), within ${a.timeoutS} s. Mark \`${a.mark}\`.`;
+    case "sink":
+      return a.fail ? "The push sink answers 500 from now on, as a broken push server would." : "The push sink answers 200 again.";
     case "watch-list":
       return "The list probe (an XCUITest that only reads the accessibility tree) reads the app's Sessions list about once a second until the setup ends (simulator lane).";
   }
@@ -929,13 +972,14 @@ async function main() {
       return 0;
     case "run": {
       const sim = flag("sim", true) === "true";
+      const awayRun = flag("away", true) === "true";
       const pairWaitS = Number(flag("pair-wait") ?? 120);
       const ui: Ui = { contentSize: flag("content-size"), appearance: flag("appearance") };
       if ((ui.contentSize || ui.appearance) && !sim) die("--content-size and --appearance need --sim");
-      const ids = (args[0] ?? die("usage: run <id>[,<id>…] [--sim] [--pair-wait s] [--content-size size] [--appearance dark|light] [--out dir]")).split(",");
+      const ids = (args[0] ?? die("usage: run <id>[,<id>…] [--sim] [--pair-wait s] [--content-size size] [--appearance dark|light] [--away] [--out dir]")).split(",");
       const scs = ids.map((id) => SCENARIOS.find((s) => s.id.toLowerCase() === id.toLowerCase()) ?? die(`no scenario ${id}`));
       const outcomes: Outcome[] = [];
-      for (const sc of scs) outcomes.push(await runScenario(sc, sim, pairWaitS, ui));
+      for (const sc of scs) outcomes.push(await runScenario(sc, sim, pairWaitS, ui, awayRun));
       return outcomes.includes("error") ? 1 : outcomes.includes("precondition-failed") ? 2 : 0;
     }
     case "pool":

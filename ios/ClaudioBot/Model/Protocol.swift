@@ -1121,6 +1121,35 @@ enum PushState: Codable, Hashable, Sendable {
     }
 }
 
+/// card: cards opened. reminder: cards waited half their time. finished, failed: the session's run came to rest.
+enum SessionAlertReason: OpenEnum {
+    case card, reminder, finished, failed
+    case unknown(String)
+
+    static let allCases: [SessionAlertReason] = [.card, .reminder, .finished, .failed]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .card: "card"
+        case .reminder: "reminder"
+        case .finished: "finished"
+        case .failed: "failed"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// Something in a session wants the user and the bridge sent no phone push for it, so the app posts a local
+/// notification. count: the cards it covers, 1 for an ending. cardId: the first card, nil for an ending.
+struct SessionAlert: Hashable, Sendable {
+    let sessionId: SessionID
+    let reason: SessionAlertReason
+    let count: Int
+    let title: String
+    let cardId: MessageID?
+}
+
 /// The session request an error answers, so the app can show it there instead of as a toast. set: a model or mode
 /// change Claude Code refused, so the session keeps the old value. unknown: a kind a newer bridge invented, which reads
 /// as no subject.
@@ -2258,6 +2287,8 @@ enum ServerMessage: Codable, Sendable {
     case sessionCreated(ref: String, sessionId: SessionID)
     /// Feature pushState: the push state changed. Never sequenced or replayed.
     case pushState(PushState)
+    /// Live only, never sequenced or replayed.
+    case sessionAlert(SessionAlert)
     /// about: the session request that failed, nil for any other error.
     case error(message: String, about: ErrorAbout? = nil)
     case unknown(type: String)
@@ -2268,7 +2299,7 @@ enum ServerMessage: Codable, Sendable {
         case `protocol`, epoch, seq, resumed, features, push
         case agentId, text, at, facts, connectors, skills, routineId, url, token, commands, peer, usage
         case projects, rows, mirror, removed, sessionId, rev, items, before, controls, live, itemId, offset, toolUseId, output, movedTo
-        case about
+        case about, reason, count, title, cardId
     }
 
     init(from decoder: Decoder) throws {
@@ -2403,6 +2434,12 @@ enum ServerMessage: Codable, Sendable {
             self = .sessionCreated(ref: try c.decode(String.self, forKey: .ref), sessionId: try session())
         case "push_state":
             self = .pushState(try c.decode(PushState.self, forKey: .push))
+        case "session_alert":
+            self = .sessionAlert(SessionAlert(
+                sessionId: try session(), reason: try c.decode(SessionAlertReason.self, forKey: .reason),
+                count: try c.decode(Int.self, forKey: .count), title: try c.decode(String.self, forKey: .title),
+                cardId: try c.decodeIfPresent(MessageID.self, forKey: .cardId)
+            ))
         case "error":
             self = .error(message: try c.decode(String.self, forKey: .message), about: try c.decodeIfPresent(ErrorAbout.self, forKey: .about))
         case let other:
@@ -2554,6 +2591,13 @@ enum ServerMessage: Codable, Sendable {
         case let .pushState(push):
             try c.encode("push_state", forKey: .type)
             try c.encode(push, forKey: .push)
+        case let .sessionAlert(alert):
+            try c.encode("session_alert", forKey: .type)
+            try c.encode(alert.sessionId, forKey: .sessionId)
+            try c.encode(alert.reason, forKey: .reason)
+            try c.encode(alert.count, forKey: .count)
+            try c.encode(alert.title, forKey: .title)
+            try c.encode(alert.cardId, forKey: .cardId)
         case let .error(message, about):
             try c.encode("error", forKey: .type)
             try c.encode(message, forKey: .message)

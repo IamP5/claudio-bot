@@ -368,3 +368,39 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
         client.stop()
     }
 }
+
+@Suite struct LinkedCardTests {
+    private let link = LinkedCard(sessionId: SessionID("s1"), cardId: MessageID("card-p1"))
+
+    private func note(_ items: [SessionItem], decidedHere: Set<MessageID> = []) -> String? {
+        link.note(in: items, decidedHere: decidedHere, at: at)
+    }
+
+    @Test func aCardClosedElsewhereSaysNothingWaits() {
+        #expect(note([permission("p1", answer: .chose(.once))]) == "Already answered. Nothing here waits on you now.")
+        #expect(note([permission("p1", answer: .stopped)]) == "That request is no longer open. Nothing here waits on you now.")
+    }
+
+    @Test func anExpiredCardSaysItExpired() {
+        #expect(note([permission("p1", answer: .expired)]) == "That request expired.")
+        #expect(note([permission("p1", expires: at - 1)]) == "That request expired.")
+    }
+
+    @Test func nothingIsSaidWhileTheCardOrAnotherOneWaits() {
+        #expect(note([permission("p1")]) == nil)
+        #expect(note([permission("p1", answer: .chose(.deny)), ask("a2", ["Which branch?"])]) == nil)
+    }
+
+    @Test func nothingIsSaidForACardNotLoadedOrAnsweredOnThisPhone() {
+        #expect(note([permission("p2", answer: .chose(.once))]) == nil)
+        #expect(note([permission("p1", answer: .chose(.once))], decidedHere: [MessageID("card-p1")]) == nil)
+    }
+
+    @Test func aPlanFoundByItsCardSaysHowItClosed() {
+        let plan = LinkedCard(sessionId: SessionID("s1"), cardId: MessageID("card-plan"))
+        let rejected = SessionItem.plan(id: ItemID("pl"), at: at, text: "# Plan", state: .rejected, cardId: MessageID("card-plan"))
+        let proposed = SessionItem.plan(id: ItemID("pl"), at: at, text: "# Plan", state: .proposed, cardId: MessageID("card-plan"))
+        #expect(plan.note(in: [rejected], decidedHere: [], at: at) == "Already answered. Nothing here waits on you now.")
+        #expect(plan.note(in: [proposed], decidedHere: [], at: at) == nil)
+    }
+}

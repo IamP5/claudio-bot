@@ -199,10 +199,25 @@ export type SessionState = {
    */
   sent?: { context?: string; brief?: string };
   /**
-   * The live query's background tasks, absent when it has none. close() leaves them on disk, so the next start can say
-   * a restart stopped them.
+   * The live query's background tasks, absent when it has none. close() leaves them on disk, so the next start can
+   * check which a restart stopped.
    */
-  background?: { id: string; description?: string }[];
+  background?: BackgroundTask[];
+};
+
+/**
+ * A background task as a note names it (description) and as the thread shows it (kind, label, stepId, startedAt).
+ * group: the process group that runs it, a command's own shell or Claude Code itself, when the bridge found it. A
+ * command can outlive Claude Code, so only a check of its group tells whether it still runs.
+ */
+export type BackgroundTask = {
+  id: string;
+  description?: string;
+  kind?: "agent" | "command" | "other";
+  label?: string;
+  stepId?: string;
+  startedAt?: string;
+  group?: number;
 };
 
 export const emptySession = (id: string | null = null): SessionState => ({ id, pending: [], lifecycle: { kind: "idle" }, notices: [] });
@@ -443,6 +458,8 @@ export type OwnDrive = {
   notices?: Extract<SessionItem, { kind: "notice" }>[];
   /** Prompts a stop ended before Claude Code wrote them down, shown until the transcript has their words. */
   kept?: { id: ItemId; at: string; text: string }[];
+  /** Background commands that outlived the Claude Code that ran them: they still run, and only the bridge follows them. */
+  outlived?: (BackgroundTask & { group: number })[];
 };
 
 /**

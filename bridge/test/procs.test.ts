@@ -21,7 +21,7 @@ async function claudeCode(...ids: string[]): Promise<number> {
   dir = mkdtempSync(join(tmpdir(), "procs-"));
   mkdirSync(join(dir, "tasks"));
   const forks = ids.map((id) => `if (fork() == 0) { setpgrp(0, 0); open(STDOUT, ">", "${dir}/tasks/${id}.output"); exec("sleep", "30"); }`).join(" ");
-  const p = spawn("perl", ["-e", `${forks} sleep 30;`], { detached: true, stdio: "ignore" });
+  const p = spawn("perl", ["-e", `$SIG{CHLD} = "IGNORE"; ${forks} sleep 30;`], { detached: true, stdio: "ignore" });
   started.push(p.pid!);
   for (let i = 0; i < 50; i++) {
     await Bun.sleep(50);

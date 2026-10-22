@@ -4,6 +4,7 @@ import type { Tickable } from "./clock";
 import { failClosed, resolveReal, toCall, toHookOutput } from "./gate";
 import type { Ledger } from "./ledger";
 import { detailOf, floors, type Scope } from "./policy";
+import { endGroup, groupAlive } from "./procs";
 import {
   PHONE_MODES,
   type AskQuestion,
@@ -28,7 +29,7 @@ import type { Persist } from "./store";
 import { RESTING, rowRun, runControls, runningSteps, runs, type Activity, type StepPatch, type Task } from "./tasks";
 import { displayName, errorText, maskSecrets } from "./text";
 import { maskSummary, stepLabel } from "./transcript";
-import { emptySession, newMessageId, ownCardId, ownCardOpen, type Cut, type OwnCard, type OwnDrive, type SessionRecord, type World } from "./world";
+import { emptySession, newMessageId, ownCardId, ownCardOpen, type BackgroundTask, type Cut, type OwnCard, type OwnDrive, type SessionRecord, type World } from "./world";
 
 // The drivers of sessions the user drives from the phone: one session.ts Session per id, opened in the transcript's
 // cwd with the user's own Claude Code settings. What Claude Code asks (a permission, AskUserQuestion, ExitPlanMode)
@@ -39,7 +40,7 @@ export type OwnDeps = {
   userName: string;
   ledger: Ledger;
   persist: Persist;
-  claude: Pick<SessionSpec, "query" | "executable">;
+  claude: Pick<SessionSpec, "query" | "executable" | "shells">;
   /** The mode and model the transcript last ran with, when it has them. */
   last(id: SessionId): { mode: PermissionMode | null; model: string | null };
   transcriptExists(id: SessionId, cwd: string): boolean;
@@ -152,6 +153,40 @@ type Reply =
 const cardIdOf = ownCardId;
 const isOpen = ownCardOpen;
 
+/**
+ * A stop of a turn, from the Stop until Claude Code ends that turn. turn: the envelope whose turn it is, null for one
+ * Claude Code began on its own. tasks: what the same Stop stopped besides, said with the turn. all: a stop of everything
+ * that landed whole, which cuts off every step. asking: Stops still waiting on Claude Code's answer. ended: how the
+ * turn ended, once it has.
+ */
+type TurnStop = {
+  turn: string | null;
+  early: boolean;
+  at: string;
+  tasks: Task[];
+  all: boolean;
+  asking: number;
+  ended?: "stopped" | "finished" | "failed";
+};
+
+/** A command that outlived its Claude Code, as the session's other tasks are shown. */
+type Outlived = NonNullable<OwnDrive["outlived"]>[number];
+const asTask = (o: Outlived, at: string): Task => ({
+  id: o.id as TaskId,
+  stepId: o.stepId ?? null,
+  kind: "command",
+  label: o.label ?? o.description ?? o.id,
+  background: true,
+  startedAt: o.startedAt ?? at,
+  parent: null,
+  progress: null,
+  ended: false,
+  told: false,
+});
+/** How often the bridge looks whether a command that outlived its Claude Code still runs. */
+const OUTLIVED_LOOK_MS = 5_000;
+const upper = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
 export function createOwn(deps: OwnDeps): Own {
   const drivers = new Map<SessionId, Session>();
   /** The live query's wait on each open card. A card without one (after a restart) can only expire. */
@@ -166,8 +201,15 @@ export function createOwn(deps: OwnDeps): Own {
   const lastTask = new Map<SessionId, string>();
   /** Subagent cards a task stop covers: when their query gives up on them, the user's stop closed them. */
   const stopping = new Set<MessageId>();
-  /** Task stops Claude Code had not confirmed within the wait; each counts as the user's once the task is gone. */
-  const awaiting = new Map<SessionId, Task[]>();
+  /**
+   * Task stops Claude Code had not confirmed within the wait; each counts as the user's once the task is gone. run:
+   * the stop was of everything, so it is the run's outcome too.
+   */
+  const awaiting = new Map<SessionId, { task: Task; run: boolean }[]>();
+  /** Stops of a turn Claude Code has not ended yet. The thread says what such a stop did once Claude Code has. */
+  const turnStops = new Map<SessionId, TurnStop>();
+  /** When the commands that outlived their Claude Code are next looked at. */
+  let lookAt = 0;
   /** When each session last came to rest; one that has not run since the bridge started rests since then. */
   const rested = new Map<SessionId, string>();
   /** Queued messages the user withdrew, so asking again says so. */
@@ -182,7 +224,14 @@ export function createOwn(deps: OwnDeps): Own {
     return rec.own;
   };
   const cards = (rec: SessionRecord) => driveOf(rec).cards;
-  const activityOf = (rec: SessionRecord): Activity => drivers.get(rec.id)?.activity() ?? RESTING;
+  const outlivedOf = (rec: SessionRecord): Outlived[] => rec.own?.outlived ?? [];
+  /** What runs on the session: the live query's work, and the commands that outlived an earlier Claude Code. */
+  const activityOf = (rec: SessionRecord): Activity => {
+    const a = drivers.get(rec.id)?.activity() ?? RESTING;
+    const left = outlivedOf(rec).map((o) => asTask(o, bootAt)).filter((t) => !a.all.has(t.id));
+    if (left.length === 0) return a;
+    return { ...a, tasks: [...a.tasks, ...left], all: new Map([...a.all, ...left.map((t) => [t.id, t] as const)]) };
+  };
 
   const working = (rec: SessionRecord) => (drivers.get(rec.id)?.working ?? false) || runs(activityOf(rec));
 
@@ -210,12 +259,16 @@ export function createOwn(deps: OwnDeps): Own {
       const turn = life.kind === "working" || life.kind === "stopping" ? life.turn.pending : null;
       if (life.kind === "working" || life.kind === "stopping") taken.set(id, { turn: life.turn.pending, at: life.turn.startedAt });
       if (drive.outcome && drive.outcome.kind !== "finished" && turn !== null && turn !== drive.endedTurn) begin(rec);
+      // A turn Claude Code began on its own has no envelope to end with: it ended once it no longer runs.
+      const stop = turnStops.get(id);
+      if (stop && stop.turn === null && !stop.ended && activityOf(rec).turn?.wake !== true) observed(rec, stop, "stopped");
       if (working(rec)) {
         underway.add(id);
         rested.delete(id);
       } else {
         if (!rested.has(id)) rested.set(id, now());
-        if (underway.delete(id) && (!drive.outcome || drive.outcome.kind === "finished")) {
+        // A stop not yet said is the run's ending, so the run's rest waits for it.
+        if (!turnStops.has(id) && underway.delete(id) && (!drive.outcome || drive.outcome.kind === "finished")) {
           drive.outcome = stoppedBy.has(id) ? { kind: "stopped", text: STOPPED_BY_YOU, at: now() } : { kind: "finished", text: lastTask.get(id) ?? "Finished", at: now() };
           deps.persist("now");
         }
@@ -224,10 +277,13 @@ export function createOwn(deps: OwnDeps): Own {
     deps.changed(id);
   }
 
-  /** The tasks the user stopped are the user's doing: the run reads stopped, and their steps read stopped. */
-  function markStopped(rec: SessionRecord, tasks: readonly Task[]) {
+  /**
+   * The tasks the user stopped are the user's doing: their steps read stopped. run: the stop was of everything, so the
+   * run reads stopped too; a stop of one task leaves the turn as it ended.
+   */
+  function markStopped(rec: SessionRecord, tasks: readonly Task[], run: boolean) {
     if (tasks.length === 0) return;
-    stoppedBy.add(rec.id);
+    if (run) stoppedBy.add(rec.id);
     const drive = driveOf(rec);
     const steps = tasks.flatMap((t) => (t.stepId === null ? [] : [t.stepId]));
     if (steps.length > 0) drive.stoppedSteps = [...(drive.stoppedSteps ?? []), ...steps].slice(-STOPPED_STEPS_KEPT);
@@ -239,14 +295,74 @@ export function createOwn(deps: OwnDeps): Own {
     const late = awaiting.get(rec.id);
     if (!late) return;
     const live = new Set(activityOf(rec).tasks.map((t) => t.id));
-    const gone = late.filter((t) => !live.has(t.id));
+    const gone = late.filter((w) => !live.has(w.task.id));
     if (gone.length === 0) return;
-    const left = late.filter((t) => live.has(t.id));
+    const left = late.filter((w) => live.has(w.task.id));
     if (left.length > 0) awaiting.set(rec.id, left);
     else awaiting.delete(rec.id);
-    markStopped(rec, gone);
+    markStopped(rec, gone.filter((w) => w.run).map((w) => w.task), true);
+    markStopped(rec, gone.filter((w) => !w.run).map((w) => w.task), false);
     for (const c of [...cards(rec)]) if (c.kind === "permission" && c.agent && isOpen(c) && stopping.has(cardIdOf(c)) && !live.has(c.agent.id as TaskId)) settle(rec, cardIdOf(c), { kind: "stopped" });
-    notice(rec.id, `${STOPPED_BY_YOU}: ${listed(gone.map(taskName))}.`, "info", "stop");
+    notice(rec.id, `${STOPPED_BY_YOU}: ${listed(gone.map((w) => taskName(w.task)))}.`, "info", "stop");
+  }
+
+  /** How the turn a stop aims at ended. The thread says so once no Stop still waits on Claude Code's answer. */
+  function observed(rec: SessionRecord, stop: TurnStop, how: NonNullable<TurnStop["ended"]>) {
+    stop.ended = how;
+    if (stop.asking === 0) say(rec, stop);
+  }
+
+  /** What a stop of the turn did, once the turn ended: the turn and the tasks it stopped, or that the turn finished first. */
+  function say(rec: SessionRecord, stop: TurnStop) {
+    if (turnStops.get(rec.id) === stop) turnStops.delete(rec.id);
+    const stopped = stop.ended === "stopped";
+    if (stop.ended === "finished") notice(rec.id, "Claude finished this turn before your stop reached it.", "info", "stop");
+    const parts = [...(stopped ? ["the turn"] : []), ...stop.tasks.map(taskName)];
+    if (parts.length === 0) return;
+    notice(rec.id, stop.early && stopped && stop.tasks.length === 0 ? `${STOPPED_BY_YOU} before Claude replied.` : `${STOPPED_BY_YOU}: ${listed(parts)}.`, "info", "stop");
+    if (stop.ended === "failed") return;
+    stoppedRun(rec, stopped, stop.tasks, stop.at, stop.turn, stop.all);
+    changed(rec.id);
+  }
+
+  /** The run ends as the user's stop: what it stopped, and with a stop of everything that all landed, a cut of every step. */
+  function stoppedRun(rec: SessionRecord, turn: boolean, tasks: readonly Task[], at: string, envelope: string | null, all: boolean) {
+    const of = (kind: Task["kind"]) => tasks.filter((t) => t.kind === kind).length;
+    const what = [...(turn ? ["the turn"] : []), ...(["agent", "command", "other"] as const).flatMap((k) => (of(k) > 0 ? [counted(of(k), KIND_WORD[k])] : []))];
+    end(rec, { kind: "stopped", text: `${STOPPED_BY_YOU}: ${what.join(", ")}`, at }, envelope, all ? { state: "stopped", cause: STOPPED_BY_YOU } : undefined);
+  }
+
+  /** Commands that outlived their Claude Code: the bridge follows them, and Stop ends them. */
+  function adopt(rec: SessionRecord, tasks: readonly BackgroundTask[], cause: "restart" | "exit") {
+    const drive = driveOf(rec);
+    const add = tasks.filter((t): t is Outlived => t.group !== undefined && !outlivedOf(rec).some((o) => o.id === t.id));
+    if (add.length === 0) return;
+    drive.outlived = [...outlivedOf(rec), ...add];
+    deps.persist("now");
+    const one = add.length === 1;
+    const names = listed(add.map((o) => taskName(asTask(o, bootAt))));
+    const runs = `still ${one ? "runs" : "run"} on this Mac. Stop ends ${one ? "it" : "them"}.`;
+    notice(
+      rec.id,
+      cause === "restart" ? `The bridge restarted, and Claude Code no longer follows ${names}, which ${runs}` : `Claude Code is no longer running, but ${names} ${runs}`,
+      "info",
+      cause === "restart" ? "restart" : "task",
+    );
+  }
+
+  /** A command that outlived its Claude Code and has ended since: nobody saw how. */
+  function lookOutlived(rec: SessionRecord) {
+    const left = outlivedOf(rec);
+    const ended = left.filter((o) => !groupAlive(o.group));
+    if (ended.length === 0) return;
+    const drive = driveOf(rec);
+    const still = left.filter((o) => !ended.includes(o));
+    if (still.length > 0) drive.outlived = still;
+    else delete drive.outlived;
+    deps.persist("now");
+    const what = upper(listed(ended.map((o) => taskName(asTask(o, bootAt)))));
+    lastTask.set(rec.id, `${what} ended`);
+    notice(rec.id, `${what} ended. Claude Code no longer followed ${ended.length === 1 ? "it" : "them"}, so how ${ended.length === 1 ? "it" : "they"} ended is not known.`, "info", "task");
   }
 
   function notice(id: SessionId, text: string, tone: "info" | "error" = "info", reason?: NoticeReason) {
@@ -467,6 +583,7 @@ export function createOwn(deps: OwnDeps): Own {
       forgotten: "fail",
       notices: false,
       idleMs: OWN_IDLE_MS,
+      outlived: (tasks, cause) => adopt(rec, tasks, cause),
       now: deps.now,
       blocked: () => {
         const wait = deps.blocked(id);
@@ -508,6 +625,11 @@ export function createOwn(deps: OwnDeps): Own {
         if (end.kind === "failed") fail(rec, end.error, pending.id);
         else if (end.kind === "done" && end.result.subtype !== "success") fail(rec, `Claude Code stopped with an error: ${end.result.errors.join("; ") || end.result.subtype}`, pending.id);
         else if (end.kind === "done") deps.done(id);
+        const stop = turnStops.get(id);
+        const how = end.kind === "stopped" ? "stopped" : end.kind === "done" && end.result.subtype === "success" ? "finished" : "failed";
+        if (stop?.turn === pending.id) observed(rec, stop, how);
+        // A turn stopped before a restart ends as the bridge comes back, with no Stop of this run to say it.
+        else if (end.kind === "stopped" && end.by === "user") say(rec, { turn: pending.id, early: false, at: now(), tasks: [], all: false, asking: 0, ended: "stopped" });
         changed(id);
       },
       onChange: () => changed(id),
@@ -540,29 +662,43 @@ export function createOwn(deps: OwnDeps): Own {
 
   /**
    * Stop closes the turn's cards, then interrupts. A subagent's card closes with its task, once Claude Code takes the
-   * stop. The thread says what stopped, what Claude Code refused to stop and what it has not confirmed yet. A stop that
-   * ended the turn or something else is the run's outcome, and a stop of everything that all landed cuts off every step.
+   * stop. A command that outlived its Claude Code is ended by the bridge itself. The thread says what stopped once it
+   * has: a task as Claude Code (or the Mac) confirms it, the turn as Claude Code ends it. It also says what Claude Code
+   * refused to stop and what it has not confirmed yet. A stop of everything or of the turn is the run's outcome, and a
+   * stop of everything that all landed cuts off every step.
    */
   async function stopRun(rec: SessionRecord, target: StopTarget): Promise<Result> {
     const s = drivers.get(rec.id);
     const a = activityOf(rec);
     const one = typeof target === "object" ? target.task : null;
     if (one !== null && !a.tasks.some((t) => t.id === one)) return refused("That task is not running.");
-    if (!s) return refused(NOTHING_RUNS);
+    const named = a.tasks.filter((t) => ends(a, target, t.id));
+    const alone = outlivedOf(rec).filter((o) => named.some((t) => t.id === o.id));
+    if (!s && alone.length === 0) return refused(NOTHING_RUNS);
     const at = now();
     const drive = driveOf(rec);
     const life = drive.session.lifecycle;
     const early = life.kind === "working" && !life.turn.output;
     const ending = life.kind === "working" || life.kind === "stopping" ? life.turn.pending : life.kind === "backoff" ? (drive.session.pending[0]?.id ?? null) : null;
-    const turn = one === null && (a.turn !== null || ending !== null);
-    const named = a.tasks.filter((t) => ends(a, target, t.id));
+    const turn = s !== undefined && one === null && (a.turn !== null || ending !== null);
     const tasksCards = cards(rec).filter((c) => isOpen(c) && c.kind === "permission" && c.agent !== undefined && ends(a, target, c.agent.id as TaskId));
     if (one === null) for (const c of [...cards(rec)]) if (isOpen(c) && (c.kind !== "permission" || !c.agent)) settle(rec, cardIdOf(c), { kind: "stopped" });
     for (const c of tasksCards) stopping.add(cardIdOf(c));
-    const r = await s.interrupt(target);
-    const missed = named.filter((t) => r.refused.includes(t.id));
+    // Registered before asking: Claude Code can end the turn before the interrupt returns.
+    let stop = turnStops.get(rec.id);
+    if (turn && stop?.turn !== ending) turnStops.set(rec.id, (stop = { turn: ending, early, at, tasks: [], all: false, asking: 0 }));
+    if (turn) stop!.asking++;
+    const asked = s && (one === null || alone.length === 0) ? s.interrupt(target) : Promise.resolve({ ran: false, refused: [], late: [] });
+    const [r, ended] = await Promise.all([asked, Promise.all(alone.map(async (o) => ((await endGroup(o.group)) ? o.id : null)))]);
+    if (alone.length > 0) {
+      const left = outlivedOf(rec).filter((o) => !ended.includes(o.id));
+      if (left.length > 0) drive.outlived = left;
+      else delete drive.outlived;
+    }
+    const missed = named.filter((t) => r.refused.includes(t.id) || alone.some((o) => o.id === t.id && !ended.includes(o.id)));
     const late = named.filter((t) => r.late.includes(t.id));
     const done = named.filter((t) => !missed.includes(t) && !late.includes(t));
+    const ran = r.ran || alone.length > 0;
     const fate = (c: OwnCard) => {
       const above = chain(a, (c.kind === "permission" ? c.agent?.id : undefined) as TaskId);
       return above.some((t) => missed.includes(t)) || !r.ran ? "missed" : above.some((t) => late.includes(t)) ? "late" : "done";
@@ -572,20 +708,28 @@ export function createOwn(deps: OwnDeps): Own {
       if (f === "missed") stopping.delete(cardIdOf(c));
       else if (f === "done" && isOpen(c)) settle(rec, cardIdOf(c), { kind: "stopped" });
     }
-    if (!r.ran) return refused(one === null ? NOTHING_RUNS : "That task is not running.");
-    if (turn) stoppedBy.add(rec.id);
-    markStopped(rec, done);
-    if (late.length > 0) awaiting.set(rec.id, [...(awaiting.get(rec.id) ?? []), ...late]);
-    const parts = [...(turn ? ["the turn"] : []), ...done.map(taskName)];
-    if (parts.length > 0) notice(rec.id, early && done.length === 0 ? `${STOPPED_BY_YOU} before Claude replied.` : `${STOPPED_BY_YOU}: ${listed(parts)}.`, "info", "stop");
-    if (missed.length > 0) notice(rec.id, `Couldn't stop ${listed(missed.map(taskName))}. It may still be running.`, "error", "stop");
-    if (late.length > 0) notice(rec.id, `Claude Code has not confirmed the stop of ${listed(late.map(taskName))} yet.`, "info", "stop");
-    if (one === null && parts.length > 0) {
-      const of = (kind: Task["kind"]) => done.filter((t) => t.kind === kind).length;
-      const what = [...(turn ? ["the turn"] : []), ...(["agent", "command", "other"] as const).flatMap((k) => (of(k) > 0 ? [counted(of(k), KIND_WORD[k])] : []))];
-      const all = target === "all" && missed.length === 0 && late.length === 0;
-      end(rec, { kind: "stopped", text: `${STOPPED_BY_YOU}: ${what.join(", ")}`, at }, ending, all ? { state: "stopped", cause: STOPPED_BY_YOU } : undefined);
+    if (turn) stop!.asking--;
+    if (!ran) {
+      if (turn && stop!.asking === 0 && !stop!.ended) turnStops.delete(rec.id);
+      return refused(one === null ? NOTHING_RUNS : "That task is not running.");
     }
+    markStopped(rec, done, one === null);
+    // A task already waiting on Claude Code's word is not waited on, or said, twice; one it now confirms waits no more.
+    const waited = awaiting.get(rec.id) ?? [];
+    const fresh = late.filter((t) => !waited.some((w) => w.task.id === t.id));
+    const still = [...waited.filter((w) => !done.some((t) => t.id === w.task.id)), ...fresh.map((task) => ({ task, run: one === null }))];
+    if (still.length > 0) awaiting.set(rec.id, still);
+    else awaiting.delete(rec.id);
+    if (turn) {
+      stop!.tasks.push(...done.filter((t) => !stop!.tasks.some((x) => x.id === t.id)));
+      stop!.all ||= target === "all" && missed.length === 0 && late.length === 0;
+      if (stop!.ended && stop!.asking === 0) say(rec, stop!);
+    } else if (done.length > 0) {
+      notice(rec.id, `${STOPPED_BY_YOU}: ${listed(done.map(taskName))}.`, "info", "stop");
+      if (one === null) stoppedRun(rec, false, done, at, null, target === "all" && missed.length === 0 && late.length === 0);
+    }
+    if (missed.length > 0) notice(rec.id, `Couldn't stop ${listed(missed.map(taskName))}. It may still be running.`, "error", "stop");
+    if (fresh.length > 0) notice(rec.id, `Claude Code has not confirmed the stop of ${listed(fresh.map(taskName))} yet.`, "info", "stop");
     changed(rec.id);
     if (missed.length > 0) return refused(`Claude Code did not stop ${listed(missed.map((t) => t.label))}.`);
     return late.length > 0 ? refused(`Claude Code has not confirmed the stop of ${listed(late.map((t) => t.label))} yet.`) : { ok: true };
@@ -624,6 +768,9 @@ export function createOwn(deps: OwnDeps): Own {
     async set(rec, patch) {
       const drive = driveOf(rec);
       const live = drivers.get(rec.id)?.controls() ?? null;
+      // With no Claude Code to take the change and refuse what it cannot run, only the models the menu offers are kept.
+      if (live === null && patch.model != null && !MODELS.some((m) => m.id === patch.model))
+        return refused(`Claude Code is not running, so it cannot check the model "${displayName(maskSecrets(patch.model), LINE_MAX)}". Pick one from the menu.`);
       try {
         if (patch.model !== undefined) {
           await live?.setModel(patch.model ?? deps.last(rec.id).model ?? undefined);
@@ -800,6 +947,10 @@ export function createOwn(deps: OwnDeps): Own {
         }
       }
       for (const s of drivers.values()) s.tick(at);
+      if (at.getTime() >= lookAt) {
+        lookAt = at.getTime() + OUTLIVED_LOOK_MS;
+        for (const rec of deps.world.sessions.values()) if (outlivedOf(rec).length > 0) lookOutlived(rec);
+      }
     },
 
     nextDeadline() {
@@ -810,6 +961,7 @@ export function createOwn(deps: OwnDeps): Own {
       for (const rec of deps.world.sessions.values())
         for (const c of rec.own?.cards ?? []) if (isOpen(c)) consider(c.kind === "permission" ? c.card.expiresAt : c.expiresAt);
       for (const s of drivers.values()) consider(s.nextDeadline());
+      if ([...deps.world.sessions.values()].some((rec) => outlivedOf(rec).length > 0)) consider(new Date(lookAt).toISOString());
       return next;
     },
 

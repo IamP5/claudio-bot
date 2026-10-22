@@ -612,6 +612,10 @@ describe("live work", () => {
     await flush();
     expect(await handle({ type: "session_stop", sessionId: ASK })).toEqual([]);
     expect(q.interrupts).toBe(1);
+    // The wake turn is said to be stopped once Claude Code ends it.
+    expect((await noticesNow()).map((n) => n.text)).toEqual(['Stopped by you: agent "sleeper one".']);
+    q.emit(result(0, { subtype: "error_during_execution", is_error: true, errors: [] }));
+    await flush();
     expect((await noticesNow()).map((n) => [n.text, n.reason])).toEqual([
       ['Stopped by you: agent "sleeper one".', "stop"],
       ["Stopped by you: the turn.", "stop"],
@@ -866,9 +870,10 @@ describe("how a run ends", () => {
     expect(await answer).toEqual({ behavior: "deny", message: "Alex stopped the session. It did not run." });
     expect((await cardItem()).card.answer).toBe("stopped");
     expect(q.stoppedTasks).toEqual(["bk"]);
-    expect((await noticesNow()).map((n) => [n.text, n.reason])).toEqual([['Stopped by you: the turn and command "sleep 600".', "stop"]]);
+    expect(await noticesNow()).toEqual([]);
     q.emit(interrupted(), sys("task_updated", { task_id: "bk", patch: { status: "killed" } }), level());
     await flush();
+    expect((await noticesNow()).map((n) => [n.text, n.reason])).toEqual([['Stopped by you: the turn and command "sleep 600".', "stop"]]);
     expect(await rowOf(ASK)).toMatchObject({ status: "idle", outcome: { kind: "stopped", text: "Stopped by you: the turn, 1 command" } });
     await send("Next");
     expect((await rowOf(ASK)).outcome).toBeUndefined();
@@ -885,7 +890,10 @@ describe("how a run ends", () => {
     await flush();
     expect([q.interrupts, q.stoppedTasks]).toEqual([1, []]);
     expect((await controlsNow()).tasks?.map((t) => t.id)).toEqual(["bk" as TaskId]);
+    q.emit(interrupted());
+    await flush();
     expect((await noticesNow()).map((n) => n.text)).toEqual(["Stopped by you: the turn."]);
+    expect(q.received).toEqual(["Start it", "Reply ok"]);
   });
 
   test("a message queued behind a stopped turn starts a new run, which ends finished", async () => {
@@ -933,7 +941,7 @@ describe("how a run ends", () => {
     expect(await tail()).toEqual(kept);
   });
 
-  test("Stop on one background task waits for Claude Code, and its step reads stopped once the task is gone", async () => {
+  test("Stop on one background task waits for Claude Code, and its step reads stopped once the task is gone; the answered turn reads finished", async () => {
     await start();
     await send("Start it");
     const q = queries[0]!;
@@ -946,7 +954,7 @@ describe("how a run ends", () => {
     q.emit(sys("task_updated", { task_id: "bk", patch: { status: "killed" } }), level());
     await flush();
     expect(await stepOf("toolu_k")).toMatchObject({ state: "stopped", cause: "Stopped by you" });
-    expect(await rowOf(ASK)).toMatchObject({ status: "idle", outcome: { kind: "stopped" } });
+    expect(await rowOf(ASK)).toMatchObject({ status: "idle", outcome: { kind: "finished" } });
   });
 
   test("when Claude Code dies, its running step and card end, the row says why, and all of it outlives a bridge restart", async () => {
@@ -978,17 +986,32 @@ describe("how a run ends", () => {
   });
 
   test("a restart that killed background work says so, and the row reads the work as lost", async () => {
+    const killed = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    process.kill(-killed.pid!, "SIGKILL");
+    await new Promise((r) => killed.once("exit", r));
+    shells = async () => new Map([["bk", killed.pid!]]);
     await start();
     await send("Start it");
     const q = queries[0]!;
     await transcribe(calledEntry("toolu_k", "Bash", { command: "sleep 600", run_in_background: true }), resultEntry("toolu_k", "Command running in background with ID: bk."));
     q.emit(taskStarted(shellTask("bk", "toolu_k", "sleep 600")), level(shellTask("bk", "toolu_k", "sleep 600")), result());
     await flush();
+    await flush();
     await restart();
     expect(queries).toHaveLength(0);
     expect((await noticesNow()).map((n) => [n.text, n.reason])).toEqual([["The bridge restarted, so Claude Code's background work stopped: sleep 600.", "restart"]]);
     expect(await rowOf(ASK)).toMatchObject({ status: "failed", outcome: { kind: "lost" } });
     expect(await stepOf("toolu_k")).toMatchObject({ state: "stopped", cause: "The bridge restarted" });
+  });
+
+  test("after a restart, background work the bridge could not look up is said to maybe still run", async () => {
+    await start();
+    await send("Start it");
+    const q = queries[0]!;
+    q.emit(taskStarted(shellTask("bk", "toolu_k", "sleep 600")), level(shellTask("bk", "toolu_k", "sleep 600")), result());
+    await flush();
+    await restart();
+    expect((await noticesNow()).map((n) => [n.text, n.reason])).toEqual([["The bridge restarted, and Claude Code's background work may still run on this Mac: sleep 600.", "restart"]]);
   });
 
   test("a failure the transcript already shows gets no second notice", async () => {
@@ -1096,7 +1119,7 @@ describe("how a run ends", () => {
     expect((await cardItem()).card.answer).toBe("closed");
   });
 
-  test("a task stop Claude Code takes late counts once the task is gone: its card and step read stopped", async () => {
+  test("a task stop Claude Code takes late counts once the task is gone: its card and step read stopped, and the answered turn finished", async () => {
     await start();
     await send("Fan out");
     const q = queries[0]!;
@@ -1119,7 +1142,7 @@ describe("how a run ends", () => {
     expect((await cardItem()).card.answer).toBe("stopped");
     expect(await stepOf("toolu_a1")).toMatchObject({ state: "stopped", cause: "Stopped by you" });
     expect((await noticesNow()).map((n) => n.text).at(-1)).toBe('Stopped by you: agent "sleeper one".');
-    expect((await rowOf(ASK)).outcome).toMatchObject({ kind: "stopped" });
+    expect((await rowOf(ASK)).outcome).toMatchObject({ kind: "finished" });
   }, 10_000);
 
   test("a stopped task's step still reads stopped after a bridge restart, and a step left running at rest ends", async () => {
@@ -1328,7 +1351,7 @@ describe("the thread says what stopped only once it did", () => {
     await flush();
     let take = () => {};
     q.holdStop = new Promise<void>((r) => (take = r));
-    const late = [{ type: "error", message: expect.stringContaining("not confirmed"), about: { kind: "stop", sessionId: ASK } }];
+    const late = [{ type: "error" as const, message: expect.stringContaining("not confirmed"), about: { kind: "stop" as const, sessionId: ASK } }];
     expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } })).toEqual(late);
     expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } })).toEqual(late);
     take();

@@ -15,7 +15,7 @@ import type {
 import type { Tickable } from "./clock";
 import type { Headroom, Ledger } from "./ledger";
 import { notices as noticeText, withNotices, type SessionInput } from "./prompts";
-import { evalArg, groupAlive, shellGroups, shellLeaders, taskRun, type TaskRun } from "./procs";
+import { evalArg, groupAlive, psText, shellGroups, shellLeaders, taskRun, type TaskRun } from "./procs";
 import type { NoticeReason, StopTarget, TaskId } from "./protocol";
 import { sandboxFailure } from "./sandbox";
 import type { Persist } from "./store";
@@ -1374,8 +1374,9 @@ export function createSession(spec: SessionSpec): Session {
 
   /**
    * A command whose shell sent its output elsewhere before the bridge looked has no output file to find it by. When
-   * exactly one of Claude Code's shells runs exactly the command Claude Code was given, and no other task has it, that
-   * shell is taken as the command's, loosely: to see it end, never to signal it. Two alike, or none exact, stay unpaired.
+   * exactly one of Claude Code's shells runs exactly the command Claude Code was given, as ps writes it, and no other
+   * task has it, that shell is taken as the command's, loosely: to see it end, never to signal it. Two alike, or none
+   * exact, stay unpaired.
    */
   function pairLoose(l: Live, shellsOf: readonly { group: number; command: string }[]) {
     const taken = new Set([...l.groups.values(), ...l.loose.values()]);
@@ -1384,7 +1385,7 @@ export function createSession(spec: SessionSpec): Session {
       const t = l.tasks.all.get(b.id as TaskId);
       if (l.groups.has(b.id) || l.loose.has(b.id) || t?.kind !== "command" || t.stepId === null) continue;
       const given = l.tasks.raw.get(t.stepId);
-      const hits = given === undefined ? [] : runs.filter((r) => r.command === given);
+      const hits = given === undefined ? [] : runs.filter((r) => r.command === psText(given));
       if (hits.length !== 1 || taken.has(hits[0]!.group)) continue;
       l.loose.set(b.id, hits[0]!.group);
       taken.add(hits[0]!.group);

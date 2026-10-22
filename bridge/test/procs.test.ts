@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { endGroup, evalArg, groupAlive, shellGroups, taskRun } from "../src/procs";
+import { endGroup, evalArg, groupAlive, read, shellGroups, taskRun } from "../src/procs";
 import { backgroundCommand } from "./shells";
 
 const started: number[] = [];
@@ -95,4 +95,10 @@ test("the command a Claude Code shell runs is read back exactly, single quotes i
   expect(evalArg(line(`echo '"'"'a b'"'"'`))).toBe("echo 'a b'");
   expect(evalArg(line(`echo '\\''a'\\''`))).toBe("echo 'a'");
   expect(evalArg("sleep 30")).toBeNull();
+});
+
+test("a read that runs past its timeout is given up on then, even while a child it left holds its output open", async () => {
+  const at = Date.now();
+  expect(await read(["/bin/sh", "-c", "/bin/sleep 2 & wait"], 200)).toBeNull();
+  expect(Date.now() - at).toBeLessThan(1_000);
 });

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,8 +6,9 @@ import { join } from "node:path";
 import type { CanUseTool, HookCallback, Options, PermissionResult, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeApps, DesktopEntry, Live } from "../src/claudeApps";
 import { alwaysText, OWN_CARD_TTL_MS } from "../src/own";
+import type { TaskRun } from "../src/procs";
 import type { AgentId, BotId, MessageId, ServerMessage, SessionId, SessionItem, SessionRow, TaskId, ThreadChannelFrame } from "../src/protocol";
-import { GONE_ERROR } from "../src/session";
+import { EXIT_SETTLE_MS, GONE_ERROR, GONE_LOOK_MAX_MS } from "../src/session";
 import { createSessions, type Sessions } from "../src/sessions";
 import { emptySession, emptyWorld, type AgentRecord, type World } from "../src/world";
 import { FakeQuery, result } from "./hub-kit";
@@ -36,6 +37,8 @@ let clock: number;
 let shells: () => Promise<Map<string, number>>;
 /** Claude Code's group-leading shells with their command lines, as ps shows them. */
 let leaders: () => Promise<{ group: number; command: string }[]>;
+/** Whether a saved group still runs its command; undefined: the process table says. */
+let taskRunOf: ((group: number, id: string) => Promise<TaskRun>) | undefined;
 let appChanged: (() => void)[] = [];
 
 const apps = (): ClaudeApps => ({
@@ -87,6 +90,7 @@ function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
       executable: () => "/fake/claude",
       shells: () => shells(),
       leaders: () => leaders(),
+      ...(taskRunOf && { taskRun: taskRunOf }),
     },
     scope: (cwd) => ({ bridgeHome: join(base, "home"), own: cwd, userMd: null, homedir: base }),
     folders: () => [],
@@ -118,6 +122,7 @@ beforeEach(() => {
   appChanged = [];
   shells = async () => new Map();
   leaders = async () => [];
+  taskRunOf = undefined;
 });
 afterEach(() => {
   sessions?.stop();
@@ -1744,6 +1749,52 @@ describe("the thread says what stopped only once it did", () => {
     } finally {
       await a.end();
       await b.end();
+    }
+  });
+
+  test("work the bridge cannot check stays so across another restart: until a new run, Stop says it cannot tell", async () => {
+    await start();
+    await send("Start it");
+    const q = queries[0]!;
+    const listed = [shellTask("bu", "toolu_bu", "Sleep")];
+    q.emit(toolCall("toolu_bu", "Bash", { command: "exec >/dev/null 2>&1; sleep 3641 # café" }), taskStarted(listed[0]!), level(...listed), result());
+    await flush();
+    await flush();
+    const stopAll = async () => handle({ type: "session_stop", sessionId: ASK, target: "all" });
+    const cantTell: ServerMessage[] = [{ type: "error", message: "The bridge can't tell whether its background work still runs on your Mac, so it has nothing it can stop.", about: { kind: "stop", sessionId: ASK } }];
+    await restart();
+    await until(async () => (await restartLines()).length === 1);
+    expect(await stopAll()).toEqual(cantTell);
+    await restart();
+    expect(await stopAll()).toEqual(cantTell);
+    await send("Say hi");
+    queries.at(-1)!.emit(result());
+    await flush();
+    expect(await stopAll()).toEqual([{ type: "error", message: "Nothing is running.", about: { kind: "stop", sessionId: ASK } }]);
+  });
+
+  test("a look at what became of a crashed Claude Code's work that never answers is given up on: the work may still run", async () => {
+    const running = backgroundCommand("bk");
+    try {
+      const q = await startedInBackground({ bk: running.pid });
+      taskRunOf = () => new Promise<TaskRun>(() => {});
+      jest.useFakeTimers();
+      try {
+        q.crash("Claude Code process terminated by signal SIGKILL");
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+        jest.advanceTimersByTime(EXIT_SETTLE_MS);
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+        jest.advanceTimersByTime(GONE_LOOK_MAX_MS - 1);
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+        expect([(await stepOf("toolu_bk")).state, (await noticesNow()).some((n) => n.text.includes("may still run"))]).toEqual(["running", false]);
+        jest.advanceTimersByTime(1);
+      } finally {
+        jest.useRealTimers();
+      }
+      await until(async () => (await noticesNow()).some((n) => n.text.includes("may still run")));
+      expect([(await stepOf("toolu_bk")).state, (await controlsNow()).working]).toEqual(["unsure", false]);
+    } finally {
+      await running.end();
     }
   });
 

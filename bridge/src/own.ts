@@ -28,7 +28,7 @@ import { refused } from "./result";
 import { createSession, goneNote, RESTARTED_ERROR, type Fate, type GoneCause, type Session, type SessionSpec, type StopReport, type TurnEnd } from "./session";
 import type { Persist } from "./store";
 import { RESTING, rowRun, runControls, runningSteps, runs, type Activity, type StepPatch, type Task } from "./tasks";
-import { displayName, errorText, maskSecrets } from "./text";
+import { displayName, errorText, fewNames, maskSecrets } from "./text";
 import { maskSummary, stepLabel } from "./transcript";
 import { emptySession, newMessageId, ownCardId, ownCardOpen, type BackgroundTask, type Cut, type OwnCard, type OwnDrive, type SessionRecord, type World } from "./world";
 
@@ -41,7 +41,7 @@ export type OwnDeps = {
   userName: string;
   ledger: Ledger;
   persist: Persist;
-  claude: Pick<SessionSpec, "query" | "executable" | "shells" | "leaders">;
+  claude: Pick<SessionSpec, "query" | "executable" | "shells" | "leaders" | "taskRun">;
   /** The mode and model the transcript last ran with, when it has them. */
   last(id: SessionId): { mode: PermissionMode | null; model: string | null };
   transcriptExists(id: SessionId, cwd: string): boolean;
@@ -172,8 +172,6 @@ type TurnEnding = "stopped" | "finished" | "failed";
 type TurnStop = { envelope: string | null; early: boolean; at: string; said: Task[]; covered: Task[]; whole: boolean; asking: number; ended?: TurnEnding };
 
 const upper = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-/** A few names, then how many more: "a, b and 3 more". */
-const fewOf = (names: readonly string[], few = 3) => (names.length <= few ? listed(names) : `${names.slice(0, few - 1).join(", ")} and ${names.length - few + 1} more`);
 /** The SDK's words for a request its query closed under, as the user reads them. */
 const plainSdkError = (text: string) => (/Query closed before response received/i.test(text) ? "Claude Code stopped before it answered. Try again." : text);
 const addNew = (to: Task[], tasks: readonly Task[]) => to.push(...tasks.filter((t) => !to.some((x) => x.id === t.id)));
@@ -200,11 +198,6 @@ export function createOwn(deps: OwnDeps): Own {
   const turnStops = new Map<SessionId, TurnStop>();
   /** Tasks a Stop is ending right now: a second Stop of one leaves the saying to the first. */
   const beingStopped = new Map<SessionId, Set<TaskId>>();
-  /**
-   * Sessions with background work the bridge cannot check and has no group to look at: until the user starts a new run,
-   * a Stop that finds nothing says it cannot tell rather than that nothing runs.
-   */
-  const unsureUnchecked = new Set<SessionId>();
   /** When the user's Stop last ended each task, so a Stop of it that comes after is not refused. */
   const stoppedAt = new Map<SessionId, Map<TaskId, number>>();
   let nextOutlivedLook = 0;
@@ -237,7 +230,7 @@ export function createOwn(deps: OwnDeps): Own {
     delete drive.endedTurn;
     stoppedBy.delete(rec.id);
     lastTask.delete(rec.id);
-    unsureUnchecked.delete(rec.id);
+    delete drive.unchecked;
     deps.persist("now");
   }
 
@@ -373,8 +366,8 @@ export function createOwn(deps: OwnDeps): Own {
   /** Background work the bridge cannot check and cannot look at again: its steps say the bridge cannot tell. */
   function markUnsure(rec: SessionRecord, tasks: readonly BackgroundTask[]) {
     if (tasks.length === 0) return;
-    unsureUnchecked.add(rec.id);
     const drive = driveOf(rec);
+    drive.unchecked = true;
     drive.unsure = [...(drive.unsure ?? []), ...tasks.map((t) => t.stepId ?? `task:${t.id}`)].slice(-STOPPED_STEPS_KEPT);
     deps.persist("now");
   }
@@ -393,7 +386,7 @@ export function createOwn(deps: OwnDeps): Own {
     if (add.length === 0) return;
     driveOf(rec).outlived = [...allOutlived(rec), ...add];
     deps.persist("now");
-    const names = listed(add.map(nameOf));
+    const names = fewNames(add.map(nameOf), listed);
     const runs = `still ${pick(add.length, "runs", "run")} on this Mac. Stop ends ${pick(add.length, "it", "them")}.`;
     notice(
       rec.id,
@@ -409,16 +402,16 @@ export function createOwn(deps: OwnDeps): Own {
    */
   function cantStop(rec: SessionRecord, one: TaskId | null): string | null {
     const unsure = allOutlived(rec).filter((o) => o.over === "unsure" && (one === null || o.id === one));
-    const unnamed = one === null ? unsureUnchecked.has(rec.id) : (rec.own?.unsure ?? []).includes(`task:${one}`);
+    const unnamed = one === null ? rec.own?.unchecked === true : (rec.own?.unsure ?? []).includes(`task:${one}`);
     if (unsure.length === 0 && !unnamed) return null;
-    const what = unsure.length > 0 ? fewOf(unsure.map(nameOf)) : "its background work";
+    const what = unsure.length > 0 ? fewNames(unsure.map(nameOf), listed) : "its background work";
     return `The bridge can't tell whether ${what} still ${unsure.length > 1 ? "run" : "runs"} on your Mac, so it has nothing it can stop.`;
   }
 
   const endedText = (tasks: readonly Outlived[]) =>
-    `${upper(listed(tasks.map(nameOf)))} ended. Claude Code no longer followed ${pick(tasks.length, "it", "them")}, so how ${pick(tasks.length, "it", "they")} ended is not known.`;
+    `${upper(fewNames(tasks.map(nameOf), listed))} ended. Claude Code no longer followed ${pick(tasks.length, "it", "them")}, so how ${pick(tasks.length, "it", "they")} ended is not known.`;
   const unsureText = (tasks: readonly Outlived[]) =>
-    `The bridge can no longer tell that ${fewOf(tasks.map(nameOf))} ${pick(tasks.length, "is still the command", "are still the commands")} it followed, so it no longer shows ${pick(tasks.length, "it", "them")}. ${pick(tasks.length, "It", "They")} may still run on this Mac.`;
+    `The bridge can no longer tell that ${fewNames(tasks.map(nameOf), listed)} ${pick(tasks.length, "is still the command", "are still the commands")} it followed, so it no longer shows ${pick(tasks.length, "it", "them")}. ${pick(tasks.length, "It", "They")} may still run on this Mac.`;
 
   /** When each command the bridge cannot tell about is next looked at, and the wait after that. */
   const unsureLooks = new Map<string, { at: number; gap: number }>();

@@ -9,21 +9,30 @@ const READ_TIMEOUT_MS = 5_000;
 const READ_TRIES = 3;
 const READ_RETRY_MS = 200;
 
-/** A command's output; null when it could not run, failed with nothing to say, or ran past the timeout. */
-async function read(argv: string[]): Promise<string | null> {
-  try {
+/**
+ * A command's output; null when it could not run, failed with nothing to say, or ran past the timeout. The timeout is
+ * final: a process its child outlives, holding the output pipe open, is not waited on past it.
+ */
+export async function read(argv: string[], timeoutMs = READ_TIMEOUT_MS): Promise<string | null> {
+  let kill = () => {};
+  const done = (async () => {
     const p = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore", stdin: "ignore", env: process.env });
-    let late = false;
-    const timer = setTimeout(() => {
-      late = true;
-      p.kill("SIGKILL");
-    }, READ_TIMEOUT_MS);
+    kill = () => p.kill("SIGKILL");
     const out = await new Response(p.stdout).text();
     await p.exited;
+    return p.exitCode !== 0 && out === "" ? null : out;
+  })().catch(() => null);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      kill();
+      resolve(null);
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([done, late]);
+  } finally {
     clearTimeout(timer);
-    return late || (p.exitCode !== 0 && out === "") ? null : out;
-  } catch {
-    return null;
   }
 }
 

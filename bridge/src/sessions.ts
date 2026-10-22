@@ -66,7 +66,7 @@ export type SessionsDeps = SessionsEnv & {
   /** The gate's answer to one of its cards: an agent's permission card, decided from the agent's thread. */
   decideGate(botId: string, cardId: MessageId, choice: PermissionChoice): Result;
   ledger: Ledger;
-  claude: Pick<SessionSpec, "query" | "executable" | "shells" | "leaders">;
+  claude: Pick<SessionSpec, "query" | "executable" | "shells" | "leaders" | "taskRun">;
   /** Paths the floors protect, for a session working in cwd. */
   scope(cwd: string): Scope;
   /** A card in a session the phone drives: a push that says only that a session needs the user. */

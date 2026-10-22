@@ -474,6 +474,11 @@ export type OwnDrive = {
    * read that it cannot tell. A step is named by its tool_use id, or as task:<id> when only its task is known.
    */
   unsure?: string[];
+  /**
+   * Since the last run began, some background work became such that the bridge cannot check: until the user starts a
+   * new run (a restart is not one), a Stop that finds nothing says it cannot tell rather than that nothing runs.
+   */
+  unchecked?: true;
 };
 
 /**

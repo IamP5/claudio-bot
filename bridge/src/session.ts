@@ -15,12 +15,12 @@ import type {
 import type { Tickable } from "./clock";
 import type { Headroom, Ledger } from "./ledger";
 import { notices as noticeText, withNotices, type SessionInput } from "./prompts";
-import { evalArg, groupAlive, shellGroups, shellLeaders, taskRun } from "./procs";
+import { evalArg, groupAlive, shellGroups, shellLeaders, taskRun, type TaskRun } from "./procs";
 import type { NoticeReason, StopTarget, TaskId } from "./protocol";
 import { sandboxFailure } from "./sandbox";
 import type { Persist } from "./store";
 import { emptyTasks, liveTasks, lostNotice, observe, wakes, type Activity, type Tasks } from "./tasks";
-import { displayName, errorText, maskSecrets } from "./text";
+import { displayName, errorText, fewNames, maskSecrets } from "./text";
 import {
   attended,
   driverKey,
@@ -110,7 +110,12 @@ const FORGOTTEN_NOTICE =
 const forgotten = (text: string, id: string) => text.includes(`No conversation found with session ID: ${id}`);
 /** What Claude Code says when a query asks to start a session under an id that already has a transcript. */
 const inUse = (text: string, id: string) => text.includes(`Session ID ${id} is already in use`);
-const tasksOf = (tasks: readonly Background[]) => tasks.map((t) => t.description ?? t.id).join("; ");
+const tasksOf = (tasks: readonly Background[]) =>
+  fewNames(
+    tasks.map((t) => t.description ?? t.id),
+    (names) => names.join("; "),
+    "; ",
+  );
 const backgroundStoppedNote = (name: string, tasks: readonly Background[]) => `${name}'s background work stopped: ${tasksOf(tasks)}.`;
 /** Why a query's background work lost its Claude Code: the bridge restarted, or Claude Code exited. */
 export type GoneCause = "restart" | "exit";
@@ -133,10 +138,10 @@ export const goneNote = (name: string, cause: GoneCause, kind: keyof Fate, tasks
  * one of those facts the bridge cannot tell.
  */
 const FATE_OF_RUN = { runs: "running", gone: "stopped", unsure: "unknown", unread: "unknown" } as const;
-async function fateOf(tasks: readonly Background[]): Promise<Fate> {
+async function fateOf(tasks: readonly Background[], run: (group: number, id: string) => Promise<TaskRun>): Promise<Fate> {
   const fate: Fate = { stopped: [], running: [], unknown: [] };
   for (const t of tasks) {
-    if (typeof t.group === "number") fate[FATE_OF_RUN[await taskRun(t.group, t.id)]].push(t);
+    if (typeof t.group === "number") fate[FATE_OF_RUN[await run(t.group, t.id)]].push(t);
     else if (typeof t.loose === "number") fate[groupAlive(t.loose) ? "unknown" : "stopped"].push(t);
     else if (t.kind === "agent" && t.claude !== undefined && !groupAlive(t.claude)) fate.stopped.push(t);
     else fate.unknown.push(t);
@@ -144,7 +149,9 @@ async function fateOf(tasks: readonly Background[]): Promise<Fate> {
   return fate;
 }
 /** A Claude Code that exits on its own stops its commands first; the bridge looks at what still runs this much later. */
-const EXIT_SETTLE_MS = 1_000;
+export const EXIT_SETTLE_MS = 1_000;
+/** How long the bridge looks at what a gone query's background work became before it says it cannot tell. */
+export const GONE_LOOK_MAX_MS = 60_000;
 /** How many times the bridge looks up the shells of a query's background commands before it gives up on one. */
 const SHELL_SEARCHES = 3;
 const SHELL_SEARCH_AGAIN_MS = 1_000;
@@ -787,6 +794,8 @@ export type SessionSpec = {
   shells?: (pid: number | null) => Promise<Map<string, number>>;
   /** The group-leading processes Claude Code's process `pid` started, with their command lines. Default shellLeaders. */
   leaders?: (pid: number | null) => Promise<{ group: number; command: string }[]>;
+  /** Whether a saved process group still runs the background command with this task id. Default taskRun. */
+  taskRun?: (group: number, id: string) => Promise<TaskRun>;
   /**
    * What became of a query's background work once its Claude Code is gone, checked against the process table. An owner
    * given this says so itself (and may follow the commands that still run); without one, notes say it.
@@ -1319,13 +1328,19 @@ export function createSession(spec: SessionSpec): Session {
 
   /** Says what became of a gone query's background work, from the process table: the owner does, or notes do. */
   async function reportGone(tasks: Background[], cause: GoneCause) {
+    // A look that never answers (a wedged lsof) is given up on: the work may still run, and is looked at again later.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cantTell = new Promise<Fate>((resolve) => {
+      timer = setTimeout(() => resolve({ stopped: [], running: [], unknown: [...tasks] }), GONE_LOOK_MAX_MS);
+    });
     reporting++;
     try {
-      const fate = await fateOf(tasks);
+      const fate = await Promise.race([fateOf(tasks, spec.taskRun ?? taskRun), cantTell]);
       if (spec.gone) return guard("gone", () => spec.gone!(fate, cause));
       for (const kind of ["stopped", "running", "unknown"] as const)
         if (fate[kind].length > 0) guard("note", () => spec.note(goneNote(spec.name?.() ?? "Claude Code", cause, kind, fate[kind]), cause === "restart" ? "restart" : undefined));
     } finally {
+      clearTimeout(timer);
       reporting--;
       guard("onChange", () => spec.onChange());
     }

@@ -1481,7 +1481,7 @@ const S6d: Scenario = {
             ...(step?.state === "ended" ? [] : [`${n}: step ${step?.state}`]),
           ];
         });
-        return bad.length ? no(bad.join("; ")) : ok("each said ended once; steps stopped");
+        return bad.length ? no(bad.join("; ")) : ok("each said ended once, after its process was gone; steps ended");
       },
     },
   ],

@@ -16,6 +16,17 @@ final class Swipe: XCTestCase {
             app.launch()
         }
         sleep(3)
+        // A screen named "...kb" is swiped with the keyboard up, which typing is what brings up. One named "...kbgone"
+        // puts the keyboard away on its own a few seconds in, and is swiped once it has.
+        if screen.hasSuffix("kb") || screen.hasSuffix("kbgone") {
+            app.textViews.firstMatch.tap()
+            app.textViews.firstMatch.typeText("x")
+            sleep(1)
+        }
+        if screen.hasSuffix("kbgone") {
+            XCTAssert(app.keyboards.firstMatch.waitForNonExistence(timeout: 15), "the keyboard did not go away")
+            sleep(1)
+        }
         let start = Date()
         app.swipeDown()
         let seconds = Date().timeIntervalSince(start)

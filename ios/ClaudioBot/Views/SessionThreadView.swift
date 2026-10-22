@@ -53,6 +53,11 @@ struct SessionThreadView: View {
     @State private var statuses: StatusAnnouncer
     /// A tall window: an iPad in portrait, where the split view hides the list.
     @State private var tall = false
+    /// The bottom bar's density, from the room between the navigation bar and the keyboard or the screen's edge.
+    @State private var fit = BarFit()
+    /// The bar's last layout: what its rows needed, the room it had, and the density they were laid out at.
+    @State private var bar = BarMeasure()
+    @State private var fitting: Task<Void, Never>?
 
     init(sessionId: SessionID) {
         self.sessionId = sessionId
@@ -154,7 +159,10 @@ struct SessionThreadView: View {
                     }
                 }
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                    ThreadRowView(row: row, sessionId: sessionId, model: model, botName: botName) { fullOutput = $0 }
+                    ThreadRowView(
+                        row: row, sessionId: sessionId, model: model, botName: botName,
+                        unanswered: model.unanswered.contains(row.id), withdraws: store.has(.sessionUnqueue)
+                    ) { fullOutput = $0 }
                         .equatable()
                         .padding(.top, index == 0 ? 12 : Self.gap(between: rows[index - 1], and: row))
                 }
@@ -193,7 +201,9 @@ struct SessionThreadView: View {
                 position.scrollTo(id: revealed.step.id, anchor: .center)
             }
         }
-        .onScrollGeometryChange(for: Bool.self) { Self.bottomGap($0) > 200 } action: { _, far in
+        // Only where the transcript shows between the bars (the container's height): a bar that fills the screen would put
+        // the button under the navigation bar.
+        .onScrollGeometryChange(for: Bool.self) { Self.bottomGap($0) > 200 && $0.containerSize.height >= 80 } action: { _, far in
             withAnimation(.easeOut(duration: 0.2)) { showsJump = far }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -221,21 +231,39 @@ struct SessionThreadView: View {
             if let banner { HolderBanner(banner: banner).frame(maxWidth: Self.column) }
         }
         .composerBar {
-            VStack(spacing: 6) {
-                if let status {
-                    // A hanging attempt would hold Retry until its greeting deadline, so Retry starts a new one.
-                    ThreadStatusLine(status: status, cause: cause, onTap: tap(status)) {
-                        Task { lastRetryFailed = !(await ConnectionBanner.retry(client, restartingAttempt: true)) }
+            // The bar never takes more than its room, and gives up detail (BarDensity) until its rows fit in it.
+            let density = fit.density
+            BarLayout { content, room in
+                let measure = BarMeasure(content: content, room: room, density: density)
+                guard measure != bar else { return }
+                bar = measure
+                refit()
+            } content: {
+                VStack(spacing: 6) {
+                    if let status {
+                        // A hanging attempt would hold Retry until its greeting deadline, so Retry starts a new one.
+                        ThreadStatusLine(status: status, cause: cause, lines: fit.density.statusLines, onTap: tap(status)) {
+                            Task { lastRetryFailed = !(await ConnectionBanner.retry(client, restartingAttempt: true)) }
+                        }
+                        .padding(.horizontal, 16)
+                        .transition(.opacity)
                     }
-                    .padding(.horizontal, 16)
-                    .transition(.opacity)
+                    SessionComposer(sessionId: sessionId, model: model, density: fit.density, announce: { announcer.post($0) }) {
+                        followsBottom = true
+                        withAnimation(reduceMotion ? nil : .snappy(duration: 0.3)) { position.scrollTo(edge: .bottom) }
+                    }
                 }
-                SessionComposer(sessionId: sessionId, controls: model.controls) {
-                    followsBottom = true
-                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.3)) { position.scrollTo(edge: .bottom) }
-                }
+                // Each row at its own height: a stack asked to share a height would squeeze the composer's field under
+                // its buttons, where the bar should give up detail instead.
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: Self.column)
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: Self.column)
+            // At its densest the bar still never draws past its room: what does not fit is cut at the top, so the
+            // composer stays in view.
+            .clipped()
+            // A crowded bar fills its room, so the transcript under it would show between its controls.
+            .background(fit.density > .full ? Theme.background : .clear)
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: status?.word)
         }
         .sheet(isPresented: $showsWork) {
@@ -249,6 +277,17 @@ struct SessionThreadView: View {
         .onChange(of: ThreadAnnouncement.key(status), initial: true) { statuses.update(status) }
         .onChange(of: banner) { _, new in
             if let new { announcer.post(new.spoken) }
+        }
+    }
+
+    /// The rows' heights can arrive in pieces during one layout, so the fit waits for the pass to end before it judges.
+    private func refit() {
+        fitting?.cancel()
+        fitting = Task {
+            await Task.yield()
+            // A layout from before the density last changed says nothing about this one.
+            guard !Task.isCancelled, bar.density == fit.density else { return }
+            fit.measured(content: bar.content, room: bar.room)
         }
     }
 
@@ -440,6 +479,8 @@ struct ThreadStatusLine: View {
     let status: ThreadStatus
     /// The connection copy the Sessions banner uses.
     let cause: String
+    /// At most this many lines, cut with an ellipsis. VoiceOver still reads the whole line.
+    var lines = 3
     let onTap: (() -> Void)?
     let onRetry: () -> Void
 
@@ -462,10 +503,6 @@ struct ThreadStatusLine: View {
                 line(now: .now)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, minHeight: HitTarget.minHeight, alignment: .leading)
-        .glass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private var retries: Bool {
@@ -481,34 +518,64 @@ struct ThreadStatusLine: View {
             if !stacked { glyph.frame(width: slot, height: slot) }
             Text(status.text(now: now, cause: cause))
                 .font(.subheadline)
+                .lineLimit(lines)
+                .truncationMode(.tail)
+                // It shares the bottom bar with the composer, which must stay on screen at the largest sizes.
+                .dynamicTypeSize(...DynamicTypeSize.accessibility3)
                 .monospacedDigit()
                 .foregroundStyle(tint == Theme.secondary ? .white : tint)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(status.spoken(now: now, cause: cause))
             if retries {
-                Button("Retry", action: onRetry)
-                    .font(.footnote.weight(.semibold))
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .accessibilityLabel("Retry connecting to your Mac")
+                Button(action: onRetry) {
+                    Text("Retry")
+                        .padding(.horizontal, 12)
+                        .frame(minWidth: HitTarget.minHeight, minHeight: HitTarget.minHeight)
+                        .background(Theme.raised, in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .font(.footnote.weight(.semibold))
+                .buttonStyle(.pressable)
+                .accessibilityLabel("Retry connecting to your Mac")
             } else if onTap != nil {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Theme.tertiary)
             }
         }
+        // The capsule is the element VoiceOver and a finger find, so it is at least a fingertip tall.
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, minHeight: HitTarget.minHeight, alignment: .leading)
+        .glass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture { onTap?() }
-        .accessibilityElement(children: .contain)
-        .accessibilityRepresentation {
-            if let onTap {
-                Button(status.spoken(now: now, cause: cause), action: onTap)
-                    .accessibilityHint(status.tasks.isEmpty ? "Shows the card" : "Lists what runs, with a Stop for each")
-            } else if retries {
-                Text(status.spoken(now: now, cause: cause))
-                Button("Retry connecting to your Mac", action: onRetry)
+        .modifier(Spoken(text: status.spoken(now: now, cause: cause), onTap: onTap, retries: retries, hint: status.tasks.isEmpty ? "Shows the card" : "Lists what runs, with a Stop for each"))
+    }
+
+    /// The capsule itself is the element, so its frame is the one a finger and VoiceOver find. With Retry, the words and
+    /// the button are two elements.
+    private struct Spoken: ViewModifier {
+        let text: String
+        let onTap: (() -> Void)?
+        let retries: Bool
+        let hint: String
+
+        func body(content: Content) -> some View {
+            if retries {
+                content.accessibilityElement(children: .contain)
+            } else if let onTap {
+                content
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(text)
+                    .accessibilityHint(hint)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { onTap() }
             } else {
-                Text(status.spoken(now: now, cause: cause))
+                content
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(text)
             }
         }
     }
@@ -717,5 +784,41 @@ struct ThreadSkeleton: View {
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Loading the session")
+    }
+}
+
+private struct BarMeasure: Equatable {
+    var content: CGFloat = 0
+    var room: CGFloat = 0
+    var density = BarDensity.full
+}
+
+/// The thread's bottom bar: as tall as its rows, or as the room the screen leaves above the keyboard, whichever is less,
+/// with the rows set on its bottom edge. It reports both heights, the rows' and the room's, after each layout.
+private struct BarLayout<Content: View>: View {
+    let report: (CGFloat, CGFloat) -> Void
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        Rows(report: report) { content }
+    }
+
+    private struct Rows: Layout {
+        let report: (CGFloat, CGFloat) -> Void
+
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            guard let rows = subviews.first else { return .zero }
+            let ideal = rows.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+            return CGSize(width: proposal.width ?? ideal.width, height: min(ideal.height, proposal.height ?? ideal.height))
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            guard let rows = subviews.first else { return }
+            let ideal = rows.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+            rows.place(at: CGPoint(x: bounds.minX, y: bounds.maxY), anchor: .bottomLeading, proposal: ProposedViewSize(width: bounds.width, height: ideal.height))
+            let room = proposal.height ?? ideal.height
+            let report = report
+            Task { @MainActor in report(ideal.height, room) }
+        }
     }
 }

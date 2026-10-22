@@ -123,6 +123,28 @@ const listed = (parts: readonly string[]) => (parts.length < 2 ? (parts[0] ?? ""
 const counted = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const KIND_WORD: Record<Task["kind"], string> = { agent: "agent", command: "command", other: "task" };
 const taskName = (t: Task) => `${KIND_WORD[t.kind]} "${t.label}"`;
+/** A refusal the phone shows under its composer: at most two commands, each cut short between words (a masked secret
+ *  stays whole), then how many more. */
+const fewOf = (tasks: readonly Task[]) => {
+  const cut = (word: string) => {
+    const head = word.slice(0, 39);
+    const open = head.lastIndexOf("«");
+    if (open < 0 || head.includes("»", open)) return head;
+    return open > 0 ? head.slice(0, open) : word.slice(0, word.indexOf("»") + 1);
+  };
+  const names = tasks.map((t) => {
+    const words = displayName(t.label, LINE_MAX).match(/(?:«[^»]*»|[^\s«])+/g) ?? [];
+    if (words.length === 0) return `an unnamed ${KIND_WORD[t.kind]}`;
+    let name = "";
+    for (const word of words) {
+      const longer = name ? `${name} ${word}` : word;
+      if (longer.length > 39) return `${name || cut(word)}…`;
+      name = longer;
+    }
+    return name;
+  });
+  return names.length <= 2 ? listed(names) : `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
+};
 
 /** What the model menu offers. Claude Code resolves these aliases to the newest model of each family. */
 export const MODELS = [
@@ -874,9 +896,12 @@ export function createOwn(deps: OwnDeps): Own {
     if (missed.length > 0) notice(rec.id, `Couldn't stop ${listed(missed.map(taskName))}. It may still be running.`, "error", "stop");
     if (fresh.length > 0) notice(rec.id, `Claude Code has not confirmed the stop of ${listed(fresh.map(taskName))} yet.`, "info", "stop");
     changed(rec.id);
-    if (missed.length > 0) return refused(`${missed.every((t) => ending(t) === "survived") ? "The bridge could not stop" : "Claude Code did not stop"} ${listed(missed.map((t) => t.label))}.`);
-    if (unproven.length > 0) return refused(`The bridge can no longer tell that ${listed(unproven.map((t) => t.label))} is the command it followed, so it did not stop it.`);
-    return late.length > 0 ? refused(`Claude Code has not confirmed the stop of ${listed(late.map((t) => t.label))} yet.`) : { ok: true };
+    if (missed.length > 0) return refused(`${missed.every((t) => ending(t) === "survived") ? "The bridge could not stop" : "Claude Code did not stop"} ${fewOf(missed)}.`);
+    if (unproven.length > 0)
+      return refused(
+        `The bridge can no longer tell that ${fewOf(unproven)} ${pick(unproven.length, "is still the command", "are still the commands")} it followed, so it did not stop ${pick(unproven.length, "it", "them")}.`,
+      );
+    return late.length > 0 ? refused(`Claude Code has not confirmed the stop of ${fewOf(late)} yet.`) : { ok: true };
   }
 
   return {

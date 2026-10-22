@@ -157,6 +157,13 @@ final class AppStore {
     private(set) var webhookToken: WebhookToken?
     /// The plan's usage limits as the bridge last read them. Kept while offline: its fetchedAt says how old it is.
     private(set) var usage: PlanUsage?
+    /// Stops this phone asked for in each session, by what they stop, until the session rests. The composer and the
+    /// background work sheet both read them, so a refusal shows on the control that asked.
+    private(set) var stops: [SessionID: [StopTarget: StopRequest]] = [:]
+    /// Model and mode changes in flight, until controls carry the new value or the Mac refuses it.
+    private(set) var sets: [SessionID: SetRequest] = [:]
+    /// What the Mac refused in a session, shown under its composer until dismissed.
+    private(set) var sessionErrors: [SessionID: SessionError] = [:]
     /// Sends the bridge has not echoed back yet, oldest first, each with how many times a socket took it. In memory
     /// only: quitting the app forgets them.
     private(set) var unechoedSends: [(message: ClientMessage, transmitted: Int)] = []
@@ -214,6 +221,9 @@ final class AppStore {
             webhookToken = nil
             usage = nil
             unechoedSends = []
+            stops = [:]
+            sets = [:]
+            sessionErrors = [:]
             sessions.reset()
             threads.reset()
         }
@@ -265,6 +275,91 @@ final class AppStore {
 
     func dismissError(_ notice: ErrorNotice) {
         if lastError == notice { lastError = nil }
+    }
+
+    func dismissSessionError(_ error: SessionError, in sessionId: SessionID) {
+        if sessionErrors[sessionId] == error { sessionErrors[sessionId] = nil }
+    }
+
+    /// A session request is on its way, so the composer can say so until the Mac answers.
+    func sessionRequestSent(_ msg: ClientMessage, at now: Date = .now) {
+        switch msg {
+        case let .sessionStop(sessionId, target, turnStartedAt):
+            let target = target ?? .all
+            var request = StopRequest(target: target, turnStartedAt: turnStartedAt, at: now)
+            if target == .all { request.tasks = Set(threads[sessionId]?.controls?.tasks?.map(\.id) ?? []) }
+            stops[sessionId, default: [:]][target] = request
+            if sessionErrors[sessionId]?.kind == .stop { sessionErrors[sessionId] = nil }
+        case let .sessionSet(sessionId, patch):
+            let models = threads[sessionId]?.controls?.models ?? []
+            if let mode = patch.mode {
+                sets[sessionId] = SetRequest(change: .mode(mode), at: now)
+            } else if case .some(.some(let id)) = patch.model {
+                sets[sessionId] = SetRequest(change: .model(id: id, label: models.first { $0.id == id }?.label ?? id), at: now)
+            } else {
+                return
+            }
+            if sessionErrors[sessionId]?.kind == .set { sessionErrors[sessionId] = nil }
+        case let .sessionSend(sessionId, _, _, _), let .sessionUnqueue(sessionId, _):
+            // A refused stop stays: the slot's Stop again needs its reason.
+            if sessionErrors[sessionId]?.kind != .stop { sessionErrors[sessionId] = nil }
+        default:
+            break
+        }
+    }
+
+    /// The newest stop this phone asked for in the session, among `targets`.
+    func latestStop(in sessionId: SessionID, _ targets: [StopTarget]) -> StopRequest? {
+        targets.compactMap { stops[sessionId]?[$0] }.max { $0.at < $1.at }
+    }
+
+    /// A change the user gave up waiting for.
+    func dismissSet(in sessionId: SessionID) {
+        sets[sessionId] = nil
+    }
+
+    /// A frame for the thread came in. A stop whose work no longer runs is confirmed, and a change the controls now
+    /// carry has landed. Once nothing runs, nothing is left to stop.
+    private func settleRequests(_ sessionId: SessionID) {
+        guard let controls = threads[sessionId]?.controls else { return }
+        if !controls.working {
+            stops[sessionId] = nil
+            // A stop Claude Code took late still landed: the status line says how the run ended.
+            if sessionErrors[sessionId]?.kind == .stop { sessionErrors[sessionId] = nil }
+        } else if var asked = stops[sessionId] {
+            for (target, request) in asked where request.state == .pending && request.landed(in: controls) {
+                asked[target]?.state = .confirmed
+            }
+            stops[sessionId] = asked
+        }
+        if let set = sets[sessionId], set.landed(in: controls) {
+            sets[sessionId] = nil
+        }
+    }
+
+    /// An error about a session request goes under that session's composer. A refused stop marks the newest stop asked
+    /// for there, whichever frame came first. A refused change says the value the controls still show.
+    private func sessionRefused(_ message: String, _ about: ErrorAbout) -> Bool {
+        switch about {
+        case .stop(let sessionId):
+            if let latest = stops[sessionId]?.values.max(by: { $0.at < $1.at }) {
+                stops[sessionId]?[latest.target]?.state = .refused(message)
+            }
+            sessionErrors[sessionId] = SessionError(kind: .stop, text: "Couldn't stop. " + message)
+        case .set(let sessionId):
+            let kept = threads[sessionId]?.controls.map { controls in
+                if case .model = sets[sessionId]?.change { "The model stays \(controls.modelLabel)." }
+                else { "The mode stays \(SessionText.mode(controls.mode))." }
+            }
+            sets[sessionId] = nil
+            sessionErrors[sessionId] = SessionError(kind: .set, text: [kept, message].compactMap { $0 }.joined(separator: " "))
+        case .send(let sessionId, let clientId):
+            threads[sessionId]?.withdrawRefused(ItemID(clientId))
+            sessionErrors[sessionId] = SessionError(kind: .send, text: message)
+        case .tool, .create, .unknown:
+            return false
+        }
+        return true
     }
 
     /// The bridge keeps one live code, so a new request makes the shown one stale until the reply lands.
@@ -387,7 +482,8 @@ final class AppStore {
             webhookToken = token
             return []
 
-        case let .error(message, _):
+        case let .error(message, about):
+            if let about, sessionRefused(message, about) { return [] }
             lastError = ErrorNotice(message: message)
             return []
 
@@ -409,6 +505,7 @@ final class AppStore {
 
         case let .thread(sessionId, frame):
             for card in threads.apply(sessionId, frame) { pendingDecisions[card] = nil }
+            settleRequests(sessionId)
             return []
 
         case let .sessionCreated(ref, sessionId):

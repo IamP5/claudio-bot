@@ -96,6 +96,6 @@ private func step(_ state: ToolStepState, cause: String? = nil) -> ToolStep {
         #expect(PermissionAnswer.chose(.deny).outcome(step: step(.stopped)) == PermissionOutcome(short: "Denied", text: "Denied", tone: .refused))
         #expect(PermissionAnswer.chose(.never).outcome().tone == .refused)
         #expect(PermissionAnswer.expired.outcome() == PermissionOutcome(short: "Expired", text: "Expired. It did not run.", tone: .ended))
-        #expect(PermissionAnswer.closed("withdrawn").outcome() == PermissionOutcome(short: "Closed", text: "Closed. It did not run.", tone: .ended))
+        #expect(PermissionAnswer.unknown("withdrawn").outcome() == PermissionOutcome(short: "Closed", text: "Closed. It did not run.", tone: .ended))
     }
 }

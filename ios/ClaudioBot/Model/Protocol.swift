@@ -577,8 +577,10 @@ enum PermissionAnswer: Codable, Hashable, Sendable {
     case expired
     /// The user stopped the session while the card was open, so the call never ran.
     case stopped
+    /// Claude Code went away while the card was open, so the call never ran.
+    case closed
     /// A closing state a newer bridge invented.
-    case closed(String)
+    case unknown(String)
 
     init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
@@ -588,7 +590,8 @@ enum PermissionAnswer: Codable, Hashable, Sendable {
             switch raw {
             case "expired": self = .expired
             case "stopped": self = .stopped
-            default: self = .closed(raw)
+            case "closed": self = .closed
+            default: self = .unknown(raw)
             }
         }
     }
@@ -599,7 +602,8 @@ enum PermissionAnswer: Codable, Hashable, Sendable {
         case .chose(let choice): try c.encode(choice.rawValue)
         case .expired: try c.encode("expired")
         case .stopped: try c.encode("stopped")
-        case .closed(let raw): try c.encode(raw)
+        case .closed: try c.encode("closed")
+        case .unknown(let raw): try c.encode(raw)
         }
     }
 }
@@ -1117,10 +1121,12 @@ enum PushState: Codable, Hashable, Sendable {
     }
 }
 
-/// The session request an error answers, so the app can show it there instead of as a toast. unknown: a kind a newer
-/// bridge invented, which reads as no subject.
+/// The session request an error answers, so the app can show it there instead of as a toast. set: a model or mode
+/// change Claude Code refused, so the session keeps the old value. unknown: a kind a newer bridge invented, which reads
+/// as no subject.
 enum ErrorAbout: Codable, Hashable, Sendable {
     case stop(sessionId: SessionID)
+    case set(sessionId: SessionID)
     case send(sessionId: SessionID, clientId: String)
     case tool(sessionId: SessionID, toolUseId: String)
     case create(ref: String)
@@ -1133,6 +1139,7 @@ enum ErrorAbout: Codable, Hashable, Sendable {
         func session() throws -> SessionID { try c.decode(SessionID.self, forKey: .sessionId) }
         switch try c.decode(String.self, forKey: .kind) {
         case "stop": self = .stop(sessionId: try session())
+        case "set": self = .set(sessionId: try session())
         case "send": self = .send(sessionId: try session(), clientId: try c.decode(String.self, forKey: .clientId))
         case "tool": self = .tool(sessionId: try session(), toolUseId: try c.decode(String.self, forKey: .toolUseId))
         case "create": self = .create(ref: try c.decode(String.self, forKey: .ref))
@@ -1145,6 +1152,9 @@ enum ErrorAbout: Codable, Hashable, Sendable {
         switch self {
         case let .stop(sessionId):
             try c.encode("stop", forKey: .kind)
+            try c.encode(sessionId, forKey: .sessionId)
+        case let .set(sessionId):
+            try c.encode("set", forKey: .kind)
             try c.encode(sessionId, forKey: .sessionId)
         case let .send(sessionId, clientId):
             try c.encode("send", forKey: .kind)

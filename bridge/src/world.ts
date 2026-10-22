@@ -224,6 +224,8 @@ export type BackgroundTask = {
    * to see when it ends, never proof enough to signal it.
    */
   loose?: number;
+  /** A command the turn ran in the foreground: it outlives Claude Code as a background one does. */
+  foreground?: true;
 };
 
 export const emptySession = (id: string | null = null): SessionState => ({ id, pending: [], lifecycle: { kind: "idle" }, notices: [] });

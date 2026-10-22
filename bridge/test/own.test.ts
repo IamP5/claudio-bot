@@ -2254,6 +2254,23 @@ describe("the thread says what stopped only once it did", () => {
     }
   }, 15_000);
 
+  test("a foreground command gone once the bridge closed a Claude Code that never confirmed a stop is said stopped by the user", async () => {
+    const fg = backgroundCommand("bf");
+    try {
+      const q = await runningInForeground({ bf: fg.pid });
+      q.holdStop = new Promise<void>(() => {});
+      await handle({ type: "session_stop", sessionId: ASK, target: "turn" });
+      await fg.end();
+      clock += 15_000;
+      sessions.tick(new Date(clock));
+      await until(async () => (await stopLines()).some((t) => t.includes("sleep bf")));
+      expect(await stopLines()).toEqual(["Stopped by you: the turn.", `Stopped by you: command "perl -e 'sleep bf'".`]);
+      expect(await stepOf("toolu_bf")).toMatchObject({ state: "stopped", cause: "Stopped by you" });
+    } finally {
+      await fg.end();
+    }
+  }, 15_000);
+
   test("a command whose command line ps writes in its own escapes, or that reads its own input, is still followed to its end after a restart", async () => {
     const shells_ = { "bé": backgroundCommand("not-its-output"), "bl": backgroundCommand("not-its-output-either") };
     const cmds = { "bé": "exec >/dev/null 2>&1; sleep 3661 # café\tx", "bl": "exec >/dev/null 2>&1; sleep 3663 < /dev/null" };

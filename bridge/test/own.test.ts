@@ -667,9 +667,27 @@ describe("live work", () => {
     await flush();
     q.refuseStop = true;
     expect(await handle({ type: "session_stop", sessionId: ASK, target: "all" })).toEqual([
-      { type: "error", message: "Claude Code did not stop sleep 901, sleep 906 && echo integration-suite-cha… and 2 more.", about: { kind: "stop", sessionId: ASK } },
+      { type: "error", message: "Claude Code did not stop sleep 901, sleep 906 && echo… and 2 more.", about: { kind: "stop", sessionId: ASK } },
     ]);
   });
+
+  for (const [labels, said] of [
+    [["a-very-long-header-name-x:sk-ant-api03-abcdefghijklmnopqrstuvwx", "   "], "a-very-long-header-name-x:… and an unnamed command"],
+    [["curl -H token:sk-ant-api03-abcdefghijklmnopqrstuvwx https://example.test"], "curl -H token:«redacted:37 chars»…"],
+  ] as const) {
+    test(`a refusal keeps a masked secret whole and names a command with no name: ${said}`, async () => {
+      await start();
+      await send("Start them");
+      const q = queries[0]!;
+      const shells = labels.map((c, i) => shellTask(`b${i}`, `toolu_${i}`, c));
+      q.emit(...shells.map((t) => taskStarted(t)), level(...shells), result());
+      await flush();
+      q.refuseStop = true;
+      expect(await handle({ type: "session_stop", sessionId: ASK, target: "all" })).toEqual([
+        { type: "error", message: `Claude Code did not stop ${said}.`, about: { kind: "stop", sessionId: ASK } },
+      ]);
+    });
+  }
 
   test("a Stop Claude Code refuses says so, and the task's later end is still named", async () => {
     await start();

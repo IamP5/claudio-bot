@@ -113,13 +113,30 @@ const DIED = /^Claude Code process (exited|terminated)/;
 const line = (text: string) => displayName(maskSecrets(text.split("\n")[0] ?? ""), LINE_MAX);
 const listed = (parts: readonly string[]) => (parts.length < 2 ? (parts[0] ?? "") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`);
 const counted = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-/** A refusal the phone shows under its composer: at most two commands, each on one short line, then how many more. */
-const fewOf = (tasks: readonly Task[]) => {
-  const names = tasks.map((t) => displayName(t.label, 40));
-  return names.length <= 2 ? listed(names) : `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
-};
 const KIND_WORD: Record<Task["kind"], string> = { agent: "agent", command: "command", other: "task" };
 const taskName = (t: Task) => `${KIND_WORD[t.kind]} "${t.label}"`;
+/** A refusal the phone shows under its composer: at most two commands, each cut short between words (a masked secret
+ *  stays whole), then how many more. */
+const fewOf = (tasks: readonly Task[]) => {
+  const cut = (word: string) => {
+    const head = word.slice(0, 39);
+    const open = head.lastIndexOf("«");
+    if (open < 0 || head.includes("»", open)) return head;
+    return open > 0 ? head.slice(0, open) : word.slice(0, word.indexOf("»") + 1);
+  };
+  const names = tasks.map((t) => {
+    const words = displayName(t.label, LINE_MAX).match(/(?:«[^»]*»|[^\s«])+/g) ?? [];
+    if (words.length === 0) return `an unnamed ${KIND_WORD[t.kind]}`;
+    let name = "";
+    for (const word of words) {
+      const longer = name ? `${name} ${word}` : word;
+      if (longer.length > 39) return `${name || cut(word)}…`;
+      name = longer;
+    }
+    return name;
+  });
+  return names.length <= 2 ? listed(names) : `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
+};
 
 /** What the model menu offers. Claude Code resolves these aliases to the newest model of each family. */
 export const MODELS = [

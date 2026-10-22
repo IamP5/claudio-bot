@@ -1256,6 +1256,90 @@ const S6b: Scenario = {
   ],
 };
 
+const S6c: Scenario = {
+  id: "S6c",
+  area: "sessions",
+  title: "A background command that outlives a bridge restart",
+  needsSimulator: false,
+  journey: [
+    "The user starts a long command in the background; the turn ends at once.",
+    "The Mac's bridge restarts while the command runs. Claude Code goes with it, but the command keeps running.",
+    "The thread must say the command still runs, never that it stopped, and Stop must end it on the Mac.",
+  ],
+  setup: [
+    { do: "create", name: "s6c", prompt: BG("sleep 420 && echo late > s6c.txt") },
+    started("s6c"),
+    { do: "until", mark: "s6c-ended", what: "the turn that starts the command to end", timeoutS: 180, test: turnEnded("s6c") },
+    { do: "until", mark: "bg-running", what: "the sleep 420 to run on the Mac", timeoutS: 60, test: (ev) => ev.procs("sleep 420").length > 0 },
+    { do: "sleep", s: 3 },
+    { do: "restart-bridge", mark: "restarted" },
+    { do: "sleep", s: 8 },
+    { do: "ps", pattern: "sleep 420", as: "after-restart" },
+    { do: "mark", mark: "after-restart" },
+    { do: "stop", name: "s6c", mark: "stopped" },
+    { do: "until", mark: "s6c-rest", what: "the session to rest after Stop", timeoutS: 30, optional: true, test: atRest("s6c") },
+    { do: "sleep", s: 3 },
+    { do: "ps", pattern: "sleep 420", as: "after-stop" },
+  ],
+  pre: [
+    created("s6c"),
+    { what: "the bridge restarted", check: (ev) => (mark(ev, "after-restart") !== undefined ? ok("yes") : no("no")) },
+    { what: "the command outlived the restart (process sample after-restart)", check: (ev) => (ev.samples["after-restart"]?.length ? ok(ev.samples["after-restart"]!.join(" | ").slice(0, 160)) : no("no sleep 420 process after the restart")) },
+  ],
+  rubric: [
+    {
+      id: "S6c.1",
+      tell: "state",
+      lane: "protocol",
+      text: "After the restart the thread never says the command stopped while it still runs, and says that it runs.",
+      pass: "Between the command starting on the Mac and Stop, no notice says the background work stopped, and a notice says it still runs.",
+      fail: "A notice says the background work stopped, or none says it still runs.",
+      check: (ev) => {
+        const at = mark(ev, "bg-running");
+        const until = mark(ev, "stopped");
+        if (at === undefined || until === undefined) return needMarks(ev, "bg-running", "stopped")!;
+        const said = notices(ev, "s6c", at)
+          .filter((i) => ev.atOf(i.at) >= at && ev.atOf(i.at) <= until)
+          .map((i) => i.text ?? "");
+        const lie = said.find((t) => /background work stopped/i.test(t));
+        const runs = said.find((t) => /still runs?\b/i.test(t));
+        return lie ? no(`said: ${lie.slice(0, 120)}`) : runs ? ok(runs.slice(0, 120)) : no(`no notice says it still runs; notices: ${said.join(" | ").slice(0, 160) || "none"}`);
+      },
+    },
+    {
+      id: "S6c.2",
+      tell: "stop",
+      lane: "protocol",
+      text: "After the restart the session reads working with the command as a task, so Stop is offered.",
+      pass: "At mark after-restart, controls.working is true and controls.tasks names the command.",
+      fail: "The session rests, or no task names the command.",
+      check: (ev) => {
+        const at = mark(ev, "after-restart");
+        if (at === undefined) return needMarks(ev, "after-restart")!;
+        const s = last(ev, "s6c", at);
+        const task = (s?.controls?.tasks ?? []).find((t) => /sleep 420/.test(String((t as { label?: unknown }).label)));
+        return s?.controls?.working === true && task ? ok(`working; task ${String((task as { label?: unknown }).label).slice(0, 60)}`) : no(`working ${s?.controls?.working}; tasks ${(s?.controls?.tasks ?? []).length}`);
+      },
+    },
+    {
+      id: "S6c.3",
+      tell: "stop",
+      lane: "protocol",
+      text: "Stop ends the command on the Mac, and the thread says the user stopped it.",
+      pass: "The sleep 420 is gone 3 s after the session rests (sample after-stop), and a notice with reason stop follows Stop.",
+      fail: "The process still runs after Stop, or no stop notice.",
+      check: (ev) => {
+        const at = mark(ev, "stopped");
+        if (at === undefined) return needMarks(ev, "stopped")!;
+        const after = ev.samples["after-stop"] ?? [];
+        const said = notices(ev, "s6c", at).find((i) => i.reason === "stop");
+        if (after.length) return no(`still running after Stop: ${after.join(" | ").slice(0, 160)}`);
+        return said ? ok(`gone after Stop; notice: ${(said.text ?? "").slice(0, 80)}`) : no("gone after Stop, but no stop notice");
+      },
+    },
+  ],
+};
+
 const SLEEPERS = 4;
 const QUICK = 8;
 const s7names = [...Array.from({ length: SLEEPERS }, (_, i) => `s7-sleep-${i + 1}`), ...Array.from({ length: QUICK }, (_, i) => `s7-quick-${i + 1}`)];
@@ -1576,4 +1660,4 @@ const S8fg: Scenario = {
   ],
 };
 
-export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S4, S5, S6, S6b, S7, S8, S8fg];
+export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S4, S5, S6, S6b, S6c, S7, S8, S8fg];

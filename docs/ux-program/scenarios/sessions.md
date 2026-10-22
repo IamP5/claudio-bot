@@ -397,6 +397,46 @@ Needs the simulator: yes.
 | S6b.2 | state | protocol | What the lost frame said reaches the app anyway. | After that watch, a snapshot of the session reaches the app with the Bash step ok. | No snapshot reaches the app, or it lacks the finished step. |
 | S6b.3 | state | simulator (after-loss) | The thread on screen shows the command done and the reply, with nothing left running. | A done step and the reply. | A step still running after the turn ended, or no reply. |
 
+## S6c A background command that outlives a bridge restart
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. The user starts a long command in the background; the turn ends at once.
+2. The Mac's bridge restarts while the command runs. Claude Code goes with it, but the command keeps running.
+3. The thread must say the command still runs, never that it stopped, and Stop must end it on the Mac.
+
+**Setup.**
+
+- New session `s6c` in demo (haiku, mode default): "Use the Bash tool with run_in_background set to true to run exactly this command: sleep 420 && echo late > s6c.txt Do not wait for it, do not check on it, do not run anything else. Reply with one line: started."
+- Wait up to 90 s for s6c's turn to start; mark `s6c-started`.
+- Wait up to 180 s for the turn that starts the command to end; mark `s6c-ended`.
+- Wait up to 60 s for the sleep 420 to run on the Mac; mark `bg-running`.
+- Wait 3 s.
+- Restart the bridge on the same port and home; the phone reconnects. Mark `restarted`.
+- Wait 8 s.
+- Sample the Mac's processes matching `sleep 420` in the seed project as `after-restart`.
+- Mark `after-restart`.
+- Press Stop on `s6c` (session_stop); mark `stopped`.
+- Wait up to 30 s for the session to rest after Stop; mark `s6c-rest` (optional).
+- Wait 3 s.
+- Sample the Mac's processes matching `sleep 420` in the seed project as `after-stop`.
+
+**Preconditions** (any failure fails the scenario):
+
+- session s6c was created
+- the bridge restarted
+- the command outlived the restart (process sample after-restart)
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S6c.1 | state | protocol | After the restart the thread never says the command stopped while it still runs, and says that it runs. | Between the command starting on the Mac and Stop, no notice says the background work stopped, and a notice says it still runs. | A notice says the background work stopped, or none says it still runs. |
+| S6c.2 | stop | protocol | After the restart the session reads working with the command as a task, so Stop is offered. | At mark after-restart, controls.working is true and controls.tasks names the command. | The session rests, or no task names the command. |
+| S6c.3 | stop | protocol | Stop ends the command on the Mac, and the thread says the user stopped it. | The sleep 420 is gone 3 s after the session rests (sample after-stop), and a notice with reason stop follows Stop. | The process still runs after Stop, or no stop notice. |
+
 ## S7 Twelve sessions at once
 
 Needs the simulator: no (simulator items run with `--sim`).

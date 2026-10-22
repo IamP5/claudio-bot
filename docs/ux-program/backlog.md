@@ -20,3 +20,6 @@
 - Bridge posts "Stopped by you: the turn …" before the turn has actually ended when Claude Code is paused (found by G6 owner; honesty, Sessions).
 - With no Claude Code process running, a model change stores any model id unchecked and the next send fails on it; the app's menu can't send a bad id (found by G6 owner).
 - Offline Send is spoken as "Sent." though the frame only went to the outbox (G6 verifier; G11 territory).
+- Two stops of the same task yield the notice "Stopped by you: command "sleep 470" and command "sleep 470"." — dedupe targets in the bridge's stop notice (G6 verifier round 2).
+- A background-task stop landing during a turn makes the status read "Stopped by you" though that turn was answered (G6 verifier round 2; status line / bridge).
+- Swipe-check default screen list did not include composer demos (being fixed in G6 round 2; confirm).

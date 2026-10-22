@@ -278,9 +278,17 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Wait up to 60 s for the sleep 305 to run on the Mac; mark `bg-running`.
 - Wait 2 s.
 - Stop only the task `sleep 305` of `s4b` (session_stop with target task); mark `stopped`.
-- Wait 5 s.
+- Wait 2 s.
+- Mark `stop-2s`.
+- Wait 3 s.
 - Mark `stop-5s`.
-- Wait 20 s.
+- Wait 5 s.
+- Mark `stop-10s`.
+- Wait 5 s.
+- Mark `stop-15s`.
+- Wait 5 s.
+- Mark `stop-20s`.
+- Wait 5 s.
 - Mark `stop-25s`.
 - Sample the Mac's processes matching `sleep 305` in the seed project as `after-stop`.
 
@@ -292,7 +300,45 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 | id | tells | lane | the user can tell | pass | fail |
 | --- | --- | --- | --- | --- | --- |
-| S4b.1 | stop | protocol | After stopping the only running task, the session rests and shows no turn that never started. | At marks stop-5s and stop-25s, controls.working is false, controls.turn is absent and the row is not working; the sleep 305 is gone. | The session reads working, or a wake turn shows, or the command still runs. |
+| S4b.1 | stop | protocol | After stopping the only running task, the session rests, shows no turn that never started, and says only what stopped. | At marks 2, 5, 10, 15, 20 and 25 s after the stop, controls.working is false, controls.turn is absent and the row is not working; the Bash step reads stopped "Stopped by you"; no notice says the turn was stopped; the sleep 305 is gone. | The session reads working or shows a wake turn at any mark, the step reads otherwise, a notice claims the turn stopped, or the command still runs. |
+
+## S4c Stop the turn only while Claude Code is frozen
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. Claude Code is frozen (a hung or busy Mac) when the user sends a prompt and presses Stop the turn only.
+2. Nothing may say the turn stopped while it is frozen. Once it resumes, the prompt must not run, and only then does the thread say the user stopped it.
+
+**Setup.**
+
+- New session `s4c` in demo (haiku, mode default): "Reply with the single word ready."
+- Wait up to 90 s for s4c's turn to start; mark `s4c-started`.
+- Wait up to 120 s for the first turn to end; mark `s4c-ready`.
+- Send SIGSTOP to the Claude Code process of `s4c` (it freezes); mark `frozen`.
+- Send in `s4c`: "Run these three Bash commands one at a time, each in its own tool call: echo s4cone ; echo s4ctwo ; echo s4cthree . Then reply with the single word done."; mark `sent`.
+- Wait up to 30 s for the prompt's turn to show; mark `turn-shown`.
+- Wait 1.5 s.
+- Press Stop the turn only on `s4c` (session_stop, target turn); mark `stopped`.
+- Wait 3 s.
+- Send SIGCONT to the Claude Code process of `s4c` (it resumes); mark `resumed`.
+- Wait up to 60 s for the session to rest after it resumes; mark `s4c-rest` (optional).
+- Wait 8 s.
+- Mark `after`.
+
+**Preconditions** (any failure fails the scenario):
+
+- session s4c was created
+- Claude Code was frozen and resumed
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S4c.1 | stop | protocol | While Claude Code is frozen, nothing says the turn stopped. | No notice with reason stop appears between Stop and the resume. | A stop notice appears while Claude Code is still frozen. |
+| S4c.2 | stop | protocol | The stopped prompt does not run once Claude Code resumes. | The transcript has no Bash call for echo s4cone, s4ctwo or s4cthree. | Claude Code ran any of the prompt's commands. |
+| S4c.3 | stop | protocol | Once the turn ended, the thread says the user stopped it, in the bridge's own words. | After the resume, a notice with reason "stop" starts "Stopped by you". | No such notice. |
 
 ## S5 A silent two-minute tool call
 
@@ -502,6 +548,9 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Mark `after-ended`.
 - Wait 30 s.
 - Mark `after-ended-40s`.
+- Wait up to 240 s for the bridge to say each command ended; mark `ended-said` (optional).
+- Wait 5 s.
+- Mark `after-said`.
 
 **Preconditions** (any failure fails the scenario):
 
@@ -513,8 +562,9 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 | id | tells | lane | the user can tell | pass | fail |
 | --- | --- | --- | --- | --- | --- |
-| S6d.1 | state | protocol | Once the bridge cannot tell whether a command still runs, its step stops spinning and says so, and the session rests. | At mark after-restart, vu1's Bash step reads stopped with a cause that says the bridge cannot tell, and vu1 is not working. | vu1's step reads running, or reads stopped as if it surely ended, or vu1 reads working. |
+| S6d.1 | state | protocol | Once the bridge cannot tell whether a command still runs, its step stops spinning and says so, and the session rests. | At mark after-restart, vu1's Bash step is in state "unsure" with a cause that says the bridge cannot tell, and vu1 is not working. | vu1's step reads running, or stopped as if it surely ended, or any state but unsure; or vu1 reads working. |
 | S6d.2 | state | protocol | After both commands ended, neither thread shows a step running and neither session works, 10 s and 40 s later. | At marks after-ended and after-ended-40s, no Bash step of vu1 or vu2 reads running, and neither reads working. | A step still reads running, or a session reads working. |
+| S6d.3 | state | protocol | Each command's end is said once, whether the bridge knew its process group or found it only by its command line. | By mark after-said, vu1 and vu2 each hold exactly one notice that the command "ended", and each Bash step reads stopped, no longer unsure. | A thread never says its command ended, says it twice, or its step still reads unsure. |
 
 ## S7 Twelve sessions at once
 

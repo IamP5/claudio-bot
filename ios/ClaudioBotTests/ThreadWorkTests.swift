@@ -49,10 +49,10 @@ private func date(_ wire: String) -> Date {
 
         #expect(run.isLive)
         #expect(run.since == noon)
-        #expect(run.headline() == "1 agent, 1 command running · 1 waiting for approval · 1 stopped")
+        #expect(run.headline() == "1 agent, 1 command running · 1 waiting for approval · 1 stopped · 1 may still run")
         #expect(run.failure == "List the late files failed: Exit code 1: ls: late.txt: No such file or directory")
         #expect(run.spoken(now: noon + 125) ==
-            "Running: 1 agent, 1 command, 1 waiting for approval, 1 stopped, 2 minutes 5 seconds. List the late files failed: Exit code 1: ls: late.txt: No such file or directory")
+            "Running: 1 agent, 1 command, 1 waiting for approval, 1 stopped, 1 may still run, 2 minutes 5 seconds. List the late files failed: Exit code 1: ls: late.txt: No such file or directory")
     }
 
     @Test func eachFixtureStepSaysItsStateTimeAndOwner() throws {
@@ -201,5 +201,22 @@ private func date(_ wire: String) -> Date {
         #expect(RunClock.coarse(45) == "45s")
         #expect(RunClock.coarse(185) == "3m")
         #expect(RunClock.coarse(4200) == "1h 10m")
+    }
+}
+
+@Suite struct UnsureStepTests {
+    @Test func aStepTheBridgeCannotFollowReadsMayStillRunNeitherStoppedNorRunning() throws {
+        let run = WorkRun(steps: [step("1", state: .unsure, started: 0, cause: "Can't tell whether this still runs on your Mac")])
+        #expect(!run.isLive && !run.isRunning && !run.ticks)
+        #expect(run.headline().hasSuffix(" · 1 may still run"))
+        #expect(!run.headline().contains("stopped") && !run.headline().contains("running"))
+        #expect(run.headline(spoken: true).hasSuffix(", 1 may still run"))
+        #expect(run.status(run.steps[0], now: start + 60) == ["May still run on your Mac"])
+        #expect(run.status(run.steps[0], now: start + 60, spoken: true) == ["May still run on your Mac"])
+    }
+
+    @Test func theWireStateDecodesAndAnOlderUnknownOneStillDegrades() throws {
+        #expect(ToolStepState(wire: "unsure") == .unsure && ToolStepState.unsure.rawValue == "unsure")
+        #expect(ToolStepState(wire: "paused") == .unknown("paused"))
     }
 }

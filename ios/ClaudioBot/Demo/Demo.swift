@@ -151,6 +151,9 @@ enum Demo {
         case "approvalsanswered":
             DemoSessions.sleepersAnswered = true
             router.open(.session(DemoSessions.sleepers))
+        case "unsure":
+            DemoSessions.sleepersUnsure = true
+            router.open(.session(DemoSessions.sleepers))
         case "streaming": router.open(.session(DemoSessions.parity))
         case "cloud": router.open(.session(DemoSessions.changelog))
         case "longthread": router.open(.session(DemoSessions.catalog))

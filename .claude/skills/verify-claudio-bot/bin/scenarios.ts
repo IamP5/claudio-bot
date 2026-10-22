@@ -50,8 +50,10 @@ export type Action =
   /** The user sends in the thread. interrupt: "Stop and send". While the phone is offline the message waits for the next hello, as in the app. */
   | { do: "send"; name: string; text: string; interrupt?: boolean; mark?: string }
   | { do: "until"; mark: string; what: string; timeoutS: number; test: (ev: Ev) => boolean; optional?: boolean }
-  /** task: stop only the running task whose label holds this text. */
-  | { do: "stop"; name: string; mark: string; task?: string }
+  /** task: stop only the running task whose label holds this text. turnOnly: "Stop the turn only". */
+  | { do: "stop"; name: string; mark: string; task?: string; turnOnly?: boolean }
+  /** Freezes (SIGSTOP) or resumes (SIGCONT) the session's own Claude Code process, as a hung or busy Mac would. */
+  | { do: "signal-claude"; name: string; signal: "SIGSTOP" | "SIGCONT"; mark: string }
   | { do: "sleep"; s: number }
   | { do: "mark"; mark: string }
   /** Unwatches the thread, as the app does when the user goes back to the list; the bridge counts it as a visit. */
@@ -1378,6 +1380,9 @@ const S6c: Scenario = {
   ],
 };
 
+/** The bridge's notices that a command it followed ended. */
+const endedSaid = (ev: Ev, name: string) => notices(ev, name).filter((i) => /ended\. Claude Code no longer followed/.test(i.text ?? ""));
+
 /** Every Bash step of the session in its latest snapshot at or before `at`. */
 const bashSteps = (ev: Ev, name: string, at: number) => stepsOf(last(ev, name, at) ?? ({ items: [] } as unknown as Snap)).filter((x) => x.tool === "Bash");
 
@@ -1406,6 +1411,9 @@ const S6d: Scenario = {
     { do: "mark", mark: "after-ended" },
     { do: "sleep", s: 30 },
     { do: "mark", mark: "after-ended-40s" },
+    { do: "until", mark: "ended-said", what: "the bridge to say each command ended", timeoutS: 240, optional: true, test: (ev) => ["vu1", "vu2"].every((n) => endedSaid(ev, n).length > 0) },
+    { do: "sleep", s: 5 },
+    { do: "mark", mark: "after-said" },
   ],
   pre: [created("vu1"), created("vu2"), { what: "the bridge restarted", check: (ev) => (mark(ev, "after-restart") !== undefined ? ok("yes") : no("no")) }],
   rubric: [
@@ -1414,15 +1422,15 @@ const S6d: Scenario = {
       tell: "state",
       lane: "protocol",
       text: "Once the bridge cannot tell whether a command still runs, its step stops spinning and says so, and the session rests.",
-      pass: "At mark after-restart, vu1's Bash step reads stopped with a cause that says the bridge cannot tell, and vu1 is not working.",
-      fail: "vu1's step reads running, or reads stopped as if it surely ended, or vu1 reads working.",
+      pass: 'At mark after-restart, vu1\'s Bash step is in state "unsure" with a cause that says the bridge cannot tell, and vu1 is not working.',
+      fail: "vu1's step reads running, or stopped as if it surely ended, or any state but unsure; or vu1 reads working.",
       check: (ev) => {
         const at = mark(ev, "after-restart");
         if (at === undefined) return needMarks(ev, "after-restart")!;
         const step = bashSteps(ev, "vu1", at)[0];
         const s = last(ev, "vu1", at);
         if (!step) return no("no Bash step for vu1");
-        if (step.state !== "stopped" || !/can.t tell/i.test(step.cause ?? "")) return no(`vu1 step ${step.state} ${step.cause ?? ""}`);
+        if (step.state !== "unsure" || !/can.t tell/i.test(step.cause ?? "")) return no(`vu1 step ${step.state} ${step.cause ?? ""}`);
         return s && !isWorking(s) ? ok(`vu1: ${step.cause}`) : no(`vu1 reads working: row ${rowStatus(s)}, working ${s?.controls?.working}`);
       },
     },
@@ -1446,6 +1454,24 @@ const S6d: Scenario = {
         return bad.length ? no(bad.join("; ")) : ok("both settled, neither working");
       },
     },
+    {
+      id: "S6d.3",
+      tell: "state",
+      lane: "protocol",
+      text: "Each command's end is said once, whether the bridge knew its process group or found it only by its command line.",
+      pass: 'By mark after-said, vu1 and vu2 each hold exactly one notice that the command "ended", and each Bash step reads stopped, no longer unsure.',
+      fail: "A thread never says its command ended, says it twice, or its step still reads unsure.",
+      check: (ev) => {
+        const at = mark(ev, "after-said");
+        if (at === undefined) return no("the bridge never said both commands ended (mark ended-said not reached)");
+        const bad = ["vu1", "vu2"].flatMap((n) => {
+          const said = endedSaid(ev, n);
+          const step = bashSteps(ev, n, at)[0];
+          return [...(said.length === 1 ? [] : [`${n}: ${said.length} ended notices`]), ...(step?.state === "stopped" ? [] : [`${n}: step ${step?.state}`])];
+        });
+        return bad.length ? no(bad.join("; ")) : ok("each said ended once; steps stopped");
+      },
+    },
   ],
 };
 
@@ -1465,10 +1491,7 @@ const S4b: Scenario = {
     { do: "until", mark: "bg-running", what: "the sleep 305 to run on the Mac", timeoutS: 60, test: (ev) => ev.procs("sleep 305").length > 0 },
     { do: "sleep", s: 2 },
     { do: "stop", name: "s4b", task: "sleep 305", mark: "stopped" },
-    { do: "sleep", s: 5 },
-    { do: "mark", mark: "stop-5s" },
-    { do: "sleep", s: 20 },
-    { do: "mark", mark: "stop-25s" },
+    ...[2, 5, 10, 15, 20, 25].flatMap((t, i, all): Action[] => [{ do: "sleep", s: t - (all[i - 1] ?? 0) }, { do: "mark", mark: `stop-${t}s` }]),
     { do: "ps", pattern: "sleep 305", as: "after-stop" },
   ],
   pre: [created("s4b")],
@@ -1477,18 +1500,95 @@ const S4b: Scenario = {
       id: "S4b.1",
       tell: "stop",
       lane: "protocol",
-      text: "After stopping the only running task, the session rests and shows no turn that never started.",
-      pass: "At marks stop-5s and stop-25s, controls.working is false, controls.turn is absent and the row is not working; the sleep 305 is gone.",
-      fail: "The session reads working, or a wake turn shows, or the command still runs.",
+      text: "After stopping the only running task, the session rests, shows no turn that never started, and says only what stopped.",
+      pass: 'At marks 2, 5, 10, 15, 20 and 25 s after the stop, controls.working is false, controls.turn is absent and the row is not working; the Bash step reads stopped "Stopped by you"; no notice says the turn was stopped; the sleep 305 is gone.',
+      fail: "The session reads working or shows a wake turn at any mark, the step reads otherwise, a notice claims the turn stopped, or the command still runs.",
       check: (ev) => {
-        const at = [mark(ev, "stop-5s"), mark(ev, "stop-25s")];
-        if (at.some((m) => m === undefined)) return needMarks(ev, "stop-5s", "stop-25s")!;
+        const at = [2, 5, 10, 15, 20, 25].map((t) => mark(ev, `stop-${t}s`));
+        const stopped = mark(ev, "stopped");
+        if (stopped === undefined || at.some((m) => m === undefined)) return needMarks(ev, "stopped", "stop-25s")!;
         if ((ev.samples["after-stop"] ?? []).length) return no(`still running: ${ev.samples["after-stop"]!.join(" | ").slice(0, 120)}`);
         const bad = at.flatMap((m) => {
           const s = last(ev, "s4b", m!);
-          return s && (isWorking(s) || s.controls?.turn != null) ? [`at ${Math.round(m! / 1000)} s: row ${rowStatus(s)}, working ${s.controls?.working}, turn ${JSON.stringify(s.controls?.turn)}`] : [];
+          const step = bashSteps(ev, "s4b", m!)[0];
+          return [
+            ...(s && (isWorking(s) || s.controls?.turn != null) ? [`at ${Math.round((m! - stopped) / 1000)} s: row ${rowStatus(s)}, working ${s.controls?.working}, turn ${JSON.stringify(s.controls?.turn)}`] : []),
+            ...(step && !(step.state === "stopped" && step.cause === "Stopped by you") && m! >= stopped + 5000 ? [`step ${step.state} ${step.cause ?? ""}`] : []),
+          ];
         });
-        return bad.length ? no(bad.join("; ")) : ok("at rest 5 s and 25 s after the stop");
+        const claim = notices(ev, "s4b", stopped).find((i) => /the turn/i.test(i.text ?? "") && i.reason === "stop");
+        if (claim) bad.push(`notice: ${claim.text}`);
+        return bad.length ? no([...new Set(bad)].join("; ")) : ok("at rest at every mark, step stopped by you, nothing claimed of a turn");
+      },
+    },
+  ],
+};
+
+const S4c: Scenario = {
+  id: "S4c",
+  area: "sessions",
+  title: "Stop the turn only while Claude Code is frozen",
+  needsSimulator: false,
+  journey: [
+    "Claude Code is frozen (a hung or busy Mac) when the user sends a prompt and presses Stop the turn only.",
+    "Nothing may say the turn stopped while it is frozen. Once it resumes, the prompt must not run, and only then does the thread say the user stopped it.",
+  ],
+  setup: [
+    { do: "create", name: "s4c", prompt: "Reply with the single word ready." },
+    started("s4c"),
+    { do: "until", mark: "s4c-ready", what: "the first turn to end", timeoutS: 120, test: (ev) => replied(last(ev, "s4c")) && !isWorking(last(ev, "s4c")!) },
+    { do: "signal-claude", name: "s4c", signal: "SIGSTOP", mark: "frozen" },
+    { do: "send", name: "s4c", text: "Run these three Bash commands one at a time, each in its own tool call: echo s4cone ; echo s4ctwo ; echo s4cthree . Then reply with the single word done.", mark: "sent" },
+    { do: "until", mark: "turn-shown", what: "the prompt's turn to show", timeoutS: 30, test: (ev) => last(ev, "s4c")?.controls?.turn != null },
+    { do: "sleep", s: 1.5 },
+    { do: "stop", name: "s4c", turnOnly: true, mark: "stopped" },
+    { do: "sleep", s: 3 },
+    { do: "signal-claude", name: "s4c", signal: "SIGCONT", mark: "resumed" },
+    { do: "until", mark: "s4c-rest", what: "the session to rest after it resumes", timeoutS: 60, optional: true, test: atRest("s4c") },
+    { do: "sleep", s: 8 },
+    { do: "mark", mark: "after" },
+  ],
+  pre: [created("s4c"), { what: "Claude Code was frozen and resumed", check: (ev) => (mark(ev, "resumed") !== undefined ? ok("yes") : no("no")) }],
+  rubric: [
+    {
+      id: "S4c.1",
+      tell: "stop",
+      lane: "protocol",
+      text: "While Claude Code is frozen, nothing says the turn stopped.",
+      pass: "No notice with reason stop appears between Stop and the resume.",
+      fail: "A stop notice appears while Claude Code is still frozen.",
+      check: (ev) => {
+        const [a, b] = [mark(ev, "stopped"), mark(ev, "resumed")];
+        if (a === undefined || b === undefined) return needMarks(ev, "stopped", "resumed")!;
+        const early = notices(ev, "s4c", a).find((i) => i.reason === "stop" && ev.atOf(i.at) < b);
+        return early ? no(`said while frozen: ${early.text}`) : ok("nothing said while frozen");
+      },
+    },
+    {
+      id: "S4c.2",
+      tell: "stop",
+      lane: "protocol",
+      text: "The stopped prompt does not run once Claude Code resumes.",
+      pass: "The transcript has no Bash call for echo s4cone, s4ctwo or s4cthree.",
+      fail: "Claude Code ran any of the prompt's commands.",
+      check: (ev) => {
+        if (mark(ev, "after") === undefined) return needMarks(ev, "after")!;
+        const ran = blocks(ev.transcript("s4c").main).uses.filter((u) => u.name === "Bash" && /s4c(one|two|three)/.test(String(u.input.command ?? "")));
+        return ran.length ? no(`ran: ${ran.map((u) => String(u.input.command)).join("; ")}`) : ok("no command of the stopped prompt ran");
+      },
+    },
+    {
+      id: "S4c.3",
+      tell: "stop",
+      lane: "protocol",
+      text: "Once the turn ended, the thread says the user stopped it, in the bridge's own words.",
+      pass: 'After the resume, a notice with reason "stop" starts "Stopped by you".',
+      fail: "No such notice.",
+      check: (ev) => {
+        const b = mark(ev, "resumed");
+        if (b === undefined) return needMarks(ev, "resumed")!;
+        const it = notices(ev, "s4c", b).find((i) => i.reason === "stop" && (i.text ?? "").startsWith("Stopped by you") && ev.atOf(i.at) >= b);
+        return it ? ok(it.text ?? "") : no("no bridge stop notice after the resume");
       },
     },
   ],
@@ -1814,4 +1914,4 @@ const S8fg: Scenario = {
   ],
 };
 
-export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S4, S4b, S5, S6, S6b, S6c, S6d, S7, S8, S8fg];
+export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S4, S4b, S4c, S5, S6, S6b, S6c, S6d, S7, S8, S8fg];

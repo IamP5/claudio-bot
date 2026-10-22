@@ -56,7 +56,7 @@ export function outlivedSteps(list: readonly Outlived[], causes: { unseen: strin
     const step = o.stepId ?? `task:${o.id}`;
     if (o.over === undefined) out.set(step, { state: "running", outlived: true, ...(o.startedAt !== undefined && { startedAt: o.startedAt }) });
     else if (o.over === "stopped") out.set(step, { outlived: true });
-    else out.set(step, { ended: { state: "stopped", cause: o.over === "ended" ? causes.unseen : causes.cantTell }, outlived: true });
+    else out.set(step, { ended: o.over === "ended" ? { state: "stopped", cause: causes.unseen } : { state: "unsure", cause: causes.cantTell }, outlived: true });
   }
   return out;
 }

@@ -506,7 +506,7 @@ extension PermissionOutcome {
         switch tone {
         case .allowed: AvatarColor.green.color
         case .refused, .failed: Theme.danger
-        case .ended: Theme.tertiary
+        case .ended, .unsure: Theme.tertiary
         }
     }
 }

@@ -34,6 +34,8 @@ let gateDecisions: { botId: string; cardId: string; choice: string }[];
 let clock: number;
 /** The process group of each background command Claude Code runs, as the Mac's process table shows it. */
 let shells: () => Promise<Map<string, number>>;
+/** Claude Code's group-leading shells with their command lines, as ps shows them. */
+let leaders: () => Promise<{ group: number; command: string }[]>;
 let appChanged: (() => void)[] = [];
 
 const apps = (): ClaudeApps => ({
@@ -84,6 +86,7 @@ function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
       }) as unknown as typeof query,
       executable: () => "/fake/claude",
       shells: () => shells(),
+      leaders: () => leaders(),
     },
     scope: (cwd) => ({ bridgeHome: join(base, "home"), own: cwd, userMd: null, homedir: base }),
     folders: () => [],
@@ -114,6 +117,7 @@ beforeEach(() => {
   clock = Date.parse("2026-10-18T12:00:00.000Z");
   appChanged = [];
   shells = async () => new Map();
+  leaders = async () => [];
 });
 afterEach(() => {
   sessions?.stop();
@@ -1458,7 +1462,7 @@ describe("the thread says what stopped only once it did", () => {
       await until(async () => (await restartLines()).length === 1);
       expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: sleep bk."]);
       expect([(await controlsNow()).tasks, (await controlsNow()).working, alive(other.pid), (await rowOf(ASK)).status]).toEqual([[], false, true, "idle"]);
-      expect(await stepOf("toolu_bk")).toMatchObject({ state: "stopped", cause: "Can't tell whether this still runs on your Mac" });
+      expect(await stepOf("toolu_bk")).toMatchObject({ state: "unsure", cause: "Can't tell whether this still runs on your Mac" });
       clock += 10_000;
       sessions.tick(new Date(clock));
       await flush();
@@ -1486,7 +1490,7 @@ describe("the thread says what stopped only once it did", () => {
     await until(async () => (await restartLines()).length === 1);
     expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: sleep 600."]);
     expect((await rowOf(ASK)).outcome?.kind).not.toBe("lost");
-    expect([(await stepOf("toolu_k")), (await controlsNow()).working]).toMatchObject([{ state: "stopped", cause: "Can't tell whether this still runs on your Mac" }, false]);
+    expect([(await stepOf("toolu_k")), (await controlsNow()).working]).toMatchObject([{ state: "unsure", cause: "Can't tell whether this still runs on your Mac" }, false]);
   });
 
   test("background work saved by an older bridge, with no group or step, is said to maybe still run and its step is not cut off", async () => {
@@ -1501,7 +1505,7 @@ describe("the thread says what stopped only once it did", () => {
     await start();
     await until(async () => (await restartLines()).length === 1);
     expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: sleep 600."]);
-    expect(await stepOf("toolu_k")).toMatchObject({ state: "stopped", cause: "Can't tell whether this still runs on your Mac" });
+    expect(await stepOf("toolu_k")).toMatchObject({ state: "unsure", cause: "Can't tell whether this still runs on your Mac" });
   });
 
   test("a later Claude Code's word that a command the bridge cannot tell about stopped is not taken either", async () => {
@@ -1520,7 +1524,7 @@ describe("the thread says what stopped only once it did", () => {
         },
       });
       expect((await noticesNow()).map((n) => n.text).filter((t) => t.includes("didn't finish"))).toEqual([]);
-      expect(await stepOf("toolu_bk")).toMatchObject({ state: "stopped", cause: "Can't tell whether this still runs on your Mac" });
+      expect(await stepOf("toolu_bk")).toMatchObject({ state: "unsure", cause: "Can't tell whether this still runs on your Mac" });
     } finally {
       await other.end();
     }
@@ -1565,7 +1569,7 @@ describe("the thread says what stopped only once it did", () => {
       expect(alive(running.pid)).toBe(true);
       expect((await noticesNow()).map((n) => n.text).filter((t) => t.startsWith("Stopped by you"))).toEqual([]);
       expect((await noticesNow()).at(-1)?.text).toContain("may still run on this Mac");
-      expect([(await controlsNow()).working, await stepOf("toolu_bk")]).toMatchObject([false, { state: "stopped", cause: "Can't tell whether this still runs on your Mac" }]);
+      expect([(await controlsNow()).working, await stepOf("toolu_bk")]).toMatchObject([false, { state: "unsure", cause: "Can't tell whether this still runs on your Mac" }]);
     } finally {
       await running.end();
     }
@@ -1642,6 +1646,69 @@ describe("the thread says what stopped only once it did", () => {
     } finally {
       await running.end();
     }
+  });
+
+  test("a command found only by its shell's command line is checked again after a restart, and its end is said once", async () => {
+    const shell = backgroundCommand("not-its-output");
+    try {
+      leaders = async () => [{ group: shell.pid, command: "/bin/zsh -c source snap.sh && eval 'sleep bk' < /dev/null" }];
+      await startedInBackground({});
+      const q = queries[0]!;
+      await transcribe(calledEntry("toolu_bk", "Bash", { command: "sleep bk", run_in_background: true }), resultEntry("toolu_bk", "Command running in background with ID: bk."));
+      q.emit(toolCall("toolu_bk", "Bash", { command: "sleep bk" }), taskStarted(shellTask("bk", "toolu_bk", "Sleep")), level(shellTask("bk", "toolu_bk", "Sleep")), result());
+      await flush();
+      await flush();
+      await restart();
+      await until(async () => (await restartLines()).length === 1);
+      expect(await stepOf("toolu_bk")).toMatchObject({ state: "unsure", cause: "Can't tell whether this still runs on your Mac" });
+      expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } })).toEqual([
+        { type: "error", message: expect.stringContaining("can't tell whether"), about: { kind: "stop", sessionId: ASK } },
+      ]);
+      expect(await handle({ type: "session_stop", sessionId: ASK })).toEqual([
+        { type: "error", message: expect.stringContaining("can't tell whether"), about: { kind: "stop", sessionId: ASK } },
+      ]);
+      expect(alive(shell.pid)).toBe(true);
+      await shell.end();
+      for (const gap of [40_000, 40_000]) {
+        clock += gap;
+        sessions.tick(new Date(clock));
+        await until(async () => (await noticesNow()).some((n) => n.text.includes("ended.")));
+      }
+      expect((await noticesNow()).filter((n) => n.text.includes("ended.")).map((n) => n.text)).toEqual(['Command "sleep bk" ended. Claude Code no longer followed it, so how it ended is not known.']);
+      expect(await stepOf("toolu_bk")).toMatchObject({ state: "stopped", cause: "It ended without a result" });
+    } finally {
+      await shell.end();
+    }
+  });
+
+  test("between a task's end and the wake turn it announces, its step is not cut off as ended before its result lands", async () => {
+    await start();
+    await send("Start it");
+    const q = queries[0]!;
+    await transcribe(calledEntry("toolu_bg", "Bash", { command: "sleep 8", run_in_background: true }), resultEntry("toolu_bg", "Command running in background with ID: bp."));
+    q.emit(taskStarted(shellTask("bp", "toolu_bg", "sleep 8")), level(shellTask("bp", "toolu_bg", "sleep 8")), result());
+    await flush();
+    // Claude Code marks the task completed a moment before it notifies and before its result reaches the transcript.
+    q.emit(completed("bp"));
+    await flush();
+    expect((await stepOf("toolu_bg")).state).toBe("running");
+    q.emit(notifiedOf("bp", "toolu_bg"), level());
+    await flush();
+    expect((await stepOf("toolu_bg")).state).toBe("running");
+    q.emit(wakeInit());
+    await flush();
+    expect((await controlsNow()).working).toBe(true);
+  });
+
+  test("a model change Claude Code's query closed under is refused in plain words", async () => {
+    await start();
+    await send("Go");
+    queries[0]!.setModel = async () => {
+      throw new Error("Query closed before response received");
+    };
+    expect(await handle({ type: "session_set", sessionId: ASK, patch: { model: "opus" } })).toEqual([
+      { type: "error", message: "Claude Code did not take the change: Claude Code stopped before it answered. Try again.", about: { kind: "set", sessionId: ASK } },
+    ]);
   });
 
   test("two Stops of one outlived command at once name it once", async () => {

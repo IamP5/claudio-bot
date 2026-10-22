@@ -41,7 +41,7 @@ export type OwnDeps = {
   userName: string;
   ledger: Ledger;
   persist: Persist;
-  claude: Pick<SessionSpec, "query" | "executable" | "shells">;
+  claude: Pick<SessionSpec, "query" | "executable" | "shells" | "leaders">;
   /** The mode and model the transcript last ran with, when it has them. */
   last(id: SessionId): { mode: PermissionMode | null; model: string | null };
   transcriptExists(id: SessionId, cwd: string): boolean;
@@ -172,6 +172,8 @@ type TurnEnding = "stopped" | "finished" | "failed";
 type TurnStop = { envelope: string | null; early: boolean; at: string; said: Task[]; covered: Task[]; whole: boolean; asking: number; ended?: TurnEnding };
 
 const upper = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/** The SDK's words for a request its query closed under, as the user reads them. */
+const plainSdkError = (text: string) => (/Query closed before response received/i.test(text) ? "Claude Code stopped before it answered. Try again." : text);
 const addNew = (to: Task[], tasks: readonly Task[]) => to.push(...tasks.filter((t) => !to.some((x) => x.id === t.id)));
 
 export function createOwn(deps: OwnDeps): Own {
@@ -349,9 +351,12 @@ export function createOwn(deps: OwnDeps): Own {
     }
     if (fate.unknown.length > 0) {
       // One with a process group is looked at again, so its end can be said; one without stays as the bridge cannot tell.
-      const grouped = fate.unknown.filter((t): t is Outlived => typeof t.group === "number" && !allOutlived(rec).some((o) => o.id === t.id));
+      const looked = (t: BackgroundTask) => typeof t.group === "number" || typeof t.loose === "number";
+      const grouped = fate.unknown
+        .filter((t) => looked(t) && !allOutlived(rec).some((o) => o.id === t.id))
+        .map((t): Outlived => ({ ...t, group: (t.group ?? t.loose)! }));
       driveOf(rec).outlived = settled([...allOutlived(rec), ...grouped], grouped.map((t) => t.id), "unsure");
-      markUnsure(rec, fate.unknown.filter((t) => typeof t.group !== "number"));
+      markUnsure(rec, fate.unknown.filter((t) => !looked(t)));
       notice(rec.id, goneNote("Claude Code", cause, "unknown", fate.unknown), "info", cause === "restart" ? "restart" : undefined);
     }
     adopt(rec, fate.running, cause);
@@ -387,6 +392,18 @@ export function createOwn(deps: OwnDeps): Own {
       "info",
       cause === "restart" ? "restart" : "task",
     );
+  }
+
+  /**
+   * A Stop that finds nothing it can stop, while background work the bridge cannot tell about may still run (all of
+   * it, or the task `one` names): it says so rather than that nothing runs.
+   */
+  function cantStop(rec: SessionRecord, one: TaskId | null): string | null {
+    const unsure = allOutlived(rec).filter((o) => o.over === "unsure" && (one === null || o.id === one));
+    const unnamed = one === null ? (rec.own?.unsure ?? []).length : (rec.own?.unsure ?? []).includes(`task:${one}`) ? 1 : 0;
+    if (unsure.length === 0 && unnamed === 0) return null;
+    const what = unsure.length > 0 ? listed(unsure.map(nameOf)) : "its background work";
+    return `The bridge can't tell whether ${what} still ${unsure.length > 1 ? "run" : "runs"} on your Mac, so it has nothing it can stop.`;
   }
 
   const endedText = (tasks: readonly Outlived[]) =>
@@ -426,6 +443,7 @@ export function createOwn(deps: OwnDeps): Own {
       const now = (kind: string) => watched.filter((o, i) => runs[i] === kind && free(o) && outlivedOf(rec).some((x) => x.id === o.id));
       const at = deps.now().getTime();
       const unsureGone = allOutlived(rec).filter((o) => o.over === "unsure" && unsureDue(rec, o, at) && !groupAlive(o.group));
+      for (const o of unsureGone) unsureLooks.delete(`${rec.id}:${o.id}`);
       const ended = [...now("gone"), ...unsureGone];
       const unsure = now("unsure");
       Object.assign(before, { outlived: drive.outlived, notices: drive.notices, last: lastTask.get(rec.id) });
@@ -759,12 +777,12 @@ export function createOwn(deps: OwnDeps): Own {
     const a = activityOf(rec);
     const one = typeof target === "object" ? target.task : null;
     const restop = one !== null && deps.now().getTime() - (stoppedAt.get(rec.id)?.get(one) ?? -Infinity) < RESTOP_MS;
-    if (one !== null && !a.tasks.some((t) => t.id === one)) return restop ? { ok: true } : refused("That task is not running.");
+    if (one !== null && !a.tasks.some((t) => t.id === one)) return restop ? { ok: true } : refused(cantStop(rec, one) ?? "That task is not running.");
     const inFlight = beingStopped.get(rec.id) ?? new Set<TaskId>();
     if (one !== null && inFlight.has(one)) return { ok: true };
     const named = a.tasks.filter((t) => ends(a, target, t.id) && !inFlight.has(t.id));
     const alone = outlivedOf(rec).filter((o) => named.some((t) => t.id === o.id));
-    if (!s && alone.length === 0) return refused(NOTHING_RUNS);
+    if (!s && alone.length === 0) return refused(cantStop(rec, one) ?? NOTHING_RUNS);
     const at = now();
     const drive = driveOf(rec);
     const life = drive.session.lifecycle;
@@ -823,7 +841,7 @@ export function createOwn(deps: OwnDeps): Own {
         if (stop.ended) sayTurnStop(rec, stop);
         else if (turnStops.get(rec.id) === stop) turnStops.delete(rec.id);
       }
-      return refused(one === null ? NOTHING_RUNS : "That task is not running.");
+      return refused(cantStop(rec, one) ?? (one === null ? NOTHING_RUNS : "That task is not running."));
     }
     // Claude Code confirms the stop of each task it was asked to stop; a foreground task stops only with its turn.
     const asked = (t: Task) => alone.some((o) => o.id === t.id) || (one !== null ? t.id === one : target === "all" && t.background);
@@ -905,7 +923,7 @@ export function createOwn(deps: OwnDeps): Own {
           drive.mode = patch.mode;
         }
       } catch (e) {
-        return refused(`Claude Code did not take the change: ${errorText(e)}`);
+        return refused(`Claude Code did not take the change: ${plainSdkError(errorText(e))}`);
       } finally {
         deps.persist();
         changed(rec.id);
@@ -995,7 +1013,7 @@ export function createOwn(deps: OwnDeps): Own {
 
     steps(rec) {
       const out = outlivedSteps(allOutlived(rec), { unseen: UNSEEN_END, cantTell: CANT_TELL });
-      for (const key of rec.own?.unsure ?? []) out.set(key, { ...out.get(key), ended: { state: "stopped", cause: CANT_TELL }, outlived: true });
+      for (const key of rec.own?.unsure ?? []) out.set(key, { ...out.get(key), ended: { state: "unsure", cause: CANT_TELL }, outlived: true });
       for (const c of rec.own?.cards ?? []) {
         if (c.kind !== "permission") continue;
         if (c.agent) {
@@ -1009,7 +1027,9 @@ export function createOwn(deps: OwnDeps): Own {
         else if (c.allowedAt) out.set(c.toolUseId, { ...out.get(c.toolUseId), startedAt: c.allowedAt });
       }
       for (const id of rec.own?.stoppedSteps ?? []) out.set(id, { ...out.get(id), ended: { state: "stopped", cause: STOPPED_BY_YOU } });
-      for (const [id, p] of runningSteps(activityOf(rec))) out.set(id, { ...p, ...out.get(id), state: "running" });
+      const a = activityOf(rec);
+      for (const t of a.all.values()) if (t.ended && t.told && t.stepId !== null) out.set(t.stepId, { ...out.get(t.stepId), told: true });
+      for (const [id, p] of runningSteps(a)) out.set(id, { ...p, ...out.get(id), state: "running" });
       return out;
     },
 
@@ -1019,7 +1039,8 @@ export function createOwn(deps: OwnDeps): Own {
       const turn = activityOf(rec).turn;
       const out = drive.cut && !(turn !== null && turn.startedAt <= drive.cut.at) ? [drive.cut] : [];
       // At rest nothing runs, so a step the transcript still leaves running never got its result.
-      if (!working(rec) && !deps.elsewhere(rec.id)) out.push({ at: rested.get(rec.id) ?? bootAt, state: "stopped", cause: UNSEEN_END });
+      // While Claude Code has announced a turn of its own, the work it reports on may not have its result written yet.
+      if (!working(rec) && !deps.elsewhere(rec.id) && !drivers.get(rec.id)?.wakeDue) out.push({ at: rested.get(rec.id) ?? bootAt, state: "stopped", cause: UNSEEN_END });
       return out;
     },
 

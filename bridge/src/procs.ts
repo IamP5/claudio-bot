@@ -47,13 +47,18 @@ async function outputs(pids: readonly number[]): Promise<Map<number, string[]> |
 
 const taskOf = (path: string) => /\/([^/]+)\.output$/.exec(path)?.[1];
 
+/** The processes Claude Code (process `pid`) started that lead a process group of their own, with their command lines. */
+export async function shellLeaders(pid: number): Promise<{ group: number; command: string }[]> {
+  return ((await read(["ps", "-axww", "-o", "pid=,ppid=,pgid=,command="])) ?? "")
+    .split("\n")
+    .map((l) => /^\s*(\d+)\s+(\d+)\s+(\d+)\s(.*)$/.exec(l))
+    .filter((m): m is RegExpExecArray => m !== null && Number(m[2]) === pid && m[1] === m[3])
+    .map((m) => ({ group: Number(m[1]), command: m[4]! }));
+}
+
 /** By task id, the process group of each background shell Claude Code (process `pid`) runs. Empty when none is found. */
 export async function shellGroups(pid: number): Promise<Map<string, number>> {
-  const leaders = ((await read(["ps", "-axo", "pid=,ppid=,pgid="])) ?? "")
-    .split("\n")
-    .map((l) => l.trim().split(/\s+/).map(Number))
-    .filter(([p, parent, group]) => parent === pid && p === group)
-    .map(([p]) => p!);
+  const leaders = (await shellLeaders(pid)).map((l) => l.group);
   const found = new Map<string, number>();
   for (const [leader, paths] of (await outputs(leaders)) ?? []) for (const id of paths.map(taskOf)) if (id !== undefined) found.set(id, leader);
   return found;

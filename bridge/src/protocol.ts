@@ -411,9 +411,10 @@ export type TaskId = string & { readonly __brand: "TaskId" };
 
 /**
  * waiting: an approval card for the call is open, so it has not started. stopped: cut off by the user or by a bridge
- * restart. The app shows a step in a state it does not know without a state mark.
+ * restart. unsure: its command outlived what the bridge can follow, and the bridge cannot tell whether it still runs;
+ * cause says so. The app shows a step in a state it does not know without a state mark.
  */
-export type StepState = "running" | "waiting" | "ok" | "error" | "denied" | "stopped";
+export type StepState = "running" | "waiting" | "ok" | "error" | "denied" | "stopped" | "unsure";
 
 /**
  * One tool call in a work item. id: its tool_use id, which session_tool names. label: the call in words ("Edit

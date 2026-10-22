@@ -15,7 +15,7 @@ import type {
 import type { Tickable } from "./clock";
 import type { Headroom, Ledger } from "./ledger";
 import { notices as noticeText, withNotices, type SessionInput } from "./prompts";
-import { groupAlive, shellGroups, taskRun } from "./procs";
+import { groupAlive, shellGroups, shellLeaders, taskRun } from "./procs";
 import type { NoticeReason, StopTarget, TaskId } from "./protocol";
 import { sandboxFailure } from "./sandbox";
 import type { Persist } from "./store";
@@ -137,6 +137,7 @@ async function fateOf(tasks: readonly Background[]): Promise<Fate> {
   const fate: Fate = { stopped: [], running: [], unknown: [] };
   for (const t of tasks) {
     if (typeof t.group === "number") fate[FATE_OF_RUN[await taskRun(t.group, t.id)]].push(t);
+    else if (typeof t.loose === "number") fate[groupAlive(t.loose) ? "unknown" : "stopped"].push(t);
     else if (t.kind === "agent" && t.claude !== undefined && !groupAlive(t.claude)) fate.stopped.push(t);
     else fate.unknown.push(t);
   }
@@ -701,6 +702,8 @@ export type Session = Tickable & {
   readonly working: boolean;
   /** Why queued work is held while nothing runs; null when something runs or nothing waits. */
   readonly parkedFor: ParkReason | null;
+  /** Claude Code announced a turn of its own that has not begun: the work it reports may still show as running. */
+  readonly wakeDue: boolean;
   /** Claude Code could not be started on the last try and the session waits to try again. working stays true meanwhile. */
   readonly unavailable: boolean;
   /** The envelope in flight. The gate reads its initiator. */
@@ -780,6 +783,8 @@ export type SessionSpec = {
   idleMs?: number;
   /** By task id, the process group of each background shell of Claude Code's process `pid` (null: none spawned). Default shellGroups. */
   shells?: (pid: number | null) => Promise<Map<string, number>>;
+  /** The group-leading processes Claude Code's process `pid` started, with their command lines. Default shellLeaders. */
+  leaders?: (pid: number | null) => Promise<{ group: number; command: string }[]>;
   /**
    * What became of a query's background work once its Claude Code is gone, checked against the process table. An owner
    * given this says so itself (and may follow the commands that still run); without one, notes say it.
@@ -824,6 +829,8 @@ type Live = {
   background: Background[];
   /** The process group of each background command's shell, by task id, once found. */
   groups: Map<string, number>;
+  /** The group of the one shell whose command line holds a command whose output file could not be found, by task id. */
+  loose: Map<string, number>;
   /** Searches of the process table for those groups so far, and whether one is under way. */
   searches: number;
   searching: boolean;
@@ -895,6 +902,7 @@ export function createSession(spec: SessionSpec): Session {
   const executable = spec.executable ?? claudeExecutable;
   const spawnProcess = spec.spawn ?? spawnGroup;
   const shells = spec.shells ?? ((pid: number | null) => (pid === null ? Promise.resolve(new Map<string, number>()) : shellGroups(pid)));
+  const leaders = spec.leaders ?? ((pid: number | null) => (pid === null ? Promise.resolve([]) : shellLeaders(pid)));
   const userName = spec.userName ?? "The user";
   const label = driverKey(spec.actor);
   const idleMs = spec.idleMs ?? IDLE_MS;
@@ -1240,6 +1248,7 @@ export function createSession(spec: SessionSpec): Session {
       sandboxNoted: false,
       background: [],
       groups: new Map(),
+      loose: new Map(),
       searches: 0,
       searching: false,
       pid: () => pid,
@@ -1293,10 +1302,12 @@ export function createSession(spec: SessionSpec): Session {
     return l.background.map((b) => {
       const t = l.tasks.all.get(b.id as TaskId);
       const group = l.groups.get(b.id);
+      const loose = group === undefined ? l.loose.get(b.id) : undefined;
       return {
         ...b,
         ...(t && { kind: t.kind, label: t.label, startedAt: t.startedAt, ...(t.stepId !== null && { stepId: t.stepId }) }),
         ...(group !== undefined && { group }),
+        ...(loose !== undefined && { loose }),
         ...(t?.kind === "agent" && pid !== null && { claude: pid }),
       };
     });
@@ -1317,10 +1328,12 @@ export function createSession(spec: SessionSpec): Session {
     if (l.searching || l.searches >= SHELL_SEARCHES || missing().length === 0) return;
     l.searching = true;
     l.searches++;
-    shells(l.pid()).then(
-      (found) => {
+    const pid = l.pid();
+    Promise.all([shells(pid), leaders(pid)]).then(
+      ([found, shellsOf]) => {
         l.searching = false;
         for (const [id, group] of found) if (l.background.some((b) => b.id === id)) l.groups.set(id, group);
+        pairLoose(l, shellsOf);
         if (live !== l) return;
         remember(savedBackground(l));
         if (missing().length > 0) setTimeout(() => live === l && saveBackground(l), SHELL_SEARCH_AGAIN_MS);
@@ -1330,6 +1343,25 @@ export function createSession(spec: SessionSpec): Session {
         log(`session ${label}: finding background shells failed: ${errorText(e)}`);
       },
     );
+  }
+
+  /**
+   * A command whose shell sent its output elsewhere before the bridge looked has no output file to find it by. When
+   * exactly one of Claude Code's shells, not already another task's, has the command in its command line, that shell is
+   * taken as the command's, loosely: to see it end, never to signal it.
+   */
+  function pairLoose(l: Live, shellsOf: readonly { group: number; command: string }[]) {
+    const taken = new Set([...l.groups.values(), ...l.loose.values()]);
+    for (const b of l.background) {
+      const t = l.tasks.all.get(b.id as TaskId);
+      if (l.groups.has(b.id) || l.loose.has(b.id) || t?.kind !== "command") continue;
+      const core = t.label.replace(/…$/, "");
+      if (core.length < 4) continue;
+      const hits = shellsOf.filter((s) => !taken.has(s.group) && s.command.includes(core));
+      if (hits.length !== 1) continue;
+      l.loose.set(b.id, hits[0]!.group);
+      taken.add(hits[0]!.group);
+    }
   }
 
   /** The turn Claude Code began on its own that a Stop reached has ended. */
@@ -1618,6 +1650,9 @@ export function createSession(spec: SessionSpec): Session {
       return isWorking();
     },
     activity,
+    get wakeDue() {
+      return live?.cli.kind === "due";
+    },
     get parkedFor() {
       return parkedFor();
     },

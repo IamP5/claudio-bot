@@ -166,6 +166,11 @@ enum WorkSummary {
     }
 }
 
+extension ToolStep {
+    /// What an unsure step says: its command may outlive what the bridge can follow.
+    static let mayStillRun = "May still run on your Mac"
+}
+
 extension ToolStepState {
     /// Not over yet: running, or held by an open approval card.
     var isLive: Bool { self == .running || self == .waiting }
@@ -243,7 +248,7 @@ struct WorkRun {
         if parts.isEmpty {
             parts.append(WorkSummary.text(steps) + (duration.map { ", " + format($0) } ?? ""))
         }
-        for (state, word) in [(ToolStepState.stopped, "stopped"), (.denied, "denied")] {
+        for (state, word) in [(ToolStepState.stopped, "stopped"), (.denied, "denied"), (.unsure, "may still run")] {
             let n = steps.count { $0.state == state }
             if n > 0 { parts.append("\(n) \(word)") }
         }
@@ -306,6 +311,8 @@ struct WorkRun {
             parts.append(step.cause ?? "Stopped")
         case .denied:
             parts.append("Denied")
+        case .unsure:
+            parts.append(ToolStep.mayStillRun)
         case .unknown(let raw):
             parts.append(raw.prefix(1).uppercased() + raw.dropFirst())
         }

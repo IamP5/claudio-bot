@@ -284,7 +284,7 @@ extension PermissionChoice {
 /// What a closed permission card says happened. A green check only when the call was allowed and nothing cut it short.
 /// short: the same in a few words, for the one line an answered card folds to.
 struct PermissionOutcome: Equatable {
-    enum Tone: Equatable { case allowed, refused, failed, ended }
+    enum Tone: Equatable { case allowed, refused, failed, ended, unsure }
 
     let short: String
     let text: String
@@ -296,6 +296,7 @@ struct PermissionOutcome: Equatable {
         case .refused: "xmark.circle.fill"
         case .failed: "exclamationmark.circle.fill"
         case .ended: "stop.circle"
+        case .unsure: "questionmark.circle"
         }
     }
 }
@@ -313,6 +314,8 @@ extension PermissionAnswer {
                 )
             case .error?:
                 PermissionOutcome(short: "\(choice.outcome), then failed", text: "\(choice.outcome). It failed.", tone: .failed)
+            case .unsure?:
+                PermissionOutcome(short: "\(choice.outcome) · may still run", text: "\(choice.outcome). \(ToolStep.mayStillRun).", tone: .unsure)
             default:
                 PermissionOutcome(short: choice.outcome, text: choice.outcome, tone: .allowed)
             }

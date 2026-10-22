@@ -126,6 +126,7 @@ const runItems = [
     { id: "toolu_01Ac3", tool: "Bash", label: "Run in background: sleep 60", state: "running", diff: null, output: null, detail: "sleep 60", startedAt: at, background: true, owner: "toolu_01Ac1" },
     { id: "toolu_01Ac4", tool: "Bash", label: "List the late files", state: "error", diff: null, output: "ls: late.txt: No such file or directory\n", detail: "ls late.txt", startedAt: at, endedAt: later, cause: "Exit code 1: ls: late.txt: No such file or directory" },
     { id: "toolu_01Ac5", tool: "Agent", label: "sleeper one", state: "stopped", diff: null, output: null, detail: "general-purpose", startedAt: at, endedAt: later, cause: "Stopped by you", usage: { tools: 4, ms: 31000 } },
+    { id: "toolu_01Ac7", tool: "Bash", label: "Run in background: sleep 600", state: "unsure", diff: null, output: null, detail: "sleep 600", startedAt: at, background: true, cause: "Can't tell whether this still runs on your Mac" },
   ] },
   { kind: "permission", id: "m23", at: later, card: { ...permission, id: "m23", label: "Bash", detail: "rm -rf build", always: "rm -rf build in solta-o-som, for this session" }, stepId: "toolu_01Ac2", subagent: "sleeper two" },
   { kind: "permission", id: "m24", at: later, card: { ...permission, id: "m24", label: "Bash", detail: "sleep 30", always: "sleep in solta-o-som, for this session", answer: "stopped" }, stepId: "toolu_01Ac6", subagent: "sleeper one" },

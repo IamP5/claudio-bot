@@ -219,6 +219,11 @@ export type BackgroundTask = {
   startedAt?: string;
   group?: number;
   claude?: number;
+  /**
+   * The group of the one shell whose command line holds the command, found when its output file could not be: enough
+   * to see when it ends, never proof enough to signal it.
+   */
+  loose?: number;
 };
 
 export const emptySession = (id: string | null = null): SessionState => ({ id, pending: [], lifecycle: { kind: "idle" }, notices: [] });

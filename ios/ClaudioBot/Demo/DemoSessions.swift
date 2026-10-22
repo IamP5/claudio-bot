@@ -13,6 +13,8 @@ enum DemoSessions {
     static let sleepers = SessionID("5e2c8a14-9b3d-4f6e-8a1c-3d7b9e2f4a60")
     /// The approvalsanswered screen: sleeper two's card is answered too, so every card is folded.
     static var sleepersAnswered = false
+    /// The "unsure" screen: sleeper one's command may outlive what the bridge can follow.
+    static var sleepersUnsure = false
     /// The approvalsexpiring screen sets sleeper two's deadline once, so it expires while the thread is open however often
     /// the thread is rebuilt.
     static var sleeperTwoDeadline: Date?
@@ -216,7 +218,7 @@ enum DemoSessions {
             work("sl-w1", 1.8, [
                 sleeper(1, "sleeper one", .running), sleeper(2, "sleeper two", .running),
                 sleeper(3, "sleeper three", .stopped, cause: "Stopped by you"), sleeper(4, "sleeper four", .stopped, cause: "Stopped by you"),
-                call(1, "perl -e 'sleep 30'", .running), call(2, "perl -e 'sleep 30'", sleepersAnswered ? .running : .waiting),
+                sleepersUnsure ? call(1, "perl -e 'sleep 30'", .unsure, cause: "Can't tell whether this still runs on your Mac") : call(1, "perl -e 'sleep 30'", .running), call(2, "perl -e 'sleep 30'", sleepersAnswered ? .running : .waiting),
                 call(3, "perl -e 'sleep 45' && echo late > late.txt", .stopped, cause: "Stopped by you"),
                 call(4, "perl -e 'sleep 60'", .stopped, cause: "Stopped by you"),
             ]),

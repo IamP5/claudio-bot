@@ -76,6 +76,9 @@ struct SettingsView: View {
                     #if os(iOS)
                     .tint(AvatarColor.green.color)
                     #endif
+                #if os(iOS)
+                if store.has(.pushState) { AwayAlertsRow(push: store.pushState ?? .on) }
+                #endif
             } footer: {
                 Text("Alerts for bot messages, questions and approvals arrive while ClaudioBot is connected to your Mac. A question alert lets you pick one of its first two answers.")
             }
@@ -169,6 +172,56 @@ struct SettingsView: View {
 
         static func mirror(_ pref: MirrorPref) -> String { SessionText.mirror(pref) }
         #endif
+    }
+}
+
+/// Whether the Mac's pushes reach this phone while the app is closed.
+private struct AwayAlertsRow: View {
+    let push: PushState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            LabeledContent("Alerts when away", value: push.value)
+            if let detail = push.detail {
+                Text(detail)
+                    .font(.footnote)
+                    .foregroundStyle(push.failing ? Theme.danger : Theme.secondary)
+                    .lineLimit(4)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+extension PushState {
+    /// A state a newer bridge invented reads as on.
+    var value: String {
+        switch self {
+        case .off: "Off"
+        case .failing: "Last send failed"
+        case .on, .unknown: "On"
+        }
+    }
+
+    var failing: Bool {
+        if case .failing = self { true } else { false }
+    }
+
+    var detail: String? {
+        switch self {
+        case .off: "Set CLAUDIOBOT_PUSH_URL on the Mac to get alerts when the app is closed."
+        case let .failing(error, at): "\(error), \(at.formatted(.relative(presentation: .named)))"
+        case .on, .unknown: nil
+        }
+    }
+
+    /// The Sessions list's one line, only when alerts while away do not reach the phone.
+    var listNote: String? {
+        switch self {
+        case .off: "Alerts when away are off"
+        case .failing: "Alerts when away are failing"
+        case .on, .unknown: nil
+        }
     }
 }
 

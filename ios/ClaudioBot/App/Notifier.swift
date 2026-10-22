@@ -8,6 +8,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private static let optionActions = ["OPTION_0", "OPTION_1"]
 
     var onOpenBot: (BotID) -> Void = { _ in }
+    /// The card is the one the alert named, so the thread can say when it no longer waits.
+    var onOpenSession: (SessionID, MessageID?) -> Void = { _, _ in }
     var onAnswer: (BotID, MessageID, Int) async -> Void = { _, _, _ in }
 
     private let center = UNUserNotificationCenter.current()
@@ -25,12 +27,21 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
     }
 
-    /// Skips alerts for the chats on screen while the app is active.
-    func post(_ alerts: [Alert], viewing: Set<BotID>) {
+    /// Skips alerts for the chats and threads on screen while the app is active.
+    func post(_ alerts: [Alert], onScreen: OnScreen) {
         guard enabled else { return }
         let active = AppActivity.isActive
-        for alert in alerts where !(active && viewing.contains(alert.bot.id)) {
+        for alert in alerts where Self.shows(alert, active: active, onScreen: onScreen) {
             Task { await post(alert) }
+        }
+    }
+
+    /// Never buzz for what is on screen: the user already sees it.
+    static func shows(_ alert: Alert, active: Bool, onScreen: OnScreen) -> Bool {
+        guard active else { return true }
+        switch alert {
+        case .bot(let bot, _): return !onScreen.bots.contains(bot.id)
+        case .session(let session): return !onScreen.sessions.contains(session.sessionId)
         }
     }
 
@@ -44,6 +55,16 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// Removes the session's notification. Its thread is the session id, as the bridge's pushes for it are.
+    func clear(session: SessionID) {
+        Task {
+            let ids = await center.deliveredNotifications()
+                .filter { $0.request.content.threadIdentifier == session.rawValue }
+                .map(\.request.identifier)
+            center.removeDeliveredNotifications(withIdentifiers: ids)
+        }
+    }
+
     /// After unpairing, nothing on the lock screen should point at the old Mac.
     func clearAll() {
         center.removeAllDeliveredNotifications()
@@ -52,29 +73,62 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     /// Messages share one notification per bot, so a newer one replaces the older instead of stacking.
     /// Each card gets its own, so a later message cannot replace a question or approval still waiting on the user.
+    /// A session has one: what it wants now replaces what it wanted before.
     static func identifier(for alert: Alert) -> String {
-        switch alert.reason {
-        case .message: "bot-\(alert.bot.id.rawValue)"
-        case .question(let id, _, _), .permission(let id, _): "card-\(id.rawValue)"
+        switch alert {
+        case .bot(let bot, .message): "bot-\(bot.id.rawValue)"
+        case .bot(_, .question(let id, _, _)), .bot(_, .permission(let id, _)): "card-\(id.rawValue)"
+        case .session(let session): "session-\(session.sessionId.rawValue)"
         }
+    }
+
+    /// Notifications group by bot, or by session (P-NOTIFY-4).
+    static func thread(of alert: Alert) -> String {
+        switch alert {
+        case .bot(let bot, _): bot.id.rawValue
+        case .session(let session): session.sessionId.rawValue
+        }
+    }
+
+    /// The session's title, then what it wants. nil for a reason a newer bridge invented, which is not posted.
+    static func text(of session: SessionAlert) -> (title: String, body: String)? {
+        let title = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body: String
+        switch session.reason {
+        case .card: body = session.count > 1 ? "Needs \(session.count) approvals" : "Needs your approval"
+        case .reminder: body = session.count > 1 ? "Still waiting for \(session.count) approvals" : "Still waiting for your approval"
+        case .finished: body = "Finished"
+        case .failed: body = "Stopped with an error"
+        case .unknown: return nil
+        }
+        return (title.isEmpty ? "Claude Code session" : title, body)
     }
 
     private func post(_ alert: Alert) async {
         let content = UNMutableNotificationContent()
-        content.title = alert.bot.name
-        content.threadIdentifier = alert.bot.id.rawValue
+        content.threadIdentifier = Self.thread(of: alert)
         content.sound = .default
-        content.userInfo = ["botId": alert.bot.id.rawValue]
-        switch alert.reason {
-        case .message(let text):
-            content.body = text
-        case let .question(id, question, options):
-            content.body = question
-            content.userInfo["messageId"] = id.rawValue
-            content.categoryIdentifier = await registerCategory(for: id, options: options)
-        case .permission(_, let label):
-            // No approve action here: the user decides with the exact command in front of them.
-            content.body = "Needs your approval: \(label)"
+        switch alert {
+        case let .bot(bot, reason):
+            content.title = bot.name
+            content.userInfo = ["botId": bot.id.rawValue]
+            switch reason {
+            case .message(let text):
+                content.body = text
+            case let .question(id, question, options):
+                content.body = question
+                content.userInfo["messageId"] = id.rawValue
+                content.categoryIdentifier = await registerCategory(for: id, options: options)
+            case .permission(_, let label):
+                // No approve action here: the user decides with the exact command in front of them.
+                content.body = "Needs your approval: \(label)"
+            }
+        case let .session(session):
+            guard let text = Self.text(of: session) else { return }
+            content.title = text.title
+            content.body = text.body
+            content.userInfo = ["sessionId": session.sessionId.rawValue]
+            if let card = session.cardId { content.userInfo["cardId"] = card.rawValue }
         }
         try? await center.add(UNNotificationRequest(identifier: Self.identifier(for: alert), content: content, trigger: nil))
     }
@@ -104,10 +158,18 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse
     ) async {
         let info = response.notification.request.content.userInfo
+        if let session = info["sessionId"] as? String {
+            let card = (info["cardId"] as? String).map { MessageID($0) }
+            return await open(session: SessionID(session), card: card)
+        }
         guard let bot = info["botId"] as? String else { return }
         let message = info["messageId"] as? String
         let action = response.actionIdentifier
         await handle(action: action, bot: BotID(bot), message: message.map { MessageID($0) })
+    }
+
+    private func open(session: SessionID, card: MessageID?) {
+        onOpenSession(session, card)
     }
 
     private func handle(action: String, bot: BotID, message: MessageID?) async {

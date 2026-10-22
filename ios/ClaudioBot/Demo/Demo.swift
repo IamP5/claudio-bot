@@ -16,7 +16,9 @@ import Foundation
 /// `threadoffline` (the Mac lost after the thread loaded), `threadwaiting` (a thread opened with the Mac out of reach),
 /// `composerdraft`, `composerlong`, `composerlapse`, `composersix`, `composerrefused`, `composermode`, `composerqueued`, `composerwithdraw`, `stoppedearly` (DemoSessions.stageComposer;
 /// add "kb" for the same with the keyboard up, or "kbgone" for the keyboard up and then put away 8 s in),
-/// `sessionsempty` and `sessionsoffline`.
+/// `sessionsempty` and `sessionsoffline`. `pushoff` and `pushfailing` open the Sessions list with alerts when away off or
+/// failing, `settingspush` Settings with them failing, and `staleapproval` the approvals thread from a push link whose
+/// card was answered.
 @MainActor
 enum Demo {
     private static let arguments = ProcessInfo.processInfo.arguments
@@ -39,9 +41,16 @@ enum Demo {
         let features: [Feature] = switch screen {
         case "live": [.activity]
         case "oldbridge": []
-        default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions, .memory, .mute, .skills, .spend, .sessionTasks, .sessionUnqueue]
+        default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions, .memory, .mute, .skills, .spend, .sessionTasks, .sessionUnqueue, .pushState]
         }
-        store.apply(.hello(Hello(protocol: oldBridge ? 2 : Wire.protocolVersion, features: features, machine: "MacBook Pro", userName: "Alex", bots: bots)))
+        let push: PushState = switch screen {
+        case "pushoff": .off
+        case "pushfailing", "settingspush": .failing(error: "ntfy answered 500 Internal Server Error", at: .now - 240)
+        default: .on
+        }
+        store.apply(.hello(Hello(
+            protocol: oldBridge ? 2 : Wire.protocolVersion, features: features, machine: "MacBook Pro", userName: "Alex", bots: bots, push: push
+        )))
         if !oldBridge { store.apply(.usage(usage(screen))) }
         if !oldBridge { store.apply(.devices(devices)) }
         for (bot, messages) in conversations {
@@ -61,7 +70,7 @@ enum Demo {
         switch screen {
         case "newchat": router.showingNewChat = true
         case "usage", "usagehot", "usageoff": router.showingUsage = true
-        case "settings": router.showingSettings = true
+        case "settings", "settingspush": router.showingSettings = true
         case "chat":
             router.selection = .bot(BotID("claude"))
             router.showingInspector = true
@@ -135,7 +144,7 @@ enum Demo {
             router.selection = .bot(BotID("release"))
             store.apply(.error(message: "That card already closed."))
         case "oldbridge": router.showingSettings = true
-        case "sessions", "sessionsempty": router.sidebar = .sessions
+        case "sessions", "sessionsempty", "pushoff", "pushfailing": router.sidebar = .sessions
         case "thread": router.open(.session(DemoSessions.fade))
         case "workrun": router.open(.session(DemoSessions.audit))
         case "ask": router.open(.session(DemoSessions.sidebar))
@@ -150,6 +159,9 @@ enum Demo {
                 try? await Task.sleep(for: .seconds(15))
                 DemoSessions.denyElsewhere(store: store)
             }
+        case "staleapproval":
+            DemoSessions.sleepersAnswered = true
+            router.open(.session(DemoSessions.sleepers), card: MessageID("card-sleeper-2"))
         case "approvalsanswered":
             DemoSessions.sleepersAnswered = true
             router.open(.session(DemoSessions.sleepers))

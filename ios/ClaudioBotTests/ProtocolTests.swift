@@ -117,6 +117,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
     case .unknown(let type): return ["type \(type)"]
     case .hello(let hello): return hello.bots.flatMap(inBot) + inPush(hello.push)
     case .pushState(let push): return inPush(push)
+    case .sessionAlert(let alert): return if case .unknown(let raw) = alert.reason { ["alert reason \(raw)"] } else { [] }
     case .error(_, .unknown(let raw)?): return ["error about \(raw)"]
     case .bot(let b): return inBot(b)
     case .conversation(_, let messages): return messages.flatMap(inMessage)
@@ -989,6 +990,12 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(DeepLink(url: URL(string: "claudiobot://bot/b1")!) == .bot(BotID("b1"), message: nil))
     }
 
+    @Test func aSessionLinkCarriesTheCardItsPushWasAbout() {
+        #expect(DeepLink(url: URL(string: "claudiobot://session/s1?card=m30")!) == .session(SessionID("s1"), card: MessageID("m30")))
+        #expect(DeepLink(url: URL(string: "claudiobot://session/s1")!) == .session(SessionID("s1"), card: nil))
+        #expect(DeepLink(url: URL(string: "claudiobot://session/s1?card=")!) == .session(SessionID("s1"), card: nil))
+    }
+
     @Test func aPairLinkCarriesTheInvite() {
         let url = URL(string: "claudiobot://pair?url=ws%3A%2F%2F10.0.0.20%3A7878%2Fws&code=K7QD-M2XP")!
         #expect(DeepLink(url: url) == .pair(PairInvite(url: URL(string: "ws://10.0.0.20:7878/ws")!, code: "K7QD-M2XP")))
@@ -1060,13 +1067,50 @@ private func unknowns(in message: ServerMessage) -> [String] {
 
     @Test func eachCardKeepsItsOwnNotificationWhileMessagesShareOnePerBot() {
         let ids = [
-            Alert(bot: bot, reason: .message("one")),
-            Alert(bot: bot, reason: .message("two")),
-            Alert(bot: bot, reason: .permission(id: MessageID("p1"), label: "Push")),
-            Alert(bot: bot, reason: .permission(id: MessageID("p2"), label: "Push")),
-            Alert(bot: bot, reason: .question(id: MessageID("q1"), question: "Merge?", options: ["Yes"])),
+            Alert.bot(bot, .message("one")),
+            .bot(bot, .message("two")),
+            .bot(bot, .permission(id: MessageID("p1"), label: "Push")),
+            .bot(bot, .permission(id: MessageID("p2"), label: "Push")),
+            .bot(bot, .question(id: MessageID("q1"), question: "Merge?", options: ["Yes"])),
         ].map(Notifier.identifier(for:))
         #expect(ids[0] == ids[1])
         #expect(Set(ids[1...]).count == 4)
+    }
+
+    private func session(_ id: String, _ reason: SessionAlertReason, count: Int = 1, title: String = "Sleep in parallel") -> Alert {
+        .session(SessionAlert(sessionId: SessionID(id), reason: reason, count: count, title: title, cardId: reason == .card ? MessageID("m30") : nil))
+    }
+
+    @Test func aSessionHasOneNotificationInItsOwnThread() {
+        let card = session("s1", .card, count: 3)
+        let done = session("s1", .finished)
+        #expect(Notifier.identifier(for: card) == "session-s1")
+        #expect(Notifier.identifier(for: done) == "session-s1")
+        #expect(Notifier.thread(of: done) == "s1")
+        #expect(Notifier.identifier(for: session("s2", .card)) == "session-s2")
+    }
+
+    @Test func aSessionAlertNamesTheSessionAndWhatItWants() {
+        func text(_ alert: Alert) -> [String]? {
+            guard case .session(let s) = alert, let t = Notifier.text(of: s) else { return nil }
+            return [t.title, t.body]
+        }
+        #expect(text(session("s1", .card)) == ["Sleep in parallel", "Needs your approval"])
+        #expect(text(session("s1", .card, count: 3)) == ["Sleep in parallel", "Needs 3 approvals"])
+        #expect(text(session("s1", .reminder, count: 2)) == ["Sleep in parallel", "Still waiting for 2 approvals"])
+        #expect(text(session("s1", .reminder)) == ["Sleep in parallel", "Still waiting for your approval"])
+        #expect(text(session("s1", .finished, title: "  ")) == ["Claude Code session", "Finished"])
+        #expect(text(session("s1", .failed)) == ["Sleep in parallel", "Stopped with an error"])
+        #expect(text(session("s1", .unknown("paused"))) == nil)
+    }
+
+    @Test func nothingBuzzesForWhatIsOnScreenWhileTheAppIsActive() {
+        var onScreen = OnScreen()
+        _ = onScreen.set(Viewing(bot: BotID("b1"), session: SessionID("s1")), for: ViewingLease())
+        let other = session("s2", .card)
+        #expect(Notifier.shows(session("s1", .card), active: true, onScreen: onScreen) == false)
+        #expect(Notifier.shows(other, active: true, onScreen: onScreen) == true)
+        #expect(Notifier.shows(.bot(bot, .message("hi")), active: true, onScreen: onScreen) == false)
+        #expect(Notifier.shows(session("s1", .finished), active: false, onScreen: onScreen) == true)
     }
 }

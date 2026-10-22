@@ -652,7 +652,7 @@ private func working(_ id: String, since minutesAgo: Double, lastAt lastMinutesA
 @MainActor
 @Suite struct SessionRoutingTests {
     @Test func aSessionLinkOpensItsThread() {
-        #expect(DeepLink(url: URL(string: "claudiobot://session/6b1f3c2a")!) == .session(SessionID("6b1f3c2a")))
+        #expect(DeepLink(url: URL(string: "claudiobot://session/6b1f3c2a")!) == .session(SessionID("6b1f3c2a"), card: nil))
         #expect(DeepLink(url: URL(string: "claudiobot://session/")!) == nil)
     }
 

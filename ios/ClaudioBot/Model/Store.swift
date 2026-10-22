@@ -39,16 +39,16 @@ struct Conversation: Equatable, Sendable {
     }
 }
 
-/// Something worth a local notification, derived from a state change.
-struct Alert: Equatable, Sendable {
+/// Something worth a local notification: a bot's new message or card, or a session the bridge sent no push for.
+enum Alert: Equatable, Sendable {
     enum Reason: Equatable, Sendable {
         case message(String)
         case question(id: MessageID, question: String, options: [String])
         case permission(id: MessageID, label: String)
     }
 
-    let bot: Bot
-    let reason: Reason
+    case bot(Bot, Reason)
+    case session(SessionAlert)
 }
 
 struct BotDetails: Equatable, Sendable {
@@ -157,6 +157,8 @@ final class AppStore {
     private(set) var webhookToken: WebhookToken?
     /// The plan's usage limits as the bridge last read them. Kept while offline: its fetchedAt says how old it is.
     private(set) var usage: PlanUsage?
+    /// Whether pushes reach the phone while the app is away, from hello and push_state. nil: the bridge does not say.
+    private(set) var pushState: PushState?
     /// Stops this phone asked for in each session, by what they stop, until the session rests. The composer and the
     /// background work sheet both read them, so a refusal shows on the control that asked.
     private(set) var stops: [SessionID: [StopTarget: StopRequest]] = [:]
@@ -220,6 +222,7 @@ final class AppStore {
             exchanges = [:]
             webhookToken = nil
             usage = nil
+            pushState = nil
             unechoedSends = []
             stops = [:]
             sets = [:]
@@ -380,6 +383,7 @@ final class AppStore {
             features = Set(hello.features)
             activity = [:]
             if !features.contains(.usage) { usage = nil }
+            pushState = hello.push
             // A decision in flight when the socket dropped either landed, and the card says so, or it is lost.
             pendingDecisions = [:]
             bots = Dictionary(hello.bots.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
@@ -423,11 +427,11 @@ final class AppStore {
             guard conversations[botId, default: Conversation()].upsert(message), let bot = bots[botId] else { return [] }
             switch message {
             case .bot(_, _, let text, _) where previous == nil:
-                return [Alert(bot: bot, reason: .message(text))]
+                return [.bot(bot, .message(text))]
             case .question(let id, _, let card) where previous == nil && card.answer == nil:
-                return [Alert(bot: bot, reason: .question(id: id, question: card.question, options: card.options))]
+                return [.bot(bot, .question(id: id, question: card.question, options: card.options))]
             case .permission(let id, _, let card) where previous == nil && card.answer == nil:
-                return [Alert(bot: bot, reason: .permission(id: id, label: card.label))]
+                return [.bot(bot, .permission(id: id, label: card.label))]
             default:
                 return []
             }
@@ -512,7 +516,14 @@ final class AppStore {
             sessions.recordCreated(ref: ref, sessionId: sessionId)
             return []
 
-        case .pushState, .unknown:
+        case let .pushState(push):
+            pushState = push
+            return []
+
+        case let .sessionAlert(alert):
+            return [.session(alert)]
+
+        case .unknown:
             return []
         }
     }

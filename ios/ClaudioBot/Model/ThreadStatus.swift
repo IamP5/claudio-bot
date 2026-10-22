@@ -62,6 +62,55 @@ struct OpenCard: Equatable, Sendable {
     }
 }
 
+/// The card a push link named. A push already on the lock screen cannot be taken back, so a thread opened from one
+/// that no longer waits on the user says so.
+struct LinkedCard: Equatable, Sendable {
+    let sessionId: SessionID
+    let cardId: MessageID
+
+    static let answered = "Already answered. Nothing here waits on you now."
+    static let expired = "That request expired."
+    static let closed = "That request is no longer open. Nothing here waits on you now."
+
+    /// The note once the card is in `items`, closed, not decided on this phone, and no other card waits. nil says
+    /// nothing: the card is not loaded, still waits, or the user just answered it here.
+    func note(in items: [SessionItem], decidedHere: Set<MessageID>, at now: Date) -> String? {
+        guard !decidedHere.contains(cardId), let note = closing(in: items, at: now) else { return nil }
+        return OpenCard.newest(in: items, at: now) == nil ? note : nil
+    }
+
+    /// What closed the card; nil while it is open or not in `items`. An ask or plan drops its card id once it closes,
+    /// so only an open one is ever found here.
+    private func closing(in items: [SessionItem], at now: Date) -> String? {
+        for item in items {
+            switch item {
+            case let .permission(_, _, permission) where permission.cardId == cardId:
+                switch permission.card.answer(at: now) {
+                case nil: return nil
+                case .expired: return Self.expired
+                case .stopped, .closed: return Self.closed
+                case .chose, .unknown: return Self.answered
+                }
+            case let .ask(_, _, _, answers, id?) where id == cardId:
+                switch answers {
+                case nil: return nil
+                case .expired: return Self.expired
+                case .answered, .dismissed, .closed: return Self.answered
+                }
+            case let .plan(_, _, _, state, id?) where id == cardId:
+                switch state {
+                case .proposed: return nil
+                case .expired: return Self.expired
+                case .approved, .rejected, .unknown: return Self.answered
+                }
+            default:
+                continue
+            }
+        }
+        return nil
+    }
+}
+
 /// The thread's one status line (P-STATE-5). The highest level that holds wins: a dead socket never shows a live
 /// clock, and a run held by a card never reads as busy.
 enum ThreadStatus: Equatable, Sendable {

@@ -201,6 +201,22 @@ struct SessionsSidebar: View {
         if let mismatch = store.protocolMismatch {
             UpdateBanner(mismatch: mismatch).plainRow()
         }
+        #if os(iOS)
+        if store.has(.pushState), let note = store.pushState?.listNote {
+            Button { router.showingSettings = true } label: {
+                Label(note, systemImage: "bell.slash")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(Theme.attention)
+                    .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            // A line above the list: past AX2 it would push the sessions off screen.
+            .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+            .accessibilityHint("Opens Settings")
+            .plainRow()
+        }
+        #endif
     }
 
     @ViewBuilder

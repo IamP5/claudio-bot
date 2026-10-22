@@ -34,7 +34,7 @@ app_cpu() {
   ps -o %cpu= -p "$pid" | tr -d ' ' || true
 }
 
-screens="${SCREENS:-workrun thread plan streaming longthread approvals approvalsanswered composerdraft composerlong composerlapse composerrefused composermode composerqueued stoppedearly composerlongkb composerlapsekb composerrefusedkb}"
+screens="${SCREENS:-workrun thread plan streaming longthread approvals approvalsanswered composerdraft composerlong composerlapse composerrefused composermode composerqueued stoppedearly composerlongkb composerlapsekb composerrefusedkb composerlapsekbgone}"
 sizes="${SIZES:-large accessibility-extra-large accessibility-extra-extra-extra-large}"
 # The six-command refusal (a long note), with the keyboard down and up, at every size from xxxLarge, where the bar is
 # most crowded. Set SCREENS to leave it out.

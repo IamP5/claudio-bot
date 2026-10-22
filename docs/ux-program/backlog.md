@@ -24,3 +24,4 @@
 - A background-task stop landing during a turn makes the status read "Stopped by you" though that turn was answered (G6 verifier round 2; status line / bridge).
 - Swipe-check default screen list did not include composer demos (being fixed in G6 round 2; confirm).
 - G17 known gaps: Claude Code's own "Interrupted" transcript line shows beside the bridge stop notice; a wake turn that ignores its interrupt is never escalated; a survivor command's step reads "The bridge restarted" once it ends after a partial restart stop; a foreground command orphaned when Claude Code is killed is not tracked; row finished text can be a foreground task summary.
+- G11: the bridge's own transcript notice for a refused stop still names every command in full; only the composer error is shortened (G6 r3).

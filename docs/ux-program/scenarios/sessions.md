@@ -761,7 +761,8 @@ Needs the simulator: no (simulator items run with `--sim`).
 - New session `s9` in demo (haiku, mode default): "Use the Bash tool to run exactly this command: echo waited > waited.txt Then reply with one line: done."
 - Wait up to 120 s for s9's permission card to open; mark `card-open`.
 - The push sink answers 500 from now on, as a broken push server would.
-- Wait up to 40 s for the push state to read failing; mark `failing`.
+- Wait up to 40 s for the card push to fail three times; mark `card-failed`.
+- Wait 1 s.
 - The push sink answers 200 again.
 - Wait up to 60 s for a reminder push; mark `reminded`.
 - Wait up to 15 s for the push state to read on again; mark `recovered`.
@@ -777,7 +778,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 | id | tells | lane | the user can tell | pass | fail |
 | --- | --- | --- | --- | --- | --- |
-| S9.1 | state | protocol | When the push server fails, the phone is told that alerts are failing, and why. | After the card push was tried three times and answered 500 each time, a push_state frame reads failing with "The push server answered 500". | No failing state, the wrong cause, or fewer than three tries. |
+| S9.1 | state | protocol | When the push server fails, the phone is told that alerts are failing, and why. | The card push is tried three times, 2 s then 8 s apart; within 2 s of its third 500, a push_state frame reads failing with "The push server answered 500". | No failing state after the card's tries, the wrong cause, or other than three tries. |
 | S9.2 | what | protocol | The card's push says what waits, at high priority, and opens the session at that card. | The card push reads "A Claude Code session needs your approval", priority high, link claudiobot://session/<id>?card=<the card id>. | Another text, priority or link. |
 | S9.3 | state | protocol | A card nobody answers reminds the user once, at half its time. | One reminder push, 30 s (half the 60 s card time) after the card opened, give or take 3 s, linking to the card. | No reminder, more than one, or one at another time. |
 | S9.4 | state | protocol | Once a push gets through again, the phone hears that alerts work. | After the failing state, a push_state frame reads on within 2 s of the first push the sink answered 200, and not before it. | The state stays failing after a push got through, or reads on before any did. |

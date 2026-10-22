@@ -2102,9 +2102,10 @@ const S9: Scenario = {
   setup: [
     { do: "create", name: "s9", prompt: `Use the Bash tool to run exactly this command: ${WAITED}\nThen reply with one line: done.` },
     { do: "until", mark: "card-open", what: "s9's permission card to open", timeoutS: 120, test: cardIs("s9", null) },
-    // Within the 2 s the card's push waits for others, and after the bot's greeting pushed.
+    // Within the 2 s the card's push waits for others. The bot's greeting may push into the failing sink too.
     { do: "sink", fail: true },
-    { do: "until", mark: "failing", what: "the push state to read failing", timeoutS: 40, test: (ev) => ev.pushStates.some((p) => p.push.state === "failing") },
+    { do: "until", mark: "card-failed", what: "the card push to fail three times", timeoutS: 40, test: (ev) => ev.pushes().filter((p) => p.status === 500 && cardCount(p) !== null).length >= 3 },
+    { do: "sleep", s: 1 },
     { do: "sink", fail: false },
     { do: "until", mark: "reminded", what: "a reminder push", timeoutS: 60, test: (ev) => ev.pushes().some((p) => /still waiting/.test(p.body) && p.status === 200) },
     { do: "until", mark: "recovered", what: "the push state to read on again", timeoutS: 15, test: (ev) => ev.pushStates.at(-1)?.push.state === "on" },
@@ -2118,15 +2119,17 @@ const S9: Scenario = {
       tell: "state",
       lane: "protocol",
       text: "When the push server fails, the phone is told that alerts are failing, and why.",
-      pass: "After the card push was tried three times and answered 500 each time, a push_state frame reads failing with \"The push server answered 500\".",
-      fail: "No failing state, the wrong cause, or fewer than three tries.",
+      pass: "The card push is tried three times, 2 s then 8 s apart; within 2 s of its third 500, a push_state frame reads failing with \"The push server answered 500\".",
+      fail: "No failing state after the card's tries, the wrong cause, or other than three tries.",
       check: (ev) => {
         // The bot's greeting turn pushes too; only the card push's tries count.
-        const tries = ev.pushes().filter((p) => p.status === 500 && cardCount(p) !== null);
-        const failing = ev.pushStates.find((p) => p.push.state === "failing");
-        if (!failing) return no(`no failing state; ${tries.length} failed tries`);
+        const tries = ev.pushes().filter((p) => p.status === 500 && cardCount(p) !== null).map((p) => ev.atOf(p.at));
+        if (tries.length !== 3) return no(`${tries.length} failed tries of the card push`);
+        const gaps = [tries[1]! - tries[0]!, tries[2]! - tries[1]!].map((g) => Math.round(g / 100) / 10);
+        const failing = ev.pushStates.find((p) => p.push.state === "failing" && p.at >= tries[2]! - 500 && p.at <= tries[2]! + 2_000);
+        if (!failing) return no(`no failing state within 2 s of the third try (${ev.pushStates.map((p) => p.push.state).join(" → ")})`);
         if (failing.push.error !== "The push server answered 500") return no(`error "${failing.push.error}"`);
-        return tries.length === 3 ? ok(`${tries.length} tries, then failing at +${Math.round(failing.at / 1000)} s`) : no(`${tries.length} failed tries`);
+        return Math.abs(gaps[0]! - 2) < 1 && Math.abs(gaps[1]! - 8) < 1 ? ok(`tries ${gaps.join(" s, ")} s apart, then failing`) : no(`tries ${gaps.join(" s, ")} s apart`);
       },
     },
     {

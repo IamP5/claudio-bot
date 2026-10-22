@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { endGroup, groupAlive, shellGroups, taskRun } from "../src/procs";
@@ -66,4 +66,25 @@ test("a live group that does not write the task's output may or may not be it, a
 
 test("a group the user may not signal, or no group at all, does not run", () => {
   expect([groupAlive(1), groupAlive(0), groupAlive(-5)]).toEqual([false, false, false]);
+});
+
+test("a process table that cannot be read is said so, after a few tries, and one that recovers is read", async () => {
+  const cmd = backgroundCommand("bk1");
+  ends.push(cmd.end);
+  const bin = mkdtempSync(join(tmpdir(), "lsof-"));
+  const path = process.env.PATH;
+  try {
+    writeFileSync(join(bin, "lsof"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(bin, "lsof"), 0o755);
+    process.env.PATH = `${bin}:${path}`;
+    expect(await taskRun(cmd.pid, "bk1")).toBe("unread");
+    expect(await endGroup(cmd.pid, "bk1")).toBe("unsure");
+    expect(groupAlive(cmd.pid)).toBe(true);
+    const count = join(bin, "count");
+    writeFileSync(join(bin, "lsof"), `#!/bin/sh\nif [ ! -f '${count}' ]; then touch '${count}'; exit 1; fi\nexec /usr/sbin/lsof "$@"\n`);
+    expect(await taskRun(cmd.pid, "bk1")).toBe("runs");
+  } finally {
+    process.env.PATH = path;
+    rmSync(bin, { recursive: true, force: true });
+  }
 });

@@ -275,7 +275,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
     const steps = item.steps.map((st) => {
       const p = patches.get(st.id);
       const shown = p ? patchStep(st, p) : st;
-      return p?.state === undefined && !p?.uncut ? cutStep(shown, cuts) : shown;
+      return p?.state === undefined ? cutStep(shown, cuts) : shown;
     });
     return steps.every((st, i) => st === item.steps[i]) ? item : { ...item, steps };
   }

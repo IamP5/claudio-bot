@@ -282,10 +282,8 @@ export type StepPatch = {
   state?: "waiting" | "running";
   startedAt?: string;
   ended?: { state: "stopped" | "denied"; cause: string };
-  /** The step of a command the bridge followed after its Claude Code was gone: a later Claude Code's "stopped" does not hold. */
+  /** The step of a command that outlived its Claude Code: a later Claude Code's "stopped" does not hold. */
   outlived?: true;
-  /** The bridge cannot tell whether the step's work still runs, so no cut ends it. */
-  uncut?: true;
 };
 
 /**

@@ -38,22 +38,25 @@ export function withOutlived(a: Activity, list: readonly Outlived[], startedAt: 
   return { ...a, tasks: [...a.tasks, ...left], all: new Map([...a.all, ...left.map((t) => [t.id, t] as const)]) };
 }
 
-/** The list with these no longer followed, as `over`, keeping the newest few the bridge stopped following. */
+/** The list with these as `over`, keeping the newest few the bridge no longer follows. */
 export function settled(list: readonly Outlived[], ids: readonly string[], over: NonNullable<Outlived["over"]>): Outlived[] {
-  const out = list.map((o) => (ids.includes(o.id) && o.over === undefined ? { ...o, over } : o));
+  const out = list.map((o) => (ids.includes(o.id) ? { ...o, over } : o));
   const done = out.filter((o) => o.over !== undefined);
   const drop = new Set(done.slice(0, Math.max(0, done.length - KEPT)));
   return out.filter((o) => !drop.has(o));
 }
 
-/** How each step of an outlived command reads: running while followed, and never what a later Claude Code claimed. */
-export function outlivedSteps(list: readonly Outlived[], unseen: string): Map<string, StepPatch> {
+/**
+ * How each step of an outlived command reads, never what a later Claude Code claimed: running while followed, ended
+ * unseen, or settled with `cantTell` when the bridge cannot tell whether it still runs.
+ */
+export function outlivedSteps(list: readonly Outlived[], causes: { unseen: string; cantTell: string }): Map<string, StepPatch> {
   const out = new Map<string, StepPatch>();
   for (const o of list) {
-    if (o.stepId === undefined) continue;
-    if (o.over === undefined) out.set(o.stepId, { state: "running", outlived: true, ...(o.startedAt !== undefined && { startedAt: o.startedAt }) });
-    else if (o.over === "ended") out.set(o.stepId, { ended: { state: "stopped", cause: unseen }, outlived: true });
-    else out.set(o.stepId, { outlived: true, ...(o.over === "unsure" && { uncut: true }) });
+    const step = o.stepId ?? `task:${o.id}`;
+    if (o.over === undefined) out.set(step, { state: "running", outlived: true, ...(o.startedAt !== undefined && { startedAt: o.startedAt }) });
+    else if (o.over === "stopped") out.set(step, { outlived: true });
+    else out.set(step, { ended: { state: "stopped", cause: o.over === "ended" ? causes.unseen : causes.cantTell }, outlived: true });
   }
   return out;
 }

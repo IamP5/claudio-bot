@@ -50,7 +50,8 @@ export type Action =
   /** The user sends in the thread. interrupt: "Stop and send". While the phone is offline the message waits for the next hello, as in the app. */
   | { do: "send"; name: string; text: string; interrupt?: boolean; mark?: string }
   | { do: "until"; mark: string; what: string; timeoutS: number; test: (ev: Ev) => boolean; optional?: boolean }
-  | { do: "stop"; name: string; mark: string }
+  /** task: stop only the running task whose label holds this text. */
+  | { do: "stop"; name: string; mark: string; task?: string }
   | { do: "sleep"; s: number }
   | { do: "mark"; mark: string }
   /** Unwatches the thread, as the app does when the user goes back to the list; the bridge counts it as a visit. */
@@ -1377,6 +1378,122 @@ const S6c: Scenario = {
   ],
 };
 
+/** Every Bash step of the session in its latest snapshot at or before `at`. */
+const bashSteps = (ev: Ev, name: string, at: number) => stepsOf(last(ev, name, at) ?? ({ items: [] } as unknown as Snap)).filter((x) => x.tool === "Bash");
+
+const S6d: Scenario = {
+  id: "S6d",
+  area: "sessions",
+  title: "Background commands the bridge cannot check after a restart",
+  needsSimulator: false,
+  journey: [
+    "Two long commands run in the background. One sends its output elsewhere at once, the other a little later, so after the bridge restarts it cannot prove either is still the command.",
+    "Both end on their own. The thread must never show them running forever: once the bridge cannot tell, the steps say so and stop spinning, and the session rests.",
+  ],
+  setup: [
+    { do: "create", name: "vu1", prompt: BG("exec >/dev/null 2>&1; sleep 51") },
+    started("vu1"),
+    { do: "until", mark: "vu1-ended", what: "vu1's turn to end", timeoutS: 180, test: turnEnded("vu1") },
+    { do: "create", name: "vu2", prompt: BG("sleep 25; exec >/dev/null 2>&1; sleep 52") },
+    started("vu2"),
+    { do: "until", mark: "vu2-ended", what: "vu2's turn to end", timeoutS: 180, test: turnEnded("vu2") },
+    { do: "until", mark: "bg-running", what: "both commands to run on the Mac", timeoutS: 60, test: (ev) => ev.procs("sleep 51").length > 0 && ev.procs("sleep 25").length > 0 },
+    { do: "restart-bridge", mark: "restarted" },
+    { do: "sleep", s: 8 },
+    { do: "mark", mark: "after-restart" },
+    { do: "until", mark: "all-gone", what: "both commands to end", timeoutS: 150, test: (ev) => ev.procs("sleep 51").length === 0 && ev.procs("sleep 52").length === 0 && ev.procs("sleep 25").length === 0 },
+    { do: "sleep", s: 10 },
+    { do: "mark", mark: "after-ended" },
+    { do: "sleep", s: 30 },
+    { do: "mark", mark: "after-ended-40s" },
+  ],
+  pre: [created("vu1"), created("vu2"), { what: "the bridge restarted", check: (ev) => (mark(ev, "after-restart") !== undefined ? ok("yes") : no("no")) }],
+  rubric: [
+    {
+      id: "S6d.1",
+      tell: "state",
+      lane: "protocol",
+      text: "Once the bridge cannot tell whether a command still runs, its step stops spinning and says so, and the session rests.",
+      pass: "At mark after-restart, vu1's Bash step reads stopped with a cause that says the bridge cannot tell, and vu1 is not working.",
+      fail: "vu1's step reads running, or reads stopped as if it surely ended, or vu1 reads working.",
+      check: (ev) => {
+        const at = mark(ev, "after-restart");
+        if (at === undefined) return needMarks(ev, "after-restart")!;
+        const step = bashSteps(ev, "vu1", at)[0];
+        const s = last(ev, "vu1", at);
+        if (!step) return no("no Bash step for vu1");
+        if (step.state !== "stopped" || !/can.t tell/i.test(step.cause ?? "")) return no(`vu1 step ${step.state} ${step.cause ?? ""}`);
+        return s && !isWorking(s) ? ok(`vu1: ${step.cause}`) : no(`vu1 reads working: row ${rowStatus(s)}, working ${s?.controls?.working}`);
+      },
+    },
+    {
+      id: "S6d.2",
+      tell: "state",
+      lane: "protocol",
+      text: "After both commands ended, neither thread shows a step running and neither session works, 10 s and 40 s later.",
+      pass: "At marks after-ended and after-ended-40s, no Bash step of vu1 or vu2 reads running, and neither reads working.",
+      fail: "A step still reads running, or a session reads working.",
+      check: (ev) => {
+        const marks = [mark(ev, "after-ended"), mark(ev, "after-ended-40s")];
+        if (marks.some((m) => m === undefined)) return needMarks(ev, "after-ended", "after-ended-40s")!;
+        const bad = marks.flatMap((at) =>
+          ["vu1", "vu2"].flatMap((name) => {
+            const s = last(ev, name, at!);
+            const running = bashSteps(ev, name, at!).filter((x) => x.state === "running");
+            return [...(running.length ? [`${name} step running at ${Math.round(at! / 1000)} s`] : []), ...(s && isWorking(s) ? [`${name} working at ${Math.round(at! / 1000)} s`] : [])];
+          }),
+        );
+        return bad.length ? no(bad.join("; ")) : ok("both settled, neither working");
+      },
+    },
+  ],
+};
+
+const S4b: Scenario = {
+  id: "S4b",
+  area: "sessions",
+  title: "Stop one background task while nothing else runs",
+  needsSimulator: false,
+  journey: [
+    "The only thing running is one background command. The user stops just that task.",
+    "Claude Code queues a note about the stopped task but starts no turn for it, so the session must come to rest, not read working.",
+  ],
+  setup: [
+    { do: "create", name: "s4b", prompt: BG("sleep 305") },
+    started("s4b"),
+    { do: "until", mark: "s4b-ended", what: "the turn that starts the command to end", timeoutS: 180, test: turnEnded("s4b") },
+    { do: "until", mark: "bg-running", what: "the sleep 305 to run on the Mac", timeoutS: 60, test: (ev) => ev.procs("sleep 305").length > 0 },
+    { do: "sleep", s: 2 },
+    { do: "stop", name: "s4b", task: "sleep 305", mark: "stopped" },
+    { do: "sleep", s: 5 },
+    { do: "mark", mark: "stop-5s" },
+    { do: "sleep", s: 20 },
+    { do: "mark", mark: "stop-25s" },
+    { do: "ps", pattern: "sleep 305", as: "after-stop" },
+  ],
+  pre: [created("s4b")],
+  rubric: [
+    {
+      id: "S4b.1",
+      tell: "stop",
+      lane: "protocol",
+      text: "After stopping the only running task, the session rests and shows no turn that never started.",
+      pass: "At marks stop-5s and stop-25s, controls.working is false, controls.turn is absent and the row is not working; the sleep 305 is gone.",
+      fail: "The session reads working, or a wake turn shows, or the command still runs.",
+      check: (ev) => {
+        const at = [mark(ev, "stop-5s"), mark(ev, "stop-25s")];
+        if (at.some((m) => m === undefined)) return needMarks(ev, "stop-5s", "stop-25s")!;
+        if ((ev.samples["after-stop"] ?? []).length) return no(`still running: ${ev.samples["after-stop"]!.join(" | ").slice(0, 120)}`);
+        const bad = at.flatMap((m) => {
+          const s = last(ev, "s4b", m!);
+          return s && (isWorking(s) || s.controls?.turn != null) ? [`at ${Math.round(m! / 1000)} s: row ${rowStatus(s)}, working ${s.controls?.working}, turn ${JSON.stringify(s.controls?.turn)}`] : [];
+        });
+        return bad.length ? no(bad.join("; ")) : ok("at rest 5 s and 25 s after the stop");
+      },
+    },
+  ],
+};
+
 const SLEEPERS = 4;
 const QUICK = 8;
 const s7names = [...Array.from({ length: SLEEPERS }, (_, i) => `s7-sleep-${i + 1}`), ...Array.from({ length: QUICK }, (_, i) => `s7-quick-${i + 1}`)];
@@ -1697,4 +1814,4 @@ const S8fg: Scenario = {
   ],
 };
 
-export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S4, S5, S6, S6b, S6c, S7, S8, S8fg];
+export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S4, S4b, S5, S6, S6b, S6c, S6d, S7, S8, S8fg];

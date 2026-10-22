@@ -465,8 +465,8 @@ export type OwnDrive = {
    */
   outlived?: (BackgroundTask & { group: number; over?: "ended" | "stopped" | "unsure" })[];
   /**
-   * Steps of background work whose fate the bridge could not check: they are not cut off as ended. A step is named by
-   * its tool_use id, or as task:<id> when only its task is known.
+   * Steps of background work whose fate the bridge could not check, and has no process group to look at again: they
+   * read that it cannot tell. A step is named by its tool_use id, or as task:<id> when only its task is known.
    */
   unsure?: string[];
 };

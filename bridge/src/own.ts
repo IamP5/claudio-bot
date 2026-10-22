@@ -4,6 +4,7 @@ import type { Tickable } from "./clock";
 import { failClosed, resolveReal, toCall, toHookOutput } from "./gate";
 import type { Ledger } from "./ledger";
 import { detailOf, floors, type Scope } from "./policy";
+import { groupAlive } from "./procs";
 import { endOutlived, followed, OUTLIVED_LOOK_MS, outlivedSteps, outlivedTask, runOf, settled, withOutlived, type Outlived } from "./outlived";
 import {
   PHONE_MODES,
@@ -110,6 +111,10 @@ const NOTHING_RUNS = "Nothing is running.";
 const STOPPED_BY_YOU = "Stopped by you";
 const RESTARTED = "The bridge restarted";
 const UNSEEN_END = "It ended without a result";
+const CANT_TELL = "Can't tell whether this still runs on your Mac";
+/** How soon, then how much less often, the bridge looks again whether a command it cannot tell about still runs. */
+const UNSURE_LOOK_MS = 30_000;
+const UNSURE_LOOK_MAX_MS = 10 * 60_000;
 /** What the SDK says when Claude Code's process ends under a query. */
 const DIED = /^Claude Code process (exited|terminated)/;
 
@@ -262,8 +267,10 @@ export function createOwn(deps: OwnDeps): Own {
   function markStopped(rec: SessionRecord, tasks: readonly Task[], ofRun: boolean) {
     if (tasks.length === 0) return;
     if (ofRun) stoppedBy.add(rec.id);
+    const at = deps.now().getTime();
     const times = stoppedAt.get(rec.id) ?? new Map<TaskId, number>();
-    for (const t of tasks) times.set(t.id, deps.now().getTime());
+    for (const [id, when] of times) if (at - when >= RESTOP_MS) times.delete(id);
+    for (const t of tasks) times.set(t.id, at);
     stoppedAt.set(rec.id, times);
     const drive = driveOf(rec);
     const steps = tasks.flatMap((t) => (t.stepId === null ? [] : [t.stepId]));
@@ -341,14 +348,18 @@ export function createOwn(deps: OwnDeps): Own {
       else notice(rec.id, text);
     }
     if (fate.unknown.length > 0) {
-      markUnsure(rec, fate.unknown);
+      // One with a process group is looked at again, so its end can be said; one without stays as the bridge cannot tell.
+      const grouped = fate.unknown.filter((t): t is Outlived => typeof t.group === "number" && !allOutlived(rec).some((o) => o.id === t.id));
+      driveOf(rec).outlived = settled([...allOutlived(rec), ...grouped], grouped.map((t) => t.id), "unsure");
+      markUnsure(rec, fate.unknown.filter((t) => typeof t.group !== "number"));
       notice(rec.id, goneNote("Claude Code", cause, "unknown", fate.unknown), "info", cause === "restart" ? "restart" : undefined);
     }
     adopt(rec, fate.running, cause);
   }
 
-  /** Background work the bridge cannot check: its steps are not cut off as ended. */
+  /** Background work the bridge cannot check and cannot look at again: its steps say the bridge cannot tell. */
   function markUnsure(rec: SessionRecord, tasks: readonly BackgroundTask[]) {
+    if (tasks.length === 0) return;
     const drive = driveOf(rec);
     drive.unsure = [...(drive.unsure ?? []), ...tasks.map((t) => t.stepId ?? `task:${t.id}`)].slice(-STOPPED_STEPS_KEPT);
     deps.persist("now");
@@ -383,32 +394,54 @@ export function createOwn(deps: OwnDeps): Own {
   const unsureText = (tasks: readonly Outlived[]) =>
     `The bridge can no longer tell that ${listed(tasks.map(nameOf))} ${pick(tasks.length, "is", "are")} still the command it followed, so it no longer shows ${pick(tasks.length, "it", "them")}. ${pick(tasks.length, "It", "They")} may still run on this Mac.`;
 
+  /** When each command the bridge cannot tell about is next looked at, and the wait after that. */
+  const unsureLooks = new Map<string, { at: number; gap: number }>();
+  const unsureDue = (rec: SessionRecord, o: Outlived, at: number) => {
+    const key = `${rec.id}:${o.id}`;
+    const look = unsureLooks.get(key) ?? { at: at + UNSURE_LOOK_MS, gap: UNSURE_LOOK_MS };
+    if (at < look.at) {
+      unsureLooks.set(key, look);
+      return false;
+    }
+    const gap = Math.min(look.gap * 2, UNSURE_LOOK_MAX_MS);
+    unsureLooks.set(key, { at: at + gap, gap });
+    return true;
+  };
+
   /**
-   * Outlived commands that ended on their own since the last look (nobody saw how), or that the bridge can no longer
-   * prove are the command. One a Stop is ending, the Stop says. A failure here is logged: a background poll never takes
-   * the bridge down.
+   * Followed commands that ended on their own since the last look (nobody saw how), or that the bridge can no longer
+   * prove are the command; and, less often, commands it cannot tell about whose group is gone. One a Stop is ending,
+   * the Stop says. A process table it cannot read changes nothing. A failure is logged and undone, so the next look
+   * says it again: a background poll never takes the bridge down.
    */
   async function lookOutlived(rec: SessionRecord) {
     if (lookingAtOutlived.has(rec.id)) return;
     lookingAtOutlived.add(rec.id);
     const free = (o: Outlived) => !(beingStopped.get(rec.id)?.has(o.id as TaskId) ?? false);
+    const drive = driveOf(rec);
+    const before = { outlived: drive.outlived, notices: drive.notices, last: lastTask.get(rec.id) };
     try {
       const watched = outlivedOf(rec).filter(free);
       const runs = await Promise.all(watched.map(runOf));
       const now = (kind: string) => watched.filter((o, i) => runs[i] === kind && free(o) && outlivedOf(rec).some((x) => x.id === o.id));
-      const ended = now("gone");
+      const at = deps.now().getTime();
+      const unsureGone = allOutlived(rec).filter((o) => o.over === "unsure" && unsureDue(rec, o, at) && !groupAlive(o.group));
+      const ended = [...now("gone"), ...unsureGone];
       const unsure = now("unsure");
+      Object.assign(before, { outlived: drive.outlived, notices: drive.notices, last: lastTask.get(rec.id) });
+      if (ended.length === 0 && unsure.length === 0) return;
       letGo(rec, ended.map((o) => o.id), "ended");
       letGo(rec, unsure.map((o) => o.id), "unsure");
       if (ended.length > 0) {
         lastTask.set(rec.id, `${upper(listed(ended.map(nameOf)))} ended`);
         notice(rec.id, endedText(ended), "info", "task");
       }
-      if (unsure.length > 0) {
-        markUnsure(rec, unsure);
-        notice(rec.id, unsureText(unsure), "info", "task");
-      }
+      if (unsure.length > 0) notice(rec.id, unsureText(unsure), "info", "task");
     } catch (e) {
+      drive.outlived = before.outlived;
+      drive.notices = before.notices;
+      if (before.last === undefined) lastTask.delete(rec.id);
+      else lastTask.set(rec.id, before.last);
       deps.log(`own ${rec.id}: looking at outlived commands failed: ${errorText(e)}`);
     } finally {
       lookingAtOutlived.delete(rec.id);
@@ -804,20 +837,20 @@ export function createOwn(deps: OwnDeps): Own {
     if (still.length > 0) awaiting.set(rec.id, still);
     else awaiting.delete(rec.id);
     const whole = target === "all" && missed.length === 0 && late.length === 0;
-    if (stop) {
-      addNew(stop.said, confirmed);
-      addNew(stop.covered, covered);
-      stop.whole ||= whole;
-      if (stop.ended && stop.asking === 0) sayTurnStop(rec, stop);
-    } else if (confirmed.length > 0) {
+    // Only a turn of ours surely ends soon; what stopped beside a wake turn is said now, as it may never end.
+    const held = stop !== undefined && stop.envelope !== null;
+    if (held) addNew(stop!.said, confirmed);
+    else if (confirmed.length > 0) {
       notice(rec.id, `${STOPPED_BY_YOU}: ${listed(confirmed.map(taskName))}.`, "info", "stop");
       if (one === null) stoppedRun(rec, { turn: false, tasks: confirmed, at, envelope: null, whole });
     }
-    if (already.length > 0) notice(rec.id, `${upper(listed(already.map(taskName)))} had already ended when your stop reached ${pick(already.length, "it", "them")}.`, "info", "stop");
-    if (unproven.length > 0) {
-      markUnsure(rec, alone.filter((o) => unproven.some((t) => t.id === o.id)));
-      notice(rec.id, unsureText(alone.filter((o) => unproven.some((t) => t.id === o.id))), "error", "stop");
+    if (stop) {
+      addNew(stop.covered, covered);
+      stop.whole ||= whole && held;
+      if (stop.ended && stop.asking === 0) sayTurnStop(rec, stop);
     }
+    if (already.length > 0) notice(rec.id, `${upper(listed(already.map(taskName)))} had already ended when your stop reached ${pick(already.length, "it", "them")}.`, "info", "stop");
+    if (unproven.length > 0) notice(rec.id, unsureText(alone.filter((o) => unproven.some((t) => t.id === o.id))), "error", "stop");
     if (missed.length > 0) notice(rec.id, `Couldn't stop ${listed(missed.map(taskName))}. It may still be running.`, "error", "stop");
     if (fresh.length > 0) notice(rec.id, `Claude Code has not confirmed the stop of ${listed(fresh.map(taskName))} yet.`, "info", "stop");
     changed(rec.id);
@@ -961,8 +994,8 @@ export function createOwn(deps: OwnDeps): Own {
     },
 
     steps(rec) {
-      const out = outlivedSteps(allOutlived(rec), UNSEEN_END);
-      for (const key of rec.own?.unsure ?? []) out.set(key, { ...out.get(key), uncut: true });
+      const out = outlivedSteps(allOutlived(rec), { unseen: UNSEEN_END, cantTell: CANT_TELL });
+      for (const key of rec.own?.unsure ?? []) out.set(key, { ...out.get(key), ended: { state: "stopped", cause: CANT_TELL }, outlived: true });
       for (const c of rec.own?.cards ?? []) {
         if (c.kind !== "permission") continue;
         if (c.agent) {
@@ -1041,7 +1074,7 @@ export function createOwn(deps: OwnDeps): Own {
       for (const s of drivers.values()) s.tick(at);
       if (at.getTime() >= nextOutlivedLook) {
         nextOutlivedLook = at.getTime() + OUTLIVED_LOOK_MS;
-        for (const rec of deps.world.sessions.values()) if (outlivedOf(rec).length > 0) void lookOutlived(rec);
+        for (const rec of deps.world.sessions.values()) if (allOutlived(rec).some((o) => o.over === undefined || o.over === "unsure")) void lookOutlived(rec);
       }
     },
 
@@ -1053,7 +1086,8 @@ export function createOwn(deps: OwnDeps): Own {
       for (const rec of deps.world.sessions.values())
         for (const c of rec.own?.cards ?? []) if (isOpen(c)) consider(c.kind === "permission" ? c.card.expiresAt : c.expiresAt);
       for (const s of drivers.values()) consider(s.nextDeadline());
-      if ([...deps.world.sessions.values()].some((rec) => outlivedOf(rec).length > 0)) consider(new Date(nextOutlivedLook).toISOString());
+      if ([...deps.world.sessions.values()].some((rec) => allOutlived(rec).some((o) => o.over === undefined || o.over === "unsure")))
+        consider(new Date(nextOutlivedLook).toISOString());
       return next;
     },
 

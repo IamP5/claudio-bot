@@ -261,6 +261,39 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S4.9 | state | protocol | The failed subagent reads failed as soon as Claude Code records the failure. | Its step first reads error within 2 s of the failed tool_result line in the transcript. | The step reads error later than 2 s after the transcript has the failure, or never. |
 | S4.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
 
+## S4b Stop one background task while nothing else runs
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. The only thing running is one background command. The user stops just that task.
+2. Claude Code queues a note about the stopped task but starts no turn for it, so the session must come to rest, not read working.
+
+**Setup.**
+
+- New session `s4b` in demo (haiku, mode default): "Use the Bash tool with run_in_background set to true to run exactly this command: sleep 305 Do not wait for it, do not check on it, do not run anything else. Reply with one line: started."
+- Wait up to 90 s for s4b's turn to start; mark `s4b-started`.
+- Wait up to 180 s for the turn that starts the command to end; mark `s4b-ended`.
+- Wait up to 60 s for the sleep 305 to run on the Mac; mark `bg-running`.
+- Wait 2 s.
+- Stop only the task `sleep 305` of `s4b` (session_stop with target task); mark `stopped`.
+- Wait 5 s.
+- Mark `stop-5s`.
+- Wait 20 s.
+- Mark `stop-25s`.
+- Sample the Mac's processes matching `sleep 305` in the seed project as `after-stop`.
+
+**Preconditions** (any failure fails the scenario):
+
+- session s4b was created
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S4b.1 | stop | protocol | After stopping the only running task, the session rests and shows no turn that never started. | At marks stop-5s and stop-25s, controls.working is false, controls.turn is absent and the row is not working; the sleep 305 is gone. | The session reads working, or a wake turn shows, or the command still runs. |
+
 ## S5 A silent two-minute tool call
 
 Needs the simulator: no (simulator items run with `--sim`).
@@ -442,6 +475,46 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S6c.2 | stop | protocol | After the restart the session reads working with the command as a task, so Stop is offered. | At mark after-restart, controls.working is true and controls.tasks names the command. | The session rests, or no task names the command. |
 | S6c.4 | state | protocol | A message sent after the restart does not bring back a claim that the command stopped: it still runs and shows so. | The sleep 420 still runs (sample after-send); at mark after-send controls.tasks names it, the Bash step reads running, and no notice since the message says it stopped or did not finish. | The process is gone, no task names it, the step reads stopped, or a notice says it stopped or did not finish. |
 | S6c.3 | stop | protocol | Stop ends the command on the Mac, and the thread says the user stopped it. | The sleep 420 is gone 3 s after the session rests (sample after-stop), and a notice that starts "Stopped by you" follows Stop. | The process still runs after Stop, or no stop notice. |
+
+## S6d Background commands the bridge cannot check after a restart
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. Two long commands run in the background. One sends its output elsewhere at once, the other a little later, so after the bridge restarts it cannot prove either is still the command.
+2. Both end on their own. The thread must never show them running forever: once the bridge cannot tell, the steps say so and stop spinning, and the session rests.
+
+**Setup.**
+
+- New session `vu1` in demo (haiku, mode default): "Use the Bash tool with run_in_background set to true to run exactly this command: exec >/dev/null 2>&1; sleep 51 Do not wait for it, do not check on it, do not run anything else. Reply with one line: started."
+- Wait up to 90 s for vu1's turn to start; mark `vu1-started`.
+- Wait up to 180 s for vu1's turn to end; mark `vu1-ended`.
+- New session `vu2` in demo (haiku, mode default): "Use the Bash tool with run_in_background set to true to run exactly this command: sleep 25; exec >/dev/null 2>&1; sleep 52 Do not wait for it, do not check on it, do not run anything else. Reply with one line: started."
+- Wait up to 90 s for vu2's turn to start; mark `vu2-started`.
+- Wait up to 180 s for vu2's turn to end; mark `vu2-ended`.
+- Wait up to 60 s for both commands to run on the Mac; mark `bg-running`.
+- Restart the bridge on the same port and home; the phone reconnects. Mark `restarted`.
+- Wait 8 s.
+- Mark `after-restart`.
+- Wait up to 150 s for both commands to end; mark `all-gone`.
+- Wait 10 s.
+- Mark `after-ended`.
+- Wait 30 s.
+- Mark `after-ended-40s`.
+
+**Preconditions** (any failure fails the scenario):
+
+- session vu1 was created
+- session vu2 was created
+- the bridge restarted
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S6d.1 | state | protocol | Once the bridge cannot tell whether a command still runs, its step stops spinning and says so, and the session rests. | At mark after-restart, vu1's Bash step reads stopped with a cause that says the bridge cannot tell, and vu1 is not working. | vu1's step reads running, or reads stopped as if it surely ended, or vu1 reads working. |
+| S6d.2 | state | protocol | After both commands ended, neither thread shows a step running and neither session works, 10 s and 40 s later. | At marks after-ended and after-ended-40s, no Bash step of vu1 or vu2 reads running, and neither reads working. | A step still reads running, or a session reads working. |
 
 ## S7 Twelve sessions at once
 

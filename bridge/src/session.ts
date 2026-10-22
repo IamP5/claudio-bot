@@ -132,7 +132,7 @@ export const goneNote = (name: string, cause: GoneCause, kind: keyof Fate, tasks
  * once no process of its group runs. Subagents run inside Claude Code, so they stopped once its process is gone. Without
  * one of those facts the bridge cannot tell.
  */
-const FATE_OF_RUN = { runs: "running", gone: "stopped", unsure: "unknown" } as const;
+const FATE_OF_RUN = { runs: "running", gone: "stopped", unsure: "unknown", unread: "unknown" } as const;
 async function fateOf(tasks: readonly Background[]): Promise<Fate> {
   const fate: Fate = { stopped: [], running: [], unknown: [] };
   for (const t of tasks) {
@@ -855,10 +855,10 @@ type Live = {
  * What Claude Code is doing on a query on its own account, background tasks aside. running: from a turn's init frame
  * to its result, ours or one a background task woke; `wake` when a task_notification came meanwhile and no later tool
  * result carried it into the turn, so a wake turn may follow. due: a wake turn may start; past `until` it is taken as
- * never coming. `shown` only when a notification came with no turn running, the one case where Claude Code always
- * wakes; a notification during a turn usually ends inside it, so the phone is not told to expect a wake turn.
+ * never coming. A due turn is not shown as running: Claude Code may only queue the notification and never start it
+ * (CLI 2.1.305, after a task the user stopped), so the session works only from the turn's init frame.
  */
-type Cli = { kind: "idle" } | { kind: "running"; wake: boolean; at: number } | { kind: "due"; until: number; at: number; shown: boolean };
+type Cli = { kind: "idle" } | { kind: "running"; wake: boolean; at: number } | { kind: "due"; until: number };
 
 const IDLE: Cli = { kind: "idle" };
 /** A wake turn was announced and has not started. */
@@ -866,8 +866,8 @@ const wakeAhead = (c: Cli) => c.kind === "due" || (c.kind === "running" && c.wak
 
 /** Closing the query now would cut work off: its background tasks, or a turn Claude Code runs or is about to run. */
 const busy = (l: Live) => l.background.length > 0 || l.cli.kind !== "idle";
-/** When Claude Code's own turn started, or was announced; null when it runs none and none is surely coming. */
-const cliTurnAt = (c: Cli): number | null => (c.kind === "running" || (c.kind === "due" && c.shown) ? c.at : null);
+/** When the turn Claude Code runs on its own started; null when it runs none. */
+const cliTurnAt = (c: Cli): number | null => (c.kind === "running" ? c.at : null);
 
 /** A background task of the live query, by what a note would name it. */
 type Background = NonNullable<SessionState["background"]>[number];
@@ -1432,12 +1432,11 @@ export function createSession(spec: SessionSpec): Session {
     if (m.type === "system" && m.subtype === "init" && stopMissed)
       guard("interrupt", () => void l.q.interrupt().catch((err) => log(`session ${label}: interrupt failed: ${errorText(err)}`)));
     const was = activityKey();
-    // A wake turn keeps the start it was announced with, so a Stop aimed at it still names it once it runs.
-    if (m.type === "system" && m.subtype === "init") l.cli = { kind: "running", wake: l.ours === true && wakeAhead(l.cli), at: l.cli.kind === "due" && l.cli.shown ? l.cli.at : heardAt };
+    if (m.type === "system" && m.subtype === "init") l.cli = { kind: "running", wake: l.ours === true && wakeAhead(l.cli), at: heardAt };
     // Claude Code wakes for a background task that ended or that the bridge stopped, not for one it stopped itself.
     else if (m.type === "system" && m.subtype === "task_notification" && wakes(l.tasks, m.task_id as TaskId, m.status)) {
-      l.cli = l.cli.kind === "running" ? { ...l.cli, wake: true } : { kind: "due", until: heardAt + WAKE_WAIT_MS, at: l.cli.kind === "due" ? l.cli.at : heardAt, shown: true };
-    } else if (m.type === "result" && l.cli.kind === "running") l.cli = l.cli.wake ? { kind: "due", until: heardAt + WAKE_WAIT_MS, at: heardAt, shown: false } : IDLE;
+      l.cli = l.cli.kind === "running" ? { ...l.cli, wake: true } : { kind: "due", until: heardAt + WAKE_WAIT_MS };
+    } else if (m.type === "result" && l.cli.kind === "running") l.cli = l.cli.wake ? { kind: "due", until: heardAt + WAKE_WAIT_MS } : IDLE;
     else if (l.cli.kind === "running" && l.cli.wake && m.type === "user" && m.parent_tool_use_id === null && Array.isArray(m.message.content) && m.message.content.some((b) => b.type === "tool_result")) {
       // The next request carries the queued notification into this turn, so no wake turn follows for it.
       l.cli = { ...l.cli, wake: false };

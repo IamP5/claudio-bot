@@ -616,9 +616,17 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
         return markNow(a.mark);
       case "sleep":
         return Bun.sleep(a.s * 1000);
-      case "stop":
-        p.send({ type: "session_stop", sessionId: ev.ids[a.name]! });
+      case "stop": {
+        const sessionId = ev.ids[a.name]!;
+        if (a.task === undefined) p.send({ type: "session_stop", sessionId });
+        else {
+          const tasks = (ev.history.filter((s) => s.name === a.name).at(-1)?.controls?.tasks ?? []) as { id: string; label: string }[];
+          const task = tasks.find((t) => t.label.includes(a.task!));
+          if (!task) throw new Error(`no running task of ${a.name} names "${a.task}"`);
+          p.send({ type: "session_stop", sessionId, target: { task: task.id } });
+        }
         return markNow(a.mark);
+      }
       case "leave":
         p.send({ type: "unwatch_session", sessionId: ev.ids[a.name]! });
         p.away.add(ev.ids[a.name]!);
@@ -852,7 +860,9 @@ function describe(a: Action): string {
     case "until":
       return `Wait up to ${a.timeoutS} s for ${a.what}; mark \`${a.mark}\`${a.optional ? " (optional)" : ""}.`;
     case "stop":
-      return `Press Stop on \`${a.name}\` (session_stop); mark \`${a.mark}\`.`;
+      return a.task === undefined
+        ? `Press Stop on \`${a.name}\` (session_stop); mark \`${a.mark}\`.`
+        : `Stop only the task \`${a.task}\` of \`${a.name}\` (session_stop with target task); mark \`${a.mark}\`.`;
     case "sleep":
       return `Wait ${a.s} s.`;
     case "mark":

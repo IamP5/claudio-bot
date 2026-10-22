@@ -3,11 +3,17 @@ import Foundation
 /// What the composer's Stop ends (P-A11Y-2): the turn, if one runs, and every live task.
 struct StopScope: Equatable, Sendable {
     let turn: Bool
-    let tasks: [SessionTask]
+    private(set) var tasks: [SessionTask]
 
     init(_ controls: SessionControls) {
         turn = controls.turn != nil || controls.tasks == nil
         tasks = controls.tasks ?? []
+    }
+
+    /// What a stop asked for ends, as against all that runs: the turn alone takes only its own subagents with it.
+    init(_ controls: SessionControls, target: StopTarget) {
+        self.init(controls)
+        if target == .turn { tasks = tasks.filter { !$0.background } }
     }
 
     var background: [SessionTask] { tasks.filter(\.background) }
@@ -203,7 +209,11 @@ struct ComposerState: Equatable, Sendable {
             send = .empty
         }
         if let controls, controls.working, canStop {
-            self.stop = (StopScope(controls), StopPhase(stop.flatMap { $0.covers(controls) ? $0 : nil }, at: now))
+            let request = stop.flatMap { $0.covers(controls) ? $0 : nil }
+            let phase = StopPhase(request, at: now)
+            // While a stop is on its way or refused, the control speaks of what that stop asked for.
+            let scope = phase == .ready ? StopScope(controls) : StopScope(controls, target: request?.target ?? .all)
+            self.stop = (scope, phase)
         } else {
             self.stop = nil
         }
@@ -365,14 +375,6 @@ enum ComposerNote: Equatable, Sendable {
         }
     }
 
-    /// The line itself is news when it says something did not happen.
-    var announced: Bool {
-        switch self {
-        case .changeUnconfirmed: true
-        case .error, .stopping, .unconfirmed, .changing: false
-        }
-    }
-
     /// P-A11Y-1: an error says so in words, not only in red.
     var spoken: String {
         if case .error = self { "Error: " + text } else { text }
@@ -408,5 +410,58 @@ enum UnansweredPrompts {
         }
         if !turnRuns { close() }
         return found
+    }
+}
+
+/// How much the thread's bottom bar shows, from the height it has (not from the keyboard or the text size, so a
+/// hardware keyboard, an iPad's floating keyboard and a thread opened with the keyboard up all fit the same way). Each
+/// level gives up a little more: the chips' words, then the status line's extra lines, then the note's, then the field's.
+enum BarDensity: Int, Comparable, CaseIterable, Sendable {
+    case full, iconChips, oneLineStatus, shortNote, shortField
+
+    static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
+
+    var next: BarDensity? { BarDensity(rawValue: rawValue + 1) }
+
+    var chipWords: Bool { self < .iconChips }
+
+    var statusLines: Int { self < .oneLineStatus ? 3 : 1 }
+
+    /// The note's lines before More: fewer at accessibility sizes, where each line is tall.
+    func noteLines(accessibility: Bool) -> Int {
+        self >= .shortNote ? 1 : accessibility ? 2 : 3
+    }
+
+    /// The lines the field shows before it scrolls.
+    func fieldLines(accessibility: Bool) -> Int {
+        self < .shortField ? (accessibility ? 2 : 6) : (accessibility ? 1 : 3)
+    }
+}
+
+/// Picks the density that fits. The bar asks for its content's height and gets what the screen has left; while it gets
+/// less, the density climbs one level per measurement. It starts again from full when the bar gets more room than it
+/// had when it was squeezed (the keyboard went down), or when the bar shrinks at the same level (something in it went
+/// away). It never steps down on its own, so it cannot swing between two levels.
+struct BarFit: Equatable, Sendable {
+    private(set) var density = BarDensity.full
+    private var heights: [BarDensity: CGFloat] = [:]
+    /// The bar's frame the last time it was squeezed.
+    private var squeezedAt: CGFloat?
+
+    /// content: what the bar's rows need. frame: what the bar got.
+    mutating func measured(content: CGFloat, frame: CGFloat) {
+        guard content > 0, frame > 0 else { return }
+        if let squeezedAt, frame > squeezedAt + 1, content <= frame + 0.5 {
+            self = BarFit()
+            return
+        }
+        if let before = heights[density], content < before - 24, density != .full {
+            self = BarFit()
+            return
+        }
+        heights[density] = content
+        guard content > frame + 0.5 else { return }
+        squeezedAt = frame
+        if let next = density.next { density = next }
     }
 }

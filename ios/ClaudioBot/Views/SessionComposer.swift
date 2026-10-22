@@ -3,8 +3,8 @@ import SwiftUI
 struct SessionComposer: View {
     let sessionId: SessionID
     @Bindable var model: ThreadModel
-    /// The keyboard is up at an accessibility size: the chips show their icons and Dismiss its glyph, so the bar fits.
-    var compact = false
+    /// How much the crowded bar shows (BarDensity): the chips' words and the note's lines.
+    var density = BarDensity.full
     /// The thread's announcer, so what the composer says keeps the thread's spacing and never talks over the status line.
     let announce: (String) -> Void
     var onSend: () -> Void = {}
@@ -28,6 +28,11 @@ struct SessionComposer: View {
     @State private var confirming: StopScope?
     /// The change whose lapse was spoken, so a redraw of the same lapse is not spoken again.
     @State private var lapseSpoken: Date?
+    /// The note's height as shown and as it would be whole, so More shows only when lines are cut.
+    @State private var noteShownHeight: CGFloat = 0
+    @State private var noteFullHeight: CGFloat = 0
+    /// The whole note, in a sheet, after More.
+    @State private var fullNote: String?
 
     private var controls: SessionControls? { model.controls }
     private var canSend: Bool { controls?.canSend ?? false }
@@ -142,7 +147,7 @@ struct SessionComposer: View {
     private func field(_ state: ComposerState) -> some View {
         let text = PromptTextView(
             draft: $model.draft, caret: $caret, placeholder: ComposerState.placeholder(controls), label: ComposerState.fieldLabel(controls),
-            maxLines: typeSize.isAccessibilitySize ? 2 : 6, autofocus: Self.autofocus, onSubmit: { send(interrupt: false) }
+            maxLines: density.fieldLines(accessibility: typeSize.isAccessibilitySize), autofocus: Self.autofocus, onSubmit: { send(interrupt: false) }
         )
         .padding(.vertical, 8)
         .frame(minHeight: Composer.field)
@@ -160,12 +165,12 @@ struct SessionComposer: View {
             if typeSize.isAccessibilitySize {
                 VStack(alignment: .trailing, spacing: 0) {
                     text
-                    buttons.padding(.bottom, Composer.inset)
+                    buttons.padding(.bottom, buttonsInset)
                 }
             } else {
                 HStack(alignment: .bottom, spacing: 6) {
                     text
-                    buttons.padding(.bottom, Composer.inset)
+                    buttons.padding(.bottom, buttonsInset)
                 }
             }
         }
@@ -224,11 +229,22 @@ struct SessionComposer: View {
         .foregroundStyle(filled ? .black : .white)
         .frame(width: control + (Composer.sendWidth - Composer.control), height: control)
         .background(filled ? Color.white.opacity(dimmed ? 0.35 : 1) : Theme.raised, in: Capsule())
+        .frame(minWidth: HitTarget.minHeight, minHeight: HitTarget.minHeight)
+        .contentShape(Rectangle())
     }
 
-    /// At accessibility sizes Dismiss goes under the words, so they keep the row's width.
+    /// The buttons' hit area reaches past the capsule, so the capsule keeps its place by giving that back here.
+    private var buttonsInset: CGFloat {
+        max(0, Composer.inset - max(0, (HitTarget.minHeight - control) / 2))
+    }
+
+    /// The note keeps to a few lines (BarDensity.noteLines) with More for the rest. At accessibility sizes its buttons go
+    /// under the words, so they keep the row's width; in a crowded bar the buttons are glyphs beside them.
     private func noteLine(_ note: ComposerNote) -> some View {
-        let layout = typeSize.isAccessibilitySize && !compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
+        let dense = !density.chipWords
+        let stacked = typeSize.isAccessibilitySize && !dense
+        let layout = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0)) : AnyLayout(HStackLayout(alignment: .center, spacing: 4))
+        let lines = density.noteLines(accessibility: typeSize.isAccessibilitySize)
         return layout {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 switch note {
@@ -241,18 +257,30 @@ struct SessionComposer: View {
                 }
                 Text(note.text)
                     .foregroundStyle(note.isError ? Theme.danger : Theme.secondary)
+                    .lineLimit(lines)
+                    .truncationMode(.tail)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(alignment: .topLeading) {
+                        Text(note.text)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .hidden()
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { noteFullHeight = $0 }
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { noteShownHeight = $0 }
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(note.spoken)
-            if let dismiss = dismiss(note) {
-                Button(action: dismiss) {
-                    if compact { Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.tertiary) } else { Text("Dismiss") }
+            HStack(spacing: 4) {
+                if noteFullHeight > noteShownHeight + 1 {
+                    noteButton("More", symbol: "ellipsis.circle", dense: dense) { fullNote = note.text }
+                        .accessibilityLabel("More")
+                        .accessibilityHint("Shows the whole message")
                 }
-                .font(.footnote.weight(.semibold))
-                .buttonStyle(.borderless)
-                .accessibilityLabel("Dismiss")
+                if let dismiss = dismiss(note) {
+                    noteButton("Dismiss", symbol: "xmark.circle.fill", dense: dense, action: dismiss)
+                        .accessibilityLabel("Dismiss")
+                }
             }
         }
         .font(.footnote)
@@ -260,6 +288,22 @@ struct SessionComposer: View {
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .padding(.horizontal, 16)
         .accessibilityElement(children: .contain)
+        .sheet(isPresented: Binding(get: { fullNote != nil }, set: { if !$0 { fullNote = nil } })) {
+            NoteSheet(text: fullNote ?? "", tone: note.isError ? Theme.danger : .white, dismiss: dismiss(note))
+        }
+    }
+
+    /// At least a fingertip in both directions.
+    private func noteButton(_ title: String, symbol: String, dense: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Group {
+                if dense { Image(systemName: symbol).foregroundStyle(Theme.tertiary) } else { Text(title) }
+            }
+            .frame(minWidth: HitTarget.minHeight, minHeight: HitTarget.minHeight)
+            .contentShape(Rectangle())
+        }
+        .font(.footnote.weight(.semibold))
+        .buttonStyle(.borderless)
     }
 
     /// An error, or a change that never landed, stays until the user puts it away.
@@ -273,8 +317,9 @@ struct SessionComposer: View {
 
     private func controlsRow(_ controls: SessionControls) -> some View {
         let changing = store.sets[sessionId].flatMap { Date.now.timeIntervalSince($0.at) < SetRequest.patience ? $0.change : nil }
-        // At accessibility sizes the usage ring joins the chips, so they get the row's width.
-        let stacked = typeSize.isAccessibilitySize && !compact
+        // Where chips can wrap, the usage ring joins them: the flow then has the row's whole width, and it measures its
+        // rows the same way when it is asked for its size as when it is laid out.
+        let stacked = typeSize >= .xxxLarge
         return HStack(spacing: 8) {
             ChipFlow(spacing: 8, lineSpacing: 0) {
                 if !controls.models.isEmpty {
@@ -289,7 +334,7 @@ struct SessionComposer: View {
                             ForEach(controls.models) { Text($0.label).tag($0.id) }
                         }
                     } label: {
-                        chip(controls.modelLabel, symbol: "cpu", busy: changing.map { if case .model = $0 { true } else { false } } ?? false)
+                        chip(controls.modelLabel, short: controls.modelLabel, symbol: "cpu", busy: changing.map { if case .model = $0 { true } else { false } } ?? false)
                     }
                     .chipMenu()
                     .accessibilityLabel("Model, \(controls.modelLabel)" + Self.changingWords(changing, model: true))
@@ -375,7 +420,7 @@ struct SessionComposer: View {
         }
     }
 
-    /// short: the words kept in compact mode; none by default, so the chip shows its icon. Its spoken label stays whole.
+    /// short: the words kept in a crowded bar; none by default, so the chip shows its icon. Its spoken label stays whole.
     private func chip(_ title: String, short: String? = nil, symbol: String, tint: Color = .white, busy: Bool = false, menu: Bool = true) -> some View {
         HStack(spacing: 5) {
             if busy {
@@ -383,7 +428,7 @@ struct SessionComposer: View {
             } else {
                 Image(systemName: symbol).font(.caption)
             }
-            if let words = compact ? short : title {
+            if let words = density.chipWords ? title : short {
                 Text(words).font(.footnote.weight(.medium)).fixedSize(horizontal: false, vertical: true)
             }
             if menu {
@@ -486,10 +531,12 @@ private struct ChipFlow: Layout {
         return rows
     }
 
-    /// A chip keeps its one-line width, and wraps its words only when even a row of its own is too narrow.
+    /// A chip keeps its one-line width, and wraps its words only when even a row of its own is too narrow. It is at least
+    /// a fingertip tall, whatever its words measure.
     private func size(of subview: LayoutSubview, width: CGFloat) -> CGSize {
         let ideal = subview.sizeThatFits(.unspecified)
-        return ideal.width <= width ? ideal : subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+        let size = ideal.width <= width ? ideal : subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+        return CGSize(width: size.width, height: max(size.height, HitTarget.minHeight))
     }
 }
 
@@ -647,5 +694,41 @@ private extension View {
         #else
         self
         #endif
+    }
+}
+
+/// A composer note too long for the bar, whole and scrollable.
+private struct NoteSheet: View {
+    let text: String
+    let tone: Color
+    let dismiss: (() -> Void)?
+
+    @Environment(\.dismiss) private var close
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(text)
+                    .foregroundStyle(tone)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+            }
+            .background(Theme.background)
+            .navigationTitle("Message")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { close() } }
+                if let dismiss {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Dismiss") {
+                            dismiss()
+                            close()
+                        }
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }

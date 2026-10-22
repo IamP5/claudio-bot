@@ -169,6 +169,46 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         #expect(slot.label == "Stop the turn and 1 command" && slot.hint == "Asks before it stops background work.")
     }
 
+    @Test func aStopOnItsWaySpeaksOfWhatItAskedFor() {
+        let busy = controls(tasks: [sleeper, sleep75])
+        let turnOnly = StopRequest(target: .turn, turnStartedAt: turnStart, at: at)
+        #expect(state(busy, stop: turnOnly, now: at + 1).slot.label == "Stopping the turn and 1 agent", "the turn's subagent, not the background command")
+        var refused = turnOnly
+        refused.state = .refused("Claude Code did not stop the turn.")
+        #expect(state(busy, stop: refused, now: at + 1).slot.label == "Stop again: the turn and 1 agent")
+        #expect(state(busy, now: at + 1).slot.label == "Stop the turn, 1 agent and 1 command", "with nothing asked, Stop names all that runs")
+    }
+
+    @Test func theBarGivesUpDetailOnlyWhileItIsSqueezed() {
+        var fit = BarFit()
+        fit.measured(content: 400, frame: 400)
+        #expect(fit.density == .full, "it fits")
+        fit.measured(content: 600, frame: 450)
+        #expect(fit.density == .iconChips)
+        fit.measured(content: 520, frame: 450)
+        #expect(fit.density == .oneLineStatus)
+        fit.measured(content: 440, frame: 440)
+        #expect(fit.density == .oneLineStatus, "it fits now, and does not step back down on its own")
+        fit.measured(content: 440, frame: 440)
+        #expect(fit.density == .oneLineStatus, "no swing between levels")
+        fit.measured(content: 600, frame: 650)
+        #expect(fit.density == .full, "more room than when it was squeezed: the keyboard went down")
+
+        var shrink = BarFit()
+        shrink.measured(content: 600, frame: 450)
+        shrink.measured(content: 560, frame: 450)
+        shrink.measured(content: 520, frame: 450)
+        #expect(shrink.density == .shortNote)
+        shrink.measured(content: 440, frame: 440)
+        #expect(shrink.density == .shortNote)
+        shrink.measured(content: 380, frame: 380)
+        #expect(shrink.density == .full, "the note went away: it starts again from full")
+        #expect(BarDensity.shortNote.noteLines(accessibility: false) == 1 && BarDensity.full.noteLines(accessibility: true) == 2)
+        #expect(BarDensity.full.noteLines(accessibility: false) == 3 && BarDensity.oneLineStatus.statusLines == 1)
+        #expect(BarDensity.shortNote.fieldLines(accessibility: true) == 2 && BarDensity.shortField.fieldLines(accessibility: true) == 1)
+        #expect(BarDensity.shortField.next == nil, "the densest level")
+    }
+
     @Test func theWorkSheetsTaskStopReadsTheRefusalToo() {
         let store = store(controls(turn: false, tasks: [sleep75]))
         store.sessionRequestSent(.sessionStop(sessionId: sid, target: .task(sleep75.id), turnStartedAt: nil), at: at)
@@ -181,11 +221,11 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         store.sessionRequestSent(.sessionSet(sessionId: sid, patch: SessionPatch(mode: .acceptEdits)), at: at)
         let c = store.threads[sid]?.controls
         let note = ComposerNote.of(error: store.sessionErrors[sid], stop: nil, set: store.sets[sid], controls: c, now: at + 1)
-        #expect(note?.text == "Changing the mode to Accept edits…" && note?.announced == false)
+        #expect(note?.text == "Changing the mode to Accept edits…")
         #expect(store.threads[sid]?.controls?.mode == .default, "the chip keeps the old value until controls change")
         let lapsed = ComposerNote.of(error: nil, stop: nil, set: store.sets[sid], controls: c, now: at + 16)
         #expect(lapsed?.text == "Claude Code has not taken the change to Accept edits yet. The mode stays Ask before edits.")
-        #expect(lapsed?.announced == true, "a change that goes quiet says so")
+        if case .changeUnconfirmed? = lapsed {} else { Issue.record("a change that goes quiet says so") }
         #expect(store.sets[sid] != nil, "it stays until it lands, is refused or put away")
         store.apply(.error(message: "Claude Code did not take the change: busy", about: .set(sessionId: sid)))
         #expect(store.sets[sid] == nil)

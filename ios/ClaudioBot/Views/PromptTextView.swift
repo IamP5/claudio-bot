@@ -112,13 +112,11 @@ private struct Representable: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView view: UITextView, context: Context) -> CGSize? {
-        guard let width = proposal.width else { return nil }
+        // An ideal-size query has no width; the field's current one keeps that answer the same as the final layout's.
+        guard let width = proposal.width ?? (view.bounds.width > 0 ? view.bounds.width : nil) else { return nil }
         let line = view.font?.lineHeight ?? 17
         let content = view.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
-        // A bar with less room than the lines proposes less height: the field scrolls instead of drawing over its neighbors.
-        // Whole lines only, so a squeezed field never shows the top of a line it cuts off.
-        let room = proposal.height.map { max(1, ($0 / line).rounded(.down)) * line } ?? .greatestFiniteMagnitude
-        let upper = min(maxLines.map { CGFloat($0) * line } ?? .greatestFiniteMagnitude, room)
+        let upper = maxLines.map { CGFloat($0) * line } ?? .greatestFiniteMagnitude
         let height = min(max(content, CGFloat(minLines) * line), upper)
         view.isScrollEnabled = content > upper
         return CGSize(width: width, height: height.rounded(.up))

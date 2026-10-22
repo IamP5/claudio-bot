@@ -237,7 +237,7 @@ struct WorkRun {
     }
 
     /// "3 agents running · 1 waiting for approval · 1 stopped", or for a finished run "Ran 3 agents, 43s".
-    /// Spoken, the state leads: "Running: 3 agents, 1 waiting for approval".
+    /// Spoken, the state leads: "Running: 3 agents, 1 waiting for approval". What may still run is never counted as ran.
     func headline(spoken: Bool = false) -> String {
         let format = spoken ? RunClock.spoken : RunClock.short
         var parts: [String] = []
@@ -245,8 +245,9 @@ struct WorkRun {
         if !running.isEmpty { parts.append(spoken ? "Running: " + Self.nouns(running) : Self.nouns(running) + " running") }
         let waiting = steps.count { $0.state == .waiting }
         if waiting > 0 { parts.append("\(waiting) waiting for approval") }
-        if parts.isEmpty {
-            parts.append(WorkSummary.text(steps) + (duration.map { ", " + format($0) } ?? ""))
+        let settled = steps.filter { $0.state != .unsure }
+        if parts.isEmpty, !settled.isEmpty || steps.isEmpty {
+            parts.append(WorkSummary.text(settled) + (duration.map { ", " + format($0) } ?? ""))
         }
         for (state, word) in [(ToolStepState.stopped, "stopped"), (.denied, "denied"), (.unsure, "may still run"), (.ended, "ended")] {
             let n = steps.count { $0.state == state }

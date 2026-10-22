@@ -666,3 +666,45 @@ test("with push off a session's events are alerts only, each once", async () => 
   h.clock.t = T0 + 3_000;
   expect(off.nextDeadline()).toBe(iso(T0 + HOUR));
 });
+
+test("a run a restart cut off waits out the start grace, then pushes once in plain words; another restart never repeats it", async () => {
+  const h = harness();
+  h.push.sessionEnded!(SID, "lost", iso(T0));
+  await settle();
+  expect([h.calls.length, h.push.nextDeadline()]).toEqual([0, iso(T0 + START_GRACE_MS)]);
+  at(h, T0 + START_GRACE_MS);
+  await settle();
+  expect(sent(h)).toEqual([["A Claude Code session was interrupted by a bridge restart", `claudiobot://session/${SID}`, "default"]]);
+  const again = harness({ home: h.home });
+  again.push.sessionEnded!(SID, "lost", iso(T0));
+  at(again, T0 + START_GRACE_MS);
+  await settle();
+  expect(again.calls).toEqual([]);
+});
+
+test("a phone back within the start grace hears of a run a restart cut off as an alert, and no push follows once it was seen", async () => {
+  const h = harness();
+  h.push.sessionEnded!(SID, "lost", iso(T0));
+  h.sockets.until = new Date(T0 + 120_000);
+  at(h, T0 + START_GRACE_MS);
+  expect(h.signals).toEqual([{ type: "session_alert", sessionId: SID, reason: "lost", count: 1, title: "Fix the fade", cardId: null }]);
+  h.sockets.seen = T0 + START_GRACE_MS + 1_000;
+  h.sockets.until = null;
+  at(h, T0 + 130_000);
+  await settle();
+  expect(h.calls).toEqual([]);
+});
+
+test("an ending held for a live phone outlives a restart, and pushes once the phone stays away past the start grace", async () => {
+  const h = harness({ liveFor: 45_000 });
+  h.push.sessionEnded!(SID, "finished", iso(T0));
+  expect(h.signals.length).toBe(1);
+  const after = harness({ home: h.home });
+  after.clock.t = T0 + 10_000;
+  expect(after.push.nextDeadline()).toBe(iso(T0 + START_GRACE_MS));
+  at(after, T0 + 20_000);
+  at(after, T0 + START_GRACE_MS);
+  at(after, T0 + START_GRACE_MS + 1);
+  await settle();
+  expect([sent(h), sent(after)]).toEqual([[], [["A Claude Code session finished", `claudiobot://session/${SID}`, "default"]]]);
+});

@@ -1,18 +1,37 @@
 // What the Mac's process table says about Claude Code's background commands. Claude Code runs each one in a shell that
 // leads a process group of its own and writes to <task id>.output (CLI 2.1.305), so killing Claude Code's group, as
 // the bridge does when it closes a query or exits, leaves the command running. Only the process table can tell
-// whether it outlived Claude Code.
+// whether it outlived Claude Code. A saved group number can belong to another process by the time it is read again, so
+// a group counts as the command's only while its leader still writes to that command's output file.
+
+const READ_TIMEOUT_MS = 5_000;
 
 async function read(argv: string[]): Promise<string> {
   try {
     const p = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    const timer = setTimeout(() => p.kill("SIGKILL"), READ_TIMEOUT_MS);
     const out = await new Response(p.stdout).text();
     await p.exited;
+    clearTimeout(timer);
     return out;
   } catch {
     return "";
   }
 }
+
+/** The output files the processes have open on stdout, by pid. */
+async function outputs(pids: readonly number[]): Promise<Map<number, string[]>> {
+  const found = new Map<number, string[]>();
+  if (pids.length === 0) return found;
+  let at = 0;
+  for (const line of (await read(["lsof", "-w", "-a", "-p", pids.join(","), "-d", "1", "-Fpn"])).split("\n")) {
+    if (line.startsWith("p")) at = Number(line.slice(1));
+    else if (line.startsWith("n") && pids.includes(at)) found.set(at, [...(found.get(at) ?? []), line.slice(1)]);
+  }
+  return found;
+}
+
+const taskOf = (path: string) => /\/([^/]+)\.output$/.exec(path)?.[1];
 
 /** By task id, the process group of each background shell Claude Code (process `pid`) runs. Empty when none is found. */
 export async function shellGroups(pid: number): Promise<Map<string, number>> {
@@ -22,24 +41,25 @@ export async function shellGroups(pid: number): Promise<Map<string, number>> {
     .filter(([p, parent, group]) => parent === pid && p === group)
     .map(([p]) => p!);
   const found = new Map<string, number>();
-  if (leaders.length === 0) return found;
-  let at = 0;
-  for (const line of (await read(["lsof", "-a", "-p", leaders.join(","), "-d", "1", "-Fpn"])).split("\n")) {
-    if (line.startsWith("p")) at = Number(line.slice(1));
-    const id = line.startsWith("n") ? /\/([^/]+)\.output$/.exec(line)?.[1] : undefined;
-    if (id !== undefined && leaders.includes(at)) found.set(id, at);
-  }
+  for (const [leader, paths] of await outputs(leaders)) for (const id of paths.map(taskOf)) if (id !== undefined) found.set(id, leader);
   return found;
 }
 
-/** Whether any process of the group still runs. */
+/** Whether a process of the group runs and is the user's own. One the bridge may not signal is not the bridge's. */
 export function groupAlive(group: number): boolean {
+  if (group <= 1) return false;
   try {
     process.kill(-group, 0);
     return true;
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === "EPERM";
+  } catch {
+    return false;
   }
+}
+
+/** Whether background task `id` still runs as group `group`: its leader still writes to <id>.output. */
+export async function stillRuns(group: number, id: string): Promise<boolean> {
+  if (!groupAlive(group)) return false;
+  return ((await outputs([group])).get(group) ?? []).some((path) => taskOf(path) === id);
 }
 
 const TERM_WAIT_MS = 3_000;
@@ -59,8 +79,12 @@ function signal(group: number, sig: NodeJS.Signals) {
   } catch {}
 }
 
-/** Stops every process of the group: SIGTERM, then SIGKILL for what is left. True once none runs. */
-export async function endGroup(group: number): Promise<boolean> {
+/**
+ * Stops background task `id` running as group `group`: SIGTERM, then SIGKILL for what is left. A group that no longer
+ * runs the task is never signalled. True once the task no longer runs.
+ */
+export async function endGroup(group: number, id: string): Promise<boolean> {
+  if (!(await stillRuns(group, id))) return true;
   signal(group, "SIGTERM");
   if (await gone(group, TERM_WAIT_MS)) return true;
   signal(group, "SIGKILL");

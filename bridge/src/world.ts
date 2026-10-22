@@ -207,8 +207,8 @@ export type SessionState = {
 
 /**
  * A background task as a note names it (description) and as the thread shows it (kind, label, stepId, startedAt).
- * group: the process group that runs it, a command's own shell or Claude Code itself, when the bridge found it. A
- * command can outlive Claude Code, so only a check of its group tells whether it still runs.
+ * group: the process group of the shell that runs a command, once found; a command can outlive Claude Code. claude:
+ * the process of the Claude Code that runs a subagent, which ends with it.
  */
 export type BackgroundTask = {
   id: string;
@@ -218,6 +218,7 @@ export type BackgroundTask = {
   stepId?: string;
   startedAt?: string;
   group?: number;
+  claude?: number;
 };
 
 export const emptySession = (id: string | null = null): SessionState => ({ id, pending: [], lifecycle: { kind: "idle" }, notices: [] });

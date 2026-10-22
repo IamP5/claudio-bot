@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,6 +34,7 @@ import {
   usedBudget,
 } from "../src/session";
 import type { SessionInput } from "../src/prompts";
+import { backgroundCommand } from "./shells";
 import {
   attended,
   emptySession,
@@ -1751,8 +1751,9 @@ const tasks = (...ts: { task_id: string; description: string; ambient?: boolean 
 /** A task's status turning completed, which Claude Code sends before the task leaves the background level. */
 const finished = (task_id: string) =>
   ({ type: "system", subtype: "task_updated", task_id, patch: { status: "completed", end_time: 0 }, uuid: `u_${task_id}`, session_id: "s_1" }) as unknown as SDKMessage;
-/** A process in a group of its own, as Claude Code starts each background command. */
-const command = () => spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+const until = async (what: () => boolean, ms = 2_000) => {
+  for (let waited = 0; waited < ms && !what(); waited += 20) await Bun.sleep(20);
+};
 const build = { task_id: "t1", description: "npm run build" };
 const lint = { task_id: "t2", description: "npm run lint" };
 /** A frame as Claude Code stamps it with the uuids of the user messages its turn consumed. */
@@ -1766,12 +1767,12 @@ describe("background work", () => {
     const { h } = await started("[a]");
     h.q().emit(said("Working."), tasks(build, lint));
     await flush();
-    expect(await h.session.interrupt("turn")).toEqual({ ran: true, refused: [], late: [] });
+    expect(await h.session.interrupt("turn")).toEqual({ ran: true, refused: [], late: [], woken: false });
     expect(h.q().stoppedTasks).toEqual([]);
     h.q().emit(interruptedResult(0.1));
     await flush();
     h.q().refusing.add("t2");
-    expect(await h.session.interrupt("all")).toEqual({ ran: true, refused: ["t2" as TaskId], late: [] });
+    expect(await h.session.interrupt("all")).toEqual({ ran: true, refused: ["t2" as TaskId], late: [], woken: false });
     expect(h.q().stoppedTasks).toEqual(["t1"]);
   });
 
@@ -1873,6 +1874,18 @@ describe("background work", () => {
     expect(h.notes).toEqual(["Ana's background work stopped: npm run build; npm run lint."]);
   });
 
+  test("the note for a held turn's stop of background work names only what Claude Code stopped", async () => {
+    const { h } = await started("[a]");
+    const first = h.q();
+    first.emit(tasks(build, lint), resultMsg(0.1));
+    await flush();
+    first.refusing.add("t2");
+    h.push("[r]", routine);
+    await flush();
+    await h.advance(BACKGROUND_WAIT_MS);
+    expect(h.notes).toEqual(["Ana's background work stopped: npm run build."]);
+  });
+
   test("a result while an unattended turn waits is not that turn's", async () => {
     const { h } = await started("[a]");
     h.q().emit(tasks(build), resultMsg(0.1));
@@ -1924,10 +1937,9 @@ describe("background work", () => {
   });
 
   test("background work a restart stopped is named in one note, once", async () => {
-    const gone = [command(), command()];
-    for (const p of gone) process.kill(-p.pid!, "SIGKILL");
-    await Promise.all(gone.map((p) => new Promise((r) => p.once("exit", r))));
-    const h = harness({ spec: { shells: async () => new Map([["t1", gone[0]!.pid!], ["t3", gone[1]!.pid!]]) } });
+    const gone = [backgroundCommand("t1"), backgroundCommand("t3")];
+    for (const c of gone) await c.end();
+    const h = harness({ spec: { shells: async () => new Map([["t1", gone[0]!.pid], ["t3", gone[1]!.pid]]) } });
     h.push("[a]");
     await flush();
     h.q().emit(tasks(build, { task_id: "t3", description: "x".repeat(200) }), resultMsg(0.1));
@@ -1935,7 +1947,7 @@ describe("background work", () => {
     await flush();
     h.session.close();
     const after = harness({ state: structuredClone(h.state) });
-    await flush();
+    await until(() => after.notes.length > 0);
     expect(after.notes).toEqual([`The bridge restarted, so Ana's background work stopped: npm run build; ${"x".repeat(79)}….`]);
     after.session.close();
     const again = harness({ state: structuredClone(after.state) });
@@ -1944,12 +1956,11 @@ describe("background work", () => {
   });
 
   test("after a restart, background work is named by what the Mac still runs: stopped, still running, or not known", async () => {
-    const running = command();
-    const ended = command();
-    process.kill(-ended.pid!, "SIGKILL");
-    await new Promise((r) => ended.once("exit", r));
+    const running = backgroundCommand("t1");
+    const ended = backgroundCommand("t3");
+    await ended.end();
     try {
-      const h = harness({ spec: { shells: async () => new Map([["t1", running.pid!], ["t3", ended.pid!]]) } });
+      const h = harness({ spec: { shells: async () => new Map([["t1", running.pid], ["t3", ended.pid]]) } });
       h.push("[a]");
       await flush();
       h.q().emit(tasks(build, lint, { task_id: "t3", description: "npm test" }), resultMsg(0.1));
@@ -1957,21 +1968,38 @@ describe("background work", () => {
       await flush();
       h.session.close();
       const after = harness({ state: structuredClone(h.state) });
-      await flush();
+      await until(() => after.notes.length === 3);
       expect(after.notes).toEqual([
         "The bridge restarted, so Ana's background work stopped: npm test.",
         "The bridge restarted, and Ana no longer follows its background work, which still runs on this Mac: npm run build.",
         "The bridge restarted, and Ana's background work may still run on this Mac: npm run lint.",
       ]);
     } finally {
-      process.kill(-running.pid!, "SIGKILL");
+      await running.end();
     }
   });
 
   test("background work that outlives a Claude Code that exited is not said to have stopped", async () => {
-    const running = command();
+    const running = backgroundCommand("t1");
     try {
-      const h = harness({ spec: { shells: async () => new Map([["t1", running.pid!]]) } });
+      const h = harness({ spec: { shells: async () => new Map([["t1", running.pid]]) } });
+      h.push("[a]");
+      await flush();
+      h.q().emit(tasks(build), resultMsg(0.1));
+      await flush();
+      await flush();
+      h.q().crash(new Error("Claude Code process terminated by signal SIGKILL"));
+      await until(() => h.notes.length > 0, 3_000);
+      expect(h.notes).toEqual(["Ana exited, and no longer follows its background work, which still runs on this Mac: npm run build."]);
+    } finally {
+      await running.end();
+    }
+  });
+
+  test("a session closed before its exit check still says what became of its background work", async () => {
+    const running = backgroundCommand("t1");
+    try {
+      const h = harness({ spec: { shells: async () => new Map([["t1", running.pid]]) } });
       h.push("[a]");
       await flush();
       h.q().emit(tasks(build), resultMsg(0.1));
@@ -1979,10 +2007,11 @@ describe("background work", () => {
       await flush();
       h.q().crash(new Error("Claude Code process terminated by signal SIGKILL"));
       await flush();
-      await Bun.sleep(1_200);
+      h.session.close();
+      await until(() => h.notes.length > 0);
       expect(h.notes).toEqual(["Ana exited, and no longer follows its background work, which still runs on this Mac: npm run build."]);
     } finally {
-      process.kill(-running.pid!, "SIGKILL");
+      await running.end();
     }
   });
 

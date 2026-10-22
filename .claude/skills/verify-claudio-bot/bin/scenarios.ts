@@ -1292,7 +1292,7 @@ const S6c: Scenario = {
       tell: "state",
       lane: "protocol",
       text: "After the restart the thread never says the command stopped while it still runs, and says that it runs.",
-      pass: "Between the command starting on the Mac and Stop, no notice says the background work stopped, and a notice says it still runs.",
+      pass: "Between the command starting on the Mac and Stop, no notice says the background work stopped, and a notice says it still runs and Stop ends it.",
       fail: "A notice says the background work stopped, or none says it still runs.",
       check: (ev) => {
         const at = mark(ev, "bg-running");
@@ -1302,7 +1302,7 @@ const S6c: Scenario = {
           .filter((i) => ev.atOf(i.at) >= at && ev.atOf(i.at) <= until)
           .map((i) => i.text ?? "");
         const lie = said.find((t) => /background work stopped/i.test(t));
-        const runs = said.find((t) => /still runs?\b/i.test(t));
+        const runs = said.find((t) => /which still runs on this Mac\. Stop ends it/.test(t));
         return lie ? no(`said: ${lie.slice(0, 120)}`) : runs ? ok(runs.slice(0, 120)) : no(`no notice says it still runs; notices: ${said.join(" | ").slice(0, 160) || "none"}`);
       },
     },
@@ -1326,13 +1326,13 @@ const S6c: Scenario = {
       tell: "stop",
       lane: "protocol",
       text: "Stop ends the command on the Mac, and the thread says the user stopped it.",
-      pass: "The sleep 420 is gone 3 s after the session rests (sample after-stop), and a notice with reason stop follows Stop.",
+      pass: 'The sleep 420 is gone 3 s after the session rests (sample after-stop), and a notice that starts "Stopped by you" follows Stop.',
       fail: "The process still runs after Stop, or no stop notice.",
       check: (ev) => {
         const at = mark(ev, "stopped");
         if (at === undefined) return needMarks(ev, "stopped")!;
         const after = ev.samples["after-stop"] ?? [];
-        const said = notices(ev, "s6c", at).find((i) => i.reason === "stop");
+        const said = notices(ev, "s6c", at).find((i) => i.reason === "stop" && (i.text ?? "").startsWith("Stopped by you"));
         if (after.length) return no(`still running after Stop: ${after.join(" | ").slice(0, 160)}`);
         return said ? ok(`gone after Stop; notice: ${(said.text ?? "").slice(0, 80)}`) : no("gone after Stop, but no stop notice");
       },

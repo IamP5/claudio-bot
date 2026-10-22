@@ -403,10 +403,11 @@ enum DemoSessions {
 
     /// The composer's states over the audit thread, once its snapshot is in: a draft typed while work runs (`composerdraft`),
     /// a three-paragraph draft under a refused stop (`composerlong`), the same with a queued message and a mode change Claude
-    /// Code has not taken (`composerlapse`),
+    /// Code has not taken (`composerlapse`), a stop of six commands refused with every one named, as an older bridge
+    /// words it (`composersix`),
     /// a stop Claude Code refused (`composerrefused`), a mode change it refused (`composermode`), a queued message
     /// (`composerqueued`), and a prompt a stop cut off before Claude answered (`stoppedearly`).
-    static let composerScreens: Set<String> = ["composerdraft", "composerlong", "composerlapse", "composerrefused", "composermode", "composerqueued", "stoppedearly"]
+    static let composerScreens: Set<String> = ["composerdraft", "composerlong", "composerlapse", "composersix", "composerrefused", "composermode", "composerqueued", "stoppedearly"]
 
     static func stageComposer(_ screen: String, in store: AppStore) {
         Task {
@@ -424,6 +425,11 @@ enum DemoSessions {
                 c.queued = 1
                 items(store, audit, [.user(id: ItemID("demo-queued"), at: .now, text: "Then open a PR with the fixes", from: .user, queued: true)], controls: c)
                 store.sessionRequestSent(.sessionSet(sessionId: audit, patch: SessionPatch(mode: .acceptEdits)), at: .now - SetRequest.patience - 5)
+            case "composersix":
+                model.draft = ComposerDraft(text: "Also check the fade test against the old curve.")
+                store.sessionRequestSent(.sessionStop(sessionId: audit, target: .all, turnStartedAt: nil))
+                let six = "sleep 903, sleep 901, sleep 902, sleep 904, sleep 905 and sleep 906 && echo integration-suite-charlie-finished"
+                store.apply(.error(message: "Claude Code has not confirmed the stop of \(six) yet.", about: .stop(sessionId: audit)))
             case "composerrefused":
                 store.sessionRequestSent(.sessionStop(sessionId: audit, target: .all, turnStartedAt: c.turn?.startedAt))
                 store.apply(.error(message: "Claude Code did not stop sleep 75.", about: .stop(sessionId: audit)))

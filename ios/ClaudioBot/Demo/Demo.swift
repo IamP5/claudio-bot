@@ -14,7 +14,7 @@ import Foundation
 /// card expires 20 s in), `approvalselsewhere` (another device denies it 15 s in), `streaming`, `cloud`,
 /// `longthread` (500 items), `newsession`, `background` (the turn over, a subagent and its command still running),
 /// `threadoffline` (the Mac lost after the thread loaded), `threadwaiting` (a thread opened with the Mac out of reach),
-/// `composerdraft`, `composerlong`, `composerlapse`, `composerrefused`, `composermode`, `composerqueued`, `stoppedearly` (DemoSessions.stageComposer;
+/// `composerdraft`, `composerlong`, `composerlapse`, `composersix`, `composerrefused`, `composermode`, `composerqueued`, `stoppedearly` (DemoSessions.stageComposer;
 /// add "kb" for the same with the keyboard up),
 /// `sessionsempty` and `sessionsoffline`.
 @MainActor
@@ -176,7 +176,7 @@ enum Demo {
             router.open(.session(DemoSessions.audit))
         case let composer? where DemoSessions.composerScreens.contains(composer.replacing(/kb$/, with: "")):
             let staged = composer.replacing(/kb$/, with: "")
-            DemoSessions.backgroundOnly = staged == "composerlong"
+            DemoSessions.backgroundOnly = staged == "composerlong" || staged == "composersix"
             router.open(.session(DemoSessions.audit))
             DemoSessions.stageComposer(staged, in: store)
         default: break

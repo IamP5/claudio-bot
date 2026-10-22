@@ -34,15 +34,18 @@ app_cpu() {
   ps -o %cpu= -p "$pid" | tr -d ' ' || true
 }
 
-screens="${SCREENS:-workrun thread plan streaming longthread approvals approvalsanswered composerdraft composerlong composerlapse composerrefused composermode composerqueued stoppedearly composerlongkb composerlapsekb composerrefusedkb composerlapsekbgone}"
+screens="${SCREENS:-workrun thread plan streaming longthread approvals approvalsanswered}"
 sizes="${SIZES:-large accessibility-extra-large accessibility-extra-extra-extra-large}"
-# The six-command refusal (a long note), with the keyboard down and up, at every size from xxxLarge, where the bar is
-# most crowded. Set SCREENS to leave it out.
-extra="${SCREENS:+none}"
-[ "$extra" = none ] && extra="" || extra="composersix composersixkb"
-extra_sizes="extra-extra-extra-large accessibility-medium accessibility-large accessibility-extra-large accessibility-extra-extra-large accessibility-extra-extra-extra-large"
-[ "$attach" = 1 ] && screens=live && sizes=current && extra=""
+[ "$attach" = 1 ] && screens=live && sizes=current
 failed=0
+# Unless SCREENS is set, the composer's screens join them: keyboard down, up ("kb"), up then put away ("kbgone"), and a
+# withdraw the bridge answers late. The six-command refusal (a long note), keyboard down and up, runs at every size
+# from xxxLarge, where the bar is most crowded.
+composer="composerdraft composerlong composerlapse composerrefused composermode composerqueued stoppedearly"
+composer="$composer composerlongkb composerlapsekb composerrefusedkb composerlapsekbgone composerwithdraw"
+extra="composersix composersixkb"
+extra_sizes="extra-extra-extra-large accessibility-medium accessibility-large accessibility-extra-large accessibility-extra-extra-large accessibility-extra-extra-extra-large"
+if [ -n "${SCREENS:-}" ] || [ "$attach" = 1 ]; then extra=""; else screens="$screens $composer"; fi
 swipe() {
   local screen=$1 size=$2
   [ "$attach" = 1 ] || xcrun simctl ui "$udid" content_size "$size"

@@ -2100,9 +2100,10 @@ const S9: Scenario = {
     "Nobody answers, so the card expires, and the thread says what was refused.",
   ],
   setup: [
-    { do: "sink", fail: true },
     { do: "create", name: "s9", prompt: `Use the Bash tool to run exactly this command: ${WAITED}\nThen reply with one line: done.` },
     { do: "until", mark: "card-open", what: "s9's permission card to open", timeoutS: 120, test: cardIs("s9", null) },
+    // Within the 2 s the card's push waits for others, and after the bot's greeting pushed.
+    { do: "sink", fail: true },
     { do: "until", mark: "failing", what: "the push state to read failing", timeoutS: 40, test: (ev) => ev.pushStates.some((p) => p.push.state === "failing") },
     { do: "sink", fail: false },
     { do: "until", mark: "reminded", what: "a reminder push", timeoutS: 60, test: (ev) => ev.pushes().some((p) => /still waiting/.test(p.body) && p.status === 200) },

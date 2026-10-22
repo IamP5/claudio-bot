@@ -758,9 +758,9 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 **Setup.**
 
-- The push sink answers 500 from now on, as a broken push server would.
 - New session `s9` in demo (haiku, mode default): "Use the Bash tool to run exactly this command: echo waited > waited.txt Then reply with one line: done."
 - Wait up to 120 s for s9's permission card to open; mark `card-open`.
+- The push sink answers 500 from now on, as a broken push server would.
 - Wait up to 40 s for the push state to read failing; mark `failing`.
 - The push sink answers 200 again.
 - Wait up to 60 s for a reminder push; mark `reminded`.

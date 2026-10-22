@@ -38,6 +38,8 @@ export const COMMANDS: SlashCommand[] = [
 export class FakeQuery {
   /** Each message's content: a string, or the blocks of a /command sent after context. */
   readonly received: string[] = [];
+  /** Each message's uuid, which Claude Code echoes on the init frame of the turn that takes it. */
+  readonly uuids: string[] = [];
   readonly toggles: string[] = [];
   /** setPermissionMode and setModel calls, as "mode <m>" and "model <m>". */
   readonly controls: string[] = [];
@@ -51,7 +53,10 @@ export class FakeQuery {
     readonly options: Options,
   ) {
     void (async () => {
-      for await (const m of prompt) this.received.push(m.message.content as string);
+      for await (const m of prompt) {
+        this.received.push(m.message.content as string);
+        this.uuids.push(m.uuid ?? "");
+      }
     })();
   }
   emit(...ms: SDKMessage[]) {

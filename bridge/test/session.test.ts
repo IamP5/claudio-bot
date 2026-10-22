@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1750,6 +1751,8 @@ const tasks = (...ts: { task_id: string; description: string; ambient?: boolean 
 /** A task's status turning completed, which Claude Code sends before the task leaves the background level. */
 const finished = (task_id: string) =>
   ({ type: "system", subtype: "task_updated", task_id, patch: { status: "completed", end_time: 0 }, uuid: `u_${task_id}`, session_id: "s_1" }) as unknown as SDKMessage;
+/** A process in a group of its own, as Claude Code starts each background command. */
+const command = () => spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
 const build = { task_id: "t1", description: "npm run build" };
 const lint = { task_id: "t2", description: "npm run lint" };
 /** A frame as Claude Code stamps it with the uuids of the user messages its turn consumed. */
@@ -1921,8 +1924,14 @@ describe("background work", () => {
   });
 
   test("background work a restart stopped is named in one note, once", async () => {
-    const { h } = await started("[a]");
+    const gone = [command(), command()];
+    for (const p of gone) process.kill(-p.pid!, "SIGKILL");
+    await Promise.all(gone.map((p) => new Promise((r) => p.once("exit", r))));
+    const h = harness({ spec: { shells: async () => new Map([["t1", gone[0]!.pid!], ["t3", gone[1]!.pid!]]) } });
+    h.push("[a]");
+    await flush();
     h.q().emit(tasks(build, { task_id: "t3", description: "x".repeat(200) }), resultMsg(0.1));
+    await flush();
     await flush();
     h.session.close();
     const after = harness({ state: structuredClone(h.state) });
@@ -1932,6 +1941,61 @@ describe("background work", () => {
     const again = harness({ state: structuredClone(after.state) });
     await flush();
     expect(again.notes).toEqual([]);
+  });
+
+  test("after a restart, background work is named by what the Mac still runs: stopped, still running, or not known", async () => {
+    const running = command();
+    const ended = command();
+    process.kill(-ended.pid!, "SIGKILL");
+    await new Promise((r) => ended.once("exit", r));
+    try {
+      const h = harness({ spec: { shells: async () => new Map([["t1", running.pid!], ["t3", ended.pid!]]) } });
+      h.push("[a]");
+      await flush();
+      h.q().emit(tasks(build, lint, { task_id: "t3", description: "npm test" }), resultMsg(0.1));
+      await flush();
+      await flush();
+      h.session.close();
+      const after = harness({ state: structuredClone(h.state) });
+      await flush();
+      expect(after.notes).toEqual([
+        "The bridge restarted, so Ana's background work stopped: npm test.",
+        "The bridge restarted, and Ana no longer follows its background work, which still runs on this Mac: npm run build.",
+        "The bridge restarted, and Ana's background work may still run on this Mac: npm run lint.",
+      ]);
+    } finally {
+      process.kill(-running.pid!, "SIGKILL");
+    }
+  });
+
+  test("background work that outlives a Claude Code that exited is not said to have stopped", async () => {
+    const running = command();
+    try {
+      const h = harness({ spec: { shells: async () => new Map([["t1", running.pid!]]) } });
+      h.push("[a]");
+      await flush();
+      h.q().emit(tasks(build), resultMsg(0.1));
+      await flush();
+      await flush();
+      h.q().crash(new Error("Claude Code process terminated by signal SIGKILL"));
+      await flush();
+      await Bun.sleep(1_200);
+      expect(h.notes).toEqual(["Ana exited, and no longer follows its background work, which still runs on this Mac: npm run build."]);
+    } finally {
+      process.kill(-running.pid!, "SIGKILL");
+    }
+  });
+
+  test("a stop Claude Code took before the turn it aims at began is sent again as that turn begins", async () => {
+    const { h, id } = await started("[a]");
+    await h.session.interrupt("turn");
+    expect(h.q().interrupts).toBe(1);
+    h.q().emit(echoing(wakeInit(), lastUuid(h)));
+    await flush();
+    expect(h.q().interrupts).toBe(2);
+    h.q().emit(interruptedResult(0));
+    await flush();
+    expect(h.finals(id).map((e) => e.end.kind)).toEqual(["stopped"]);
   });
 
   test("background work that ends on its own leaves nothing for a restart to name", async () => {

@@ -99,3 +99,7 @@ ts	decision	why
 2026-10-22T03:47:46Z	G17: with no Claude Code running, model must be opus, sonnet, haiku or null; with Claude Code running it decides	an unchecked id broke the next send
 2026-10-22T03:47:46Z	G17: a restart during stopping says "The bridge restarted before Claude Code confirmed your stop. The turn ended."	the restart ended it, not a confirmed stop
 2026-10-22T03:47:46Z	G17: the bot note for a held turn's background stop names only tasks Claude Code confirmed stopping	same honesty rule on the bot path
+2026-10-22T04:51:21Z	G17: a later Claude Code's "stopped / didn't finish" claim about a command the bridge adopted as outlived is never shown; the step keeps the state the bridge observed	Claude Code cannot see a command that outlived it; the process table can
+2026-10-22T04:51:21Z	G17: a process group that is alive but cannot be proven to be the command reads "may still run"; a Stop of it refuses honestly and sends no signal	never claim stopped and never signal what is not provably ours
+2026-10-22T04:51:21Z	G17: a step whose fate is unknown stays running rather than cut as stopped (narrow exception to "no spinner outlives its work"); verifier judges whether the app shows it honestly	a stopped cut would be a false claim; open question whether a spinner is honest enough
+2026-10-22T04:51:21Z	G17: a second Stop of a task stopped within 60 s returns ok; a Stop that finds the command already ended says "had already ended when your stop reached it"	double taps and races must not error or over-claim

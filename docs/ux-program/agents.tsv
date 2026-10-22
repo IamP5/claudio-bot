@@ -17,5 +17,5 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-21T17:20:21Z	owner	G15	ux/sessions-g15-card-copy	merged #19 (verified aa73056; fix round 3a08224 reviewed by root)	4h	wave after G7
 2026-10-21T20:33:21Z	owner	G6	ux/sessions-g6-composer	fix round 3 pushed 6e796c9	5h	after G5 G10 G3
 2026-10-21T22:12:30Z	verifier	G6	ux/sessions-g6-composer	round 4 verifying 6e796c9 (fresh agent)	3h	independent of owner
-2026-10-22T02:00:22Z	owner	G17	ux/sessions-g17-stop-honesty	fix round 2	5h	bridge-only; parallel with G6; before G13
-2026-10-22T03:47:46Z	verifier	G17	ux/sessions-g17-stop-honesty	round 2 FAIL 43874da: P1 unknown-fate forever spinner; 2 P2; new F-SES-175	3h	independent of owner
+2026-10-22T02:00:22Z	owner	G17	ux/sessions-g17-stop-honesty	fix round 2 pushed 5e474a2	5h	bridge-only; parallel with G6; before G13
+2026-10-22T03:47:46Z	verifier	G17	ux/sessions-g17-stop-honesty	round 3 verifying 5e474a2 (fresh agent)	3h	independent of owner

@@ -32,3 +32,6 @@
 - "Stop the turn and 2 commands" counts the turn's own foreground command while the dialog names only the background one (G6 verifier r5; check whether pre-existing).
 - tasks.ts cuts task labels at 80 characters, which can split a «redacted» mask in the Running panel (G6 verifier r5).
 - #21 and #22 also conflict in ios/scripts/swipe-check.sh (both add screens; keep both).
+- Harness: ClaudioBot-UX-1 shows an unanswered notification-permission alert over thread screenshots; runner should pre-answer it at install (G17 verifier r4).
+- Unsure work card: header pairs "Ran" with "may still run"; a stale "Stop ends it." notice stays after the bridge loses track; a card with only unsure steps can fold away its count (G17 verifier r4, P3).
+- S4.9 latency missed 2 s in 2/3 runs on the #21+#22 combination under load average 40-88 (watch after both merge).

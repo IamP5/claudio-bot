@@ -116,3 +116,5 @@ ts	decision	why
 2026-10-22T07:53:40Z	G17: a command found only through its shell's command line is used to see it end and is never signalled; a Stop of only unverifiable work says "The bridge can't tell whether … still runs on your Mac, so it has nothing it can stop."	matching by command line is not proof of identity
 2026-10-22T07:53:40Z	G17: a step whose task Claude Code says completed or failed is never cut off while its result is on the way	removed a ~100 ms false "stopped" flash
 2026-10-22T07:53:40Z	G17: raw SDK "Query closed before response received" is shown as "Claude Code stopped before it answered. Try again."	raw errors are not user copy
+2026-10-22T09:03:35Z	G17: command-to-shell pairing must match the exact shell command line built from the raw Bash input; zero or several matches means unpaired (unsure), never a guess	substring matching on the display label attached a command to its sibling and claimed a live command ended
+2026-10-22T09:03:35Z	G17: unsure or followed work that ends on its own reads as ended with unknown result (new additive state if needed), never stopped	it ended, nobody stopped it

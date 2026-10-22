@@ -2018,6 +2018,22 @@
       }
     },
     {
+      "type": "session_alert",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "reason": "card",
+      "count": 3,
+      "title": "Sleep in parallel",
+      "cardId": "m30"
+    },
+    {
+      "type": "session_alert",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "reason": "finished",
+      "count": 1,
+      "title": "Sleep in parallel",
+      "cardId": null
+    },
+    {
       "type": "error",
       "message": "Nothing is running.",
       "about": {

@@ -664,6 +664,10 @@ export type ServerMessage =
   | { type: "usage"; usage: PlanUsage }
   // Feature push_state. Live sockets only, like usage: sent when the state changes; hello carries it on connect.
   | { type: "push_state"; push: PushState }
+  // Live sockets only, never sequenced. Something in a session the phone drives wants the user and the bridge sent no
+  // phone push for it (a phone is live, or push is off), so the app shows a local notification unless that session is
+  // on screen. count: the cards it covers, 1 for an ending. title: the session's title. cardId: its first card.
+  | { type: "session_alert"; sessionId: SessionId; reason: SessionAlertReason; count: number; title: string; cardId: MessageId | null }
   | SessionServerMessage
   // about: the session request that failed, so the app can show the error there instead of as a toast.
   | { type: "error"; message: string; about?: ErrorAbout };
@@ -673,6 +677,9 @@ export type ServerMessage =
  * why and when. The app treats an unknown state as "on".
  */
 export type PushState = { state: "on" } | { state: "off" } | { state: "failing"; error: string; at: string };
+
+/** card: cards opened. reminder: cards waited half their time. finished, failed: the session's run came to rest. */
+export type SessionAlertReason = "card" | "reminder" | "finished" | "failed";
 
 /**
  * The session request an error answers: a stop, a send (its clientId), a full-output fetch (its toolUseId), a create
@@ -686,7 +693,7 @@ export type ErrorAbout =
   | { kind: "create"; ref: string };
 
 /** Sent to live protocol 3 sockets only, without a seq: not kept for replay. */
-export type Signal = Extract<ServerMessage, { type: "activity" | "usage" | "push_state" }>;
+export type Signal = Extract<ServerMessage, { type: "activity" | "usage" | "push_state" | "session_alert" }>;
 
 // A frame published to every socket carries the stream seq. Replies to one client do not.
 export type Broadcast = ServerMessage & { seq: number };

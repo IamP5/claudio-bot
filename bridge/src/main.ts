@@ -107,9 +107,14 @@ const push = createPush({
   persist: saver.schedule,
   sender: senderFromEnv(process.env.CLAUDIOBOT_PUSH_URL, log),
   liveUntil: () => transport.liveUntil(),
+  seen: () => transport.seen(),
+  signal: (message) => transport.signal(message),
+  title: (id) => hub.sessionTitle(id),
   now,
   log,
 });
+// CLAUDIOBOT_SESSION_CARD_TTL_S: a verification run's shorter wait on session cards, so a reminder at half of it shows.
+const cardTtlS = Number(process.env.CLAUDIOBOT_SESSION_CARD_TTL_S);
 
 const stream = createStream();
 
@@ -127,6 +132,7 @@ const hub = createHub({
   log,
   push,
   webhookPort: Number(process.env.CLAUDIOBOT_WEBHOOK_PORT ?? 7879),
+  ...(cardTtlS > 0 && { cardTtlMs: cardTtlS * 1000 }),
   usage: { read: readUsage, watched: () => transport.live() > 0 },
   sessions: {
     epoch: stream.epoch,
@@ -138,10 +144,11 @@ const hub = createHub({
     cacheDir: join(home, "cache"),
     signal: { list: (frame) => transport.signal(frame, "sessions"), thread: (id, frame) => transport.signal(frame, threadTopic(id)) },
     watchers: (id) => transport.watchers(id),
+    readers: (id) => transport.readers(id),
   },
 });
 
-const transport = serve({ devices, stream, hub, legacy, log, now, port, offer });
+const transport = serve({ devices, stream, hub, legacy, log, now, port, offer, presence: () => hub.presence() });
 const urls = bridgeUrls(names, lanAddresses(), transport.port);
 const control = serveControl({ home, offer, log });
 

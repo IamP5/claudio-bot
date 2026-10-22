@@ -39,6 +39,8 @@ function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m
   const legacy = legacyToken(home);
   legacy.reconcile(devices);
   const handled: ClientMessage[] = [];
+  const left: { id: SessionId; at: string }[] = [];
+  let presences = 0;
   const hub = {
     hello: (position: StreamPosition): ServerMessage => ({ type: "hello", protocol: 3, features: [], ...position, machine: "Mac", userName: "Alex", bots: [] }),
     greeting: () => opts.greeting ?? [],
@@ -46,6 +48,7 @@ function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m
       handled.push(message);
       return (await opts.replies?.(message)) ?? [];
     },
+    left: async (id: SessionId, at: Date) => void left.push({ id, at: at.toISOString() }),
   };
   const transport = serve({
     devices: opts.wrap ? opts.wrap(devices) : devices,
@@ -57,6 +60,7 @@ function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m
     port: 0,
     hostname: "127.0.0.1",
     offer: () => ({ ...devices.newCode(), urls: URLS }),
+    presence: () => presences++,
   });
   let stopped = false;
   const stop = () => {
@@ -71,6 +75,8 @@ function boot(home: string, opts: { wrap?: (d: Devices) => Devices; replies?: (m
     devices,
     announced,
     handled,
+    left,
+    presences: () => presences,
     http: `http://127.0.0.1:${transport.port}`,
     savesFail: (fail = true) => (saving = !fail),
     advance: (ms: number) => (now = new Date(now.getTime() + ms)),
@@ -372,6 +378,51 @@ test("a protocol 2 app may not watch sessions or send any session request; a pro
   expect(b.handled.map((m) => m.type).sort()).toEqual(["watch_session", "watch_sessions"]);
 });
 
+test("only an attended socket heard from recently reads a thread it watches, and a silent one left when last heard", async () => {
+  const b = boot(tempHome());
+  const { token } = await pairPhone(b);
+  const phone = connect(b, { bearer: token, query: "?protocol=3" });
+  await phone.next("hello");
+  const id = "s1" as SessionId;
+  phone.send({ type: "watch_session", sessionId: id, after: null });
+  await until(() => b.transport.watchers(id) === 1, "the watch");
+  expect(b.transport.readers(id)).toBe(1);
+
+  phone.send({ type: "presence", attended: false });
+  await until(() => b.presences() === 1, "the presence change");
+  expect([b.transport.watchers(id), b.transport.readers(id)]).toEqual([1, 0]);
+  phone.send({ type: "presence", attended: false });
+  phone.send({ type: "presence", attended: true });
+  await until(() => b.presences() === 2, "the second change");
+  expect(b.transport.readers(id)).toBe(1);
+
+  b.advance(45_000);
+  expect(b.transport.readers(id)).toBe(0);
+  phone.raw.close();
+  await until(() => b.left.length === 1, "the close");
+  expect(b.left).toEqual([{ id, at: "2026-10-17T09:00:00.000Z" }]);
+  expect(b.presences()).toBe(3);
+});
+
+test("seen moves when an attended app is heard, including the presence(false) it leaves with, and not after", async () => {
+  const b = boot(tempHome());
+  const { token } = await pairPhone(b);
+  const phone = connect(b, { bearer: token, query: "?protocol=3" });
+  await phone.next("hello");
+  expect(b.transport.seen()).toBe(0);
+  b.advance(1_000);
+  phone.send({ type: "devices" });
+  await phone.next("devices");
+  expect(b.transport.seen()).toBe(Date.parse("2026-10-17T09:00:01.000Z"));
+  b.advance(1_000);
+  phone.send({ type: "presence", attended: false });
+  await until(() => b.presences() === 1, "the presence change");
+  b.advance(1_000);
+  phone.send({ type: "devices" });
+  await phone.next("devices");
+  expect(b.transport.seen()).toBe(Date.parse("2026-10-17T09:00:02.000Z"));
+});
+
 test("session channels reach only the sockets watching them, until they unwatch or close", async () => {
   const b = boot(tempHome());
   const { token } = await pairPhone(b);
@@ -395,10 +446,11 @@ test("session channels reach only the sockets watching them, until they unwatch 
   expect(list.inbox).toEqual([]);
 
   thread.raw.close();
-  await until(() => b.handled.some((m) => m.type === "unwatch_session"), "the close to unwatch the thread");
+  await until(() => b.left.length === 1, "the close to unwatch the thread");
+  expect(b.left).toEqual([{ id, at: "2026-10-17T09:00:00.000Z" }]);
   expect(b.transport.watchers(id)).toBe(0);
   list.send({ type: "unwatch_sessions" });
-  await until(() => b.handled.length === 4, "the unwatch");
+  await until(() => b.handled.length === 3, "the unwatch");
   b.transport.signal(rows, "sessions");
   await Bun.sleep(50);
   expect(list.inbox).toEqual([]);

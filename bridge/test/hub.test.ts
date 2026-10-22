@@ -905,9 +905,20 @@ test("one ticker throwing is logged, and the tickers after it still run", () => 
 
 test("hello lists every feature this bridge has, and usage only with a usage reader", () => {
   const hello = hubOver(emptyWorld()).hub.hello(NO_RING);
-  expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups", "presence", "session_tasks", "session_unqueue"]);
+  expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups", "presence", "session_tasks", "session_unqueue", "push_state"]);
   const reading = hubOver(emptyWorld(), { usage: { read: () => new Promise(() => {}), watched: () => true } }).hub.hello(NO_RING);
   expect(reading.type === "hello" && reading.features.at(-1)).toBe("usage");
+});
+
+test("hello says whether phone pushes reach the user", () => {
+  const world = emptyWorld();
+  const off = createPush({ world, persist: () => {}, sender: null, liveUntil: () => null, now: () => new Date(), log: () => {} });
+  const on = createPush({ world, persist: () => {}, sender: async () => {}, liveUntil: () => null, now: () => new Date(), log: () => {} });
+  const push = (p: typeof off) => {
+    const hello = hubOver(world, { push: p }).hub.hello(NO_RING);
+    return hello.type === "hello" ? hello.push : undefined;
+  };
+  expect([push(off), push(on)]).toEqual([{ state: "off" }, { state: "on" }]);
 });
 
 test("a hub with Claude Code's folders serves sessions; one without refuses every session request", async () => {

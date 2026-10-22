@@ -570,7 +570,11 @@ export type SessionServerMessage =
   | { type: "session_tool_output"; sessionId: SessionId; toolUseId: string; output: string }
   // Channel s:<id>, and the reply to watch_session for a session that is gone. movedTo: the id an agent's session
   // restarted under, which the app opens instead; null when the transcript is gone.
-  | { type: "session_removed"; sessionId: SessionId; movedTo: SessionId | null };
+  | { type: "session_removed"; sessionId: SessionId; movedTo: SessionId | null }
+  // Live sockets only, never sequenced. Something in a session the phone drives wants the user and the bridge sent no
+  // phone push for it (a phone is live, or push is off), so the app shows a local notification unless that session is
+  // on screen. count: the cards it covers, 1 for an ending. title: the session's title. cardId: its first card.
+  | { type: "session_alert"; sessionId: SessionId; reason: SessionAlertReason; count: number; title: string; cardId: MessageId | null };
 
 /** Sent on channel "sessions". */
 export type SessionsChannelFrame = Extract<SessionServerMessage, { type: "session_rows" }>;
@@ -618,7 +622,7 @@ export type SessionClientMessage =
 /** Every session frame by type, so a session frame can be told apart at runtime. */
 const SESSION_FRAMES: Record<SessionServerMessage["type"], true> = {
   sessions: true, session_rows: true, session: true, session_items: true, session_delta: true,
-  session_page: true, session_created: true, session_tool_output: true, session_removed: true,
+  session_page: true, session_created: true, session_tool_output: true, session_removed: true, session_alert: true,
 };
 const SESSION_REQUESTS: Record<SessionClientMessage["type"], true> = {
   watch_sessions: true, unwatch_sessions: true, watch_session: true, unwatch_session: true, session_page: true,
@@ -664,10 +668,6 @@ export type ServerMessage =
   | { type: "usage"; usage: PlanUsage }
   // Feature push_state. Live sockets only, like usage: sent when the state changes; hello carries it on connect.
   | { type: "push_state"; push: PushState }
-  // Live sockets only, never sequenced. Something in a session the phone drives wants the user and the bridge sent no
-  // phone push for it (a phone is live, or push is off), so the app shows a local notification unless that session is
-  // on screen. count: the cards it covers, 1 for an ending. title: the session's title. cardId: its first card.
-  | { type: "session_alert"; sessionId: SessionId; reason: SessionAlertReason; count: number; title: string; cardId: MessageId | null }
   | SessionServerMessage
   // about: the session request that failed, so the app can show the error there instead of as a toast.
   | { type: "error"; message: string; about?: ErrorAbout };

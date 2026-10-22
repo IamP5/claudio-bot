@@ -27,6 +27,7 @@ import {
   type ThreadChannelFrame,
 } from "./protocol";
 import type { Result } from "./result";
+import type { SessionEnd } from "./push";
 import type { SessionSpec } from "./session";
 import type { Persist } from "./store";
 import { RESTING, rowRun, runControls, runningSteps, runs, type StepPatch } from "./tasks";
@@ -49,6 +50,8 @@ export type SessionsEnv = {
   cacheDir: string;
   signal: { list(frame: SessionsChannelFrame): void; thread(id: SessionId, frame: ThreadChannelFrame): void };
   watchers(id: SessionId): number;
+  /** The watchers someone looks at; absent: every watcher. A thread only they hold has nothing unread. */
+  readers?(id: SessionId): number;
   sdk?: SdkReaders & { renameSession?: typeof renameSession };
   coalesceMs?: number;
   /** false: no fs.watch on the projects folder (tests). */
@@ -69,8 +72,12 @@ export type SessionsDeps = SessionsEnv & {
   claude: Pick<SessionSpec, "query" | "executable" | "shells" | "leaders" | "taskRun">;
   /** Paths the floors protect, for a session working in cwd. */
   scope(cwd: string): Scope;
-  /** A card in a session the phone drives: a push that says only that a session needs the user. */
+  /** A card opened in a session the phone drives. */
   notify?(id: SessionId, cardId: MessageId): void;
+  /** A run of a session the phone drives came to rest, finished or failed, at `at`; never after a user's stop. */
+  ended?(id: SessionId, end: SessionEnd, at: string): void;
+  /** How long a card waits for an answer; absent: two hours. */
+  cardTtlMs?: number;
   /** The project folders under the roots (no git run), so a project with no session yet lists. */
   folders(): string[];
   persist: Persist;
@@ -91,6 +98,12 @@ export type Sessions = Tickable & {
   resume(): void;
   /** A message of an agent's live query on the session: its text streams into the thread. */
   stream(id: SessionId, m: SDKMessage): void;
+  /** A socket that watched the thread went away at `at`: the user last saw it then. */
+  left(id: SessionId, at: Date): void;
+  /** Who looks at the app changed, so what reads as unread may have. */
+  presence(): void;
+  /** The title the session's row shows. */
+  title(id: SessionId): string;
   stop(): void;
 };
 
@@ -133,6 +146,7 @@ const THREAD_POLL_MS = 1_000;
 const GONE = "This session's transcript is gone.";
 const SENT_KEPT = 50;
 const DRAFT_TITLE_MAX = 80;
+const draftTitle = (prompt: string | undefined) => displayName((prompt ?? "New session").split("\n")[0]!, DRAFT_TITLE_MAX);
 /** Shown cards per agent, so a settled gate card stays in the agent's thread with its answer. */
 const GATE_CARDS_KEPT = 20;
 
@@ -333,6 +347,8 @@ export function createSessions(deps: SessionsDeps): Sessions {
       if (deps.world.sessions.get(id)?.own?.created) due(id);
     },
     ...(deps.notify && { notify: deps.notify }),
+    ...(deps.ended && { ended: deps.ended }),
+    ...(deps.cardTtlMs !== undefined && { cardTtlMs: deps.cardTtlMs }),
     observe: (id, m) => threads.stream(id, m),
     options: { includePartialMessages: true },
     now: deps.now,
@@ -349,6 +365,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   });
 
   const watched = (id: SessionId) => deps.watchers(id) > 0;
+  const read = (id: SessionId) => (deps.readers ?? deps.watchers)(id) > 0;
 
   const catalog = createCatalog({
     projectsDir: deps.projectsDir,
@@ -359,9 +376,9 @@ export function createSessions(deps: SessionsDeps): Sessions {
     driven,
     drafts: () =>
       [...deps.world.sessions.values()].flatMap((r) =>
-        r.own?.created ? [{ id: r.id, cwd: r.own.cwd, title: displayName((r.own.prompt ?? "New session").split("\n")[0]!, DRAFT_TITLE_MAX), at: r.own.at }] : [],
+        r.own?.created ? [{ id: r.id, cwd: r.own.cwd, title: draftTitle(r.own.prompt), at: r.own.at }] : [],
       ),
-    watched,
+    watched: read,
     folders: deps.folders,
     publish: deps.signal.list,
     appended: (path) => threads.appended(path),
@@ -425,6 +442,18 @@ export function createSessions(deps: SessionsDeps): Sessions {
   }
 
   const reply = (r: Result): ServerMessage[] => (r.ok ? [] : error(r.error));
+
+  /** The user last saw the thread at `at`. A visit never moves back. */
+  function left(id: SessionId, at: Date) {
+    if (known(id)) {
+      const rec = recordOf(id);
+      if (rec.visitedAt === null || Date.parse(rec.visitedAt) < at.getTime()) rec.visitedAt = at.toISOString();
+      deps.persist();
+      catalog.touch();
+    }
+    // The socket's topic is dropped after this message is handled, so the count is read on the next turn.
+    setTimeout(() => threads.release(id), 0);
+  }
 
   /** The phone's clientIds each session took, so a resend after a reconnect runs nothing twice. */
   const taken = new Map<SessionId, string[]>();
@@ -609,17 +638,12 @@ export function createSessions(deps: SessionsDeps): Sessions {
           return [];
         case "watch_session":
           if (!known(m.sessionId)) return gone(m.sessionId);
+          // An open thread has nothing unread, so its row says so with the next pass rather than once the user leaves.
+          catalog.touch();
           return threads.watch(m.sessionId, m.after);
-        case "unwatch_session": {
-          if (known(m.sessionId)) {
-            recordOf(m.sessionId).visitedAt = deps.now().toISOString();
-            deps.persist();
-            catalog.touch();
-          }
-          // The socket's topic is dropped after this message is handled, so the count is read on the next turn.
-          setTimeout(() => threads.release(m.sessionId), 0);
+        case "unwatch_session":
+          left(m.sessionId, deps.now());
           return [];
-        }
         case "session_page":
           return known(m.sessionId) ? threads.page(m.sessionId, m.before) : gone(m.sessionId);
         case "session_tool":
@@ -659,6 +683,9 @@ export function createSessions(deps: SessionsDeps): Sessions {
     },
 
     stream: (id, m) => threads.stream(id, m),
+    left,
+    presence: () => catalog.touch(),
+    title: (id) => catalog.head(id)?.title ?? agentOf(id)?.agent.title ?? draftTitle(deps.world.sessions.get(id)?.own?.prompt),
 
     agentTurnDone(rec) {
       if (rec.session.id) due(rec.session.id as SessionId);

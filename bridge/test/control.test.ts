@@ -33,6 +33,7 @@ function boot(home: string) {
     hello: (): ServerMessage => ({ type: "hello", protocol: 3, features: [], epoch: "e", seq: 0, resumed: false, machine: "Mac", userName: "Alex", bots: [] }),
     greeting: () => [],
     handle: async () => [],
+    left: async () => {},
   };
   const transport = serve({ devices, stream: createStream(), hub, legacy: legacyToken(home), log: () => {}, now: () => new Date(), port: 0, hostname: "127.0.0.1", offer });
   const logs: string[] = [];

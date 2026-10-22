@@ -58,7 +58,7 @@ type Socket = ServerWebSocket<SocketData>;
 export type ServeDeps = {
   devices: Devices;
   stream: Stream;
-  hub: Pick<Hub, "hello" | "greeting" | "handle">;
+  hub: Pick<Hub, "hello" | "greeting" | "handle" | "left">;
   legacy: Legacy;
   log: (line: string) => void;
   now: () => Date;
@@ -66,6 +66,8 @@ export type ServeDeps = {
   hostname?: string;
   /** The one way a code is minted for another device: pair_code here and the control socket both call it. */
   offer: () => PairOffer;
+  /** Who is looking changed: a socket's presence flipped, or an attended socket left. */
+  presence?: () => void;
 };
 
 export type Transport = {
@@ -81,10 +83,14 @@ export type Transport = {
   signal(message: SessionsChannelFrame, topic: "sessions"): void;
   signal(message: ThreadChannelFrame, topic: ThreadTopic): void;
   watchers(sessionId: SessionId): number;
+  /** Watchers that read the thread: attended and heard from within LIVE_WINDOW_MS. An app nobody looks at reads nothing. */
+  readers(sessionId: SessionId): number;
   /** Open authenticated sockets heard from within LIVE_WINDOW_MS whose app is attended. */
   live(): number;
   /** When the last of those goes quiet, or null when none is live. */
   liveUntil(): Date | null;
+  /** When an attended socket was last heard from, in ms; 0 for never. */
+  seen(): number;
   stop(): void;
 };
 
@@ -153,10 +159,14 @@ export function serve(deps: ServeDeps): Transport {
     failures.set(address, { since: at, count: 1 });
   };
 
+  let seenAt = 0;
+  // Before a presence(false) is handled, so the app that sends it counts as having seen what came before it.
   const heard = (ws: Socket) => {
     ws.data.heardAt = deps.now().getTime();
+    if (ws.data.attended) seenAt = ws.data.heardAt;
   };
-  const quietAt = () => [...sockets.values()].flatMap((set) => [...set].filter((ws) => ws.data.attended).map((ws) => ws.data.heardAt + LIVE_WINDOW_MS));
+  const open = () => [...sockets.values()].flatMap((set) => [...set]);
+  const quietAt = () => open().filter((ws) => ws.data.attended).map((ws) => ws.data.heardAt + LIVE_WINDOW_MS);
 
   const send = (ws: Socket, message: ServerMessage) => {
     const frame = ws.data.protocol === 3 ? message : forProtocol2(message);
@@ -174,7 +184,10 @@ export function serve(deps: ServeDeps): Transport {
         }
         return [{ type: "pair_code", ...deps.offer() }];
       case "presence":
-        ws.data.attended = message.attended;
+        if (ws.data.attended !== message.attended) {
+          ws.data.attended = message.attended;
+          deps.presence?.();
+        }
         return [];
       case "revoke_device": {
         const target = devices.list(null).find((d) => d.id === message.deviceId);
@@ -267,9 +280,11 @@ export function serve(deps: ServeDeps): Transport {
       },
       close(ws) {
         sockets.get(ws.data.deviceId)?.delete(ws);
-        // Bun drops a closed socket's topics; the hub hears it left each thread, after the requests already sent.
+        if (ws.data.attended) deps.presence?.();
+        // Bun drops a closed socket's topics; the hub hears it left each thread, after the requests already sent. A
+        // socket that went silent left when it was last heard, not when its close finally came.
         ws.data.turns = ws.data.turns.then(async () => {
-          for (const sessionId of ws.data.threads) await hub.handle({ type: "unwatch_session", sessionId }).catch(() => {});
+          for (const sessionId of ws.data.threads) await hub.left(sessionId, new Date(ws.data.heardAt)).catch(() => {});
           ws.data.threads.clear();
         });
       },
@@ -310,7 +325,12 @@ export function serve(deps: ServeDeps): Transport {
       server.publish(topic ?? TOPIC[3], wire(message));
     },
     watchers: (sessionId) => server.subscriberCount(threadTopic(sessionId)),
+    readers: (sessionId) => {
+      const at = deps.now().getTime();
+      return open().filter((ws) => ws.data.attended && ws.data.heardAt + LIVE_WINDOW_MS > at && ws.data.threads.has(sessionId)).length;
+    },
     live: () => quietAt().filter((t) => t > deps.now().getTime()).length,
+    seen: () => seenAt,
     liveUntil: () => {
       const last = Math.max(0, ...quietAt());
       return last > deps.now().getTime() ? new Date(last) : null;

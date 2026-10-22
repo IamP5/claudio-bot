@@ -26,6 +26,7 @@ import {
 import type { Result } from "./result";
 import { refused } from "./result";
 import { createSession, goneNote, RESTARTED_ERROR, type Fate, type GoneCause, type Session, type SessionSpec, type StopReport, type TurnEnd } from "./session";
+import type { SessionEnd } from "./push";
 import type { Persist } from "./store";
 import { RESTING, rowRun, runControls, runningSteps, runs, type Activity, type StepPatch, type Task } from "./tasks";
 import { displayName, errorText, fewNames, maskSecrets } from "./text";
@@ -57,6 +58,10 @@ export type OwnDeps = {
   done(id: SessionId): void;
   /** A card opened: the push says only that a session needs the user. */
   notify?(id: SessionId, cardId: MessageId): void;
+  /** A run came to rest finished or failed at `at` and stayed at rest: not after a stop of the user's or a restart. */
+  ended?(id: SessionId, end: SessionEnd, at: string): void;
+  /** How long a card waits for an answer; OWN_CARD_TTL_MS when absent. */
+  cardTtlMs?: number;
   /** Every message of the live query, for the streaming text. */
   observe?(id: SessionId, m: Parameters<SessionSpec["onMessage"]>[0]): void;
   /** Extra query options (the streaming text needs partial messages). */
@@ -97,6 +102,11 @@ export type Own = Tickable & {
 
 /** A card left this long unanswered is denied, with a notice. The same as the gate's permission cards. */
 export const OWN_CARD_TTL_MS = 2 * 3_600_000;
+/**
+ * A run that came to rest is told ended once it stayed at rest this long, with no wake turn announced and nothing of
+ * a gone query still being looked up: a background task that ends a moment before the turn it wakes rests it twice.
+ */
+export const END_SETTLE_MS = 5_000;
 /** An own session's query with nothing to do closes after this; an agent's stays 15 minutes. */
 export const OWN_IDLE_MS = 10 * 60_000;
 const SETTLED_KEPT = 20;
@@ -145,6 +155,18 @@ const fewOf = (tasks: readonly Task[]) => {
   });
   return names.length <= 2 ? listed(names) : `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
 };
+
+const waited = (ms: number) => (ms >= 3_600_000 && ms % 3_600_000 === 0 ? counted(ms / 3_600_000, "hour") : counted(Math.max(1, Math.round(ms / 60_000)), "minute"));
+
+/** A card nobody answered in time, named by what it asked, which was refused. */
+function expiredText(c: OwnCard, ttl: number): string {
+  const after = `waited ${waited(ttl)} unanswered, so it was denied. You did not say no.`;
+  if (c.kind === "ask") return `Claude's question ${after}`;
+  if (c.kind === "plan") return `Claude's plan ${after}`;
+  const { tool, label, detail } = c.card;
+  const what = displayName(maskSecrets(label === tool && detail ? `${tool}: ${detail.split("\n")[0]}` : label), 80);
+  return `The request to allow "${what}" ${after}`;
+}
 
 /** What the model menu offers. Claude Code resolves these aliases to the newest model of each family. */
 export const MODELS = [
@@ -226,6 +248,8 @@ export function createOwn(deps: OwnDeps): Own {
   const lookingAtOutlived = new Set<SessionId>();
   /** When each session last came to rest; one that has not run since the bridge started rests since then. */
   const rested = new Map<SessionId, string>();
+  /** Runs that came to rest, by when, until their ending is told or a new run takes over. */
+  const ending = new Map<SessionId, number>();
   /** Queued messages the user withdrew, so asking again says so. */
   const withdrawn = new Map<SessionId, string[]>();
   /** The turn in flight on each session and when Claude Code took its message, which is where the message shows. */
@@ -276,9 +300,12 @@ export function createOwn(deps: OwnDeps): Own {
       } else {
         if (!rested.has(id)) rested.set(id, now());
         // A stop not yet said is the run's ending, so the run's rest waits for it.
-        if (!turnStops.has(id) && underway.delete(id) && (!drive.outcome || drive.outcome.kind === "finished")) {
-          drive.outcome = stoppedBy.has(id) ? { kind: "stopped", text: STOPPED_BY_YOU, at: now() } : { kind: "finished", text: lastTask.get(id) ?? "Finished", at: now() };
-          deps.persist("now");
+        if (!turnStops.has(id) && underway.delete(id)) {
+          if (!drive.outcome || drive.outcome.kind === "finished") {
+            drive.outcome = stoppedBy.has(id) ? { kind: "stopped", text: STOPPED_BY_YOU, at: now() } : { kind: "finished", text: lastTask.get(id) ?? "Finished", at: now() };
+            deps.persist("now");
+          }
+          ending.set(id, deps.now().getTime());
         }
       }
     }
@@ -597,7 +624,8 @@ export function createOwn(deps: OwnDeps): Own {
     return { ok: true };
   }
 
-  const expiresAt = () => new Date(deps.now().getTime() + OWN_CARD_TTL_MS).toISOString();
+  const ttl = deps.cardTtlMs ?? OWN_CARD_TTL_MS;
+  const expiresAt = () => new Date(deps.now().getTime() + ttl).toISOString();
 
   function canUseTool(rec: SessionRecord): CanUseTool {
     return async (tool, input, o): Promise<PermissionResult> => {
@@ -1117,9 +1145,19 @@ export function createOwn(deps: OwnDeps): Own {
           const until = c.kind === "permission" ? c.card.expiresAt : c.expiresAt;
           if (isOpen(c) && until <= at.toISOString()) {
             settle(rec, cardIdOf(c), { kind: "expired" });
-            notice(rec.id, "A request waited two hours unanswered, so it was denied. You did not say no.", "info", "approval");
+            notice(rec.id, expiredText(c, ttl), "info", "approval");
           }
         }
+      }
+      for (const [id, since] of ending) {
+        if (at.getTime() - since < END_SETTLE_MS) continue;
+        const rec = deps.world.sessions.get(id);
+        const s = drivers.get(id);
+        if (rec?.own && !working(rec) && (s?.wakeDue || s?.settling)) continue;
+        ending.delete(id);
+        const outcome = rec?.own?.outcome;
+        if (!rec?.own || working(rec) || !outcome) continue;
+        if (outcome.kind === "finished" || outcome.kind === "failed") deps.ended?.(id, outcome.kind, outcome.at);
       }
       for (const s of drivers.values()) s.tick(at);
       if (at.getTime() >= nextOutlivedLook) {
@@ -1136,6 +1174,7 @@ export function createOwn(deps: OwnDeps): Own {
       for (const rec of deps.world.sessions.values())
         for (const c of rec.own?.cards ?? []) if (isOpen(c)) consider(c.kind === "permission" ? c.card.expiresAt : c.expiresAt);
       for (const s of drivers.values()) consider(s.nextDeadline());
+      for (const since of ending.values()) consider(new Date(since + END_SETTLE_MS).toISOString());
       if ([...deps.world.sessions.values()].some((rec) => allOutlived(rec).some((o) => o.over === undefined || o.over === "unsure")))
         consider(new Date(nextOutlivedLook).toISOString());
       return next;

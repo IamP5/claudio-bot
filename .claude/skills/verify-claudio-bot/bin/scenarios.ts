@@ -2040,8 +2040,10 @@ const S3b: Scenario = {
     { do: "show-list" },
     { do: "until", mark: "bg-done", what: "bg3b.txt to appear", timeoutS: 90, test: (ev) => ev.exists("bg3b.txt") },
     { do: "until", mark: "alerted", what: "a session_alert that s3b finished", timeoutS: 60, test: (ev) => ev.alerts.some((a) => a.name === "s3b" && a.frame.reason === "finished") },
+    // A banner slides in over about half a second and stays about five.
+    { do: "sleep", s: 1.5 },
     { do: "screenshot", shot: "alert" },
-    { do: "sleep", s: 20 },
+    { do: "sleep", s: 50 },
     { do: "mark", mark: "window-over" },
   ],
   pre: [
@@ -2069,7 +2071,7 @@ const S3b: Scenario = {
       tell: "state",
       lane: "protocol",
       text: "While the app is open, nothing is pushed from outside on top of it.",
-      pass: "pushes.jsonl has no push about s3b, through 20 s after the alert.",
+      pass: "pushes.jsonl has no push about s3b, through 50 s after the alert (past the 45 s a phone counts as live without being heard).",
       fail: "A remote push also went out, so the user gets the news twice.",
       check: (ev) => {
         const p = ev.pushes().filter((x) => (x.click ?? "").includes(ev.ids.s3b ?? "-"));

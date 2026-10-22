@@ -236,8 +236,9 @@ Needs the simulator: no (simulator items run with `--sim`).
 - The app goes back to the Sessions list (simulator lane: relaunched on the list).
 - Wait up to 90 s for bg3b.txt to appear; mark `bg-done`.
 - Wait up to 60 s for a session_alert that s3b finished; mark `alerted`.
+- Wait 1.5 s.
 - Screenshot `alert` (simulator lane).
-- Wait 20 s.
+- Wait 50 s.
 - Mark `window-over`.
 
 **Preconditions** (any failure fails the scenario):
@@ -251,7 +252,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | id | tells | lane | the user can tell | pass | fail |
 | --- | --- | --- | --- | --- | --- |
 | S3b.1 | state | protocol | While the app is open on another screen, it is told the session finished, so it can show a notification. | After bg-done, the phone gets a session_alert for s3b with reason finished and the session's title. | No session_alert, so an open app on another screen gives no sign that the work finished. |
-| S3b.2 | state | protocol | While the app is open, nothing is pushed from outside on top of it. | pushes.jsonl has no push about s3b, through 20 s after the alert. | A remote push also went out, so the user gets the news twice. |
+| S3b.2 | state | protocol | While the app is open, nothing is pushed from outside on top of it. | pushes.jsonl has no push about s3b, through 50 s after the alert (past the 45 s a phone counts as live without being heard). | A remote push also went out, so the user gets the news twice. |
 | S3b.3 | state | simulator (alert) | With the Sessions list on screen, a notification says the session finished. | A banner that names the session and says it finished. | No banner. |
 
 ## S4 A subagent fails, and the user stops one from the phone

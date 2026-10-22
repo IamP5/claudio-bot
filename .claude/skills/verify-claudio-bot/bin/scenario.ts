@@ -12,6 +12,7 @@ import { SCENARIOS, type Action, type Controls, type Drop, type Ev, type Item, t
 
 const CONTROL = join(import.meta.dir, "control-claudio.ts");
 const AWAY_HOLD_S = 5;
+const PING_MS = 20_000;
 const args = process.argv.slice(2);
 const cmd = args.shift() ?? "help";
 const flag = (name: string, boolean = false) => {
@@ -235,6 +236,7 @@ class Phone {
   outbox: Frame[] = [];
   /** Seconds the user takes to allow a card. */
   holdS = 0;
+  private pinger: ReturnType<typeof setInterval> | null = null;
   private frameNo = 0;
 
   constructor(
@@ -367,6 +369,10 @@ class Phone {
       this.apply(JSON.parse(String(e.data)) as Frame);
     };
     for (const f of early) this.apply(f);
+    // The app pings every 20 s while it is on screen, which is how the bridge tells it is still looked at.
+    if (this.pinger) clearInterval(this.pinger);
+    this.pinger = setInterval(() => this.c === c && (c.ws as unknown as { ping(): void }).ping(), PING_MS);
+    this.pinger.unref();
     // With the simulator, the app is the phone the user looks at; this socket only watches, so it must not hold back pushes.
     if (!this.attended) c.send({ type: "presence", attended: false });
     const at = c.frames.length;
@@ -382,6 +388,7 @@ class Phone {
 
   /** The app leaves the screen: it says nobody is looking and leaves its threads, which it watches again on return. */
   background() {
+    if (this.pinger) clearInterval(this.pinger);
     if (!this.c) return;
     if (this.attended) this.c.send({ type: "presence", attended: false });
     for (const [sid] of this.names) if (!this.away.has(sid)) this.send({ type: "unwatch_session", sessionId: sid });
@@ -397,6 +404,7 @@ class Phone {
   drop() {
     const c = this.c;
     this.c = null;
+    if (this.pinger) clearInterval(this.pinger);
     if (!c) return;
     c.ws.onmessage = null;
     c.close();

@@ -25,3 +25,6 @@
 - Swipe-check default screen list did not include composer demos (being fixed in G6 round 2; confirm).
 - G17 known gaps: Claude Code's own "Interrupted" transcript line shows beside the bridge stop notice; a wake turn that ignores its interrupt is never escalated; a survivor command's step reads "The bridge restarted" once it ends after a partial restart stop; a foreground command orphaned when Claude Code is killed is not tracked; row finished text can be a foreground task summary.
 - G11: the bridge's own transcript notice for a refused stop still names every command in full; only the composer error is shortened (G6 r3).
+- (for G17) A turn-only stop on a hung Claude Code ended with the bridge killing the process; notices said "Stopped by you: command sleep 2003…" and "Claude Code's background work stopped" while the six sleeps kept running as orphans (ppid 1); the mode refusal showed raw "Query closed before response received" (G6 verifier r4, on main-based #21 bridge).
+- Merge order note: #21 and #22 conflict in bridge/src/own.ts (refusal returns ~590 and fewOf near 103-115); second to merge resolves and re-tests.
+- ClaudioBot-UX-1 has AutomaticMinimizationEnabled=NO set by a verifier (software keyboard had stopped showing).

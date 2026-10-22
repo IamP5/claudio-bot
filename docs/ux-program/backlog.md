@@ -41,3 +41,8 @@
 - (G17/G18) After a stop Claude Code never confirms, the bridge closes Claude Code at 15 s and says "Claude Code's background work stopped: …sleep 6002" while it is alive (seen on main); "Stop again" adds a second identical "Stopped by you" notice.
 - S4.9 (error on the wire within 2 s) flakes on main too: 2/3 fails on main 6f1f4ea, 2/10 on G17 head; machine load is high. Investigate threshold vs load before Step 4.
 - G13 gaps: "Already answered" covers permission cards only (question/plan cards drop cardId when closed); a reconnecting socket can count as having seen an alert it never received (signals not replayed — G11); an ending inside the 5 s wait is lost if the bridge crashes; S3.6 remote banner cannot be shown by simctl (coverage gap).
+- G11: the "That request expired." / "Already answered" link note stays when a new card opens below it (SessionThreadView linkNote never cleared when OpenCard.newest is non-nil) (G13 verifier P2-1).
+- G11: local notifications say "Needs your approval" for question and plan cards (session_alert lacks the card kind) (G13 P2-2); "Already answered" fallback covers permission cards only (G13 P2-3).
+- A failed card push is never retried after its 3 tries (~10 s) until the reminder at TTL/2 (1 h in production) (G13 P2-5).
+- Guess: a frontmost Mac app counts as attended and may hold every phone push while the user is away from the desk (G13 P2-6; verify).
+- push.ts lastCards never pruned (small); S3b.3 banner screenshot 1.5 s after alert is fragile under load; dark-mode Settings Memory "Confirm" pill renders blank (pre-existing, Settings area).

@@ -1844,6 +1844,24 @@
           "subagent": "sleeper one"
         },
         {
+          "kind": "permission",
+          "id": "m25",
+          "at": "2026-10-16T14:00:00.000Z",
+          "card": {
+            "kind": "permission",
+            "id": "m25",
+            "at": "2026-10-16T14:00:00.000Z",
+            "from": null,
+            "tool": "Bash",
+            "label": "Bash",
+            "detail": "sleep 45",
+            "always": "sleep in solta-o-som",
+            "answer": "closed",
+            "expiresAt": "2026-10-16T16:00:00.000Z"
+          },
+          "stepId": "toolu_01Ac7"
+        },
+        {
           "kind": "notice",
           "id": "n_2",
           "at": "2026-10-16T14:00:00.000Z",
@@ -1980,6 +1998,14 @@
       "message": "Nothing is running.",
       "about": {
         "kind": "stop",
+        "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31"
+      }
+    },
+    {
+      "type": "error",
+      "message": "Claude Code kept the mode Ask before edits: the session is busy.",
+      "about": {
+        "kind": "set",
         "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31"
       }
     },

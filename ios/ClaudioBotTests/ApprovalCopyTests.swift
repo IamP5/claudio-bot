@@ -76,7 +76,7 @@ private func card(
         let c = card(detail: "perl -e 'sleep 45'")
         #expect(PermissionAnswer.expired.announcement(card: c, here: false) == "Expired. Bash did not run: perl -e 'sleep 45'")
         #expect(PermissionAnswer.stopped.announcement(card: c, here: false) == "Stopped by you. Bash did not run: perl -e 'sleep 45'")
-        #expect(PermissionAnswer.closed("gone").announcement(card: c, here: false) == "Closed. Bash did not run: perl -e 'sleep 45'")
+        #expect(PermissionAnswer.unknown("gone").announcement(card: c, here: false) == "Closed. Bash did not run: perl -e 'sleep 45'")
         #expect(PermissionAnswer.chose(.once).announcement(card: c, here: true) == "Allowed once. Bash: perl -e 'sleep 45'")
         #expect(PermissionAnswer.chose(.never).announcement(card: c, here: true) == "Never allowed. Bash did not run: perl -e 'sleep 45'")
     }

@@ -14,6 +14,8 @@ import Foundation
 /// card expires 20 s in), `approvalselsewhere` (another device denies it 15 s in), `streaming`, `cloud`,
 /// `longthread` (500 items), `newsession`, `background` (the turn over, a subagent and its command still running),
 /// `threadoffline` (the Mac lost after the thread loaded), `threadwaiting` (a thread opened with the Mac out of reach),
+/// `composerdraft`, `composerlong`, `composerlapse`, `composersix`, `composerrefused`, `composermode`, `composerqueued`, `composerwithdraw`, `stoppedearly` (DemoSessions.stageComposer;
+/// add "kb" for the same with the keyboard up, or "kbgone" for the keyboard up and then put away 8 s in),
 /// `sessionsempty` and `sessionsoffline`.
 @MainActor
 enum Demo {
@@ -37,7 +39,7 @@ enum Demo {
         let features: [Feature] = switch screen {
         case "live": [.activity]
         case "oldbridge": []
-        default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions, .memory, .mute, .skills, .spend, .sessionTasks]
+        default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions, .memory, .mute, .skills, .spend, .sessionTasks, .sessionUnqueue]
         }
         store.apply(.hello(Hello(protocol: oldBridge ? 2 : Wire.protocolVersion, features: features, machine: "MacBook Pro", userName: "Alex", bots: bots)))
         if !oldBridge { store.apply(.usage(usage(screen))) }
@@ -172,6 +174,11 @@ enum Demo {
         case "threadwaiting":
             store.setConnection(.disconnected(retryAt: .now + 25))
             router.open(.session(DemoSessions.audit))
+        case let composer? where DemoSessions.composerScreens.contains(composer.replacing(/kb(gone)?$/, with: "")):
+            let staged = composer.replacing(/kb(gone)?$/, with: "")
+            DemoSessions.backgroundOnly = staged == "composerlong" || staged == "composersix"
+            router.open(.session(DemoSessions.audit))
+            DemoSessions.stageComposer(staged, in: store)
         default: break
         }
     }
@@ -183,6 +190,16 @@ enum Demo {
     /// The bots already ticked when `newgroup` opens the group picker.
     static var groupPick: [BotID]? {
         screen == "newgroup" ? [BotID("engineer"), BotID("news")] : nil
+    }
+
+    /// A composer screen whose name ends in "kb" or "kbgone" opens with the field focused, so the keyboard is up.
+    static var focusesComposer: Bool {
+        screen.map { DemoSessions.composerScreens.contains($0.replacing(/kb(gone)?$/, with: "")) && $0.contains(/kb(gone)?$/) } ?? false
+    }
+
+    /// A "kbgone" screen puts the keyboard away after this long, as a drag down the transcript would.
+    static var dropsComposerFocus: Duration? {
+        focusesComposer && screen?.hasSuffix("kbgone") == true ? .seconds(8) : nil
     }
 
     /// What the composer holds when a screen opens mid-sentence: the "@" menu, a picked token, or the "/" menu.

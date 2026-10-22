@@ -11,8 +11,6 @@ struct BackgroundWorkSheet: View {
     @Environment(BridgeClient.self) private var client
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
-    @State private var stopping: [TaskID: Date] = [:]
-    @State private var stoppingAll: Date?
 
     private var model: ThreadModel? { store.threads[sessionId] }
     private var tasks: [SessionTask] { model?.controls?.tasks ?? [] }
@@ -38,10 +36,6 @@ struct BackgroundWorkSheet: View {
         #if os(macOS)
         .frame(minWidth: 480, idealWidth: 560, minHeight: 360, idealHeight: 480)
         #endif
-        .onChange(of: tasks.map(\.id)) { _, live in
-            stopping = stopping.filter { live.contains($0.key) }
-            if live.isEmpty { stoppingAll = nil }
-        }
     }
 
     private var list: some View {
@@ -58,7 +52,16 @@ struct BackgroundWorkSheet: View {
                         }
                         .padding(.horizontal, 14)
                         .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        if store.has(.sessionTasks) { stopAll(clock: context.date) }
+                        if store.has(.sessionTasks) {
+                            stopAll(clock: context.date)
+                            if case .refused(let why) = phase(.all, context.date) {
+                                Text("Couldn't stop. " + why)
+                                    .font(.footnote)
+                                    .foregroundStyle(Theme.danger)
+                                    .padding(.top, 8)
+                                    .accessibilityLabel("Error: couldn't stop. " + why)
+                            }
+                        }
                     }
                 }
                 if staleAt != nil {
@@ -85,7 +88,8 @@ struct BackgroundWorkSheet: View {
     }
 
     private func words(_ task: SessionTask, _ line: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let refusal = refusal(of: task)
+        return VStack(alignment: .leading, spacing: 4) {
             Text(task.label)
                 .font(task.kind == .command ? .system(.subheadline, design: .monospaced) : .subheadline)
                 .foregroundStyle(.white)
@@ -95,54 +99,62 @@ struct BackgroundWorkSheet: View {
                 .monospacedDigit()
                 .foregroundStyle(task.waiting != nil ? Theme.attention : Theme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
+            if let refusal {
+                Text("Couldn't stop. " + refusal)
+                    .font(.caption)
+                    .foregroundStyle(Theme.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(task.label + ", " + Self.status(task, now: staleAt ?? .now, owner: owner(of: task), spoken: true))
+        .accessibilityLabel(
+            task.label + ", " + Self.status(task, now: staleAt ?? .now, owner: owner(of: task), spoken: true) + (refusal.map { ". Error: couldn't stop. " + $0 } ?? "")
+        )
+    }
+
+    private func refusal(of task: SessionTask) -> String? {
+        if case .refused(let why)? = store.stops[sessionId]?[.task(task.id)]?.state { why } else { nil }
+    }
+
+    private func phase(_ target: StopTarget, _ clock: Date) -> StopPhase {
+        StopPhase(store.stops[sessionId]?[target], at: clock)
     }
 
     @ViewBuilder
     private func stop(_ task: SessionTask, clock: Date) -> some View {
         if store.has(.sessionTasks) {
-            let since = stopping[task.id]
-            let late = Self.late(since, clock)
+            let phase = phase(.task(task.id), clock)
             Button {
-                stopping[task.id] = .now
                 client.send(.sessionStop(sessionId: sessionId, target: .task(task.id)))
             } label: {
-                Text(since == nil ? "Stop" : late ? "Try again" : "Stopping…")
+                Text(phase == .stopping ? "Stopping…" : phase.retries ? "Try again" : "Stop")
                     .font(.subheadline.weight(.semibold))
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
-            .tint(since == nil || late ? Theme.danger : Theme.secondary)
-            .disabled(since != nil && !late)
-            .accessibilityLabel(since == nil ? "Stop \(task.label)" : late ? "Not stopped yet. Try stopping \(task.label) again" : "Stopping \(task.label)")
+            .tint(phase == .stopping ? Theme.secondary : Theme.danger)
+            .disabled(phase == .stopping)
+            .accessibilityLabel(phase == .stopping ? "Stopping \(task.label)" : phase.retries ? "Not stopped yet. Try stopping \(task.label) again" : "Stop \(task.label)")
         }
     }
 
     private func stopAll(clock: Date) -> some View {
-        let late = Self.late(stoppingAll, clock)
+        let phase = phase(.all, clock)
         let what = model?.controls?.turn == nil ? "all background work" : "the turn and all background work"
         return Button(role: .destructive) {
-            stoppingAll = .now
             client.send(.sessionStop(sessionId: sessionId, target: .all, turnStartedAt: model?.controls?.turn?.startedAt))
         } label: {
-            Text(stoppingAll == nil ? "Stop all" : late ? "Not stopped yet. Stop all again" : "Stopping all…")
+            Text(phase == .stopping ? "Stopping all…" : phase.retries ? "Not stopped yet. Stop all again" : "Stop all")
                 .font(.body.weight(.semibold))
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.bordered)
         .controlSize(.large)
         .tint(Theme.danger)
-        .disabled(stoppingAll != nil && !late)
+        .disabled(phase == .stopping)
         .padding(.top, 16)
-        .accessibilityLabel(stoppingAll == nil || late ? "Stop \(what)" : "Stopping \(what)")
-    }
-
-    /// A stop the Mac has not confirmed within 10 seconds may be tried again (P-STOP-4).
-    private static func late(_ since: Date?, _ clock: Date) -> Bool {
-        since.map { clock.timeIntervalSince($0) >= 10 } ?? false
+        .accessibilityLabel(phase == .stopping ? "Stopping \(what)" : "Stop \(what)")
     }
 
     /// The subagent that started the task: another live task, else the step it ran as.

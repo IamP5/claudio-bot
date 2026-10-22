@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { endGroup, groupAlive, shellGroups, stillRuns } from "../src/procs";
+import { endGroup, groupAlive, shellGroups, taskRun } from "../src/procs";
 import { backgroundCommand } from "./shells";
 
 const started: number[] = [];
@@ -37,7 +37,7 @@ test("each background shell's process group is found by the task id its output f
   const found = await shellGroups(cc);
   started.push(...found.values());
   expect([...found.keys()].sort()).toEqual(["bk1", "bk2"]);
-  for (const [id, g] of found) expect([g === cc, await stillRuns(g, id)]).toEqual([false, true]);
+  for (const [id, g] of found) expect([g === cc, await taskRun(g, id)]).toEqual([false, "runs"]);
 });
 
 test("a process with no background shells has none, and a pid that is gone has none either", async () => {
@@ -51,16 +51,16 @@ test("ending a group stops every process in it, and a group already gone counts 
   const cc = await fakeClaudeWithShells("bk1");
   const group = (await shellGroups(cc)).get("bk1")!;
   started.push(group);
-  expect(await endGroup(group, "bk1")).toBe(true);
+  expect(await endGroup(group, "bk1")).toBe("stopped");
   expect(groupAlive(group)).toBe(false);
-  expect(await endGroup(group, "bk1")).toBe(true);
+  expect(await endGroup(group, "bk1")).toBe("gone");
 });
 
-test("a group that now runs something else is not the task's, and is never signalled", async () => {
+test("a live group that does not write the task's output may or may not be it, and is never signalled", async () => {
   const other = backgroundCommand("someone-else");
   ends.push(other.end);
-  expect(await stillRuns(other.pid, "bk1")).toBe(false);
-  expect(await endGroup(other.pid, "bk1")).toBe(true);
+  expect(await taskRun(other.pid, "bk1")).toBe("unsure");
+  expect(await endGroup(other.pid, "bk1")).toBe("unsure");
   expect(groupAlive(other.pid)).toBe(true);
 });
 

@@ -4,7 +4,7 @@ import type { Tickable } from "./clock";
 import { failClosed, resolveReal, toCall, toHookOutput } from "./gate";
 import type { Ledger } from "./ledger";
 import { detailOf, floors, type Scope } from "./policy";
-import { endedOf, endOutlived, OUTLIVED_LOOK_MS, outlivedTask, withOutlived, type Outlived } from "./outlived";
+import { endOutlived, followed, OUTLIVED_LOOK_MS, outlivedSteps, outlivedTask, runOf, settled, withOutlived, type Outlived } from "./outlived";
 import {
   PHONE_MODES,
   type AskQuestion,
@@ -102,6 +102,8 @@ const SETTLED_KEPT = 20;
 const NOTICES_KEPT = 10;
 const PROMPTS_KEPT = 5;
 const STOPPED_STEPS_KEPT = 20;
+/** A Stop of a task the user stopped this recently is the same Stop, sent again or queued behind the first. */
+const RESTOP_MS = 60_000;
 const LINE_MAX = 160;
 
 const NOTHING_RUNS = "Nothing is running.";
@@ -189,6 +191,8 @@ export function createOwn(deps: OwnDeps): Own {
   const turnStops = new Map<SessionId, TurnStop>();
   /** Tasks a Stop is ending right now: a second Stop of one leaves the saying to the first. */
   const beingStopped = new Map<SessionId, Set<TaskId>>();
+  /** When the user's Stop last ended each task, so a Stop of it that comes after is not refused. */
+  const stoppedAt = new Map<SessionId, Map<TaskId, number>>();
   let nextOutlivedLook = 0;
   const lookingAtOutlived = new Set<SessionId>();
   /** When each session last came to rest; one that has not run since the bridge started rests since then. */
@@ -205,8 +209,9 @@ export function createOwn(deps: OwnDeps): Own {
     return rec.own;
   };
   const cards = (rec: SessionRecord) => driveOf(rec).cards;
-  const outlivedOf = (rec: SessionRecord): Outlived[] => rec.own?.outlived ?? [];
-  const activityOf = (rec: SessionRecord): Activity => withOutlived(drivers.get(rec.id)?.activity() ?? RESTING, outlivedOf(rec), bootAt);
+  const allOutlived = (rec: SessionRecord): Outlived[] => rec.own?.outlived ?? [];
+  const outlivedOf = (rec: SessionRecord): Outlived[] => followed(allOutlived(rec));
+  const activityOf = (rec: SessionRecord): Activity => withOutlived(drivers.get(rec.id)?.activity() ?? RESTING, allOutlived(rec), bootAt);
   const nameOf = (o: Outlived) => taskName(outlivedTask(o, bootAt));
 
   const working = (rec: SessionRecord) => (drivers.get(rec.id)?.working ?? false) || runs(activityOf(rec));
@@ -257,6 +262,9 @@ export function createOwn(deps: OwnDeps): Own {
   function markStopped(rec: SessionRecord, tasks: readonly Task[], ofRun: boolean) {
     if (tasks.length === 0) return;
     if (ofRun) stoppedBy.add(rec.id);
+    const times = stoppedAt.get(rec.id) ?? new Map<TaskId, number>();
+    for (const t of tasks) times.set(t.id, deps.now().getTime());
+    stoppedAt.set(rec.id, times);
     const drive = driveOf(rec);
     const steps = tasks.flatMap((t) => (t.stepId === null ? [] : [t.stepId]));
     if (steps.length > 0) drive.stoppedSteps = [...(drive.stoppedSteps ?? []), ...steps].slice(-STOPPED_STEPS_KEPT);
@@ -332,18 +340,36 @@ export function createOwn(deps: OwnDeps): Own {
       if (cause === "restart") lose(rec, text, null);
       else notice(rec.id, text);
     }
-    if (fate.unknown.length > 0) notice(rec.id, goneNote("Claude Code", cause, "unknown", fate.unknown), "info", cause === "restart" ? "restart" : undefined);
+    if (fate.unknown.length > 0) {
+      markUnsure(rec, fate.unknown);
+      notice(rec.id, goneNote("Claude Code", cause, "unknown", fate.unknown), "info", cause === "restart" ? "restart" : undefined);
+    }
     adopt(rec, fate.running, cause);
   }
 
-  function adopt(rec: SessionRecord, tasks: readonly BackgroundTask[], cause: GoneCause) {
-    const add = tasks.filter((t): t is Outlived => t.group !== undefined && !outlivedOf(rec).some((o) => o.id === t.id));
-    if (add.length === 0) return;
-    driveOf(rec).outlived = [...outlivedOf(rec), ...add];
+  /** Background work the bridge cannot check: its steps are not cut off as ended. */
+  function markUnsure(rec: SessionRecord, tasks: readonly BackgroundTask[]) {
+    const drive = driveOf(rec);
+    drive.unsure = [...(drive.unsure ?? []), ...tasks.map((t) => t.stepId ?? `task:${t.id}`)].slice(-STOPPED_STEPS_KEPT);
     deps.persist("now");
-    const one = add.length === 1;
+  }
+
+  /** The bridge no longer follows these outlived commands; `over` says why. */
+  function letGo(rec: SessionRecord, ids: readonly string[], over: NonNullable<Outlived["over"]>) {
+    if (ids.length === 0) return;
+    driveOf(rec).outlived = settled(allOutlived(rec), ids, over);
+    deps.persist("now");
+  }
+
+  const pick = (n: number, singular: string, plural: string) => (n === 1 ? singular : plural);
+
+  function adopt(rec: SessionRecord, tasks: readonly BackgroundTask[], cause: GoneCause) {
+    const add = tasks.filter((t): t is Outlived => t.group !== undefined && !allOutlived(rec).some((o) => o.id === t.id));
+    if (add.length === 0) return;
+    driveOf(rec).outlived = [...allOutlived(rec), ...add];
+    deps.persist("now");
     const names = listed(add.map(nameOf));
-    const runs = `still ${one ? "runs" : "run"} on this Mac. Stop ends ${one ? "it" : "them"}.`;
+    const runs = `still ${pick(add.length, "runs", "run")} on this Mac. Stop ends ${pick(add.length, "it", "them")}.`;
     notice(
       rec.id,
       cause === "restart" ? `The bridge restarted, and Claude Code no longer follows ${names}, which ${runs}` : `Claude Code is no longer running, but ${names} ${runs}`,
@@ -352,23 +378,38 @@ export function createOwn(deps: OwnDeps): Own {
     );
   }
 
-  /** Outlived commands that ended on their own since the last look: nobody saw how. One a Stop is ending, it says. */
+  const endedText = (tasks: readonly Outlived[]) =>
+    `${upper(listed(tasks.map(nameOf)))} ended. Claude Code no longer followed ${pick(tasks.length, "it", "them")}, so how ${pick(tasks.length, "it", "they")} ended is not known.`;
+  const unsureText = (tasks: readonly Outlived[]) =>
+    `The bridge can no longer tell that ${listed(tasks.map(nameOf))} ${pick(tasks.length, "is", "are")} still the command it followed, so it no longer shows ${pick(tasks.length, "it", "them")}. ${pick(tasks.length, "It", "They")} may still run on this Mac.`;
+
+  /**
+   * Outlived commands that ended on their own since the last look (nobody saw how), or that the bridge can no longer
+   * prove are the command. One a Stop is ending, the Stop says. A failure here is logged: a background poll never takes
+   * the bridge down.
+   */
   async function lookOutlived(rec: SessionRecord) {
     if (lookingAtOutlived.has(rec.id)) return;
     lookingAtOutlived.add(rec.id);
-    const stopping = () => beingStopped.get(rec.id) ?? new Set<TaskId>();
+    const free = (o: Outlived) => !(beingStopped.get(rec.id)?.has(o.id as TaskId) ?? false);
     try {
-      const ended = (await endedOf(outlivedOf(rec).filter((o) => !stopping().has(o.id as TaskId)))).map((o) => o.id);
-      const gone = outlivedOf(rec).filter((o) => ended.includes(o.id) && !stopping().has(o.id as TaskId));
-      if (gone.length === 0) return;
-      const still = outlivedOf(rec).filter((o) => !gone.includes(o));
-      if (still.length > 0) driveOf(rec).outlived = still;
-      else delete driveOf(rec).outlived;
-      deps.persist("now");
-      const what = upper(listed(gone.map(nameOf)));
-      const one = gone.length === 1;
-      lastTask.set(rec.id, `${what} ended`);
-      notice(rec.id, `${what} ended. Claude Code no longer followed ${one ? "it" : "them"}, so how ${one ? "it" : "they"} ended is not known.`, "info", "task");
+      const watched = outlivedOf(rec).filter(free);
+      const runs = await Promise.all(watched.map(runOf));
+      const now = (kind: string) => watched.filter((o, i) => runs[i] === kind && free(o) && outlivedOf(rec).some((x) => x.id === o.id));
+      const ended = now("gone");
+      const unsure = now("unsure");
+      letGo(rec, ended.map((o) => o.id), "ended");
+      letGo(rec, unsure.map((o) => o.id), "unsure");
+      if (ended.length > 0) {
+        lastTask.set(rec.id, `${upper(listed(ended.map(nameOf)))} ended`);
+        notice(rec.id, endedText(ended), "info", "task");
+      }
+      if (unsure.length > 0) {
+        markUnsure(rec, unsure);
+        notice(rec.id, unsureText(unsure), "info", "task");
+      }
+    } catch (e) {
+      deps.log(`own ${rec.id}: looking at outlived commands failed: ${errorText(e)}`);
     } finally {
       lookingAtOutlived.delete(rec.id);
     }
@@ -684,7 +725,8 @@ export function createOwn(deps: OwnDeps): Own {
     const s = drivers.get(rec.id);
     const a = activityOf(rec);
     const one = typeof target === "object" ? target.task : null;
-    if (one !== null && !a.tasks.some((t) => t.id === one)) return refused("That task is not running.");
+    const restop = one !== null && deps.now().getTime() - (stoppedAt.get(rec.id)?.get(one) ?? -Infinity) < RESTOP_MS;
+    if (one !== null && !a.tasks.some((t) => t.id === one)) return restop ? { ok: true } : refused("That task is not running.");
     const inFlight = beingStopped.get(rec.id) ?? new Set<TaskId>();
     if (one !== null && inFlight.has(one)) return { ok: true };
     const named = a.tasks.filter((t) => ends(a, target, t.id) && !inFlight.has(t.id));
@@ -707,10 +749,13 @@ export function createOwn(deps: OwnDeps): Own {
     if (!turn) stop = undefined;
     if (stop) stop.asking++;
     let r: StopReport;
-    let ended: (string | null)[];
+    let endings: Awaited<ReturnType<typeof endOutlived>>[];
     try {
       const asked = s && (one === null || alone.length === 0) ? s.interrupt(target) : Promise.resolve({ ran: false, refused: [], late: [], woken: false });
-      [r, ended] = await Promise.all([asked, Promise.all(alone.map(async (o) => ((await endOutlived(o)) ? o.id : null)))]);
+      [r, endings] = await Promise.all([asked, Promise.all(alone.map(endOutlived))]);
+    } catch (e) {
+      if (stop && stop.asking === 1 && !stop.ended && turnStops.get(rec.id) === stop) turnStops.delete(rec.id);
+      throw e;
     } finally {
       for (const t of named) inFlight.delete(t.id);
       if (stop) stop.asking--;
@@ -720,15 +765,16 @@ export function createOwn(deps: OwnDeps): Own {
       if (stop.asking === 0 && !stop.ended && turnStops.get(rec.id) === stop) turnStops.delete(rec.id);
       stop = undefined;
     }
-    if (alone.length > 0) {
-      const left = outlivedOf(rec).filter((o) => !ended.includes(o.id));
-      if (left.length > 0) drive.outlived = left;
-      else delete drive.outlived;
-    }
-    const unended = (t: Task) => alone.some((o) => o.id === t.id && !ended.includes(o.id));
-    const missed = named.filter((t) => r.refused.includes(t.id) || unended(t));
+    const ending = (t: Task) => endings[alone.findIndex((o) => o.id === t.id)];
+    const outlivedBy = (kind: (typeof endings)[number]) => alone.filter((_, i) => endings[i] === kind);
+    letGo(rec, outlivedBy("stopped").map((o) => o.id), "stopped");
+    letGo(rec, outlivedBy("gone").map((o) => o.id), "ended");
+    letGo(rec, outlivedBy("unsure").map((o) => o.id), "unsure");
+    const unproven = named.filter((t) => ending(t) === "unsure");
+    const already = named.filter((t) => ending(t) === "gone");
+    const missed = named.filter((t) => r.refused.includes(t.id) || ending(t) === "survived");
     const late = named.filter((t) => r.late.includes(t.id));
-    const done = named.filter((t) => !missed.includes(t) && !late.includes(t));
+    const done = named.filter((t) => ![...missed, ...late, ...unproven, ...already].includes(t));
     const ran = r.ran || alone.length > 0;
     const fate = (c: OwnCard) => {
       const above = chain(a, (c.kind === "permission" ? c.agent?.id : undefined) as TaskId);
@@ -767,10 +813,16 @@ export function createOwn(deps: OwnDeps): Own {
       notice(rec.id, `${STOPPED_BY_YOU}: ${listed(confirmed.map(taskName))}.`, "info", "stop");
       if (one === null) stoppedRun(rec, { turn: false, tasks: confirmed, at, envelope: null, whole });
     }
+    if (already.length > 0) notice(rec.id, `${upper(listed(already.map(taskName)))} had already ended when your stop reached ${pick(already.length, "it", "them")}.`, "info", "stop");
+    if (unproven.length > 0) {
+      markUnsure(rec, alone.filter((o) => unproven.some((t) => t.id === o.id)));
+      notice(rec.id, unsureText(alone.filter((o) => unproven.some((t) => t.id === o.id))), "error", "stop");
+    }
     if (missed.length > 0) notice(rec.id, `Couldn't stop ${listed(missed.map(taskName))}. It may still be running.`, "error", "stop");
     if (fresh.length > 0) notice(rec.id, `Claude Code has not confirmed the stop of ${listed(fresh.map(taskName))} yet.`, "info", "stop");
     changed(rec.id);
-    if (missed.length > 0) return refused(`${missed.every(unended) ? "The bridge could not stop" : "Claude Code did not stop"} ${listed(missed.map((t) => t.label))}.`);
+    if (missed.length > 0) return refused(`${missed.every((t) => ending(t) === "survived") ? "The bridge could not stop" : "Claude Code did not stop"} ${listed(missed.map((t) => t.label))}.`);
+    if (unproven.length > 0) return refused(`The bridge can no longer tell that ${listed(unproven.map((t) => t.label))} is the command it followed, so it did not stop it.`);
     return late.length > 0 ? refused(`Claude Code has not confirmed the stop of ${listed(late.map((t) => t.label))} yet.`) : { ok: true };
   }
 
@@ -909,18 +961,19 @@ export function createOwn(deps: OwnDeps): Own {
     },
 
     steps(rec) {
-      const out = new Map<string, StepPatch>();
+      const out = outlivedSteps(allOutlived(rec), UNSEEN_END);
+      for (const key of rec.own?.unsure ?? []) out.set(key, { ...out.get(key), uncut: true });
       for (const c of rec.own?.cards ?? []) {
         if (c.kind !== "permission") continue;
         if (c.agent) {
           // A subagent carries on after a denied call and returns ok, so its Agent step says what was refused.
           const step = c.agent.stepId;
-          if (step !== null && (c.card.answer === "deny" || c.card.answer === "never") && !out.has(step))
-            out.set(step, { ended: { state: "denied", cause: `You denied its ${c.card.tool}: ${displayName(maskSecrets(c.card.detail), LINE_MAX)}` } });
+          if (step !== null && (c.card.answer === "deny" || c.card.answer === "never") && out.get(step)?.ended === undefined)
+            out.set(step, { ...out.get(step), ended: { state: "denied", cause: `You denied its ${c.card.tool}: ${displayName(maskSecrets(c.card.detail), LINE_MAX)}` } });
           continue;
         }
-        if (isOpen(c)) out.set(c.toolUseId, { state: "waiting" });
-        else if (c.allowedAt) out.set(c.toolUseId, { startedAt: c.allowedAt });
+        if (isOpen(c)) out.set(c.toolUseId, { ...out.get(c.toolUseId), state: "waiting" });
+        else if (c.allowedAt) out.set(c.toolUseId, { ...out.get(c.toolUseId), startedAt: c.allowedAt });
       }
       for (const id of rec.own?.stoppedSteps ?? []) out.set(id, { ...out.get(id), ended: { state: "stopped", cause: STOPPED_BY_YOU } });
       for (const [id, p] of runningSteps(activityOf(rec))) out.set(id, { ...p, ...out.get(id), state: "running" });

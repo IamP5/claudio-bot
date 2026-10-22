@@ -278,7 +278,15 @@ export function rowRun(a: Activity, card: string | null, call: CallLabel): Pick<
  * ended: how a call that reads running, or ok, really ended: the user stopped its task, or denied a call its subagent
  * asked for.
  */
-export type StepPatch = { state?: "waiting" | "running"; startedAt?: string; ended?: { state: "stopped" | "denied"; cause: string } };
+export type StepPatch = {
+  state?: "waiting" | "running";
+  startedAt?: string;
+  ended?: { state: "stopped" | "denied"; cause: string };
+  /** The step of a command the bridge followed after its Claude Code was gone: a later Claude Code's "stopped" does not hold. */
+  outlived?: true;
+  /** The bridge cannot tell whether the step's work still runs, so no cut ends it. */
+  uncut?: true;
+};
 
 /**
  * Steps whose work still runs, each live task's own call and the calls of the subagents above it, with the patch that
@@ -298,10 +306,16 @@ export function runningSteps(a: Activity): Map<string, StepPatch> {
 }
 
 /** A transcript step as shown: a waiting card only over a call that reads running, a live task never over a failure. */
-export function patchStep(step: ToolStep, p: StepPatch): ToolStep {
+export function patchStep(shown: ToolStep, p: StepPatch): ToolStep {
+  const step = p.outlived && shown.state === "stopped" ? unclaimed(shown) : shown;
   if (p.state === undefined && p.ended && step.state === (p.ended.state === "stopped" ? "running" : "ok")) return { ...step, state: p.ended.state, cause: p.ended.cause };
   const state = p.state === "waiting" ? (step.state === "running" ? "waiting" : step.state) : p.state === "running" && step.state === "ok" ? "running" : step.state;
   return { ...step, state, ...(p.startedAt !== undefined && { startedAt: p.startedAt }), ...(state === "running" && step.state === "ok" && { output: null }) };
+}
+
+function unclaimed(step: ToolStep): ToolStep {
+  const { cause: _cause, endedAt: _endedAt, ...rest } = step;
+  return { ...rest, state: "running" };
 }
 
 /** A transcript step as shown once its work was cut off: one that still reads running takes the first cut after its start. */

@@ -459,8 +459,16 @@ export type OwnDrive = {
   notices?: Extract<SessionItem, { kind: "notice" }>[];
   /** Prompts a stop ended before Claude Code wrote them down, shown until the transcript has their words. */
   kept?: { id: ItemId; at: string; text: string }[];
-  /** Background commands that outlived the Claude Code that ran them: they still run, and only the bridge follows them. */
-  outlived?: (BackgroundTask & { group: number })[];
+  /**
+   * Background commands that outlived the Claude Code that ran them, which only the bridge follows. over: since when it
+   * no longer does: the command ended unseen, the user stopped it, or the bridge can no longer tell it is the command.
+   */
+  outlived?: (BackgroundTask & { group: number; over?: "ended" | "stopped" | "unsure" })[];
+  /**
+   * Steps of background work whose fate the bridge could not check: they are not cut off as ended. A step is named by
+   * its tool_use id, or as task:<id> when only its task is known.
+   */
+  unsure?: string[];
 };
 
 /**

@@ -254,7 +254,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S4.2 | what | protocol | The user can read why it failed. | The failed step carries output that names the cause. | No output on the failed step. |
 | S4.3 | stop | protocol | After Stop, nothing is left looking like it runs. | Within 30 s of Stop, no step is in state running. | A step still reads running 30 s after Stop. |
 | S4.4 | stop | protocol | After Stop, the session comes to rest. | Row not working and controls.working false within 30 s of Stop. | Still working 30 s after Stop. |
-| S4.5 | stop | protocol | The thread says the user stopped it. | After Stop, a notice item says so: its reason is "stop", or, from a bridge without reasons, its text says interrupted or stopped. Assistant prose does not count. | No notice says it was stopped. |
+| S4.5 | stop | protocol | The thread says the user stopped it, in the bridge's own words. | After Stop, a notice from the bridge says so: its reason is "stop" and its text starts "Stopped by you". Claude Code's own "Interrupted" line and assistant prose do not count. | No bridge notice says it was stopped. |
 | S4.6 | stop | protocol | Stop really stops the subagent's work on the Mac. | The sleeper's sleep 45 process ran before Stop (sample before-stop), is gone 5 s after the session rests (sample after-stop), and late.txt never appears, checked 50 s after Stop. | The process is still there after Stop, or late.txt appeared. |
 | S4.7 | state | simulator (running) | Mid-run, the failed subagent reads failed and the other running. | Two distinct states. | Same look for both. |
 | S4.8 | stop | simulator (stopped) | After Stop, the thread reads stopped, no spinner. | Stopped state. | Spinner left. |
@@ -418,6 +418,11 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Wait 8 s.
 - Sample the Mac's processes matching `sleep 420` in the seed project as `after-restart`.
 - Mark `after-restart`.
+- Send in `s6c`: "Reply with the single word hi."; mark `sent`.
+- Wait up to 120 s for the turn of the message sent after the restart to end; mark `replied`.
+- Wait 3 s.
+- Sample the Mac's processes matching `sleep 420` in the seed project as `after-send`.
+- Mark `after-send`.
 - Press Stop on `s6c` (session_stop); mark `stopped`.
 - Wait up to 30 s for the session to rest after Stop; mark `s6c-rest` (optional).
 - Wait 3 s.
@@ -433,9 +438,10 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 | id | tells | lane | the user can tell | pass | fail |
 | --- | --- | --- | --- | --- | --- |
-| S6c.1 | state | protocol | After the restart the thread never says the command stopped while it still runs, and says that it runs. | Between the command starting on the Mac and Stop, no notice says the background work stopped, and a notice says it still runs. | A notice says the background work stopped, or none says it still runs. |
+| S6c.1 | state | protocol | After the restart the thread says the command still runs and Stop ends it, never that it stopped, and its step still runs. | Between the command starting on the Mac and Stop, no notice says the background work stopped and one says "which still runs on this Mac. Stop ends it"; at mark after-restart the Bash step reads running. | A notice says the background work stopped, none says it still runs, or the step reads anything but running. |
 | S6c.2 | stop | protocol | After the restart the session reads working with the command as a task, so Stop is offered. | At mark after-restart, controls.working is true and controls.tasks names the command. | The session rests, or no task names the command. |
-| S6c.3 | stop | protocol | Stop ends the command on the Mac, and the thread says the user stopped it. | The sleep 420 is gone 3 s after the session rests (sample after-stop), and a notice with reason stop follows Stop. | The process still runs after Stop, or no stop notice. |
+| S6c.4 | state | protocol | A message sent after the restart does not bring back a claim that the command stopped: it still runs and shows so. | The sleep 420 still runs (sample after-send); at mark after-send controls.tasks names it, the Bash step reads running, and no notice since the message says it stopped or did not finish. | The process is gone, no task names it, the step reads stopped, or a notice says it stopped or did not finish. |
+| S6c.3 | stop | protocol | Stop ends the command on the Mac, and the thread says the user stopped it. | The sleep 420 is gone 3 s after the session rests (sample after-stop), and a notice that starts "Stopped by you" follows Stop. | The process still runs after Stop, or no stop notice. |
 
 ## S7 Twelve sessions at once
 

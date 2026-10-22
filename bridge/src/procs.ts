@@ -2,7 +2,8 @@
 // leads a process group of its own and writes to <task id>.output (CLI 2.1.305), so killing Claude Code's group, as
 // the bridge does when it closes a query or exits, leaves the command running. Only the process table can tell
 // whether it outlived Claude Code. A saved group number can belong to another process by the time it is read again, so
-// a group counts as the command's only while its leader still writes to that command's output file.
+// a group counts as the command's only while its leader still writes to that command's output file. A live group whose
+// leader no longer does may or may not be the command, and is never signalled.
 
 const READ_TIMEOUT_MS = 5_000;
 
@@ -56,10 +57,12 @@ export function groupAlive(group: number): boolean {
   }
 }
 
-/** Whether background task `id` still runs as group `group`: its leader still writes to <id>.output. */
-export async function stillRuns(group: number, id: string): Promise<boolean> {
-  if (!groupAlive(group)) return false;
-  return ((await outputs([group])).get(group) ?? []).some((path) => taskOf(path) === id);
+/** runs: the group's leader still writes to <id>.output. gone: no process of the group runs. unsure: it runs, unproven. */
+export type TaskRun = "runs" | "gone" | "unsure";
+
+export async function taskRun(group: number, id: string): Promise<TaskRun> {
+  if (!groupAlive(group)) return "gone";
+  return ((await outputs([group])).get(group) ?? []).some((path) => taskOf(path) === id) ? "runs" : "unsure";
 }
 
 const TERM_WAIT_MS = 3_000;
@@ -80,13 +83,15 @@ function signal(group: number, sig: NodeJS.Signals) {
 }
 
 /**
- * Stops background task `id` running as group `group`: SIGTERM, then SIGKILL for what is left. A group that no longer
- * runs the task is never signalled. True once the task no longer runs.
+ * Stops background task `id` running as group `group`: SIGTERM, then SIGKILL for what is left. Only a group proven to
+ * run the task is signalled. stopped: it ran and no longer does; gone or unsure: as taskRun found it, nothing was sent;
+ * survived: it still runs after SIGKILL.
  */
-export async function endGroup(group: number, id: string): Promise<boolean> {
-  if (!(await stillRuns(group, id))) return true;
+export async function endGroup(group: number, id: string): Promise<"stopped" | "gone" | "unsure" | "survived"> {
+  const run = await taskRun(group, id);
+  if (run !== "runs") return run;
   signal(group, "SIGTERM");
-  if (await gone(group, TERM_WAIT_MS)) return true;
+  if (await gone(group, TERM_WAIT_MS)) return "stopped";
   signal(group, "SIGKILL");
-  return gone(group, KILL_WAIT_MS);
+  return (await gone(group, KILL_WAIT_MS)) ? "stopped" : "survived";
 }

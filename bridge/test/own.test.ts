@@ -1004,16 +1004,6 @@ describe("how a run ends", () => {
     expect(await stepOf("toolu_k")).toMatchObject({ state: "stopped", cause: "The bridge restarted" });
   });
 
-  test("after a restart, background work the bridge could not look up is said to maybe still run", async () => {
-    await start();
-    await send("Start it");
-    const q = queries[0]!;
-    q.emit(taskStarted(shellTask("bk", "toolu_k", "sleep 600")), level(shellTask("bk", "toolu_k", "sleep 600")), result());
-    await flush();
-    await restart();
-    expect((await noticesNow()).map((n) => [n.text, n.reason])).toEqual([["The bridge restarted, and Claude Code's background work may still run on this Mac: sleep 600.", "restart"]]);
-  });
-
   test("a failure the transcript already shows gets no second notice", async () => {
     await start();
     await send("Hello");
@@ -1454,14 +1444,15 @@ describe("the thread says what stopped only once it did", () => {
     }
   });
 
-  test("a saved group that now runs something else is not the command: it is said to have stopped, and nothing is signalled", async () => {
+  test("a saved group that is alive but does not write the command's output may still be it: said so, never stopped or signalled", async () => {
     const other = backgroundCommand("someone-else");
     try {
       await startedInBackground({ bk: other.pid });
       await restart();
       await until(async () => (await restartLines()).length === 1);
-      expect(await restartLines()).toEqual(["The bridge restarted, so Claude Code's background work stopped: sleep bk."]);
-      expect([(await controlsNow()).tasks, alive(other.pid)]).toEqual([[], true]);
+      expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: sleep bk."]);
+      expect([(await controlsNow()).tasks, alive(other.pid), (await rowOf(ASK)).outcome?.kind]).toEqual([[], true, "finished"]);
+      expect((await stepOf("toolu_bk")).state).toBe("running");
     } finally {
       await other.end();
     }
@@ -1477,7 +1468,134 @@ describe("the thread says what stopped only once it did", () => {
     await until(async () => (await restartLines()).length === 1);
     expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: sleep 600."]);
     expect((await rowOf(ASK)).outcome?.kind).not.toBe("lost");
-    expect((await stepOf("toolu_k")).cause).not.toBe("The bridge restarted");
+    expect((await stepOf("toolu_k")).state).toBe("running");
+  });
+
+  test("background work saved by an older bridge, with no group or step, is said to maybe still run and its step is not cut off", async () => {
+    await startedInBackground({});
+    const q = queries[0]!;
+    await transcribe(calledEntry("toolu_k", "Bash", { command: "sleep 600", run_in_background: true }), resultEntry("toolu_k", "Command running in background with ID: bk."));
+    q.emit(taskStarted(shellTask("bk", "toolu_k", "sleep 600")), level(shellTask("bk", "toolu_k", "sleep 600")));
+    await flush();
+    sessions.stop();
+    (world.sessions.get(ASK)!.own!.session as { background?: unknown }).background = [{ id: "bk", description: "sleep 600" }];
+    queries.length = 0;
+    await start();
+    await until(async () => (await restartLines()).length === 1);
+    expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: sleep 600."]);
+    expect((await stepOf("toolu_k")).state).toBe("running");
+  });
+
+  test("after a restart, a later Claude Code's word that an outlived command stopped is not taken: it still runs and shows so", async () => {
+    const running = backgroundCommand("bk");
+    try {
+      await startedInBackground({ bk: running.pid });
+      await restart();
+      await until(async () => (await controlsNow()).working === true);
+      await send("Say hi", "c_hi");
+      await transcribe({
+        type: "user",
+        message: {
+          role: "user",
+          content:
+            "<task-notification>\n<task-id>bk</task-id>\n<tool-use-id>toolu_bk</tool-use-id>\n<status>stopped</status>\n<summary>Background shell command didn't finish before the previous session ended</summary>\n</task-notification>",
+        },
+      });
+      expect((await noticesNow()).map((n) => n.text).filter((t) => t.includes("didn't finish"))).toEqual([]);
+      expect((await stepOf("toolu_bk")).state).toBe("running");
+      expect((await controlsNow()).tasks?.map((t) => t.id)).toEqual(["bk" as TaskId]);
+      expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } })).toEqual([]);
+      expect(await stepOf("toolu_bk")).toMatchObject({ state: "stopped", cause: "Stopped by you" });
+      expect((await noticesNow()).map((n) => n.text).filter((t) => t.includes("didn't finish"))).toEqual([]);
+    } finally {
+      await running.end();
+    }
+  });
+
+  test("an outlived command that stops writing its output is let go as unsure, and a Stop then refuses rather than claims", async () => {
+    const running = backgroundCommand("bk");
+    try {
+      await startedInBackground({ bk: running.pid });
+      await restart();
+      await until(async () => (await controlsNow()).working === true);
+      await running.redirect();
+      expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } })).toEqual([
+        { type: "error", message: expect.stringContaining("did not stop it"), about: { kind: "stop", sessionId: ASK } },
+      ]);
+      expect(alive(running.pid)).toBe(true);
+      expect((await noticesNow()).map((n) => n.text).filter((t) => t.startsWith("Stopped by you"))).toEqual([]);
+      expect((await noticesNow()).at(-1)?.text).toContain("may still run on this Mac");
+      expect([(await controlsNow()).working, (await stepOf("toolu_bk")).state]).toEqual([false, "running"]);
+    } finally {
+      await running.end();
+    }
+  });
+
+  test("the poll lets an outlived command go as unsure when it stops writing its output, and never says it ended", async () => {
+    const running = backgroundCommand("bk");
+    try {
+      await startedInBackground({ bk: running.pid });
+      await restart();
+      await until(async () => (await controlsNow()).working === true);
+      await running.redirect();
+      clock += 10_000;
+      sessions.tick(new Date(clock));
+      await until(async () => (await controlsNow()).working === false);
+      const said = (await noticesNow()).map((n) => n.text);
+      expect(said.some((t) => t.includes("ended"))).toBe(false);
+      expect(said.at(-1)).toContain("may still run on this Mac");
+      expect(alive(running.pid)).toBe(true);
+    } finally {
+      await running.end();
+    }
+  });
+
+  test("a state write that fails while the bridge looks at outlived commands is logged, not thrown", async () => {
+    const running = backgroundCommand("bk");
+    const logs: string[] = [];
+    let failing = false;
+    try {
+      shells = async () => new Map([["bk", running.pid]]);
+      const over = {
+        persist: () => {
+          if (failing) throw new Error("EACCES: state.json");
+        },
+        log: (l: string) => void logs.push(l),
+      };
+      await start(over);
+      await send("Start it");
+      const q = queries[0]!;
+      q.emit(taskStarted(shellTask("bk", "toolu_bk", "sleep bk")), level(shellTask("bk", "toolu_bk", "sleep bk")), result());
+      await flush();
+      await flush();
+      sessions.stop();
+      queries.length = 0;
+      await start(over);
+      await until(async () => (await controlsNow()).working === true);
+      await running.end();
+      failing = true;
+      clock += 10_000;
+      sessions.tick(new Date(clock));
+      await until(async () => logs.some((l) => l.includes("looking at outlived commands failed")));
+      expect(logs.filter((l) => l.includes("looking at outlived commands failed"))).toHaveLength(1);
+    } finally {
+      failing = false;
+      await running.end();
+    }
+  });
+
+  test("a second Stop of an outlived command queued behind the first, as one phone sends them, is not refused", async () => {
+    const running = backgroundCommand("bk");
+    try {
+      await startedInBackground({ bk: running.pid });
+      await restart();
+      await until(async () => (await controlsNow()).working === true);
+      expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } })).toEqual([]);
+      expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } })).toEqual([]);
+      expect((await stopLines()).filter((t) => t.startsWith("Stopped by you"))).toEqual(['Stopped by you: command "sleep bk".']);
+    } finally {
+      await running.end();
+    }
   });
 
   test("two Stops of one outlived command at once name it once", async () => {

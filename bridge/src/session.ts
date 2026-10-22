@@ -15,7 +15,7 @@ import type {
 import type { Tickable } from "./clock";
 import type { Headroom, Ledger } from "./ledger";
 import { notices as noticeText, withNotices, type SessionInput } from "./prompts";
-import { groupAlive, shellGroups, stillRuns } from "./procs";
+import { groupAlive, shellGroups, taskRun } from "./procs";
 import type { NoticeReason, StopTarget, TaskId } from "./protocol";
 import { sandboxFailure } from "./sandbox";
 import type { Persist } from "./store";
@@ -128,13 +128,15 @@ export const goneNote = (name: string, cause: GoneCause, kind: keyof Fate, tasks
   }
 };
 /**
- * A command (or other shell task) outlives Claude Code exactly while its shell still writes to its output file.
- * Subagents run inside Claude Code, so they stopped once its process is gone. Without either fact the bridge cannot tell.
+ * A command (or other shell task) outlives Claude Code while its shell still writes to its output file, and stopped
+ * once no process of its group runs. Subagents run inside Claude Code, so they stopped once its process is gone. Without
+ * one of those facts the bridge cannot tell.
  */
+const FATE_OF_RUN = { runs: "running", gone: "stopped", unsure: "unknown" } as const;
 async function fateOf(tasks: readonly Background[]): Promise<Fate> {
   const fate: Fate = { stopped: [], running: [], unknown: [] };
   for (const t of tasks) {
-    if (t.group !== undefined) fate[(await stillRuns(t.group, t.id)) ? "running" : "stopped"].push(t);
+    if (typeof t.group === "number") fate[FATE_OF_RUN[await taskRun(t.group, t.id)]].push(t);
     else if (t.kind === "agent" && t.claude !== undefined && !groupAlive(t.claude)) fate.stopped.push(t);
     else fate.unknown.push(t);
   }

@@ -36,3 +36,6 @@
 - Unsure work card: header pairs "Ran" with "may still run"; a stale "Stop ends it." notice stays after the bridge loses track; a card with only unsure steps can fold away its count (G17 verifier r4, P3).
 - S4.9 latency missed 2 s in 2/3 runs on the #21+#22 combination under load average 40-88 (watch after both merge).
 - Harness: dismissing the iOS notification-permission alert needs UI automation (simctl privacy cannot grant notifications); verifiers may Allow it once per pool device via XCUITest (decision recorded).
+- G11: "Sent before it could be withdrawn" note never shows on the real bridge: settleWithdrawals marks sentAnyway[clientId] but the bridge then re-keys the item to its transcript id, so taken(id) misses; a single replacement frame would read as a drop. Test must send the re-key frame (G6 verifier r6, shots/sa.png).
+- G11: sentAnyway map is never pruned (negligible).
+- (G17/G18) After a stop Claude Code never confirms, the bridge closes Claude Code at 15 s and says "Claude Code's background work stopped: …sleep 6002" while it is alive (seen on main); "Stop again" adds a second identical "Stopped by you" notice.

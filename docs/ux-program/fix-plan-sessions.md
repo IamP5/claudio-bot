@@ -916,3 +916,11 @@ Totals: 10 P1s, all assigned (G3 2, G6 1, G8 2, G11 1, G12 2, G15 2, where 140 a
 ## Schema note (after G0 merged, PR #4)
 
 Section 2's sketch is superseded. The wire contract is `bridge/src/protocol.ts` and `docs/sessions-design.md` §3.1. Differences: new fields are `?: T` (absent, never null); `PushState` and `ErrorAbout` are discriminated unions; `session_tool_output.output` stays a string and a failed fetch is an `error` with `about: {kind: "tool"}`. G2, G3 and G13 add `session_tasks`, `session_unqueue` and `push_state` to the hub's `SERVED` list when they serve them.
+
+### G17. Stop and restart honesty in the bridge (added during Step 3)
+
+- **Findings:** F-SES-173 (P1) after a bridge restart the thread says background work stopped while the command is still alive. F-SES-174 (P1) "Stopped by you before Claude replied." is posted, then Claude Code takes the prompt and replies.
+  P2 (from backlog, found by G6 owner and verifiers): the bridge posts "Stopped by you: the turn …" before the turn has actually ended when Claude Code is paused; two stops of the same task produce "command X and command X"; a background-task stop landing during an answered turn makes the status read "Stopped by you"; with no Claude Code process a model change stores any model id unchecked and the next send fails.
+- **Rule:** the bridge never claims an outcome it has not observed. A stop notice is posted only once Claude Code (or the OS, for a process) confirms it; until then the state is "stopping". After a restart, background work is reported from what is actually alive (process check), not assumed dead.
+- **Files (expected):** `bridge/src/own.ts`, `bridge/src/session.ts`, `bridge/src/tasks.ts`, bridge tests. Bridge-only; no iOS files (G6 owns the composer). Runs before G13 on `own.ts`.
+- **Verify:** protocol lane S4 and S6 (restart variant), plus probes with SIGSTOP/SIGCONT on the run's own Claude Code.

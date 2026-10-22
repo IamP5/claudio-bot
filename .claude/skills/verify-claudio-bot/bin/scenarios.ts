@@ -2118,7 +2118,8 @@ const S9: Scenario = {
       pass: "After the card push was tried three times and answered 500 each time, a push_state frame reads failing with \"The push server answered 500\".",
       fail: "No failing state, the wrong cause, or fewer than three tries.",
       check: (ev) => {
-        const tries = ev.pushes().filter((p) => p.status === 500);
+        // The bot's greeting turn pushes too; only the card push's tries count.
+        const tries = ev.pushes().filter((p) => p.status === 500 && cardCount(p) !== null);
         const failing = ev.pushStates.find((p) => p.push.state === "failing");
         if (!failing) return no(`no failing state; ${tries.length} failed tries`);
         if (failing.push.error !== "The push server answered 500") return no(`error "${failing.push.error}"`);
@@ -2160,12 +2161,17 @@ const S9: Scenario = {
       tell: "state",
       lane: "protocol",
       text: "Once a push gets through again, the phone hears that alerts work.",
-      pass: "After the failing state and the reminder that got through, a push_state frame reads on.",
-      fail: "The state stays failing after a push went out.",
+      pass: "After the failing state, a push_state frame reads on within 2 s of the first push the sink answered 200, and not before it.",
+      fail: "The state stays failing after a push got through, or reads on before any did.",
       check: (ev) => {
         const failing = ev.pushStates.findIndex((p) => p.push.state === "failing");
+        if (failing < 0) return no("never failing");
+        const since = ev.pushStates[failing]!.at;
+        const through = ev.pushes().find((p) => p.status === 200 && ev.atOf(p.at) >= since);
         const on = ev.pushStates.slice(failing + 1).find((p) => p.push.state === "on");
-        return failing >= 0 && on ? ok(`on at +${Math.round(on.at / 1000)} s`) : no(ev.pushStates.map((p) => p.push.state).join(" → "));
+        if (!through || !on) return no(`${ev.pushStates.map((p) => p.push.state).join(" → ")}; first good push ${through?.body ?? "none"}`);
+        const lag = on.at - ev.atOf(through.at);
+        return lag >= -500 && lag <= 2_000 ? ok(`on ${(lag / 1000).toFixed(1)} s after "${through.body}" got through`) : no(`on ${(lag / 1000).toFixed(1)} s after the first good push`);
       },
     },
     {

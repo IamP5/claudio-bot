@@ -113,6 +113,11 @@ const DIED = /^Claude Code process (exited|terminated)/;
 const line = (text: string) => displayName(maskSecrets(text.split("\n")[0] ?? ""), LINE_MAX);
 const listed = (parts: readonly string[]) => (parts.length < 2 ? (parts[0] ?? "") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`);
 const counted = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+/** A refusal the phone shows under its composer: at most two commands, each on one short line, then how many more. */
+const fewOf = (tasks: readonly Task[]) => {
+  const names = tasks.map((t) => displayName(t.label, 40));
+  return names.length <= 2 ? listed(names) : `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
+};
 const KIND_WORD: Record<Task["kind"], string> = { agent: "agent", command: "command", other: "task" };
 const taskName = (t: Task) => `${KIND_WORD[t.kind]} "${t.label}"`;
 
@@ -587,8 +592,8 @@ export function createOwn(deps: OwnDeps): Own {
       end(rec, { kind: "stopped", text: `${STOPPED_BY_YOU}: ${what.join(", ")}`, at }, ending, all ? { state: "stopped", cause: STOPPED_BY_YOU } : undefined);
     }
     changed(rec.id);
-    if (missed.length > 0) return refused(`Claude Code did not stop ${listed(missed.map((t) => t.label))}.`);
-    return late.length > 0 ? refused(`Claude Code has not confirmed the stop of ${listed(late.map((t) => t.label))} yet.`) : { ok: true };
+    if (missed.length > 0) return refused(`Claude Code did not stop ${fewOf(missed)}.`);
+    return late.length > 0 ? refused(`Claude Code has not confirmed the stop of ${fewOf(late)} yet.`) : { ok: true };
   }
 
   return {

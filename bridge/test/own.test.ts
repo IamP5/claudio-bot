@@ -658,6 +658,19 @@ describe("live work", () => {
     for (const secret of ["sk-ant-api03", "hunter2pass", "topsecret9"]) expect(JSON.stringify([live, notices])).not.toContain(secret);
   });
 
+  test("a refusal to stop many commands names two, cut short, and counts the rest", async () => {
+    await start();
+    await send("Start them");
+    const q = queries[0]!;
+    const shells = ["sleep 901", "sleep 906 && echo integration-suite-charlie-finished-at-last", "sleep 902", "sleep 904"].map((c, i) => shellTask(`b${i}`, `toolu_${i}`, c));
+    q.emit(...shells.map((t) => taskStarted(t)), level(...shells), result());
+    await flush();
+    q.refuseStop = true;
+    expect(await handle({ type: "session_stop", sessionId: ASK, target: "all" })).toEqual([
+      { type: "error", message: "Claude Code did not stop sleep 901, sleep 906 && echo integration-suite-cha… and 2 more.", about: { kind: "stop", sessionId: ASK } },
+    ]);
+  });
+
   test("a Stop Claude Code refuses says so, and the task's later end is still named", async () => {
     await start();
     await send("Start it");

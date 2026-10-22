@@ -924,3 +924,9 @@ Section 2's sketch is superseded. The wire contract is `bridge/src/protocol.ts` 
 - **Rule:** the bridge never claims an outcome it has not observed. A stop notice is posted only once Claude Code (or the OS, for a process) confirms it; until then the state is "stopping". After a restart, background work is reported from what is actually alive (process check), not assumed dead.
 - **Files (expected):** `bridge/src/own.ts`, `bridge/src/session.ts`, `bridge/src/tasks.ts`, bridge tests. Bridge-only; no iOS files (G6 owns the composer). Runs before G13 on `own.ts`.
 - **Verify:** protocol lane S4 and S6 (restart variant), plus probes with SIGSTOP/SIGCONT on the run's own Claude Code.
+
+### G18. Foreground work that outlives a restart or crash (added during Step 3)
+
+- **Findings:** F-SES-176 (P1). Also from G17 verifiers (P2): commands macOS ps rewrites (non-ASCII, tabs, newlines) or with their own `<` can never be paired, so their end is never reported; header "Ran N commands" while one may still run; ~0.5 s "error" on a live background step after a crash during a turn.
+- **Rule:** the same as G17: report foreground work after a restart or crash from the process table, adopt it as stoppable, never claim stopped or failed while it runs.
+- **Files (expected):** `bridge/src/own.ts`, `bridge/src/session.ts`, `bridge/src/outlived.ts`, `bridge/src/procs.ts`. Runs after G17 merges, before or alongside G13 depending on file overlap.

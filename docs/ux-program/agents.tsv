@@ -17,5 +17,5 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-21T17:20:21Z	owner	G15	ux/sessions-g15-card-copy	merged #19 (verified aa73056; fix round 3a08224 reviewed by root)	4h	wave after G7
 2026-10-21T20:33:21Z	owner	G6	ux/sessions-g6-composer	fix round 4 pushed e176c06	5h	after G5 G10 G3
 2026-10-21T22:12:30Z	verifier	G6	ux/sessions-g6-composer	round 5 verifying e176c06 (fresh agent)	3h	independent of owner
-2026-10-22T02:00:22Z	owner	G17	ux/sessions-g17-stop-honesty	fix round 3 (wire step state + app)	5h	bridge-only; parallel with G6; before G13
-2026-10-22T03:47:46Z	verifier	G17	ux/sessions-g17-stop-honesty	round 3 FAIL 5e474a2: P1 app shows unknown as stopped; 4 P2	3h	independent of owner
+2026-10-22T02:00:22Z	owner	G17	ux/sessions-g17-stop-honesty	fix round 3 pushed 9eebb8d (touches ios: Protocol, Threads, ThreadItems, Display, ChatItems)	5h	bridge-only; parallel with G6; before G13
+2026-10-22T03:47:46Z	verifier	G17	ux/sessions-g17-stop-honesty	round 4 verifying 9eebb8d (fresh agent)	3h	independent of owner

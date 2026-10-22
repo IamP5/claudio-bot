@@ -244,6 +244,10 @@ struct SessionThreadView: View {
                 }
             }
             .frame(maxWidth: Self.column)
+            .frame(maxWidth: .infinity)
+            // With the keyboard up at an accessibility size the bar fills the room above it, so the transcript under it
+            // would show between its controls.
+            .background(compact ? Theme.background : .clear)
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: status?.word)
         }
         .sheet(isPresented: $showsWork) {

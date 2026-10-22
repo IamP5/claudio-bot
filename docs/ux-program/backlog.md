@@ -40,3 +40,4 @@
 - G11: sentAnyway map is never pruned (negligible).
 - (G17/G18) After a stop Claude Code never confirms, the bridge closes Claude Code at 15 s and says "Claude Code's background work stopped: …sleep 6002" while it is alive (seen on main); "Stop again" adds a second identical "Stopped by you" notice.
 - S4.9 (error on the wire within 2 s) flakes on main too: 2/3 fails on main 6f1f4ea, 2/10 on G17 head; machine load is high. Investigate threshold vs load before Step 4.
+- G13 gaps: "Already answered" covers permission cards only (question/plan cards drop cardId when closed); a reconnecting socket can count as having seen an alert it never received (signals not replayed — G11); an ending inside the 5 s wait is lost if the bridge crashes; S3.6 remote banner cannot be shown by simctl (coverage gap).

@@ -638,13 +638,16 @@ const fanOut = (id: "S1" | "S1b", background: boolean): Scenario => {
   };
 };
 
-/** The session's cards, by when each opened, grouped into bursts that opened within 2 s of the burst's first card. */
+/**
+ * The session's cards, by when each opened, grouped as the bridge groups them: a card within 2 s of the one before
+ * joins its burst, while the burst is under 6 s old.
+ */
 const cardBursts = (ev: Ev, name: string) => {
   const opened = [...new Map(snaps(ev, name).flatMap((s) => s.items).filter((i) => i.kind === "permission" && i.card).map((i) => [i.card!.id, ev.atOf(i.at)])).values()].sort((a, b) => a - b);
   const bursts: number[][] = [];
   for (const t of opened) {
     const b = bursts.at(-1);
-    if (b && t - b[0]! <= 2_000) b.push(t);
+    if (b && t - b.at(-1)! <= 2_000 && t - b[0]! <= 6_000) b.push(t);
     else bursts.push([t]);
   }
   return bursts;
@@ -656,7 +659,7 @@ const coalescedCards = (id: string, name: string): RubricItem => ({
   tell: "how-many",
   lane: "protocol",
   text: "With the phone away, approvals that open together arrive as one push that counts them, not one buzz each.",
-  pass: "With --away, every burst of cards that opened within 2 s gets exactly one card push, which counts the burst's cards; it names no command.",
+  pass: "With --away, each burst of cards (each within 2 s of the one before, the burst under 6 s) gets exactly one card push, in order, counting the burst's cards; no push names a command.",
   fail: "A burst sends a push per card, a count that does not match, or no push at all.",
   check: (ev) => {
     const away = awayOnly(ev);
@@ -665,14 +668,10 @@ const coalescedCards = (id: string, name: string): RubricItem => ({
     const pushes = ev.pushes().filter((p) => cardCount(p) !== null && (p.click ?? "").includes(sid));
     const bursts = cardBursts(ev, name);
     if (!bursts.length) return no("no cards opened");
-    const bad: string[] = [];
-    for (const b of bursts) {
-      const mine = pushes.filter((p) => ev.atOf(p.at) >= b[0]! - 500 && ev.atOf(p.at) <= b[0]! + 15_000);
-      if (mine.length !== 1 || cardCount(mine[0]!) !== b.length) bad.push(`${b.length} cards at +${Math.round(b[0]! / 1000)} s: ${mine.map((p) => p.body).join(" | ") || "no push"}`);
-    }
-    const leaky = pushes.filter((p) => /perl|sleep/.test(p.body));
-    if (leaky.length) bad.push(`content in ${leaky[0]!.body}`);
-    return bad.length ? no(bad.join("; ")) : ok(`${bursts.map((b) => b.length).join(", ")} card(s): ${pushes.map((p) => p.body).join(" | ")}`);
+    const sizes = bursts.map((b) => b.length).join(", ");
+    const counts = pushes.map((p) => cardCount(p)).join(", ");
+    if (pushes.some((p) => /perl|sleep/.test(p.body))) return no(`content in a push: ${pushes.map((p) => p.body).join(" | ")}`);
+    return sizes === counts ? ok(`bursts of ${sizes}: ${pushes.map((p) => p.body).join(" | ")}`) : no(`bursts of ${sizes}, pushes counting ${counts || "none"}: ${pushes.map((p) => p.body).join(" | ")}`);
   },
 });
 

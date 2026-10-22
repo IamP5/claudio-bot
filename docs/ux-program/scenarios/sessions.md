@@ -48,7 +48,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S1.8 | how-many | simulator (running) | Mid-run, the thread shows three labeled subagent rows, each visibly running, and a Stop button. | All three rows, a running indicator on each, Stop visible. | Rows missing or merged, no running indicator, or no Stop. |
 | S1.9 | state | simulator (done) | After the turn, the thread shows all three done and the session at rest. | Three done rows, no spinner, composer ready. | A spinner or running state remains. |
 | S1.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
-| S1.11 | how-many | protocol | With the phone away, approvals that open together arrive as one push that counts them, not one buzz each. | With --away, every burst of cards that opened within 2 s gets exactly one card push, which counts the burst's cards; it names no command. | A burst sends a push per card, a count that does not match, or no push at all. |
+| S1.11 | how-many | protocol | With the phone away, approvals that open together arrive as one push that counts them, not one buzz each. | With --away, each burst of cards (each within 2 s of the one before, the burst under 6 s) gets exactly one card push, in order, counting the burst's cards; no push names a command. | A burst sends a push per card, a count that does not match, or no push at all. |
 
 ## S1b Three parallel subagents in the background (Claude Code's default)
 
@@ -94,7 +94,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S1b.8 | how-many | simulator (running) | Mid-run, the thread shows three labeled subagent rows, each visibly running, and a Stop button. | All three rows, a running indicator on each, Stop visible. | Rows missing or merged, no running indicator, or no Stop. |
 | S1b.9 | state | simulator (done) | After the turn, the thread shows all three done and the session at rest. | Three done rows, no spinner, composer ready. | A spinner or running state remains. |
 | S1b.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
-| S1b.11 | how-many | protocol | With the phone away, approvals that open together arrive as one push that counts them, not one buzz each. | With --away, every burst of cards that opened within 2 s gets exactly one card push, which counts the burst's cards; it names no command. | A burst sends a push per card, a count that does not match, or no push at all. |
+| S1b.11 | how-many | protocol | With the phone away, approvals that open together arrive as one push that counts them, not one buzz each. | With --away, each burst of cards (each within 2 s of the one before, the burst under 6 s) gets exactly one card push, in order, counting the burst's cards; no push names a command. | A burst sends a push per card, a count that does not match, or no push at all. |
 
 ## S2 A long background Bash command
 

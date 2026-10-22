@@ -48,6 +48,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S1.8 | how-many | simulator (running) | Mid-run, the thread shows three labeled subagent rows, each visibly running, and a Stop button. | All three rows, a running indicator on each, Stop visible. | Rows missing or merged, no running indicator, or no Stop. |
 | S1.9 | state | simulator (done) | After the turn, the thread shows all three done and the session at rest. | Three done rows, no spinner, composer ready. | A spinner or running state remains. |
 | S1.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S1.11 | how-many | protocol | With the phone away, approvals that open together arrive as one push that counts them, not one buzz each. | With --away, every burst of cards that opened within 2 s gets exactly one card push, which counts the burst's cards; it names no command. | A burst sends a push per card, a count that does not match, or no push at all. |
 
 ## S1b Three parallel subagents in the background (Claude Code's default)
 
@@ -93,6 +94,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S1b.8 | how-many | simulator (running) | Mid-run, the thread shows three labeled subagent rows, each visibly running, and a Stop button. | All three rows, a running indicator on each, Stop visible. | Rows missing or merged, no running indicator, or no Stop. |
 | S1b.9 | state | simulator (done) | After the turn, the thread shows all three done and the session at rest. | Three done rows, no spinner, composer ready. | A spinner or running state remains. |
 | S1b.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S1b.11 | how-many | protocol | With the phone away, approvals that open together arrive as one push that counts them, not one buzz each. | With --away, every burst of cards that opened within 2 s gets exactly one card push, which counts the burst's cards; it names no command. | A burst sends a push per card, a count that does not match, or no push at all. |
 
 ## S2 A long background Bash command
 
@@ -179,7 +181,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Open `s3`'s thread: in the app by claudiobot://session/<id> (simulator lane), or watch it again if the phone had left it (protocol lane).
 - Wait 4 s.
 - Screenshot `thread-before` (simulator lane).
-- Send the app to the background (simulator: Settings over it; protocol: the socket goes half-open); mark `backgrounded`.
+- Send the app to the background (simulator: Settings over it; protocol: as the app does, the phone says nobody is looking and leaves its threads, then its socket goes half-open); mark `backgrounded`.
 - Wait up to 150 s for bg3.txt to appear; mark `bg-done`.
 - Wait 20 s.
 - Mark `list-after`.
@@ -203,8 +205,8 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 | id | tells | lane | the user can tell | pass | fail |
 | --- | --- | --- | --- | --- | --- |
-| S3.1 | state | protocol | A push tells the user the background work finished. | pushes.jsonl has a push sent after bg-done. | No push after the work finished. |
-| S3.2 | what | protocol | Tapping that push opens the session. | The push's link is claudiobot://session/<the session id>. | No push, or a link elsewhere. |
+| S3.1 | state | protocol | A push tells the user the background work finished, and only once it did. | After bg-done, a push says a session finished, without the command or any other content; no push said finished while the command still ran. | No finished push after the work finished, one before it, or one that carries content. |
+| S3.2 | what | protocol | Tapping that push opens the session. | The finished push's link is claudiobot://session/<the session id>. | No finished push, or a link elsewhere. |
 | S3.3 | state | protocol | Once the work finished while the user was away from the thread, the list marks the session as having news. | With --sim, at mark list-after (the app in the background), the row is unread. On the protocol lane, where the suspended phone hears nothing, the first list it gets on its return (mark foregrounded-list) has the row unread. | The row is not unread, so the list gives no sign that something finished. |
 | S3.4 | state | protocol | When the background command finishes, the thread shows that it finished. | Within 60 s of mark bg-done, a new item or a step state change appears in the thread. | Nothing in the thread changes when the work finishes. |
 | S3.5 | state | simulator (thread-before) | Before leaving, the thread shows the command running in the background. | Running indicator with what runs. | Looks finished. |
@@ -212,6 +214,45 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S3.7 | state | simulator (thread-after) | Back in the app, the thread shows the result, with no stale running indicator. | Done state and the reply. | Still running, or stale. |
 | S3.8 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
 | S3.9 | state | protocol | Once its work is over (the background command and the turn it woke), the session comes to rest. | Within 60 s of mark bg-done, a state reads not working: the row not busy and controls.working false. | The session still reads working 60 s after its work ended, so the busy row and Stop never go away. |
+
+## S3b Background work finishes while the user is elsewhere in the app
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. The user starts a background command from the phone, then goes back to the Sessions list with the app still open.
+2. The command finishes on the Mac while the list is on screen.
+3. A notification on the phone says the session finished; nothing is pushed from outside, since the app is open.
+
+**Setup.**
+
+- New session `s3b` in demo (haiku, mode default): "Use the Bash tool with run_in_background set to true to run exactly this command: sleep 20 && echo bg-done > bg3b.txt Do not wait for it, do not check on it, do not run anything else. Reply with one line: started."
+- Wait up to 90 s for s3b's turn to start; mark `s3b-started`.
+- Wait up to 180 s for the turn that starts the command to end; mark `s3b-ended`.
+- Leave `s3b`'s thread for the list (unwatch_session; the bridge counts it as a visit, and a watched thread is never unread).
+- Open `s3b`'s thread: in the app by claudiobot://session/<id> (simulator lane), or watch it again if the phone had left it (protocol lane).
+- Wait 3 s.
+- The app goes back to the Sessions list (simulator lane: relaunched on the list).
+- Wait up to 90 s for bg3b.txt to appear; mark `bg-done`.
+- Wait up to 60 s for a session_alert that s3b finished; mark `alerted`.
+- Screenshot `alert` (simulator lane).
+- Wait 20 s.
+- Mark `window-over`.
+
+**Preconditions** (any failure fails the scenario):
+
+- with --sim, the app on the leased simulator paired with the run's bridge
+- session s3b was created
+- bg3b.txt exists in the seed project
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S3b.1 | state | protocol | While the app is open on another screen, it is told the session finished, so it can show a notification. | After bg-done, the phone gets a session_alert for s3b with reason finished and the session's title. | No session_alert, so an open app on another screen gives no sign that the work finished. |
+| S3b.2 | state | protocol | While the app is open, nothing is pushed from outside on top of it. | pushes.jsonl has no push about s3b, through 20 s after the alert. | A remote push also went out, so the user gets the news twice. |
+| S3b.3 | state | simulator (alert) | With the Sessions list on screen, a notification says the session finished. | A banner that names the session and says it finished. | No banner. |
 
 ## S4 A subagent fails, and the user stops one from the phone
 
@@ -260,6 +301,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S4.8 | stop | simulator (stopped) | After Stop, the thread reads stopped, no spinner. | Stopped state. | Spinner left. |
 | S4.9 | state | protocol | The failed subagent reads failed as soon as Claude Code records the failure. | Its step first reads error within 2 s of the failed tool_result line in the transcript. | The step reads error later than 2 s after the transcript has the failure, or never. |
 | S4.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S4.11 | state | protocol | After the user stops the session, no push claims it finished or failed. | With --away, no push after mark stopped says the session finished or stopped with an error. | A finished or failed push follows the user's own Stop. |
 
 ## S4b Stop one background task while nothing else runs
 
@@ -702,4 +744,72 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S8fg.1 | what | protocol | When Claude Code stops the subagent's background command, the thread names the command and the subagent that started it. | A notice names the command ("sleep 60" or "nested") and its owner ("starter"). | No notice names both, so the command vanished without a word. Assistant prose does not count. |
 | S8fg.2 | stop | protocol | Once the turn's final reply is written, nothing runs, so the session rests at once and Stop goes away. | A state reads not working within 5 s of the main transcript's final reply. | The session reads working, with Stop, for more than 5 s after the reply while nothing runs. |
 | S8fg.3 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+
+## S9 A card waits while the user is away: push, failing push server, reminder, expiry
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. The user is away from the phone when a session asks for approval; the push server is down at that moment.
+2. The push server comes back. Half the card's time later the user is reminded.
+3. Nobody answers, so the card expires, and the thread says what was refused.
+
+**Setup.**
+
+- The push sink answers 500 from now on, as a broken push server would.
+- New session `s9` in demo (haiku, mode default): "Use the Bash tool to run exactly this command: echo waited > waited.txt Then reply with one line: done."
+- Wait up to 120 s for s9's permission card to open; mark `card-open`.
+- Wait up to 40 s for the push state to read failing; mark `failing`.
+- The push sink answers 200 again.
+- Wait up to 60 s for a reminder push; mark `reminded`.
+- Wait up to 15 s for the push state to read on again; mark `recovered`.
+- Wait up to 60 s for the card to expire; mark `expired`.
+- Wait 3 s.
+
+**Preconditions** (any failure fails the scenario):
+
+- session s9 was created
+- a permission card opened
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S9.1 | state | protocol | When the push server fails, the phone is told that alerts are failing, and why. | After the card push was tried three times and answered 500 each time, a push_state frame reads failing with "The push server answered 500". | No failing state, the wrong cause, or fewer than three tries. |
+| S9.2 | what | protocol | The card's push says what waits, at high priority, and opens the session at that card. | The card push reads "A Claude Code session needs your approval", priority high, link claudiobot://session/<id>?card=<the card id>. | Another text, priority or link. |
+| S9.3 | state | protocol | A card nobody answers reminds the user once, at half its time. | One reminder push, 30 s (half the 60 s card time) after the card opened, give or take 3 s, linking to the card. | No reminder, more than one, or one at another time. |
+| S9.4 | state | protocol | Once a push gets through again, the phone hears that alerts work. | After the failing state and the reminder that got through, a push_state frame reads on. | The state stays failing after a push went out. |
+| S9.5 | state | protocol | When the card expires, the thread says what was refused, and that the user did not say no. | The card reads expired and a notice (reason approval) names the command and says "You did not say no." | No notice, or one that does not say what was refused. |
+| S9.6 | what | protocol | No push carries the command or anything else from the session. | No push title, body or link contains the command. | A push carries content. |
+
+## S9b Push is off: the phone can tell, and the app still hears what finished
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. The Mac has no push URL set, so nothing can reach the phone when the app is closed.
+2. The user can tell this from the app, and while the app is open it still hears that a session finished.
+
+**Setup.**
+
+- New session `s9b` in demo (haiku, mode default): "Use the Bash tool with run_in_background set to true to run exactly this command: sleep 10 && echo bg-done > off.txt Do not wait for it, do not check on it, do not run anything else. Reply with one line: started."
+- Wait up to 90 s for s9b's turn to start; mark `s9b-started`.
+- Wait up to 180 s for the turn that starts the command to end; mark `s9b-ended`.
+- Leave `s9b`'s thread for the list (unwatch_session; the bridge counts it as a visit, and a watched thread is never unread).
+- Wait up to 90 s for off.txt to appear; mark `bg-done`.
+- Wait up to 60 s for a session_alert that s9b finished; mark `alerted`.
+
+**Preconditions** (any failure fails the scenario):
+
+- session s9b was created
+- off.txt exists in the seed project
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S9b.1 | state | protocol | The app can tell that alerts when away are off. | hello carries push state off. | No push state, or it reads on. |
+| S9b.2 | state | protocol | With push off, the open app still hears that the session finished. | A session_alert for s9b with reason finished arrives after bg-done, and the sink got nothing. | No alert, or something was pushed. |
 

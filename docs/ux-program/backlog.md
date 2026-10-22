@@ -5,3 +5,38 @@
 - Runner rubric (S4.9): the 2 s phone-latency limit flakes about half the time with no bridge change; decide whether to judge a median of several samples rather than one.
 - Runner coverage (from G2 sim verify): no scenario photographs the Sessions row while work runs, and S1b's mid-run shot shows the bottom of the thread (permission cards) so the work-run header with three steps is off screen. Add a list screenshot mid-run and scroll the thread to the work run before S1b.8.
 - Composer at accessibility sizes (from G2 sim verify): at AX5 the composer drops the "Ask before edits" chip, clips "Haiku" and truncates the placeholder to "Queue a me…" (G6 territory).
+- Runner rubric (S2.12, S8.10): noPhantomWork measures only to the next user/assistant transcript line; a real wake turn whose first line lands more than 5 s after its init could read as phantom work. Watch for flakes.
+- Chat (area 2, from G16): ChatView and ExchangeView use the same bottom-pinned LazyVStack; a very tall bot message at AX5 may hang like F-SES-170. Check in the Chat audit.
+- Swipe check (from G16 verify): if the app crashes during a swipe, no process is found and CPU averages 0, so a short swipe time passes. Fail when the app process is gone.
+- Runner (from G8 verify): the S6.6 after-resume-2 screenshot is taken ~0.5 s after the runner's own phone resumes and can catch the app mid-backoff; wait for the app's own re-watch (the S6b tap shows it) before the shot.
+- G8 follow-ups (from fix-round verify): saved heads restart with size 0 after a bridge start, costing one full transcript read per active session after an upgrade; a loss from an overtaken snapshot during a repair does not reset the timed retry; card vs transcript exact-millisecond ties can still differ between resumed and fresh views.
+- Settings (area 5, from G15): the pairing code countdown in SettingsView.swift uses TimelineView(.deadline), which G15 found never fires while the view sits still; check in the Settings audit.
+- Protocol (from G15): bot trust cards are detected by the tool name string "Claude Code settings"; add a card kind field on the wire.
+- Cards (from G15): a decision lost in a reconnect and answered later on another device is still announced as this phone's answer; the store cannot tell landed from lost. Needs a bridge ack per decision (G11 territory).
+- Runner launch flake: "the run's demo project is not listed" right after launch, seen by G8, G12 and G16 verifiers; passes on retry. The bridge can list projects before it has scanned the seed roots; launch should wait for the demo project.
+- Runner (S7.6 with the list probe): the 1/s XCUITest probe adds simulator load; S7.6 worst lag rose to 1.6 s once at AX5 (limit 1.5 s) vs 0.3-0.6 s without the probe. Run the probe only during the phase S7.7 judges, or measure S7.6 in a probe-free run.
+- Runner (S7.9): cannot catch a missing fold exemption alone when ranking already lifts working rows; add a variant with more working rows than fit above the fold.
+- swipe-check (from G5 verify): every CPU sample is empty because XCUITest ends the app when the test finishes, so the CPU-after half of the gate measures nothing; sample during the swipe or keep the app alive.
+- Bridge posts "Stopped by you: the turn …" before the turn has actually ended when Claude Code is paused (found by G6 owner; honesty, Sessions).
+- With no Claude Code process running, a model change stores any model id unchecked and the next send fails on it; the app's menu can't send a bad id (found by G6 owner).
+- Offline Send is spoken as "Sent." though the frame only went to the outbox (G6 verifier; G11 territory).
+- Two stops of the same task yield the notice "Stopped by you: command "sleep 470" and command "sleep 470"." — dedupe targets in the bridge's stop notice (G6 verifier round 2).
+- A background-task stop landing during a turn makes the status read "Stopped by you" though that turn was answered (G6 verifier round 2; status line / bridge).
+- Swipe-check default screen list did not include composer demos (being fixed in G6 round 2; confirm).
+- G17 known gaps: Claude Code's own "Interrupted" transcript line shows beside the bridge stop notice; a wake turn that ignores its interrupt is never escalated; a survivor command's step reads "The bridge restarted" once it ends after a partial restart stop; a foreground command orphaned when Claude Code is killed is not tracked; row finished text can be a foreground task summary.
+- G11: the bridge's own transcript notice for a refused stop still names every command in full; only the composer error is shortened (G6 r3).
+- (for G17) A turn-only stop on a hung Claude Code ended with the bridge killing the process; notices said "Stopped by you: command sleep 2003…" and "Claude Code's background work stopped" while the six sleeps kept running as orphans (ppid 1); the mode refusal showed raw "Query closed before response received" (G6 verifier r4, on main-based #21 bridge).
+- Merge order note: #21 and #22 conflict in bridge/src/own.ts (refusal returns ~590 and fewOf near 103-115); second to merge resolves and re-tests.
+- ClaudioBot-UX-1 has AutomaticMinimizationEnabled=NO set by a verifier (software keyboard had stopped showing).
+- Composer at xxxLarge/AX5 worst combo with keyboard up: keyboard can only be dismissed by a drag from a 3-7 pt transcript strip (better than main; consider a visible Dismiss keyboard control) (G6 verifier r5).
+- "Stop the turn and 2 commands" counts the turn's own foreground command while the dialog names only the background one (G6 verifier r5; check whether pre-existing).
+- tasks.ts cuts task labels at 80 characters, which can split a «redacted» mask in the Running panel (G6 verifier r5).
+- #21 and #22 also conflict in ios/scripts/swipe-check.sh (both add screens; keep both).
+- Harness: ClaudioBot-UX-1 shows an unanswered notification-permission alert over thread screenshots; runner should pre-answer it at install (G17 verifier r4).
+- Unsure work card: header pairs "Ran" with "may still run"; a stale "Stop ends it." notice stays after the bridge loses track; a card with only unsure steps can fold away its count (G17 verifier r4, P3).
+- S4.9 latency missed 2 s in 2/3 runs on the #21+#22 combination under load average 40-88 (watch after both merge).
+- Harness: dismissing the iOS notification-permission alert needs UI automation (simctl privacy cannot grant notifications); verifiers may Allow it once per pool device via XCUITest (decision recorded).
+- G11: "Sent before it could be withdrawn" note never shows on the real bridge: settleWithdrawals marks sentAnyway[clientId] but the bridge then re-keys the item to its transcript id, so taken(id) misses; a single replacement frame would read as a drop. Test must send the re-key frame (G6 verifier r6, shots/sa.png).
+- G11: sentAnyway map is never pruned (negligible).
+- (G17/G18) After a stop Claude Code never confirms, the bridge closes Claude Code at 15 s and says "Claude Code's background work stopped: …sleep 6002" while it is alive (seen on main); "Stop again" adds a second identical "Stopped by you" notice.
+- S4.9 (error on the wire within 2 s) flakes on main too: 2/3 fails on main 6f1f4ea, 2/10 on G17 head; machine load is high. Investigate threshold vs load before Step 4.

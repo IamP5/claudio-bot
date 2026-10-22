@@ -158,6 +158,17 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         #expect(store.sessionErrors[sid] == nil, "Claude Code took the stop late: once nothing runs, the refusal is no longer true")
     }
 
+    @Test func stopAgainRetriesOnlyTheRunThatRefusedIt() {
+        var refused = StopRequest(target: .all, turnStartedAt: nil, at: at)
+        refused.state = .refused("Claude Code did not stop sleep 75.")
+        let background = controls(turn: false, tasks: [sleep75])
+        #expect(state(background, stop: refused, now: at + 1).slot.label == "Stop again: 1 command")
+        let newTurn = controls(tasks: [sleep75])
+        let slot = state(newTurn, stop: refused, now: at + 1).slot
+        #expect(slot == .stop(StopScope(newTurn), .ready), "a turn sent after the refusal was never asked to stop")
+        #expect(slot.label == "Stop the turn and 1 command" && slot.hint == "Asks before it stops background work.")
+    }
+
     @Test func theWorkSheetsTaskStopReadsTheRefusalToo() {
         let store = store(controls(turn: false, tasks: [sleep75]))
         store.sessionRequestSent(.sessionStop(sessionId: sid, target: .task(sleep75.id), turnStartedAt: nil), at: at)

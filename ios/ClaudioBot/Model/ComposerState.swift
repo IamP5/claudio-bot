@@ -58,6 +58,12 @@ struct StopRequest: Equatable, Sendable {
     /// How long a stop may stay unconfirmed before the control offers to stop again.
     static let patience: TimeInterval = 10
 
+    /// The run on screen is still the one this stop was aimed at: no newer turn has started since. Stop again may only
+    /// retry it while that holds; a newer turn goes through Stop and its confirmation like any other.
+    func covers(_ controls: SessionControls) -> Bool {
+        controls.turn == nil || controls.turn?.startedAt == turnStartedAt
+    }
+
     /// The work this stop was aimed at no longer runs. A wake turn that starts after it is new work, not this stop's.
     func landed(in controls: SessionControls) -> Bool {
         let turnEnded = turnStartedAt == nil || controls.turn?.startedAt != turnStartedAt
@@ -197,7 +203,7 @@ struct ComposerState: Equatable, Sendable {
             send = .empty
         }
         if let controls, controls.working, canStop {
-            self.stop = (StopScope(controls), StopPhase(stop, at: now))
+            self.stop = (StopScope(controls), StopPhase(stop.flatMap { $0.covers(controls) ? $0 : nil }, at: now))
         } else {
             self.stop = nil
         }

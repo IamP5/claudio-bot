@@ -1158,10 +1158,12 @@ const S6: Scenario = {
       send: { name: "s6", text: "Run exactly this Bash command in the foreground (not in the background): perl -e 'sleep 90'\nThen reply with one line: done." },
     },
     { do: "until", mark: "second-running", what: "the perl sleep 90 sent while offline to run on the Mac", timeoutS: 150, test: (ev) => ev.procs("sleep 90").length > 0 },
-    { do: "sleep", s: 3 },
+    { do: "until", mark: "second-task", what: "Claude Code to make the perl sleep 90 a task", timeoutS: 30, optional: true, test: (ev) => (last(ev, "s6")?.controls?.tasks ?? []).length > 0 },
+    { do: "sleep", s: 2 },
     { do: "kill-claude", name: "s6", mark: "killed" },
     { do: "until", mark: "s6-rest-after-kill", what: "the session to rest after the crash", timeoutS: 30, optional: true, test: (ev) => !isWorking(last(ev, "s6")!) },
     { do: "sleep", s: 5 },
+    { do: "ps", pattern: "sleep 90", as: "after-kill" },
     { do: "mark", mark: "after-kill" },
     { do: "screenshot", shot: "after-kill" },
     { do: "restart-bridge", mark: "restarted" },
@@ -1245,18 +1247,26 @@ const S6: Scenario = {
       id: "S6.7",
       tell: "state",
       lane: "protocol",
-      text: "When Claude Code dies mid-command, nothing keeps reading running, and the row says the run failed and why.",
-      pass: "At mark after-kill (5 s after the session rests), no step reads running, the row reads failed, and row.outcome carries the cause.",
-      fail: "A step still reads running, the row is not failed, or the row gives no cause.",
+      text: "When Claude Code dies mid-command, the row says the run failed and why, and a step reads running only while its command still runs on the Mac, as a task Stop can end.",
+      pass: "At mark after-kill, row.outcome is failed with its cause; every Bash step that reads running names the perl sleep 90, which still runs (sample after-kill), and controls.tasks offers it; no other step reads running; the row reads failed, or working only while that task runs.",
+      fail: "A step reads running whose command is gone or that no task offers, the command runs but its step reads failed or stopped, or the row gives no failure and cause.",
       check: (ev) => {
         const at = mark(ev, "after-kill");
         if (at === undefined) return needMarks(ev, "after-kill")!;
         const s = last(ev, "s6", at);
         if (!s) return no("no state seen");
-        const running = stepsOf(s).filter((x) => x.state === "running").map((x) => x.label);
+        const alive = (ev.samples["after-kill"] ?? []).length > 0;
+        const tasks = (s.controls?.tasks ?? []) as { stepId?: string | null }[];
+        const running = stepsOf(s).filter((x) => x.state === "running");
+        const command = stepsOf(s).find((x) => x.tool === "Bash" && String(x.detail ?? "").includes("sleep 90"));
         const outcome = s.row?.outcome as { kind?: string; text?: string } | null | undefined;
-        const bad = [running.length ? `still running: ${running.join("; ")}` : "", s.row?.status !== "failed" ? `row ${rowStatus(s)}` : "", outcome?.text ? "" : "the row carries no outcome cause"].filter(Boolean);
-        return bad.length ? no(bad.join("; ")) : ok(`no running step; row failed: ${outcome!.text}`);
+        const bad = [
+          ...running.filter((x) => !alive || !String(x.detail ?? "").includes("sleep 90") || !tasks.some((t) => t.stepId === x.id)).map((x) => `reads running without a live task: ${x.label}`),
+          alive && command && command.state !== "running" ? `the perl sleep 90 still runs but its step reads ${command.state} ${command.cause ?? ""}` : "",
+          outcome?.kind === "failed" && outcome.text ? "" : `the row's outcome is ${outcome?.kind ?? "none"} ${outcome?.text ?? ""}`,
+          s.row?.status === "failed" || (s.row?.status === "working" && alive && tasks.length > 0) ? "" : `row ${rowStatus(s)}`,
+        ].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok(`row ${rowStatus(s)}, failed: ${outcome!.text}; perl sleep 90 ${alive ? `runs and reads ${command?.state}` : "gone, no step running"}`);
       },
     },
     {
@@ -1571,6 +1581,205 @@ const S6d: Scenario = {
           ];
         });
         return bad.length ? no(bad.join("; ")) : ok("each said ended once, after its process was gone; steps ended");
+      },
+    },
+  ],
+};
+
+const FG = (bg: string, fg: string) =>
+  `First use the Bash tool with run_in_background set to true to run exactly: ${bg}\nThen use the Bash tool in the foreground (not in the background) to run exactly: ${fg}\nThen reply with one line: done.`;
+/** The session's Bash step whose command holds `cmd`. */
+const commandStep = (s: Snap | undefined, cmd: string) => (s ? stepsOf(s).find((x) => x.tool === "Bash" && String(x.detail ?? "").includes(cmd)) : undefined);
+const hasForegroundTask = (name: string) => (ev: Ev) => ((last(ev, name)?.controls?.tasks ?? []) as { background?: boolean }[]).some((t) => t.background === false);
+/**
+ * Between two marks, each snapshot in which a command's step read anything but running while the command still ran: the
+ * process samples bound when it ran, so a step may end only once the command is gone.
+ */
+const falseEnds = (ev: Ev, name: string, cmds: string[], from: number, to: number) =>
+  during(ev, name, from, to).flatMap((s) => cmds.flatMap((cmd) => {
+    const st = commandStep(s, cmd);
+    return st && st.state !== "running" ? [`${Math.round(s.at / 1000)} s ${cmd}: ${st.state} ${st.cause ?? ""}`] : [];
+  }));
+
+const S6e: Scenario = {
+  id: "S6e",
+  area: "sessions",
+  title: "Foreground commands that outlive a bridge restart and a Claude Code crash",
+  needsSimulator: false,
+  journey: [
+    "A turn runs a long command in the background, then one in the foreground. The Mac's bridge restarts mid-turn: Claude Code goes with it, but both commands keep running.",
+    "In a second session the same, but Claude Code itself crashes mid-turn.",
+    "Each time the turn is over, but the thread must say the commands still run, keep their steps running (never stopped or failed, not even for a moment), and offer Stop, which must end them on the Mac.",
+  ],
+  setup: [
+    { do: "create", name: "e1", prompt: FG("sleep 3653", "perl -e 'sleep 3654'") },
+    started("e1"),
+    { do: "until", mark: "e1-fg", what: "e1's foreground command to be a task", timeoutS: 150, test: hasForegroundTask("e1") },
+    { do: "sleep", s: 3 },
+    { do: "restart-bridge", mark: "restarted" },
+    { do: "sleep", s: 10 },
+    { do: "ps", pattern: "sleep 3654", as: "e1-after-restart" },
+    { do: "mark", mark: "e1-after-restart" },
+    { do: "create", name: "e2", prompt: FG("sleep 3655", "perl -e 'sleep 3656'") },
+    started("e2"),
+    { do: "until", mark: "e2-fg", what: "e2's foreground command to be a task", timeoutS: 150, test: hasForegroundTask("e2") },
+    { do: "sleep", s: 3 },
+    { do: "kill-claude", name: "e2", mark: "killed" },
+    { do: "sleep", s: 8 },
+    { do: "ps", pattern: "sleep 3656", as: "e2-after-crash" },
+    { do: "mark", mark: "e2-after-crash" },
+    { do: "stop", name: "e1", task: "sleep 3654", mark: "e1-stop" },
+    { do: "stop", name: "e2", mark: "e2-stop" },
+    { do: "sleep", s: 6 },
+    { do: "ps", pattern: "sleep 365", as: "after-stop" },
+    { do: "stop", name: "e1", mark: "e1-stop-all" },
+    { do: "sleep", s: 4 },
+  ],
+  pre: [
+    created("e1"),
+    created("e2"),
+    { what: "e1's perl sleep outlived the restart (sample e1-after-restart)", check: (ev) => (ev.samples["e1-after-restart"]?.length ? ok(ev.samples["e1-after-restart"]!.join(" | ").slice(0, 120)) : no("no sleep 3654 after the restart")) },
+    { what: "e2's perl sleep outlived the crash (sample e2-after-crash)", check: (ev) => (ev.samples["e2-after-crash"]?.length ? ok(ev.samples["e2-after-crash"]!.join(" | ").slice(0, 120)) : no("no sleep 3656 after the crash")) },
+  ],
+  rubric: [
+    {
+      id: "S6e.1",
+      tell: "state",
+      lane: "protocol",
+      text: "Across the restart neither command's step ever reads stopped or failed while it runs, and the thread says the commands still run and Stop ends them.",
+      pass: 'In every e1 snapshot from the restart to the Stop, the Bash steps of sleep 3653 and sleep 3654 read running; between the command becoming a task and the Stop, a notice says they still run on this Mac with "Stop ends" and none says either stopped.',
+      fail: "A snapshot shows either step stopped, failed, unsure or ended while it ran, no notice says they still run, or one says they stopped.",
+      check: (ev) => {
+        const sp = span(ev, "restarted", "e1-stop");
+        const from = mark(ev, "e1-fg");
+        if (!sp || from === undefined) return needMarks(ev, "e1-fg", "restarted", "e1-stop")!;
+        const lies = falseEnds(ev, "e1", ["sleep 3653", "sleep 3654"], ...sp);
+        const said = notices(ev, "e1").filter((i) => ev.atOf(i.at) >= from && ev.atOf(i.at) <= sp[1]).map((i) => i.text ?? "");
+        const runs = said.find((t) => /sleep 3654.*still runs? on this Mac\. Stop ends/.test(t));
+        const stopped = said.find((t) => /work stopped|stopped: .*sleep 365/.test(t));
+        if (lies.length) return no(lies.slice(0, 3).join("; "));
+        if (stopped) return no(`said: ${stopped.slice(0, 120)}`);
+        return runs ? ok(runs.slice(0, 140)) : no(`no notice says the commands still run: ${said.join(" | ").slice(0, 160) || "none"}`);
+      },
+    },
+    {
+      id: "S6e.2",
+      tell: "stop",
+      lane: "protocol",
+      text: "After the restart the session reads working with the foreground command as a task, so Stop is offered.",
+      pass: "At mark e1-after-restart, controls.working is true and controls.tasks has one task whose step is the perl sleep 3654's.",
+      fail: "The session rests, or no task offers the foreground command.",
+      check: (ev) => {
+        const at = mark(ev, "e1-after-restart");
+        if (at === undefined) return needMarks(ev, "e1-after-restart")!;
+        const s = last(ev, "e1", at);
+        const step = commandStep(s, "sleep 3654");
+        const task = ((s?.controls?.tasks ?? []) as { stepId?: string | null; label?: string }[]).find((t) => step && t.stepId === step.id);
+        return s?.controls?.working === true && task ? ok(`working; task ${String(task.label).slice(0, 60)}`) : no(`working ${s?.controls?.working}; step ${step?.state}; tasks ${(s?.controls?.tasks ?? []).length}`);
+      },
+    },
+    {
+      id: "S6e.3",
+      tell: "state",
+      lane: "protocol",
+      text: "After Claude Code crashes, the run reads failed, yet neither command's step ever reads failed or stopped while it runs, and the thread says they still run.",
+      pass: 'Every e2 snapshot from the kill to the Stop has the Bash steps of sleep 3655 and sleep 3656 running; a notice says they still run on this Mac with "Stop ends"; at e2-after-crash row.outcome is failed with a cause and controls.tasks offers the perl sleep 3656.',
+      fail: "A snapshot shows either step error or stopped while it ran, no notice says they run, the outcome is not failed, or no task offers the command.",
+      check: (ev) => {
+        const sp = span(ev, "killed", "e2-stop");
+        const at = mark(ev, "e2-after-crash");
+        if (!sp || at === undefined) return needMarks(ev, "killed", "e2-stop", "e2-after-crash")!;
+        const lies = falseEnds(ev, "e2", ["sleep 3655", "sleep 3656"], ...sp);
+        const runs = notices(ev, "e2").find((i) => ev.atOf(i.at) >= sp[0] && /sleep 3656.*still runs? on this Mac\. Stop ends/.test(i.text ?? ""));
+        const s = last(ev, "e2", at);
+        const outcome = s?.row?.outcome as { kind?: string; text?: string } | null | undefined;
+        const step = commandStep(s, "sleep 3656");
+        const task = ((s?.controls?.tasks ?? []) as { stepId?: string | null }[]).some((t) => step && t.stepId === step.id);
+        const bad = [...lies.slice(0, 3), runs ? "" : "no notice says the commands still run", outcome?.kind === "failed" && outcome.text ? "" : `outcome ${outcome?.kind ?? "none"}`, task ? "" : "no task offers the perl sleep 3656"].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok(`${(runs!.text ?? "").slice(0, 100)}; failed: ${outcome!.text}`);
+      },
+    },
+    {
+      id: "S6e.4",
+      tell: "stop",
+      lane: "protocol",
+      text: "Stop ends the foreground commands on the Mac, and the thread says the user stopped them.",
+      pass: 'The perl sleeps 3654 and 3656 are gone 6 s after their Stops (sample after-stop), and each session holds a notice that starts "Stopped by you" and names its perl sleep, after its Stop.',
+      fail: "A perl sleep still runs after its Stop, or a session has no such notice.",
+      check: (ev) => {
+        const left = (ev.samples["after-stop"] ?? []).filter((l) => /sleep 365[46]/.test(l));
+        const said = (["e1", "e2"] as const).map((n) => {
+          const at = mark(ev, `${n}-stop`) ?? Infinity;
+          return notices(ev, n).find((i) => ev.atOf(i.at) >= at && (i.text ?? "").startsWith("Stopped by you") && /sleep 365[46]/.test(i.text ?? ""));
+        });
+        if (left.length) return no(`still running after Stop: ${left.join(" | ").slice(0, 160)}`);
+        return said.every(Boolean) ? ok(said.map((i) => (i!.text ?? "").slice(0, 70)).join(" | ")) : no(`e1 notice ${!!said[0]}, e2 notice ${!!said[1]}`);
+      },
+    },
+  ],
+};
+
+const S6f: Scenario = {
+  id: "S6f",
+  area: "sessions",
+  title: "The bridge restarts in the middle of a run while the user is away",
+  needsSimulator: false,
+  away: true,
+  journey: [
+    "The user starts a long command and puts the phone away. The Mac's bridge restarts mid-turn, so the turn is cut off.",
+    "Once the bridge is back and no phone came back to look, the user must get one push that says the run was interrupted, with nothing of the session's content in it.",
+    "A second restart must not push it again.",
+  ],
+  setup: [
+    { do: "create", name: "f1", prompt: "Use the Bash tool in the foreground (not in the background) to run exactly: perl -e 'sleep 3657'\nThen reply with one line: done." },
+    started("f1"),
+    { do: "until", mark: "f1-running", what: "f1's command to run on the Mac", timeoutS: 150, test: (ev) => ev.procs("sleep 3657").length > 0 },
+    { do: "sleep", s: 3 },
+    { do: "restart-bridge", mark: "restarted" },
+    { do: "until", mark: "pushed", what: "a push about f1 after the restart", timeoutS: 90, optional: true, test: (ev) => ev.pushes().some((p) => (p.click ?? "").includes(ev.ids.f1 ?? "-") && ev.atOf(p.at) >= (mark(ev, "restarted") ?? Infinity)) },
+    { do: "sleep", s: 5 },
+    { do: "restart-bridge", mark: "restarted-again" },
+    { do: "sleep", s: 75 },
+    { do: "mark", mark: "after-second" },
+    { do: "stop", name: "f1", mark: "f1-stop" },
+    { do: "sleep", s: 4 },
+  ],
+  pre: [created("f1"), { what: "the bridge restarted twice", check: (ev) => (mark(ev, "after-second") !== undefined ? ok("yes") : no("no")) }],
+  rubric: [
+    {
+      id: "S6f.1",
+      tell: "state",
+      lane: "protocol",
+      text: "The user away from the phone hears once that the run was interrupted by the restart, in words that hold nothing of the session.",
+      pass: 'Between the first and second restart, exactly one push links to f1; it says the session "was interrupted by a bridge restart", names no command, and went out within 90 s of the restart.',
+      fail: "No push, more than one, a push that names the command, or one that says the run finished or failed.",
+      check: (ev) => {
+        const nf = awayOnly(ev);
+        if (nf) return nf;
+        const sp = span(ev, "restarted", "restarted-again");
+        if (!sp) return needMarks(ev, "restarted", "restarted-again")!;
+        const ps = ev.pushes().filter((p) => (p.click ?? "").includes(ev.ids.f1 ?? "-") && ev.atOf(p.at) >= sp[0] && ev.atOf(p.at) <= sp[1]);
+        if (ps.length !== 1) return no(`${ps.length} pushes: ${ps.map((p) => p.body).join(" | ") || "none"}`);
+        const p = ps[0]!;
+        if (/sleep|perl|3657/.test(`${p.title} ${p.body}`)) return no(`content in the push: ${p.body}`);
+        const after = (ev.atOf(p.at) - sp[0]) / 1000;
+        return /was interrupted by a bridge restart/.test(p.body) && after <= 90 ? ok(`"${p.body}" ${after.toFixed(0)} s after the restart`) : no(`"${p.body}" ${after.toFixed(0)} s after the restart`);
+      },
+    },
+    {
+      id: "S6f.2",
+      tell: "state",
+      lane: "protocol",
+      text: "Another restart does not push the same interruption again.",
+      pass: "From the second restart to mark after-second (75 s, past the start grace), no push links to f1.",
+      fail: "A push about f1 goes out after the second restart.",
+      check: (ev) => {
+        const nf = awayOnly(ev);
+        if (nf) return nf;
+        const sp = span(ev, "restarted-again", "after-second");
+        if (!sp) return needMarks(ev, "restarted-again", "after-second")!;
+        const ps = ev.pushes().filter((p) => (p.click ?? "").includes(ev.ids.f1 ?? "-") && ev.atOf(p.at) >= sp[0] && ev.atOf(p.at) <= sp[1]);
+        return ps.length === 0 ? ok("no push after the second restart") : no(ps.map((p) => p.body).join(" | "));
       },
     },
   ],
@@ -2257,4 +2466,4 @@ const S9b: Scenario = {
   ],
 };
 
-export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S3b, S4, S4b, S4c, S5, S6, S6b, S6c, S6d, S7, S8, S8fg, S9, S9b];
+export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S3b, S4, S4b, S4c, S5, S6, S6b, S6c, S6d, S6e, S6f, S7, S8, S8fg, S9, S9b];

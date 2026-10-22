@@ -77,6 +77,15 @@ private func step(_ state: ToolStepState, cause: String? = nil) -> ToolStep {
         #expect(failed.short == "Allowed once, then failed" && failed.tone == .failed)
     }
 
+    @Test func anAllowedCallTheBridgeCannotFollowSaysItMayStillRunAndNotStopped() {
+        let unsure = PermissionAnswer.chose(.once).outcome(step: step(.unsure, cause: "Can't tell whether this still runs on your Mac"))
+        #expect(unsure == PermissionOutcome(short: "Allowed once · may still run", text: "Allowed once. May still run on your Mac.", tone: .unsure))
+        #expect(unsure.glyph == "questionmark.circle")
+        let ended = PermissionAnswer.chose(.once).outcome(step: step(.ended, cause: "It ended without a result"))
+        #expect(ended == PermissionOutcome(short: "Allowed once · ended, result unknown", text: "Allowed once. It ended; its result is unknown.", tone: .unseen))
+        #expect(ended.glyph == "circle.dashed")
+    }
+
     @Test(arguments: [ToolStepState.running, .waiting, .ok])
     func anAllowedCallThatRunsOrFinishedReadsAllowed(state: ToolStepState) {
         #expect(PermissionAnswer.chose(.once).outcome(step: step(state)) == PermissionOutcome(short: "Allowed once", text: "Allowed once", tone: .allowed))

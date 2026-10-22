@@ -77,6 +77,13 @@ export const maskSecrets = applying(SECRET_RULES);
  */
 export const maskProse = applying(PROSE_RULES);
 
+/**
+ * Names for a sentence: a few are all said, by `all`; more are the first few but one and how many more, joined by `sep`
+ * ("a, b and 3 more").
+ */
+export const fewNames = (names: readonly string[], all: (names: readonly string[]) => string, sep = ", ", few = 3): string =>
+  names.length <= few ? all(names) : `${names.slice(0, few - 1).join(sep)} and ${names.length - few + 1} more`;
+
 export const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}… (${s.length - n} more chars)`);
 const CLIP = 4096;
 

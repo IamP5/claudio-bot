@@ -514,9 +514,21 @@ export type ProjectionTail = {
   todo: ItemId | null;
   /** Blocks seen per API message, for entries written without their block index. */
   blocks: Map<string, number>;
+  /** The step each task notification's notice speaks of, by the notice's item id. */
+  notes: Map<ItemId, string>;
 };
 
-export const emptyTail = (): ProjectionTail => ({ open: new Map(), tools: new Map(), tasks: new Map(), descriptions: new Map(), rejected: new Map(), work: null, todo: null, blocks: new Map() });
+export const emptyTail = (): ProjectionTail => ({
+  open: new Map(),
+  tools: new Map(),
+  tasks: new Map(),
+  descriptions: new Map(),
+  rejected: new Map(),
+  work: null,
+  todo: null,
+  blocks: new Map(),
+  notes: new Map(),
+});
 
 function resultText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -894,6 +906,7 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
     work: prior.work,
     todo: prior.todo,
     blocks: new Map(prior.blocks),
+    notes: new Map(prior.notes),
   };
   const changed = new Map<ItemId, SessionItem>();
   const put = (item: SessionItem, keep: boolean) => {
@@ -1087,6 +1100,7 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
     const summary = maskSummary(note.summary, description);
     const outcome = noteOutcome(note, summary);
     if (toolId !== undefined && item) updateStep(item.id, toolId, (s) => settleStep(s, outcome, at));
+    if (toolId !== undefined) tail.notes.set(id as ItemId, toolId);
     closeWork();
     put({ kind: "notice", id: id as ItemId, at, text: summary, tone: outcome.kind === "error" ? "error" : "info", reason: "task" }, false);
   }

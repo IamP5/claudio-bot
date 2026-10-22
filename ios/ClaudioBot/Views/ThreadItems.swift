@@ -573,6 +573,10 @@ private struct StepState: View {
             Image(systemName: "nosign").font(.footnote).foregroundStyle(Theme.attention)
         case .stopped:
             Image(systemName: "stop.circle").font(.footnote).foregroundStyle(Theme.secondary)
+        case .unsure:
+            Image(systemName: "questionmark.circle").font(.footnote).foregroundStyle(Theme.tertiary)
+        case .ended:
+            Image(systemName: "circle.dashed").font(.footnote).foregroundStyle(Theme.tertiary)
         case .unknown:
             EmptyView()
         }

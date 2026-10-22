@@ -324,12 +324,13 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(tasks[1].owner == "toolu_01Ac1" && tasks[1].progress == nil && tasks[1].background)
 
         guard case let .work(_, _, steps) = items.first else { Issue.record("no work item first"); return }
-        #expect(steps.map(\.state) == [.running, .waiting, .running, .error, .stopped])
+        #expect(steps.map(\.state) == [.running, .waiting, .running, .error, .stopped, .unsure, .ended])
         #expect(tasks.compactMap(\.stepId).allSatisfy { id in steps.contains { $0.id == id } }, "every task names a step in the thread")
         #expect(steps[0].background && steps[0].detail == "general-purpose" && steps[0].startedAt == at)
         #expect(!steps[1].background && steps[1].owner == "toolu_01Ac1" && steps[1].startedAt == nil)
         #expect(steps[3].cause == "Exit code 1: ls: late.txt: No such file or directory" && steps[3].endedAt == at.addingTimeInterval(7200))
         #expect(steps[4].usage == ToolUsage(tools: 4, ms: 31000) && steps[4].cause == "Stopped by you")
+        #expect(steps[5].cause == "Can't tell whether this still runs on your Mac" && steps[5].background)
 
         let cards = items.compactMap { if case .permission(_, _, let p) = $0 { p } else { nil } }
         #expect(cards.map(\.stepId) == ["toolu_01Ac2", "toolu_01Ac6", "toolu_01Ac7"])
@@ -584,7 +585,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
             "mentions", "commands", "exchanges", "groups", "usage", "sessions", "presence",
             "session_tasks", "session_unqueue", "push_state",
         ])
-        #expect(ToolStepState.allCases.map(\.rawValue) == ["running", "waiting", "ok", "error", "denied", "stopped"])
+        #expect(ToolStepState.allCases.map(\.rawValue) == ["running", "waiting", "ok", "error", "denied", "stopped", "unsure", "ended"])
         #expect(SessionTaskKind.allCases.map(\.rawValue) == ["agent", "command", "other"])
         #expect(SessionOutcomeKind.allCases.map(\.rawValue) == ["finished", "failed", "stopped", "lost"])
         #expect(NoticeReason.allCases.map(\.rawValue) == ["stop", "task", "restart", "failure", "approval"])

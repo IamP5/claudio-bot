@@ -243,7 +243,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
   /** Records the step patches and the cut as published; returns the transcript's work items they now show otherwise. */
   function absorbSteps(s: State): SessionItem[] {
     const before = s.steps;
-    s.steps = new Map([...deps.steps(s.id)].map(([id, p]) => [id, JSON.stringify(p)]));
+    s.steps = new Map([...patchesOf(s)].map(([id, p]) => [id, JSON.stringify(p)]));
     const touched = new Set([...before.keys(), ...s.steps.keys()].filter((id) => before.get(id) !== s.steps.get(id)));
     const cutBefore = s.cut;
     s.cut = JSON.stringify(deps.cuts(s.id));
@@ -253,7 +253,21 @@ export function createThreads(deps: ThreadsDeps): Threads {
   }
 
   type View = { patches: ReadonlyMap<string, StepPatch>; cuts: readonly Cut[] };
-  const viewOf = (id: SessionId): View => ({ patches: deps.steps(id), cuts: deps.cuts(id) });
+  const viewOf = (s: State): View => ({ patches: patchesOf(s), cuts: deps.cuts(s.id) });
+
+  /** The live view's patches by tool_use id; one named by its task (task:<id>) goes to the step that launched the task. */
+  function patchesOf(s: State): Map<string, StepPatch> {
+    const out = new Map<string, StepPatch>();
+    for (const [key, p] of deps.steps(s.id)) {
+      const id = key.startsWith("task:") ? s.tail.tasks.get(key.slice("task:".length)) : key;
+      if (id !== undefined) out.set(id, { ...out.get(id), ...p });
+    }
+    return out;
+  }
+
+  /** Claude Code's word on a task the bridge followed itself, after the task outlived an earlier Claude Code. */
+  const overruled = (s: State, item: SessionItem, view: View) =>
+    item.kind === "notice" && item.reason === "task" && view.patches.get(s.tail.notes.get(item.id) ?? "")?.outlived === true;
 
   /** A transcript item as shown: its steps patched by the live view, then ended by a cut unless the live view holds them. */
   function patched(item: SessionItem, { patches, cuts }: View): SessionItem {
@@ -261,7 +275,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
     const steps = item.steps.map((st) => {
       const p = patches.get(st.id);
       const shown = p ? patchStep(st, p) : st;
-      return p?.state === undefined ? cutStep(shown, cuts) : shown;
+      return p?.state === undefined && !p?.told ? cutStep(shown, cuts) : shown;
     });
     return steps.every((st, i) => st === item.steps[i]) ? item : { ...item, steps };
   }
@@ -270,11 +284,11 @@ export function createThreads(deps: ThreadsDeps): Threads {
   function merged(s: State): SessionItem[] {
     const overlay = visible(s);
     const byId = new Map(overlay.map((item) => [item.id, item]));
-    const view = viewOf(s.id);
+    const view = viewOf(s);
     const out = s.items.flatMap((item) => {
       const over = byId.get(item.id);
       if (over) byId.delete(item.id);
-      return over ? [over] : restated(item, overlay) ? [] : [patched(item, view)];
+      return over ? [over] : restated(item, overlay) || overruled(s, item, view) ? [] : [patched(item, view)];
     });
     return ordered([...out, ...byId.values()]);
   }
@@ -331,10 +345,10 @@ export function createThreads(deps: ThreadsDeps): Threads {
   const shown = (s: State, items: readonly SessionItem[]) => {
     const overlay = deps.overlay(s.id);
     const byId = new Map(overlay.map((item) => [item.id, item]));
-    const view = viewOf(s.id);
+    const view = viewOf(s);
     return items.flatMap((item) => {
       const over = byId.get(item.id);
-      return over ? [over] : restated(item, overlay) ? [] : [patched(item, view)];
+      return over ? [over] : restated(item, overlay) || overruled(s, item, view) ? [] : [patched(item, view)];
     });
   };
 

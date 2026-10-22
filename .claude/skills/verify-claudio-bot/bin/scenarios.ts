@@ -50,7 +50,10 @@ export type Action =
   /** The user sends in the thread. interrupt: "Stop and send". While the phone is offline the message waits for the next hello, as in the app. */
   | { do: "send"; name: string; text: string; interrupt?: boolean; mark?: string }
   | { do: "until"; mark: string; what: string; timeoutS: number; test: (ev: Ev) => boolean; optional?: boolean }
-  | { do: "stop"; name: string; mark: string }
+  /** task: stop only the running task whose label holds this text. turnOnly: "Stop the turn only". */
+  | { do: "stop"; name: string; mark: string; task?: string; turnOnly?: boolean }
+  /** Freezes (SIGSTOP) or resumes (SIGCONT) the session's own Claude Code process, as a hung or busy Mac would. */
+  | { do: "signal-claude"; name: string; signal: "SIGSTOP" | "SIGCONT"; mark: string }
   | { do: "sleep"; s: number }
   | { do: "mark"; mark: string }
   /** Unwatches the thread, as the app does when the user goes back to the list; the bridge counts it as a visit. */
@@ -438,6 +441,14 @@ const awayAndBack = (name: string, doneFile: string, finishIsOutcome = false): A
   { do: "mark", mark: "returned" },
   { do: "screenshot", shot: "after" },
 ];
+
+/** A turn of the session began after `from` and has ended since. */
+const turnRan = (ev: Ev, name: string, from: string) => {
+  const at = mark(ev, from);
+  if (at === undefined) return false;
+  const ss = snaps(ev, name, at);
+  return ss.some((s) => s.controls?.turn != null) && ss.at(-1)?.controls?.turn == null;
+};
 
 const BG = (cmd: string) =>
   `Use the Bash tool with run_in_background set to true to run exactly this command: ${cmd}\nDo not wait for it, do not check on it, do not run anything else. Reply with one line: started.`;
@@ -857,13 +868,13 @@ const S4: Scenario = {
       id: "S4.5",
       tell: "stop",
       lane: "protocol",
-      text: "The thread says the user stopped it.",
-      pass: 'After Stop, a notice item says so: its reason is "stop", or, from a bridge without reasons, its text says interrupted or stopped. Assistant prose does not count.',
-      fail: "No notice says it was stopped.",
+      text: "The thread says the user stopped it, in the bridge's own words.",
+      pass: 'After Stop, a notice from the bridge says so: its reason is "stop" and its text starts "Stopped by you". Claude Code\'s own "Interrupted" line and assistant prose do not count.',
+      fail: "No bridge notice says it was stopped.",
       check: (ev) => {
         const at = mark(ev, "stopped");
         if (at === undefined) return needMarks(ev, "stopped")!;
-        const it = notices(ev, "s4", at).find((i) => (i.reason !== undefined && i.reason !== null ? i.reason === "stop" : /interrupt|stopp/i.test(i.text ?? "")));
+        const it = notices(ev, "s4", at).find((i) => i.reason === "stop" && (i.text ?? "").startsWith("Stopped by you") && ev.atOf(i.at) >= at);
         const other = notices(ev, "s4", at).map((i) => `"${(i.text ?? "").slice(0, 60)}" reason ${String(i.reason ?? "-")}`);
         return it ? ok(`notice: ${(it.text ?? "").slice(0, 80)}`) : no(other.length ? `no stop notice; notices: ${other.join("; ")}` : "no notice after Stop");
       },
@@ -1256,6 +1267,349 @@ const S6b: Scenario = {
   ],
 };
 
+const S6c: Scenario = {
+  id: "S6c",
+  area: "sessions",
+  title: "A background command that outlives a bridge restart",
+  needsSimulator: false,
+  journey: [
+    "The user starts a long command in the background; the turn ends at once.",
+    "The Mac's bridge restarts while the command runs. Claude Code goes with it, but the command keeps running.",
+    "The thread must say the command still runs, never that it stopped, and Stop must end it on the Mac.",
+  ],
+  setup: [
+    { do: "create", name: "s6c", prompt: BG("sleep 420 && echo late > s6c.txt") },
+    started("s6c"),
+    { do: "until", mark: "s6c-ended", what: "the turn that starts the command to end", timeoutS: 180, test: turnEnded("s6c") },
+    { do: "until", mark: "bg-running", what: "the sleep 420 to run on the Mac", timeoutS: 60, test: (ev) => ev.procs("sleep 420").length > 0 },
+    { do: "sleep", s: 3 },
+    { do: "restart-bridge", mark: "restarted" },
+    { do: "sleep", s: 8 },
+    { do: "ps", pattern: "sleep 420", as: "after-restart" },
+    { do: "mark", mark: "after-restart" },
+    { do: "send", name: "s6c", text: "Reply with the single word hi.", mark: "sent" },
+    { do: "until", mark: "replied", what: "the turn of the message sent after the restart to end", timeoutS: 120, test: (ev) => turnRan(ev, "s6c", "sent") },
+    { do: "sleep", s: 3 },
+    { do: "ps", pattern: "sleep 420", as: "after-send" },
+    { do: "mark", mark: "after-send" },
+    { do: "stop", name: "s6c", mark: "stopped" },
+    { do: "until", mark: "s6c-rest", what: "the session to rest after Stop", timeoutS: 30, optional: true, test: atRest("s6c") },
+    { do: "sleep", s: 3 },
+    { do: "ps", pattern: "sleep 420", as: "after-stop" },
+  ],
+  pre: [
+    created("s6c"),
+    { what: "the bridge restarted", check: (ev) => (mark(ev, "after-restart") !== undefined ? ok("yes") : no("no")) },
+    { what: "the command outlived the restart (process sample after-restart)", check: (ev) => (ev.samples["after-restart"]?.length ? ok(ev.samples["after-restart"]!.join(" | ").slice(0, 160)) : no("no sleep 420 process after the restart")) },
+  ],
+  rubric: [
+    {
+      id: "S6c.1",
+      tell: "state",
+      lane: "protocol",
+      text: "After the restart the thread says the command still runs and Stop ends it, never that it stopped, and its step still runs.",
+      pass: 'Between the command starting on the Mac and Stop, no notice says the background work stopped and one says "which still runs on this Mac. Stop ends it"; at mark after-restart the Bash step reads running.',
+      fail: "A notice says the background work stopped, none says it still runs, or the step reads anything but running.",
+      check: (ev) => {
+        const at = mark(ev, "bg-running");
+        const until = mark(ev, "stopped");
+        const seen = mark(ev, "after-restart");
+        if (at === undefined || until === undefined || seen === undefined) return needMarks(ev, "bg-running", "stopped", "after-restart")!;
+        const said = notices(ev, "s6c", at)
+          .filter((i) => ev.atOf(i.at) >= at && ev.atOf(i.at) <= until)
+          .map((i) => i.text ?? "");
+        const lie = said.find((t) => /background work stopped/i.test(t));
+        const runs = said.find((t) => /which still runs on this Mac\. Stop ends it/.test(t));
+        const step = stepsOf(last(ev, "s6c", seen)!).find((x) => x.tool === "Bash");
+        if (lie) return no(`said: ${lie.slice(0, 120)}`);
+        if (!runs) return no(`no notice says it still runs; notices: ${said.join(" | ").slice(0, 160) || "none"}`);
+        return step?.state === "running" ? ok(runs.slice(0, 120)) : no(`the Bash step reads ${step?.state ?? "nothing"} ${step?.cause ?? ""}`);
+      },
+    },
+    {
+      id: "S6c.2",
+      tell: "stop",
+      lane: "protocol",
+      text: "After the restart the session reads working with the command as a task, so Stop is offered.",
+      pass: "At mark after-restart, controls.working is true and controls.tasks names the command.",
+      fail: "The session rests, or no task names the command.",
+      check: (ev) => {
+        const at = mark(ev, "after-restart");
+        if (at === undefined) return needMarks(ev, "after-restart")!;
+        const s = last(ev, "s6c", at);
+        const task = (s?.controls?.tasks ?? []).find((t) => /sleep 420/.test(String((t as { label?: unknown }).label)));
+        return s?.controls?.working === true && task ? ok(`working; task ${String((task as { label?: unknown }).label).slice(0, 60)}`) : no(`working ${s?.controls?.working}; tasks ${(s?.controls?.tasks ?? []).length}`);
+      },
+    },
+    {
+      id: "S6c.4",
+      tell: "state",
+      lane: "protocol",
+      text: "A message sent after the restart does not bring back a claim that the command stopped: it still runs and shows so.",
+      pass: "The sleep 420 still runs (sample after-send); at mark after-send controls.tasks names it, the Bash step reads running, and no notice since the message says it stopped or did not finish.",
+      fail: "The process is gone, no task names it, the step reads stopped, or a notice says it stopped or did not finish.",
+      check: (ev) => {
+        const sent = mark(ev, "sent");
+        const at = mark(ev, "after-send");
+        if (sent === undefined || at === undefined) return needMarks(ev, "sent", "after-send")!;
+        if (!(ev.samples["after-send"] ?? []).length) return no("not judged: the sleep 420 was not running after the message");
+        const s = last(ev, "s6c", at)!;
+        const task = (s.controls?.tasks ?? []).some((t) => /sleep 420/.test(String((t as { label?: unknown }).label)));
+        const step = stepsOf(s).find((x) => x.tool === "Bash");
+        const claim = notices(ev, "s6c", sent).find((i) => ev.atOf(i.at) >= sent && ev.atOf(i.at) <= at && /stopped|didn.t finish|did not finish/i.test(i.text ?? ""));
+        const bad = [task ? "" : "no task names it", step?.state === "running" ? "" : `step ${step?.state} ${step?.cause ?? ""}`, claim ? `notice: ${(claim.text ?? "").slice(0, 80)}` : ""].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok("still a task, step running, no claim");
+      },
+    },
+    {
+      id: "S6c.3",
+      tell: "stop",
+      lane: "protocol",
+      text: "Stop ends the command on the Mac, and the thread says the user stopped it.",
+      pass: 'The sleep 420 is gone 3 s after the session rests (sample after-stop), and a notice that starts "Stopped by you" follows Stop.',
+      fail: "The process still runs after Stop, or no stop notice.",
+      check: (ev) => {
+        const at = mark(ev, "stopped");
+        if (at === undefined) return needMarks(ev, "stopped")!;
+        const after = ev.samples["after-stop"] ?? [];
+        const said = notices(ev, "s6c", at).find((i) => i.reason === "stop" && (i.text ?? "").startsWith("Stopped by you") && ev.atOf(i.at) >= at);
+        if (after.length) return no(`still running after Stop: ${after.join(" | ").slice(0, 160)}`);
+        return said ? ok(`gone after Stop; notice: ${(said.text ?? "").slice(0, 80)}`) : no("gone after Stop, but no stop notice");
+      },
+    },
+  ],
+};
+
+/** The bridge's notices that a command it followed ended. */
+const endedSaid = (ev: Ev, name: string) => notices(ev, name).filter((i) => /ended\. Claude Code no longer followed/.test(i.text ?? ""));
+
+/** Every Bash step of the session in its latest snapshot at or before `at`. */
+const bashSteps = (ev: Ev, name: string, at: number) => stepsOf(last(ev, name, at) ?? ({ items: [] } as unknown as Snap)).filter((x) => x.tool === "Bash");
+
+const S6d: Scenario = {
+  id: "S6d",
+  area: "sessions",
+  title: "Background commands the bridge cannot check after a restart",
+  needsSimulator: false,
+  journey: [
+    "Two long commands run in the background. One sends its output elsewhere at once, the other a little later, so after the bridge restarts it cannot prove either is still the command.",
+    "Both end on their own. The thread must never show them running forever: once the bridge cannot tell, the steps say so and stop spinning, and the session rests.",
+  ],
+  setup: [
+    { do: "create", name: "vu1", prompt: BG("exec >/dev/null 2>&1; sleep 51") },
+    started("vu1"),
+    { do: "until", mark: "vu1-ended", what: "vu1's turn to end", timeoutS: 180, test: turnEnded("vu1") },
+    { do: "create", name: "vu2", prompt: BG("sleep 25; exec >/dev/null 2>&1; sleep 52") },
+    started("vu2"),
+    { do: "until", mark: "vu2-ended", what: "vu2's turn to end", timeoutS: 180, test: turnEnded("vu2") },
+    { do: "until", mark: "bg-running", what: "both commands to run on the Mac", timeoutS: 60, test: (ev) => ev.procs("sleep 51").length > 0 && ev.procs("sleep 25").length > 0 },
+    { do: "restart-bridge", mark: "restarted" },
+    { do: "sleep", s: 8 },
+    { do: "mark", mark: "after-restart" },
+    { do: "until", mark: "vu1-gone", what: "vu1's command to end", timeoutS: 150, test: (ev) => ev.procs("sleep 51").length === 0 },
+    { do: "until", mark: "vu2-gone", what: "vu2's command to end", timeoutS: 150, test: (ev) => ev.procs("sleep 52").length === 0 && ev.procs("sleep 25").length === 0 },
+    { do: "until", mark: "all-gone", what: "both commands to end", timeoutS: 150, test: (ev) => ev.procs("sleep 51").length === 0 && ev.procs("sleep 52").length === 0 && ev.procs("sleep 25").length === 0 },
+    { do: "sleep", s: 10 },
+    { do: "mark", mark: "after-ended" },
+    { do: "sleep", s: 30 },
+    { do: "mark", mark: "after-ended-40s" },
+    { do: "until", mark: "ended-said", what: "the bridge to say each command ended", timeoutS: 240, optional: true, test: (ev) => ["vu1", "vu2"].every((n) => endedSaid(ev, n).length > 0) },
+    { do: "sleep", s: 5 },
+    { do: "mark", mark: "after-said" },
+  ],
+  pre: [created("vu1"), created("vu2"), { what: "the bridge restarted", check: (ev) => (mark(ev, "after-restart") !== undefined ? ok("yes") : no("no")) }],
+  rubric: [
+    {
+      id: "S6d.1",
+      tell: "state",
+      lane: "protocol",
+      text: "Once the bridge cannot tell whether a command still runs, its step stops spinning and says so, and the session rests; one it still follows reads running.",
+      pass: 'At mark after-restart, vu1\'s Bash step is in state "unsure" with a cause that says the bridge cannot tell, and vu1 is not working; vu2\'s step is running with a task that names it, or already unsure; neither reads stopped.',
+      fail: "vu1's step reads anything but unsure, or vu1 reads working; or vu2's step reads stopped, or running with no task.",
+      check: (ev) => {
+        const at = mark(ev, "after-restart");
+        if (at === undefined) return needMarks(ev, "after-restart")!;
+        const step = bashSteps(ev, "vu1", at)[0];
+        const s = last(ev, "vu1", at);
+        if (!step) return no("no Bash step for vu1");
+        if (step.state !== "unsure" || !/can.t tell/i.test(step.cause ?? "")) return no(`vu1 step ${step.state} ${step.cause ?? ""}`);
+        if (!s || isWorking(s)) return no(`vu1 reads working: row ${rowStatus(s)}, working ${s?.controls?.working}`);
+        const step2 = bashSteps(ev, "vu2", at)[0];
+        const s2 = last(ev, "vu2", at);
+        const task2 = (s2?.controls?.tasks ?? []).some((t) => /sleep 25/.test(String((t as { label?: unknown }).label)));
+        const vu2ok = step2?.state === "unsure" || (step2?.state === "running" && task2);
+        return vu2ok ? ok(`vu1: ${step.cause}; vu2: ${step2!.state}`) : no(`vu2 step ${step2?.state} ${step2?.cause ?? ""}, task ${task2}`);
+      },
+    },
+    {
+      id: "S6d.2",
+      tell: "state",
+      lane: "protocol",
+      text: "After both commands ended, neither thread shows a step running and neither session works, 10 s and 40 s later.",
+      pass: "At marks after-ended and after-ended-40s, no Bash step of vu1 or vu2 reads running, and neither reads working.",
+      fail: "A step still reads running, or a session reads working.",
+      check: (ev) => {
+        const marks = [mark(ev, "after-ended"), mark(ev, "after-ended-40s")];
+        if (marks.some((m) => m === undefined)) return needMarks(ev, "after-ended", "after-ended-40s")!;
+        const bad = marks.flatMap((at) =>
+          ["vu1", "vu2"].flatMap((name) => {
+            const s = last(ev, name, at!);
+            const running = bashSteps(ev, name, at!).filter((x) => x.state === "running");
+            return [...(running.length ? [`${name} step running at ${Math.round(at! / 1000)} s`] : []), ...(s && isWorking(s) ? [`${name} working at ${Math.round(at! / 1000)} s`] : [])];
+          }),
+        );
+        return bad.length ? no(bad.join("; ")) : ok("both settled, neither working");
+      },
+    },
+    {
+      id: "S6d.3",
+      tell: "state",
+      lane: "protocol",
+      text: "Each command's end is said once, whether the bridge knew its process group or found it only by its command line.",
+      pass: 'By mark after-said, vu1 and vu2 each hold exactly one notice that the command "ended", said no earlier than 1 s before the run saw that command\'s process gone, and each Bash step is in state "ended", neither stopped nor unsure.',
+      fail: "A thread never says its command ended, says it twice, says it while the process still ran, or its step reads anything but ended.",
+      check: (ev) => {
+        const at = mark(ev, "after-said");
+        if (at === undefined) return no("the bridge never said both commands ended (mark ended-said not reached)");
+        const bad = ["vu1", "vu2"].flatMap((n) => {
+          const said = endedSaid(ev, n);
+          const gone = mark(ev, `${n}-gone`);
+          const step = bashSteps(ev, n, at)[0];
+          return [
+            ...(said.length === 1 ? [] : [`${n}: ${said.length} ended notices`]),
+            ...(gone === undefined ? [`${n}: never seen gone`] : said.some((i) => ev.atOf(i.at) < gone - 1000) ? [`${n}: said ended ${((gone - ev.atOf(said[0]!.at)) / 1000).toFixed(1)} s before its process was gone`] : []),
+            ...(step?.state === "ended" ? [] : [`${n}: step ${step?.state}`]),
+          ];
+        });
+        return bad.length ? no(bad.join("; ")) : ok("each said ended once, after its process was gone; steps ended");
+      },
+    },
+  ],
+};
+
+const S4b: Scenario = {
+  id: "S4b",
+  area: "sessions",
+  title: "Stop one background task while nothing else runs",
+  needsSimulator: false,
+  journey: [
+    "The only thing running is one background command. The user stops just that task.",
+    "Claude Code queues a note about the stopped task but starts no turn for it, so the session must come to rest, not read working.",
+  ],
+  setup: [
+    { do: "create", name: "s4b", prompt: BG("sleep 305") },
+    started("s4b"),
+    { do: "until", mark: "s4b-ended", what: "the turn that starts the command to end", timeoutS: 180, test: turnEnded("s4b") },
+    { do: "until", mark: "bg-running", what: "the sleep 305 to run on the Mac", timeoutS: 60, test: (ev) => ev.procs("sleep 305").length > 0 },
+    { do: "sleep", s: 2 },
+    { do: "stop", name: "s4b", task: "sleep 305", mark: "stopped" },
+    ...[2, 5, 10, 15, 20, 25].flatMap((t, i, all): Action[] => [{ do: "sleep", s: t - (all[i - 1] ?? 0) }, { do: "mark", mark: `stop-${t}s` }]),
+    { do: "ps", pattern: "sleep 305", as: "after-stop" },
+  ],
+  pre: [created("s4b")],
+  rubric: [
+    {
+      id: "S4b.1",
+      tell: "stop",
+      lane: "protocol",
+      text: "After stopping the only running task, the session rests, shows no turn that never started, and says only what stopped.",
+      pass: 'At marks 2, 5, 10, 15, 20 and 25 s after the stop, controls.working is false, controls.turn is absent and the row is not working; the Bash step reads stopped "Stopped by you"; no notice says the turn was stopped; the sleep 305 is gone.',
+      fail: "The session reads working or shows a wake turn at any mark, the step reads otherwise, a notice claims the turn stopped, or the command still runs.",
+      check: (ev) => {
+        const at = [2, 5, 10, 15, 20, 25].map((t) => mark(ev, `stop-${t}s`));
+        const stopped = mark(ev, "stopped");
+        if (stopped === undefined || at.some((m) => m === undefined)) return needMarks(ev, "stopped", "stop-25s")!;
+        if ((ev.samples["after-stop"] ?? []).length) return no(`still running: ${ev.samples["after-stop"]!.join(" | ").slice(0, 120)}`);
+        const bad = at.flatMap((m) => {
+          const s = last(ev, "s4b", m!);
+          const step = bashSteps(ev, "s4b", m!)[0];
+          return [
+            ...(s && (isWorking(s) || s.controls?.turn != null) ? [`at ${Math.round((m! - stopped) / 1000)} s: row ${rowStatus(s)}, working ${s.controls?.working}, turn ${JSON.stringify(s.controls?.turn)}`] : []),
+            ...(step && !(step.state === "stopped" && step.cause === "Stopped by you") && m! >= stopped + 5000 ? [`step ${step.state} ${step.cause ?? ""}`] : []),
+          ];
+        });
+        const claim = notices(ev, "s4b", stopped).find((i) => /the turn/i.test(i.text ?? "") && i.reason === "stop");
+        if (claim) bad.push(`notice: ${claim.text}`);
+        return bad.length ? no([...new Set(bad)].join("; ")) : ok("at rest at every mark, step stopped by you, nothing claimed of a turn");
+      },
+    },
+  ],
+};
+
+const S4c: Scenario = {
+  id: "S4c",
+  area: "sessions",
+  title: "Stop the turn only while Claude Code is frozen",
+  needsSimulator: false,
+  journey: [
+    "Claude Code is frozen (a hung or busy Mac) when the user sends a prompt and presses Stop the turn only.",
+    "Nothing may say the turn stopped while it is frozen. Once it resumes, the prompt must not run, and only then does the thread say the user stopped it.",
+  ],
+  setup: [
+    { do: "create", name: "s4c", prompt: "Reply with the single word ready." },
+    started("s4c"),
+    { do: "until", mark: "s4c-ready", what: "the first turn to end", timeoutS: 120, test: (ev) => replied(last(ev, "s4c")) && !isWorking(last(ev, "s4c")!) },
+    { do: "signal-claude", name: "s4c", signal: "SIGSTOP", mark: "frozen" },
+    { do: "send", name: "s4c", text: "Run these three Bash commands one at a time, each in its own tool call: echo s4cone ; echo s4ctwo ; echo s4cthree . Then reply with the single word done.", mark: "sent" },
+    { do: "until", mark: "turn-shown", what: "the prompt's turn to show", timeoutS: 30, test: (ev) => last(ev, "s4c")?.controls?.turn != null },
+    { do: "sleep", s: 1.5 },
+    { do: "stop", name: "s4c", turnOnly: true, mark: "stopped" },
+    { do: "sleep", s: 3 },
+    { do: "signal-claude", name: "s4c", signal: "SIGCONT", mark: "resumed" },
+    { do: "until", mark: "s4c-rest", what: "the session to rest after it resumes", timeoutS: 60, optional: true, test: atRest("s4c") },
+    { do: "sleep", s: 8 },
+    { do: "mark", mark: "after" },
+  ],
+  pre: [created("s4c"), { what: "Claude Code was frozen and resumed", check: (ev) => (mark(ev, "resumed") !== undefined ? ok("yes") : no("no")) }],
+  rubric: [
+    {
+      id: "S4c.1",
+      tell: "stop",
+      lane: "protocol",
+      text: "While Claude Code is frozen, nothing says the turn stopped.",
+      pass: "No notice with reason stop appears between Stop and the resume.",
+      fail: "A stop notice appears while Claude Code is still frozen.",
+      check: (ev) => {
+        const [a, b] = [mark(ev, "stopped"), mark(ev, "resumed")];
+        if (a === undefined || b === undefined) return needMarks(ev, "stopped", "resumed")!;
+        const early = notices(ev, "s4c", a).find((i) => i.reason === "stop" && ev.atOf(i.at) < b);
+        return early ? no(`said while frozen: ${early.text}`) : ok("nothing said while frozen");
+      },
+    },
+    {
+      id: "S4c.2",
+      tell: "stop",
+      lane: "protocol",
+      text: "The stopped prompt does not run once Claude Code resumes, and Claude does not answer it.",
+      pass: "The transcript has no Bash call for echo s4cone, s4ctwo or s4cthree, and no assistant text after the prompt.",
+      fail: "Claude Code ran any of the prompt's commands, or Claude replied to it.",
+      check: (ev) => {
+        if (mark(ev, "after") === undefined) return needMarks(ev, "after")!;
+        const main = ev.transcript("s4c").main;
+        const ran = blocks(main).uses.filter((u) => u.name === "Bash" && /s4c(one|two|three)/.test(String(u.input.command ?? "")));
+        const asked = main.findIndex((l) => l.type === "user" && JSON.stringify(l.message?.content ?? "").includes("echo s4cone"));
+        const replies = asked === -1 ? [] : main.slice(asked + 1).filter((l) => l.type === "assistant" && Array.isArray(l.message?.content) && (l.message!.content as { type?: string; text?: string }[]).some((b) => b.type === "text" && (b.text ?? "").trim() !== ""));
+        if (ran.length) return no(`ran: ${ran.map((u) => String(u.input.command)).join("; ")}`);
+        return replies.length ? no(`Claude replied: ${JSON.stringify(replies[0]!.message?.content).slice(0, 100)}`) : ok("no command ran and no reply");
+      },
+    },
+    {
+      id: "S4c.3",
+      tell: "stop",
+      lane: "protocol",
+      text: "Once the turn ended, the thread says the user stopped it, in the bridge's own words.",
+      pass: 'After the resume, a notice with reason "stop" starts "Stopped by you".',
+      fail: "No such notice.",
+      check: (ev) => {
+        const b = mark(ev, "resumed");
+        if (b === undefined) return needMarks(ev, "resumed")!;
+        const it = notices(ev, "s4c", b).find((i) => i.reason === "stop" && (i.text ?? "").startsWith("Stopped by you") && ev.atOf(i.at) >= b);
+        return it ? ok(it.text ?? "") : no("no bridge stop notice after the resume");
+      },
+    },
+  ],
+};
+
 const SLEEPERS = 4;
 const QUICK = 8;
 const s7names = [...Array.from({ length: SLEEPERS }, (_, i) => `s7-sleep-${i + 1}`), ...Array.from({ length: QUICK }, (_, i) => `s7-quick-${i + 1}`)];
@@ -1576,4 +1930,4 @@ const S8fg: Scenario = {
   ],
 };
 
-export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S4, S5, S6, S6b, S7, S8, S8fg];
+export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S4, S4b, S4c, S5, S6, S6b, S6c, S6d, S7, S8, S8fg];

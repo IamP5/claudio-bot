@@ -199,10 +199,31 @@ export type SessionState = {
    */
   sent?: { context?: string; brief?: string };
   /**
-   * The live query's background tasks, absent when it has none. close() leaves them on disk, so the next start can say
-   * a restart stopped them.
+   * The live query's background tasks, absent when it has none. close() leaves them on disk, so the next start can
+   * check which a restart stopped.
    */
-  background?: { id: string; description?: string }[];
+  background?: BackgroundTask[];
+};
+
+/**
+ * A background task as a note names it (description) and as the thread shows it (kind, label, stepId, startedAt).
+ * group: the process group of the shell that runs a command, once found; a command can outlive Claude Code. claude:
+ * the process of the Claude Code that runs a subagent, which ends with it.
+ */
+export type BackgroundTask = {
+  id: string;
+  description?: string;
+  kind?: "agent" | "command" | "other";
+  label?: string;
+  stepId?: string;
+  startedAt?: string;
+  group?: number;
+  claude?: number;
+  /**
+   * The group of the one shell whose command line holds the command, found when its output file could not be: enough
+   * to see when it ends, never proof enough to signal it.
+   */
+  loose?: number;
 };
 
 export const emptySession = (id: string | null = null): SessionState => ({ id, pending: [], lifecycle: { kind: "idle" }, notices: [] });
@@ -443,6 +464,21 @@ export type OwnDrive = {
   notices?: Extract<SessionItem, { kind: "notice" }>[];
   /** Prompts a stop ended before Claude Code wrote them down, shown until the transcript has their words. */
   kept?: { id: ItemId; at: string; text: string }[];
+  /**
+   * Background commands that outlived the Claude Code that ran them, which only the bridge follows. over: since when it
+   * no longer does: the command ended unseen, the user stopped it, or the bridge can no longer tell it is the command.
+   */
+  outlived?: (BackgroundTask & { group: number; over?: "ended" | "stopped" | "unsure" })[];
+  /**
+   * Steps of background work whose fate the bridge could not check, and has no process group to look at again: they
+   * read that it cannot tell. A step is named by its tool_use id, or as task:<id> when only its task is known.
+   */
+  unsure?: string[];
+  /**
+   * Since the last run began, some background work became such that the bridge cannot check: until the user starts a
+   * new run (a restart is not one), a Stop that finds nothing says it cannot tell rather than that nothing runs.
+   */
+  unchecked?: true;
 };
 
 /**

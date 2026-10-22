@@ -254,12 +254,91 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S4.2 | what | protocol | The user can read why it failed. | The failed step carries output that names the cause. | No output on the failed step. |
 | S4.3 | stop | protocol | After Stop, nothing is left looking like it runs. | Within 30 s of Stop, no step is in state running. | A step still reads running 30 s after Stop. |
 | S4.4 | stop | protocol | After Stop, the session comes to rest. | Row not working and controls.working false within 30 s of Stop. | Still working 30 s after Stop. |
-| S4.5 | stop | protocol | The thread says the user stopped it. | After Stop, a notice item says so: its reason is "stop", or, from a bridge without reasons, its text says interrupted or stopped. Assistant prose does not count. | No notice says it was stopped. |
+| S4.5 | stop | protocol | The thread says the user stopped it, in the bridge's own words. | After Stop, a notice from the bridge says so: its reason is "stop" and its text starts "Stopped by you". Claude Code's own "Interrupted" line and assistant prose do not count. | No bridge notice says it was stopped. |
 | S4.6 | stop | protocol | Stop really stops the subagent's work on the Mac. | The sleeper's sleep 45 process ran before Stop (sample before-stop), is gone 5 s after the session rests (sample after-stop), and late.txt never appears, checked 50 s after Stop. | The process is still there after Stop, or late.txt appeared. |
 | S4.7 | state | simulator (running) | Mid-run, the failed subagent reads failed and the other running. | Two distinct states. | Same look for both. |
 | S4.8 | stop | simulator (stopped) | After Stop, the thread reads stopped, no spinner. | Stopped state. | Spinner left. |
 | S4.9 | state | protocol | The failed subagent reads failed as soon as Claude Code records the failure. | Its step first reads error within 2 s of the failed tool_result line in the transcript. | The step reads error later than 2 s after the transcript has the failure, or never. |
 | S4.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+
+## S4b Stop one background task while nothing else runs
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. The only thing running is one background command. The user stops just that task.
+2. Claude Code queues a note about the stopped task but starts no turn for it, so the session must come to rest, not read working.
+
+**Setup.**
+
+- New session `s4b` in demo (haiku, mode default): "Use the Bash tool with run_in_background set to true to run exactly this command: sleep 305 Do not wait for it, do not check on it, do not run anything else. Reply with one line: started."
+- Wait up to 90 s for s4b's turn to start; mark `s4b-started`.
+- Wait up to 180 s for the turn that starts the command to end; mark `s4b-ended`.
+- Wait up to 60 s for the sleep 305 to run on the Mac; mark `bg-running`.
+- Wait 2 s.
+- Stop only the task `sleep 305` of `s4b` (session_stop with target task); mark `stopped`.
+- Wait 2 s.
+- Mark `stop-2s`.
+- Wait 3 s.
+- Mark `stop-5s`.
+- Wait 5 s.
+- Mark `stop-10s`.
+- Wait 5 s.
+- Mark `stop-15s`.
+- Wait 5 s.
+- Mark `stop-20s`.
+- Wait 5 s.
+- Mark `stop-25s`.
+- Sample the Mac's processes matching `sleep 305` in the seed project as `after-stop`.
+
+**Preconditions** (any failure fails the scenario):
+
+- session s4b was created
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S4b.1 | stop | protocol | After stopping the only running task, the session rests, shows no turn that never started, and says only what stopped. | At marks 2, 5, 10, 15, 20 and 25 s after the stop, controls.working is false, controls.turn is absent and the row is not working; the Bash step reads stopped "Stopped by you"; no notice says the turn was stopped; the sleep 305 is gone. | The session reads working or shows a wake turn at any mark, the step reads otherwise, a notice claims the turn stopped, or the command still runs. |
+
+## S4c Stop the turn only while Claude Code is frozen
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. Claude Code is frozen (a hung or busy Mac) when the user sends a prompt and presses Stop the turn only.
+2. Nothing may say the turn stopped while it is frozen. Once it resumes, the prompt must not run, and only then does the thread say the user stopped it.
+
+**Setup.**
+
+- New session `s4c` in demo (haiku, mode default): "Reply with the single word ready."
+- Wait up to 90 s for s4c's turn to start; mark `s4c-started`.
+- Wait up to 120 s for the first turn to end; mark `s4c-ready`.
+- Send SIGSTOP to the Claude Code process of `s4c` (it freezes); mark `frozen`.
+- Send in `s4c`: "Run these three Bash commands one at a time, each in its own tool call: echo s4cone ; echo s4ctwo ; echo s4cthree . Then reply with the single word done."; mark `sent`.
+- Wait up to 30 s for the prompt's turn to show; mark `turn-shown`.
+- Wait 1.5 s.
+- Press Stop the turn only on `s4c` (session_stop, target turn); mark `stopped`.
+- Wait 3 s.
+- Send SIGCONT to the Claude Code process of `s4c` (it resumes); mark `resumed`.
+- Wait up to 60 s for the session to rest after it resumes; mark `s4c-rest` (optional).
+- Wait 8 s.
+- Mark `after`.
+
+**Preconditions** (any failure fails the scenario):
+
+- session s4c was created
+- Claude Code was frozen and resumed
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S4c.1 | stop | protocol | While Claude Code is frozen, nothing says the turn stopped. | No notice with reason stop appears between Stop and the resume. | A stop notice appears while Claude Code is still frozen. |
+| S4c.2 | stop | protocol | The stopped prompt does not run once Claude Code resumes, and Claude does not answer it. | The transcript has no Bash call for echo s4cone, s4ctwo or s4cthree, and no assistant text after the prompt. | Claude Code ran any of the prompt's commands, or Claude replied to it. |
+| S4c.3 | stop | protocol | Once the turn ended, the thread says the user stopped it, in the bridge's own words. | After the resume, a notice with reason "stop" starts "Stopped by you". | No such notice. |
 
 ## S5 A silent two-minute tool call
 
@@ -396,6 +475,98 @@ Needs the simulator: yes.
 | S6b.1 | state | protocol | The app notices the lost frame and asks for the thread again, from scratch. | The app sends watch_session for the session with after null within 2 s of the first thread frame that reached it after the loss. | The app never watches the thread again, asks to resume from a position past the loss, or waits longer than 2 s. |
 | S6b.2 | state | protocol | What the lost frame said reaches the app anyway. | After that watch, a snapshot of the session reaches the app with the Bash step ok. | No snapshot reaches the app, or it lacks the finished step. |
 | S6b.3 | state | simulator (after-loss) | The thread on screen shows the command done and the reply, with nothing left running. | A done step and the reply. | A step still running after the turn ended, or no reply. |
+
+## S6c A background command that outlives a bridge restart
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. The user starts a long command in the background; the turn ends at once.
+2. The Mac's bridge restarts while the command runs. Claude Code goes with it, but the command keeps running.
+3. The thread must say the command still runs, never that it stopped, and Stop must end it on the Mac.
+
+**Setup.**
+
+- New session `s6c` in demo (haiku, mode default): "Use the Bash tool with run_in_background set to true to run exactly this command: sleep 420 && echo late > s6c.txt Do not wait for it, do not check on it, do not run anything else. Reply with one line: started."
+- Wait up to 90 s for s6c's turn to start; mark `s6c-started`.
+- Wait up to 180 s for the turn that starts the command to end; mark `s6c-ended`.
+- Wait up to 60 s for the sleep 420 to run on the Mac; mark `bg-running`.
+- Wait 3 s.
+- Restart the bridge on the same port and home; the phone reconnects. Mark `restarted`.
+- Wait 8 s.
+- Sample the Mac's processes matching `sleep 420` in the seed project as `after-restart`.
+- Mark `after-restart`.
+- Send in `s6c`: "Reply with the single word hi."; mark `sent`.
+- Wait up to 120 s for the turn of the message sent after the restart to end; mark `replied`.
+- Wait 3 s.
+- Sample the Mac's processes matching `sleep 420` in the seed project as `after-send`.
+- Mark `after-send`.
+- Press Stop on `s6c` (session_stop); mark `stopped`.
+- Wait up to 30 s for the session to rest after Stop; mark `s6c-rest` (optional).
+- Wait 3 s.
+- Sample the Mac's processes matching `sleep 420` in the seed project as `after-stop`.
+
+**Preconditions** (any failure fails the scenario):
+
+- session s6c was created
+- the bridge restarted
+- the command outlived the restart (process sample after-restart)
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S6c.1 | state | protocol | After the restart the thread says the command still runs and Stop ends it, never that it stopped, and its step still runs. | Between the command starting on the Mac and Stop, no notice says the background work stopped and one says "which still runs on this Mac. Stop ends it"; at mark after-restart the Bash step reads running. | A notice says the background work stopped, none says it still runs, or the step reads anything but running. |
+| S6c.2 | stop | protocol | After the restart the session reads working with the command as a task, so Stop is offered. | At mark after-restart, controls.working is true and controls.tasks names the command. | The session rests, or no task names the command. |
+| S6c.4 | state | protocol | A message sent after the restart does not bring back a claim that the command stopped: it still runs and shows so. | The sleep 420 still runs (sample after-send); at mark after-send controls.tasks names it, the Bash step reads running, and no notice since the message says it stopped or did not finish. | The process is gone, no task names it, the step reads stopped, or a notice says it stopped or did not finish. |
+| S6c.3 | stop | protocol | Stop ends the command on the Mac, and the thread says the user stopped it. | The sleep 420 is gone 3 s after the session rests (sample after-stop), and a notice that starts "Stopped by you" follows Stop. | The process still runs after Stop, or no stop notice. |
+
+## S6d Background commands the bridge cannot check after a restart
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. Two long commands run in the background. One sends its output elsewhere at once, the other a little later, so after the bridge restarts it cannot prove either is still the command.
+2. Both end on their own. The thread must never show them running forever: once the bridge cannot tell, the steps say so and stop spinning, and the session rests.
+
+**Setup.**
+
+- New session `vu1` in demo (haiku, mode default): "Use the Bash tool with run_in_background set to true to run exactly this command: exec >/dev/null 2>&1; sleep 51 Do not wait for it, do not check on it, do not run anything else. Reply with one line: started."
+- Wait up to 90 s for vu1's turn to start; mark `vu1-started`.
+- Wait up to 180 s for vu1's turn to end; mark `vu1-ended`.
+- New session `vu2` in demo (haiku, mode default): "Use the Bash tool with run_in_background set to true to run exactly this command: sleep 25; exec >/dev/null 2>&1; sleep 52 Do not wait for it, do not check on it, do not run anything else. Reply with one line: started."
+- Wait up to 90 s for vu2's turn to start; mark `vu2-started`.
+- Wait up to 180 s for vu2's turn to end; mark `vu2-ended`.
+- Wait up to 60 s for both commands to run on the Mac; mark `bg-running`.
+- Restart the bridge on the same port and home; the phone reconnects. Mark `restarted`.
+- Wait 8 s.
+- Mark `after-restart`.
+- Wait up to 150 s for vu1's command to end; mark `vu1-gone`.
+- Wait up to 150 s for vu2's command to end; mark `vu2-gone`.
+- Wait up to 150 s for both commands to end; mark `all-gone`.
+- Wait 10 s.
+- Mark `after-ended`.
+- Wait 30 s.
+- Mark `after-ended-40s`.
+- Wait up to 240 s for the bridge to say each command ended; mark `ended-said` (optional).
+- Wait 5 s.
+- Mark `after-said`.
+
+**Preconditions** (any failure fails the scenario):
+
+- session vu1 was created
+- session vu2 was created
+- the bridge restarted
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S6d.1 | state | protocol | Once the bridge cannot tell whether a command still runs, its step stops spinning and says so, and the session rests; one it still follows reads running. | At mark after-restart, vu1's Bash step is in state "unsure" with a cause that says the bridge cannot tell, and vu1 is not working; vu2's step is running with a task that names it, or already unsure; neither reads stopped. | vu1's step reads anything but unsure, or vu1 reads working; or vu2's step reads stopped, or running with no task. |
+| S6d.2 | state | protocol | After both commands ended, neither thread shows a step running and neither session works, 10 s and 40 s later. | At marks after-ended and after-ended-40s, no Bash step of vu1 or vu2 reads running, and neither reads working. | A step still reads running, or a session reads working. |
+| S6d.3 | state | protocol | Each command's end is said once, whether the bridge knew its process group or found it only by its command line. | By mark after-said, vu1 and vu2 each hold exactly one notice that the command "ended", said no earlier than 1 s before the run saw that command's process gone, and each Bash step is in state "ended", neither stopped nor unsure. | A thread never says its command ended, says it twice, says it while the process still ran, or its step reads anything but ended. |
 
 ## S7 Twelve sessions at once
 

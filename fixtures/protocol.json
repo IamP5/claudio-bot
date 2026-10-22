@@ -1802,6 +1802,30 @@
                 "tools": 4,
                 "ms": 31000
               }
+            },
+            {
+              "id": "toolu_01Ac7",
+              "tool": "Bash",
+              "label": "Run in background: sleep 600",
+              "state": "unsure",
+              "diff": null,
+              "output": null,
+              "detail": "sleep 600",
+              "startedAt": "2026-10-16T12:00:00.000Z",
+              "background": true,
+              "cause": "Can't tell whether this still runs on your Mac"
+            },
+            {
+              "id": "toolu_01Ac8",
+              "tool": "Bash",
+              "label": "Run in background: sleep 700",
+              "state": "ended",
+              "diff": null,
+              "output": null,
+              "detail": "sleep 700",
+              "startedAt": "2026-10-16T12:00:00.000Z",
+              "background": true,
+              "cause": "It ended without a result"
             }
           ]
         },

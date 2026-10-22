@@ -24,7 +24,14 @@ class PreconditionFailed extends Error {}
 
 /** The run whose bridge is up, so every way out (the end, SIGINT, SIGTERM, a crash) stops it. */
 let live: { id: string; out: string } | null = null;
+/** Claude Code processes a scenario froze (signal-claude), resumed on every way out so cleanup can stop them. */
+const paused: number[] = [];
 function cleanupBridge() {
+  for (const pid of paused.splice(0)) {
+    try {
+      process.kill(pid, "SIGCONT");
+    } catch {}
+  }
   if (!live) return null;
   const { id, out } = live;
   live = null;
@@ -32,7 +39,12 @@ function cleanupBridge() {
   return sh(["bun", CONTROL, "cleanup", "--run", id], join(out, "cleanup.log")).out;
 }
 process.on("exit", cleanupBridge);
-for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]] as const) process.on(sig, () => process.exit(code));
+for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129], ["SIGQUIT", 131]] as const) process.on(sig, () => process.exit(code));
+for (const event of ["uncaughtException", "unhandledRejection"] as const)
+  process.on(event, (e) => {
+    console.error(e);
+    process.exit(1);
+  });
 
 /** seen: the order each item was first seen in. */
 type Thread = { items: Map<string, Item>; seen: Map<string, number>; controls: Controls | null; epoch: string | null; rev: number };
@@ -616,9 +628,17 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
         return markNow(a.mark);
       case "sleep":
         return Bun.sleep(a.s * 1000);
-      case "stop":
-        p.send({ type: "session_stop", sessionId: ev.ids[a.name]! });
+      case "stop": {
+        const sessionId = ev.ids[a.name]!;
+        if (a.task === undefined) p.send({ type: "session_stop", sessionId, ...(a.turnOnly && { target: "turn" }) });
+        else {
+          const tasks = (ev.history.filter((s) => s.name === a.name).at(-1)?.controls?.tasks ?? []) as { id: string; label: string }[];
+          const task = tasks.find((t) => t.label.includes(a.task!));
+          if (!task) throw new Error(`no running task of ${a.name} names "${a.task}"`);
+          p.send({ type: "session_stop", sessionId, target: { task: task.id } });
+        }
         return markNow(a.mark);
+      }
       case "leave":
         p.send({ type: "unwatch_session", sessionId: ev.ids[a.name]! });
         p.away.add(ev.ids[a.name]!);
@@ -686,6 +706,17 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
         ev.samples[a.as] = ev.procs(a.pattern);
         log(`ps ${a.as}: ${ev.samples[a.as]!.join(" | ") || "none"}`);
         return;
+      case "signal-claude": {
+        const sid = ev.ids[a.name]!;
+        const found = sh(["pgrep", "-P", String(run!.bridgePid), "-f", sid]).out.split("\n").filter(Boolean).map(Number);
+        const lines = found.map((pid) => `${pid} ${sh(["ps", "-p", String(pid), "-o", "command="]).out.trim()}`).filter((l) => /(^|\/)claude$/.test(l.split(" ")[1] ?? ""));
+        if (!lines.length) throw new PreconditionFailed(`no Claude Code process names session ${sid}`);
+        for (const l of lines) process.kill(Number(l.split(" ")[0]), a.signal);
+        if (a.signal === "SIGSTOP") paused.push(...lines.map((l) => Number(l.split(" ")[0])));
+        else paused.splice(0);
+        log(`${a.signal} ${lines.join(" | ").slice(0, 200)}`);
+        return markNow(a.mark);
+      }
       case "kill-claude": {
         const sid = ev.ids[a.name]!;
         const found = sh(["pgrep", "-P", String(run!.bridgePid), "-f", sid]).out.split("\n").filter(Boolean).map(Number);
@@ -852,7 +883,9 @@ function describe(a: Action): string {
     case "until":
       return `Wait up to ${a.timeoutS} s for ${a.what}; mark \`${a.mark}\`${a.optional ? " (optional)" : ""}.`;
     case "stop":
-      return `Press Stop on \`${a.name}\` (session_stop); mark \`${a.mark}\`.`;
+      return a.task === undefined
+        ? `Press Stop${a.turnOnly ? " the turn only" : ""} on \`${a.name}\` (session_stop${a.turnOnly ? ", target turn" : ""}); mark \`${a.mark}\`.`
+        : `Stop only the task \`${a.task}\` of \`${a.name}\` (session_stop with target task); mark \`${a.mark}\`.`;
     case "sleep":
       return `Wait ${a.s} s.`;
     case "mark":
@@ -875,6 +908,8 @@ function describe(a: Action): string {
       return `Sample the Mac's processes matching \`${a.pattern}\` in the seed project as \`${a.as}\`.`;
     case "kill-claude":
       return `SIGKILL the Claude Code process of \`${a.name}\`; mark \`${a.mark}\`.`;
+    case "signal-claude":
+      return `Send ${a.signal} to the Claude Code process of \`${a.name}\` (${a.signal === "SIGSTOP" ? "it freezes" : "it resumes"}); mark \`${a.mark}\`.`;
     case "restart-bridge":
       return `Restart the bridge on the same port and home; the phone reconnects. Mark \`${a.mark}\`.`;
     case "lose-frame":

@@ -15,11 +15,12 @@ import type {
 import type { Tickable } from "./clock";
 import type { Headroom, Ledger } from "./ledger";
 import { notices as noticeText, withNotices, type SessionInput } from "./prompts";
+import { evalArg, groupAlive, shellGroups, shellLeaders, taskRun, type TaskRun } from "./procs";
 import type { NoticeReason, StopTarget, TaskId } from "./protocol";
 import { sandboxFailure } from "./sandbox";
 import type { Persist } from "./store";
 import { emptyTasks, liveTasks, lostNotice, observe, wakes, type Activity, type Tasks } from "./tasks";
-import { displayName, errorText, maskSecrets } from "./text";
+import { displayName, errorText, fewNames, maskSecrets } from "./text";
 import {
   attended,
   driverKey,
@@ -65,8 +66,9 @@ const STALL_MS = 30 * 60_000;
  */
 const IDLE_MS = 15 * 60_000;
 /**
- * Closing a query kills its background work, so a turn that needs a new query waits this long at most for the live
- * one's to finish. Then the work is stopped, with a note, and the turn runs.
+ * Closing a query ends its background subagents and leaves its commands running with no one to report them, so a turn
+ * that needs a new query waits this long at most for the live one's work to finish. Then the work is stopped, with a
+ * note once Claude Code confirms it, and the turn runs.
  */
 export const BACKGROUND_WAIT_MS = 10 * 60_000;
 /**
@@ -108,10 +110,51 @@ const FORGOTTEN_NOTICE =
 const forgotten = (text: string, id: string) => text.includes(`No conversation found with session ID: ${id}`);
 /** What Claude Code says when a query asks to start a session under an id that already has a transcript. */
 const inUse = (text: string, id: string) => text.includes(`Session ID ${id} is already in use`);
-const tasksOf = (tasks: readonly Background[]) => tasks.map((t) => t.description ?? t.id).join("; ");
+const tasksOf = (tasks: readonly Background[]) =>
+  fewNames(
+    tasks.map((t) => t.description ?? t.id),
+    (names) => names.join("; "),
+    "; ",
+  );
 const backgroundStoppedNote = (name: string, tasks: readonly Background[]) => `${name}'s background work stopped: ${tasksOf(tasks)}.`;
-const restartStoppedNote = (name: string, tasks: readonly Background[]) =>
-  `The bridge restarted, so ${name}'s background work stopped: ${tasksOf(tasks)}.`;
+/** Why a query's background work lost its Claude Code: the bridge restarted, or Claude Code exited. */
+export type GoneCause = "restart" | "exit";
+/** What became of a gone query's background work, by what the Mac still runs. */
+export type Fate = { stopped: Background[]; running: Background[]; unknown: Background[] };
+export const goneNote = (name: string, cause: GoneCause, kind: keyof Fate, tasks: readonly Background[]): string => {
+  const restart = cause === "restart";
+  switch (kind) {
+    case "stopped":
+      return restart ? `The bridge restarted, so ${name}'s background work stopped: ${tasksOf(tasks)}.` : backgroundStoppedNote(name, tasks);
+    case "running":
+      return `${restart ? `The bridge restarted, and ${name}` : `${name} exited, and`} no longer follows its background work, which still runs on this Mac: ${tasksOf(tasks)}.`;
+    case "unknown":
+      return `${restart ? `The bridge restarted, and ${name}'s` : `${name} exited, and its`} background work may still run on this Mac: ${tasksOf(tasks)}.`;
+  }
+};
+/**
+ * A command (or other shell task) outlives Claude Code while its shell still writes to its output file, and stopped
+ * once no process of its group runs. Subagents run inside Claude Code, so they stopped once its process is gone. Without
+ * one of those facts the bridge cannot tell.
+ */
+const FATE_OF_RUN = { runs: "running", gone: "stopped", unsure: "unknown", unread: "unknown" } as const;
+async function fateOf(tasks: readonly Background[], run: (group: number, id: string) => Promise<TaskRun>): Promise<Fate> {
+  const fate: Fate = { stopped: [], running: [], unknown: [] };
+  for (const t of tasks) {
+    if (typeof t.group === "number") fate[FATE_OF_RUN[await run(t.group, t.id)]].push(t);
+    else if (typeof t.loose === "number") fate[groupAlive(t.loose) ? "unknown" : "stopped"].push(t);
+    else if (t.kind === "agent" && t.claude !== undefined && !groupAlive(t.claude)) fate.stopped.push(t);
+    else fate.unknown.push(t);
+  }
+  return fate;
+}
+/** A Claude Code that exits on its own stops its commands first; the bridge looks at what still runs this much later. */
+export const EXIT_SETTLE_MS = 1_000;
+/** How long the bridge looks at what a gone query's background work became before it says it cannot tell. */
+export const GONE_LOOK_MAX_MS = 60_000;
+/** How many times the bridge looks up the shells of a query's background commands before it gives up on one. */
+const SHELL_SEARCHES = 3;
+const SHELL_SEARCH_AGAIN_MS = 1_000;
 const compactedNote = (name: string) => `${name}'s conversation was compacted to make room; older details are summarized now.`;
 const restartedNotice = (envelopeText: string) =>
   `[The bridge restarted during your turn on: ${envelopeText.split("\n")[0]} It may be partly done; check before redoing it.]`;
@@ -610,7 +653,7 @@ function killGroup(pid: number) {
  * it spawned itself, so this one hands it over. `exited` is called once Claude Code has exited, or at once when it
  * never started.
  */
-export function spawnGroup(o: SpawnOptions, stderr: (data: string) => void, exited: () => void): SpawnedProcess {
+export function spawnGroup(o: SpawnOptions, stderr: (data: string) => void, exited: () => void): SpawnedProcess & { pid?: number } {
   const child = spawn(o.command, o.args, { cwd: o.cwd, env: o.env, stdio: ["pipe", "pipe", "pipe"], detached: true });
   child.stderr.on("data", (d) => stderr(String(d)));
   const pid = child.pid;
@@ -666,6 +709,10 @@ export type Session = Tickable & {
   readonly working: boolean;
   /** Why queued work is held while nothing runs; null when something runs or nothing waits. */
   readonly parkedFor: ParkReason | null;
+  /** Claude Code announced a turn of its own that has not begun: the work it reports may still show as running. */
+  readonly wakeDue: boolean;
+  /** What became of a gone query's background work is still being looked up: none of it is known to have ended. */
+  readonly settling: boolean;
   /** Claude Code could not be started on the last try and the session waits to try again. working stays true meanwhile. */
   readonly unavailable: boolean;
   /** The envelope in flight. The gate reads its initiator. */
@@ -673,7 +720,8 @@ export type Session = Tickable & {
   readonly lifecycle: Owned<Lifecycle>;
 };
 
-export type StopReport = { ran: boolean; refused: TaskId[]; late: TaskId[] };
+/** woken: the stop reached a turn Claude Code began on its own, whose end onWakeEnd tells. */
+export type StopReport = { ran: boolean; refused: TaskId[]; late: TaskId[]; woken: boolean };
 
 function within<T>(p: Promise<T>, ms: number, late: T): Promise<T> {
   return new Promise((resolve) => {
@@ -742,6 +790,19 @@ export type SessionSpec = {
   forgotten?: "restart" | "fail";
   /** How long a query with nothing to do stays open. Default 15 minutes. */
   idleMs?: number;
+  /** By task id, the process group of each background shell of Claude Code's process `pid` (null: none spawned). Default shellGroups. */
+  shells?: (pid: number | null) => Promise<Map<string, number>>;
+  /** The group-leading processes Claude Code's process `pid` started, with their command lines. Default shellLeaders. */
+  leaders?: (pid: number | null) => Promise<{ group: number; command: string }[]>;
+  /** Whether a saved process group still runs the background command with this task id. Default taskRun. */
+  taskRun?: (group: number, id: string) => Promise<TaskRun>;
+  /**
+   * What became of a query's background work once its Claude Code is gone, checked against the process table. An owner
+   * given this says so itself (and may follow the commands that still run); without one, notes say it.
+   */
+  gone?: (fate: Fate, cause: GoneCause) => void;
+  /** How a turn Claude Code began on its own ended after a Stop reached it: stopped, or finished before the stop landed. */
+  onWakeEnd?: (how: "stopped" | "finished") => void;
   /**
    * Read before a turn is sent: why it must wait (another live Claude Code is busy on the session), or null. A wait
    * keeps the turn queued and retries it as a start that could not open does.
@@ -775,8 +836,19 @@ type Live = {
   claimed: string | null;
   /** A turn on this query has ended, so a later "No conversation found" is not about its resume. */
   answered: boolean;
-  /** Its live background tasks, as the last background_tasks_changed listed them, ambient ones left out. Closing kills them. */
+  /** Its live background tasks, as the last background_tasks_changed listed them, ambient ones left out. */
   background: Background[];
+  /** The process group of each background command's shell, by task id, once found. */
+  groups: Map<string, number>;
+  /** The group of the one shell whose command line holds a command whose output file could not be found, by task id. */
+  loose: Map<string, number>;
+  /** Searches of the process table for each task's group so far, and whether one is under way. */
+  searches: Map<string, number>;
+  searching: boolean;
+  /** Claude Code's process id; null until it is spawned, or when it never was. */
+  pid(): number | null;
+  /** A Stop reached a turn Claude Code began on its own; past this time with no such turn running, it is taken as stopped. */
+  wakeStop: number | null;
   /**
    * Whose turn Claude Code is running, from the init frame each of its turns starts with: true for ours, false for one a
    * background task woke, null while no init has echoed a uuid on this query (an older CLI). Only a turn's first
@@ -785,8 +857,8 @@ type Live = {
   ours: boolean | null;
   /** Claude Code's own turn on this query, which closing it would cut off. */
   cli: Cli;
-  /** Its background tasks were stopped with a note, so closing it does not note them again. */
-  stopped: boolean;
+  /** Background tasks Claude Code confirmed it stopped, with a note, so closing it does not note them again. */
+  stopped: Set<string>;
   /** Every task Claude Code runs on it, foreground ones too. */
   tasks: Tasks;
   heardAt: number | null;
@@ -801,10 +873,10 @@ type Live = {
  * What Claude Code is doing on a query on its own account, background tasks aside. running: from a turn's init frame
  * to its result, ours or one a background task woke; `wake` when a task_notification came meanwhile and no later tool
  * result carried it into the turn, so a wake turn may follow. due: a wake turn may start; past `until` it is taken as
- * never coming. `shown` only when a notification came with no turn running, the one case where Claude Code always
- * wakes; a notification during a turn usually ends inside it, so the phone is not told to expect a wake turn.
+ * never coming. A due turn is not shown as running: Claude Code may only queue the notification and never start it
+ * (CLI 2.1.305, after a task the user stopped), so the session works only from the turn's init frame.
  */
-type Cli = { kind: "idle" } | { kind: "running"; wake: boolean; at: number } | { kind: "due"; until: number; at: number; shown: boolean };
+type Cli = { kind: "idle" } | { kind: "running"; wake: boolean; at: number } | { kind: "due"; until: number };
 
 const IDLE: Cli = { kind: "idle" };
 /** A wake turn was announced and has not started. */
@@ -812,8 +884,8 @@ const wakeAhead = (c: Cli) => c.kind === "due" || (c.kind === "running" && c.wak
 
 /** Closing the query now would cut work off: its background tasks, or a turn Claude Code runs or is about to run. */
 const busy = (l: Live) => l.background.length > 0 || l.cli.kind !== "idle";
-/** When Claude Code's own turn started, or was announced; null when it runs none and none is surely coming. */
-const cliTurnAt = (c: Cli): number | null => (c.kind === "running" || (c.kind === "due" && c.shown) ? c.at : null);
+/** When the turn Claude Code runs on its own started; null when it runs none. */
+const cliTurnAt = (c: Cli): number | null => (c.kind === "running" ? c.at : null);
 
 /** A background task of the live query, by what a note would name it. */
 type Background = NonNullable<SessionState["background"]>[number];
@@ -840,6 +912,8 @@ export function createSession(spec: SessionSpec): Session {
   const log = spec.log ?? ((line: string) => console.error(line));
   const executable = spec.executable ?? claudeExecutable;
   const spawnProcess = spec.spawn ?? spawnGroup;
+  const shells = spec.shells ?? ((pid: number | null) => (pid === null ? Promise.resolve(new Map<string, number>()) : shellGroups(pid)));
+  const leaders = spec.leaders ?? ((pid: number | null) => (pid === null ? Promise.resolve([]) : shellLeaders(pid)));
   const userName = spec.userName ?? "The user";
   const label = driverKey(spec.actor);
   const idleMs = spec.idleMs ?? IDLE_MS;
@@ -865,6 +939,10 @@ export function createSession(spec: SessionSpec): Session {
    * cannot charge the new query's turns.
    */
   let closing: Live | null = null;
+  /** The look at what a gone query's background work became, due once Claude Code has had time to stop its commands. */
+  let exitCheck: { timer: ReturnType<typeof setTimeout>; run: () => void } | null = null;
+  /** Reports of a gone query's background work still looking at the process table. */
+  let reporting = 0;
 
   /** Claude Code said the id the options name for a new session is taken: from now on that id is resumed. */
   let takenId: string | null = null;
@@ -994,7 +1072,7 @@ export function createSession(spec: SessionSpec): Session {
    * maxBudgetUsd is fixed when a query opens and counts the spend since then, and the SDK stops a turn at it. So an
    * unattended turn gets a query of its own, capped at what is left of the daily cap as it starts, and an attended turn
    * never runs on such a query: the cap does not hold it. A runaway unattended turn stops at the cap, not at its end.
-   * Closing a query kills its background work and any turn Claude Code runs on its own, so a turn that needs a new
+   * Closing a query cuts off its background work and any turn Claude Code runs on its own, so a turn that needs a new
    * query while the live one is busy is held until it is not, or for BACKGROUND_WAIT_MS. An attended turn runs on a
    * stale busy query rather than wait: the new options can wait, the user should not.
    */
@@ -1028,10 +1106,13 @@ export function createSession(spec: SessionSpec): Session {
     if (h.stopping || !l || !busy(l)) return advance(true);
     h.stopping = true;
     h.until = clock().getTime() + WAKE_WAIT_MS;
-    if (l.background.length === 0) return;
-    l.stopped = true;
-    guard("note", () => spec.note(backgroundStoppedNote(spec.name?.() ?? "Claude Code", l.background)));
-    for (const t of l.background) void stopTask(l, t.id as TaskId);
+    const tasks = [...l.background];
+    if (tasks.length === 0) return;
+    void Promise.all(tasks.map((t) => stopTask(l, t.id as TaskId))).then((took) => {
+      const stopped = tasks.filter((_, i) => took[i]);
+      for (const t of stopped) l.stopped.add(t.id);
+      if (stopped.length > 0) guard("note", () => spec.note(backgroundStoppedNote(spec.name?.() ?? "Claude Code", stopped)));
+    });
   }
 
   /** Marked before asking, since Claude Code can report the stop before the call returns. */
@@ -1106,6 +1187,7 @@ export function createSession(spec: SessionSpec): Session {
       told();
       settle(l);
     }
+    if (l && l.wakeStop !== null && l.cli.kind !== "running" && now.getTime() >= l.wakeStop) wakeEnded(l, "stopped");
     const due = watchDeadline();
     if (due !== null && now.getTime() >= due) {
       if (held) expire(held);
@@ -1132,6 +1214,7 @@ export function createSession(spec: SessionSpec): Session {
     let stderr = "";
     const tail = (d: string) => void (stderr = (stderr + d).slice(-2000));
     let spawned = false;
+    let pid: number | null = null;
     let exited = false;
     const exit = () => {
       exited = true;
@@ -1160,7 +1243,9 @@ export function createSession(spec: SessionSpec): Session {
         stderr: tail,
         spawnClaudeCodeProcess: (o) => {
           spawned = true;
-          return spawnProcess(o, tail, exit);
+          const child = spawnProcess(o, tail, exit);
+          pid = child.pid ?? null;
+          return child;
         },
       },
     });
@@ -1175,9 +1260,15 @@ export function createSession(spec: SessionSpec): Session {
       stale: false,
       sandboxNoted: false,
       background: [],
+      groups: new Map(),
+      loose: new Map(),
+      searches: new Map(),
+      searching: false,
+      pid: () => pid,
+      wakeStop: null,
       ours: null,
       cli: IDLE,
-      stopped: false,
+      stopped: new Set(),
       tasks: emptyTasks(),
       heardAt: null,
       gone: () => exited || !spawned,
@@ -1203,10 +1294,107 @@ export function createSession(spec: SessionSpec): Session {
     l.release();
     guard("close", () => l.q.close());
     if (!l.gone()) closing = l;
-    // close() leaves them on disk for the next start to name.
+    if (l.wakeStop !== null) wakeEnded(l, "stopped");
+    // close() leaves them on disk for the next start to check.
     if (closed || l.background.length === 0) return;
-    if (!l.stopped) guard("note", () => spec.note(backgroundStoppedNote(spec.name?.() ?? "Claude Code", l.background)));
-    remember([]);
+    const ids = new Set(l.background.map((b) => b.id));
+    const look = () => {
+      exitCheck = null;
+      const left = savedBackground(l).filter((b) => !l.stopped.has(b.id));
+      // A query opened since has saved its own background work over these.
+      if (live === null) remember((spec.state.background ?? []).filter((b) => !ids.has(b.id)));
+      if (left.length > 0) void reportGone(left, "exit");
+    };
+    if (l.stopped.size >= ids.size) return look();
+    exitCheck = { timer: setTimeout(look, EXIT_SETTLE_MS), run: look };
+  }
+
+  /** The live query's background tasks as saved: what the thread shows of each, and what runs it once found. */
+  function savedBackground(l: Live): Background[] {
+    const pid = l.pid();
+    return l.background.map((b) => {
+      const t = l.tasks.all.get(b.id as TaskId);
+      const group = l.groups.get(b.id);
+      const loose = group === undefined ? l.loose.get(b.id) : undefined;
+      return {
+        ...b,
+        ...(t && { kind: t.kind, label: t.label, startedAt: t.startedAt, ...(t.stepId !== null && { stepId: t.stepId }) }),
+        ...(group !== undefined && { group }),
+        ...(loose !== undefined && { loose }),
+        ...(t?.kind === "agent" && pid !== null && { claude: pid }),
+      };
+    });
+  }
+
+  /** Says what became of a gone query's background work, from the process table: the owner does, or notes do. */
+  async function reportGone(tasks: Background[], cause: GoneCause) {
+    // A look that never answers (a wedged lsof) is given up on: the work may still run, and is looked at again later.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cantTell = new Promise<Fate>((resolve) => {
+      timer = setTimeout(() => resolve({ stopped: [], running: [], unknown: [...tasks] }), GONE_LOOK_MAX_MS);
+    });
+    reporting++;
+    try {
+      const fate = await Promise.race([fateOf(tasks, spec.taskRun ?? taskRun), cantTell]);
+      if (spec.gone) return guard("gone", () => spec.gone!(fate, cause));
+      for (const kind of ["stopped", "running", "unknown"] as const)
+        if (fate[kind].length > 0) guard("note", () => spec.note(goneNote(spec.name?.() ?? "Claude Code", cause, kind, fate[kind]), cause === "restart" ? "restart" : undefined));
+    } finally {
+      clearTimeout(timer);
+      reporting--;
+      guard("onChange", () => spec.onChange());
+    }
+  }
+
+  /** Saves the live query's background work, and looks up the shell of each command not yet found, a few times each. */
+  function saveBackground(l: Live) {
+    remember(savedBackground(l));
+    const missing = () =>
+      l.background.filter((b) => !l.groups.has(b.id) && l.tasks.all.get(b.id as TaskId)?.kind !== "agent" && (l.searches.get(b.id) ?? 0) < SHELL_SEARCHES);
+    const now = missing();
+    if (l.searching || now.length === 0) return;
+    l.searching = true;
+    for (const b of now) l.searches.set(b.id, (l.searches.get(b.id) ?? 0) + 1);
+    const pid = l.pid();
+    Promise.all([shells(pid), leaders(pid)]).then(
+      ([found, shellsOf]) => {
+        l.searching = false;
+        for (const [id, group] of found) if (l.background.some((b) => b.id === id)) l.groups.set(id, group);
+        pairLoose(l, shellsOf);
+        if (live !== l) return;
+        remember(savedBackground(l));
+        if (missing().length > 0) setTimeout(() => live === l && saveBackground(l), SHELL_SEARCH_AGAIN_MS);
+      },
+      (e) => {
+        l.searching = false;
+        log(`session ${label}: finding background shells failed: ${errorText(e)}`);
+      },
+    );
+  }
+
+  /**
+   * A command whose shell sent its output elsewhere before the bridge looked has no output file to find it by. When
+   * exactly one of Claude Code's shells runs exactly the command Claude Code was given, and no other task has it, that
+   * shell is taken as the command's, loosely: to see it end, never to signal it. Two alike, or none exact, stay unpaired.
+   */
+  function pairLoose(l: Live, shellsOf: readonly { group: number; command: string }[]) {
+    const taken = new Set([...l.groups.values(), ...l.loose.values()]);
+    const runs = shellsOf.map((s) => ({ group: s.group, command: evalArg(s.command) }));
+    for (const b of l.background) {
+      const t = l.tasks.all.get(b.id as TaskId);
+      if (l.groups.has(b.id) || l.loose.has(b.id) || t?.kind !== "command" || t.stepId === null) continue;
+      const given = l.tasks.raw.get(t.stepId);
+      const hits = given === undefined ? [] : runs.filter((r) => r.command === given);
+      if (hits.length !== 1 || taken.has(hits[0]!.group)) continue;
+      l.loose.set(b.id, hits[0]!.group);
+      taken.add(hits[0]!.group);
+    }
+  }
+
+  /** The turn Claude Code began on its own that a Stop reached has ended. */
+  function wakeEnded(l: Live, how: "stopped" | "finished") {
+    l.wakeStop = null;
+    guard("onWakeEnd", () => spec.onWakeEnd?.(how));
   }
 
   function remember(tasks: Background[]) {
@@ -1221,7 +1409,7 @@ export function createSession(spec: SessionSpec): Session {
     l.background = tasks
       .filter((t) => t.ambient !== true)
       .map((t) => ({ id: t.task_id, ...(t.description && { description: displayName(maskSecrets(t.description), DESCRIPTION_MAX) }) }));
-    remember(l.background);
+    saveBackground(l);
     settle(l);
   }
 
@@ -1296,13 +1484,18 @@ export function createSession(spec: SessionSpec): Session {
       guard("persist", () => spec.persist());
     }
     const turn = answers(m, l) ? current() : null;
+    const wakeRan = l.cli.kind === "running";
+    // Claude Code takes a stop it reads before the turn it aims at begins as a stop of nothing (it was paused, or slow
+    // to read its input), then runs the turn. So the stop goes again as that turn begins.
+    const stopMissed = l.ours === true ? spec.state.lifecycle.kind === "stopping" : l.wakeStop !== null;
+    if (m.type === "system" && m.subtype === "init" && stopMissed)
+      guard("interrupt", () => void l.q.interrupt().catch((err) => log(`session ${label}: interrupt failed: ${errorText(err)}`)));
     const was = activityKey();
-    // A wake turn keeps the start it was announced with, so a Stop aimed at it still names it once it runs.
-    if (m.type === "system" && m.subtype === "init") l.cli = { kind: "running", wake: l.ours === true && wakeAhead(l.cli), at: l.cli.kind === "due" && l.cli.shown ? l.cli.at : heardAt };
+    if (m.type === "system" && m.subtype === "init") l.cli = { kind: "running", wake: l.ours === true && wakeAhead(l.cli), at: heardAt };
     // Claude Code wakes for a background task that ended or that the bridge stopped, not for one it stopped itself.
     else if (m.type === "system" && m.subtype === "task_notification" && wakes(l.tasks, m.task_id as TaskId, m.status)) {
-      l.cli = l.cli.kind === "running" ? { ...l.cli, wake: true } : { kind: "due", until: heardAt + WAKE_WAIT_MS, at: l.cli.kind === "due" ? l.cli.at : heardAt, shown: true };
-    } else if (m.type === "result" && l.cli.kind === "running") l.cli = l.cli.wake ? { kind: "due", until: heardAt + WAKE_WAIT_MS, at: heardAt, shown: false } : IDLE;
+      l.cli = l.cli.kind === "running" ? { ...l.cli, wake: true } : { kind: "due", until: heardAt + WAKE_WAIT_MS };
+    } else if (m.type === "result" && l.cli.kind === "running") l.cli = l.cli.wake ? { kind: "due", until: heardAt + WAKE_WAIT_MS } : IDLE;
     else if (l.cli.kind === "running" && l.cli.wake && m.type === "user" && m.parent_tool_use_id === null && Array.isArray(m.message.content) && m.message.content.some((b) => b.type === "tool_result")) {
       // The next request carries the queued notification into this turn, so no wake turn follows for it.
       l.cli = { ...l.cli, wake: false };
@@ -1326,6 +1519,7 @@ export function createSession(spec: SessionSpec): Session {
     if (m.type === "system" && m.subtype === "compact_boundary" && m.compact_metadata.trigger === "auto")
       guard("note", () => spec.note(compactedNote(spec.name?.() ?? "Claude Code")));
     if (m.type === "system" && m.subtype === "background_tasks_changed") track(l, m.tasks);
+    else if (m.type === "system" && m.subtype === "task_started" && l.background.length > 0) saveBackground(l);
     guard("onMessage", () => spec.onMessage(m, turn));
     if (m.type !== "result") return;
     const fresh = l.fresh;
@@ -1337,6 +1531,7 @@ export function createSession(spec: SessionSpec): Session {
     signals = noSignals();
     if (!turn) {
       if (outcome.kind === "usage_limit" && outcome.scope === "account") dispatch({ kind: "limit", until: outcome.until });
+      if (wakeRan && l.wakeStop !== null) wakeEnded(l, m.subtype === "success" && !m.is_error ? "finished" : "stopped");
       return settle(l);
     }
     const failed = m.subtype !== "success" || m.is_error;
@@ -1380,15 +1575,15 @@ export function createSession(spec: SessionSpec): Session {
 
   const bootStatus = status();
   let recovered: Effect[] | null = transition({ kind: "recover" }, clock());
-  const lost = spec.state.background ?? [];
-  if (lost.length > 0) {
-    recovered.push({ kind: "note", text: restartStoppedNote(spec.name?.() ?? "Claude Code", lost), reason: "restart" });
-    remember([]);
-  }
+  let lost: Background[] = [...(spec.state.background ?? [])];
+  if (lost.length > 0) remember([]);
   function tellRecovered() {
     const fx = recovered;
     recovered = null;
     for (const e of fx ?? []) perform(e);
+    const left = lost;
+    if (left.length > 0) void reportGone(left, "restart");
+    lost = [];
   }
   // The caller registers the session before any callback fires, so the recovered TurnEnds wait for the first dispatch,
   // close(), or this microtask, whichever comes first.
@@ -1407,13 +1602,13 @@ export function createSession(spec: SessionSpec): Session {
       dispatch({ kind: "denied" });
     },
     async interrupt(target = "all") {
-      const none: StopReport = { ran: false, refused: [], late: [] };
+      const none: StopReport = { ran: false, refused: [], late: [], woken: false };
       if (closed) return none;
       const l = live;
       const stopOne = async (id: TaskId) => ({ id, took: await within<boolean | null>(stopTask(l!, id), STOP_TASK_WAIT_MS, null) });
-      const report = async (ran: boolean, stops: ReturnType<typeof stopOne>[]): Promise<StopReport> => {
+      const report = async (ran: boolean, stops: ReturnType<typeof stopOne>[], woken = false): Promise<StopReport> => {
         const done = await Promise.all(stops);
-        return { ran, refused: done.filter((s) => s.took === false).map((s) => s.id), late: done.filter((s) => s.took === null).map((s) => s.id) };
+        return { ran, refused: done.filter((s) => s.took === false).map((s) => s.id), late: done.filter((s) => s.took === null).map((s) => s.id), woken };
       };
       if (typeof target === "object") {
         if (l === null || !liveTasks(l.tasks).some((t) => t.id === target.task)) return none;
@@ -1423,6 +1618,7 @@ export function createSession(spec: SessionSpec): Session {
       // A wake turn, running or announced, has no lifecycle turn to stop; only the query can interrupt it.
       const woken = l !== null && l.cli.kind !== "idle" && turnOf(spec.state.lifecycle as Lifecycle) === null;
       if (woken) {
+        l.wakeStop = clock().getTime() + WAKE_WAIT_MS;
         if (l.cli.kind === "due") {
           l.cli = IDLE;
           told();
@@ -1433,7 +1629,7 @@ export function createSession(spec: SessionSpec): Session {
       const running = kind === "working" || kind === "stopping" || kind === "backoff";
       const waits = running || spec.state.pending.length > 0;
       if (waits) dispatch({ kind: "stop" });
-      return report(waits || woken || stops.length > 0, stops);
+      return report(waits || woken || stops.length > 0, stops, woken);
     },
     unqueue(clientId) {
       const inFlight = turnOf(spec.state.lifecycle as Lifecycle)?.pending;
@@ -1462,7 +1658,8 @@ export function createSession(spec: SessionSpec): Session {
       const life = spec.state.lifecycle;
       const lifecycleAt =
         life.kind === "stopping" ? life.deadline : life.kind === "backoff" || life.kind === "parked" ? life.until : waiting() ? spec.account.parkedUntil : null;
-      const watched = watchDeadline();
+      const stopAt = live && live.wakeStop !== null && live.cli.kind !== "running" ? live.wakeStop : null;
+      const watched = [watchDeadline(), stopAt].reduce<number | null>((min, d) => (d !== null && (min === null || d < min) ? d : min), null);
       const watchAt = watched === null ? null : new Date(watched).toISOString();
       return lifecycleAt === null || (watchAt !== null && watchAt < lifecycleAt) ? watchAt : lifecycleAt;
     },
@@ -1471,11 +1668,21 @@ export function createSession(spec: SessionSpec): Session {
       tellRecovered();
       closed = true;
       closeLive();
+      if (exitCheck) {
+        clearTimeout(exitCheck.timer);
+        exitCheck.run();
+      }
     },
     get working() {
       return isWorking();
     },
     activity,
+    get wakeDue() {
+      return live?.cli.kind === "due";
+    },
+    get settling() {
+      return exitCheck !== null || reporting > 0 || lost.length > 0;
+    },
     get parkedFor() {
       return parkedFor();
     },

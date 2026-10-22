@@ -67,6 +67,8 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         let both = StopScope(controls(tasks: [sleeper, sleep75]))
         #expect(both.asks && both.confirmAll == "Stop everything")
         #expect(both.confirmMessage(queued: 2) == "sleep 75 keeps running in the background unless you stop everything. Your 2 queued messages still run.")
+        let two = StopScope(controls(tasks: [sleep75, task("t3", .command, "sleep 76", background: true)]))
+        #expect(two.confirmMessage(queued: 0) == "sleep 75 and sleep 76 keep running in the background unless you stop everything.")
         let background = StopScope(controls(turn: false, tasks: [sleep75]))
         #expect(background.asks && background.confirmAll == "Stop sleep 75" && background.confirmMessage(queued: 0) == "This stops sleep 75.")
     }
@@ -179,34 +181,55 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         #expect(state(busy, now: at + 1).slot.label == "Stop the turn, 1 agent and 1 command", "with nothing asked, Stop names all that runs")
     }
 
-    @Test func theBarGivesUpDetailOnlyWhileItIsSqueezed() {
-        var fit = BarFit()
-        fit.measured(content: 400, frame: 400)
-        #expect(fit.density == .full, "it fits")
-        fit.measured(content: 600, frame: 450)
-        #expect(fit.density == .iconChips)
-        fit.measured(content: 520, frame: 450)
-        #expect(fit.density == .oneLineStatus)
-        fit.measured(content: 440, frame: 440)
-        #expect(fit.density == .oneLineStatus, "it fits now, and does not step back down on its own")
-        fit.measured(content: 440, frame: 440)
-        #expect(fit.density == .oneLineStatus, "no swing between levels")
-        fit.measured(content: 600, frame: 650)
-        #expect(fit.density == .full, "more room than when it was squeezed: the keyboard went down")
+    @Test func aWithdrawnMessageLeavesTheQueueAtOnceEvenWhileClaudeCodeHangs() throws {
+        let store = store(controls(queued: 1), items: [user("q1", "Also run lint", queued: true)])
+        let model = try #require(store.threads[sid])
+        model.withdraw(ItemID("q1"))
+        #expect(model.queuedMessages.isEmpty, "the chip drops it before the bridge answers")
+        frame(store, rev: 2, items: [user("q1", "Also run lint", queued: true)], controls: controls(queued: 1))
+        #expect(model.withdrawing == [ItemID("q1")], "a frame that still has it queued keeps it withdrawing")
+        store.apply(.error(message: "That message is no longer queued: it already went to Claude.", about: .send(sessionId: sid, clientId: "q1")))
+        #expect(model.withdrawing.isEmpty, "a refusal gives it back to the items")
+        model.withdraw(ItemID("q1"))
+        store.apply(.thread(sessionId: sid, .items(rev: 3, items: [], removed: [ItemID("q1")], controls: controls(queued: 0))), at: at)
+        #expect(model.withdrawing.isEmpty && model.queuedMessages.isEmpty, "the bridge dropped it: settled")
+    }
 
-        var shrink = BarFit()
-        shrink.measured(content: 600, frame: 450)
-        shrink.measured(content: 560, frame: 450)
-        shrink.measured(content: 520, frame: 450)
-        #expect(shrink.density == .shortNote)
-        shrink.measured(content: 440, frame: 440)
-        #expect(shrink.density == .shortNote)
-        shrink.measured(content: 380, frame: 380)
-        #expect(shrink.density == .full, "the note went away: it starts again from full")
+    /// The bar as the thread drives it: each layout reports what the rows need at the density they were laid out at,
+    /// and the room the screen gives, until the density stops changing.
+    private func settle(_ fit: inout BarFit, room: CGFloat, needs: [BarDensity: CGFloat]) -> [BarDensity] {
+        var seen: [BarDensity] = []
+        for _ in 0..<20 {
+            fit.measured(content: needs[fit.density]!, room: room)
+            seen.append(fit.density)
+        }
+        return seen
+    }
+
+    @Test func theBarGivesUpDetailWhileSqueezedAndTakesItBackWhenTheRoomGrows() {
+        let needs: [BarDensity: CGFloat] = [.full: 615, .iconChips: 560, .oneLineStatus: 470, .shortNote: 440, .shortField: 400]
+        var fit = BarFit()
+        _ = settle(&fit, room: 724, needs: needs)
+        #expect(fit.density == .full, "the keyboard is down: it fits")
+        let typing = settle(&fit, room: 450, needs: needs)
+        #expect(fit.density == .shortNote, "the keyboard came up: the first level that fits")
+        #expect(Set(typing.suffix(10)) == [.shortNote], "and it stays there")
+        let done = settle(&fit, room: 724, needs: needs)
+        #expect(fit.density == .full, "the keyboard went down: the room alone brings the detail back")
+        #expect(Set(done.suffix(10)) == [.full])
+        _ = settle(&fit, room: 450, needs: needs)
+        _ = settle(&fit, room: 480, needs: needs)
+        #expect(fit.density == .oneLineStatus, "a little more room gives back as much as fits")
+        _ = settle(&fit, room: 300, needs: needs)
+        #expect(fit.density == .shortField, "nothing fits: the densest level, cut at the top")
+        let gone: [BarDensity: CGFloat] = [.full: 430, .iconChips: 420, .oneLineStatus: 400, .shortNote: 390, .shortField: 380]
+        _ = settle(&fit, room: 300, needs: needs)
+        _ = settle(&fit, room: 450, needs: gone)
+        #expect(fit.density == .full, "the note went away at the same room: everything fits again")
         #expect(BarDensity.shortNote.noteLines(accessibility: false) == 1 && BarDensity.full.noteLines(accessibility: true) == 2)
         #expect(BarDensity.full.noteLines(accessibility: false) == 3 && BarDensity.oneLineStatus.statusLines == 1)
         #expect(BarDensity.shortNote.fieldLines(accessibility: true) == 2 && BarDensity.shortField.fieldLines(accessibility: true) == 1)
-        #expect(BarDensity.shortField.next == nil, "the densest level")
+        #expect(BarDensity.shortField.next == nil && BarDensity.full.previous == nil)
     }
 
     @Test func theWorkSheetsTaskStopReadsTheRefusalToo() {

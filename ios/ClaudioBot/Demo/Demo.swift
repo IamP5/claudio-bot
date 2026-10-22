@@ -15,7 +15,7 @@ import Foundation
 /// `longthread` (500 items), `newsession`, `background` (the turn over, a subagent and its command still running),
 /// `threadoffline` (the Mac lost after the thread loaded), `threadwaiting` (a thread opened with the Mac out of reach),
 /// `composerdraft`, `composerlong`, `composerlapse`, `composersix`, `composerrefused`, `composermode`, `composerqueued`, `stoppedearly` (DemoSessions.stageComposer;
-/// add "kb" for the same with the keyboard up),
+/// add "kb" for the same with the keyboard up, or "kbgone" for the keyboard up and then put away 8 s in),
 /// `sessionsempty` and `sessionsoffline`.
 @MainActor
 enum Demo {
@@ -174,8 +174,8 @@ enum Demo {
         case "threadwaiting":
             store.setConnection(.disconnected(retryAt: .now + 25))
             router.open(.session(DemoSessions.audit))
-        case let composer? where DemoSessions.composerScreens.contains(composer.replacing(/kb$/, with: "")):
-            let staged = composer.replacing(/kb$/, with: "")
+        case let composer? where DemoSessions.composerScreens.contains(composer.replacing(/kb(gone)?$/, with: "")):
+            let staged = composer.replacing(/kb(gone)?$/, with: "")
             DemoSessions.backgroundOnly = staged == "composerlong" || staged == "composersix"
             router.open(.session(DemoSessions.audit))
             DemoSessions.stageComposer(staged, in: store)
@@ -192,9 +192,14 @@ enum Demo {
         screen == "newgroup" ? [BotID("engineer"), BotID("news")] : nil
     }
 
-    /// A composer screen whose name ends in "kb" opens with the field focused, so the keyboard is up.
+    /// A composer screen whose name ends in "kb" or "kbgone" opens with the field focused, so the keyboard is up.
     static var focusesComposer: Bool {
-        screen.map { $0.hasSuffix("kb") && DemoSessions.composerScreens.contains(String($0.dropLast(2))) } ?? false
+        screen.map { DemoSessions.composerScreens.contains($0.replacing(/kb(gone)?$/, with: "")) && $0.contains(/kb(gone)?$/) } ?? false
+    }
+
+    /// A "kbgone" screen puts the keyboard away after this long, as a drag down the transcript would.
+    static var dropsComposerFocus: Duration? {
+        focusesComposer && screen?.hasSuffix("kbgone") == true ? .seconds(8) : nil
     }
 
     /// What the composer holds when a screen opens mid-sentence: the "@" menu, a picked token, or the "/" menu.

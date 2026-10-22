@@ -26,7 +26,10 @@ struct ThreadRowView: View, Equatable {
         case .item(let item):
             switch item {
             case let .user(id, _, text, from, queued):
-                SessionUserBubble(text: text, from: from, queued: queued, botName: botName, actions: actions(id, text, queued: queued))
+                SessionUserBubble(
+                    text: text, from: from, queued: queued, withdrawing: model.withdrawing.contains(id), botName: botName,
+                    actions: model.withdrawing.contains(id) ? nil : actions(id, text, queued: queued)
+                )
             case let .assistant(id, _, text):
                 RenderedMarkdownView(markdown: model.rendered(id, text))
                     .font(.ui(size: 16))
@@ -87,6 +90,8 @@ struct SessionUserBubble: View {
     let text: String
     let from: SessionAuthor
     let queued: Bool
+    /// Taken back, and the bridge has not dropped it yet.
+    var withdrawing = false
     var botName: String?
     var actions: Actions?
 
@@ -123,7 +128,7 @@ struct SessionUserBubble: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(Self.spoken(rendered, from: from, botName: botName, queued: queued))
+            .accessibilityLabel(Self.spoken(rendered, from: from, botName: botName, queued: queued) + (withdrawing ? ", withdrawing" : ""))
             .accessibilityActions {
                 switch actions {
                 case let .queued(edit, withdraw)?:
@@ -152,7 +157,11 @@ struct SessionUserBubble: View {
             Button(action: resend) { captionLabel("Edit and resend", symbol: "arrow.uturn.up") }
                 .buttonStyle(.plain)
         case nil:
-            if queued {
+            if withdrawing {
+                Label("Withdrawing…", systemImage: "arrow.uturn.backward")
+                    .font(.caption)
+                    .foregroundStyle(Theme.tertiary)
+            } else if queued {
                 Label("Queued", systemImage: "clock")
                     .font(.caption)
                     .foregroundStyle(Theme.tertiary)

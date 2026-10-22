@@ -335,7 +335,8 @@ extension StopScope {
 
     /// queued: messages that wait for the turn. They survive a stop and run next.
     func confirmMessage(queued: Int) -> String {
-        let work = turn ? "\(backgroundWhat) keeps running in the background unless you stop everything." : "This stops \(backgroundWhat)."
+        let keeps = background.count == 1 ? "keeps" : "keep"
+        let work = turn ? "\(backgroundWhat) \(keeps) running in the background unless you stop everything." : "This stops \(backgroundWhat)."
         guard queued > 0 else { return work }
         return work + " " + (queued == 1 ? "Your queued message still runs." : "Your \(queued) queued messages still run.")
     }
@@ -423,6 +424,8 @@ enum BarDensity: Int, Comparable, CaseIterable, Sendable {
 
     var next: BarDensity? { BarDensity(rawValue: rawValue + 1) }
 
+    var previous: BarDensity? { BarDensity(rawValue: rawValue - 1) }
+
     var chipWords: Bool { self < .iconChips }
 
     var statusLines: Int { self < .oneLineStatus ? 3 : 1 }
@@ -438,30 +441,26 @@ enum BarDensity: Int, Comparable, CaseIterable, Sendable {
     }
 }
 
-/// Picks the density that fits. The bar asks for its content's height and gets what the screen has left; while it gets
-/// less, the density climbs one level per measurement. It starts again from full when the bar gets more room than it
-/// had when it was squeezed (the keyboard went down), or when the bar shrinks at the same level (something in it went
-/// away). It never steps down on its own, so it cannot swing between two levels.
+/// Picks the density that fits the room the screen leaves the bar. While the rows need more than the room, it climbs
+/// one level per measurement. While they fit, it tries the level below, unless that level already needed more than
+/// this room. What each level needed is forgotten when the room or the rows change (the keyboard went down, a note
+/// went away), so the bar opens back up step by step, and it cannot swing between two levels at a room that stays.
 struct BarFit: Equatable, Sendable {
     private(set) var density = BarDensity.full
-    private var heights: [BarDensity: CGFloat] = [:]
-    /// The bar's frame the last time it was squeezed.
-    private var squeezedAt: CGFloat?
+    /// What the rows needed at each level, at this room.
+    private var needs: [BarDensity: CGFloat] = [:]
+    private var room: CGFloat = 0
 
-    /// content: what the bar's rows need. frame: what the bar got.
-    mutating func measured(content: CGFloat, frame: CGFloat) {
-        guard content > 0, frame > 0 else { return }
-        if let squeezedAt, frame > squeezedAt + 1, content <= frame + 0.5 {
-            self = BarFit()
-            return
+    /// content: what the bar's rows need. room: the most the screen gives the bar.
+    mutating func measured(content: CGFloat, room: CGFloat) {
+        guard content > 0, room > 0 else { return }
+        if abs(room - self.room) > 1 || needs[density].map({ abs($0 - content) > 1 }) == true { needs = [:] }
+        self.room = room
+        needs[density] = content
+        if content > room + 0.5 {
+            if let next = density.next { density = next }
+        } else if let previous = density.previous, needs[previous].map({ $0 <= room + 0.5 }) ?? true {
+            density = previous
         }
-        if let before = heights[density], content < before - 24, density != .full {
-            self = BarFit()
-            return
-        }
-        heights[density] = content
-        guard content > frame + 0.5 else { return }
-        squeezedAt = frame
-        if let next = density.next { density = next }
     }
 }

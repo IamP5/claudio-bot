@@ -55,9 +55,8 @@ struct SessionThreadView: View {
     @State private var tall = false
     /// The bottom bar's density, from the room between the navigation bar and the keyboard or the screen's edge.
     @State private var fit = BarFit()
-    /// What the bar's rows need, and the height the bar got.
-    @State private var barContent: CGFloat = 0
-    @State private var barFrame: CGFloat = 0
+    /// The bar's last layout: what its rows needed, the room it had, and the density they were laid out at.
+    @State private var bar = BarMeasure()
     @State private var fitting: Task<Void, Never>?
 
     init(sessionId: SessionID) {
@@ -233,10 +232,11 @@ struct SessionThreadView: View {
         }
         .composerBar {
             // The bar never takes more than its room, and gives up detail (BarDensity) until its rows fit in it.
+            let density = fit.density
             BarLayout { content, room in
-                guard content != barContent || min(content, room) != barFrame else { return }
-                barContent = content
-                barFrame = min(content, room)
+                let measure = BarMeasure(content: content, room: room, density: density)
+                guard measure != bar else { return }
+                bar = measure
                 refit()
             } content: {
                 VStack(spacing: 6) {
@@ -285,8 +285,9 @@ struct SessionThreadView: View {
         fitting?.cancel()
         fitting = Task {
             await Task.yield()
-            guard !Task.isCancelled else { return }
-            fit.measured(content: barContent, frame: barFrame)
+            // A layout from before the density last changed says nothing about this one.
+            guard !Task.isCancelled, bar.density == fit.density else { return }
+            fit.measured(content: bar.content, room: bar.room)
         }
     }
 
@@ -784,6 +785,12 @@ struct ThreadSkeleton: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Loading the session")
     }
+}
+
+private struct BarMeasure: Equatable {
+    var content: CGFloat = 0
+    var room: CGFloat = 0
+    var density = BarDensity.full
 }
 
 /// The thread's bottom bar: as tall as its rows, or as the room the screen leaves above the keyboard, whichever is less,

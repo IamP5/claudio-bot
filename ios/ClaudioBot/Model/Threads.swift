@@ -348,7 +348,9 @@ final class ThreadModel {
     }
 
     let id: SessionID
-    private(set) var items: [SessionItem] = []
+    private(set) var items: [SessionItem] = [] {
+        didSet { if !withdrawing.isEmpty { withdrawing.formIntersection(queuedIds) } }
+    }
     /// What the thread shows, recomputed when items, folds or working change, never by a delta.
     private(set) var rows: [ThreadRow] = []
     private(set) var before: Cursor?
@@ -362,6 +364,9 @@ final class ThreadModel {
     private(set) var toolOutputs: [String: String] = [:]
     /// The composer's text, kept with the thread so a queued message taken back for editing lands in it.
     var draft = ComposerDraft()
+    /// Queued messages the user took back: gone from the queue at once, until the bridge's items drop them or it
+    /// refuses (a Claude Code that hangs answers neither).
+    private(set) var withdrawing: Set<ItemID> = []
     /// The user's prompts a stop ended before Claude answered (UnansweredPrompts), less the ones already taken back.
     private(set) var unanswered: Set<ItemID> = []
     @ObservationIgnored private var resent: Set<ItemID> = []
@@ -584,6 +589,19 @@ final class ThreadModel {
         resent.insert(id)
         edit(text)
         relayout()
+    }
+
+    func withdraw(_ id: ItemID) {
+        withdrawing.insert(id)
+    }
+
+    /// The bridge would not take the message back: it is queued, or went to Claude, as the items say.
+    func withdrawRefused(_ id: ItemID) {
+        withdrawing.remove(id)
+    }
+
+    private var queuedIds: Set<ItemID> {
+        Set(items.compactMap { if case let .user(id, _, _, .user, true) = $0 { id } else { nil } })
     }
 
     /// Puts a message back in the composer for editing, after whatever is typed there.

@@ -31,8 +31,8 @@ struct SessionComposer: View {
     /// The note's height as shown and as it would be whole, so More shows only when lines are cut.
     @State private var noteShownHeight: CGFloat = 0
     @State private var noteFullHeight: CGFloat = 0
-    /// The whole note, in a sheet, after More.
-    @State private var fullNote: String?
+    /// The whole note in a sheet, after More. It shows the note as it is now, and closes when the note goes.
+    @State private var showsFullNote = false
 
     private var controls: SessionControls? { model.controls }
     private var canSend: Bool { controls?.canSend ?? false }
@@ -73,6 +73,14 @@ struct SessionComposer: View {
         #endif
         .sensoryFeedback(.impact(weight: .light), trigger: sends)
         .sensoryFeedback(.impact(weight: .medium), trigger: stops)
+        .onChange(of: note == nil) { _, gone in if gone { showsFullNote = false } }
+        #if DEBUG && os(iOS)
+        .task {
+            guard let after = Demo.dropsComposerFocus else { return }
+            try? await Task.sleep(for: after)
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
+        #endif
         .confirmationDialog(
             confirming?.confirmTitle ?? "", isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
             titleVisibility: .visible, presenting: confirming
@@ -161,18 +169,14 @@ struct SessionComposer: View {
             slot(state.slot)
         }
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.25, extraBounce: 0.12), value: state.stopBeside != nil)
-        Group {
-            if typeSize.isAccessibilitySize {
-                VStack(alignment: .trailing, spacing: 0) {
-                    text
-                    buttons.padding(.bottom, buttonsInset)
-                }
-            } else {
-                HStack(alignment: .bottom, spacing: 6) {
-                    text
-                    buttons.padding(.bottom, buttonsInset)
-                }
-            }
+        // One layout that changes shape, so the field keeps its identity, and with it focus and the keyboard, when the
+        // text size crosses into or out of the accessibility sizes.
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .trailing, spacing: 0))
+            : AnyLayout(HStackLayout(alignment: .bottom, spacing: 6))
+        layout {
+            text
+            buttons.padding(.bottom, buttonsInset)
         }
         .padding(.trailing, Composer.inset)
         .glass(in: RoundedRectangle(cornerRadius: Composer.control / 2 + Composer.inset, style: .continuous))
@@ -273,8 +277,9 @@ struct SessionComposer: View {
             .accessibilityLabel(note.spoken)
             HStack(spacing: 4) {
                 if noteFullHeight > noteShownHeight + 1 {
-                    noteButton("More", symbol: "ellipsis.circle", dense: dense) { fullNote = note.text }
-                        .accessibilityLabel("More")
+                    noteButton("More", symbol: "ellipsis.circle", dense: dense) { showsFullNote = true }
+                        // Apart from the navigation bar's More, and with the word on screen in it for Voice Control.
+                        .accessibilityLabel("More of the message")
                         .accessibilityHint("Shows the whole message")
                 }
                 if let dismiss = dismiss(note) {
@@ -288,8 +293,8 @@ struct SessionComposer: View {
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .padding(.horizontal, 16)
         .accessibilityElement(children: .contain)
-        .sheet(isPresented: Binding(get: { fullNote != nil }, set: { if !$0 { fullNote = nil } })) {
-            NoteSheet(text: fullNote ?? "", tone: note.isError ? Theme.danger : .white, dismiss: dismiss(note))
+        .sheet(isPresented: $showsFullNote) {
+            NoteSheet(text: note.text, tone: note.isError ? Theme.danger : .white, dismiss: dismiss(note))
         }
     }
 
@@ -429,7 +434,7 @@ struct SessionComposer: View {
                 Image(systemName: symbol).font(.caption)
             }
             if let words = density.chipWords ? title : short {
-                Text(words).font(.footnote.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+                Text(words).font(.footnote.weight(.medium)).lineLimit(2).truncationMode(.tail).fixedSize(horizontal: false, vertical: true)
             }
             if menu {
                 Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(Theme.tertiary)
@@ -549,7 +554,7 @@ private extension ComposerNote {
 extension ThreadModel {
     /// The user's messages that wait for the turn, oldest first.
     var queuedMessages: [(id: ItemID, text: String)] {
-        items.compactMap { if case let .user(id, _, text, .user, true) = $0 { (id, text) } else { nil } }
+        items.compactMap { if case let .user(id, _, text, .user, true) = $0, !withdrawing.contains(id) { (id, text) } else { nil } }
     }
 }
 
@@ -557,6 +562,7 @@ extension BridgeClient {
     /// Takes a queued message back before it runs. edit: its text goes back in the composer.
     func withdraw(_ id: ItemID, text: String, from model: ThreadModel, edit: Bool) {
         if edit { model.edit(text) }
+        model.withdraw(id)
         send(.sessionUnqueue(sessionId: model.id, clientId: id.rawValue))
     }
 }

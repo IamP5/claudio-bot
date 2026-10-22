@@ -353,7 +353,8 @@ final class AppStore {
             }
             sets[sessionId] = nil
             sessionErrors[sessionId] = SessionError(kind: .set, text: [kept, message].compactMap { $0 }.joined(separator: " "))
-        case .send(let sessionId, _):
+        case .send(let sessionId, let clientId):
+            threads[sessionId]?.withdrawRefused(ItemID(clientId))
             sessionErrors[sessionId] = SessionError(kind: .send, text: message)
         case .tool, .create, .unknown:
             return false

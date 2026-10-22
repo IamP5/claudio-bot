@@ -35,3 +35,4 @@
 - Harness: ClaudioBot-UX-1 shows an unanswered notification-permission alert over thread screenshots; runner should pre-answer it at install (G17 verifier r4).
 - Unsure work card: header pairs "Ran" with "may still run"; a stale "Stop ends it." notice stays after the bridge loses track; a card with only unsure steps can fold away its count (G17 verifier r4, P3).
 - S4.9 latency missed 2 s in 2/3 runs on the #21+#22 combination under load average 40-88 (watch after both merge).
+- Harness: dismissing the iOS notification-permission alert needs UI automation (simctl privacy cannot grant notifications); verifiers may Allow it once per pool device via XCUITest (decision recorded).

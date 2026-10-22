@@ -1410,6 +1410,23 @@ describe("telling the phone how a run ended", () => {
     expect(endings).toEqual([["lost", lostAt!]]);
   });
 
+  test("background work found gone after a restart, with no turn cut, is not told as a lost run", async () => {
+    const gone = backgroundCommand("bk");
+    await gone.end();
+    shells = async () => new Map([["bk", gone.pid]]);
+    await begin();
+    await send("Start it");
+    const q = queries[0]!;
+    q.emit(taskStarted(shellTask("bk", "toolu_k", "sleep 600")), level(shellTask("bk", "toolu_k", "sleep 600")), result());
+    await flush();
+    await flush();
+    sessions.stop();
+    queries.length = 0;
+    await start({ ended: (_, end, at) => void endings.push([end, at]) });
+    for (let i = 0; i < 50 && (await rowOf(ASK)).outcome?.kind !== "lost"; i++) await Bun.sleep(20);
+    expect([(await rowOf(ASK)).outcome?.kind, endings.filter(([end]) => end === "lost")]).toEqual(["lost", []]);
+  });
+
   test("a card nobody answers is denied at its time, with a notice that names what was refused, secrets masked", async () => {
     await start({ cardTtlMs: 90_000 });
     await send("Deploy");

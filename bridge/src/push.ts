@@ -2,7 +2,7 @@ import type { Tickable } from "./clock";
 import type { BotId, MessageId, PushState as Reach, SessionAlertReason, SessionId, Signal } from "./protocol";
 import type { Persist } from "./store";
 import { BOT_NAME_MAX, displayName, errorText } from "./text";
-import { chatOf, own, ownCardId, ownCardOpen, type OwnCard, type PushState, type World } from "./world";
+import { chatOf, own, ownCardId, ownCardOpen, type HeldEnding, type OwnCard, type PushState, type SessionEnd, type World } from "./world";
 
 // Phone pushes: an ntfy-style POST to CLAUDIOBOT_PUSH_URL now, APNs later behind the same Sender. The only writer of
 // World.push.
@@ -23,13 +23,13 @@ import { chatOf, own, ownCardId, ownCardOpen, type OwnCard, type PushState, type
 // to the sockets as a session_alert, for a local notification, and push once the phone goes quiet only if no attended
 // socket was heard from since: a phone that went quiet unseen never got the alert.
 // At start no socket is live yet, though a phone that was open usually reconnects within seconds. So a card or reminder
-// push for a bot card already open at start waits START_GRACE_MS and then goes out only if no phone is live.
+// push for a bot card already open at start waits START_GRACE_MS and then goes out only if no phone is live. So do a
+// run the restart cut off and a session ending still held from before the restart, which is kept on disk for that.
 // A muted bot sends no message or result push. Cards and reminders still push: a held call waits on the user.
 
 /** message: a turn's first pushed bubble. result: the last bubble of a turn still running 20 s after that push. */
 export type PushReason = "card" | "reminder" | "message" | "result";
-/** How a run of a session the phone drives came to rest, when that is worth a push. A user's stop never is. */
-export type SessionEnd = "finished" | "failed";
+export type { SessionEnd };
 
 /** tick sends what a live socket held back and what waited out a window; nextDeadline is the earliest of those. */
 export type Push = Tickable & {
@@ -75,7 +75,13 @@ const sessionLink = (id: SessionId, card?: MessageId) =>
   `claudiobot://session/${encodeURIComponent(id)}${card ? `?card=${encodeURIComponent(card)}` : ""}`;
 
 const SESSION = "A Claude Code session";
-const ENDED: Record<SessionEnd, string> = { finished: `${SESSION} finished`, failed: `${SESSION} stopped with an error` };
+const ENDED: Record<SessionEnd, string> = {
+  finished: `${SESSION} finished`,
+  failed: `${SESSION} stopped with an error`,
+  lost: `${SESSION} was interrupted by a bridge restart`,
+};
+/** The most session endings kept owed at once; the oldest go first. */
+const HELD_KEPT = 50;
 
 /** What a session's cards ask, in a few words: "needs 3 approvals", "is still waiting for your answer". */
 function cardsText(reason: "card" | "reminder", cards: readonly OwnCard[]): string {
@@ -162,8 +168,24 @@ export function createPush(deps: {
   let reach: Reach = sender === null ? { state: "off" } : { state: "on" };
   /** Session keys a session_alert went out for, with when, while a phone was live or push was off. */
   const alerted = new Map<string, number>();
-  /** Session endings held for a live phone. */
-  const held = new Map<string, { id: SessionId; end: SessionEnd; at: number }>();
+  const held = (): readonly HeldEnding[] => (Array.isArray(world.push.held) ? world.push.held : []);
+  /** Saves the endings owed; one that cannot be saved is still owed while the bridge runs. */
+  function setHeld(next: HeldEnding[]) {
+    if (next.length > HELD_KEPT) deps.log(`push: ${next.length - HELD_KEPT} session endings owed were dropped, the oldest first`);
+    own<PushState>(world.push).held = next.slice(-HELD_KEPT);
+    try {
+      deps.persist("now");
+    } catch (e) {
+      deps.log(`push: could not save the session endings owed: ${errorText(e)}`);
+    }
+  }
+  const readable = (h: Partial<HeldEnding>) =>
+    typeof h.key === "string" && typeof h.id === "string" && typeof h.end === "string" && h.end in ENDED && typeof h.at === "string" && !Number.isNaN(Date.parse(h.at));
+  if (held().some((h) => !readable(h))) setHeld(held().filter(readable));
+  /** Endings held from before this start: a phone that was open may be about to come back. */
+  const restored = new Set(held().map((h) => h.key));
+  /** A run a restart cut off, or an ending from before the start, waits out the grace a returning phone gets. */
+  const waits = (h: HeldEnding, now: number) => now < graceEnds && (h.end === "lost" || restored.has(h.key));
   /** Each session's last card push: a later card waits while these stay open. */
   const lastCards = new Map<SessionId, { at: number; cards: MessageId[] }>();
 
@@ -315,15 +337,37 @@ export function createPush(deps: {
         if (unseen.length > 0) pushCards(id, "reminder", unseen, now);
       }
     }
-    if (held.size > 0) {
-      if (isLive) hold();
-      else if (act)
-        for (const [key, h] of held) {
-          held.delete(key);
-          if (seenSince(h.at)) record([key], `${h.end} for session ${h.id}, seen in the app`, now);
-          else pushEnd(h.id, h.end, key, now);
+    // An ending the open app was told of is owed no push once a phone was heard from after it, and pushes when the
+    // phone goes quiet otherwise; one it was not told of yet is told now if a phone is live, or pushes.
+    let owed = [...held()];
+    const before = JSON.stringify(owed);
+    const drop = (key: string) => (owed = owed.filter((x) => x.key !== key));
+    for (const h of held()) {
+      if (pushed(h.key)) {
+        if (act) drop(h.key);
+        continue;
+      }
+      if (h.alerted && seenSince(Date.parse(h.at))) {
+        if (act && record([h.key], `${h.end} for session ${h.id}, seen in the app`, now)) drop(h.key);
+        continue;
+      }
+      if (isLive || sender === null) {
+        if (!h.alerted && act) {
+          alert(h.id, h.end, [h.key], 1, null, now);
+          owed = owed.flatMap((x) => (x.key !== h.key ? [x] : sender === null ? [] : [{ ...x, alerted: true, at: new Date(now).toISOString() }]));
         }
+        if (sender !== null) hold();
+        continue;
+      }
+      if (waits(h, now)) {
+        later(graceEnds);
+        continue;
+      }
+      if (!act) continue;
+      drop(h.key);
+      pushEnd(h.id, h.end, h.key, now);
     }
+    if (JSON.stringify(owed) !== before) setHeld(owed);
     return next;
   }
 
@@ -332,10 +376,12 @@ export function createPush(deps: {
     sessionEnded(id, end, at) {
       const now = deps.now().getTime();
       const key = `${id}|${at}|done`;
-      if (pushed(key) || held.has(key) || alerted.has(key)) return;
+      if (pushed(key) || held().some((h) => h.key === key) || alerted.has(key)) return;
+      const ending: HeldEnding = { key, id, end, at: new Date(now).toISOString(), alerted: false };
+      if (sender !== null && !live(now) && waits(ending, now)) return setHeld([...held(), ending]);
       if (sender === null || live(now)) {
         alert(id, end, [key], 1, null, now);
-        if (sender !== null) held.set(key, { id, end, at: now });
+        if (sender !== null) setHeld([...held(), { ...ending, alerted: true }]);
         return;
       }
       pushEnd(id, end, key, now);

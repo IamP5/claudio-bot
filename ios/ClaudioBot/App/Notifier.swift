@@ -99,6 +99,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         case .reminder: body = session.count > 1 ? "Still waiting for \(session.count) approvals" : "Still waiting for your approval"
         case .finished: body = "Finished"
         case .failed: body = "Stopped with an error"
+        case .lost: body = "Interrupted by a bridge restart"
         case .unknown: return nil
         }
         return (title.isEmpty ? "Claude Code session" : title, body)

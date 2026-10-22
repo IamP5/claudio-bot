@@ -58,7 +58,7 @@ export type OwnDeps = {
   done(id: SessionId): void;
   /** A card opened: the push says only that a session needs the user. */
   notify?(id: SessionId, cardId: MessageId): void;
-  /** A run came to rest finished or failed at `at` and stayed at rest: not after a stop of the user's or a restart. */
+  /** A run came to rest finished or failed at `at` and stayed at rest, or a bridge restart cut it off; never after a stop of the user's. */
   ended?(id: SessionId, end: SessionEnd, at: string): void;
   /** How long a card waits for an answer; OWN_CARD_TTL_MS when absent. */
   cardTtlMs?: number;
@@ -563,9 +563,15 @@ export function createOwn(deps: OwnDeps): Own {
     notice(rec.id, maskSecrets(error), "error", "failure");
   }
 
-  /** A bridge restart cut the run off. */
+  /**
+   * A bridge restart cut the run off. A turn it cut is told to the user even if nothing was there to see it, before the
+   * outcome is saved, so a crash between the two never loses it. Background work found gone after a restart is not
+   * told: it may have ended on its own while the bridge was down.
+   */
   function lose(rec: SessionRecord, text: string, turn: string | null) {
-    end(rec, { kind: "lost", text: line(text), at: now() }, turn, { state: "stopped", cause: RESTARTED });
+    const at = now();
+    if (turn !== null) deps.ended?.(rec.id, "lost", at);
+    end(rec, { kind: "lost", text: line(text), at }, turn, { state: "stopped", cause: RESTARTED });
     notice(rec.id, text, "info", "restart");
   }
 

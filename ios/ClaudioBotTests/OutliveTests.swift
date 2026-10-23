@@ -187,6 +187,22 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(store.sessionErrors[sid]?.text == "Stop not sent: the connection came back too late.")
     }
 
+    @Test func aStopTappedOfflineSaysItWaitsNotThatItStops() {
+        let c = controls(working: true, turn: "2026-10-16T12:00:00.000Z")
+        let stop = (scope: StopScope(c), phase: StopPhase.stopping)
+        #expect(ComposerNote.of(error: nil, stop: stop, set: nil, controls: c, now: at, offline: true) == .stopWaits)
+        #expect(ComposerNote.stopWaits.text == "Stop waits for your Mac. It goes if the connection is back within a minute.")
+        #expect(ComposerNote.of(error: nil, stop: stop, set: nil, controls: c, now: at) == .stopping(StopScope(c)))
+    }
+
+    @Test func onlyTheNewestDecisionsAreKept() {
+        let store = store()
+        for n in 0...AppStore.decisionsKept { store.decisionSent(.once, for: MessageID("m\(n)")) }
+        #expect(store.decisions.count == AppStore.decisionsKept)
+        #expect(store.decisions[MessageID("m0")] == nil)
+        #expect(store.decisions[MessageID("m\(AppStore.decisionsKept)")] != nil)
+    }
+
     @Test func aDroppedDecisionFreesTheCardAndSaysWhy() {
         let store = store()
         store.decisionSent(.once, for: MessageID("m1"))

@@ -287,6 +287,14 @@ struct SessionThreadView: View {
         .sheet(isPresented: $showsWork) {
             BackgroundWorkSheet(sessionId: sessionId, staleAt: status?.staleAt)
         }
+        #if DEBUG
+        .task(id: model.phase) {
+            guard Demo.toolFails, fullOutput == nil else { return }
+            fullOutput = model.items.lazy.compactMap { item -> ToolStep? in
+                if case .work(_, _, let steps) = item { steps.first { $0.output != nil } } else { nil }
+            }.first
+        }
+        #endif
         .task(id: openCard?.expiresAt) {
             guard let at = openCard?.expiresAt, at > .now else { return }
             try? await Task.sleep(for: .seconds(at.timeIntervalSinceNow))
@@ -886,8 +894,9 @@ struct ToolOutputSheet: View {
                     } description: {
                         Text(why)
                     } actions: {
+                        // Bordered like the sheet's other actions: the app's white tint made a prominent button white on white.
                         Button("Retry", action: ask)
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(.bordered)
                             .accessibilityLabel("Retry reading the output")
                         Button("Close") { dismiss() }
                     }

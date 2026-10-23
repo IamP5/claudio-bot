@@ -51,7 +51,9 @@ struct SessionComposer: View {
     var body: some View {
         let now = max(clock, .now)
         let state = state(at: now)
-        let note = ComposerNote.of(error: store.sessionErrors[sessionId], stop: state.stop, set: store.sets[sessionId], controls: controls, now: now)
+        let note = ComposerNote.of(
+            error: store.sessionErrors[sessionId], stop: state.stop, set: store.sets[sessionId], controls: controls, now: now, offline: store.machine == nil
+        )
         glassGroup {
             VStack(alignment: .leading, spacing: 8) {
                 if let controls { controlsRow(controls) }
@@ -109,7 +111,7 @@ struct SessionComposer: View {
         }
         .onChange(of: state.stop?.phase) { _, phase in
             guard let phase, let scope = state.stop?.scope, let text = ComposerState.announcement(phase, scope) else { return }
-            announce(text)
+            announce(phase == .stopping && store.machine == nil ? ComposerState.stopWaitsLine : text)
         }
         .onChange(of: note) { _, note in
             guard case let .changeUnconfirmed(set, text)? = note, lapseSpoken != set.at else { return }
@@ -257,6 +259,8 @@ struct SessionComposer: View {
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.danger)
                 case .stopping, .changing:
                     ProgressView().controlSize(.mini)
+                case .stopWaits:
+                    Image(systemName: "wifi.slash").foregroundStyle(Theme.attention)
                 case .unconfirmed, .changeUnconfirmed:
                     Image(systemName: "questionmark.circle").foregroundStyle(Theme.attention)
                 }
@@ -317,7 +321,7 @@ struct SessionComposer: View {
         switch note {
         case .error(let error): { store.dismissSessionError(error, in: sessionId) }
         case .changeUnconfirmed: { store.dismissSet(in: sessionId) }
-        case .stopping, .unconfirmed, .changing: nil
+        case .stopping, .stopWaits, .unconfirmed, .changing: nil
         }
     }
 
@@ -765,8 +769,10 @@ struct NewSessionSheet: View {
     private static let startTitle = "Start"
     #endif
 
+    /// A Start the Mac never confirmed may have made the session, so Start sends its ref again, as Retry does.
     private func start() {
         guard canStart else { return }
+        if case .unconfirmed(let ref) = phase { return send(ref: ref) }
         send(ref: UUID().uuidString)
     }
 

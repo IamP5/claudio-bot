@@ -286,6 +286,8 @@ struct ComposerState: Equatable, Sendable {
         return interrupt ? "Stopping the turn. Your message goes next." : queued ? "Queued behind the current turn." : "Sent."
     }
 
+    static let stopWaitsLine = "Stop waits for your Mac. It goes if the connection is back within a minute."
+
     /// The stop's progress, spoken. The outcome itself is the status line's (StatusAnnouncer), so success says nothing.
     static func announcement(_ phase: StopPhase, _ scope: StopScope) -> String? {
         switch phase {
@@ -380,16 +382,20 @@ extension StopScope {
 enum ComposerNote: Equatable, Sendable {
     case error(SessionError)
     case stopping(StopScope)
+    /// A Stop tapped while the Mac is out of reach: it waits on this phone, and goes only if the Mac is back within a
+    /// minute.
+    case stopWaits
     case unconfirmed
     case changing(SetRequest)
     /// The change took longer than SetRequest.patience. text: what still runs.
     case changeUnconfirmed(SetRequest, text: String)
 
     static func of(
-        error: SessionError?, stop: (scope: StopScope, phase: StopPhase)?, set: SetRequest?, controls: SessionControls?, now: Date
+        error: SessionError?, stop: (scope: StopScope, phase: StopPhase)?, set: SetRequest?, controls: SessionControls?, now: Date,
+        offline: Bool = false
     ) -> ComposerNote? {
         if let error { return .error(error) }
-        if let stop, stop.phase == .stopping { return .stopping(stop.scope) }
+        if let stop, stop.phase == .stopping { return offline ? .stopWaits : .stopping(stop.scope) }
         if stop?.phase == .unconfirmed { return .unconfirmed }
         guard let set else { return nil }
         if now.timeIntervalSince(set.at) < SetRequest.patience { return .changing(set) }
@@ -400,6 +406,7 @@ enum ComposerNote: Equatable, Sendable {
         switch self {
         case .error(let error): error.text
         case .stopping(let scope): "Stopping \(scope.what)…"
+        case .stopWaits: ComposerState.stopWaitsLine
         case .unconfirmed: "Your Mac has not confirmed the stop. It may still be running."
         case .changing(let set): set.line
         case .changeUnconfirmed(_, let text): text

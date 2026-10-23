@@ -253,6 +253,7 @@ final class AppStore {
             protocolMismatch = nil
             bridgeProtocol = nil
             decisions = [:]
+            decided = []
             createRefusals = [:]
             devices = nil
             pairCode = nil
@@ -333,7 +334,15 @@ final class AppStore {
     /// on one that does not, the socket taking it does, as before.
     func decisionSent(_ choice: PermissionChoice?, for card: MessageID) {
         decisions[card] = CardDecision(choice: choice, phase: has(.decideAck) ? .sending : .taken, holds: true)
+        decided.removeAll { $0 == card }
+        decided.append(card)
+        // The newest are enough: a card's close is announced within seconds, and a push link names a recent card.
+        while decided.count > Self.decisionsKept { decisions[decided.removeFirst()] = nil }
     }
+
+    static let decisionsKept = 200
+    /// The cards in `decisions`, oldest first.
+    @ObservationIgnored private var decided: [MessageID] = []
 
     /// The socket refused the frame, so the buttons come back and the card says it was not sent.
     func decisionFailed(for card: MessageID) {
@@ -480,7 +489,8 @@ final class AppStore {
             guard let thread = threads[sessionId] else { return false }
             thread.apply(.toolOutput(toolUseId: toolUseId, .missing(message)))
         case .create(let ref):
-            createRefusals[ref] = message
+            // Only the sheet that sent the ref reads it, and only while it is open: one is enough.
+            createRefusals = [ref: message]
         case .page(let sessionId):
             threads[sessionId]?.pageRefused()
             return false

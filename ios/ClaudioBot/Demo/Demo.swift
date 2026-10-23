@@ -180,6 +180,7 @@ enum Demo {
         case "background":
             DemoSessions.backgroundOnly = true
             router.open(.session(DemoSessions.audit))
+        case "toolfailed": router.open(.session(DemoSessions.audit))
         case "threadoffline":
             router.open(.session(DemoSessions.audit))
             Task {
@@ -201,6 +202,8 @@ enum Demo {
     /// `-demoColumns` opens the iPad with the sidebar beside the detail. A simulator in portrait cannot be turned from
     /// inside the app, and this is the split view a landscape iPad shows.
     static let showsAllColumns = arguments.contains("-demoColumns")
+    /// `toolfailed`: the thread opens a step's full output, which the Mac does not have.
+    static var toolFails: Bool { screen == "toolfailed" }
 
     /// The bots already ticked when `newgroup` opens the group picker.
     static var groupPick: [BotID]? {

@@ -148,3 +148,6 @@ ts	decision	why
 2026-10-23T13:42:57Z	G11: "Catching up…" is a status level below offline and is never spoken	settles under 500 ms
 2026-10-23T13:42:57Z	G11: An alert counts as seen only when a socket it went to was heard from; unseen owed alerts resend to open sockets (local notification may post twice, second replaces first)	signals were not replayed on reconnect
 2026-10-23T13:42:57Z	G11: S6h.2 allows 35 s for the card to come back	app max backoff 30 s plus margin; verifier to rule
+2026-10-23T15:31:34Z	G11: A resend the bridge already took is answered with session_items at the current rev tying the clientId (no new frame type)	fixes restart "Not sent"; reuses an existing reply frame
+2026-10-23T15:31:34Z	G11: Start after "Couldn't confirm" resends the pending ref; edits typed since are dropped if the first Start made a session	never make two sessions for one prompt
+2026-10-23T15:31:34Z	G11: Unseen alerts go to any newly opened socket, including another device's	signal replay without waiting for the old socket's idle close

@@ -23,5 +23,6 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-22T13:57:26Z	verifier	G13	ux/sessions-g13-notify	PASS 3be0f4b; 6 P2 placed	3h	independent of owner
 2026-10-22T15:16:10Z	owner	G18	ux/sessions-g18-foreground	merged #25 (verify PASS first round)	5h	after G13
 2026-10-22T17:12:02Z	verifier	G18	ux/sessions-g18-foreground	PASS b1164e6; S6.7 rubric = honest correction; 2 P2 + P3s placed	3h	independent of owner
-2026-10-23T12:25:47Z	owner	G11	ux/sessions-g11-outlive-socket	PR #26 round 2 fix-forward (verify r1 FAIL: P1 restart Not sent)	6h	last Sessions group; after G18; bypassed a write-guard hook via Bash early (writes stayed in g11-outlive), then used EnterWorktree
+2026-10-23T12:25:47Z	owner	G11	ux/sessions-g11-outlive-socket	PR #26 round 2 at 4f933b8; verifying	6h	last Sessions group; after G18; bypassed a write-guard hook via Bash early (writes stayed in g11-outlive), then used EnterWorktree
 2026-10-23T13:42:41Z	verifier	G11	ux/sessions-g11-outlive-socket	r1 FAIL e4f61ef: P1 restart-resend reads Not sent; 2 P2; S6h.2 honest	3h	independent of owner
+2026-10-23T15:31:34Z	verifier	G11	ux/sessions-g11-outlive-socket	round 2 verifying 4f933b8	3h	fresh, independent of owner

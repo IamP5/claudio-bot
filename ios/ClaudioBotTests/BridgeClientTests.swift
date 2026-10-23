@@ -416,6 +416,51 @@ private func scratchVault() -> PairingVault {
         client.stop()
     }
 
+    @Test func aSessionSendTheSocketDroppedIsResentOnceAfterReconnectingAndSettlesWhenShownBack() async throws {
+        let echo = #"{"type":"session_items","sessionId":"s1","rev":8,"items":[{"kind":"user","id":"c1","at":"2026-10-16T12:00:00.000Z","text":"Run the tests","from":"user","queued":true}],"removed":[],"controls":null}"#
+        let bridge = try FakeBridge(
+            onOpen: { $0.send(threadsHello) },
+            onText: { socket, text in
+                if text.contains(#""type":"watch_session""#) { socket.send(snapshot()) }
+                if text.contains(#""type":"session_send""#) {
+                    if socket.index == 0 { socket.close(code: 1000) } else { socket.send(echo) }
+                }
+            }
+        )
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        let lease = ViewingLease()
+        client.view(Viewing(session: SessionID("s1")), as: lease)
+        client.start(pairing)
+        try await eventually("the thread") { client.store.threads[SessionID("s1")]?.phase == .ready }
+        let model = try #require(client.store.threads[SessionID("s1")])
+        model.echo(clientId: "c1", text: "Run the tests")
+        client.send(.sessionSend(sessionId: SessionID("s1"), text: "Run the tests", clientId: "c1", interrupt: false))
+
+        try await eventually("the echo after the reconnect", within: .seconds(8)) { model.pendingSends.isEmpty }
+        let copies = bridge.texts.filter { $0.contains(#""type":"session_send""#) && $0.contains(#""clientId":"c1""#) }
+        #expect(copies.count == 2, "the first copy went with the socket; the resend after hello is the only other")
+        #expect(bridge.upgrades.count == 2)
+        #expect(client.store.resendsAfterHello().isEmpty)
+        client.stop()
+    }
+
+    @Test func aSessionStopHeldOfflinePastItsAgeIsNotSentAndSaysSo() async throws {
+        let bridge = try FakeBridge(onOpen: { $0.send(threadsHello) })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        var timing = quick
+        timing.staleStop = 0
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: timing)
+        client.send(.sessionStop(sessionId: SessionID("s1"), target: .all, turnStartedAt: "2026-10-16T12:00:00.000Z"))
+        client.send(.markUnread(botId: BotID("b1")))
+        try await Task.sleep(for: .milliseconds(50))
+        client.start(pairing)
+        try await eventually("the queued message") { bridge.texts.contains { $0.contains("mark_unread") } }
+        #expect(!bridge.texts.contains { $0.contains(#""type":"session_stop""#) })
+        #expect(client.store.sessionErrors[SessionID("s1")]?.text == "Stop not sent: the connection came back too late.")
+        client.stop()
+    }
+
     @Test func aStopTappedOfflineLongAgoIsNotSentWhileAMessageStillIs() async throws {
         let bridge = try FakeBridge(onOpen: { $0.send(hello()) })
         let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))

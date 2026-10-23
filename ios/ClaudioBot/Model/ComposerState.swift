@@ -11,6 +11,24 @@ struct Withdrawal: Equatable, Sendable {
     var lapsed = false
 }
 
+/// A message this phone sent, from the tap until a frame from the Mac shows it back (F-SES-070).
+struct PendingSend: Equatable, Sendable {
+    enum State: Equatable, Sendable {
+        /// On no socket yet: it goes after the next hello.
+        case waiting
+        /// A socket took it at `since`, and the Mac has not shown it back.
+        case sending(since: Date)
+        /// No sign of it within the patience of the last try, or the Mac refused it in these words.
+        case notSent(String?)
+    }
+
+    /// How long a message a socket took may go unseen before it reads as not sent.
+    static let patience: TimeInterval = 10
+    let text: String
+    let at: Date
+    var state = State.waiting
+}
+
 /// What the composer's Stop ends (P-A11Y-2): the turn, if one runs, and every live task.
 struct StopScope: Equatable, Sendable {
     let turn: Bool
@@ -262,9 +280,10 @@ struct ComposerState: Equatable, Sendable {
         queues(controls) ? "Message, waits for the current turn" : "Message"
     }
 
-    /// Spoken once Send lands (F-SES-146).
-    static func sentAnnouncement(queued: Bool, interrupt: Bool = false) -> String {
-        interrupt ? "Stopping the turn. Your message goes next." : queued ? "Queued behind the current turn." : "Sent."
+    /// Spoken once Send lands (F-SES-146). Offline the message only waits on this phone, so it is never called sent.
+    static func sentAnnouncement(queued: Bool, interrupt: Bool = false, offline: Bool = false) -> String {
+        if offline { return "Not sent yet. It goes when your Mac is back." }
+        return interrupt ? "Stopping the turn. Your message goes next." : queued ? "Queued behind the current turn." : "Sent."
     }
 
     /// The stop's progress, spoken. The outcome itself is the status line's (StatusAnnouncer), so success says nothing.
@@ -406,9 +425,9 @@ enum UnansweredPrompts {
         }
         for item in items {
             switch item {
-            case .user(_, _, _, .system, _):
+            case .user(_, _, _, .system, _, _):
                 continue
-            case let .user(id, _, _, from, queued):
+            case let .user(id, _, _, from, queued, _):
                 close()
                 open = from == .user && !queued ? id : nil
                 stopped = false

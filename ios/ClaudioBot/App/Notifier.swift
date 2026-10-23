@@ -95,14 +95,32 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let title = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body: String
         switch session.reason {
-        case .card: body = session.count > 1 ? "Needs \(session.count) approvals" : "Needs your approval"
-        case .reminder: body = session.count > 1 ? "Still waiting for \(session.count) approvals" : "Still waiting for your approval"
+        case .card: body = Self.cards(session.count, session.cardKind)
+        case .reminder: body = Self.reminder(session.count, session.cardKind)
         case .finished: body = "Finished"
         case .failed: body = "Stopped with an error"
         case .lost: body = "Interrupted by a bridge restart"
         case .unknown: return nil
         }
         return (title.isEmpty ? "Claude Code session" : title, body)
+    }
+
+    /// Named by what the cards ask for. Mixed kinds, or a bridge that does not say, name none (as the bridge's push does).
+    static func cards(_ n: Int, _ kind: SessionCardKind?) -> String {
+        switch kind {
+        case .permission?: n > 1 ? "Needs \(n) approvals" : "Needs your approval"
+        case .ask?: n > 1 ? "Has \(n) questions for you" : "Has a question for you"
+        case .plan?: n > 1 ? "Has \(n) plans for you to review" : "Has a plan for you to review"
+        case .unknown?, nil: n > 1 ? "Needs you: \(n) requests" : "Needs you"
+        }
+    }
+
+    static func reminder(_ n: Int, _ kind: SessionCardKind?) -> String {
+        switch kind {
+        case .permission?: n > 1 ? "Still waiting for \(n) approvals" : "Still waiting for your approval"
+        case .ask?: n > 1 ? "Still waiting for \(n) answers" : "Still waiting for your answer"
+        case .plan?, .unknown?, nil: "Still waiting for you"
+        }
     }
 
     private func post(_ alert: Alert) async {

@@ -116,6 +116,8 @@ struct LinkedCard: Equatable, Sendable {
 enum ThreadStatus: Equatable, Sendable {
     /// The Mac is out of reach. lastUpdate: when the app last heard from it; nil when this thread never loaded.
     case offline(Reach, lastUpdate: Date?)
+    /// The thread shows what the app kept, and the Mac's reply to its watch has not come yet (F-SES-128).
+    case catchingUp(lastUpdate: Date?)
     /// The socket is up, but the Mac has sent nothing for a while although this thread works.
     case quiet(since: Date)
     case needsYou(OpenCard)
@@ -130,12 +132,13 @@ enum ThreadStatus: Equatable, Sendable {
     /// since: the row's run start, for a bridge whose controls carry no turn.
     static func of(
         reach: Reach, quietSince: Date?, lastUpdate: Date?, controls: SessionControls?, card: OpenCard?,
-        since: Date?, outcome: SessionOutcome?
+        since: Date?, outcome: SessionOutcome?, catchingUp: Bool = false
     ) -> ThreadStatus? {
         switch reach {
         case .connected, .unpaired: break
         case .firstConnect, .unreachable, .retrying, .unrecognized: return .offline(reach, lastUpdate: lastUpdate)
         }
+        if catchingUp { return .catchingUp(lastUpdate: lastUpdate) }
         let working = controls?.working ?? false
         if working, let quietSince { return .quiet(since: quietSince) }
         if let card { return .needsYou(card) }
@@ -150,7 +153,7 @@ enum ThreadStatus: Equatable, Sendable {
     /// Where running marks stop and dim: the last moment the thread's state was known true.
     var staleAt: Date? {
         switch self {
-        case .offline(_, let lastUpdate): lastUpdate
+        case .offline(_, let lastUpdate), .catchingUp(let lastUpdate): lastUpdate
         case .quiet(let since): since
         case .needsYou, .working, .background, .ended: nil
         }
@@ -159,7 +162,7 @@ enum ThreadStatus: Equatable, Sendable {
     var tasks: [SessionTask] {
         switch self {
         case .working(_, let tasks), .background(_, let tasks): tasks
-        case .offline, .quiet, .needsYou, .ended: []
+        case .offline, .catchingUp, .quiet, .needsYou, .ended: []
         }
     }
 
@@ -168,6 +171,7 @@ enum ThreadStatus: Equatable, Sendable {
         switch self {
         case .offline(.firstConnect, _): "Connecting"
         case .offline: "Offline"
+        case .catchingUp: "Catching up"
         case .quiet: "No word from your Mac"
         case .needsYou(let card): card.kind == .ask ? "Needs your answer" : "Needs your approval"
         case .working: "Working"
@@ -202,6 +206,8 @@ enum ThreadStatus: Equatable, Sendable {
             let head = reach == .firstConnect ? "Connecting to your Mac…" : cause
             guard let lastUpdate else { return head + " This session loads when your Mac is back." }
             return head + " Last update \(clock(now.timeIntervalSince(lastUpdate))) ago."
+        case .catchingUp:
+            return "Catching up…"
         case .quiet(let since):
             return "No word from your Mac for \(clock(now.timeIntervalSince(since)))"
         case .needsYou(let card):
@@ -250,6 +256,7 @@ enum ThreadAnnouncement {
         switch status {
         case nil: "rest"
         case .offline: "offline"
+        case .catchingUp: "catching up"
         case .quiet: "quiet"
         case .needsYou(let card): "card " + card.id.rawValue
         case .working(_, let tasks): "working " + tasks.map(\.id.rawValue).joined(separator: " ")
@@ -266,7 +273,7 @@ enum ThreadAnnouncement {
         }
         guard !first, old != new else { return nil }
         switch old {
-        case .offline, .quiet, .ended:
+        case .offline, .catchingUp, .quiet, .ended:
             return nil
         case nil:
             // The row brings the outcome after the thread's frame put it at rest, later than StatusAnnouncer waited.
@@ -288,7 +295,7 @@ enum ThreadAnnouncement {
                 return ended(was, now)
             case .working(_, let now):
                 return ended(was, now)
-            case .offline, .quiet, .needsYou:
+            case .offline, .catchingUp, .quiet, .needsYou:
                 return nil
             }
         }
@@ -354,7 +361,7 @@ final class StatusAnnouncer {
             cardClosed = false
         case .working, .background:
             cardClosed = false
-        case nil, .ended, .offline, .quiet:
+        case nil, .ended, .offline, .catchingUp, .quiet:
             if case .needsYou = spoken { cardClosed = true }
         }
         spoken = status

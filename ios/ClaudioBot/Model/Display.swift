@@ -407,7 +407,8 @@ extension PermissionChoice {
 extension PermissionAnswer {
     /// What VoiceOver hears when an open card closes: who closed it when it was not this device, the outcome, whether
     /// the tool ran, and the command: "Expired. Bash did not run: perl -e 'sleep 45'".
-    func announcement(card: PermissionCard, step: ToolStep? = nil, here: Bool) -> String {
+    /// here: whether this phone's decision closed it; nil when the phone cannot tell, so it names nobody.
+    func announcement(card: PermissionCard, step: ToolStep? = nil, here: Bool?) -> String {
         let outcome = outcome(step: step)
         let allowed = if case .chose(let choice) = self { choice.allows } else { false }
         let result = switch (allowed, card.isTrust) {
@@ -416,7 +417,7 @@ extension PermissionAnswer {
         case (true, true): "\(outcome.short). Trusted"
         case (false, true): "\(outcome.short). Nothing was trusted"
         }
-        let elsewhere = if case .chose = self, !here { "Answered on another device. " } else { "" }
+        let elsewhere = if case .chose = self, here == false { "Answered on another device. " } else { "" }
         return "\(elsewhere)\(result): \(card.commandHead)"
     }
 }

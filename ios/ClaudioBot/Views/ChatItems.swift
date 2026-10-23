@@ -550,14 +550,7 @@ private struct CloseAnnouncer: ViewModifier {
             }
             .onChange(of: answer) { old, new in
                 guard old == nil, let new else { return }
-                let said = new.announcement(card: card, step: step, here: store.decidedHere.contains(cardId))
-                var text = AttributedString(said)
-                text.accessibilitySpeechAnnouncementPriority = .high
-                AccessibilityNotification.Announcement(text).post()
-                #if DEBUG
-                // Debug builds only: the command can carry a secret, and the demo checks read this line.
-                a11yLog.debug("announced \(said, privacy: .public)")
-                #endif
+                Task { await announce(new) }
                 guard onChoice else { return }
                 Task {
                     // The outcome fades in after the choices fade out (Card.swap); focus set before it exists is lost.
@@ -565,6 +558,24 @@ private struct CloseAnnouncer: ViewModifier {
                     focus.wrappedValue = .outcome
                 }
             }
+    }
+
+    /// A card that closes while this phone's decision waits for the Mac's ack waits for it, briefly: the close and the
+    /// ack can cross on the wire. Past that, the phone says what closed it without saying who.
+    private func announce(_ new: PermissionAnswer) async {
+        var waited = 0
+        while store.decisions[cardId]?.phase == .sending, waited < 20 {
+            try? await Task.sleep(for: .milliseconds(100))
+            waited += 1
+        }
+        let said = new.announcement(card: card, step: step, here: store.decidedHere(cardId))
+        var text = AttributedString(said)
+        text.accessibilitySpeechAnnouncementPriority = .high
+        AccessibilityNotification.Announcement(text).post()
+        #if DEBUG
+        // Debug builds only: the command can carry a secret, and the demo checks read this line.
+        a11yLog.debug("announced \(said, privacy: .public)")
+        #endif
     }
 }
 
@@ -587,6 +598,8 @@ private struct PermissionCardBody: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     private var sent: PermissionChoice? { store.pendingDecisions[messageId] }
+    /// A tap would only wait on this phone while the Mac is out of reach (F-SES-094).
+    private var offline: Bool { store.machine == nil }
 
     private func send(_ choice: PermissionChoice) {
         client.send(decision(choice))
@@ -672,6 +685,7 @@ private struct PermissionCardBody: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         buttons
+                        DecisionStatusLine(offline: offline, note: store.decisionNote(messageId))
                         ExpiryLine(expiresAt: card.expiresAt)
                     }
                 }
@@ -710,7 +724,7 @@ private struct PermissionCardBody: View {
             choiceButton(.once)
         }
         .controlSize(.large)
-        .disabled(sent != nil)
+        .disabled(sent != nil || offline)
     }
 
     @ViewBuilder
@@ -743,7 +757,7 @@ private struct PermissionCardBody: View {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(card.choices, id: \.self) { choice($0) }
             }
-            .disabled(sent != nil)
+            .disabled(sent != nil || offline)
         } else {
             let rows = [card.choices.filter(\.allows), card.choices.filter { !$0.allows }]
             Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 12) {
@@ -753,7 +767,7 @@ private struct PermissionCardBody: View {
                     }
                 }
             }
-            .disabled(sent != nil)
+            .disabled(sent != nil || offline)
         }
     }
 
@@ -801,6 +815,38 @@ private struct PermissionCardBody: View {
         choice == .once ? .white : Theme.inset
     }
     #endif
+}
+
+/// Under a card's buttons: why a tap cannot reach the Mac now, or why the last one did not count (F-SES-094, F-SES-142).
+struct DecisionStatusLine: View {
+    static let offlineText = "Your answer can't reach your Mac"
+
+    let offline: Bool
+    let note: DecisionNote?
+
+    var body: some View {
+        Group {
+            if offline {
+                Label(Self.offlineText, systemImage: "wifi.slash")
+                    .font(.ui(.footnote))
+                    .foregroundStyle(Theme.attention)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let note {
+                Label(note.text, systemImage: note.answered ? "checkmark.circle" : "exclamationmark.triangle")
+                    .font(.ui(.footnote))
+                    .foregroundStyle(note.answered ? Theme.secondary : Theme.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onChange(of: note) { _, note in
+            if let note { AccessibilityNotification.Announcement(note.text).post() }
+        }
+    }
+}
+
+extension DecisionNote {
+    /// Someone answered first: not a failure the user has to fix.
+    var answered: Bool { text == "Already answered" }
 }
 
 /// The spinner on a tapped choice. The button's value says "Sending", so the spinner itself stays silent.

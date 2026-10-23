@@ -551,7 +551,7 @@ enum DemoSessions {
             update(store, id) { $0.mirror = .imported }
         case let .sessionTool(id, toolUseId):
             let lines = (1...60).map { "  \($0 == 14 ? "✗" : "✓") fade.test.ts > case \($0)" }.joined(separator: "\n")
-            store.apply(.thread(sessionId: id, .toolOutput(toolUseId: toolUseId, output: "bun test v1.3.0\n\n\(lines)\n\n 59 pass\n 1 fail\nRan 60 tests across 3 files. [1.21s]")))
+            store.apply(.thread(sessionId: id, .toolOutput(toolUseId: toolUseId, .text("bun test v1.3.0\n\n\(lines)\n\n 59 pass\n 1 fail\nRan 60 tests across 3 files. [1.21s]"))))
         case let .sessionPrefs(mirror):
             store.apply(.sessions(.list(projects: projects, rows: Array(store.sessions.rows.values), mirror: mirror)))
         default:

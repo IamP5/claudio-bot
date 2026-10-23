@@ -432,7 +432,7 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         store.decisionSent(.always, for: MessageID("p1"))
         store.decisionFailed(for: MessageID("p1"))
         #expect(store.pendingDecisions.isEmpty)
-        #expect(store.lastError?.message == "Your decision did not reach your Mac. Try again.")
+        #expect(store.decisionNote(MessageID("p1"))?.text == "Not sent · Try again", "said on the card that failed (F-SES-142)")
     }
 
     @Test func anErrorIsDismissedOnlyByItsOwnNotice() throws {

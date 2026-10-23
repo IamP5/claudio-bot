@@ -491,7 +491,7 @@ private func working(_ id: String, since minutesAgo: Double, lastAt lastMinutesA
         #expect(model.items.first?.id == ItemID("n_1"), "the page went above")
         #expect(model.items.contains { $0.id == ItemID("toolu_01Ab9") })
         #expect(!model.items.contains { $0.id == ItemID("c_4d2a") })
-        #expect(model.toolOutputs["toolu_01Ab5"]?.contains("1 fail") == true)
+        if case .text(let output)? = model.toolOutputs["toolu_01Ab5"] { #expect(output.contains("1 fail")) } else { Issue.record("the fixture's tool output") }
         #expect(model.position == ThreadPosition(epoch: "e_7f3a", rev: 44))
         store.apply(.thread(sessionId: id, frames.last!))
         #expect(model.phase == .removed(movedTo: SessionID("f2c8b4a6-1e3d-4f9b-a7c5-6d2e8b1f4a37")))

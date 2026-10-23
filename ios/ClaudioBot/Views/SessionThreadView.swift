@@ -138,7 +138,7 @@ struct SessionThreadView: View {
         if case .connected(_, let since) = store.connection { quietSince = since }
         return ThreadStatus.of(
             reach: reach.online || offlineShown ? reach : .connected(machine: ""), quietSince: quietSince, lastUpdate: model.phase == .ready ? store.heardAt : nil,
-            controls: model.controls, card: card, since: row?.since, outcome: row?.outcome
+            controls: model.controls, card: card, since: row?.since, outcome: row?.outcome, catchingUp: model.catchingUp
         )
     }
 
@@ -149,7 +149,7 @@ struct SessionThreadView: View {
         let status = status(model, card: openCard)
         let banner = ThreadBanner.of(row: row, controls: model.controls)
         let linked = router.linkedCard.flatMap { link in
-            link.sessionId == sessionId ? link.note(in: model.items, decidedHere: store.decidedHere, at: max(cardClock, .now)) : nil
+            link.sessionId == sessionId ? link.note(in: model.items, decidedHere: store.decidedOrSending, at: max(cardClock, .now)) : nil
         }
         return ScrollView {
             // Not lazy: a lazy stack estimates the height of rows it has not drawn, and at the largest text sizes one
@@ -159,7 +159,7 @@ struct SessionThreadView: View {
                 // Lazy, so the earlier page loads only once the thread is scrolled up to it.
                 LazyVStack {
                     if model.before != nil {
-                        LoadEarlierRow(loading: model.loadingEarlier)
+                        LoadEarlierRow(state: LoadEarlierRow.State(loading: model.loadingEarlier, online: store.machine != nil)) { loadEarlier(model) }
                             .onAppear { loadEarlier(model) }
                     }
                 }
@@ -246,6 +246,8 @@ struct SessionThreadView: View {
             announcer.post(note)
         }
         .onChange(of: sessionId) { linkNote = nil }
+        // The note says nothing waits on the user, so a card that opens since makes it wrong.
+        .onChange(of: openCard?.id) { _, open in if open != nil { linkNote = nil } }
         .composerBar {
             // The bar never takes more than its room, and gives up detail (BarDensity) until its rows fit in it.
             let density = fit.density
@@ -325,7 +327,7 @@ struct SessionThreadView: View {
             }
         case .working, .background:
             return status.tasks.isEmpty ? nil : { showsWork = true }
-        case .offline, .quiet, .ended:
+        case .offline, .catchingUp, .quiet, .ended:
             return nil
         }
     }
@@ -394,8 +396,9 @@ struct SessionThreadView: View {
         }
     }
 
+    /// Offline the request would only wait in the outbox, so the row waits for the Mac instead.
     private func loadEarlier(_ model: ThreadModel) {
-        guard let cursor = model.requestEarlier() else { return }
+        guard store.machine != nil, let cursor = model.requestEarlier() else { return }
         pageAnchor = model.rows.first?.id
         client.send(.sessionPage(sessionId: sessionId, before: cursor))
     }
@@ -506,6 +509,7 @@ struct ThreadStatusLine: View {
     private var ticks: Bool {
         switch status {
         case .offline(_, let at): at != nil
+        case .catchingUp: false
         case .quiet, .working, .background: true
         case .needsYou, .ended: false
         }
@@ -599,6 +603,7 @@ struct ThreadStatusLine: View {
     private var tint: Color {
         switch status {
         case .offline, .quiet: Theme.attention
+        case .catchingUp: Theme.secondary
         case .needsYou: Theme.attention
         case .ended(let outcome): outcome.kind == .stopped ? Theme.secondary : Theme.danger
         case .working, .background: Theme.secondary
@@ -609,6 +614,7 @@ struct ThreadStatusLine: View {
     private var glyph: some View {
         switch status {
         case .offline: Image(systemName: "wifi.slash").font(.footnote).foregroundStyle(Theme.attention)
+        case .catchingUp: Image(systemName: "arrow.triangle.2.circlepath").font(.footnote).foregroundStyle(Theme.secondary)
         case .quiet: Image(systemName: "circle.dotted").font(.footnote).foregroundStyle(Theme.attention)
         case .needsYou: Image(systemName: "hand.raised").font(.footnote).foregroundStyle(Theme.attention)
         case .working: WorkingRing(size: slot * 0.7)
@@ -759,17 +765,79 @@ struct LinkNote: View {
     }
 }
 
+/// The top of a thread with more above it: a button while idle, a spinner while a page is out, and words while the Mac
+/// is out of reach (F-SES-127).
 struct LoadEarlierRow: View {
-    let loading: Bool
+    enum State: Equatable {
+        case idle, loading, offline
+
+        init(loading: Bool, online: Bool) {
+            self = !online ? .offline : loading ? .loading : .idle
+        }
+
+        var text: String {
+            switch self {
+            case .idle: "Load earlier messages"
+            case .loading: "Loading earlier messages…"
+            case .offline: "Earlier messages: waiting for your Mac"
+            }
+        }
+    }
+
+    let state: State
+    let load: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            Text("Loading earlier messages…").font(.footnote).foregroundStyle(Theme.tertiary)
+        Group {
+            switch state {
+            case .idle:
+                Button(action: load) {
+                    Label(state.text, systemImage: "arrow.up.circle")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Theme.link)
+                        .frame(maxWidth: .infinity, minHeight: HitTarget.minHeight)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            case .loading:
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(state.text).font(.footnote).foregroundStyle(Theme.tertiary)
+                }
+                .frame(maxWidth: .infinity, minHeight: HitTarget.minHeight)
+                .accessibilityElement(children: .combine)
+            case .offline:
+                Label(state.text, systemImage: "wifi.slash")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.tertiary)
+                    .frame(maxWidth: .infinity, minHeight: HitTarget.minHeight)
+                    .accessibilityElement(children: .combine)
+            }
         }
-        .frame(maxWidth: .infinity, minHeight: 44)
-        .opacity(loading ? 1 : 0.6)
-        .accessibilityElement(children: .combine)
+    }
+}
+
+/// What the full-output sheet shows at one moment. It never spins without end: the Mac answers with the output or
+/// why it has none, and a request that hears nothing gives up after the patience (F-SES-073).
+enum ToolOutputState: Equatable {
+    case text(String)
+    case reading
+    case waitingForMac
+    /// The Mac has no output, in its words, or never answered.
+    case failed(String)
+
+    static let patience: TimeInterval = 15
+    static let unanswered = "Your Mac didn't send the output."
+
+    init(output: ToolOutput?, askedAt: Date?, online: Bool, now: Date) {
+        switch output {
+        case .text(let text)?: self = .text(text)
+        case .missing(let why)?: self = .failed(why)
+        case nil:
+            if !online { self = .waitingForMac }
+            else if let askedAt, now.timeIntervalSince(askedAt) >= Self.patience { self = .failed(Self.unanswered) }
+            else { self = .reading }
+        }
     }
 }
 
@@ -780,11 +848,18 @@ struct ToolOutputSheet: View {
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
     @Environment(\.dismiss) private var dismiss
+    @State private var clock = Date.now
+
+    private var thread: ThreadModel? { store.threads[sessionId] }
 
     var body: some View {
+        let state = ToolOutputState(
+            output: thread?.toolOutputs[step.id], askedAt: thread?.toolAsked[step.id], online: store.machine != nil, now: max(clock, .now)
+        )
         NavigationStack {
             Group {
-                if let output = store.threads[sessionId]?.toolOutputs[step.id] {
+                switch state {
+                case .text(let output):
                     ScrollView([.vertical, .horizontal]) {
                         Text(output)
                             .font(.system(.footnote, design: .monospaced))
@@ -794,9 +869,28 @@ struct ToolOutputSheet: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .defaultScrollAnchor(.bottom)
-                } else {
+                case .reading:
                     ProgressView("Reading the output from your Mac…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .waitingForMac:
+                    ContentUnavailableView {
+                        Label("Waiting for your Mac", systemImage: "wifi.slash")
+                    } description: {
+                        Text("The output loads when your Mac is back.")
+                    } actions: {
+                        Button("Close") { dismiss() }
+                    }
+                case .failed(let why):
+                    ContentUnavailableView {
+                        Label("No output", systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(why)
+                    } actions: {
+                        Button("Retry", action: ask)
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityLabel("Retry reading the output")
+                        Button("Close") { dismiss() }
+                    }
                 }
             }
             .background(Theme.background)
@@ -804,7 +898,7 @@ struct ToolOutputSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-                if let output = store.threads[sessionId]?.toolOutputs[step.id] {
+                if case .text(let output) = state {
                     ToolbarItem(placement: .topBarLeading) {
                         ShareLink(item: output) { Image(systemName: "square.and.arrow.up") }
                     }
@@ -814,7 +908,33 @@ struct ToolOutputSheet: View {
         #if os(macOS)
         .frame(minWidth: 640, idealWidth: 760, minHeight: 420, idealHeight: 560)
         #endif
-        .task { client.send(.sessionTool(sessionId: sessionId, toolUseId: step.id)) }
+        // Offline the request would wait in the outbox; it is asked for once the Mac is back instead.
+        .task { if !hasText, store.machine != nil { ask() } }
+        .task(id: thread?.toolAsked[step.id]) {
+            guard let at = thread?.toolAsked[step.id] else { return }
+            try? await Task.sleep(for: .seconds(max(0, ToolOutputState.patience - Date.now.timeIntervalSince(at))))
+            if !Task.isCancelled { clock = .now }
+        }
+        // A request that went on a socket that dropped is asked again once the Mac is back.
+        .onChange(of: store.machine != nil) { _, online in
+            if online, !hasText { ask() }
+        }
+        .onChange(of: state) { old, new in
+            switch new {
+            case .failed(let why) where old != new: AccessibilityNotification.Announcement("No output. " + why).post()
+            case .waitingForMac where old != new: AccessibilityNotification.Announcement("Waiting for your Mac.").post()
+            default: break
+            }
+        }
+    }
+
+    private var hasText: Bool {
+        if case .text? = thread?.toolOutputs[step.id] { true } else { false }
+    }
+
+    private func ask() {
+        thread?.askTool(step.id)
+        client.send(.sessionTool(sessionId: sessionId, toolUseId: step.id))
     }
 }
 

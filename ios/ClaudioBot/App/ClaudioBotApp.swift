@@ -82,6 +82,8 @@ final class Router {
     /// The ref of a create_bot in flight; the bot it becomes is opened.
     var pendingCreate: String?
     var pendingSessionCreate: String?
+    /// The New Session sheet's prompt. It outlives the sheet, so closing it never loses what was typed (F-SES-154).
+    var newSessionDraft = ComposerDraft()
 
     /// The main window's router, with the sidebar it had last time.
     init() {
@@ -301,6 +303,7 @@ struct RootView: View {
         .onChange(of: store.sessions.created) { _, created in
             if let ref = router.pendingSessionCreate, let session = created[ref] {
                 router.pendingSessionCreate = nil
+                router.newSessionDraft = ComposerDraft()
                 router.open(.session(session))
             }
         }

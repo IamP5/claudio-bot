@@ -58,7 +58,7 @@ export type OwnDeps = {
   done(id: SessionId): void;
   /** A card opened: the push says only that a session needs the user. */
   notify?(id: SessionId, cardId: MessageId): void;
-  /** A run came to rest finished or failed at `at` and stayed at rest: not after a stop of the user's or a restart. */
+  /** A run came to rest finished or failed at `at` and stayed at rest, or a bridge restart cut it off; never after a stop of the user's. */
   ended?(id: SessionId, end: SessionEnd, at: string): void;
   /** How long a card waits for an answer; OWN_CARD_TTL_MS when absent. */
   cardTtlMs?: number;
@@ -211,9 +211,10 @@ type TurnEnding = "stopped" | "finished" | "failed";
  * A Stop that reached a turn, until Claude Code ends that turn. envelope: whose turn it is, null for a turn Claude Code
  * began on its own. said: tasks Claude Code confirmed stopped, said with the turn. covered: foreground tasks that end
  * with the turn, so stopped only if the turn is. whole: a stop of everything that landed whole, which cuts off every
- * step. asking: Stops of it still waiting on Claude Code's answer.
+ * step. asking: Stops of it still waiting on Claude Code's answer. killed: Claude Code never confirmed it, so the bridge
+ * closed Claude Code, which leaves its foreground commands running for the process table to tell about.
  */
-type TurnStop = { envelope: string | null; early: boolean; at: string; said: Task[]; covered: Task[]; whole: boolean; asking: number; ended?: TurnEnding };
+type TurnStop = { envelope: string | null; early: boolean; at: string; said: Task[]; covered: Task[]; whole: boolean; asking: number; ended?: TurnEnding; killed?: true };
 
 const upper = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 /** The SDK's words for a request its query closed under, as the user reads them. */
@@ -240,6 +241,8 @@ export function createOwn(deps: OwnDeps): Own {
    */
   const awaiting = new Map<SessionId, { task: Task; ofRun: boolean }[]>();
   const turnStops = new Map<SessionId, TurnStop>();
+  /** Foreground commands of a turn whose Stop ended with the bridge closing Claude Code: the process table says which stopped. */
+  const leftByKill = new Map<SessionId, Task[]>();
   /** Tasks a Stop is ending right now: a second Stop of one leaves the saying to the first. */
   const beingStopped = new Map<SessionId, Set<TaskId>>();
   /** When the user's Stop last ended each task, so a Stop of it that comes after is not refused. */
@@ -365,8 +368,10 @@ export function createOwn(deps: OwnDeps): Own {
   function sayTurnStop(rec: SessionRecord, stop: TurnStop) {
     if (turnStops.get(rec.id) === stop) turnStops.delete(rec.id);
     const stopped = stop.ended === "stopped";
-    if (stopped) markStopped(rec, stop.covered, true);
-    const tasks = [...stop.said, ...(stopped ? stop.covered : [])];
+    const covered = stop.killed ? stop.covered.filter((t) => t.kind !== "command") : stop.covered;
+    if (stop.killed && covered.length < stop.covered.length) leftByKill.set(rec.id, stop.covered.filter((t) => t.kind === "command"));
+    if (stopped) markStopped(rec, covered, true);
+    const tasks = [...stop.said, ...(stopped ? covered : [])];
     if (stop.ended === "finished") notice(rec.id, "Claude finished this turn before your stop reached it.", "info", "stop");
     const parts = [...(stopped ? ["the turn"] : []), ...tasks.map(taskName)];
     if (parts.length === 0) return;
@@ -390,12 +395,21 @@ export function createOwn(deps: OwnDeps): Own {
   }
 
   /**
-   * What became of a gone query's background work, from the process table. Only work that stopped is the restart's
-   * cut; a command that still runs is followed, and one the bridge cannot check is said to maybe still run.
+   * What became of a gone query's background work and foreground commands, from the process table. Only background
+   * work that stopped is the restart's cut; a foreground command that stopped went with its turn, which says so itself.
+   * A command that still runs is followed, and one the bridge cannot check is said to maybe still run.
    */
   function lost(rec: SessionRecord, fate: Fate, cause: GoneCause) {
-    if (fate.stopped.length > 0) {
-      const text = goneNote("Claude Code", cause, "stopped", fate.stopped);
+    const left = leftByKill.get(rec.id) ?? [];
+    leftByKill.delete(rec.id);
+    const ended = left.filter((t) => fate.stopped.some((s) => s.id === t.id));
+    if (ended.length > 0) {
+      markStopped(rec, ended, true);
+      notice(rec.id, `${STOPPED_BY_YOU}: ${listed(ended.map(taskName))}.`, "info", "stop");
+    }
+    const stopped = fate.stopped.filter((t) => !t.foreground);
+    if (stopped.length > 0) {
+      const text = goneNote("Claude Code", cause, "stopped", stopped);
       if (cause === "restart") lose(rec, text, null);
       else notice(rec.id, text);
     }
@@ -549,9 +563,15 @@ export function createOwn(deps: OwnDeps): Own {
     notice(rec.id, maskSecrets(error), "error", "failure");
   }
 
-  /** A bridge restart cut the run off. */
+  /**
+   * A bridge restart cut the run off. A turn it cut is told to the user even if nothing was there to see it, before the
+   * outcome is saved, so a crash between the two never loses it. Background work found gone after a restart is not
+   * told: it may have ended on its own while the bridge was down.
+   */
   function lose(rec: SessionRecord, text: string, turn: string | null) {
-    end(rec, { kind: "lost", text: line(text), at: now() }, turn, { state: "stopped", cause: RESTARTED });
+    const at = now();
+    if (turn !== null) deps.ended?.(rec.id, "lost", at);
+    end(rec, { kind: "lost", text: line(text), at }, turn, { state: "stopped", cause: RESTARTED });
     notice(rec.id, text, "info", "restart");
   }
 
@@ -785,7 +805,10 @@ export function createOwn(deps: OwnDeps): Own {
         const stop = turnStops.get(id);
         const how: TurnEnding =
           end.kind === "stopped" ? (end.by === "user" ? "stopped" : "failed") : end.kind === "done" && end.result.subtype === "success" ? "finished" : "failed";
-        if (stop?.envelope === pending.id) observed(rec, stop, how);
+        if (stop?.envelope === pending.id) {
+          if (end.kind === "stopped" && end.killed) stop.killed = true;
+          observed(rec, stop, how);
+        }
         else if (end.kind === "stopped" && end.by === "user") sayRecoveredStop(rec, pending.id);
         changed(id);
       },
@@ -1092,11 +1115,11 @@ export function createOwn(deps: OwnDeps): Own {
       const drive = rec.own;
       if (!drive) return [];
       const turn = activityOf(rec).turn;
-      const out = drive.cut && !(turn !== null && turn.startedAt <= drive.cut.at) ? [drive.cut] : [];
+      const s = drivers.get(rec.id);
+      // While what became of a gone query's work is still being looked up, it may turn out to run, so nothing is cut.
+      const out = drive.cut && !(turn !== null && turn.startedAt <= drive.cut.at) && !s?.settling ? [drive.cut] : [];
       // At rest nothing runs, so a step the transcript still leaves running never got its result.
       // While Claude Code has announced a turn of its own, the work it reports on may not have its result written yet.
-      const s = drivers.get(rec.id);
-      // Nor while what became of a gone query's work is still being looked up: it may turn out to run.
       if (!working(rec) && !deps.elsewhere(rec.id) && !s?.wakeDue && !s?.settling) out.push({ at: rested.get(rec.id) ?? bootAt, state: "stopped", cause: UNSEEN_END });
       return out;
     },

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { BotId, MessageId, SessionId, Signal } from "../src/protocol";
 import { createPush, MESSAGE_THROTTLE_MS, ntfySender, senderFromEnv, START_GRACE_MS, type PushReason, type Sender } from "../src/push";
 import { createSaver, loadWorld } from "../src/store";
-import { botActor, emptySession, newBot, post, type GateState, type OwnCard, type PushState, type World } from "../src/world";
+import { botActor, emptySession, newBot, own, post, type GateState, type OwnCard, type PushState, type World } from "../src/world";
 
 const homes: string[] = [];
 afterEach(() => {
@@ -665,4 +665,69 @@ test("with push off a session's events are alerts only, each once", async () => 
   ]);
   h.clock.t = T0 + 3_000;
   expect(off.nextDeadline()).toBe(iso(T0 + HOUR));
+});
+
+test("a run a restart cut off waits out the start grace, then pushes once in plain words; another restart never repeats it", async () => {
+  const h = harness();
+  h.push.sessionEnded!(SID, "lost", iso(T0));
+  await settle();
+  expect([h.calls.length, h.push.nextDeadline()]).toEqual([0, iso(T0 + START_GRACE_MS)]);
+  at(h, T0 + START_GRACE_MS);
+  await settle();
+  expect(sent(h)).toEqual([["A Claude Code session was interrupted by a bridge restart", `claudiobot://session/${SID}`, "default"]]);
+  const again = harness({ home: h.home });
+  again.push.sessionEnded!(SID, "lost", iso(T0));
+  at(again, T0 + START_GRACE_MS);
+  await settle();
+  expect(again.calls).toEqual([]);
+});
+
+test("a phone back within the start grace hears of a run a restart cut off as an alert, and no push follows once it was seen", async () => {
+  const h = harness();
+  h.push.sessionEnded!(SID, "lost", iso(T0));
+  h.sockets.until = new Date(T0 + 120_000);
+  at(h, T0 + START_GRACE_MS);
+  expect(h.signals).toEqual([{ type: "session_alert", sessionId: SID, reason: "lost", count: 1, title: "Fix the fade", cardId: null }]);
+  h.sockets.seen = T0 + START_GRACE_MS + 1_000;
+  h.sockets.until = null;
+  at(h, T0 + 130_000);
+  await settle();
+  expect(h.calls).toEqual([]);
+});
+
+test("an ending the app was told of and a phone was heard from after is never pushed, also after a restart", async () => {
+  const h = harness({ liveFor: 45_000 });
+  h.push.sessionEnded!(SID, "finished", iso(T0));
+  h.sockets.seen = T0 + 20_000;
+  at(h, T0 + 20_000);
+  const after = harness({ home: h.home });
+  at(after, T0 + START_GRACE_MS + 1);
+  await settle();
+  expect([h.calls, after.calls, after.world.push.held]).toEqual([[], [], []]);
+});
+
+test("unreadable endings on disk are dropped, and a readable one is still owed", async () => {
+  const h = harness();
+  own<PushState>(h.world.push).held = [{ key: "x" } as never, { key: `${SID}|${iso(T0)}|done`, id: SID, end: "failed", at: iso(T0), alerted: false }];
+  const bodies: unknown[] = [];
+  const sender = ntfySender(URL_, (async (_: string, init: RequestInit) => (bodies.push(init.body), new Response("ok"))) as unknown as typeof fetch);
+  const restarted = createPush({ world: h.world, persist: () => {}, sender, liveUntil: () => null, now: () => new Date(T0), log: () => {} });
+  expect(h.world.push.held?.map((x) => x.end)).toEqual(["failed"]);
+  restarted.tick(new Date(T0 + START_GRACE_MS));
+  await settle();
+  expect(bodies).toEqual(["A Claude Code session stopped with an error"]);
+});
+
+test("an ending held for a live phone outlives a restart, and pushes once the phone stays away past the start grace", async () => {
+  const h = harness({ liveFor: 45_000 });
+  h.push.sessionEnded!(SID, "finished", iso(T0));
+  expect(h.signals.length).toBe(1);
+  const after = harness({ home: h.home });
+  after.clock.t = T0 + 10_000;
+  expect(after.push.nextDeadline()).toBe(iso(T0 + START_GRACE_MS));
+  at(after, T0 + 20_000);
+  at(after, T0 + START_GRACE_MS);
+  at(after, T0 + START_GRACE_MS + 1);
+  await settle();
+  expect([sent(h), sent(after)]).toEqual([[], [["A Claude Code session finished", `claudiobot://session/${SID}`, "default"]]]);
 });

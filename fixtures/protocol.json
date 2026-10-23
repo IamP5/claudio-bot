@@ -2034,6 +2034,14 @@
       "cardId": null
     },
     {
+      "type": "session_alert",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "reason": "lost",
+      "count": 1,
+      "title": "Sleep in parallel",
+      "cardId": null
+    },
+    {
       "type": "error",
       "message": "Nothing is running.",
       "about": {

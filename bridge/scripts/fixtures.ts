@@ -266,6 +266,7 @@ export const server = [
   { type: "push_state", push: { state: "off" } },
   { type: "session_alert", sessionId: phoneRow.id, reason: "card", count: 3, title: phoneRow.title, cardId: "m30" },
   { type: "session_alert", sessionId: phoneRow.id, reason: "finished", count: 1, title: phoneRow.title, cardId: null },
+  { type: "session_alert", sessionId: phoneRow.id, reason: "lost", count: 1, title: phoneRow.title, cardId: null },
   { type: "error", message: "Nothing is running.", about: { kind: "stop", sessionId: agentSession } },
   { type: "error", message: "Claude Code kept the mode Ask before edits: the session is busy.", about: { kind: "set", sessionId: agentSession } },
   { type: "error", message: "That session is gone.", about: { kind: "send", sessionId: agentSession, clientId: "c_4d2a" } },

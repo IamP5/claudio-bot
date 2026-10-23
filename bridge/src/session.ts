@@ -15,7 +15,7 @@ import type {
 import type { Tickable } from "./clock";
 import type { Headroom, Ledger } from "./ledger";
 import { notices as noticeText, withNotices, type SessionInput } from "./prompts";
-import { evalArg, groupAlive, shellGroups, shellLeaders, taskRun, type TaskRun } from "./procs";
+import { evalArg, groupAlive, psText, shellGroups, shellLeaders, taskRun, type TaskRun } from "./procs";
 import type { NoticeReason, StopTarget, TaskId } from "./protocol";
 import { sandboxFailure } from "./sandbox";
 import type { Persist } from "./store";
@@ -116,20 +116,20 @@ const tasksOf = (tasks: readonly Background[]) =>
     (names) => names.join("; "),
     "; ",
   );
-const backgroundStoppedNote = (name: string, tasks: readonly Background[]) => `${name}'s background work stopped: ${tasksOf(tasks)}.`;
 /** Why a query's background work lost its Claude Code: the bridge restarted, or Claude Code exited. */
 export type GoneCause = "restart" | "exit";
-/** What became of a gone query's background work, by what the Mac still runs. */
+/** What became of a gone query's background work and foreground commands, by what the Mac still runs. */
 export type Fate = { stopped: Background[]; running: Background[]; unknown: Background[] };
 export const goneNote = (name: string, cause: GoneCause, kind: keyof Fate, tasks: readonly Background[]): string => {
   const restart = cause === "restart";
+  const work = tasks.some((t) => t.foreground) ? "work" : "background work";
   switch (kind) {
     case "stopped":
-      return restart ? `The bridge restarted, so ${name}'s background work stopped: ${tasksOf(tasks)}.` : backgroundStoppedNote(name, tasks);
+      return restart ? `The bridge restarted, so ${name}'s ${work} stopped: ${tasksOf(tasks)}.` : `${name}'s ${work} stopped: ${tasksOf(tasks)}.`;
     case "running":
-      return `${restart ? `The bridge restarted, and ${name}` : `${name} exited, and`} no longer follows its background work, which still runs on this Mac: ${tasksOf(tasks)}.`;
+      return `${restart ? `The bridge restarted, and ${name}` : `${name} exited, and`} no longer follows its ${work}, which still runs on this Mac: ${tasksOf(tasks)}.`;
     case "unknown":
-      return `${restart ? `The bridge restarted, and ${name}'s` : `${name} exited, and its`} background work may still run on this Mac: ${tasksOf(tasks)}.`;
+      return `${restart ? `The bridge restarted, and ${name}'s` : `${name} exited, and its`} ${work} may still run on this Mac: ${tasksOf(tasks)}.`;
   }
 };
 /**
@@ -140,12 +140,14 @@ export const goneNote = (name: string, cause: GoneCause, kind: keyof Fate, tasks
 const FATE_OF_RUN = { runs: "running", gone: "stopped", unsure: "unknown", unread: "unknown" } as const;
 async function fateOf(tasks: readonly Background[], run: (group: number, id: string) => Promise<TaskRun>): Promise<Fate> {
   const fate: Fate = { stopped: [], running: [], unknown: [] };
-  for (const t of tasks) {
-    if (typeof t.group === "number") fate[FATE_OF_RUN[await run(t.group, t.id)]].push(t);
-    else if (typeof t.loose === "number") fate[groupAlive(t.loose) ? "unknown" : "stopped"].push(t);
-    else if (t.kind === "agent" && t.claude !== undefined && !groupAlive(t.claude)) fate.stopped.push(t);
-    else fate.unknown.push(t);
-  }
+  const kinds = await Promise.all(
+    tasks.map(async (t): Promise<keyof Fate> => {
+      if (typeof t.group === "number") return FATE_OF_RUN[await run(t.group, t.id)];
+      if (typeof t.loose === "number") return groupAlive(t.loose) ? "unknown" : "stopped";
+      return t.kind === "agent" && t.claude !== undefined && !groupAlive(t.claude) ? "stopped" : "unknown";
+    }),
+  );
+  tasks.forEach((t, i) => fate[kinds[i]!].push(t));
   return fate;
 }
 /** A Claude Code that exits on its own stops its commands first; the bridge looks at what still runs this much later. */
@@ -190,7 +192,8 @@ function droppedNotice(userName: string, texts: readonly string[]): string {
  */
 export type TurnEnd =
   | { kind: "done"; result: SDKResultMessage }
-  | { kind: "stopped"; by: "user" | "breaker" }
+  /** killed: Claude Code never confirmed the stop, so the bridge closed it; commands it ran in the foreground may live on. */
+  | { kind: "stopped"; by: "user" | "breaker"; killed?: true }
   | { kind: "dropped" }
   | { kind: "failed"; error: string }
   | { kind: "deferred"; until: string; why: Deferral };
@@ -542,7 +545,7 @@ export function step(core: Core, ev: Event, ctx: StepContext): { core: Core; eff
       const life = s.lifecycle;
       if (life.kind === "stopping" && due(life.deadline)) {
         fx.push({ kind: "kill" });
-        finish(life.turn, { kind: "stopped", by: stoppedBy(life.turn) });
+        finish(life.turn, { kind: "stopped", by: stoppedBy(life.turn), killed: true });
       } else if (life.kind === "backoff" && due(life.until)) {
         s.lifecycle = { kind: "idle" };
       } else if (life.kind === "parked" && (life.reason === "daily_cap" || due(life.until))) {
@@ -890,6 +893,16 @@ const cliTurnAt = (c: Cli): number | null => (c.kind === "running" ? c.at : null
 /** A background task of the live query, by what a note would name it. */
 type Background = NonNullable<SessionState["background"]>[number];
 
+/**
+ * What of the query can outlive its Claude Code: its background tasks, and the commands it runs in the foreground,
+ * which Claude Code runs in shells of their own as it does background ones (CLI 2.1.305), so they outlive it alike.
+ * The foreground ones only for an owner that follows what outlives (SessionSpec.gone): a bot's turn says its own end.
+ */
+function outliving(l: Live, withForeground: boolean): Background[] {
+  const foreground = !withForeground ? [] : liveTasks(l.tasks).filter((t) => t.kind === "command" && !t.background && !l.background.some((b) => b.id === t.id));
+  return [...l.background, ...foreground.map((t) => ({ id: t.id, description: t.label, foreground: true as const }))];
+}
+
 const SYSTEM: Initiator = { kind: "system" };
 
 const digest = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex").slice(0, 16);
@@ -914,6 +927,7 @@ export function createSession(spec: SessionSpec): Session {
   const spawnProcess = spec.spawn ?? spawnGroup;
   const shells = spec.shells ?? ((pid: number | null) => (pid === null ? Promise.resolve(new Map<string, number>()) : shellGroups(pid)));
   const leaders = spec.leaders ?? ((pid: number | null) => (pid === null ? Promise.resolve([]) : shellLeaders(pid)));
+  const foreground = spec.gone !== undefined;
   const userName = spec.userName ?? "The user";
   const label = driverKey(spec.actor);
   const idleMs = spec.idleMs ?? IDLE_MS;
@@ -1111,7 +1125,7 @@ export function createSession(spec: SessionSpec): Session {
     void Promise.all(tasks.map((t) => stopTask(l, t.id as TaskId))).then((took) => {
       const stopped = tasks.filter((_, i) => took[i]);
       for (const t of stopped) l.stopped.add(t.id);
-      if (stopped.length > 0) guard("note", () => spec.note(backgroundStoppedNote(spec.name?.() ?? "Claude Code", stopped)));
+      if (stopped.length > 0) guard("note", () => spec.note(goneNote(spec.name?.() ?? "Claude Code", "exit", "stopped", stopped)));
     });
   }
 
@@ -1296,8 +1310,9 @@ export function createSession(spec: SessionSpec): Session {
     if (!l.gone()) closing = l;
     if (l.wakeStop !== null) wakeEnded(l, "stopped");
     // close() leaves them on disk for the next start to check.
-    if (closed || l.background.length === 0) return;
-    const ids = new Set(l.background.map((b) => b.id));
+    const work = outliving(l, foreground);
+    if (closed || work.length === 0) return;
+    const ids = new Set(work.map((b) => b.id));
     const look = () => {
       exitCheck = null;
       const left = savedBackground(l).filter((b) => !l.stopped.has(b.id));
@@ -1309,10 +1324,10 @@ export function createSession(spec: SessionSpec): Session {
     exitCheck = { timer: setTimeout(look, EXIT_SETTLE_MS), run: look };
   }
 
-  /** The live query's background tasks as saved: what the thread shows of each, and what runs it once found. */
+  /** What of the live query can outlive it, as saved: what the thread shows of each, and what runs it once found. */
   function savedBackground(l: Live): Background[] {
     const pid = l.pid();
-    return l.background.map((b) => {
+    return outliving(l, foreground).map((b) => {
       const t = l.tasks.all.get(b.id as TaskId);
       const group = l.groups.get(b.id);
       const loose = group === undefined ? l.loose.get(b.id) : undefined;
@@ -1346,11 +1361,11 @@ export function createSession(spec: SessionSpec): Session {
     }
   }
 
-  /** Saves the live query's background work, and looks up the shell of each command not yet found, a few times each. */
+  /** Saves what of the live query can outlive it, and looks up the shell of each command not yet found, a few times each. */
   function saveBackground(l: Live) {
     remember(savedBackground(l));
     const missing = () =>
-      l.background.filter((b) => !l.groups.has(b.id) && l.tasks.all.get(b.id as TaskId)?.kind !== "agent" && (l.searches.get(b.id) ?? 0) < SHELL_SEARCHES);
+      outliving(l, foreground).filter((b) => !l.groups.has(b.id) && l.tasks.all.get(b.id as TaskId)?.kind !== "agent" && (l.searches.get(b.id) ?? 0) < SHELL_SEARCHES);
     const now = missing();
     if (l.searching || now.length === 0) return;
     l.searching = true;
@@ -1359,7 +1374,8 @@ export function createSession(spec: SessionSpec): Session {
     Promise.all([shells(pid), leaders(pid)]).then(
       ([found, shellsOf]) => {
         l.searching = false;
-        for (const [id, group] of found) if (l.background.some((b) => b.id === id)) l.groups.set(id, group);
+        const work = outliving(l, foreground);
+        for (const [id, group] of found) if (work.some((b) => b.id === id)) l.groups.set(id, group);
         pairLoose(l, shellsOf);
         if (live !== l) return;
         remember(savedBackground(l));
@@ -1374,17 +1390,18 @@ export function createSession(spec: SessionSpec): Session {
 
   /**
    * A command whose shell sent its output elsewhere before the bridge looked has no output file to find it by. When
-   * exactly one of Claude Code's shells runs exactly the command Claude Code was given, and no other task has it, that
-   * shell is taken as the command's, loosely: to see it end, never to signal it. Two alike, or none exact, stay unpaired.
+   * exactly one of Claude Code's shells runs exactly the command Claude Code was given, as ps writes it, and no other
+   * task has it, that shell is taken as the command's, loosely: to see it end, never to signal it. Two alike, or none
+   * exact, stay unpaired.
    */
   function pairLoose(l: Live, shellsOf: readonly { group: number; command: string }[]) {
     const taken = new Set([...l.groups.values(), ...l.loose.values()]);
     const runs = shellsOf.map((s) => ({ group: s.group, command: evalArg(s.command) }));
-    for (const b of l.background) {
+    for (const b of outliving(l, foreground)) {
       const t = l.tasks.all.get(b.id as TaskId);
       if (l.groups.has(b.id) || l.loose.has(b.id) || t?.kind !== "command" || t.stepId === null) continue;
       const given = l.tasks.raw.get(t.stepId);
-      const hits = given === undefined ? [] : runs.filter((r) => r.command === given);
+      const hits = given === undefined ? [] : runs.filter((r) => r.command === psText(given));
       if (hits.length !== 1 || taken.has(hits[0]!.group)) continue;
       l.loose.set(b.id, hits[0]!.group);
       taken.add(hits[0]!.group);
@@ -1502,7 +1519,8 @@ export function createSession(spec: SessionSpec): Session {
     }
     l.heardAt = heardAt;
     for (const lost of observe(l.tasks, m, new Date(heardAt).toISOString())) guard("note", () => spec.note(lostNotice(lost), "task"));
-    if (activityKey() !== was) told();
+    const changedTasks = activityKey() !== was;
+    if (changedTasks) told();
     if (m.type === "assistant" && m.error) signals.apiError = m.error;
     else if (m.type === "assistant" && turn !== null && turnOf(spec.state.lifecycle as Lifecycle)?.output === false) {
       accepted();
@@ -1519,7 +1537,7 @@ export function createSession(spec: SessionSpec): Session {
     if (m.type === "system" && m.subtype === "compact_boundary" && m.compact_metadata.trigger === "auto")
       guard("note", () => spec.note(compactedNote(spec.name?.() ?? "Claude Code")));
     if (m.type === "system" && m.subtype === "background_tasks_changed") track(l, m.tasks);
-    else if (m.type === "system" && m.subtype === "task_started" && l.background.length > 0) saveBackground(l);
+    else if (changedTasks || (m.type === "system" && m.subtype === "task_started")) saveBackground(l);
     guard("onMessage", () => spec.onMessage(m, turn));
     if (m.type !== "result") return;
     const fresh = l.fresh;

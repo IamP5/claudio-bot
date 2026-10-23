@@ -13,10 +13,10 @@ const READ_RETRY_MS = 200;
  * A command's output; null when it could not run, failed with nothing to say, or ran past the timeout. The timeout is
  * final: a process its child outlives, holding the output pipe open, is not waited on past it.
  */
-export async function read(argv: string[], timeoutMs = READ_TIMEOUT_MS): Promise<string | null> {
+export async function read(argv: string[], timeoutMs = READ_TIMEOUT_MS, env: Record<string, string | undefined> = process.env): Promise<string | null> {
   let kill = () => {};
   const done = (async () => {
-    const p = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore", stdin: "ignore", env: process.env });
+    const p = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore", stdin: "ignore", env });
     kill = () => p.kill("SIGKILL");
     const out = await new Response(p.stdout).text();
     await p.exited;
@@ -56,9 +56,12 @@ async function outputs(pids: readonly number[]): Promise<Map<number, string[]> |
 
 const taskOf = (path: string) => /\/([^/]+)\.output$/.exec(path)?.[1];
 
-/** The processes Claude Code (process `pid`) started that lead a process group of their own, with their command lines. */
+/**
+ * The processes Claude Code (process `pid`) started that lead a process group of their own, with their command lines
+ * as ps writes them in the C locale (see psText).
+ */
 export async function shellLeaders(pid: number): Promise<{ group: number; command: string }[]> {
-  return ((await read(["ps", "-axww", "-o", "pid=,ppid=,pgid=,command="])) ?? "")
+  return ((await read(["ps", "-axww", "-o", "pid=,ppid=,pgid=,command="], READ_TIMEOUT_MS, { ...process.env, LC_ALL: "C" })) ?? "")
     .split("\n")
     .map((l) => /^\s*(\d+)\s+(\d+)\s+(\d+)\s(.*)$/.exec(l))
     .filter((m): m is RegExpExecArray => m !== null && Number(m[2]) === pid && m[1] === m[3])
@@ -67,11 +70,33 @@ export async function shellLeaders(pid: number): Promise<{ group: number; comman
 
 /**
  * The command a shell Claude Code started runs, from its command line: Claude Code hands it to `eval '<command>'` with
- * each single quote written as '"'"' or '\''. null when the line is not of that form.
+ * each single quote written as '"'"' or '\'', and adds `< /dev/null` unless the command reads input of its own. null
+ * when the line is not of that form.
  */
 export function evalArg(commandLine: string): string | null {
-  const m = /\beval '((?:[^']|'"'"'|'\\'')*)' < \/dev\/null/.exec(commandLine);
+  const m = /\beval '((?:[^']|'"'"'|'\\'')*)'(?: < \/dev\/null)?(?: && |$)/.exec(commandLine);
   return m ? m[1]!.replace(/'"'"'|'\\''/g, "'") : null;
+}
+
+const octal = (b: number) => `\\${b.toString(8).padStart(3, "0")}`;
+
+/**
+ * A command as macOS ps writes it in the C locale, byte by byte (vis(3)): tab and newline in octal, other control
+ * bytes as ^X, a byte above 0x7f as M- or M^ before its low seven bits, and one whose low bits are a space in octal.
+ * Two commands can read alike this way; that only makes a pairing that needs a single match less likely.
+ */
+export function psText(command: string): string {
+  let out = "";
+  for (const b of new TextEncoder().encode(command)) {
+    if (b === 0x09 || b === 0x0a || b === 0xa0) out += octal(b);
+    else if (b >= 0x20 && b < 0x7f) out += String.fromCharCode(b);
+    else {
+      const low = b & 0x7f;
+      const meta = b & 0x80 ? "M" : "";
+      out += low < 0x20 || low === 0x7f ? `${meta}^${low === 0x7f ? "?" : String.fromCharCode(low + 0x40)}` : `${meta}-${String.fromCharCode(low)}`;
+    }
+  }
+  return out;
 }
 
 /** By task id, the process group of each background shell Claude Code (process `pid`) runs. Empty when none is found. */

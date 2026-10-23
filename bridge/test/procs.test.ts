@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { endGroup, evalArg, groupAlive, read, shellGroups, taskRun } from "../src/procs";
+import { endGroup, evalArg, groupAlive, psText, read, shellGroups, shellLeaders, taskRun } from "../src/procs";
 import { backgroundCommand } from "./shells";
 
 const started: number[] = [];
@@ -95,6 +95,23 @@ test("the command a Claude Code shell runs is read back exactly, single quotes i
   expect(evalArg(line(`echo '"'"'a b'"'"'`))).toBe("echo 'a b'");
   expect(evalArg(line(`echo '\\''a'\\''`))).toBe("echo 'a'");
   expect(evalArg("sleep 30")).toBeNull();
+  expect(evalArg(`/bin/zsh -c source /x/snapshot.sh && eval 'sort < in.txt' && pwd -P >| /tmp/claude-1-cwd`)).toBe("sort < in.txt");
+});
+
+test("a command line with tabs, newlines and non-ASCII reads back from ps as psText writes the command", async () => {
+  dir = mkdtempSync(join(tmpdir(), "procs-"));
+  const command = "sleep 30 # café…\tand\n: more ~\\ ^";
+  const line = `eval '${command}' < /dev/null && pwd -P >| /tmp/claude-x-cwd`;
+  const p = spawn("perl", ["-e", `if (fork() == 0) { setpgrp(0, 0); exec("/bin/zsh", "-c", $ARGV[0]); } sleep 30;`, line], { detached: true, stdio: "ignore" });
+  started.push(p.pid!);
+  let found: { group: number; command: string }[] = [];
+  for (let i = 0; i < 50 && found.length === 0; i++) {
+    await Bun.sleep(50);
+    found = await shellLeaders(p.pid!);
+  }
+  started.push(...found.map((f) => f.group));
+  expect(found.map((f) => evalArg(f.command))).toEqual([psText(command)]);
+  expect(psText(command)).toBe("sleep 30 # cafM-CM-)M-bM^@M-&\\011and\\012: more ~\\ ^");
 });
 
 test("a read that runs past its timeout is given up on then, even while a child it left holds its output open", async () => {

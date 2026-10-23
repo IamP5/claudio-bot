@@ -289,7 +289,10 @@ export type StepPatch = {
   state?: "waiting" | "running";
   startedAt?: string;
   ended?: { state: "stopped" | "denied" | "unsure" | "ended"; cause: string };
-  /** The step of a command that outlived its Claude Code: a later Claude Code's "stopped" does not hold. */
+  /**
+   * The step of a command that outlived its Claude Code: a later Claude Code's "stopped", or the "interrupted" error it
+   * writes for a foreground call it never saw end, does not hold.
+   */
   outlived?: true;
   /** Claude Code said its task completed or failed, so its result is on its way to the transcript: no cut ends it. */
   told?: true;
@@ -314,7 +317,7 @@ export function runningSteps(a: Activity): Map<string, StepPatch> {
 
 /** A transcript step as shown: a waiting card only over a call that reads running, a live task never over a failure. */
 export function patchStep(shown: ToolStep, p: StepPatch): ToolStep {
-  const step = p.outlived && shown.state === "stopped" ? unclaimed(shown) : shown;
+  const step = p.outlived && (shown.state === "stopped" || shown.state === "error") ? unclaimed(shown) : shown;
   if (p.state === undefined && p.ended && step.state === (p.ended.state === "denied" ? "ok" : "running")) return { ...step, state: p.ended.state, cause: p.ended.cause };
   const state = p.state === "waiting" ? (step.state === "running" ? "waiting" : step.state) : p.state === "running" && step.state === "ok" ? "running" : step.state;
   return { ...step, state, ...(p.startedAt !== undefined && { startedAt: p.startedAt }), ...(state === "running" && step.state === "ok" && { output: null }) };

@@ -1122,11 +1122,12 @@ enum PushState: Codable, Hashable, Sendable {
 }
 
 /// card: cards opened. reminder: cards waited half their time. finished, failed: the session's run came to rest.
+/// lost: a bridge restart cut the run off.
 enum SessionAlertReason: OpenEnum {
-    case card, reminder, finished, failed
+    case card, reminder, finished, failed, lost
     case unknown(String)
 
-    static let allCases: [SessionAlertReason] = [.card, .reminder, .finished, .failed]
+    static let allCases: [SessionAlertReason] = [.card, .reminder, .finished, .failed, .lost]
     init?(rawValue: String) { self.init(wire: rawValue) }
 
     var rawValue: String {
@@ -1135,6 +1136,7 @@ enum SessionAlertReason: OpenEnum {
         case .reminder: "reminder"
         case .finished: "finished"
         case .failed: "failed"
+        case .lost: "lost"
         case .unknown(let raw): raw
         }
     }

@@ -1391,6 +1391,42 @@ describe("telling the phone how a run ended", () => {
     expect(endings.map(([end]) => end)).toEqual(["failed"]);
   });
 
+  test("a run a bridge restart cut off is told lost once, at the restart, and not again after another restart", async () => {
+    await begin();
+    await send("Work");
+    queries[0]!.emit(toolCall("toolu_p", "Bash", { command: "make" }));
+    await flush();
+    const restart = async () => {
+      sessions.stop();
+      queries.length = 0;
+      await start({ ended: (_, end, at) => void endings.push([end, at]) });
+      await flush();
+    };
+    await restart();
+    const lostAt = (await rowOf(ASK)).outcome?.at;
+    expect(endings).toEqual([["lost", lostAt!]]);
+    await restart();
+    wait(END_SETTLE_MS);
+    expect(endings).toEqual([["lost", lostAt!]]);
+  });
+
+  test("background work found gone after a restart, with no turn cut, is not told as a lost run", async () => {
+    const gone = backgroundCommand("bk");
+    await gone.end();
+    shells = async () => new Map([["bk", gone.pid]]);
+    await begin();
+    await send("Start it");
+    const q = queries[0]!;
+    q.emit(taskStarted(shellTask("bk", "toolu_k", "sleep 600")), level(shellTask("bk", "toolu_k", "sleep 600")), result());
+    await flush();
+    await flush();
+    sessions.stop();
+    queries.length = 0;
+    await start({ ended: (_, end, at) => void endings.push([end, at]) });
+    for (let i = 0; i < 50 && (await rowOf(ASK)).outcome?.kind !== "lost"; i++) await Bun.sleep(20);
+    expect([(await rowOf(ASK)).outcome?.kind, endings.filter(([end]) => end === "lost")]).toEqual(["lost", []]);
+  });
+
   test("a card nobody answers is denied at its time, with a notice that names what was refused, secrets masked", async () => {
     await start({ cardTtlMs: 90_000 });
     await send("Deploy");
@@ -2092,6 +2128,195 @@ describe("the thread says what stopped only once it did", () => {
       await running.end();
     }
   }, 15_000);
+
+  /** A turn runs `perl -e 'sleep bf'` in the foreground; Claude Code has made it a task and the bridge found its shell. */
+  const runningInForeground = async (pids: Record<string, number>) => {
+    shells = async () => new Map(Object.entries(pids));
+    await start();
+    await send("Run it");
+    const q = queries[0]!;
+    await transcribe(calledEntry("toolu_bf", "Bash", { command: "perl -e 'sleep bf'" }));
+    q.emit(toolCall("toolu_bf", "Bash", { command: "perl -e 'sleep bf'" }), taskStarted({ ...shellTask("bf", "toolu_bf", "Sleep"), is_backgrounded: false }));
+    await flush();
+    await flush();
+    return q;
+  };
+
+  test("after a restart, a foreground command still running on the Mac is said to run, stays a task Stop can end, and its step is never cut off", async () => {
+    const running = backgroundCommand("bf");
+    try {
+      await runningInForeground({ bf: running.pid });
+      await restart();
+      await until(async () => (await restartLines()).length === 2);
+      expect(await restartLines()).toEqual([
+        "The bridge restarted during this turn.",
+        `The bridge restarted, and Claude Code no longer follows command "perl -e 'sleep bf'", which still runs on this Mac. Stop ends it.`,
+      ]);
+      expect((await controlsNow()).tasks?.map((t) => [t.id, t.label, t.stepId])).toEqual([["bf", "perl -e 'sleep bf'", "toolu_bf"]]);
+      expect([(await stepOf("toolu_bf")).state, (await controlsNow()).working, (await rowOf(ASK)).outcome?.kind]).toEqual(["running", true, "lost"]);
+      // A later Claude Code writes off the call it never saw end; the command still runs.
+      const interrupted = "[Tool call interrupted: the session ended before this call's result was recorded, so its outcome is unknown.]";
+      await transcribe({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_bf", content: interrupted, is_error: true }] } });
+      expect((await stepOf("toolu_bf")).state).toBe("running");
+
+      expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bf" as TaskId } })).toEqual([]);
+      expect(alive(running.pid)).toBe(false);
+      expect((await stopLines()).at(-1)).toBe(`Stopped by you: command "perl -e 'sleep bf'".`);
+      expect(await stepOf("toolu_bf")).toMatchObject({ state: "stopped", cause: "Stopped by you" });
+    } finally {
+      await running.end();
+    }
+  });
+
+  test("when Claude Code dies under a foreground command that still runs, the run fails but the command is said to run and Stop can end it", async () => {
+    const running = backgroundCommand("bf");
+    try {
+      const q = await runningInForeground({ bf: running.pid });
+      q.crash("Claude Code process terminated by signal SIGKILL");
+      await until(async () => (await noticesNow()).some((n) => n.text.includes("still runs")));
+      expect((await noticesNow()).map((n) => n.text.split("\n")[0])).toEqual([
+        "Claude Code stopped unexpectedly. Send a message to start it again.",
+        `Claude Code is no longer running, but command "perl -e 'sleep bf'" still runs on this Mac. Stop ends it.`,
+      ]);
+      expect([(await stepOf("toolu_bf")).state, (await controlsNow()).tasks?.map((t) => t.id as string)]).toEqual(["running", ["bf"]]);
+      expect((await rowOf(ASK)).outcome).toMatchObject({ kind: "failed", text: "Claude Code stopped unexpectedly (terminated by signal SIGKILL)" });
+      expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bf" as TaskId } })).toEqual([]);
+      expect(alive(running.pid)).toBe(false);
+    } finally {
+      await running.end();
+    }
+  }, 15_000);
+
+  test("a foreground command gone with its Claude Code reads cut off, with no notice of its own", async () => {
+    const gone = backgroundCommand("bf");
+    await gone.end();
+    await runningInForeground({ bf: gone.pid });
+    await restart();
+    await until(async () => (await stepOf("toolu_bf")).state !== "running");
+    expect(await restartLines()).toEqual(["The bridge restarted during this turn."]);
+    expect(await stepOf("toolu_bf")).toMatchObject({ state: "stopped", cause: "The bridge restarted" });
+  });
+
+  test("while the bridge looks up what a restart left of a turn, a background step it may still run is not cut off as stopped", async () => {
+    const running = backgroundCommand("bk");
+    let answer: (r: TaskRun) => void = () => {};
+    try {
+      shells = async () => new Map([["bk", running.pid]]);
+      await start();
+      await send("Start it and carry on");
+      const q = queries[0]!;
+      await transcribe(calledEntry("toolu_bk", "Bash", { command: "sleep bk", run_in_background: true }), resultEntry("toolu_bk", "Command running in background with ID: bk."), calledEntry("toolu_r", "Read", { file_path: "/x" }));
+      q.emit(taskStarted(shellTask("bk", "toolu_bk", "sleep bk")), level(shellTask("bk", "toolu_bk", "sleep bk")), toolCall("toolu_r", "Read", { file_path: "/x" }));
+      await flush();
+      await flush();
+      taskRunOf = () => new Promise<TaskRun>((r) => (answer = r));
+      await restart();
+      expect([(await stepOf("toolu_bk")).state, (await stepOf("toolu_r")).state]).toEqual(["running", "running"]);
+      answer("runs");
+      await until(async () => (await restartLines()).length === 2);
+      expect([(await stepOf("toolu_bk")).state, (await stepOf("toolu_r")).state]).toEqual(["running", "stopped"]);
+    } finally {
+      answer("gone");
+      await running.end();
+    }
+  });
+
+  test("when Claude Code dies during a turn, a background command it left running never reads failed, not even before the bridge looks", async () => {
+    const running = backgroundCommand("bk");
+    try {
+      const q = await startedInBackground({ bk: running.pid });
+      await send("Carry on", "c_on");
+      q.emit(toolCall("toolu_r", "Read", { file_path: "/x" }));
+      await flush();
+      q.crash("Claude Code process terminated by signal SIGKILL");
+      await flush();
+      await flush();
+      expect((await stepOf("toolu_bk")).state).toBe("running");
+      await until(async () => (await noticesNow()).some((n) => n.text.includes("still runs")));
+      expect((await stepOf("toolu_bk")).state).toBe("running");
+    } finally {
+      await running.end();
+    }
+  }, 15_000);
+
+  test("a stop Claude Code never confirms ends with Claude Code closed, and work it left running is said to run, never to have stopped", async () => {
+    const bg = backgroundCommand("bk");
+    const fg = backgroundCommand("bf");
+    try {
+      shells = async () => new Map([["bk", bg.pid], ["bf", fg.pid]]);
+      await start();
+      await send("Run it");
+      const q = queries[0]!;
+      await transcribe(calledEntry("toolu_bk", "Bash", { command: "sleep bk", run_in_background: true }), resultEntry("toolu_bk", "Command running in background with ID: bk."), calledEntry("toolu_bf", "Bash", { command: "perl -e 'sleep bf'" }));
+      q.emit(
+        taskStarted(shellTask("bk", "toolu_bk", "sleep bk")),
+        level(shellTask("bk", "toolu_bk", "sleep bk")),
+        toolCall("toolu_bf", "Bash", { command: "perl -e 'sleep bf'" }),
+        taskStarted({ ...shellTask("bf", "toolu_bf", "Sleep"), is_backgrounded: false }),
+      );
+      await flush();
+      await flush();
+      q.holdStop = new Promise<void>(() => {});
+      await handle({ type: "session_stop", sessionId: ASK });
+      clock += 15_000;
+      sessions.tick(new Date(clock));
+      await until(async () => (await noticesNow()).some((n) => n.text.includes("still run")));
+      const said = (await noticesNow()).map((n) => n.text);
+      expect(said.filter((t) => /stopped: |work stopped/.test(t) && /sleep b/.test(t))).toEqual([]);
+      expect(said.at(-1)).toBe(`Claude Code is no longer running, but command "sleep bk" and command "perl -e 'sleep bf'" still run on this Mac. Stop ends them.`);
+      expect([(await stepOf("toolu_bk")).state, (await stepOf("toolu_bf")).state, alive(bg.pid), alive(fg.pid)]).toEqual(["running", "running", true, true]);
+    } finally {
+      await bg.end();
+      await fg.end();
+    }
+  }, 15_000);
+
+  test("a foreground command gone once the bridge closed a Claude Code that never confirmed a stop is said stopped by the user", async () => {
+    const fg = backgroundCommand("bf");
+    try {
+      const q = await runningInForeground({ bf: fg.pid });
+      q.holdStop = new Promise<void>(() => {});
+      await handle({ type: "session_stop", sessionId: ASK, target: "turn" });
+      await fg.end();
+      clock += 15_000;
+      sessions.tick(new Date(clock));
+      await until(async () => (await stopLines()).some((t) => t.includes("sleep bf")));
+      expect(await stopLines()).toEqual(["Stopped by you: the turn.", `Stopped by you: command "perl -e 'sleep bf'".`]);
+      expect(await stepOf("toolu_bf")).toMatchObject({ state: "stopped", cause: "Stopped by you" });
+    } finally {
+      await fg.end();
+    }
+  }, 15_000);
+
+  test("a command whose command line ps writes in its own escapes, or that reads its own input, is still followed to its end after a restart", async () => {
+    const shells_ = { "bé": backgroundCommand("not-its-output"), "bl": backgroundCommand("not-its-output-either") };
+    const cmds = { "bé": "exec >/dev/null 2>&1; sleep 3661 # café\tx", "bl": "exec >/dev/null 2>&1; sleep 3663 < /dev/null" };
+    try {
+      leaders = async () => [
+        { group: shells_["bé"].pid, command: "/bin/zsh -c source snap.sh && eval 'exec >/dev/null 2>&1; sleep 3661 # cafM-CM-)\\011x' < /dev/null && pwd -P >| /tmp/claude-1-cwd" },
+        { group: shells_["bl"].pid, command: "/bin/zsh -c source snap.sh && eval 'exec >/dev/null 2>&1; sleep 3663 < /dev/null' && pwd -P >| /tmp/claude-2-cwd" },
+      ];
+      await start();
+      await send("Start them");
+      const q = queries[0]!;
+      await transcribe(...Object.entries(cmds).flatMap(([id, command]) => [calledEntry(`toolu_${id}`, "Bash", { command, run_in_background: true }), resultEntry(`toolu_${id}`, `Command running in background with ID: ${id}.`)]));
+      const listed = Object.keys(cmds).map((id) => shellTask(id, `toolu_${id}`, "Sleep"));
+      q.emit(...Object.entries(cmds).map(([id, command]) => toolCall(`toolu_${id}`, "Bash", { command })), ...listed.map(taskStarted), level(...listed), result());
+      await flush();
+      await flush();
+      await restart();
+      await until(async () => (await restartLines()).length === 1);
+      for (const s of Object.values(shells_)) await s.end();
+      for (const gap of [40_000, 40_000]) {
+        clock += gap;
+        sessions.tick(new Date(clock));
+        await until(async () => (await stepOf("toolu_bl")).state === "ended");
+      }
+      expect([(await stepOf("toolu_bé")).state, (await stepOf("toolu_bl")).state]).toEqual(["ended", "ended"]);
+    } finally {
+      for (const s of Object.values(shells_)) await s.end();
+    }
+  });
 });
 
 describe("the thread's order and how soon it shows", () => {

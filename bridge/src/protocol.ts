@@ -678,8 +678,11 @@ export type ServerMessage =
  */
 export type PushState = { state: "on" } | { state: "off" } | { state: "failing"; error: string; at: string };
 
-/** card: cards opened. reminder: cards waited half their time. finished, failed: the session's run came to rest. */
-export type SessionAlertReason = "card" | "reminder" | "finished" | "failed";
+/**
+ * card: cards opened. reminder: cards waited half their time. finished, failed: the session's run came to rest. lost: a
+ * bridge restart cut the run off. The app posts nothing for a reason it does not know.
+ */
+export type SessionAlertReason = "card" | "reminder" | "finished" | "failed" | "lost";
 
 /**
  * The session request an error answers: a stop, a send (its clientId), a full-output fetch (its toolUseId), a create

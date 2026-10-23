@@ -1101,6 +1101,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(text(session("s1", .reminder)) == ["Sleep in parallel", "Still waiting for your approval"])
         #expect(text(session("s1", .finished, title: "  ")) == ["Claude Code session", "Finished"])
         #expect(text(session("s1", .failed)) == ["Sleep in parallel", "Stopped with an error"])
+        #expect(text(session("s1", .lost)) == ["Sleep in parallel", "Interrupted by a bridge restart"])
         #expect(text(session("s1", .unknown("paused"))) == nil)
     }
 

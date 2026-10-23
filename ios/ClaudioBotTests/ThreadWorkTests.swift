@@ -208,9 +208,10 @@ private func date(_ wire: String) -> Date {
     @Test func aStepTheBridgeCannotFollowReadsMayStillRunNeitherStoppedNorRunning() throws {
         let run = WorkRun(steps: [step("1", state: .unsure, started: 0, cause: "Can't tell whether this still runs on your Mac")])
         #expect(!run.isLive && !run.isRunning && !run.ticks)
-        #expect(run.headline().hasSuffix(" · 1 may still run"))
-        #expect(!run.headline().contains("stopped") && !run.headline().contains("running"))
-        #expect(run.headline(spoken: true).hasSuffix(", 1 may still run"))
+        #expect(run.headline() == "1 may still run")
+        #expect(run.headline(spoken: true) == "1 may still run")
+        let mixed = WorkRun(steps: [step("1", state: .ok), step("2", state: .unsure, cause: "Can't tell whether this still runs on your Mac")])
+        #expect(mixed.headline() == "Ran 1 command · 1 may still run")
         #expect(run.status(run.steps[0], now: start + 60) == ["May still run on your Mac"])
         #expect(run.status(run.steps[0], now: start + 60, spoken: true) == ["May still run on your Mac"])
     }

@@ -224,6 +224,8 @@ export type BackgroundTask = {
    * to see when it ends, never proof enough to signal it.
    */
   loose?: number;
+  /** A command the turn ran in the foreground: it outlives Claude Code as a background one does. */
+  foreground?: true;
 };
 
 export const emptySession = (id: string | null = null): SessionState => ({ id, pending: [], lifecycle: { kind: "idle" }, notices: [] });
@@ -339,7 +341,14 @@ export type DeviceRecord = {
  * Pushes already sent, recorded before sending so a crash never double-pushes. key: `${messageId}|${reason}`, reason
  * card, reminder, message (a turn's first bubble) or result (a long turn's last bubble). Writer: push.ts.
  */
-export type PushState = { sent: { key: string; at: string }[] };
+/**
+ * sent: the keys of every push recorded, the newest week. held: session endings owed a push once no phone is live,
+ * kept across restarts; alerted: the open app was told at `at`, so a phone heard from since saw it.
+ */
+export type PushState = { sent: { key: string; at: string }[]; held?: HeldEnding[] };
+/** How a run of a session the phone drives came to an end worth a push. A user's stop never is; a restart's cut is. */
+export type SessionEnd = "finished" | "failed" | "lost";
+export type HeldEnding = { key: string; id: SessionId; end: SessionEnd; at: string; alerted: boolean };
 
 
 /** What a bot and a group share: one chat in the phone's list. Writer: hub. */

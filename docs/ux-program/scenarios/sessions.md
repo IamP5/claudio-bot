@@ -451,10 +451,12 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Screenshot `after-resume-2` (simulator lane).
 - The network drops the phone (the socket closes); the user sends in `s6` meanwhile: "Run exactly this Bash command in the foreground (not in the background): perl -e 'sleep 90' Then reply with one line: done."; wait 3 s, reconnect with the stream position (epoch, after) and resume each thread from its last position. Mark `resume-3`.
 - Wait up to 150 s for the perl sleep 90 sent while offline to run on the Mac; mark `second-running`.
-- Wait 3 s.
+- Wait up to 30 s for Claude Code to make the perl sleep 90 a task; mark `second-task` (optional).
+- Wait 2 s.
 - SIGKILL the Claude Code process of `s6`; mark `killed`.
 - Wait up to 30 s for the session to rest after the crash; mark `s6-rest-after-kill` (optional).
 - Wait 5 s.
+- Sample the Mac's processes matching `sleep 90` in the seed project as `after-kill`.
 - Mark `after-kill`.
 - Screenshot `after-kill` (simulator lane).
 - Restart the bridge on the same port and home; the phone reconnects. Mark `restarted`.
@@ -481,7 +483,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S6.4 | state | protocol | After each reconnect, the Sessions list shows the row's current state. | The list frame after resume-1 shows working, after resume-2 idle. | The list row lags behind the thread. |
 | S6.5 | how-long | protocol | While the command runs, the phone can show how long it has been running, also after reopening the thread. | Every running step carries a start time (a step field), or is the first step of its work item, whose `at` is its start. | A running step has no start time on the wire, so elapsed time can only be counted from when the phone happened to see it. |
 | S6.6 | state | simulator (after-resume-1, after-resume-2) | Right after each reconnect, the thread on screen matches the truth. | Running after resume-1, done after resume-2. | Stale state. |
-| S6.7 | state | protocol | When Claude Code dies mid-command, nothing keeps reading running, and the row says the run failed and why. | At mark after-kill (5 s after the session rests), no step reads running, the row reads failed, and row.outcome carries the cause. | A step still reads running, the row is not failed, or the row gives no cause. |
+| S6.7 | state | protocol | When Claude Code dies mid-command, the row says the run failed and why, and a step reads running only while its command still runs on the Mac, as a task Stop can end. | At mark after-kill, row.outcome is failed with its cause; every Bash step that reads running names the perl sleep 90, which still runs (sample after-kill), and controls.tasks offers it; no other step reads running; the row reads failed, or working only while that task runs. | A step reads running whose command is gone or that no task offers, the command runs but its step reads failed or stopped, or the row gives no failure and cause. |
 | S6.8 | state | protocol | The failure outlives a bridge restart: the row and the thread still say the run failed. | At mark after-restart, the row reads failed (or its outcome is failed or lost) and the thread still holds a notice that says the run failed or that the bridge restarted. | After the restart the row reads idle, or the thread lost the notice. |
 | S6.9 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
 
@@ -610,6 +612,94 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S6d.1 | state | protocol | Once the bridge cannot tell whether a command still runs, its step stops spinning and says so, and the session rests; one it still follows reads running. | At mark after-restart, vu1's Bash step is in state "unsure" with a cause that says the bridge cannot tell, and vu1 is not working; vu2's step is running with a task that names it, or already unsure; neither reads stopped. | vu1's step reads anything but unsure, or vu1 reads working; or vu2's step reads stopped, or running with no task. |
 | S6d.2 | state | protocol | After both commands ended, neither thread shows a step running and neither session works, 10 s and 40 s later. | At marks after-ended and after-ended-40s, no Bash step of vu1 or vu2 reads running, and neither reads working. | A step still reads running, or a session reads working. |
 | S6d.3 | state | protocol | Each command's end is said once, whether the bridge knew its process group or found it only by its command line. | By mark after-said, vu1 and vu2 each hold exactly one notice that the command "ended", said no earlier than 1 s before the run saw that command's process gone, and each Bash step is in state "ended", neither stopped nor unsure. | A thread never says its command ended, says it twice, says it while the process still ran, or its step reads anything but ended. |
+
+## S6e Foreground commands that outlive a bridge restart and a Claude Code crash
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. A turn runs a long command in the background, then one in the foreground. The Mac's bridge restarts mid-turn: Claude Code goes with it, but both commands keep running.
+2. In a second session the same, but Claude Code itself crashes mid-turn.
+3. Each time the turn is over, but the thread must say the commands still run, keep their steps running (never stopped or failed, not even for a moment), and offer Stop, which must end them on the Mac.
+
+**Setup.**
+
+- New session `e1` in demo (haiku, mode default): "First use the Bash tool with run_in_background set to true to run exactly: sleep 3653 Then use the Bash tool in the foreground (not in the background) to run exactly: perl -e 'sleep 3654' Then reply with one line: done."
+- Wait up to 90 s for e1's turn to start; mark `e1-started`.
+- Wait up to 150 s for e1's foreground command to be a task; mark `e1-fg`.
+- Wait 3 s.
+- Restart the bridge on the same port and home; the phone reconnects. Mark `restarted`.
+- Wait 10 s.
+- Sample the Mac's processes matching `sleep 3654` in the seed project as `e1-after-restart`.
+- Mark `e1-after-restart`.
+- New session `e2` in demo (haiku, mode default): "First use the Bash tool with run_in_background set to true to run exactly: sleep 3655 Then use the Bash tool in the foreground (not in the background) to run exactly: perl -e 'sleep 3656' Then reply with one line: done."
+- Wait up to 90 s for e2's turn to start; mark `e2-started`.
+- Wait up to 150 s for e2's foreground command to be a task; mark `e2-fg`.
+- Wait 3 s.
+- SIGKILL the Claude Code process of `e2`; mark `killed`.
+- Wait 8 s.
+- Sample the Mac's processes matching `sleep 3656` in the seed project as `e2-after-crash`.
+- Mark `e2-after-crash`.
+- Stop only the task `sleep 3654` of `e1` (session_stop with target task); mark `e1-stop`.
+- Press Stop on `e2` (session_stop); mark `e2-stop`.
+- Wait 6 s.
+- Sample the Mac's processes matching `sleep 365` in the seed project as `after-stop`.
+- Press Stop on `e1` (session_stop); mark `e1-stop-all`.
+- Wait 4 s.
+
+**Preconditions** (any failure fails the scenario):
+
+- session e1 was created
+- session e2 was created
+- e1's perl sleep outlived the restart (sample e1-after-restart)
+- e2's perl sleep outlived the crash (sample e2-after-crash)
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S6e.1 | state | protocol | Across the restart neither command's step ever reads stopped or failed while it runs, and the thread says the commands still run and Stop ends them. | In every e1 snapshot from the restart to the Stop, the Bash steps of sleep 3653 and sleep 3654 read running; a notice says they still run on this Mac with "Stop ends"; none says either stopped. | A snapshot shows either step stopped, failed, unsure or ended while it ran, no notice says they still run, or one says they stopped. |
+| S6e.2 | stop | protocol | After the restart the session reads working with the foreground command as a task, so Stop is offered. | At mark e1-after-restart, controls.working is true and controls.tasks has one task whose step is the perl sleep 3654's. | The session rests, or no task offers the foreground command. |
+| S6e.3 | state | protocol | After Claude Code crashes, the run reads failed, yet neither command's step ever reads failed or stopped while it runs, and the thread says they still run. | Every e2 snapshot from the kill to the Stop has the Bash steps of sleep 3655 and sleep 3656 running; a notice says they still run on this Mac with "Stop ends"; at e2-after-crash row.outcome is failed with a cause and controls.tasks offers the perl sleep 3656. | A snapshot shows either step error or stopped while it ran, no notice says they run, the outcome is not failed, or no task offers the command. |
+| S6e.4 | stop | protocol | Stop ends the foreground commands on the Mac, and the thread says the user stopped them. | The perl sleeps 3654 and 3656 are gone 6 s after their Stops (sample after-stop), and each session holds a notice that starts "Stopped by you" and names its perl sleep, after its Stop. | A perl sleep still runs after its Stop, or a session has no such notice. |
+
+## S6f The bridge restarts in the middle of a run while the user is away
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. The user starts a long command and puts the phone away. The Mac's bridge restarts mid-turn, so the turn is cut off.
+2. Once the bridge is back and no phone came back to look, the user must get one push that says the run was interrupted, with nothing of the session's content in it.
+3. A second restart must not push it again.
+
+**Setup.**
+
+- New session `f1` in demo (haiku, mode default): "Use the Bash tool in the foreground (not in the background) to run exactly: perl -e 'sleep 3657' Then reply with one line: done."
+- Wait up to 90 s for f1's turn to start; mark `f1-started`.
+- Wait up to 150 s for f1's command to run on the Mac; mark `f1-running`.
+- Wait 3 s.
+- Restart the bridge on the same port and home; the phone reconnects. Mark `restarted`.
+- Wait up to 90 s for a push about f1 after the restart; mark `pushed` (optional).
+- Wait 5 s.
+- Restart the bridge on the same port and home; the phone reconnects. Mark `restarted-again`.
+- Wait 75 s.
+- Mark `after-second`.
+- Press Stop on `f1` (session_stop); mark `f1-stop`.
+- Wait 4 s.
+
+**Preconditions** (any failure fails the scenario):
+
+- session f1 was created
+- the bridge restarted twice
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S6f.1 | state | protocol | The user away from the phone hears once that the run was interrupted by the restart, in words that hold nothing of the session. | Between the first and second restart, exactly one push links to f1; it says the session "was interrupted by a bridge restart", names no command, and went out within 90 s of the restart. | No push, more than one, a push that names the command, or one that says the run finished or failed. |
+| S6f.2 | state | protocol | Another restart does not push the same interruption again. | From the second restart to mark after-second (75 s, past the start grace), no push links to f1. | A push about f1 goes out after the second restart. |
 
 ## S7 Twelve sessions at once
 

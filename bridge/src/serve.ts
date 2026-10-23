@@ -349,8 +349,8 @@ export function serve(deps: ServeDeps): Transport {
     },
     live: () => quietAt().filter((t) => t > deps.now().getTime()).length,
     sockets: {
-      alert: (m) => {
-        const to = open().filter((ws) => ws.data.protocol === 3 && ws.readyState === 1);
+      alert: (m, only) => {
+        const to = open().filter((ws) => ws.data.protocol === 3 && ws.readyState === 1 && (only === undefined || only.includes(ws.data.id)));
         for (const ws of to) ws.send(wire(m));
         return to.map((ws) => ws.data.id);
       },

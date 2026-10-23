@@ -60,7 +60,7 @@ function harness(opts: { home?: string; liveFor?: number; respond?: () => Promis
     sender: ntfySender(URL_, fakeFetch),
     liveUntil: () => sockets.until,
     sockets: {
-      alert: (m) => (signals.push(m), [...sockets.open]),
+      alert: (m, only) => (signals.push(m), sockets.open.filter((id) => only === undefined || only.includes(id))),
       heard: (ids, since) => ids.some((id) => (sockets.readAt.get(id) ?? 0) > since),
       open: () => [...sockets.open],
     },
@@ -791,6 +791,15 @@ test("an alert the socket that got it was heard from after is not sent again to 
   h.sockets.open = [2];
   at(h, T0 + 4_000);
   expect(h.signals.map((s) => s.type === "session_alert" && [s.reason, s.cardId as string])).toEqual([["card", "m_a"]]);
+});
+
+test("an alert goes at once to a socket that opens while the one it went to is still open but unheard, and only once", () => {
+  const h = harness({ liveFor: 45_000 });
+  h.push.sessionEnded!(SID, "finished", iso(T0));
+  h.sockets.open = [1, 2];
+  at(h, T0 + 1_000);
+  at(h, T0 + 2_000);
+  expect(h.signals.map((s) => s.type)).toEqual(["session_alert", "session_alert"]);
 });
 
 test("a card alert to a socket that died unseen goes again while the card is open, and not once it is answered", () => {

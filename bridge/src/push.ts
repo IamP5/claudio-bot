@@ -150,12 +150,12 @@ const burstDue = (cards: readonly OwnCard[]) => Math.min(Math.max(...cards.map(c
 
 /**
  * The sockets session alerts go to. Ids are the transport's own and are never reused while the bridge runs.
- * alert: sends the frame to every open protocol 3 socket, and returns the ids it went to. heard: whether a socket among
+ * alert: sends the frame to every open protocol 3 socket, or to those of `only`, and returns the ids it went to. heard: whether a socket among
  * ids was heard from, attended, after `since` (ms), a closed one by when it was last heard so. open: the ids of the
  * open protocol 3 sockets.
  */
 export type AlertSockets = {
-  alert(m: SessionAlert): number[];
+  alert(m: SessionAlert, only?: readonly number[]): number[];
   heard(ids: readonly number[], since: number): boolean;
   open(): number[];
 };
@@ -306,13 +306,17 @@ export function createPush(deps: {
   const owes = (a: Alerted) =>
     [...alerted].some(([key, x]) => x === a && !pushed(key) && (key.endsWith("|done") ? held().some((h) => h.key === key) : isOpen(a.frame.sessionId, idOf(key) as MessageId)));
 
-  /** Alerts not seen and still owed that reached no socket open now go to the open ones. */
+  /**
+   * Alerts not seen and still owed go to each open socket they never reached, such as the one a phone opens after its
+   * last died unseen, without waiting for the dead one to close.
+   */
   function resend(now: number, act: boolean, later: (t: number) => void) {
     const open = deps.sockets?.open() ?? [];
     if (open.length === 0) return;
     for (const a of new Set(alerted.values())) {
-      if (a.sent.some((b) => b.to.some((s) => open.includes(s))) || a.sent.some((b) => deps.sockets!.heard(b.to, b.at)) || !owes(a)) continue;
-      if (act) a.sent.push({ at: now, to: deps.sockets!.alert(a.frame) });
+      const fresh = open.filter((s) => !a.sent.some((b) => b.to.includes(s)));
+      if (fresh.length === 0 || a.sent.some((b) => deps.sockets!.heard(b.to, b.at)) || !owes(a)) continue;
+      if (act) a.sent.push({ at: now, to: deps.sockets!.alert(a.frame, fresh) });
       else later(now);
     }
   }

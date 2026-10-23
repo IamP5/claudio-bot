@@ -31,6 +31,8 @@ export type Ev = {
   paired: boolean;
   transcript(name: string): { main: TranscriptLine[]; subagents: TranscriptLine[] };
   exists(rel: string): boolean;
+  /** A file in the seed project, null when absent. */
+  read(rel: string): string | null;
   /** What the push sink received; status is what it answered (500 while it was made to fail). */
   pushes(): Push[];
   /** --away (or a scenario that says so): the phone said from the start that nobody looks at it, so pushes go out. */
@@ -52,6 +54,18 @@ export type Ev = {
    * labels of the seed project's header and rows, top to bottom; more: its "Show N more" fold when on screen.
    */
   list: { at: number; rows: string[]; more: string[] }[];
+  /**
+   * Every session_send the phone made, by clientId: when, how many copies it handed to a socket or the outbox, and
+   * when a frame first showed it back (an item's id or clientId, or a removal), as the app counts it.
+   */
+  sends: { at: number; name: string; clientId: string; text: string; shownAt: number | null; copies: number }[];
+  /** Replies with no thread to file them under, and errors: decided, error, session_tool_output, session_created. */
+  replies: { at: number; frame: Frame }[];
+  /**
+   * With --sim and watch-labels: the app's elements whose label holds a watched phrase, sampled by the label probe.
+   * button: the element is a button; enabled: whether it takes a tap.
+   */
+  labels: { at: number; hits: { label: string; button: boolean; enabled: boolean }[] }[];
 };
 
 export type Action =
@@ -74,7 +88,19 @@ export type Action =
    * while it is down. Waits, reconnects with the app's stream position (epoch, after), resumes every thread, and
    * unless compare is false, compares each with a fresh open.
    */
-  | { do: "reconnect"; afterS: number; mark: string; how?: Drop; send?: { name: string; text: string }; compare?: boolean; until?: { what: string; timeoutS: number; test: (ev: Ev) => boolean } }
+  | {
+      do: "reconnect";
+      afterS: number;
+      mark: string;
+      how?: Drop;
+      send?: { name: string; text: string };
+      /** The send goes just before the drop, so it races it: it may reach the bridge with its echo lost, or not at all. */
+      sendFirst?: boolean;
+      /** With --sim, a screenshot this far into the drop; mark `<mark>-shot` when it is taken. */
+      shot?: { name: string; afterS: number };
+      compare?: boolean;
+      until?: { what: string; timeoutS: number; test: (ev: Ev) => boolean };
+    }
   | { do: "screenshot"; shot: string }
   /** The user opens the thread: the app by its link with --sim; on the protocol lane the phone watches it again if it had left. */
   | { do: "open-thread"; name: string }
@@ -93,7 +119,13 @@ export type Action =
   /** With --sim, the list probe reads the app's Sessions list as it draws it until the setup ends, into ev.list. */
   | { do: "watch-list" }
   /** The push sink answers 500 from now on (fail), or 200 again. */
-  | { do: "sink"; fail: boolean };
+  | { do: "sink"; fail: boolean }
+  /** The phone sends a frame the app can send, built from the evidence so far (what: the frame in words, for the doc). */
+  | { do: "raw"; mark: string; what: string; frame: (ev: Ev) => Frame }
+  /** Reads a file of the seed project, line by line, into the report's samples under `as`. */
+  | { do: "file"; rel: string; as: string }
+  /** With --sim, the label probe records the app's elements whose label holds one of `phrases` until the setup ends, into ev.labels. */
+  | { do: "watch-labels"; phrases: string[] };
 
 export type Tell = "what" | "how-many" | "how-long" | "state" | "stop";
 export type Verdict = { ok: boolean; why: string };
@@ -1289,6 +1321,20 @@ const S6: Scenario = {
       },
     },
     noAckOutput("S6.9", ["s6"]),
+    {
+      id: "S6.10",
+      tell: "what",
+      lane: "protocol",
+      text: "The message sent offline runs exactly once, and a frame shows it back so the app stops resending it.",
+      pass: "The perl sleep 90 prompt is in the transcript once, and a frame named the send's clientId after resume-3.",
+      fail: "It ran twice, never, or no frame named it, so the app would call it not sent.",
+      check: (ev) => {
+        const send = ev.sends.find((x) => x.text.includes("perl -e 'sleep 90'"));
+        const said = prompts(ev, "s6", "perl -e 'sleep 90'").length;
+        const bad = [send ? "" : "no such send", send && send.shownAt === null ? "no frame showed it back" : "", said === 1 ? "" : `${said} prompts`].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok(`1 prompt; shown back at +${(send!.shownAt! / 1000).toFixed(1)}s after ${send!.copies} copies`);
+      },
+    },
   ],
 };
 
@@ -1716,6 +1762,336 @@ const S6e: Scenario = {
         return said.every(Boolean) ? ok(said.map((i) => (i!.text ?? "").slice(0, 70)).join(" | ")) : no(`e1 notice ${!!said[0]}, e2 notice ${!!said[1]}`);
       },
     },
+  ],
+};
+
+const ONCE = "Use the Bash tool to run exactly: echo once >> once.txt\nThen reply with one line: done.";
+const RACE = "Use the Bash tool to run exactly: echo race >> race.txt\nThen reply with one line: done.";
+const LONG = "Use the Bash tool in the foreground (not in the background) to run exactly: perl -e 'sleep 3661'\nThen reply with one line: done.";
+/** The main transcript's prompts that hold `text`: the user's own lines, not tool results. */
+const prompts = (ev: Ev, name: string, text: string) =>
+  ev.transcript(name).main.filter((l) => l.type === "user" && !JSON.stringify(l.message?.content ?? "").includes("tool_result") && JSON.stringify(l.message?.content ?? "").includes(text));
+const lines = (ev: Ev, rel: string) => (ev.read(rel) ?? "").split("\n").filter(Boolean);
+const sendOf = (ev: Ev, text: string) => ev.sends.find((x) => x.text === text);
+/** Replies of `type` within `s` seconds of mark `m` that pass `test`. */
+const repliesAfter = (ev: Ev, m: string, s: number, type: string, test: (f: Frame) => boolean = () => true) => {
+  const at = mark(ev, m) ?? Infinity;
+  return ev.replies.filter((r) => r.at >= at && r.at <= at + s * 1000 && r.frame.type === type && test(r.frame));
+};
+const about = (f: Frame) => (f.about ?? {}) as { kind?: string; sessionId?: string; cardId?: string; ref?: string };
+/** The first turn's start as the thread showed it, which a later stop can aim at. */
+const firstTurn = (ev: Ev, name: string) =>
+  snaps(ev, name).map((s) => (s.controls?.turn as { startedAt?: string } | null | undefined)?.startedAt).find((t): t is string => typeof t === "string");
+const permissionCards = (ev: Ev, name: string) => {
+  const cards = new Map<string, unknown>();
+  for (const s of snaps(ev, name)) for (const i of s.items) if (i.kind === "permission" && i.card) cards.set(i.card.id, i.card.answer);
+  return cards;
+};
+/**
+ * An exactly-once verdict before the bridge restarted: the file sample has one line, the transcript one prompt from
+ * before the restart, and a frame showed the send back.
+ */
+const once = (ev: Ev, name: string, sample: string, text: string): Verdict => {
+  const send = sendOf(ev, text);
+  const got = ev.samples[sample] ?? [];
+  const file = sample.replace("-before-restart", ".txt");
+  const before = mark(ev, "restarted") ?? Infinity;
+  const said = prompts(ev, name, text.split("\n")[0]!.replace("Use the Bash tool to run exactly: ", "")).filter((l) => !l.timestamp || ev.atOf(l.timestamp) < before).length;
+  const bad = [
+    send ? "" : "the phone made no such send",
+    send && send.shownAt === null ? `no frame showed ${send.clientId} back` : "",
+    got.length === 1 ? "" : `${file} has ${got.length} lines`,
+    said === 1 ? "" : `the transcript has the prompt ${said} times`,
+  ].filter(Boolean);
+  return bad.length ? no(bad.join("; ")) : ok(`${send!.copies} copies sent, shown back at +${(send!.shownAt! / 1000).toFixed(1)}s; ${file} has 1 line; 1 prompt`);
+};
+
+const S6g: Scenario = {
+  id: "S6g",
+  area: "sessions",
+  title: "Requests that outlive the socket",
+  needsSimulator: false,
+  journey: [
+    "The user sends while the connection dies without a word (half-open), and again just as it drops. Each message must run exactly once once the phone is back, as the app resends what no frame showed back.",
+    "The Mac's bridge restarts and the phone sends one of those messages again (its echo lost): it must not run twice.",
+    "A Stop meant for an earlier turn must never stop the turn that runs now.",
+    "Requests the Mac cannot meet must each end with words tied to the request: a tool output it does not have, a decision on a closed card, a refused Start. Every decision it took is acknowledged, and a retried Start makes no second session.",
+  ],
+  setup: [
+    { do: "create", name: "g1", prompt: "Reply with exactly one word: ready." },
+    started("g1"),
+    { do: "until", mark: "g1-rest", what: "g1's first turn to end", timeoutS: 90, test: atRest("g1") },
+    { do: "reconnect", how: "half-open", afterS: 5, mark: "lost-send", compare: false, send: { name: "g1", text: ONCE } },
+    { do: "until", mark: "once-done", what: "once.txt and the turn's end", timeoutS: 150, test: (ev) => ev.exists("once.txt") && atRest("g1")(ev) },
+    { do: "reconnect", how: "close", sendFirst: true, afterS: 3, mark: "race-send", compare: false, send: { name: "g1", text: RACE } },
+    { do: "until", mark: "race-done", what: "race.txt and the turn's end", timeoutS: 150, test: (ev) => ev.exists("race.txt") && atRest("g1")(ev) },
+    { do: "file", rel: "once.txt", as: "once-before-restart" },
+    { do: "file", rel: "race.txt", as: "race-before-restart" },
+    { do: "restart-bridge", mark: "restarted" },
+    {
+      do: "raw",
+      mark: "resent-after-restart",
+      what: "the once.txt message again with its clientId, as an app whose echo was lost resends it",
+      frame: (ev) => {
+        const s = sendOf(ev, ONCE);
+        return { type: "session_send", sessionId: ev.ids.g1!, text: ONCE, clientId: s?.clientId ?? "none", interrupt: false };
+      },
+    },
+    { do: "sleep", s: 15 },
+    { do: "mark", mark: "after-resend" },
+    { do: "send", name: "g1", text: LONG },
+    { do: "until", mark: "long-running", what: "the perl sleep 3661 to run on the Mac", timeoutS: 150, test: (ev) => ev.procs("sleep 3661").length > 0 },
+    { do: "sleep", s: 2 },
+    {
+      do: "raw",
+      mark: "stale-stop",
+      what: "a Stop aimed at g1's first turn (turnStartedAt as the thread showed it then)",
+      frame: (ev) => ({ type: "session_stop", sessionId: ev.ids.g1!, target: "all", turnStartedAt: firstTurn(ev, "g1") ?? "2026-01-01T00:00:00.000Z" }),
+    },
+    { do: "sleep", s: 4 },
+    { do: "ps", pattern: "sleep 3661", as: "after-stale-stop" },
+    { do: "stop", name: "g1", mark: "real-stop" },
+    { do: "sleep", s: 6 },
+    { do: "ps", pattern: "sleep 3661", as: "after-real-stop" },
+    { do: "raw", mark: "tool-asked", what: "session_tool for a toolUseId the transcript does not have", frame: (ev) => ({ type: "session_tool", sessionId: ev.ids.g1!, toolUseId: "toolu_g11_missing" }) },
+    { do: "sleep", s: 3 },
+    {
+      do: "raw",
+      mark: "decide-again",
+      what: "session_decide on the first permission card, which is already answered",
+      frame: (ev) => ({ type: "session_decide", sessionId: ev.ids.g1!, cardId: [...permissionCards(ev, "g1").keys()][0] ?? "none", choice: "once" }),
+    },
+    { do: "sleep", s: 3 },
+    {
+      do: "raw",
+      mark: "bad-create",
+      what: "session_create for a project the Mac does not have",
+      frame: () => ({ type: "session_create", ref: "g11-bad", projectId: "p_g11_missing", text: "Reply ok.", model: "haiku", mode: "default", isolate: "none" }),
+    },
+    { do: "sleep", s: 3 },
+    {
+      do: "raw",
+      mark: "create-again",
+      what: "g1's own session_create again, with its ref, as the New Session sheet's Retry sends it",
+      frame: (ev) => ({ type: "session_create", ref: "g1", projectId: last(ev, "g1")?.row?.projectId ?? "none", text: "Reply with exactly one word: ready.", model: "haiku", mode: "default", isolate: "none" }),
+    },
+    { do: "sleep", s: 6 },
+  ],
+  pre: [
+    created("g1"),
+    fileMade("once.txt"),
+    fileMade("race.txt"),
+    { what: "the bridge restarted", check: (ev) => (mark(ev, "restarted") !== undefined ? ok("yes") : no("no")) },
+    { what: "the perl sleep 3661 ran (sample after-stale-stop or the long-running mark)", check: (ev) => (mark(ev, "long-running") !== undefined ? ok("yes") : no("it never ran")) },
+  ],
+  rubric: [
+    {
+      id: "S6g.1",
+      tell: "what",
+      lane: "protocol",
+      text: "A message sent into a connection that died without a word runs exactly once after the phone is back.",
+      pass: "The send a half-open drop swallowed is shown back by a frame naming its clientId after the reconnect, once.txt has one line before the restart, and the transcript holds its prompt once.",
+      fail: "It never runs, runs twice, or no frame names it so the app would keep resending it or call it not sent.",
+      check: (ev) => once(ev, "g1", "once-before-restart", ONCE),
+    },
+    {
+      id: "S6g.2",
+      tell: "what",
+      lane: "protocol",
+      text: "A message sent just as the connection drops runs exactly once after the phone is back.",
+      pass: "Before the restart, race.txt has one line, the transcript holds its prompt once, and a frame showed the send back by its clientId.",
+      fail: "It runs twice or never, or nothing shows it back.",
+      check: (ev) => once(ev, "g1", "race-before-restart", RACE),
+    },
+    {
+      id: "S6g.3",
+      tell: "what",
+      lane: "protocol",
+      text: "A message sent again after the Mac's bridge restarted runs nothing a second time.",
+      pass: "At after-resend, once.txt still has one line, the transcript holds the prompt once, and no turn ran after the resend.",
+      fail: "The bridge forgot the clientIds it took when it restarted and ran the message again.",
+      check: (ev) => {
+        const at = mark(ev, "after-resend");
+        if (at === undefined) return needMarks(ev, "after-resend")!;
+        const got = lines(ev, "once.txt");
+        const said = prompts(ev, "g1", "echo once >> once.txt").length;
+        const ran = during(ev, "g1", mark(ev, "resent-after-restart") ?? at, at).some((s) => s.controls?.working === true);
+        const bad = [got.length === 1 ? "" : `once.txt has ${got.length} lines`, said === 1 ? "" : `${said} prompts`, ran ? "a turn ran after the resend" : ""].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok("one line, one prompt, no turn after the resend");
+      },
+    },
+    {
+      id: "S6g.4",
+      tell: "stop",
+      lane: "protocol",
+      text: "A Stop meant for an earlier turn never stops the turn that runs now; the user's own Stop still does.",
+      pass: "Within 5 s of stale-stop the bridge answers an error about this session's stop, the perl sleep 3661 still runs 4 s later (sample after-stale-stop), and it is gone after the real Stop (sample after-real-stop).",
+      fail: "The stale Stop stopped the command, was not answered, or the real Stop did not end it.",
+      check: (ev) => {
+        const refused = repliesAfter(ev, "stale-stop", 5, "error", (f) => about(f).kind === "stop" && about(f).sessionId === ev.ids.g1);
+        const alive = (ev.samples["after-stale-stop"] ?? []).length > 0;
+        const gone = (ev.samples["after-real-stop"] ?? []).length === 0;
+        const bad = [refused.length ? "" : "no refusal about the stop", alive ? "" : "the command was gone after the stale stop", gone ? "" : "the command still ran after the real Stop"].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok(`refused: "${String(refused[0]!.frame.message)}"; ran on; the real Stop ended it`);
+      },
+    },
+    {
+      id: "S6g.5",
+      tell: "state",
+      lane: "protocol",
+      text: "Asking for a tool call's output the Mac does not have ends with the reason, on the request itself, so the sheet never spins.",
+      pass: "Within 5 s of tool-asked a session_tool_output for toolu_g11_missing arrives with output null and an error in words.",
+      fail: "No answer, or an error frame the sheet cannot tie to its request.",
+      check: (ev) => {
+        const got = repliesAfter(ev, "tool-asked", 5, "session_tool_output", (f) => f.toolUseId === "toolu_g11_missing");
+        const f = got[0]?.frame;
+        if (!f) return no(`no session_tool_output; replies: ${repliesAfter(ev, "tool-asked", 5, "error").map((r) => String(r.frame.message)).join(" | ") || "none"}`);
+        return f.output === null && typeof f.error === "string" && f.error.length > 0 ? ok(`"${f.error}"`) : no(`output ${JSON.stringify(f.output)}, error ${JSON.stringify(f.error)}`);
+      },
+    },
+    {
+      id: "S6g.6",
+      tell: "state",
+      lane: "protocol",
+      text: "A decision on a card that is already closed is refused about that card, so the card can say Already answered.",
+      pass: "Within 5 s of decide-again an error arrives whose about is {kind: decide} with this session and that card id.",
+      fail: "No refusal, or one with no card to tie it to.",
+      check: (ev) => {
+        const card = [...permissionCards(ev, "g1").keys()][0];
+        if (!card) return no("not judged: g1 raised no permission card");
+        const got = repliesAfter(ev, "decide-again", 5, "error");
+        const tied = got.find((r) => about(r.frame).kind === "decide" && about(r.frame).cardId === card && about(r.frame).sessionId === ev.ids.g1);
+        return tied ? ok(`"${String(tied.frame.message)}"`) : no(`errors: ${got.map((r) => `${String(r.frame.message)} ${JSON.stringify(r.frame.about ?? null)}`).join(" | ") || "none"}`);
+      },
+    },
+    {
+      id: "S6g.7",
+      tell: "state",
+      lane: "protocol",
+      text: "Every decision the Mac took from this phone is acknowledged, so the phone never calls another device's answer its own.",
+      pass: "For every permission card of g1 the phone answered, a decided frame with its card id arrived.",
+      fail: "A card the phone answered closed with no decided frame.",
+      check: (ev) => {
+        const answered = [...permissionCards(ev, "g1").entries()].filter(([, a]) => a === "once").map(([id]) => id);
+        if (!answered.length) return no("not judged: g1 raised no permission card the phone answered");
+        const acked = new Set(ev.replies.filter((r) => r.frame.type === "decided").map((r) => String(r.frame.cardId)));
+        const missing = answered.filter((id) => !acked.has(id));
+        return missing.length ? no(`${missing.length}/${answered.length} answered cards had no decided frame`) : ok(`${answered.length} cards, each acknowledged`);
+      },
+    },
+    {
+      id: "S6g.8",
+      tell: "state",
+      lane: "protocol",
+      text: "A Start the Mac refuses is refused about that Start, so the New Session sheet shows why.",
+      pass: "Within 5 s of bad-create an error arrives whose about is {kind: create, ref: g11-bad}.",
+      fail: "No refusal, or one the sheet cannot tie to its Start.",
+      check: (ev) => {
+        const got = repliesAfter(ev, "bad-create", 5, "error");
+        const tied = got.find((r) => about(r.frame).kind === "create" && about(r.frame).ref === "g11-bad");
+        return tied ? ok(`"${String(tied.frame.message)}"`) : no(`errors: ${got.map((r) => `${String(r.frame.message)} ${JSON.stringify(r.frame.about ?? null)}`).join(" | ") || "none"}`);
+      },
+    },
+    {
+      id: "S6g.9",
+      tell: "what",
+      lane: "protocol",
+      text: "Retrying a Start the phone could not confirm makes no second session.",
+      pass: "Within 6 s of create-again a session_created for ref g1 arrives with g1's first session id.",
+      fail: "The retry made another session, or got no answer.",
+      check: (ev) => {
+        const first = ev.replies.find((r) => r.frame.type === "session_created" && r.frame.ref === "g1")?.frame.sessionId;
+        const again = repliesAfter(ev, "create-again", 6, "session_created", (f) => f.ref === "g1");
+        if (!again.length) return no("no session_created for the retry");
+        return again.every((r) => r.frame.sessionId === first) ? ok(`same session ${String(first)}`) : no(`a new session ${String(again[0]!.frame.sessionId)}; the first was ${String(first)}`);
+      },
+    },
+  ],
+};
+
+const S6h: Scenario = {
+  id: "S6h",
+  area: "sessions",
+  title: "An approval while the Mac is out of reach (X-empty-error-offline case 2)",
+  needsSimulator: true,
+  holdCardsS: 240,
+  journey: [
+    "A session asks to run a command and the card waits for the user. The Mac drops out of reach while the user looks at it.",
+    "The card must say the answer cannot reach the Mac, and its choices must take no tap, so nothing is queued silently.",
+    "Once the Mac is back the card takes a tap again, and the thread is not left catching up.",
+  ],
+  setup: [
+    { do: "watch-labels", phrases: ["Your answer can't reach your Mac", "Allow once", "Catching up", "Not sent"] },
+    { do: "create", name: "h1", prompt: "Use the Bash tool to run exactly: echo held > held.txt\nThen reply with one line: done." },
+    started("h1"),
+    { do: "until", mark: "card-open", what: "h1's permission card", timeoutS: 120, test: (ev) => [...permissionCards(ev, "h1").values()].some((a) => a === null) },
+    { do: "open-thread", name: "h1" },
+    { do: "sleep", s: 3 },
+    { do: "screenshot", shot: "card-online" },
+    { do: "reconnect", how: "close", afterS: 20, mark: "offline", compare: false, shot: { name: "card-offline", afterS: 12 } },
+    { do: "sleep", s: 8 },
+    { do: "screenshot", shot: "card-back" },
+    { do: "mark", mark: "back" },
+  ],
+  pre: [
+    created("h1"),
+    { what: "the card stayed open through the drop", check: (ev) => ([...permissionCards(ev, "h1").values()].some((a) => a === null) ? ok("open") : no("the card closed")) },
+    { what: "the label probe read the app", check: (ev) => (!ev.sim || ev.labels.length > 0 ? ok(`${ev.labels.length} samples`) : no("no samples")) },
+  ],
+  rubric: [
+    {
+      id: "S6h.1",
+      tell: "state",
+      lane: "simulator",
+      text: "While the Mac is out of reach, the card says the answer cannot reach it and its choices take no tap.",
+      pass: 'In the label samples from 4 s into the drop to its end, "Your answer can\'t reach your Mac" shows, and every Allow once button seen is disabled.',
+      fail: "The card offers live choices while nothing can reach the Mac, or says nothing.",
+      check: (ev) => {
+        const from = mark(ev, "offline-dropped");
+        const to = mark(ev, "offline");
+        if (from === undefined || to === undefined) return needMarks(ev, "offline-dropped", "offline")!;
+        const xs = ev.labels.filter((x) => x.at >= from + 4000 && x.at <= to - 1000);
+        if (!xs.length) return no("not judged: no label sample in the drop");
+        const said = xs.filter((x) => x.hits.some((h) => h.label.includes("Your answer can't reach your Mac"))).length;
+        const live = xs.flatMap((x) => x.hits).filter((h) => h.button && h.label.startsWith("Allow once") && h.enabled).length;
+        return said > 0 && live === 0 ? ok(`${said}/${xs.length} samples say it; no enabled Allow once`) : no(`${said}/${xs.length} samples say it; ${live} enabled Allow once seen`);
+      },
+    },
+    {
+      id: "S6h.2",
+      tell: "state",
+      lane: "simulator",
+      text: "Once the Mac is back, the card takes a tap again and no longer says the answer cannot reach it.",
+      pass: "In the label samples from 3 s after the reconnect to mark back, Allow once is enabled and the offline line is gone.",
+      fail: "The card stays disabled or keeps the offline line after the Mac is back.",
+      check: (ev) => {
+        const from = mark(ev, "offline");
+        const to = mark(ev, "back");
+        if (from === undefined || to === undefined) return needMarks(ev, "offline", "back")!;
+        const xs = ev.labels.filter((x) => x.at >= from + 3000 && x.at <= to);
+        if (!xs.length) return no("not judged: no label sample after the reconnect");
+        const live = xs.filter((x) => x.hits.some((h) => h.button && h.label.startsWith("Allow once") && h.enabled)).length;
+        const stale = xs.filter((x) => x.hits.some((h) => h.label.includes("Your answer can't reach your Mac"))).length;
+        return live === xs.length && stale === 0 ? ok(`${xs.length} samples: enabled, no offline line`) : no(`${live}/${xs.length} enabled; ${stale} with the offline line`);
+      },
+    },
+    {
+      id: "S6h.3",
+      tell: "state",
+      lane: "simulator",
+      text: "The thread is never left catching up once the Mac answered.",
+      pass: 'No label sample from 3 s after the reconnect to mark back holds "Catching up".',
+      fail: '"Catching up" stays after the reply came.',
+      check: (ev) => {
+        const from = mark(ev, "offline");
+        const to = mark(ev, "back");
+        if (from === undefined || to === undefined) return needMarks(ev, "offline", "back")!;
+        const xs = ev.labels.filter((x) => x.at >= from + 3000 && x.at <= to);
+        const stuck = xs.filter((x) => x.hits.some((h) => h.label.includes("Catching up"))).length;
+        return xs.length && !stuck ? ok(`${xs.length} samples, none catching up`) : no(xs.length ? `${stuck}/${xs.length} samples catching up` : "not judged: no samples");
+      },
+    },
+    review("S6h.4", "state", "The card offline and back, as the user sees it.", "card-offline shows the disabled choices with the offline line; card-back shows them live again.", "Live choices offline, or a stale line after.", ["card-online", "card-offline", "card-back"]),
   ],
 };
 
@@ -2466,4 +2842,4 @@ const S9b: Scenario = {
   ],
 };
 
-export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S3b, S4, S4b, S4c, S5, S6, S6b, S6c, S6d, S6e, S6f, S7, S8, S8fg, S9, S9b];
+export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S3b, S4, S4b, S4c, S5, S6, S6b, S6c, S6d, S6e, S6f, S6g, S6h, S7, S8, S8fg, S9, S9b];

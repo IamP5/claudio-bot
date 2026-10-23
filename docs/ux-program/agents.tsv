@@ -21,5 +21,6 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-22T03:47:46Z	verifier	G17	ux/sessions-g17-stop-honesty	final PASS b218769	3h	independent of owner
 2026-10-22T12:05:30Z	owner	G13	ux/sessions-g13-notify	merged #24 (verify PASS first round)	6h	after G6 G17
 2026-10-22T13:57:26Z	verifier	G13	ux/sessions-g13-notify	PASS 3be0f4b; 6 P2 placed	3h	independent of owner
-2026-10-22T15:16:10Z	owner	G18	ux/sessions-g18-foreground	PR #25 at b1164e6; verifying	5h	after G13
-2026-10-22T17:12:02Z	verifier	G18	ux/sessions-g18-foreground	verifying b1164e6	3h	independent of owner
+2026-10-22T15:16:10Z	owner	G18	ux/sessions-g18-foreground	merged #25 (verify PASS first round)	5h	after G13
+2026-10-22T17:12:02Z	verifier	G18	ux/sessions-g18-foreground	PASS b1164e6; S6.7 rubric = honest correction; 2 P2 + P3s placed	3h	independent of owner
+2026-10-23T12:25:47Z	owner	G11	ux/sessions-g11-outlive-socket	starting off main 21cfa31	6h	last Sessions group; after G18

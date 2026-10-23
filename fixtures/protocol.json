@@ -21,7 +21,8 @@
         "presence",
         "session_tasks",
         "session_unqueue",
-        "push_state"
+        "push_state",
+        "decide_ack"
       ],
       "epoch": "e_7f3a",
       "seq": 41,
@@ -1623,6 +1624,47 @@
           "cardId": null,
           "state": "approved",
           "text": "## Plan\n1. Read the fade code"
+        },
+        {
+          "kind": "ask",
+          "id": "toolu_01Aa4",
+          "at": "2026-10-16T11:50:00.000Z",
+          "cardId": "m18",
+          "answers": "dismissed",
+          "questions": [
+            {
+              "question": "Which audio library should the fade use?",
+              "header": "Library",
+              "multiSelect": false,
+              "options": [
+                {
+                  "label": "Web Audio API",
+                  "description": "Native, no new dependency"
+                },
+                {
+                  "label": "Howler.js",
+                  "description": "Handles the Safari quirks for us"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "plan",
+          "id": "toolu_01Aa5",
+          "at": "2026-10-16T11:55:00.000Z",
+          "cardId": "m19",
+          "state": "rejected",
+          "text": "## Plan\n1. Rewrite the fade"
+        },
+        {
+          "kind": "user",
+          "id": "5b8f3d02-6c4e-4f90-b2d7-0e3c8f6a4b29",
+          "at": "2026-10-16T11:58:00.000Z",
+          "text": "Also check it on Firefox",
+          "from": "user",
+          "queued": false,
+          "clientId": "c_4d2a"
         }
       ]
     },
@@ -1636,6 +1678,13 @@
       "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
       "toolUseId": "toolu_01Ab5",
       "output": "bun test v1.3.0\n\nsrc/audio/fade.test.ts:\n(fail) fades to silence in 40 ms\n\n 13 pass\n 1 fail\n"
+    },
+    {
+      "type": "session_tool_output",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "toolUseId": "toolu_01Ab6",
+      "output": null,
+      "error": "That tool call's output is not in the transcript."
     },
     {
       "type": "session_removed",
@@ -2023,7 +2072,26 @@
       "reason": "card",
       "count": 3,
       "title": "Sleep in parallel",
-      "cardId": "m30"
+      "cardId": "m30",
+      "cardKind": "permission"
+    },
+    {
+      "type": "session_alert",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "reason": "reminder",
+      "count": 2,
+      "title": "Sleep in parallel",
+      "cardId": "m31",
+      "cardKind": null
+    },
+    {
+      "type": "session_alert",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "reason": "card",
+      "count": 1,
+      "title": "Sleep in parallel",
+      "cardId": "m32",
+      "cardKind": "ask"
     },
     {
       "type": "session_alert",
@@ -2031,7 +2099,8 @@
       "reason": "finished",
       "count": 1,
       "title": "Sleep in parallel",
-      "cardId": null
+      "cardId": null,
+      "cardKind": null
     },
     {
       "type": "session_alert",
@@ -2039,7 +2108,12 @@
       "reason": "lost",
       "count": 1,
       "title": "Sleep in parallel",
-      "cardId": null
+      "cardId": null,
+      "cardKind": null
+    },
+    {
+      "type": "decided",
+      "cardId": "m20"
     },
     {
       "type": "error",
@@ -2081,6 +2155,23 @@
       "about": {
         "kind": "create",
         "ref": "s1"
+      }
+    },
+    {
+      "type": "error",
+      "message": "That card was already answered",
+      "about": {
+        "kind": "decide",
+        "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+        "cardId": "m20"
+      }
+    },
+    {
+      "type": "error",
+      "message": "That part of the thread changed. Reopen the session to load it again.",
+      "about": {
+        "kind": "page",
+        "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31"
       }
     }
   ],

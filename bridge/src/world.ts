@@ -385,6 +385,9 @@ export type BotRecord = ChatRecord & {
  */
 export type GroupRecord = ChatRecord & { members: BotId[] };
 
+/** One line of an agent's thread. clientId: the phone's, when the user sent it from the agent's session. */
+export type AgentRecordMessage = AgentMessage & { clientId?: string };
+
 export type AgentRecord = {
   /** Writer: agents.ts. */
   agent: Agent;
@@ -396,7 +399,7 @@ export type AgentRecord = {
   repo?: string;
   /** The commit a worktree agent's branch started from; its evidence counts ahead against it. Writer: agents.ts. */
   base?: string | null;
-  messages: AgentMessage[];
+  messages: AgentRecordMessage[];
   /** Mac agents' SDK session. Writer: session.ts. */
   readonly session: Owned<SessionState>;
   /** Cloud agents' claude.ai session. Writer: agents.ts. */
@@ -441,6 +444,11 @@ export type SessionRecord = {
   mirror?: { dueAt: string; failed: boolean };
   /** Present once the phone has sent to it or made it; never on an id an agent owns. */
   own?: OwnDrive;
+  /**
+   * The clientIds of the phone's newest sends to this session, any kind, oldest first, so a resend after a reconnect or
+   * a bridge restart runs nothing twice. Writer: sessions.ts. Absent until the phone sends.
+   */
+  sent?: string[];
 };
 
 /** A session the user drives from the phone. Writer: own.ts, its session slice session.ts. */
@@ -453,6 +461,8 @@ export type OwnDrive = {
   at: string;
   /** A session the phone started: its first prompt, the row's title until Claude Code names it. */
   prompt?: string;
+  /** A session the phone started: the session_create ref that made it, so a resend of that create makes nothing. */
+  ref?: string;
   /** null: the transcript's last model, else Claude Code's default. */
   model: string | null;
   /** null: the transcript's last mode, else the user's settings.permissions.defaultMode. */

@@ -861,7 +861,7 @@ test("an agent in a repo with committed Claude settings runs on an empty config 
   await flush();
   expect([h.queries.length, status()]).toEqual([3, "awaiting_approval"]);
 
-  expect(await h.hub.handle({ type: "decide", botId: b.id, messageId: card.id, choice: "always" })).toEqual([]);
+  expect(await h.hub.handle({ type: "decide", botId: b.id, messageId: card.id, choice: "always" })).toEqual([{ type: "decided", cardId: card.id }]);
   const rec = [...world.agents.values()][0]!;
   await callTool(h.queries[2]!, "message_agent", { agentId: rec.agent.id, text: "Also add a test." });
   await flush();
@@ -905,7 +905,7 @@ test("one ticker throwing is logged, and the tickers after it still run", () => 
 
 test("hello lists every feature this bridge has, and usage only with a usage reader", () => {
   const hello = hubOver(emptyWorld()).hub.hello(NO_RING);
-  expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups", "presence", "session_tasks", "session_unqueue", "push_state"]);
+  expect(hello.type === "hello" && hello.features).toEqual(["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups", "presence", "session_tasks", "session_unqueue", "push_state", "decide_ack"]);
   const reading = hubOver(emptyWorld(), { usage: { read: () => new Promise(() => {}), watched: () => true } }).hub.hello(NO_RING);
   expect(reading.type === "hello" && reading.features.at(-1)).toBe("usage");
 });

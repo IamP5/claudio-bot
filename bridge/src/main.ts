@@ -107,7 +107,11 @@ const push = createPush({
   persist: saver.schedule,
   sender: senderFromEnv(process.env.CLAUDIOBOT_PUSH_URL, log),
   liveUntil: () => transport.liveUntil(),
-  seen: () => transport.seen(),
+  sockets: {
+    alert: (m) => transport.sockets.alert(m),
+    heard: (ids, since) => transport.sockets.heard(ids, since),
+    open: () => transport.sockets.open(),
+  },
   signal: (message) => transport.signal(message),
   title: (id) => hub.sessionTitle(id),
   now,

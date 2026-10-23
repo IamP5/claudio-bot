@@ -158,7 +158,7 @@ type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; tail: Bubble
 type Pushes = { pushed: { id: MessageId; at: number } | null; last: MessageId | null };
 
 /** What hello advertises: the FEATURES this bridge serves. Each new one joins when the hub implements it. */
-const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups", "presence", "session_tasks", "session_unqueue", "push_state"];
+const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups", "presence", "session_tasks", "session_unqueue", "push_state", "decide_ack"];
 
 /** A client request about one chat: a bot's, or a group's. */
 type ChatRequest = Extract<ClientMessage, { botId: BotId }>;
@@ -1188,8 +1188,10 @@ export function createHub(deps: HubDeps): Hub {
         const reply = cardReply(bot.messages.find((m) => m.id === message.messageId), message);
         return reply ? replyTo(gate.answer(bot.id, message.messageId, reply)) : error("Unknown option");
       }
-      case "decide":
-        return replyTo(gate.answer(bot.id, message.messageId, { kind: "permission", choice: message.choice }));
+      case "decide": {
+        const r = gate.answer(bot.id, message.messageId, { kind: "permission", choice: message.choice });
+        return r.ok ? [{ type: "decided", cardId: message.messageId }] : error(r.error);
+      }
       case "stop":
         return (await brains.get(bot.id)?.interrupt())?.ran ? [] : error("Nothing is running.");
       case "update_bot":

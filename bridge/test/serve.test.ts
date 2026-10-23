@@ -411,23 +411,31 @@ test("only an attended socket heard from recently reads a thread it watches, and
   ]);
 });
 
-test("seen moves when an attended app is heard, including the presence(false) it leaves with, and not after", async () => {
+test("an alert counts as seen once a socket it went to is heard from attended, including the presence(false) it leaves with, and after it closes", async () => {
   const b = boot(tempHome());
   const { token } = await pairPhone(b);
   const phone = connect(b, { bearer: token, query: "?protocol=3" });
   await phone.next("hello");
-  expect(b.transport.seen()).toBe(0);
+  const old = connect(b, { bearer: token });
+  await old.next("hello");
+  const alert = { type: "session_alert", sessionId: "s1" as SessionId, reason: "finished", count: 1, title: "Fix the fade", cardId: null, cardKind: null } as const;
+  const to = b.transport.sockets.alert(alert);
+  const sent = Date.parse("2026-10-17T09:00:00.000Z");
+  expect([to, b.transport.sockets.open(), await phone.next("session_alert"), b.transport.sockets.heard(to, sent)]).toEqual([[1], [1], alert, false]);
   b.advance(1_000);
   phone.send({ type: "devices" });
   await phone.next("devices");
-  expect(b.transport.seen()).toBe(Date.parse("2026-10-17T09:00:01.000Z"));
+  expect([b.transport.sockets.heard(to, sent), b.transport.sockets.heard(to, sent + 1_000)]).toEqual([true, false]);
   b.advance(1_000);
   phone.send({ type: "presence", attended: false });
   await until(() => b.presences() === 1, "the presence change");
   b.advance(1_000);
   phone.send({ type: "devices" });
   await phone.next("devices");
-  expect(b.transport.seen()).toBe(Date.parse("2026-10-17T09:00:02.000Z"));
+  expect([b.transport.sockets.heard(to, sent + 1_500), b.transport.sockets.heard(to, sent + 2_000)]).toEqual([true, false]);
+  phone.raw.close();
+  await until(() => b.transport.sockets.open().length === 0, "the close");
+  expect([b.transport.sockets.heard(to, sent + 1_500), b.transport.sockets.heard(to, sent + 2_000), old.inbox.some((m) => m.type === "session_alert")]).toEqual([true, false, false]);
 });
 
 test("session channels reach only the sockets watching them, until they unwatch or close", async () => {

@@ -26,7 +26,7 @@ import {
   type SessionStatus,
   type ThreadChannelFrame,
 } from "./protocol";
-import type { Result } from "./result";
+import { refused, type Result } from "./result";
 import type { SessionEnd } from "./push";
 import type { SessionSpec } from "./session";
 import type { Persist } from "./store";
@@ -303,7 +303,11 @@ export function createSessions(deps: SessionsDeps): Sessions {
 
   /** A cloud agent's thread is what the bridge said to it and heard back: the bridge never has its transcript. */
   const cloudOverlay = (rec: AgentRecord): SessionItem[] =>
-    rec.messages.map((m): SessionItem => (m.from === "bot" ? { kind: "user", id: m.id as string as ItemId, at: m.at, text: m.text, from: "bot", queued: false } : { kind: "assistant", id: m.id as string as ItemId, at: m.at, text: m.text }));
+    rec.messages.map((m): SessionItem =>
+      m.from === "bot"
+        ? { kind: "user", id: m.id as string as ItemId, at: m.at, text: m.text, from: "bot", queued: false, ...(m.clientId !== undefined && { clientId: m.clientId }) }
+        : { kind: "assistant", id: m.id as string as ItemId, at: m.at, text: m.text },
+    );
 
   function steps(id: SessionId): Map<string, StepPatch> {
     const w = driverOf(id);
@@ -441,7 +445,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     mirrorAt = 0;
   }
 
-  const reply = (r: Result): ServerMessage[] => (r.ok ? [] : error(r.error));
+  const reply = (r: Result, about?: ErrorAbout): ServerMessage[] => (r.ok ? [] : error(r.error, about));
 
   /** The user last saw the thread at `at`. A visit never moves back. */
   function left(id: SessionId, at: Date) {
@@ -455,34 +459,43 @@ export function createSessions(deps: SessionsDeps): Sessions {
     setTimeout(() => threads.release(id), 0);
   }
 
-  /** The phone's clientIds each session took, so a resend after a reconnect runs nothing twice. */
-  const taken = new Map<SessionId, string[]>();
+  /**
+   * A resend after a reconnect or a restart runs nothing twice: the clientId is taken before the send is routed, so one
+   * that arrives while the first still waits is dropped too, and given back if the send was refused.
+   */
   async function send(m: Extract<SessionClientMessage, { type: "session_send" }>): Promise<ServerMessage[]> {
-    const seen = taken.get(m.sessionId) ?? [];
-    if (seen.includes(m.clientId)) return [];
-    const replies = await route(m);
-    if (replies.length === 0) taken.set(m.sessionId, [...seen, m.clientId].slice(-SENT_KEPT));
-    return replies;
+    const about: ErrorAbout = { kind: "send", sessionId: m.sessionId, clientId: m.clientId };
+    const w = driverOf(m.sessionId);
+    if (w.kind === "none") return error(w.reason, about);
+    const rec = recordOf(m.sessionId);
+    if (rec.sent?.includes(m.clientId)) return [];
+    rec.sent = [...(rec.sent ?? []), m.clientId].slice(-SENT_KEPT);
+    let ran = false;
+    try {
+      const replies = await route(m, w, about);
+      ran = replies.length === 0;
+      return replies;
+    } finally {
+      if (!ran) rec.sent = rec.sent.filter((c) => c !== m.clientId);
+      deps.persist();
+    }
   }
 
-  async function route(m: Extract<SessionClientMessage, { type: "session_send" }>): Promise<ServerMessage[]> {
-    const w = driverOf(m.sessionId);
+  async function route(m: Extract<SessionClientMessage, { type: "session_send" }>, w: Exclude<Writer, { kind: "none" }>, about: ErrorAbout): Promise<ServerMessage[]> {
     switch (w.kind) {
       case "agent": {
         if (m.interrupt) await deps.agents.stop(w.rec);
         const refusal = deps.agents.direct(w.rec, m.text, m.clientId);
-        return refusal === null ? [] : error(refusal);
+        return refusal === null ? [] : error(refusal, about);
       }
       case "cloud": {
-        const said = await deps.agents.message(w.rec, m.text, { kind: "user" });
-        return said.startsWith("Sent") ? [] : error(said);
+        const said = await deps.agents.message(w.rec, m.text, { kind: "user" }, m.clientId);
+        return said.startsWith("Sent") ? [] : error(said, about);
       }
       case "own":
-        return reply(await drivers.send(w.rec, m.text, m.clientId, m.interrupt));
+        return reply(await drivers.send(w.rec, m.text, m.clientId, m.interrupt), about);
       case "open":
-        return reply(await drivers.send(take(m.sessionId, w.head), m.text, m.clientId, m.interrupt));
-      case "none":
-        return error(w.reason);
+        return reply(await drivers.send(take(m.sessionId, w.head), m.text, m.clientId, m.interrupt), about);
     }
   }
 
@@ -513,31 +526,57 @@ export function createSessions(deps: SessionsDeps): Sessions {
     return r.ok ? [] : error(r.error, about);
   }
 
-  function decide(m: Extract<SessionClientMessage, { type: "session_decide" }>): ServerMessage[] {
+  /** A decision the bridge took is acknowledged to the socket that sent it; a refused one names its card. */
+  function decision(m: Extract<SessionClientMessage, { type: "session_decide" | "session_answer" }>): ServerMessage[] {
     const w = driverOf(m.sessionId);
-    if (w.kind === "own") return reply(drivers.decide(w.rec, m.cardId, m.choice));
-    if (w.kind === "agent") return reply(deps.decideGate(w.rec.agent.botId, m.cardId, m.choice));
-    return error("Unknown card");
+    const r =
+      m.type === "session_decide"
+        ? w.kind === "own"
+          ? drivers.decide(w.rec, m.cardId, m.choice)
+          : w.kind === "agent"
+            ? deps.decideGate(w.rec.agent.botId, m.cardId, m.choice)
+            : refused("Unknown card")
+        : w.kind === "own"
+          ? drivers.answer(w.rec, m.cardId, m.answers)
+          : refused("Unknown card");
+    return r.ok ? [{ type: "decided", cardId: m.cardId }] : error(r.error, { kind: "decide", sessionId: m.sessionId, cardId: m.cardId });
   }
 
-  async function create(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<ServerMessage[]> {
+  /** Creates in flight by ref, so a resend while the first still runs gets the first's answer. */
+  const creating = new Map<string, Promise<ServerMessage[]>>();
+  function create(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<ServerMessage[]> {
+    const made = [...deps.world.sessions.values()].find((r) => r.own?.ref === m.ref);
+    if (made) return Promise.resolve([{ type: "session_created", ref: m.ref, sessionId: made.id }]);
+    const running = creating.get(m.ref);
+    if (running) return running;
+    const p = make(m).finally(() => creating.delete(m.ref));
+    creating.set(m.ref, p);
+    return p;
+  }
+
+  async function make(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<ServerMessage[]> {
+    const about: ErrorAbout = { kind: "create", ref: m.ref };
     const project = catalog.snapshot().projects.find((p) => p.id === m.projectId);
-    if (!project) return error("Unknown project");
-    if (!existsSync(project.path)) return error(`${project.name}'s folder is gone from this Mac.`);
+    if (!project) return error("Unknown project", about);
+    if (!existsSync(project.path)) return error(`${project.name}'s folder is gone from this Mac.`, about);
     const id = crypto.randomUUID() as SessionId;
     let cwd = project.path;
     if (m.isolate === "worktree") {
       try {
         cwd = (await prepareWorkspace({ path: project.path, name: project.name }, id, "worktree")).cwd;
       } catch (e) {
-        return error(errorText(e));
+        return error(errorText(e), about);
       }
     }
     const rec = recordOf(id);
-    rec.own = newDrive({ id, cwd, created: true, at: deps.now().toISOString(), model: m.model, mode: m.mode, prompt: m.text });
+    rec.own = { ...newDrive({ id, cwd, created: true, at: deps.now().toISOString(), model: m.model, mode: m.mode, prompt: m.text }), ref: m.ref };
     deps.persist("now");
     const sent = await drivers.send(rec, m.text, m.ref, false);
-    if (!sent.ok) return error(sent.error);
+    if (!sent.ok) {
+      delete rec.own.ref;
+      deps.persist();
+      return error(sent.error, about);
+    }
     catalog.touch();
     return [{ type: "session_created", ref: m.ref, sessionId: id }];
   }
@@ -663,11 +702,8 @@ export function createSessions(deps: SessionsDeps): Sessions {
         case "session_unqueue":
           return unqueue(m);
         case "session_decide":
-          return decide(m);
-        case "session_answer": {
-          const w = driverOf(m.sessionId);
-          return w.kind === "own" ? reply(drivers.answer(w.rec, m.cardId, m.answers)) : error("Unknown card");
-        }
+        case "session_answer":
+          return decision(m);
         case "session_create":
           return create(m);
       }

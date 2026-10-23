@@ -35,11 +35,13 @@ const downgrade = (m: Message): Message => (m.kind === "permission" ? asQuestion
 
 /**
  * The frame a protocol 2 socket gets in place of `message`: the same frame unless it carries a permission card, and
- * null for a session frame, which it never gets.
+ * null for a session frame and a decide ack, which it never gets.
  */
 export function forProtocol2(message: ServerMessage): ServerMessage | null {
   if (isSessionFrame(message)) return null;
   switch (message.type) {
+    case "decided":
+      return null;
     case "message":
       return message.message.kind === "permission" ? { ...message, message: asQuestion(message.message) } : message;
     case "conversation":

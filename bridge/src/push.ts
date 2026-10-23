@@ -1,5 +1,5 @@
 import type { Tickable } from "./clock";
-import type { BotId, MessageId, PushState as Reach, SessionAlertReason, SessionId, Signal } from "./protocol";
+import type { BotId, MessageId, PushState as Reach, SessionAlert, SessionAlertReason, SessionId, Signal } from "./protocol";
 import type { Persist } from "./store";
 import { BOT_NAME_MAX, displayName, errorText } from "./text";
 import { chatOf, own, ownCardId, ownCardOpen, type HeldEnding, type OwnCard, type PushState, type SessionEnd, type World } from "./world";
@@ -20,8 +20,10 @@ import { chatOf, own, ownCardId, ownCardOpen, type HeldEnding, type OwnCard, typ
 // dropped once nothing is owed: its cards were answered, or a phone came back.
 // While a phone is live (an attended socket heard from recently, which the transport decides) nothing pushes. A bot
 // card, or a session card, still open when every socket has gone quiet pushes then. A session's other events are sent
-// to the sockets as a session_alert, for a local notification, and push once the phone goes quiet only if no attended
-// socket was heard from since: a phone that went quiet unseen never got the alert.
+// to the sockets as a session_alert, for a local notification, and push once the phone goes quiet unless the alert was
+// seen: a socket it went to was heard from, attended, after it went. A socket can die unseen and stay open until the
+// transport's idle close, so an alert not seen and still owed that reached no socket open now goes again to the
+// sockets that are.
 // At start no socket is live yet, though a phone that was open usually reconnects within seconds. So a card or reminder
 // push for a bot card already open at start waits START_GRACE_MS and then goes out only if no phone is live. So do a
 // run the restart cut off and a session ending still held from before the restart, which is kept on disk for that.
@@ -83,11 +85,16 @@ const ENDED: Record<SessionEnd, string> = {
 /** The most session endings kept owed at once; the oldest go first. */
 const HELD_KEPT = 50;
 
+/** The kind every card is, or null when they are mixed or there are none. */
+function kindOf(cards: readonly OwnCard[]): OwnCard["kind"] | null {
+  const kinds = new Set(cards.map((c) => c.kind));
+  return kinds.size === 1 ? cards[0]!.kind : null;
+}
+
 /** What a session's cards ask, in a few words: "needs 3 approvals", "is still waiting for your answer". */
 function cardsText(reason: "card" | "reminder", cards: readonly OwnCard[]): string {
   const n = cards.length;
-  const kinds = new Set(cards.map((c) => c.kind));
-  const only = kinds.size === 1 ? cards[0]!.kind : null;
+  const only = kindOf(cards);
   if (reason === "card") {
     if (only === "permission") return n === 1 ? "needs your approval" : `needs ${n} approvals`;
     if (only === "ask") return n === 1 ? "has a question for you" : `has ${n} questions for you`;
@@ -141,6 +148,21 @@ const remindAt = (c: OwnCard) => cardAt(c) + (cardUntil(c) - cardAt(c)) / 2;
 /** When a burst of cards goes out: 2 s after its newest card, at most 6 s after its first. */
 const burstDue = (cards: readonly OwnCard[]) => Math.min(Math.max(...cards.map(cardAt)) + COALESCE_MS, Math.min(...cards.map(cardAt)) + COALESCE_MAX_MS);
 
+/**
+ * The sockets session alerts go to. Ids are the transport's own and are never reused while the bridge runs.
+ * alert: sends the frame to every open protocol 3 socket, and returns the ids it went to. heard: whether a socket among
+ * ids was heard from, attended, after `since` (ms), a closed one by when it was last heard so. open: the ids of the
+ * open protocol 3 sockets.
+ */
+export type AlertSockets = {
+  alert(m: SessionAlert): number[];
+  heard(ids: readonly number[], since: number): boolean;
+  open(): number[];
+};
+
+/** One session_alert: the frame, and each time it went out with the sockets it reached. */
+type Alerted = { frame: SessionAlert; sent: { at: number; to: number[] }[] };
+
 export function createPush(deps: {
   world: World;
   persist: Persist;
@@ -148,9 +170,9 @@ export function createPush(deps: {
   sender: Sender | null;
   /** When the last live socket goes quiet, or null when none is live. A push goes out only when none is. */
   liveUntil: () => Date | null;
-  /** When an attended socket was last heard from, in ms; absent: never. */
-  seen?: () => number;
-  /** Live frames to every protocol 3 socket: the push state, and session alerts nothing pushed for. */
+  /** Where session alerts go and whether they were seen; absent: nowhere, and never seen. */
+  sockets?: AlertSockets;
+  /** Live frames to every protocol 3 socket: the push state. */
   signal?: (m: Signal) => void;
   /** A session's title, for its alert. */
   title?: (id: SessionId) => string;
@@ -166,8 +188,8 @@ export function createPush(deps: {
   type Deferred = { bot: { id: BotId; name: string }; reason: PushReason; messageId: MessageId };
   const deferred = new Map<string, Deferred>();
   let reach: Reach = sender === null ? { state: "off" } : { state: "on" };
-  /** Session keys a session_alert went out for, with when, while a phone was live or push was off. */
-  const alerted = new Map<string, number>();
+  /** Session keys a session_alert went out for, while a phone was live or push was off. Keys an alert covers share it. */
+  const alerted = new Map<string, Alerted>();
   const held = (): readonly HeldEnding[] => (Array.isArray(world.push.held) ? world.push.held : []);
   /** Saves the endings owed; one that cannot be saved is still owed while the bridge runs. */
   function setHeld(next: HeldEnding[]) {
@@ -201,8 +223,8 @@ export function createPush(deps: {
 
   const live = (now: number) => (deps.liveUntil()?.getTime() ?? 0) > now;
   const pushed = (key: string) => world.push.sent.some((s) => s.key === key);
-  /** Seen since `at`: an attended socket was heard from after it, so the app got what was sent then. */
-  const seenSince = (at: number) => (deps.seen?.() ?? 0) > at;
+  /** The alert for the key was seen: a socket it went to was heard from, attended, after it went. */
+  const seen = (key: string) => alerted.get(key)?.sent.some((b) => deps.sockets?.heard(b.to, b.at) === true) ?? false;
   /** Open cards whose own push has not gone out, for any reason but a failed record. */
   const heldCards = () => world.gate.open.filter((c) => !pushed(`${c.cardId}|card`));
 
@@ -264,10 +286,35 @@ export function createPush(deps: {
     return true;
   }
 
-  function alert(id: SessionId, reason: SessionAlertReason, keys: readonly string[], count: number, cardId: MessageId | null, now: number) {
+  /** cards: what a card or reminder alert covers; none for an ending. */
+  function alert(id: SessionId, reason: SessionAlertReason, keys: readonly string[], cards: readonly OwnCard[], now: number) {
     if (keys.every((k) => alerted.has(k))) return;
-    for (const k of keys) if (!alerted.has(k)) alerted.set(k, now);
-    deps.signal?.({ type: "session_alert", sessionId: id, reason, count, title: deps.title?.(id) ?? "Claude Code session", cardId });
+    const frame: SessionAlert = {
+      type: "session_alert",
+      sessionId: id,
+      reason,
+      count: cards.length === 0 ? 1 : cards.length,
+      title: deps.title?.(id) ?? "Claude Code session",
+      cardId: cards[0] ? ownCardId(cards[0]) : null,
+      cardKind: kindOf(cards),
+    };
+    const a: Alerted = { frame, sent: [{ at: now, to: deps.sockets?.alert(frame) ?? [] }] };
+    for (const k of keys) if (!alerted.has(k)) alerted.set(k, a);
+  }
+
+  /** Still owed: a card it covers is open and not pushed for that, or an ending it covers is still held. */
+  const owes = (a: Alerted) =>
+    [...alerted].some(([key, x]) => x === a && !pushed(key) && (key.endsWith("|done") ? held().some((h) => h.key === key) : isOpen(a.frame.sessionId, idOf(key) as MessageId)));
+
+  /** Alerts not seen and still owed that reached no socket open now go to the open ones. */
+  function resend(now: number, act: boolean, later: (t: number) => void) {
+    const open = deps.sockets?.open() ?? [];
+    if (open.length === 0) return;
+    for (const a of new Set(alerted.values())) {
+      if (a.sent.some((b) => b.to.some((s) => open.includes(s))) || a.sent.some((b) => deps.sockets!.heard(b.to, b.at)) || !owes(a)) continue;
+      if (act) a.sent.push({ at: now, to: deps.sockets!.alert(a.frame) });
+      else later(now);
+    }
   }
 
   function pushCards(id: SessionId, reason: "card" | "reminder", cards: readonly OwnCard[], now: number) {
@@ -313,7 +360,7 @@ export function createPush(deps: {
       if (isLive || sender === null) {
         // Alerts group the way pushes do, counting every card still owed.
         if (unalerted.length > 0 && now < burstDue(unalerted)) later(burstDue(unalerted));
-        else if (unalerted.length > 0 && act) alert(id, "card", fresh.map((c) => `${ownCardId(c)}|card`), fresh.length, ownCardId(fresh[0]!), now);
+        else if (unalerted.length > 0 && act) alert(id, "card", fresh.map((c) => `${ownCardId(c)}|card`), fresh, now);
         if (fresh.length > 0) hold();
       } else if (fresh.length > 0) {
         const due = burstDue(fresh);
@@ -328,17 +375,17 @@ export function createPush(deps: {
       if (ripe.length === 0) continue;
       const keyOf = (c: OwnCard) => `${ownCardId(c)}|reminder`;
       if (isLive || sender === null) {
-        if (act) alert(id, "reminder", ripe.map(keyOf), ripe.length, ownCardId(ripe[0]!), now);
+        if (act) alert(id, "reminder", ripe.map(keyOf), ripe, now);
         hold();
       } else if (act) {
-        const seen = ripe.filter((c) => alerted.has(keyOf(c)) && seenSince(alerted.get(keyOf(c))!));
-        if (seen.length > 0) record(seen.map(keyOf), `reminder for session ${id}, seen in the app`, now);
-        const unseen = ripe.filter((c) => !seen.includes(c));
+        const shown = ripe.filter((c) => seen(keyOf(c)));
+        if (shown.length > 0) record(shown.map(keyOf), `reminder for session ${id}, seen in the app`, now);
+        const unseen = ripe.filter((c) => !shown.includes(c));
         if (unseen.length > 0) pushCards(id, "reminder", unseen, now);
       }
     }
-    // An ending the open app was told of is owed no push once a phone was heard from after it, and pushes when the
-    // phone goes quiet otherwise; one it was not told of yet is told now if a phone is live, or pushes.
+    // An ending the open app saw is owed no push, and one it did not see pushes when the phone goes quiet; one it was
+    // not told of yet in this run of the bridge is told now if a phone is live, or pushes.
     let owed = [...held()];
     const before = JSON.stringify(owed);
     const drop = (key: string) => (owed = owed.filter((x) => x.key !== key));
@@ -347,13 +394,13 @@ export function createPush(deps: {
         if (act) drop(h.key);
         continue;
       }
-      if (h.alerted && seenSince(Date.parse(h.at))) {
+      if (seen(h.key)) {
         if (act && record([h.key], `${h.end} for session ${h.id}, seen in the app`, now)) drop(h.key);
         continue;
       }
       if (isLive || sender === null) {
-        if (!h.alerted && act) {
-          alert(h.id, h.end, [h.key], 1, null, now);
+        if (!alerted.has(h.key) && act) {
+          alert(h.id, h.end, [h.key], [], now);
           owed = owed.flatMap((x) => (x.key !== h.key ? [x] : sender === null ? [] : [{ ...x, alerted: true, at: new Date(now).toISOString() }]));
         }
         if (sender !== null) hold();
@@ -368,6 +415,7 @@ export function createPush(deps: {
       pushEnd(h.id, h.end, h.key, now);
     }
     if (JSON.stringify(owed) !== before) setHeld(owed);
+    if (isLive || sender === null) resend(now, act, later);
     return next;
   }
 
@@ -380,7 +428,7 @@ export function createPush(deps: {
       const ending: HeldEnding = { key, id, end, at: new Date(now).toISOString(), alerted: false };
       if (sender !== null && !live(now) && waits(ending, now)) return setHeld([...held(), ending]);
       if (sender === null || live(now)) {
-        alert(id, end, [key], 1, null, now);
+        alert(id, end, [key], [], now);
         if (sender !== null) setHeld([...held(), { ...ending, alerted: true }]);
         return;
       }
@@ -396,7 +444,7 @@ export function createPush(deps: {
         const bot = world.bots.get(card.actor.botId);
         if (bot) notify(bot, "card", card.cardId, now.getTime());
       }
-      for (const [key, at] of alerted) if (now.getTime() - at > ALERTS_KEPT_MS) alerted.delete(key);
+      for (const [key, a] of alerted) if (now.getTime() - a.sent[0]!.at > ALERTS_KEPT_MS) alerted.delete(key);
       sweep(now.getTime(), true);
     },
     nextDeadline() {

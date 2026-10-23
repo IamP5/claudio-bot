@@ -41,8 +41,11 @@ export type Agents = {
   ): Promise<AgentRecord>;
   /** The phone's remove_worktree. Refused while the agent works, or while its worktree holds uncommitted work or ignored files other than build folders. */
   removeWorktree(rec: AgentRecord): Promise<Result>;
-  /** Bot → agent follow-up: recorded in the agent's thread, queued with the bot turn's initiator. */
-  message(rec: AgentRecord, text: string, initiator: Initiator): Promise<string>;
+  /**
+   * Bot → agent follow-up: recorded in the agent's thread, queued with the bot turn's initiator. clientId: the phone's,
+   * when the user sent it from the agent's session, kept on the recorded line.
+   */
+  message(rec: AgentRecord, text: string, initiator: Initiator, clientId?: string): Promise<string>;
   /** Gate → mac agent (a decision envelope): queued, not recorded in the thread. Ignored for cloud agents. */
   deliver(rec: AgentRecord, input: SessionInput): void;
   /**
@@ -161,13 +164,13 @@ export function createAgents(deps: {
     return LIVE.has(reported) ? "waiting" : reported;
   }
 
-  function record(rec: AgentRecord, said: { from: "bot" | "agent"; text: string }) {
+  function record(rec: AgentRecord, said: { from: "bot" | "agent"; text: string; clientId?: string }) {
     const at = deps.now();
     rec.messages.push({ id: newMessageId(), at, ...said });
     rec.agent = { ...rec.agent, updatedAt: at };
   }
 
-  function update(rec: AgentRecord, reported: AgentStatus, said?: { from: "bot" | "agent"; text: string }) {
+  function update(rec: AgentRecord, reported: AgentStatus, said?: { from: "bot" | "agent"; text: string; clientId?: string }) {
     if (said) record(rec, said);
     const status = statusOf(rec, reported);
     if (status !== rec.agent.status) rec.agent = { ...rec.agent, status, updatedAt: deps.now() };
@@ -385,18 +388,18 @@ export function createAgents(deps: {
       return rec;
     },
 
-    async message(rec, text, initiator) {
+    async message(rec, text, initiator, clientId) {
       if (gone(rec)) return `${rec.agent.title} worked in a worktree that was removed, so it cannot continue. Start a new agent.`;
       if (rec.agent.where === "mac") {
         // Recorded before the push, which can end the turn at once (a used-up budget) and report after it.
-        record(rec, { from: "bot", text });
+        record(rec, { from: "bot", text, ...(clientId !== undefined && { clientId }) });
         macSession(rec).push(queued(text, initiator));
         refresh(rec);
         return `Sent. ${rec.agent.title} will report back.`;
       }
       const cloudSession = rec.cloudSession;
       if (!cloudSession) return "This cloud agent has no session to follow up on.";
-      update(rec, rec.agent.status, { from: "bot", text });
+      update(rec, rec.agent.status, { from: "bot", text, ...(clientId !== undefined && { clientId }) });
       let result = "";
       await cloud(rec, async () => {
         try {

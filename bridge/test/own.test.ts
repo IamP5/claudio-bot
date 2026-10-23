@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CanUseTool, HookCallback, Options, PermissionResult, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeApps, DesktopEntry, Live } from "../src/claudeApps";
 import { alwaysText, END_SETTLE_MS, OWN_CARD_TTL_MS } from "../src/own";
 import type { TaskRun } from "../src/procs";
-import type { AgentId, BotId, MessageId, ServerMessage, SessionId, SessionItem, SessionRow, TaskId, ThreadChannelFrame } from "../src/protocol";
+import type { AgentId, BotId, ItemId, MessageId, ServerMessage, SessionId, SessionItem, SessionRow, TaskId, ThreadChannelFrame } from "../src/protocol";
 import { EXIT_SETTLE_MS, GONE_ERROR, GONE_LOOK_MAX_MS } from "../src/session";
 import { createSessions, type Sessions } from "../src/sessions";
 import { emptySession, emptyWorld, type AgentRecord, type World } from "../src/world";
@@ -310,9 +310,11 @@ describe("what Claude Code asks", () => {
     const item = (await openCard("permission")) as Extract<SessionItem, { kind: "permission" }>;
     expect(item.card).toMatchObject({ tool: "Bash", label: "Claude wants to run rm -rf build", detail: "rm -rf build", always: "Bash: rm -rf build", answer: null, from: null });
     expect((await rowOf(ASK)).status).toBe("awaiting_approval");
-    expect(await handle({ type: "session_decide", sessionId: ASK, cardId: item.card.id, choice: "always" })).toEqual([]);
+    expect(await handle({ type: "session_decide", sessionId: ASK, cardId: item.card.id, choice: "always" })).toEqual([{ type: "decided", cardId: item.card.id }]);
     expect(await answer).toEqual({ behavior: "allow", updatedInput: { command: "rm -rf build" }, updatedPermissions: [{ ...suggestions[0]!, destination: "session" }] });
-    expect(await handle({ type: "session_decide", sessionId: ASK, cardId: item.card.id, choice: "once" })).toEqual([{ type: "error", message: "That card was already answered" }]);
+    expect(await handle({ type: "session_decide", sessionId: ASK, cardId: item.card.id, choice: "once" })).toEqual([
+      { type: "error", message: "That card was already answered", about: { kind: "decide", sessionId: ASK, cardId: item.card.id } },
+    ]);
     expect(((await openCard("permission")) as Extract<SessionItem, { kind: "permission" }>).card.answer).toBe("always");
   });
 
@@ -341,9 +343,9 @@ describe("what Claude Code asks", () => {
     expect(item).toMatchObject({ id: "toolu_ask1", answers: null, questions: [{ question: "Pick a color", header: "Color" }] });
     expect((await rowOf(ASK)).status).toBe("awaiting_input");
     const answers = (recorded.reply as Extract<PermissionResult, { behavior: "allow" }>).updatedInput!.answers as Record<string, string>;
-    expect(await handle({ type: "session_answer", sessionId: ASK, cardId: item.cardId!, answers })).toEqual([]);
+    expect(await handle({ type: "session_answer", sessionId: ASK, cardId: item.cardId!, answers })).toEqual([{ type: "decided", cardId: item.cardId! }]);
     expect(await answer).toEqual(recorded.reply);
-    expect(await openCard("ask", "toolu_ask1")).toMatchObject({ answers, cardId: null });
+    expect(await openCard("ask", "toolu_ask1")).toMatchObject({ answers, cardId: item.cardId! });
   });
 
   test("a dismissed question is a denial that says so", async () => {
@@ -725,7 +727,7 @@ describe("live work", () => {
     q.emit(sys("task_updated", { task_id: "bk", patch: { status: "killed" } }), level());
     await flush();
     expect((await noticesNow()).map((n) => [n.text, n.tone])).toEqual([
-      ['Couldn\'t stop command "sleep 600". It may still be running.', "error"],
+      ["Couldn't stop sleep 600. It may still be running.", "error"],
       ['The background command "sleep 600" was stopped by Claude Code.', "info"],
     ]);
   });
@@ -824,7 +826,7 @@ describe("an agent's session", () => {
     expect(await send("Use blue", "c_blue")).toEqual([]);
     expect(directs).toEqual([{ agentId: "a_1", text: "Use blue", clientId: "c_blue" }]);
     expect(queries).toHaveLength(0);
-    expect(await handle({ type: "session_decide", sessionId: ASK, cardId: "m_card" as MessageId, choice: "once" })).toEqual([]);
+    expect(await handle({ type: "session_decide", sessionId: ASK, cardId: "m_card" as MessageId, choice: "once" })).toEqual([{ type: "decided", cardId: "m_card" as MessageId }]);
     expect(gateDecisions).toEqual([{ botId: "b_1", cardId: "m_card", choice: "once" }]);
     expect(await handle({ type: "session_set", sessionId: ASK, patch: { mode: "plan" } })).toEqual([{ type: "error", message: expect.stringContaining("bot") }]);
   });
@@ -1518,7 +1520,7 @@ describe("the thread says what stopped only once it did", () => {
     take();
     q.emit(sys("task_updated", { task_id: "bk", patch: { status: "killed" } }), level());
     await flush();
-    expect(await stopLines()).toEqual(['Claude Code has not confirmed the stop of command "sleep 470" yet.', 'Stopped by you: command "sleep 470".']);
+    expect(await stopLines()).toEqual(["Claude Code has not confirmed the stop of sleep 470 yet.", 'Stopped by you: command "sleep 470".']);
   }, 15_000);
 
   test("a task stop Claude Code confirms on the second try is named once", async () => {
@@ -2389,5 +2391,185 @@ describe("the thread's order and how soon it shows", () => {
     const id = await created("r2", `${"x".repeat(79)}\u{1F600} then reply ok`);
     const title = (await rowOf(id)).title;
     expect([title.isWellFormed(), Array.from(title).length, title.at(-1)]).toEqual([true, 80, "…"]);
+  });
+});
+
+describe("requests that outlive the socket", () => {
+  const OTHER = "99999999-9999-4999-8999-999999999999" as SessionId;
+  const CLOUD = "session_01cloud" as SessionId;
+  const agentAt = (where: "mac" | "cloud"): AgentRecord => {
+    const rec: AgentRecord = {
+      agent: { id: "a_1" as AgentId, botId: "b_1" as BotId, title: "Pick a color", where, projectName: "demo", status: "waiting", url: null, createdAt: "2026-10-18T12:00:00.000Z", updatedAt: "2026-10-18T12:00:00.000Z", evidence: null, worktree: null },
+      cwd: repo,
+      repo,
+      messages: [],
+      session: emptySession(where === "mac" ? ASK : null),
+      cloudSession: where === "cloud" ? CLOUD : null,
+      budgetUsd: null,
+      startedBy: { kind: "user" },
+    };
+    world.agents.set(rec.agent.id, rec);
+    return rec;
+  };
+  const sendTo = (id: SessionId, text: string, clientId: string, interrupt = false) => handle({ type: "session_send", sessionId: id, text, clientId, interrupt });
+  const projectOf = async () => ((await handle({ type: "watch_sessions" }))[0] as Extract<ServerMessage, { type: "sessions" }>).projects.find((p) => p.path === repo)!;
+  const create = async (ref: string, projectId: string) =>
+    handle({ type: "session_create", ref, projectId: projectId as never, text: "Add a mute button", model: null, mode: null, isolate: "none" });
+
+  test("a resend after a bridge restart runs nothing twice, and a new message still runs", async () => {
+    await start();
+    await send("Once", "c_once");
+    queries[0]!.emit(result(0.01, { session_id: ASK }));
+    await flush();
+    sessions.stop();
+    queries.length = 0;
+    await start();
+    expect([await send("Once", "c_once"), await send("Twice", "c_two")]).toEqual([[], []]);
+    expect([queries.flatMap((q) => q.received), world.sessions.get(ASK)?.sent]).toEqual([["Twice"], ["c_once", "c_two"]]);
+  });
+
+  test("a resend that arrives while the first send still waits is dropped", async () => {
+    agentAt("mac");
+    let release = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    await start({
+      agents: {
+        session: () => null,
+        direct: (rec, text, clientId) => (directs.push({ agentId: rec.agent.id, text, clientId }), null),
+        stop: async () => (await held, true),
+        message: async () => "",
+      },
+    });
+    const first = sendTo(ASK, "Use red", "c_red", true);
+    const again = sendTo(ASK, "Use red", "c_red", true);
+    release();
+    expect([await first, await again, directs]).toEqual([[], [], [{ agentId: "a_1", text: "Use red", clientId: "c_red" }]]);
+  });
+
+  test("a refused send names its clientId and gives it back, so the retry runs", async () => {
+    agentAt("mac");
+    let refusal: string | null = "Pick a color worked in a worktree that was removed, so it cannot continue.";
+    await start({
+      agents: { session: () => null, direct: (rec, text, clientId) => refusal ?? (directs.push({ agentId: rec.agent.id, text, clientId }), null), stop: async () => true, message: async () => "" },
+    });
+    expect(await sendTo(ASK, "Use red", "c_red")).toEqual([{ type: "error", message: refusal, about: { kind: "send", sessionId: ASK, clientId: "c_red" } }]);
+    refusal = null;
+    expect([await sendTo(ASK, "Use red", "c_red"), directs]).toEqual([[], [{ agentId: "a_1", text: "Use red", clientId: "c_red" }]]);
+    expect(await sendTo(OTHER, "Hello", "c_gone")).toEqual([{ type: "error", message: "This session's transcript is gone.", about: { kind: "send", sessionId: OTHER, clientId: "c_gone" } }]);
+  });
+
+  test("a cloud session shows the phone's message back under its clientId, and a refusal names it", async () => {
+    const rec = agentAt("cloud");
+    let said = "Sent to the cloud session.";
+    await start({
+      agents: {
+        session: () => null,
+        direct: () => null,
+        stop: async () => false,
+        message: async (r, text, _initiator, clientId) => {
+          if (said.startsWith("Sent")) r.messages.push({ id: "m_c1" as MessageId, at: "2026-10-18T12:00:00.000Z", from: "bot", text, ...(clientId !== undefined && { clientId }) });
+          return said;
+        },
+      },
+    });
+    expect(await sendTo(CLOUD, "Use blue", "c_blue")).toEqual([]);
+    expect(rec.messages).toEqual([{ id: "m_c1" as MessageId, at: "2026-10-18T12:00:00.000Z", from: "bot", text: "Use blue", clientId: "c_blue" }]);
+    expect((await snapshot(CLOUD)).items).toEqual([{ kind: "user", id: "m_c1" as ItemId, at: "2026-10-18T12:00:00.000Z", text: "Use blue", from: "bot", queued: false, clientId: "c_blue" }]);
+    said = "This cloud agent has no session to follow up on.";
+    expect(await sendTo(CLOUD, "Use red", "c_red")).toEqual([{ type: "error", message: said, about: { kind: "send", sessionId: CLOUD, clientId: "c_red" } }]);
+  });
+
+  test("Claude Code's copy of the phone's message replaces it in one frame and names its clientId, in snapshots and replays too", async () => {
+    await start();
+    const before = (await snapshot(ASK)) as Extract<ServerMessage, { type: "session" }>;
+    await send("First", "c_first");
+    const uuid = crypto.randomUUID();
+    const lines = readFileSync(fileOf(ASK), "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
+    const leaf = lines.findLast((l) => typeof l.uuid === "string" && l.type !== "queue-operation")!;
+    const at = new Date(clock).toISOString();
+    appendFileSync(fileOf(ASK), `${JSON.stringify({ parentUuid: leaf.uuid, isSidechain: false, type: "user", message: { role: "user", content: "First" }, uuid, timestamp: at, cwd: repo, sessionId: ASK })}\n`);
+    thread.length = 0;
+    await sessions.sync();
+    const frames = thread.map((t) => t.frame).filter((f): f is Extract<ThreadChannelFrame, { type: "session_items" }> => f.type === "session_items");
+    const mine: SessionItem = { kind: "user", id: uuid as ItemId, at, text: "First", from: "user", queued: false, clientId: "c_first" };
+    expect(frames.map((f) => [f.removed, f.items.filter((i) => i.kind === "user")])).toEqual([[["c_first" as ItemId], [mine]]]);
+    expect((await snapshot(ASK)).items.filter((i) => i.kind === "user" && i.text === "First")).toEqual([mine]);
+    const replayed = (await handle({ type: "watch_session", sessionId: ASK, after: { epoch: before.epoch, rev: before.rev } }))[0] as Extract<ServerMessage, { type: "session_items" }>;
+    expect([replayed.removed, replayed.items.filter((i) => i.kind === "user")]).toEqual([["c_first" as ItemId], [mine]]);
+  });
+
+  test("a repeated create ref answers with the same session and starts nothing, while in flight, after it, and after a restart", async () => {
+    await start({ folders: () => [repo] });
+    const project = await projectOf();
+    const [first, during] = await Promise.all([create("r1", project.id), create("r1", project.id)]);
+    const id = (first![0] as Extract<ServerMessage, { type: "session_created" }>).sessionId;
+    expect([during, await create("r1", project.id)]).toEqual([[{ type: "session_created", ref: "r1", sessionId: id }], [{ type: "session_created", ref: "r1", sessionId: id }]]);
+    queries[0]!.emit(result(0.01, { session_id: id }));
+    await flush();
+    sessions.stop();
+    await start({ folders: () => [repo] });
+    expect(await create("r1", project.id)).toEqual([{ type: "session_created", ref: "r1", sessionId: id }]);
+    expect(queries.map((q) => q.received)).toEqual([["Add a mute button"]]);
+    expect(await create("r2", "p_gone")).toEqual([{ type: "error", message: "Unknown project", about: { kind: "create", ref: "r2" } }]);
+  });
+
+  test("a decision the bridge refuses names its card, for a session the phone does not drive and for the gate", async () => {
+    agentAt("mac");
+    await start({ decideGate: () => ({ ok: false, error: "That request expired" }) });
+    const card = "m_card" as MessageId;
+    expect(await handle({ type: "session_decide", sessionId: ASK, cardId: card, choice: "once" })).toEqual([{ type: "error", message: "That request expired", about: { kind: "decide", sessionId: ASK, cardId: card } }]);
+    expect(await handle({ type: "session_answer", sessionId: ASK, cardId: card, answers: null })).toEqual([{ type: "error", message: "Unknown card", about: { kind: "decide", sessionId: ASK, cardId: card } }]);
+    expect(await handle({ type: "session_decide", sessionId: OTHER, cardId: card, choice: "once" })).toEqual([{ type: "error", message: "Unknown card", about: { kind: "decide", sessionId: OTHER, cardId: card } }]);
+  });
+
+  test("a tool output the bridge cannot give is an answer that says why, and a page that changed names the session", async () => {
+    await start();
+    expect(await handle({ type: "session_tool", sessionId: OTHER, toolUseId: "toolu_x" })).toEqual([
+      { type: "session_tool_output", sessionId: OTHER, toolUseId: "toolu_x", output: null, error: "This session has no transcript on this Mac." },
+    ]);
+    expect(await handle({ type: "session_tool", sessionId: ASK, toolUseId: "toolu_x" })).toEqual([
+      { type: "session_tool_output", sessionId: ASK, toolUseId: "toolu_x", output: null, error: "That tool call's output is not in the transcript." },
+    ]);
+    expect(await handle({ type: "session_page", sessionId: ASK, before: "nowhere" as never })).toEqual([
+      { type: "error", message: "That part of the thread changed. Reopen the session to load it again.", about: { kind: "page", sessionId: ASK } },
+    ]);
+    chmodSync(fileOf(ASK), 0);
+    expect(await handle({ type: "session_tool", sessionId: ASK, toolUseId: "toolu_x" })).toEqual([
+      { type: "session_tool_output", sessionId: ASK, toolUseId: "toolu_x", output: null, error: "The bridge could not read this session's transcript." },
+    ]);
+  });
+
+  const LONG = ["npm run build:all -- --filter=@acme/web --filter=@acme/api --verbose", "docker compose -f docker-compose.dev.yml up --build --remove-orphans", "pytest tests/integration -k 'not slow' --maxfail=1 --durations=20"];
+
+  test("a stop Claude Code refuses for three long commands says so in one short line", async () => {
+    await start();
+    await send("Start them");
+    const q = queries[0]!;
+    const shells = LONG.map((c, i) => shellTask(`b${i}`, `toolu_${i}`, c));
+    q.emit(...shells.map((t) => taskStarted(t)), level(...shells), result());
+    await flush();
+    q.refuseStop = true;
+    await handle({ type: "session_stop", sessionId: ASK, target: "all" });
+    expect((await noticesNow()).map((n) => [n.text, n.tone])).toEqual([["Couldn't stop npm run build:all -- --filter=@acme/web…, docker compose -f… and 1 more. They may still be running.", "error"]]);
+  });
+
+  test("Claude Code's word that it stopped three long commands hides behind the bridge's own stop line", async () => {
+    await start();
+    await send("Start them");
+    const q = queries[0]!;
+    const shells = LONG.map((c, i) => shellTask(`b${i}`, `toolu_${i}`, c));
+    q.emit(...shells.map((t) => taskStarted(t)), level(...shells), result());
+    await flush();
+    clock += 1000;
+    await handle({ type: "session_stop", sessionId: ASK });
+    q.emit(...shells.map((t) => sys("task_updated", { task_id: t.task_id, patch: { status: "killed" } })), level());
+    await flush();
+    clock += 1000;
+    const note = (i: number) => ({
+      type: "user",
+      message: { role: "user", content: `<task-notification>\n<task-id>b${i}</task-id>\n<tool-use-id>toolu_${i}</tool-use-id>\n<status>killed</status>\n<summary>Background command "${LONG[i]}" was stopped by user</summary>\n</task-notification>` },
+    });
+    await transcribe(note(0), note(1), note(2));
+    expect((await noticesNow()).map((n) => [n.reason, n.text])).toEqual([["stop", `Stopped by you: command "${LONG[0]}", command "${LONG[1]}" and command "${LONG[2]}".`]]);
   });
 });

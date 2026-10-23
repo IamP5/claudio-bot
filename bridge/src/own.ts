@@ -473,8 +473,8 @@ export function createOwn(deps: OwnDeps): Own {
 
   const endedText = (tasks: readonly Outlived[]) =>
     `${upper(fewNames(tasks.map(nameOf), listed))} ended. Claude Code no longer followed ${pick(tasks.length, "it", "them")}, so how ${pick(tasks.length, "it", "they")} ended is not known.`;
-  const unsureText = (tasks: readonly Outlived[]) =>
-    `The bridge can no longer tell that ${fewNames(tasks.map(nameOf), listed)} ${pick(tasks.length, "is still the command", "are still the commands")} it followed, so it no longer shows ${pick(tasks.length, "it", "them")}. ${pick(tasks.length, "It", "They")} may still run on this Mac.`;
+  const unsureText = (names: string, n: number) =>
+    `The bridge can no longer tell that ${names} ${pick(n, "is still the command", "are still the commands")} it followed, so it no longer shows ${pick(n, "it", "them")}. ${pick(n, "It", "They")} may still run on this Mac.`;
 
   /** When each command the bridge cannot tell about is next looked at, and the wait after that. */
   const unsureLooks = new Map<string, { at: number; gap: number }>();
@@ -519,7 +519,7 @@ export function createOwn(deps: OwnDeps): Own {
         lastTask.set(rec.id, `${upper(listed(ended.map(nameOf)))} ended`);
         notice(rec.id, endedText(ended), "info", "task");
       }
-      if (unsure.length > 0) notice(rec.id, unsureText(unsure), "info", "task");
+      if (unsure.length > 0) notice(rec.id, unsureText(fewNames(unsure.map(nameOf), listed), unsure.length), "info", "task");
     } catch (e) {
       drive.outlived = before.outlived;
       drive.notices = before.notices;
@@ -942,10 +942,11 @@ export function createOwn(deps: OwnDeps): Own {
       stop.whole ||= whole && held;
       if (stop.ended && stop.asking === 0) sayTurnStop(rec, stop);
     }
-    if (already.length > 0) notice(rec.id, `${upper(listed(already.map(taskName)))} had already ended when your stop reached ${pick(already.length, "it", "them")}.`, "info", "stop");
-    if (unproven.length > 0) notice(rec.id, unsureText(alone.filter((o) => unproven.some((t) => t.id === o.id))), "error", "stop");
-    if (missed.length > 0) notice(rec.id, `Couldn't stop ${listed(missed.map(taskName))}. It may still be running.`, "error", "stop");
-    if (fresh.length > 0) notice(rec.id, `Claude Code has not confirmed the stop of ${listed(fresh.map(taskName))} yet.`, "info", "stop");
+    // Named as the composer's refusal names them, so a stop of many long commands stays a short line.
+    if (already.length > 0) notice(rec.id, `Your stop came after ${fewOf(already)} had already ended.`, "info", "stop");
+    if (unproven.length > 0) notice(rec.id, unsureText(fewOf(unproven), unproven.length), "error", "stop");
+    if (missed.length > 0) notice(rec.id, `Couldn't stop ${fewOf(missed)}. ${pick(missed.length, "It", "They")} may still be running.`, "error", "stop");
+    if (fresh.length > 0) notice(rec.id, `Claude Code has not confirmed the stop of ${fewOf(fresh)} yet.`, "info", "stop");
     changed(rec.id);
     if (missed.length > 0) return refused(`${missed.every((t) => ending(t) === "survived") ? "The bridge could not stop" : "Claude Code did not stop"} ${fewOf(missed)}.`);
     if (unproven.length > 0)
@@ -1027,10 +1028,10 @@ export function createOwn(deps: OwnDeps): Own {
             });
             break;
           case "ask":
-            items.push({ kind: "ask", id: c.toolUseId as ItemId, at: c.at, questions: c.questions.map((q) => ({ ...q })), answers: c.answers, cardId: c.answers === null ? c.cardId : null });
+            items.push({ kind: "ask", id: c.toolUseId as ItemId, at: c.at, questions: c.questions.map((q) => ({ ...q })), answers: c.answers, cardId: c.cardId });
             break;
           case "plan":
-            items.push({ kind: "plan", id: c.toolUseId as ItemId, at: c.at, text: c.text, state: c.state, cardId: c.state === "proposed" ? c.cardId : null });
+            items.push({ kind: "plan", id: c.toolUseId as ItemId, at: c.at, text: c.text, state: c.state, cardId: c.cardId });
             break;
         }
       }

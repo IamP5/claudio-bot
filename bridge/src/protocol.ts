@@ -23,7 +23,7 @@ export type FactId = string & { readonly __brand: "FactId" };
 export const FEATURES = [
   "memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend",
   "mentions", "commands", "exchanges", "groups", "usage", "sessions", "presence",
-  "session_tasks", "session_unqueue", "push_state",
+  "session_tasks", "session_unqueue", "push_state", "decide_ack",
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 
@@ -473,22 +473,26 @@ export type PermissionMessage = Extract<Message, { kind: "permission" }>;
 /**
  * One row of a thread. The app upserts items by id.
  * - user: from "bot" when a bot sent it to its agent, "system" for a bridge notice turn. queued: not sent yet.
+ *   clientId: the phone's clientId for this message, when the item has another id. It is set on Claude Code's own copy
+ *   of a message the phone sent, which replaces the item the phone's id named, and on a cloud session's message.
  * - assistant: markdown text.
  * - thinking: at most 400 characters. ms: how long it thought, null when unknown.
  * - work: one run of tool calls, until a text block or a user prompt closes it. id: its first tool_use id.
  * - todo: the turn's TodoWrite list, upserted in place.
- * - plan: an ExitPlanMode plan. cardId: set while the phone may decide it (session_decide: "once" approves, "deny"
- *   keeps planning), null when it was decided or was proposed elsewhere.
+ * - plan: an ExitPlanMode plan. Open while state is "proposed". cardId: what the phone decides it with
+ *   (session_decide: "once" approves, "deny" keeps planning). It stays once the plan is decided, so a link to the card
+ *   still finds it. null only when it was proposed elsewhere.
  * - permission: a card the gate or the session holds. Open while card.answer is null. stepId: the ToolStep it holds
  *   back. subagent: the label of the subagent that asked, absent when the main thread did.
  * - ask: an AskUserQuestion. answers: by question text, a multi-select's labels comma-separated; null while open.
- *   cardId: set while the phone may answer it (session_answer), null otherwise.
+ *   cardId: what the phone answers it with (session_answer). It stays once the question is closed, so a link to the
+ *   card still finds it. null only when it was asked elsewhere.
  * - notice: a line the bridge adds ("This session's transcript is gone"). reason: what it reports, absent for any
  *   other line; the app treats an unknown reason as absent.
  * - compaction: Claude Code compacted the conversation here.
  */
 export type SessionItem =
-  | { kind: "user"; id: ItemId; at: string; text: string; from: "user" | "bot" | "system"; queued: boolean }
+  | { kind: "user"; id: ItemId; at: string; text: string; from: "user" | "bot" | "system"; queued: boolean; clientId?: string }
   | { kind: "assistant"; id: ItemId; at: string; text: string }
   | { kind: "thinking"; id: ItemId; at: string; text: string; ms: number | null }
   | { kind: "work"; id: ItemId; at: string; steps: ToolStep[] }
@@ -556,6 +560,8 @@ export type SessionServerMessage =
   // Channel s:<id>, and the reply to watch_session when the ring still holds after.rev: then it is one frame with every
   // upsert and removal since then, and controls set. Items upsert by id, so a replayed one is a no-op. rev: the
   // thread's rev after this frame. controls: null when they did not change. An upsert of an item drops its live text.
+  // Also the reply to a session_send whose clientId the bridge already took, at the thread's current rev: the item that
+  // shows the message, and the removal of the clientId's own item, so a phone whose echo was lost stops resending.
   | { type: "session_items"; sessionId: SessionId; rev: number; items: SessionItem[]; removed: ItemId[]; controls: SessionControls | null }
   // Channel s:<id>, unsequenced, coalesced every 60 ms. Applies only when offset equals the length of the app's live
   // text for itemId (0 when it has none), counted in UTF-16 code units; any other is dropped, and the upsert brings
@@ -564,17 +570,30 @@ export type SessionServerMessage =
   | { type: "session_delta"; sessionId: SessionId; itemId: ItemId; offset: number; text: string }
   // Reply to session_page: the page before the cursor, oldest first, to put above the app's items.
   | { type: "session_page"; sessionId: SessionId; items: SessionItem[]; before: Cursor | null }
-  // Reply to session_create with the ref the client sent. The id exists before Claude Code starts.
+  // Reply to session_create with the ref the client sent. The id exists before Claude Code starts. A session_create
+  // that repeats the ref of a session the bridge made gets the same reply again and creates nothing.
   | { type: "session_created"; ref: string; sessionId: SessionId }
-  // Reply to session_tool: the call's full result, its last 64 KB when longer.
-  | { type: "session_tool_output"; sessionId: SessionId; toolUseId: string; output: string }
+  // Reply to session_tool: the call's full result, its last 64 KB when longer. output null: the bridge has none, and
+  // error says why in one sentence. error is absent when output is set.
+  | { type: "session_tool_output"; sessionId: SessionId; toolUseId: string; output: string | null; error?: string }
   // Channel s:<id>, and the reply to watch_session for a session that is gone. movedTo: the id an agent's session
   // restarted under, which the app opens instead; null when the transcript is gone.
   | { type: "session_removed"; sessionId: SessionId; movedTo: SessionId | null }
   // Live sockets only, never sequenced. Something in a session the phone drives wants the user and the bridge sent no
   // phone push for it (a phone is live, or push is off), so the app shows a local notification unless that session is
   // on screen. count: the cards it covers, 1 for an ending. title: the session's title. cardId: its first card.
-  | { type: "session_alert"; sessionId: SessionId; reason: SessionAlertReason; count: number; title: string; cardId: MessageId | null };
+  // cardKind: the kind of every card it covers when they are all one kind; null when they are mixed, and for an ending.
+  // An alert the app may have missed (it went to a socket that died unseen) is sent again to the sockets open now, so
+  // the app can get the same alert twice.
+  | {
+      type: "session_alert";
+      sessionId: SessionId;
+      reason: SessionAlertReason;
+      count: number;
+      title: string;
+      cardId: MessageId | null;
+      cardKind: "permission" | "ask" | "plan" | null;
+    };
 
 /** Sent on channel "sessions". */
 export type SessionsChannelFrame = Extract<SessionServerMessage, { type: "session_rows" }>;
@@ -609,7 +628,8 @@ export type SessionClientMessage =
   | { type: "session_decide"; sessionId: SessionId; cardId: MessageId; choice: PermissionChoice }
   // Answers an ask item by question text. null dismisses it.
   | { type: "session_answer"; sessionId: SessionId; cardId: MessageId; answers: Record<string, string> | null }
-  // Answered by session_created with the same ref. model and mode null: the user's Claude Code defaults.
+  // Answered by session_created with the same ref. model and mode null: the user's Claude Code defaults. Sent again with
+  // the same ref, it creates nothing and is answered with the same session.
   | { type: "session_create"; ref: string; projectId: ProjectId; text: string; model: string | null; mode: PhoneMode | null; isolate: "none" | "worktree" }
   | { type: "session_set"; sessionId: SessionId; patch: SessionPatch }
   // Imports the session into the Claude app when needed, then brings the app forward.
@@ -669,7 +689,10 @@ export type ServerMessage =
   // Feature push_state. Live sockets only, like usage: sent when the state changes; hello carries it on connect.
   | { type: "push_state"; push: PushState }
   | SessionServerMessage
-  // about: the session request that failed, so the app can show the error there instead of as a toast.
+  // Feature decide_ack. The bridge took a decision: a decide, a session_decide or a session_answer. It goes only to the
+  // socket that sent it, never sequenced or replayed. A decision the bridge refused is answered with an error instead.
+  | { type: "decided"; cardId: MessageId }
+  // about: the request that failed, so the app can show the error there instead of as a toast.
   | { type: "error"; message: string; about?: ErrorAbout };
 
 /**
@@ -685,18 +708,22 @@ export type PushState = { state: "on" } | { state: "off" } | { state: "failing";
 export type SessionAlertReason = "card" | "reminder" | "finished" | "failed" | "lost";
 
 /**
- * The session request an error answers: a stop, a send (its clientId), a full-output fetch (its toolUseId), a create
- * (its ref) or a model or mode change Claude Code refused. The app treats an unknown kind as no subject.
+ * The session request an error answers: a stop, a send or an unqueue (its clientId), a full-output fetch (its
+ * toolUseId), a create (its ref), a model or mode change Claude Code refused, a session_decide or session_answer (its
+ * cardId), or an older page of the thread. The app treats an unknown kind as no subject.
  */
 export type ErrorAbout =
   | { kind: "stop"; sessionId: SessionId }
   | { kind: "set"; sessionId: SessionId }
   | { kind: "send"; sessionId: SessionId; clientId: string }
   | { kind: "tool"; sessionId: SessionId; toolUseId: string }
-  | { kind: "create"; ref: string };
+  | { kind: "create"; ref: string }
+  | { kind: "decide"; sessionId: SessionId; cardId: MessageId }
+  | { kind: "page"; sessionId: SessionId };
 
 /** Sent to live protocol 3 sockets only, without a seq: not kept for replay. */
 export type Signal = Extract<ServerMessage, { type: "activity" | "usage" | "push_state" | "session_alert" }>;
+export type SessionAlert = Extract<SessionServerMessage, { type: "session_alert" }>;
 
 // A frame published to every socket carries the stream seq. Replies to one client do not.
 export type Broadcast = ServerMessage & { seq: number };

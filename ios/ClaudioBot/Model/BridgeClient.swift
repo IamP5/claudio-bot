@@ -68,7 +68,8 @@ final class BridgeClient {
         var health: TimeInterval = 10
         var reply: Duration = .seconds(10)
         var legacyRetry: Duration = .seconds(600)
-        /// A Stop queued offline for longer than this is dropped: by the time it arrives it would stop a later turn.
+        /// A Stop or a decision queued offline for longer than this is dropped: by the time it arrives it would stop a
+        /// later turn, or answer a card the user no longer has in mind.
         var staleStop: TimeInterval = 60
         /// How often the socket is pinged, and how long the pong may take before the socket counts as dead.
         var ping: Duration = .seconds(20)
@@ -329,8 +330,12 @@ final class BridgeClient {
 
     /// Sends now when connected; otherwise holds the message until the next hello.
     func send(_ msg: ClientMessage) {
-        if case let .decide(_, card, choice) = msg { store.decisionSent(choice, for: card) }
-        if case let .sessionDecide(_, card, choice) = msg { store.decisionSent(choice, for: card) }
+        switch msg {
+        case let .decide(_, card, choice), let .sessionDecide(_, card, choice): store.decisionSent(choice, for: card)
+        case let .sessionAnswer(_, card, _): store.decisionSent(nil, for: card)
+        case .sessionSend: store.sendStarted(msg)
+        default: break
+        }
         store.sessionRequestSent(msg)
         #if DEBUG
         if Demo.isEnabled { return Demo.respond(to: msg, store: store) }
@@ -348,10 +353,10 @@ final class BridgeClient {
     }
 
     /// Whether a message queued offline still means what the user meant. A Stop is for the turn on screen when it was
-    /// tapped; a minute later it would stop whatever turn runs by then.
+    /// tapped; a minute later it would stop whatever turn runs by then. A decision is for the card as the user saw it.
     nonisolated static func stillWanted(_ msg: ClientMessage, queuedAt: Date, now: Date, staleStop: TimeInterval) -> Bool {
         switch msg {
-        case .stop, .stopAgent: now.timeIntervalSince(queuedAt) <= staleStop
+        case .stop, .stopAgent, .sessionStop, .decide, .sessionDecide, .sessionAnswer: now.timeIntervalSince(queuedAt) <= staleStop
         default: true
         }
     }
@@ -388,7 +393,10 @@ final class BridgeClient {
 
     /// A send's frame counts toward giving up its resends only once a socket took it.
     private func transmitCounted(_ msg: ClientMessage, on socket: URLSessionWebSocketTask) {
-        guard case .send = msg else { return transmit(msg, on: socket) }
+        switch msg {
+        case .send, .sessionSend: break
+        default: return transmit(msg, on: socket)
+        }
         let store = store
         transmit(msg, on: socket) { ok in
             if ok { Task { @MainActor in store.sendTransmitted(msg) } }
@@ -403,7 +411,8 @@ final class BridgeClient {
             if let error {
                 log.error("send failed: \(error.localizedDescription)")
                 switch msg {
-                case .decide(_, let card, _), .sessionDecide(_, let card, _): Task { @MainActor in store.decisionFailed(for: card) }
+                case .decide(_, let card, _), .sessionDecide(_, let card, _), .sessionAnswer(_, let card, _):
+                    Task { @MainActor in store.decisionFailed(for: card) }
                 default: break
                 }
             }
@@ -575,9 +584,13 @@ final class BridgeClient {
                 let pending = outbox
                 outbox.removeAll()
                 let now = Date.now
-                pending
-                    .filter { !resent.contains($0.message) && Self.stillWanted($0.message, queuedAt: $0.at, now: now, staleStop: timing.staleStop) }
-                    .forEach { send($0.message) }
+                for held in pending where !resent.contains(held.message) {
+                    if Self.stillWanted(held.message, queuedAt: held.at, now: now, staleStop: timing.staleStop) {
+                        send(held.message)
+                    } else {
+                        store.requestDropped(held.message)
+                    }
+                }
                 upgradeLegacyPairing()
             case .bot(let bot) where onScreen.bots.contains(bot.id) && bot.unread > 0:
                 // The bridge counts a message as unread until the next open, so re-open a bot on screen.

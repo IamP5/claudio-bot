@@ -29,12 +29,22 @@ export type ThreadsDeps = {
   sdk?: SdkReaders;
   /** Threads nobody watches that stay read, newest first, so reopening one is instant. */
   keep?: number;
+  /** The clientId each transcript user item of the session showed a phone message under, kept across restarts. */
+  ties?(id: SessionId): Iterable<[ItemId, string]>;
+  /** A transcript user item now shows the phone message sent with clientId. */
+  tie?(id: SessionId, item: ItemId, clientId: string): void;
 };
 
 export type Threads = {
   /** The reply to watch_session: a replay since `after` while the ring holds it, else a snapshot. */
   watch(id: SessionId, after: ThreadPosition | null): Promise<ServerMessage[]>;
   page(id: SessionId, before: Cursor): Promise<ServerMessage[]>;
+  /**
+   * The reply to a session_send the bridge already took: one frame that names the clientId, so a phone whose echo was
+   * lost stops resending. It upserts the item that shows the message and removes the clientId's own item, or only
+   * removes it when no item shows the message any more.
+   */
+  sentBack(id: SessionId, clientId: string): Promise<ServerMessage[]>;
   tool(id: SessionId, toolUseId: string): ServerMessage[];
   /** The overlay or the controls of a session may have changed: an open thread publishes what did. */
   refresh(id: SessionId): void;
@@ -93,6 +103,8 @@ type State = {
   sentAt: number;
   /** Overlay user items the transcript now shows, so they are not shown twice. */
   shownByTranscript: Set<ItemId>;
+  /** The phone's clientId of each transcript user item that took an overlay item's place, by the transcript item's id. */
+  sentAs: Map<ItemId, string>;
   rev: number;
   ring: Frame[];
   live: ThreadLive | null;
@@ -136,7 +148,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
 
   const indexOf = (items: readonly SessionItem[]) => new Map(items.map((item, i) => [item.id, i] as const));
 
-  async function read(id: SessionId): Promise<Omit<State, "overlay" | "controls" | "steps" | "cut" | "holding" | "working" | "sentAt" | "shownByTranscript" | "rev" | "ring" | "live" | "queue" | "usedAt" | "epoch">> {
+  async function read(id: SessionId): Promise<Omit<State, "overlay" | "controls" | "steps" | "cut" | "holding" | "working" | "sentAt" | "shownByTranscript" | "sentAs" | "rev" | "ring" | "live" | "queue" | "usedAt" | "epoch">> {
     const written = deps.transcript(id);
     const ctx = deps.context(id);
     if (!written) return { id, path: null, ctx, items: [], index: new Map(), tail: emptyTail(), chain: { uuids: new Set(), leaf: null }, offset: 0 };
@@ -163,6 +175,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
           working: false,
           sentAt: deps.now().getTime(),
           shownByTranscript: new Set(),
+          sentAs: new Map(deps.ties?.(id) ?? []),
           rev: 0,
           ring: [],
           live: null,
@@ -280,6 +293,13 @@ export function createThreads(deps: ThreadsDeps): Threads {
     return steps.every((st, i) => st === item.steps[i]) ? item : { ...item, steps };
   }
 
+  /** A transcript user item that took the place of the phone's own copy names the clientId the phone sent it with. */
+  function tagged(s: State, item: SessionItem): SessionItem {
+    if (item.kind !== "user") return item;
+    const clientId = s.sentAs.get(item.id);
+    return clientId === undefined ? item : { ...item, clientId };
+  }
+
   /** The transcript's items with the overlay's replacements and step patches applied, and the overlay's own among them. */
   function merged(s: State): SessionItem[] {
     const overlay = visible(s);
@@ -288,7 +308,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
     const out = s.items.flatMap((item) => {
       const over = byId.get(item.id);
       if (over) byId.delete(item.id);
-      return over ? [over] : restated(item, overlay) || overruled(s, item, view) ? [] : [patched(item, view)];
+      return over ? [over] : restated(item, overlay) || overruled(s, item, view) ? [] : [tagged(s, patched(item, view))];
     });
     return ordered([...out, ...byId.values()]);
   }
@@ -323,7 +343,10 @@ export function createThreads(deps: ThreadsDeps): Threads {
     for (const t of transcript) {
       if (t.kind !== "user") continue;
       const mine = overlay.find((o) => o.kind === "user" && !s.shownByTranscript.has(o.id) && o.text.trim() === t.text.trim() && t.at >= o.at);
-      if (mine) s.shownByTranscript.add(mine.id);
+      if (!mine) continue;
+      s.shownByTranscript.add(mine.id);
+      if (s.sentAs.get(t.id) !== mine.id) deps.tie?.(s.id, t.id, mine.id);
+      s.sentAs.set(t.id, mine.id);
     }
   }
 
@@ -336,7 +359,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
     const items = overlay.filter((item) => before.get(item.id) !== JSON.stringify(item));
     const removed = [...before.keys()].filter((id) => !s.overlay.has(id) && !s.index.has(id));
     // An overlay item that replaced a transcript item and went away brings the transcript's back.
-    const restored = [...before.keys()].filter((id) => !s.overlay.has(id) && s.index.has(id)).map((id) => s.items[s.index.get(id)!]!);
+    const restored = [...before.keys()].filter((id) => !s.overlay.has(id) && s.index.has(id)).map((id) => tagged(s, s.items[s.index.get(id)!]!));
     const controls = s.controls === beforeControls ? null : (JSON.parse(s.controls) as SessionControls);
     return { items: [...items, ...restored, ...shown(s, absorbSteps(s))], removed, controls };
   }
@@ -348,7 +371,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
     const view = viewOf(s);
     return items.flatMap((item) => {
       const over = byId.get(item.id);
-      return over ? [over] : restated(item, overlay) || overruled(s, item, view) ? [] : [patched(item, view)];
+      return over ? [over] : restated(item, overlay) || overruled(s, item, view) ? [] : [tagged(s, patched(item, view))];
     });
   };
 
@@ -483,14 +506,31 @@ export function createThreads(deps: ThreadsDeps): Threads {
       const s = await load(id);
       await s.queue;
       const page = pageOf(merged(s), before as string as ItemId);
-      if (!page) return [{ type: "error", message: "That part of the thread changed. Reopen the session to load it again." }];
+      if (!page) return [{ type: "error", message: "That part of the thread changed. Reopen the session to load it again.", about: { kind: "page", sessionId: id } }];
       return [{ type: "session_page", sessionId: id, items: page.items, before: page.before === null ? null : (page.before as string as Cursor) }];
     },
 
+    async sentBack(id, clientId) {
+      const s = await load(id);
+      await s.queue;
+      const shown = merged(s).find((i) => i.kind === "user" && (i.id === clientId || i.clientId === clientId));
+      const items = shown ? [shown] : [];
+      const removed = shown?.id === clientId ? [] : [clientId as ItemId];
+      return [{ type: "session_items", sessionId: id, rev: s.rev, items, removed, controls: null }];
+    },
+
     tool(id, toolUseId) {
+      const none = (error: string): ServerMessage[] => [{ type: "session_tool_output", sessionId: id, toolUseId, output: null, error }];
       const written = deps.transcript(id);
-      const output = written ? toolOutput(written.file, toolUseId) : null;
-      if (output === null) return [{ type: "error", message: "That tool call's output is not in the transcript." }];
+      if (!written) return none("This session has no transcript on this Mac.");
+      let output: string | null;
+      try {
+        output = toolOutput(written.file, toolUseId);
+      } catch (e) {
+        deps.log(`sessions: the output of ${toolUseId} in ${id} could not be read: ${e}`);
+        return none("The bridge could not read this session's transcript.");
+      }
+      if (output === null) return none("That tool call's output is not in the transcript.");
       return [{ type: "session_tool_output", sessionId: id, toolUseId, output }];
     },
 

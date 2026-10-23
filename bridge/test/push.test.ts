@@ -42,15 +42,28 @@ function harness(opts: { home?: string; liveFor?: number; respond?: () => Promis
   }) as unknown as typeof fetch;
   const logs: string[] = [];
   const clock = { t: T0 };
-  const sockets: { until: Date | null; seen: number } = { until: opts.liveFor ? new Date(T0 + opts.liveFor) : null, seen: 0 };
   const signals: Signal[] = [];
+  /** until: when the live sockets go quiet. open: the open sockets' ids. readAt: when each was last heard from, attended. */
+  const sockets: { until: Date | null; open: number[]; readAt: Map<number, number>; hear(t: number): void } = {
+    until: opts.liveFor ? new Date(T0 + opts.liveFor) : null,
+    open: [1],
+    readAt: new Map(),
+    /** Every open socket was heard from, attended, at t. */
+    hear(t) {
+      for (const id of sockets.open) sockets.readAt.set(id, t);
+    },
+  };
   const waits: number[] = [];
   const push = createPush({
     world,
     persist: saver.schedule,
     sender: ntfySender(URL_, fakeFetch),
     liveUntil: () => sockets.until,
-    seen: () => sockets.seen,
+    sockets: {
+      alert: (m, only) => (signals.push(m), sockets.open.filter((id) => only === undefined || only.includes(id))),
+      heard: (ids, since) => ids.some((id) => (sockets.readAt.get(id) ?? 0) > since),
+      open: () => [...sockets.open],
+    },
     signal: (m) => signals.push(m),
     title: () => "Fix the fade",
     now: () => new Date(clock.t),
@@ -569,10 +582,10 @@ test("while a phone is live, cards become one session alert; still open when it 
   drive(h, [permission("m_a", T0), permission("m_b", T0 + 10)]);
   at(h, T0 + 2_010);
   at(h, T0 + 3_000);
-  expect(h.signals).toEqual([{ type: "session_alert", sessionId: SID, reason: "card", count: 2, title: "Fix the fade", cardId: "m_a" as MessageId }]);
+  expect(h.signals).toEqual([{ type: "session_alert", sessionId: SID, reason: "card", count: 2, title: "Fix the fade", cardId: "m_a" as MessageId, cardKind: "permission" }]);
   expect(h.push.nextDeadline()).toBe(iso(T0 + 45_000));
   h.sockets.until = null;
-  h.sockets.seen = T0 + 20_000;
+  h.sockets.hear(T0 + 20_000);
   at(h, T0 + 46_000);
   await settle();
   expect(sent(h).map((s) => s[0])).toEqual(["A Claude Code session needs 2 approvals"]);
@@ -611,7 +624,7 @@ test("a reminder the app showed is not pushed when the phone goes quiet after it
   drive(h, [permission("m_a", T0)]);
   at(h, T0 + HOUR);
   expect(h.signals.map((s) => s.type === "session_alert" && s.reason)).toEqual(["card", "reminder"]);
-  h.sockets.seen = T0 + HOUR + 5_000;
+  h.sockets.hear(T0 + HOUR + 5_000);
   h.sockets.until = null;
   at(h, T0 + HOUR + 60_000);
   await settle();
@@ -635,14 +648,14 @@ test("a session's run that ended pushes once per ending, at default priority, to
 test("an ending held for a live phone is an alert; it pushes when the phone goes quiet only if nobody was heard since", async () => {
   const seen = harness({ liveFor: 45_000 });
   seen.push.sessionEnded!(SID, "finished", iso(T0));
-  expect(seen.signals).toEqual([{ type: "session_alert", sessionId: SID, reason: "finished", count: 1, title: "Fix the fade", cardId: null }]);
-  seen.sockets.seen = T0 + 1_000;
+  expect(seen.signals).toEqual([{ type: "session_alert", sessionId: SID, reason: "finished", count: 1, title: "Fix the fade", cardId: null, cardKind: null }]);
+  seen.sockets.hear(T0 + 1_000);
   seen.sockets.until = null;
   at(seen, T0 + 46_000);
 
   const gone = harness({ liveFor: 45_000 });
   gone.push.sessionEnded!(SID, "finished", iso(T0));
-  gone.sockets.seen = T0 - 1_000;
+  gone.sockets.hear(T0 - 1_000);
   gone.sockets.until = null;
   at(gone, T0 + 46_000);
   at(gone, T0 + 47_000);
@@ -653,7 +666,8 @@ test("an ending held for a live phone is an alert; it pushes when the phone goes
 test("with push off a session's events are alerts only, each once", async () => {
   const h = harness();
   const signals: Signal[] = [];
-  const off = createPush({ world: h.world, persist: () => {}, sender: null, liveUntil: () => null, signal: (m) => signals.push(m), now: () => new Date(h.clock.t), log: () => {} });
+  const sockets = { alert: (m: Signal) => (signals.push(m), [1]), heard: () => false, open: () => [1] };
+  const off = createPush({ world: h.world, persist: () => {}, sender: null, liveUntil: () => null, sockets, now: () => new Date(h.clock.t), log: () => {} });
   drive(h, [permission("m_a", T0)]);
   off.tick(new Date(T0 + 2_000));
   off.tick(new Date(T0 + 3_000));
@@ -687,8 +701,8 @@ test("a phone back within the start grace hears of a run a restart cut off as an
   h.push.sessionEnded!(SID, "lost", iso(T0));
   h.sockets.until = new Date(T0 + 120_000);
   at(h, T0 + START_GRACE_MS);
-  expect(h.signals).toEqual([{ type: "session_alert", sessionId: SID, reason: "lost", count: 1, title: "Fix the fade", cardId: null }]);
-  h.sockets.seen = T0 + START_GRACE_MS + 1_000;
+  expect(h.signals).toEqual([{ type: "session_alert", sessionId: SID, reason: "lost", count: 1, title: "Fix the fade", cardId: null, cardKind: null }]);
+  h.sockets.hear(T0 + START_GRACE_MS + 1_000);
   h.sockets.until = null;
   at(h, T0 + 130_000);
   await settle();
@@ -698,7 +712,7 @@ test("a phone back within the start grace hears of a run a restart cut off as an
 test("an ending the app was told of and a phone was heard from after is never pushed, also after a restart", async () => {
   const h = harness({ liveFor: 45_000 });
   h.push.sessionEnded!(SID, "finished", iso(T0));
-  h.sockets.seen = T0 + 20_000;
+  h.sockets.hear(T0 + 20_000);
   at(h, T0 + 20_000);
   const after = harness({ home: h.home });
   at(after, T0 + START_GRACE_MS + 1);
@@ -730,4 +744,75 @@ test("an ending held for a live phone outlives a restart, and pushes once the ph
   at(after, T0 + START_GRACE_MS + 1);
   await settle();
   expect([sent(h), sent(after)]).toEqual([[], [["A Claude Code session finished", `claudiobot://session/${SID}`, "default"]]]);
+});
+
+test("an alert names its cards' kind when every card is that kind, and none when they are mixed", () => {
+  const asks = harness({ liveFor: 45_000 });
+  drive(asks, [question("m_q", T0), question("m_r", T0)]);
+  at(asks, T0 + 2_000);
+  const mixed = harness({ liveFor: 45_000 });
+  drive(mixed, [question("m_q", T0), permission("m_p", T0)]);
+  at(mixed, T0 + 2_000);
+  expect([...asks.signals, ...mixed.signals]).toEqual([
+    { type: "session_alert", sessionId: SID, reason: "card", count: 2, title: "Fix the fade", cardId: "m_q" as MessageId, cardKind: "ask" },
+    { type: "session_alert", sessionId: SID, reason: "card", count: 2, title: "Fix the fade", cardId: "m_q" as MessageId, cardKind: null },
+  ]);
+});
+
+test("an alert that went to a socket that died unseen goes again to the socket open now, and is seen only once that one is heard from", async () => {
+  const unheard = harness({ liveFor: 45_000 });
+  unheard.push.sessionEnded!(SID, "finished", iso(T0));
+  unheard.sockets.open = [2];
+  unheard.clock.t = T0 + 5_000;
+  expect(unheard.push.nextDeadline()).toBe(iso(T0 + 5_000));
+  at(unheard, T0 + 5_000);
+  at(unheard, T0 + 6_000);
+  const alert: Signal = { type: "session_alert", sessionId: SID, reason: "finished", count: 1, title: "Fix the fade", cardId: null, cardKind: null };
+  expect(unheard.signals).toEqual([alert, alert]);
+  unheard.sockets.until = null;
+  at(unheard, T0 + 46_000);
+
+  const heard = harness({ liveFor: 45_000 });
+  heard.push.sessionEnded!(SID, "finished", iso(T0));
+  heard.sockets.open = [2];
+  at(heard, T0 + 5_000);
+  heard.sockets.hear(T0 + 6_000);
+  heard.sockets.until = null;
+  at(heard, T0 + 46_000);
+  await settle();
+  expect([sent(unheard), sent(heard), heard.world.push.held]).toEqual([[["A Claude Code session finished", `claudiobot://session/${SID}`, "default"]], [], []]);
+});
+
+test("an alert the socket that got it was heard from after is not sent again to a socket that opens later", () => {
+  const h = harness({ liveFor: 45_000 });
+  drive(h, [permission("m_a", T0)]);
+  at(h, T0 + 2_000);
+  h.sockets.hear(T0 + 3_000);
+  h.sockets.open = [2];
+  at(h, T0 + 4_000);
+  expect(h.signals.map((s) => s.type === "session_alert" && [s.reason, s.cardId as string])).toEqual([["card", "m_a"]]);
+});
+
+test("an alert goes at once to a socket that opens while the one it went to is still open but unheard, and only once", () => {
+  const h = harness({ liveFor: 45_000 });
+  h.push.sessionEnded!(SID, "finished", iso(T0));
+  h.sockets.open = [1, 2];
+  at(h, T0 + 1_000);
+  at(h, T0 + 2_000);
+  expect(h.signals.map((s) => s.type)).toEqual(["session_alert", "session_alert"]);
+});
+
+test("a card alert to a socket that died unseen goes again while the card is open, and not once it is answered", () => {
+  const open = harness({ liveFor: 45_000 });
+  drive(open, [permission("m_a", T0)]);
+  at(open, T0 + 2_000);
+  open.sockets.open = [2];
+  at(open, T0 + 3_000);
+  const answered = harness({ liveFor: 45_000 });
+  const [card] = drive(answered, [permission("m_a", T0)]);
+  at(answered, T0 + 2_000);
+  answer(card!);
+  answered.sockets.open = [2];
+  at(answered, T0 + 3_000);
+  expect([open.signals.length, answered.signals.length]).toEqual([2, 1]);
 });

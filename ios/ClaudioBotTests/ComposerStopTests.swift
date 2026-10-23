@@ -318,7 +318,8 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         #expect(store.sessionErrors[sid]?.text == "That message is no longer queued: it already went to Claude.")
         #expect(store.lastError == nil)
         store.apply(.error(message: "That output is no longer on the Mac.", about: .tool(sessionId: sid, toolUseId: "t")))
-        #expect(store.lastError?.message == "That output is no longer on the Mac.", "the tool sheet is not the composer")
+        #expect(store.sessionErrors[sid]?.text == "That message is no longer queued: it already went to Claude.", "the tool sheet is not the composer")
+        #expect(store.threads[sid]?.toolOutputs["t"] == .missing("That output is no longer on the Mac."), "it ends the sheet that asked (F-SES-073)")
     }
 
     @Test func aSentMessageIsSpokenAsItReadsNotAsItsMarkup() {

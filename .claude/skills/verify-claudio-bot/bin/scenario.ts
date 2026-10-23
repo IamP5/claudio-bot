@@ -234,6 +234,10 @@ class Phone {
   cursor: { epoch: string; seq: number } | null = null;
   /** What the user sent while the phone was offline; the app sends it after the next hello. */
   outbox: Frame[] = [];
+  /** Each session_send by clientId, as the app keeps it until a frame shows it back. */
+  private sent = new Map<string, Frame>();
+  /** clientIds whose frames are lost on the way to the phone until it reconnects. */
+  deaf = new Set<string>();
   /** Seconds the user takes to allow a card. */
   holdS = 0;
   private pinger: ReturnType<typeof setInterval> | null = null;
@@ -247,15 +251,17 @@ class Phone {
     private relay: Relay,
   ) {}
 
-  private record(dir: "in" | "out" | "held", name: string, f: Frame) {
+  private record(dir: "in" | "out" | "held" | "lost", name: string, f: Frame) {
     const at = this.ev.now();
     appendFileSync(join(this.out, "timeline.jsonl"), JSON.stringify({ at, dir, name, frame: f }) + "\n");
-    if (name !== "list" || dir !== "in") appendFileSync(join(this.out, "threads.txt"), `+${(at / 1000).toFixed(1)}s ${dir === "in" ? "<<" : dir === "out" ? ">>" : ">> (held offline)"} ${name} ${dir === "in" ? frameLine(f, true) : JSON.stringify(f)}\n`);
+    const arrow = { in: "<<", out: ">>", held: ">> (held offline)", lost: "<< (lost on the way)" }[dir];
+    if (name !== "list" || dir !== "in") appendFileSync(join(this.out, "threads.txt"), `+${(at / 1000).toFixed(1)}s ${arrow} ${name} ${dir === "in" ? frameLine(f, true) : JSON.stringify(f)}\n`);
   }
 
   send(m: Frame) {
     const sid = m.sessionId as string | undefined;
     const name = sid && this.names.has(sid) ? this.names.get(sid)! : m.type === "session_create" ? String(m.ref) : null;
+    if (m.type === "session_send") this.track(m, name ?? "?");
     if (!this.c) {
       if (m.type !== "session_send") throw new Error(`the phone is offline; cannot send ${m.type}`);
       this.outbox.push(m);
@@ -264,6 +270,32 @@ class Phone {
     }
     if (name) this.record("out", name, m);
     this.c.send(m);
+  }
+
+  /** A send's ledger entry: one per clientId, counting every copy the phone hands to a socket or to the outbox. */
+  private track(m: Frame, name: string) {
+    const clientId = String(m.clientId);
+    const known = this.ev.sends.find((x) => x.clientId === clientId);
+    if (known) known.copies++;
+    else this.ev.sends.push({ at: this.ev.now(), name, clientId, text: String(m.text), shownAt: null, copies: 1 });
+    this.sent.set(clientId, m);
+  }
+
+  /** As the app does: a frame that names a send's clientId (an item's id, a user item's clientId, a removal) shows it back. */
+  private shownBack(f: Frame) {
+    const items = (f.items as Item[] | undefined) ?? [];
+    const removed = (f.removed as string[] | undefined) ?? [];
+    for (const s of this.ev.sends) {
+      if (s.shownAt !== null) continue;
+      const by = items.some((i) => i.clientId === s.clientId) ? "clientId" : items.some((i) => i.id === s.clientId) ? "id" : removed.includes(s.clientId) ? "removed" : null;
+      if (by) (s.shownAt = this.ev.now()), (s.shownBy = by);
+    }
+  }
+
+  /** The frame names a clientId whose frames are being lost. */
+  private mentions(f: Frame, ids: Set<string>) {
+    const items = (f.items as Item[] | undefined) ?? [];
+    return items.some((i) => ids.has(i.id) || (typeof i.clientId === "string" && ids.has(i.clientId))) || ((f.removed as string[] | undefined) ?? []).some((id) => ids.has(id));
   }
 
   private thread(sid: string) {
@@ -279,6 +311,7 @@ class Phone {
 
   private apply(f: Frame) {
     this.frameNo++;
+    if (["decided", "error", "session_tool_output", "session_created"].includes(f.type as string)) this.ev.replies.push({ at: this.ev.now(), frame: f });
     if (f.type === "hello") {
       if (!(f.resumed === true && f.epoch === this.cursor?.epoch)) this.cursor = { epoch: f.epoch as string, seq: f.seq as number };
       if (f.push) this.ev.pushStates.push({ at: this.ev.now(), via: "hello", push: f.push as Ev["pushStates"][number]["push"] });
@@ -314,9 +347,13 @@ class Phone {
       return;
     }
     if (f.type === "session_created") {
-      this.names.set(f.sessionId as string, String(f.ref));
-      this.ev.ids[String(f.ref)] = f.sessionId as string;
-      this.record("in", String(f.ref), f);
+      // As the app does, a ref opens its first session; a second answer for it is recorded, not followed.
+      const ref = String(f.ref);
+      if (this.ev.ids[ref] === undefined) {
+        this.names.set(f.sessionId as string, ref);
+        this.ev.ids[ref] = f.sessionId as string;
+      }
+      this.record("in", ref, f);
       return;
     }
     const sid = f.sessionId as string | undefined;
@@ -325,8 +362,10 @@ class Phone {
       return;
     }
     const name = this.names.get(sid)!;
+    if (this.deaf.size && this.mentions(f, this.deaf)) return this.record("lost", name, f);
     this.record("in", name, f);
     this.ev.frameTimes.push({ at: this.ev.now(), name, type: f.type });
+    if (f.type === "session" || f.type === "session_items") this.shownBack(f);
     const t = this.thread(sid);
     if (f.type === "session") {
       t.items = new Map();
@@ -361,6 +400,7 @@ class Phone {
   async open(resume: boolean, listed?: () => void) {
     const c = await connect(this.run, { port: this.relay.port, resume: resume && this.cursor ? { epoch: this.cursor.epoch, after: this.cursor.seq } : null });
     this.c = c;
+    this.deaf.clear();
     // Frames that came with the hello (a replay) arrived before this handler; the reducer takes them first.
     const early = c.frames.slice();
     const inner = c.ws.onmessage;
@@ -381,7 +421,11 @@ class Phone {
     if (!this.demo) throw new Error("the run's demo project is not listed");
     listed?.();
     for (const [sid] of this.names) if (!this.away.has(sid)) this.watch(sid, resume);
+    const held = new Set(this.outbox.map((m) => String(m.clientId)));
     for (const m of this.outbox.splice(0)) this.send(m);
+    // As the app does: a send no frame showed back went on a socket that dropped, so it goes again with the same
+    // clientId, at most three copies in all; the bridge runs a clientId once.
+    for (const s of this.ev.sends) if (s.shownAt === null && !held.has(s.clientId) && s.copies < 3) this.send(this.sent.get(s.clientId)!);
     const hello = early.find((f) => f.type === "hello")!;
     return { resumed: hello.resumed === true, replayed: early.filter((f) => typeof f.seq === "number").length };
   }
@@ -511,6 +555,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
       return { main: parse(join(dir, `${sid}.jsonl`)), subagents: subs };
     },
     exists: (rel: string) => !!phone?.demo && existsSync(join(phone.demo.path, rel)),
+    read: (rel: string) => (phone?.demo && existsSync(join(phone.demo.path, rel)) ? readFileSync(join(phone.demo.path, rel), "utf8") : null),
     pushes: () => (run && existsSync(join(run.dir, "pushes.jsonl")) ? readFileSync(join(run.dir, "pushes.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []),
     atOf: (iso: string) => Date.parse(iso) - t0,
     procs: (pattern: string) => {
@@ -528,8 +573,21 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
     away,
     alerts: [],
     pushStates: [],
+    sends: [],
+    replies: [],
+    labels: [],
   };
   const probe: { run: { proc: ReturnType<typeof Bun.spawn>; file: string } | null } = { run: null };
+  const labels: { run: { proc: ReturnType<typeof Bun.spawn>; file: string } | null; poll: ReturnType<typeof setInterval> | null } = { run: null, poll: null };
+  const readLabels = (file: string): Ev["labels"] =>
+    (existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean) : []).flatMap((l) => {
+      try {
+        const x = JSON.parse(l) as { t: number; hits: Ev["labels"][number]["hits"] };
+        return [{ at: x.t - t0, hits: x.hits }];
+      } catch {
+        return [];
+      }
+    });
   let phone: Phone | null = null;
   let relay: Relay | null = null;
   let losing: ((f: Frame) => boolean) | null = null;
@@ -633,6 +691,15 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
     });
     log(`list probe stopped: ${ev.list.length} samples`);
   }
+  const read = labels.run;
+  if (read) {
+    if (labels.poll) clearInterval(labels.poll);
+    read.proc.kill("SIGTERM");
+    await read.proc.exited;
+    if (lease) pool.simctl(lease, "terminate", "dev.claudiobot.listprobe.UITests.xctrunner");
+    ev.labels = readLabels(read.file);
+    log(`label probe stopped: ${ev.labels.length} samples`);
+  }
 
   async function perform(a: Action) {
     const p = phone!;
@@ -643,10 +710,13 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
         p.watch(sid, false);
         return;
       }
-      case "send":
-        p.send({ type: "session_send", sessionId: ev.ids[a.name]!, text: a.text, clientId: `runner-${crypto.randomUUID()}`, interrupt: a.interrupt ?? false });
+      case "send": {
+        const clientId = `runner-${crypto.randomUUID()}`;
+        if (a.echoLost) p.deaf.add(clientId);
+        p.send({ type: "session_send", sessionId: ev.ids[a.name]!, text: a.text, clientId, interrupt: a.interrupt ?? false });
         if (a.mark) markNow(a.mark);
         return;
+      }
       case "until":
         try {
           await until(() => a.test(ev), a.what, a.timeoutS);
@@ -679,13 +749,22 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
         return p.watch(ev.ids[a.name]!, true);
       case "reconnect": {
         const how = a.how ?? "close";
+        const message = a.send && { type: "session_send", sessionId: ev.ids[a.send.name]!, text: a.send.text, clientId: `runner-${crypto.randomUUID()}`, interrupt: false };
+        // Sent while dropping: the frame races the drop, so it may reach the bridge with its echo lost, or not at all.
+        if (message && a.sendFirst) p.send(message);
         relay!.drop(how);
         // A closed socket is noticed at once; a half-open one looks alive, so a send goes into it and is lost.
         if (how === "close") p.drop();
         markNow(`${a.mark}-dropped`);
-        if (a.send) p.send({ type: "session_send", sessionId: ev.ids[a.send.name]!, text: a.send.text, clientId: `runner-${crypto.randomUUID()}`, interrupt: false });
+        if (message && !a.sendFirst) p.send(message);
         if (a.until) await until(() => a.until!.test(ev), a.until.what, a.until.timeoutS);
-        await Bun.sleep(a.afterS * 1000);
+        if (a.shot && a.shot.afterS < a.afterS) {
+          await Bun.sleep(a.shot.afterS * 1000);
+          markNow(`${a.mark}-shot`);
+          if (lease) shots[a.shot.name] = pool.screenshot(lease, join(out, "screenshots", `${a.shot.name}.png`));
+          else skipped.push(`screenshot ${a.shot.name}`);
+          await Bun.sleep((a.afterS - a.shot.afterS) * 1000);
+        } else await Bun.sleep(a.afterS * 1000);
         relay!.restore();
         p.drop();
         const replies = new Map<string, string>();
@@ -792,6 +871,33 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
         };
         await until(() => existsSync(file) && readFileSync(file, "utf8").includes("\n"), "the list probe's first sample", 120);
         log("list probe reading the app's Sessions list");
+        return;
+      }
+      case "file":
+        ev.samples[a.as] = (ev.read(a.rel) ?? "").split("\n").filter(Boolean);
+        log(`file ${a.rel} as ${a.as}: ${ev.samples[a.as]!.length} lines`);
+        return;
+      case "raw": {
+        const f = a.frame(ev);
+        log(`raw ${JSON.stringify(f).slice(0, 200)}`);
+        p.send(f);
+        return markNow(a.mark);
+      }
+      case "watch-labels": {
+        if (!lease) return void skipped.push("watch-labels");
+        const dir = await buildListProbe();
+        const file = join(out, "app-labels.jsonl");
+        labels.run = {
+          file,
+          proc: Bun.spawn(
+            ["xcodebuild", "-project", join(dir, "ListProbe.xcodeproj"), "-scheme", "UITests", "-destination", `platform=iOS Simulator,id=${lease.udid}`, "-derivedDataPath", join(dir, "dd"), "test-without-building", "-only-testing:UITests/ListProbe/testLabels"],
+            { env: { ...process.env, TEST_RUNNER_OUT: file, TEST_RUNNER_PHRASES: a.phrases.join("\n"), TEST_RUNNER_SECONDS: "900" }, stdout: Bun.file(join(out, "label-probe.log")), stderr: "pipe" },
+          ),
+        };
+        await until(() => existsSync(file) && readFileSync(file, "utf8").includes("\n"), "the label probe's first sample", 120);
+        // Read as they come, so a setup step can wait on what the app shows.
+        labels.poll = setInterval(() => (ev.labels = readLabels(file)), 1000);
+        log("label probe reading the app's labels");
         return;
       }
       case "restart-bridge": {
@@ -920,7 +1026,7 @@ function describe(a: Action): string {
     case "create":
       return `New session \`${a.name}\` in demo (haiku, mode ${a.mode ?? "default"}): "${a.prompt.replace(/\n/g, " ")}"`;
     case "send":
-      return `Send in \`${a.name}\`${a.interrupt ? " with Stop and send (interrupt)" : ""}: "${a.text.replace(/\n/g, " ")}"${a.mark ? `; mark \`${a.mark}\`` : ""}.`;
+      return `Send in \`${a.name}\`${a.interrupt ? " with Stop and send (interrupt)" : ""}: "${a.text.replace(/\n/g, " ")}"${a.echoLost ? "; every frame naming it is lost on the way to the phone until it reconnects" : ""}${a.mark ? `; mark \`${a.mark}\`` : ""}.`;
     case "until":
       return `Wait up to ${a.timeoutS} s for ${a.what}; mark \`${a.mark}\`${a.optional ? " (optional)" : ""}.`;
     case "stop":
@@ -936,7 +1042,7 @@ function describe(a: Action): string {
     case "return":
       return `Reopen \`${a.name}\`'s thread from the position the phone held (watch_session with after).`;
     case "reconnect":
-      return `The network drops the phone${a.how === "half-open" ? " half-open (nothing passes, no close on either side)" : " (the socket closes)"}${a.send ? `; the user sends in \`${a.send.name}\` meanwhile: "${a.send.text.replace(/\n/g, " ")}"` : ""}${a.until ? `; wait for ${a.until.what}` : ""}; wait ${a.afterS} s, reconnect with the stream position (epoch, after) and resume each thread from its last position${a.compare === false ? "" : "; compare each with a fresh open"}. Mark \`${a.mark}\`.`;
+      return `The network drops the phone${a.how === "half-open" ? " half-open (nothing passes, no close on either side)" : " (the socket closes)"}${a.send ? `; the user sends in \`${a.send.name}\` ${a.sendFirst ? "as it drops (the frame races the drop)" : "meanwhile"}: "${a.send.text.replace(/\n/g, " ")}"` : ""}${a.shot ? `; screenshot \`${a.shot.name}\` ${a.shot.afterS} s into the drop (simulator lane)` : ""}${a.until ? `; wait for ${a.until.what}` : ""}; wait ${a.afterS} s, reconnect with the stream position (epoch, after) and resume each thread from its last position${a.compare === false ? "" : "; compare each with a fresh open"}. Mark \`${a.mark}\`.`;
     case "screenshot":
       return `Screenshot \`${a.shot}\` (simulator lane).`;
     case "open-thread":
@@ -959,6 +1065,12 @@ function describe(a: Action): string {
       return a.fail ? "The push sink answers 500 from now on, as a broken push server would." : "The push sink answers 200 again.";
     case "watch-list":
       return "The list probe (an XCUITest that only reads the accessibility tree) reads the app's Sessions list about once a second until the setup ends (simulator lane).";
+    case "file":
+      return `Read \`${a.rel}\` in the seed project into the report as \`${a.as}\`.`;
+    case "raw":
+      return `The phone sends a frame the app can send, built from what it saw: ${a.what}. Mark \`${a.mark}\`.`;
+    case "watch-labels":
+      return `The label probe (the same read-only XCUITest) records, about once a second until the setup ends, every element of the app whose label holds ${a.phrases.map((x) => `"${x}"`).join(", ")}, and whether each button among them is enabled (simulator lane).`;
   }
 }
 

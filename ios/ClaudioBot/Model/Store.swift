@@ -80,6 +80,49 @@ struct FileKey: Hashable, Sendable {
     let path: String
 }
 
+/// A decision or answer this phone sent for one card (F-SES-142).
+struct CardDecision: Equatable, Sendable {
+    enum Phase: Equatable, Sendable {
+        /// On its way, on a bridge that acks: nobody can say yet whether it landed.
+        case sending
+        /// The Mac took it from this phone.
+        case taken
+        /// It went on a socket that dropped before the Mac said whether it took it.
+        case unsure
+        /// It did not count, for this reason.
+        case failed(DecisionNote)
+    }
+
+    /// nil: an answer to a question.
+    let choice: PermissionChoice?
+    var phase: Phase
+    /// The card's buttons wait for it to close, with a spinner on the one tapped.
+    var holds: Bool
+
+    mutating func fail(_ note: DecisionNote) {
+        phase = .failed(note)
+        holds = false
+    }
+}
+
+/// Why a card's last decision did not count. The card says it, and takes a tap again.
+enum DecisionNote: Equatable, Sendable {
+    /// The socket refused the frame.
+    case notSent
+    /// It waited offline past the age a decision still means what the user meant.
+    case tooLate
+    /// The Mac refused it, in its words.
+    case refused(String)
+
+    var text: String {
+        switch self {
+        case .notSent: "Not sent · Try again"
+        case .tooLate: "Not sent: the connection came back too late · Try again"
+        case .refused(let why): why.localizedCaseInsensitiveContains("already answered") ? "Already answered" : why.hasSuffix(".") ? why : why + "."
+        }
+    }
+}
+
 struct ErrorNotice: Equatable, Sendable, Identifiable {
     let id = UUID()
     let message: String
@@ -127,11 +170,11 @@ final class AppStore {
     private(set) var protocolMismatch: ProtocolMismatch?
     /// From the last hello. Nil until this pairing has connected once.
     private(set) var bridgeProtocol: Int?
-    /// Decisions sent and not yet echoed back by their card, so a second tap cannot send another.
-    private(set) var pendingDecisions: [MessageID: PermissionChoice] = [:]
-    /// Cards this phone sent a decision for that the socket did not refuse. It outlives the card's view and a
-    /// reconnect, so a card closing is announced as this phone's answer or another device's.
-    private(set) var decidedHere: Set<MessageID> = []
+    /// The decisions and answers this phone sent, by card. They outlive the card's view and a reconnect, so a card
+    /// closing is announced as this phone's answer, another device's, or one this phone cannot vouch for.
+    private(set) var decisions: [MessageID: CardDecision] = [:]
+    /// Session create requests the Mac refused, by ref, in its words.
+    private(set) var createRefusals: [String: String] = [:]
     /// The phones paired with this Mac, once Settings asked for them.
     private(set) var devices: [Device]?
     /// Device lists heard, so a view sees every reply, even one that repeats the list.
@@ -209,8 +252,9 @@ final class AppStore {
             created = [:]
             protocolMismatch = nil
             bridgeProtocol = nil
-            pendingDecisions = [:]
-            decidedHere = []
+            decisions = [:]
+            decided = []
+            createRefusals = [:]
             devices = nil
             pairCode = nil
             features = []
@@ -232,48 +276,126 @@ final class AppStore {
         }
     }
 
-    /// A frame sent on a socket that dropped may never have arrived, so a send stays here until its echo.
+    /// A frame sent on a socket that dropped may never have arrived, so a send stays here until its echo. A bot's send
+    /// needs a bridge that drops a repeated clientId, which came with mute; every bridge with sessions drops a repeated
+    /// session send.
     func sendStarted(_ msg: ClientMessage) {
-        guard has(.mute), Self.clientId(of: msg) != nil, !unechoedSends.contains(where: { $0.message == msg }) else { return }
+        if case let .sessionSend(sessionId, _, clientId, _) = msg { threads[sessionId]?.sendWaiting(clientId) }
+        guard Self.clientId(of: msg) != nil, !unechoedSends.contains(where: { $0.message == msg }) else { return }
+        if case .send = msg, !has(.mute) { return }
         unechoedSends.append((msg, 0))
     }
 
     /// A socket took the frame. Only these count toward giving up, so a send made offline survives any number of
     /// reconnects that drop before it goes out.
-    func sendTransmitted(_ msg: ClientMessage) {
+    func sendTransmitted(_ msg: ClientMessage, at now: Date = .now) {
         guard let i = unechoedSends.firstIndex(where: { $0.message == msg }) else { return }
         unechoedSends[i].transmitted += 1
+        if case let .sessionSend(sessionId, _, clientId, _) = msg { threads[sessionId]?.sendTransmitted(clientId, at: now) }
     }
 
     /// What to send again on the socket that just said hello, with the same clientIds. A send three sockets took
     /// without an echo is given up, so one the bridge refuses is not repeated forever.
     func resendsAfterHello() -> [ClientMessage] {
-        // The bridge drops a repeated clientId from the same release that added mute; an older one would post it twice.
-        guard has(.mute) else {
-            unechoedSends = []
-            return []
-        }
         unechoedSends.removeAll { pending in
-            guard case .send(let botId, _, _, _, _) = pending.message, bots[botId] != nil else { return true }
-            return pending.transmitted >= 3
+            switch pending.message {
+            // The bridge drops a repeated clientId from the same release that added mute; an older one would post it twice.
+            case .send(let botId, _, _, _, _): !has(.mute) || bots[botId] == nil || pending.transmitted >= 3
+            case .sessionSend: !has(.sessions) || pending.transmitted >= 3
+            default: true
+            }
         }
         return unechoedSends.map(\.message)
     }
 
     private static func clientId(of msg: ClientMessage) -> String? {
-        if case .send(_, _, _, let clientId, _) = msg { clientId } else { nil }
+        switch msg {
+        case .send(_, _, _, let clientId, _): clientId
+        case .sessionSend(_, _, let clientId, _): clientId
+        default: nil
+        }
     }
 
-    func decisionSent(_ choice: PermissionChoice, for card: MessageID) {
-        pendingDecisions[card] = choice
-        decidedHere.insert(card)
+    /// The session sends a thread frame shows back are no longer owed a resend.
+    private func settleSends(_ sessionId: SessionID, _ frame: ThreadFrame) {
+        let shown: Set<ItemID> = switch frame {
+        case .snapshot(let snapshot): ThreadModel.clientIds(snapshot.items, removed: [])
+        case let .items(_, items, removed, _): ThreadModel.clientIds(items, removed: removed)
+        case let .page(items, _): ThreadModel.clientIds(items, removed: [])
+        case .delta, .toolOutput, .removed: []
+        }
+        guard !shown.isEmpty else { return }
+        unechoedSends.removeAll { pending in
+            if case let .sessionSend(id, _, clientId, _) = pending.message { id == sessionId && shown.contains(ItemID(clientId)) } else { false }
+        }
     }
 
-    /// The socket refused the frame, so the buttons come back.
+    /// The buttons hold until the card closes. On a bridge that acks decisions, the Mac's ack makes it this phone's;
+    /// on one that does not, the socket taking it does, as before.
+    func decisionSent(_ choice: PermissionChoice?, for card: MessageID) {
+        decisions[card] = CardDecision(choice: choice, phase: has(.decideAck) ? .sending : .taken, holds: true)
+        decided.removeAll { $0 == card }
+        decided.append(card)
+        // The newest are enough: a card's close is announced within seconds, and a push link names a recent card.
+        while decided.count > Self.decisionsKept { decisions[decided.removeFirst()] = nil }
+    }
+
+    static let decisionsKept = 200
+    /// The cards in `decisions`, oldest first.
+    @ObservationIgnored private var decided: [MessageID] = []
+
+    /// The socket refused the frame, so the buttons come back and the card says it was not sent.
     func decisionFailed(for card: MessageID) {
-        pendingDecisions[card] = nil
-        decidedHere.remove(card)
-        lastError = ErrorNotice(message: "Your decision did not reach your Mac. Try again.")
+        decisions[card]?.fail(.notSent)
+    }
+
+    /// The choice on its way for an open card, which holds its buttons.
+    var pendingDecisions: [MessageID: PermissionChoice] {
+        decisions.compactMapValues { $0.holds ? $0.choice : nil }
+    }
+
+    func holds(_ card: MessageID) -> Bool {
+        decisions[card]?.holds == true
+    }
+
+    /// Cards whose decision the Mac took from this phone.
+    var decidedHere: Set<MessageID> {
+        Set(decisions.compactMap { $0.value.phase == .taken ? $0.key : nil })
+    }
+
+    /// Cards this phone decided or is deciding, so a link's note never calls them answered elsewhere.
+    var decidedOrSending: Set<MessageID> {
+        Set(decisions.compactMap { $0.value.phase == .taken || $0.value.phase == .sending ? $0.key : nil })
+    }
+
+    /// Who closed the card, as far as this phone knows: true here, false elsewhere, nil when it cannot tell (its
+    /// decision went on a socket that dropped, or the Mac's ack has not come yet).
+    func decidedHere(_ card: MessageID) -> Bool? {
+        switch decisions[card]?.phase {
+        case .taken: true
+        case .sending, .unsure: nil
+        case .failed, nil: false
+        }
+    }
+
+    /// Why a card's last decision did not count, until the next tap.
+    func decisionNote(_ card: MessageID) -> DecisionNote? {
+        if case .failed(let note)? = decisions[card]?.phase { note } else { nil }
+    }
+
+    /// A message held offline was not sent: by the time the connection came back it no longer meant what the user meant.
+    func requestDropped(_ msg: ClientMessage) {
+        switch msg {
+        case let .sessionStop(sessionId, target, _):
+            stops[sessionId]?[target ?? .all] = nil
+            sessionErrors[sessionId] = SessionError(kind: .stop, text: "Stop not sent: the connection came back too late.")
+        case .stop, .stopAgent:
+            lastError = ErrorNotice(message: "Stop not sent: the connection came back too late.")
+        case .decide(_, let card, _), .sessionDecide(_, let card, _), .sessionAnswer(_, let card, _):
+            decisions[card]?.fail(.tooLate)
+        default:
+            break
+        }
     }
 
     func dismissError(_ notice: ErrorNotice) {
@@ -358,8 +480,21 @@ final class AppStore {
             sessionErrors[sessionId] = SessionError(kind: .set, text: [kept, message].compactMap { $0 }.joined(separator: " "))
         case .send(let sessionId, let clientId):
             threads[sessionId]?.withdrawRefused(ItemID(clientId))
+            threads[sessionId]?.sendRefused(clientId, message)
+            unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId }
             sessionErrors[sessionId] = SessionError(kind: .send, text: message)
-        case .tool, .create, .unknown:
+        case let .decide(_, cardId):
+            decisions[cardId]?.fail(.refused(message))
+        case let .tool(sessionId, toolUseId):
+            guard let thread = threads[sessionId] else { return false }
+            thread.apply(.toolOutput(toolUseId: toolUseId, .missing(message)))
+        case .create(let ref):
+            // Only the sheet that sent the ref reads it, and only while it is open: one is enough.
+            createRefusals = [ref: message]
+        case .page(let sessionId):
+            threads[sessionId]?.pageRefused()
+            return false
+        case .unknown:
             return false
         }
         return true
@@ -384,8 +519,12 @@ final class AppStore {
             activity = [:]
             if !features.contains(.usage) { usage = nil }
             pushState = hello.push
-            // A decision in flight when the socket dropped either landed, and the card says so, or it is lost.
-            pendingDecisions = [:]
+            // A decision in flight when the socket dropped either landed, and the card says so, or it is lost. Without
+            // its ack this phone cannot say which, and an open card takes a tap again.
+            for (card, decision) in decisions where decision.holds || decision.phase == .sending {
+                decisions[card]?.holds = false
+                if decision.phase == .sending { decisions[card]?.phase = .unsure }
+            }
             bots = Dictionary(hello.bots.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             conversations = conversations.filter { self.bots[$0.key] != nil }
             details = details.filter { self.bots[$0.key] != nil }
@@ -508,8 +647,13 @@ final class AppStore {
             return []
 
         case let .thread(sessionId, frame):
-            for card in threads.apply(sessionId, frame) { pendingDecisions[card] = nil }
+            for card in threads.apply(sessionId, frame) { decisions[card]?.holds = false }
+            settleSends(sessionId, frame)
             settleRequests(sessionId)
+            return []
+
+        case let .decided(cardId):
+            decisions[cardId]?.phase = .taken
             return []
 
         case let .sessionCreated(ref, sessionId):
@@ -529,7 +673,7 @@ final class AppStore {
     }
 
     private func settlePending(_ message: Message) {
-        if case .permission(let id, _, let card) = message, card.answer != nil { pendingDecisions[id] = nil }
+        if case .permission(let id, _, let card) = message, card.answer != nil { decisions[id]?.holds = false }
         if case .user(_, _, _, _, let clientId?, _) = message { unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId } }
     }
 

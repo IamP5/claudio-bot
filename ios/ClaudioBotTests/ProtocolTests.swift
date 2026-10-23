@@ -87,7 +87,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
     func inItem(_ item: SessionItem) -> [String] {
         switch item {
         case .unknown(_, _, let kind): return ["item kind \(kind)"]
-        case .user(_, _, _, let from, _): return if case .unknown(let raw) = from { ["author \(raw)"] } else { [] }
+        case .user(_, _, _, let from, _, _): return if case .unknown(let raw) = from { ["author \(raw)"] } else { [] }
         case .work(_, _, let steps): return steps.compactMap { if case .unknown(let raw) = $0.state { "step state \(raw)" } else { nil } }
         case .todo(_, _, let todos): return todos.compactMap { if case .unknown(let raw) = $0.state { "todo state \(raw)" } else { nil } }
         case .plan(_, _, _, let state, _): return if case .unknown(let raw) = state { ["plan state \(raw)"] } else { [] }
@@ -274,11 +274,11 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(permission?.cardId == MessageID("m20"))
         #expect(permission?.card.tool == "Bash" && permission?.card.answer == nil)
         let asks = all.compactMap { if case let .ask(_, _, questions, answers, cardId) = $0 { (questions, answers, cardId) } else { nil } }
-        #expect(asks.map { $0.2 } == [MessageID("m21"), nil])
+        #expect(asks.map { $0.2 } == [MessageID("m21"), nil, MessageID("m18")], "a closed question keeps its card id")
         #expect(asks[0].1 == nil && asks[0].0[0].options.map(\.label) == ["Web Audio API", "Howler.js"])
         #expect(asks[1].1 == .answered(["Which audio library should the fade use?": "Web Audio API"]))
         let plans = all.compactMap { if case let .plan(_, _, _, state, cardId) = $0 { "\(state.rawValue):\(cardId?.rawValue ?? "-")" } else { nil } }
-        #expect(plans == ["proposed:m22", "approved:-"])
+        #expect(plans == ["proposed:m22", "approved:-", "rejected:m19"], "a decided plan keeps its card id")
 
         let removals: [SessionID?] = thread.compactMap { frame -> SessionID?? in
             if case .removed(let movedTo) = frame { .some(movedTo) } else { nil }
@@ -355,6 +355,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         let agent = SessionID("6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31")
         #expect(abouts == [
             .stop(sessionId: agent), .set(sessionId: agent), .send(sessionId: agent, clientId: "c_4d2a"), .tool(sessionId: agent, toolUseId: "toolu_01Ab5"), .create(ref: "s1"),
+            .decide(sessionId: agent, cardId: MessageID("m20")), .page(sessionId: agent),
         ])
         let plain = frames.compactMap { if case let .error(message, nil) = $0 { message } else { nil } }
         #expect(plain == ["Unknown bot"])
@@ -392,7 +393,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(try decode(SessionOutcomeKind.self, #""cancelled""#) == .unknown("cancelled"))
         #expect(try decode(NoticeReason.self, #""compact""#) == .unknown("compact"))
         #expect(try decode(PushState.self, #"{"state":"snoozed"}"#) == .unknown("snoozed"))
-        #expect(try decode(ErrorAbout.self, #"{"kind":"decide","sessionId":"s1"}"#) == .unknown("decide"))
+        #expect(try decode(ErrorAbout.self, #"{"kind":"approve","sessionId":"s1"}"#) == .unknown("approve"))
         #expect(try decode(PermissionAnswer.self, #""withdrawn""#) == .unknown("withdrawn"))
     }
 
@@ -584,7 +585,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(Feature.allCases.map(\.rawValue) == [
             "memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend",
             "mentions", "commands", "exchanges", "groups", "usage", "sessions", "presence",
-            "session_tasks", "session_unqueue", "push_state",
+            "session_tasks", "session_unqueue", "push_state", "decide_ack",
         ])
         #expect(ToolStepState.allCases.map(\.rawValue) == ["running", "waiting", "ok", "error", "denied", "stopped", "unsure", "ended"])
         #expect(SessionTaskKind.allCases.map(\.rawValue) == ["agent", "command", "other"])
@@ -1077,8 +1078,11 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(Set(ids[1...]).count == 4)
     }
 
-    private func session(_ id: String, _ reason: SessionAlertReason, count: Int = 1, title: String = "Sleep in parallel") -> Alert {
-        .session(SessionAlert(sessionId: SessionID(id), reason: reason, count: count, title: title, cardId: reason == .card ? MessageID("m30") : nil))
+    private func session(_ id: String, _ reason: SessionAlertReason, count: Int = 1, title: String = "Sleep in parallel", kind: SessionCardKind? = .permission) -> Alert {
+        let card = reason == .card || reason == .reminder
+        return .session(SessionAlert(
+            sessionId: SessionID(id), reason: reason, count: count, title: title, cardId: reason == .card ? MessageID("m30") : nil, cardKind: card ? kind : nil
+        ))
     }
 
     @Test func aSessionHasOneNotificationInItsOwnThread() {
@@ -1099,6 +1103,8 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(text(session("s1", .card, count: 3)) == ["Sleep in parallel", "Needs 3 approvals"])
         #expect(text(session("s1", .reminder, count: 2)) == ["Sleep in parallel", "Still waiting for 2 approvals"])
         #expect(text(session("s1", .reminder)) == ["Sleep in parallel", "Still waiting for your approval"])
+        #expect(text(session("s1", .card, kind: .ask)) == ["Sleep in parallel", "Has a question for you"])
+        #expect(text(session("s1", .card, kind: nil)) == ["Sleep in parallel", "Needs you"], "mixed kinds, or a bridge that does not say")
         #expect(text(session("s1", .finished, title: "  ")) == ["Claude Code session", "Finished"])
         #expect(text(session("s1", .failed)) == ["Sleep in parallel", "Stopped with an error"])
         #expect(text(session("s1", .lost)) == ["Sleep in parallel", "Interrupted by a bridge restart"])

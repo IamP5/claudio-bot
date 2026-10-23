@@ -36,8 +36,9 @@ struct SessionComposer: View {
 
     private var controls: SessionControls? { model.controls }
     private var canSend: Bool { controls?.canSend ?? false }
-    /// A cloud session runs on claude.ai: the bridge can follow up on it but not stop it.
-    private var canStop: Bool { store.sessions.rows[sessionId]?.origin != .cloud }
+    /// A cloud session runs on claude.ai: the bridge can follow up on it but not stop it. A thread catching up shows
+    /// what ran when the app last heard, so its Stop would aim at a run that may be over (F-SES-128).
+    private var canStop: Bool { store.sessions.rows[sessionId]?.origin != .cloud && !model.catchingUp }
     private var stopRequest: StopRequest? { store.latestStop(in: sessionId, [.all, .turn]) }
 
     private func state(at now: Date) -> ComposerState {
@@ -50,7 +51,9 @@ struct SessionComposer: View {
     var body: some View {
         let now = max(clock, .now)
         let state = state(at: now)
-        let note = ComposerNote.of(error: store.sessionErrors[sessionId], stop: state.stop, set: store.sets[sessionId], controls: controls, now: now)
+        let note = ComposerNote.of(
+            error: store.sessionErrors[sessionId], stop: state.stop, set: store.sets[sessionId], controls: controls, now: now, offline: store.machine == nil
+        )
         glassGroup {
             VStack(alignment: .leading, spacing: 8) {
                 if let controls { controlsRow(controls) }
@@ -108,7 +111,7 @@ struct SessionComposer: View {
         }
         .onChange(of: state.stop?.phase) { _, phase in
             guard let phase, let scope = state.stop?.scope, let text = ComposerState.announcement(phase, scope) else { return }
-            announce(text)
+            announce(phase == .stopping && store.machine == nil ? ComposerState.stopWaitsLine : text)
         }
         .onChange(of: note) { _, note in
             guard case let .changeUnconfirmed(set, text)? = note, lapseSpoken != set.at else { return }
@@ -256,6 +259,8 @@ struct SessionComposer: View {
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.danger)
                 case .stopping, .changing:
                     ProgressView().controlSize(.mini)
+                case .stopWaits:
+                    Image(systemName: "wifi.slash").foregroundStyle(Theme.attention)
                 case .unconfirmed, .changeUnconfirmed:
                     Image(systemName: "questionmark.circle").foregroundStyle(Theme.attention)
                 }
@@ -316,7 +321,7 @@ struct SessionComposer: View {
         switch note {
         case .error(let error): { store.dismissSessionError(error, in: sessionId) }
         case .changeUnconfirmed: { store.dismissSet(in: sessionId) }
-        case .stopping, .unconfirmed, .changing: nil
+        case .stopping, .stopWaits, .unconfirmed, .changing: nil
         }
     }
 
@@ -456,15 +461,16 @@ struct SessionComposer: View {
         let text = model.draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, canSend else { return }
         let queued = !interrupt && ComposerState.queues(controls)
+        let offline = store.machine == nil
         let clientId = UUID().uuidString
         model.echo(clientId: clientId, text: text)
         client.send(.sessionSend(sessionId: sessionId, text: text, clientId: clientId, interrupt: interrupt))
         model.draft = ComposerDraft()
         caret = 0
         sends += 1
-        sentAt = .now
+        sentAt = offline ? nil : .now
         sentQueued = queued
-        announce(ComposerState.sentAnnouncement(queued: queued, interrupt: interrupt))
+        announce(ComposerState.sentAnnouncement(queued: queued, interrupt: interrupt, offline: offline))
         onSend()
     }
 
@@ -554,7 +560,7 @@ private extension ComposerNote {
 extension ThreadModel {
     /// The user's messages that wait for the turn, oldest first.
     var queuedMessages: [(id: ItemID, text: String)] {
-        items.compactMap { if case let .user(id, _, text, .user, true) = $0, !withdrawing.contains(id) { (id, text) } else { nil } }
+        items.compactMap { if case let .user(id, _, text, .user, true, _) = $0, !withdrawing.contains(id) { (id, text) } else { nil } }
     }
 }
 
@@ -568,6 +574,23 @@ extension BridgeClient {
     }
 }
 
+/// Where the New Session sheet's Start stands (F-SES-036).
+enum StartPhase: Equatable, Sendable {
+    case editing
+    case starting(ref: String, at: Date)
+    /// No word from the Mac within the patience, or the connection dropped meanwhile: the session may exist.
+    case unconfirmed(ref: String)
+    /// The Mac refused it, in its words.
+    case refused(String)
+
+    /// How long Start waits for the Mac before it says it could not confirm.
+    static let patience: TimeInterval = 20
+
+    static let startingLine = "Starting session…"
+    static let unconfirmedLine = "Couldn't confirm. Check the list or retry."
+    static let offlineLabel = "Start (your Mac is unreachable)"
+}
+
 struct NewSessionSheet: View {
     let projectId: ProjectID?
 
@@ -576,24 +599,36 @@ struct NewSessionSheet: View {
     @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
     @State private var project: ProjectID?
-    @State private var draft = ComposerDraft()
     @State private var caret = 0
     @State private var model: String?
     @State private var mode: PermissionMode?
     @State private var worktree = false
-    @State private var starting = false
+    @State private var phase = StartPhase.editing
+    @State private var lastRetryFailed = false
 
     private var models: [SessionModelOption] {
         store.threads.lastModels
     }
 
+    private var starting: Bool {
+        if case .starting = phase { true } else { false }
+    }
+
     private var canStart: Bool {
-        project != nil && !draft.isBlank && !starting && store.machine != nil
+        project != nil && !router.newSessionDraft.isBlank && !starting && store.machine != nil
     }
 
     var body: some View {
+        @Bindable var router = router
         NavigationStack {
             Form {
+                // Start needs the Mac, so the sheet says when it is out of reach and offers Retry (F-SES-154).
+                if store.machine == nil {
+                    Section {
+                        ConnectionBanner(state: store.connection, lastRetryFailed: $lastRetryFailed)
+                            .listRowInsets(EdgeInsets())
+                    }
+                }
                 Section {
                     Picker("Project", selection: $project) {
                         ForEach(store.sessions.orderedProjects) { project in
@@ -609,7 +644,7 @@ struct NewSessionSheet: View {
                 }
                 Section {
                     PromptTextView(
-                        draft: $draft, caret: $caret, placeholder: "What should Claude do?", minLines: 4,
+                        draft: $router.newSessionDraft, caret: $caret, placeholder: "What should Claude do?", minLines: 4,
                         maxLines: 10, autofocus: true
                     )
                     .padding(.vertical, 4)
@@ -638,6 +673,7 @@ struct NewSessionSheet: View {
                             ? "Claude works on its own branch in a new worktree, so the project's checkout stays as it is."
                             : "Claude works in the project's folder, on the branch checked out there.")
                 }
+                if phase != .editing { Section { startLine } }
             }
             #if os(macOS)
             .formStyle(.grouped)
@@ -652,8 +688,12 @@ struct NewSessionSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     if starting {
                         ProgressView()
+                            .accessibilityLabel(StartPhase.startingLine)
                     } else {
-                        Button(Self.startTitle, action: start).disabled(!canStart)
+                        Button(Self.startTitle, action: start)
+                            .disabled(!canStart)
+                            .accessibilityLabel(store.machine == nil ? StartPhase.offlineLabel : Self.startTitle)
+                            .help(store.machine == nil ? StartPhase.offlineLabel : Self.startTitle)
                     }
                 }
             }
@@ -662,14 +702,65 @@ struct NewSessionSheet: View {
         .frame(minWidth: 480, idealWidth: 520, minHeight: 420, idealHeight: 460)
         #endif
         .onAppear { project = projectId ?? store.sessions.orderedProjects.first?.id }
-        // A refused create comes back as an error frame, so the sheet lets the user try again.
-        .onChange(of: store.lastError) {
-            if starting {
-                starting = false
-                router.pendingSessionCreate = nil
-            }
+        .task(id: phase) {
+            guard case let .starting(ref, at) = phase else { return }
+            try? await Task.sleep(for: .seconds(max(0, StartPhase.patience - Date.now.timeIntervalSince(at))))
+            if !Task.isCancelled, phase == .starting(ref: ref, at: at) { settle(.unconfirmed(ref: ref)) }
+        }
+        // A reply on a socket that dropped is lost with it, so the sheet cannot tell whether the session started.
+        .onChange(of: store.machine == nil) { _, lost in
+            if lost, case let .starting(ref, _) = phase { settle(.unconfirmed(ref: ref)) }
+        }
+        .onChange(of: refusal) { _, why in
+            guard let why else { return }
+            router.pendingSessionCreate = nil
+            settle(.refused(why))
         }
         .interactiveDismissDisabled(starting)
+    }
+
+    /// The Mac's refusal of the Start in flight or not confirmed.
+    private var refusal: String? {
+        switch phase {
+        case let .starting(ref, _), let .unconfirmed(ref): store.createRefusals[ref]
+        case .editing, .refused: nil
+        }
+    }
+
+    @ViewBuilder
+    private var startLine: some View {
+        switch phase {
+        case .editing:
+            EmptyView()
+        case .starting:
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text(StartPhase.startingLine).foregroundStyle(Theme.secondary)
+            }
+            .accessibilityElement(children: .combine)
+        case .unconfirmed(let ref):
+            VStack(alignment: .leading, spacing: 8) {
+                Label(StartPhase.unconfirmedLine, systemImage: "questionmark.circle")
+                    .foregroundStyle(Theme.attention)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Retry") { send(ref: ref) }
+                    .disabled(store.machine == nil)
+                    .accessibilityLabel("Retry starting the session")
+            }
+        case .refused(let why):
+            Label(why, systemImage: "exclamationmark.triangle")
+                .foregroundStyle(Theme.danger)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func settle(_ next: StartPhase) {
+        phase = next
+        switch next {
+        case .unconfirmed: AccessibilityNotification.Announcement(StartPhase.unconfirmedLine).post()
+        case .refused(let why): AccessibilityNotification.Announcement("Couldn't start. " + why).post()
+        case .editing, .starting: break
+        }
     }
 
     #if os(macOS)
@@ -678,15 +769,23 @@ struct NewSessionSheet: View {
     private static let startTitle = "Start"
     #endif
 
+    /// A Start the Mac never confirmed may have made the session, so Start sends its ref again, as Retry does.
     private func start() {
-        guard let project, canStart else { return }
-        let ref = UUID().uuidString
-        starting = true
+        guard canStart else { return }
+        if case .unconfirmed(let ref) = phase { return send(ref: ref) }
+        send(ref: UUID().uuidString)
+    }
+
+    /// A retry sends the same ref, which the Mac answers with the session it already made, so it never makes two.
+    private func send(ref: String) {
+        guard let project else { return }
+        phase = .starting(ref: ref, at: .now)
         router.pendingSessionCreate = ref
+        AccessibilityNotification.Announcement(StartPhase.startingLine).post()
         client.send(
             .sessionCreate(
                 ref: ref, projectId: project,
-                text: draft.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                text: router.newSessionDraft.text.trimmingCharacters(in: .whitespacesAndNewlines),
                 model: model, mode: mode, isolate: worktree ? .worktree : .inPlace
             ))
     }

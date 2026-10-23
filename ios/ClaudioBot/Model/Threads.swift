@@ -365,11 +365,17 @@ final class ThreadModel {
     private(set) var controls: SessionControls?
     private(set) var position: ThreadPosition?
     private(set) var phase = Phase.loading
-    /// A session_page request is out. Cleared by its reply or by a snapshot.
+    /// A session_page request is out. Cleared by its reply, a snapshot, its refusal, or the next watch.
     private(set) var loadingEarlier = false
+    /// A watch from the position the app holds is out, so what the thread shows may be old until its reply (F-SES-128).
+    private(set) var catchingUp = false
     private(set) var expanded: Set<ItemID> = []
-    /// Full tool outputs the user asked for, by tool_use id.
-    private(set) var toolOutputs: [String: String] = [:]
+    /// Full tool outputs the user asked for, by tool_use id, or why the Mac has none.
+    private(set) var toolOutputs: [String: ToolOutput] = [:]
+    /// When each full output was last asked for, until it arrives.
+    private(set) var toolAsked: [String: Date] = [:]
+    /// Messages this phone sent that no frame from the Mac has shown back yet, by clientId (F-SES-070).
+    private(set) var pendingSends: [ItemID: PendingSend] = [:]
     /// The composer's text, kept with the thread so a queued message taken back for editing lands in it.
     var draft = ComposerDraft()
     /// Queued messages the user took back, until the bridge's items drop them or it refuses (a Claude Code that hangs
@@ -410,6 +416,7 @@ final class ThreadModel {
                 forget(again: true)
                 return []
             }
+            acknowledge(snapshot.items, removed: [])
             replace(snapshot.items)
             before = snapshot.before
             controls = snapshot.controls
@@ -418,6 +425,7 @@ final class ThreadModel {
             phase = .ready
             loadingEarlier = false
             replying = false
+            catchingUp = false
             repairing = false
             retried = false
             live.seed(snapshot.live)
@@ -434,8 +442,11 @@ final class ThreadModel {
                 self.position = ThreadPosition(epoch: position.epoch, rev: rev)
             }
             replying = false
+            catchingUp = false
             newestRev = max(newestRev ?? rev, rev)
+            acknowledge(items, removed: removed)
             for item in items {
+                rekey(item)
                 upsert(item)
                 live.drop(item.id)
             }
@@ -458,6 +469,8 @@ final class ThreadModel {
 
         case let .page(items, before):
             // Older by position: a page item at the same time as one already shown goes above it.
+            acknowledge(items, removed: [])
+            items.forEach(rekey)
             let older = items.filter { index[$0.id] == nil }
             for item in older.reversed() {
                 firstArrival -= 1
@@ -472,10 +485,12 @@ final class ThreadModel {
 
         case let .toolOutput(toolUseId, output):
             toolOutputs[toolUseId] = output
+            toolAsked[toolUseId] = nil
             return []
 
         case .removed(let movedTo):
             phase = .removed(movedTo: movedTo)
+            catchingUp = false
             live.clear()
             return []
         }
@@ -487,7 +502,10 @@ final class ThreadModel {
         live.clear()
         let from = phase == .ready ? position : nil
         replying = from != nil
+        catchingUp = from != nil
         newestRev = nil
+        // A page asked for on an earlier socket is answered on that socket or never; the row may ask again.
+        loadingEarlier = false
         return from
     }
 
@@ -519,9 +537,77 @@ final class ThreadModel {
     }
 
     /// The user's message, shown queued at once under the clientId the bridge keeps until the transcript replaces it.
+    /// It stays pending until a frame from the Mac shows it back.
     func echo(clientId: String, text: String, at now: Date = .now) {
-        upsert(.user(id: ItemID(clientId), at: now, text: text, from: .user, queued: true))
+        let id = ItemID(clientId)
+        pendingSends[id] = PendingSend(text: text, at: now)
+        upsert(.user(id: id, at: now, text: text, from: .user, queued: true))
         relayout()
+    }
+
+    /// The message waits for a socket again: offline, or the user retried it.
+    func sendWaiting(_ clientId: String) {
+        pendingSends[ItemID(clientId)]?.state = .waiting
+    }
+
+    /// A socket took the message. Without a sign of it from the Mac within the patience, it reads as not sent.
+    func sendTransmitted(_ clientId: String, at now: Date = .now) {
+        let id = ItemID(clientId)
+        guard pendingSends[id] != nil else { return }
+        pendingSends[id]?.state = .sending(since: now)
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(PendingSend.patience))
+            self?.lapseSends(at: .now)
+        }
+    }
+
+    func lapseSends(at now: Date) {
+        for (id, send) in pendingSends {
+            if case .sending(let since) = send.state, now.timeIntervalSince(since) >= PendingSend.patience { pendingSends[id]?.state = .notSent(nil) }
+        }
+    }
+
+    /// The Mac refused the message, in its words.
+    func sendRefused(_ clientId: String, _ why: String) {
+        pendingSends[ItemID(clientId)]?.state = .notSent(why)
+    }
+
+    /// A frame that shows a pending message back, under its clientId or as the transcript's copy, or removes it, means
+    /// the Mac has it.
+    private func acknowledge(_ items: [SessionItem], removed: [ItemID]) {
+        guard !pendingSends.isEmpty else { return }
+        for id in Self.clientIds(items, removed: removed) { pendingSends[id] = nil }
+    }
+
+    /// The ids by which a frame names the phone's messages.
+    static func clientIds(_ items: [SessionItem], removed: [ItemID]) -> Set<ItemID> {
+        var ids = Set(removed)
+        for item in items {
+            ids.insert(item.id)
+            if case let .user(_, _, _, _, _, clientId?) = item { ids.insert(ItemID(clientId)) }
+        }
+        return ids
+    }
+
+    /// The transcript now shows a message under its own id. What the phone knew about it under its clientId moves there.
+    private func rekey(_ item: SessionItem) {
+        guard case let .user(id, _, _, _, _, clientId?) = item else { return }
+        let old = ItemID(clientId)
+        guard old != id else { return }
+        if let withdrawal = withdrawals.removeValue(forKey: old) { withdrawals[id] = withdrawal }
+        if let edited = sentAnyway.removeValue(forKey: old) { sentAnyway[id] = edited }
+        if resent.remove(old) != nil { resent.insert(id) }
+    }
+
+    /// Full output was asked for. One the Mac had no output for is asked for again.
+    func askTool(_ toolUseId: String, at now: Date = .now) {
+        if case .missing = toolOutputs[toolUseId] { toolOutputs[toolUseId] = nil }
+        toolAsked[toolUseId] = now
+    }
+
+    /// The Mac refused a page, so the row may ask again.
+    func pageRefused() {
+        loadingEarlier = false
     }
 
     /// The cursor to ask for, once. Nil while a page is out or at the start of the transcript.
@@ -544,20 +630,27 @@ final class ThreadModel {
         return value
     }
 
+    /// A snapshot replaces the items. A message still pending is not in it yet, so its echo stays.
     private func replace(_ items: [SessionItem]) {
         self.items = []
         index = [:]
         arrival = [:]
         firstArrival = 0
         lastArrival = 0
-        for item in items { upsert(item) }
+        for item in items {
+            rekey(item)
+            upsert(item)
+        }
+        for (id, send) in pendingSends.sorted(by: { $0.value.at < $1.value.at }) where index[id] == nil {
+            upsert(.user(id: id, at: send.at, text: send.text, from: .user, queued: true))
+        }
     }
 
     /// Where an item sits, as bridge/src/threads.ts ordered() puts it: by time, a message Claude Code has not taken yet
     /// after everything, and items at one time in the order they were first seen, as the bridge's stable sort keeps
     /// them. Snapshot, page, replay and live frames all land in this one order.
     private func place(_ item: SessionItem) -> (Int, Date, Int) {
-        let waits = if case .user(_, _, _, _, true) = item { 1 } else { 0 }
+        let waits = if case .user(_, _, _, _, true, _) = item { 1 } else { 0 }
         return (waits, item.at, arrival[item.id] ?? 0)
     }
 
@@ -588,6 +681,8 @@ final class ThreadModel {
 
     private func relayout() {
         if !withdrawals.isEmpty { settleWithdrawals() }
+        // A message taken back that went to Claude anyway keeps its note only while it is in the thread.
+        if sentAnyway.keys.contains(where: { index[$0] == nil }) { sentAnyway = sentAnyway.filter { index[$0.key] != nil } }
         let next = ThreadLayout.rows(items, expanded: expanded, working: controls?.working ?? false)
         if next != rows { rows = next }
         let prompts = UnansweredPrompts.of(items, turnRuns: ComposerState.queues(controls)).subtracting(resent)
@@ -637,7 +732,7 @@ final class ThreadModel {
     /// went to Claude before the withdrawal reached it.
     private func settleWithdrawals() {
         var queued: [ItemID: Bool] = [:]
-        for case let .user(id, _, _, .user, isQueued) in items { queued[id] = isQueued }
+        for case let .user(id, _, _, .user, isQueued, _) in items { queued[id] = isQueued }
         for (id, withdrawal) in withdrawals where queued[id] != true {
             withdrawals[id] = nil
             if queued[id] == false { sentAnyway[id] = withdrawal.edited }
@@ -649,9 +744,15 @@ final class ThreadModel {
         if draft.isBlank { draft = ComposerDraft(text: text) } else { draft.append("\n\n" + text) }
     }
 
+    /// The cards these items show closed, so the decisions sent for them settle.
     private static func settled(_ items: [SessionItem]) -> [MessageID] {
         items.compactMap { item in
-            if case let .permission(_, _, permission) = item, permission.card.answer != nil { permission.cardId } else { nil }
+            switch item {
+            case let .permission(_, _, permission) where permission.card.answer != nil: permission.cardId
+            case let .ask(_, _, _, _?, cardId?): cardId
+            case let .plan(_, _, _, state, cardId?) where state != .proposed: cardId
+            default: nil
+            }
         }
     }
 }

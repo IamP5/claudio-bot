@@ -25,9 +25,10 @@ struct ThreadRowView: View, Equatable {
             FoldRow(items: items, expanded: expanded) { model.toggle(fold: id) }
         case .item(let item):
             switch item {
-            case let .user(id, _, text, from, queued):
+            case let .user(id, _, text, from, queued, _):
                 SessionUserBubble(
-                    text: text, from: from, queued: queued, taken: taken(id), botName: botName, actions: actions(id, text, queued: queued)
+                    text: text, from: from, queued: queued, taken: taken(id), botName: botName, actions: actions(id, text, queued: queued),
+                    delivery: model.pendingSends[id]?.state
                 )
             case let .assistant(id, _, text):
                 RenderedMarkdownView(markdown: model.rendered(id, text))
@@ -65,6 +66,11 @@ extension ThreadRowView {
     }
 
     private func actions(_ id: ItemID, _ text: String, queued: Bool) -> SessionUserBubble.Actions? {
+        // Until the Mac shows it back the message is this phone's alone: the only thing to do with it is send it again.
+        if let pending = model.pendingSends[id] {
+            guard case .notSent = pending.state else { return nil }
+            return .notSent(retry: { client.send(.sessionSend(sessionId: model.id, text: pending.text, clientId: id.rawValue, interrupt: false)) })
+        }
         if let withdrawal = model.withdrawals[id] {
             guard withdrawal.lapsed else { return nil }
             return .unconfirmed(
@@ -98,6 +104,8 @@ struct SessionUserBubble: View {
         case resend(() -> Void)
         /// A withdrawal the Mac never confirmed: try it again, or, when the text is not in the composer yet, edit it.
         case unconfirmed(retry: () -> Void, edit: (() -> Void)?)
+        /// The Mac never showed the message back, or refused it: send it again, with the same id so it runs once.
+        case notSent(retry: () -> Void)
     }
 
     /// Where a message the user took back stands.
@@ -123,6 +131,18 @@ struct SessionUserBubble: View {
     var taken: Taken?
     var botName: String?
     var actions: Actions?
+    /// Where a message this phone sent stands until the Mac shows it back (F-SES-070).
+    var delivery: PendingSend.State?
+
+    /// The caption's words for a message not yet shown back. Offline it is never called sent.
+    static func words(_ delivery: PendingSend.State) -> String {
+        switch delivery {
+        case .waiting: "Not sent yet · Goes when your Mac is back"
+        case .sending: "Sending…"
+        case .notSent(let why?): "Not sent: " + why
+        case .notSent(nil): "Not sent"
+        }
+    }
 
     var body: some View {
         if from == .system {
@@ -157,7 +177,10 @@ struct SessionUserBubble: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(Self.spoken(rendered, from: from, botName: botName, queued: queued) + (taken.map { ". " + $0.words } ?? ""))
+            .accessibilityLabel(
+                Self.spoken(rendered, from: from, botName: botName, queued: queued && delivery == nil)
+                    + (delivery.map { ". " + Self.words($0) } ?? taken.map { ". " + $0.words } ?? "")
+            )
             .accessibilityActions {
                 switch actions {
                 case let .queued(edit, withdraw)?:
@@ -168,6 +191,8 @@ struct SessionUserBubble: View {
                 case let .unconfirmed(retry, edit)?:
                     Button("Try again", action: retry)
                     if let edit { Button("Edit", action: edit) }
+                case .notSent(let retry)?:
+                    Button("Retry", action: retry)
                 case nil:
                     EmptyView()
                 }
@@ -198,8 +223,18 @@ struct SessionUserBubble: View {
             } label: {
                 captionLabel("Couldn't confirm the withdraw · Try again", symbol: "exclamationmark.triangle")
             }
+        case .notSent(let retry)?:
+            Button(action: retry) {
+                captionLabel((delivery.map(Self.words) ?? "Not sent") + " · Retry", symbol: "exclamationmark.triangle")
+                    .foregroundStyle(Theme.danger)
+            }
+            .buttonStyle(.plain)
         case nil:
-            if let taken {
+            if let delivery {
+                Label(Self.words(delivery), systemImage: delivery == .waiting ? "wifi.slash" : "arrow.up.circle")
+                    .font(.caption)
+                    .foregroundStyle(Theme.tertiary)
+            } else if let taken {
                 Label(taken.words, systemImage: taken == .withdrawing ? "arrow.uturn.backward" : "info.circle")
                     .font(.caption)
                     .foregroundStyle(Theme.tertiary)
@@ -657,7 +692,11 @@ struct PlanCard: View {
     let cardId: MessageID?
 
     @Environment(BridgeClient.self) private var client
-    @State private var sent: PermissionChoice?
+    @Environment(AppStore.self) private var store
+
+    /// The choice on its way. The store holds it, so a failed send or a refusal frees the buttons (F-SES-142).
+    private var sent: PermissionChoice? { cardId.flatMap { store.pendingDecisions[$0] } }
+    private var offline: Bool { store.machine == nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -671,14 +710,17 @@ struct PlanCard: View {
             switch state {
             case .proposed:
                 if let cardId {
-                    HStack(spacing: 8) {
-                        decide("Approve", .once, cardId, primary: true)
-                        decide("Keep planning", .deny, cardId, primary: false)
-                    }
-                    .disabled(sent != nil)
+                    // Before the buttons, so VoiceOver reads what a choice does before the choices (F-SES-166).
                     Text("Approving lets Claude leave plan mode and start on it.")
                         .font(.footnote)
                         .foregroundStyle(Theme.tertiary)
+                    HStack(spacing: 8) {
+                        decide("Approve", .once, cardId, primary: true, hint: "Leaves plan mode and starts the work")
+                        decide("Keep planning", .deny, cardId, primary: false, hint: "Claude stays in plan mode and revises the plan")
+                    }
+                    .disabled(sent != nil || offline)
+                    .opacity(offline ? 0.4 : 1)
+                    DecisionStatusLine(offline: offline, note: store.decisionNote(cardId))
                 } else {
                     Text("Waiting for an answer where it was asked.")
                         .font(.footnote)
@@ -700,12 +742,10 @@ struct PlanCard: View {
             }
         }
         .sensoryFeedback(trigger: sent) { _, choice in choice.map { $0.allows ? .success : .warning } }
-        .onChange(of: state) { sent = nil }
     }
 
-    private func decide(_ title: String, _ choice: PermissionChoice, _ cardId: MessageID, primary: Bool) -> some View {
+    private func decide(_ title: String, _ choice: PermissionChoice, _ cardId: MessageID, primary: Bool, hint: String) -> some View {
         Button {
-            sent = choice
             client.send(.sessionDecide(sessionId: sessionId, cardId: cardId, choice: choice))
         } label: {
             HStack(spacing: 6) {
@@ -720,6 +760,7 @@ struct PlanCard: View {
         }
         .buttonStyle(.pressable)
         .sending(sent == choice)
+        .accessibilityHint(hint)
     }
 }
 
@@ -730,9 +771,13 @@ struct AskCard: View {
     let cardId: MessageID?
 
     @Environment(BridgeClient.self) private var client
+    @Environment(AppStore.self) private var store
     @State private var picks: [String: Set<String>] = [:]
     @State private var typed: [String: String] = [:]
-    @State private var sent = false
+
+    /// An answer on its way. The store holds it, so a failed send or a refusal frees the card (F-SES-142).
+    private var sent: Bool { cardId.map(store.holds) ?? false }
+    private var offline: Bool { store.machine == nil }
 
     private var open: Bool { answers == nil && cardId != nil }
 
@@ -756,7 +801,6 @@ struct AskCard: View {
                 Spacer()
                 if open, let cardId {
                     Button {
-                        sent = true
                         client.send(.sessionAnswer(sessionId: sessionId, cardId: cardId, answers: nil))
                     } label: {
                         Image(systemName: "xmark")
@@ -766,7 +810,7 @@ struct AskCard: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(sent)
+                    .disabled(sent || offline)
                     .help("Dismiss Question")
                     .accessibilityLabel("Dismiss question")
                 }
@@ -782,7 +826,6 @@ struct AskCard: View {
             if open { RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Theme.attention.opacity(0.35), lineWidth: 1) }
         }
         .sensoryFeedback(.success, trigger: sent) { _, now in now }
-        .onChange(of: answers) { sent = false }
     }
 
     @ViewBuilder
@@ -812,17 +855,18 @@ struct AskCard: View {
                             AskOptionRow(index: index, option: option, multi: q.multiSelect, picked: picks[q.question]?.contains(option.label) == true)
                         }
                         .buttonStyle(.pressable)
-                        .disabled(sent)
+                        .disabled(sent || offline)
                     }
                 }
                 .background(Theme.inset, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .opacity(offline ? 0.4 : 1)
                 TextField("Or type your own answer", text: Binding(get: { typed[q.question, default: ""] }, set: { typed[q.question] = $0 }), axis: .vertical)
                     .font(.subheadline)
                     .lineLimit(1...4)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(Theme.inset, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .disabled(sent)
+                    .disabled(sent || offline)
             } else if case .answered(let given) = answers, let answer = given[q.question] {
                 Label(answer, systemImage: "checkmark.circle.fill")
                     .font(.subheadline.weight(.medium))
@@ -839,7 +883,6 @@ struct AskCard: View {
             if let cardId {
                 if needsSubmit {
                     Button {
-                        sent = true
                         client.send(.sessionAnswer(sessionId: sessionId, cardId: cardId, answers: draft))
                     } label: {
                         HStack(spacing: 6) {
@@ -851,12 +894,13 @@ struct AskCard: View {
                         .padding(.vertical, 11)
                         .foregroundStyle(.black)
                         .background(.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .opacity(draft.count == questions.count ? 1 : 0.4)
+                        .opacity(draft.count == questions.count && !offline ? 1 : 0.4)
                     }
                     .buttonStyle(.pressable)
                     .sending(sent)
-                    .disabled(sent || draft.count != questions.count)
+                    .disabled(sent || offline || draft.count != questions.count)
                 }
+                DecisionStatusLine(offline: offline, note: store.decisionNote(cardId))
             } else {
                 Text("Waiting for an answer where it was asked.").font(.footnote).foregroundStyle(Theme.tertiary)
             }
@@ -885,7 +929,6 @@ struct AskCard: View {
         picks[q.question] = set
         typed[q.question] = ""
         if !needsSubmit, let cardId {
-            sent = true
             client.send(.sessionAnswer(sessionId: sessionId, cardId: cardId, answers: [q.question: label]))
         }
     }

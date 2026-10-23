@@ -2034,7 +2034,7 @@ const S6h: Scenario = {
     { do: "screenshot", shot: "card-online" },
     { do: "reconnect", how: "close", afterS: 20, mark: "offline", compare: false, shot: { name: "card-offline", afterS: 12 } },
     // The app retries on its backoff (at most 30 s apart), so it may take that long to be back after the Mac is.
-    { do: "until", mark: "app-back", what: "the app's card to take a tap again", timeoutS: 45, optional: true, test: (ev) => ev.labels.length === 0 || ev.labels.some((x) => x.at > (mark(ev, "offline") ?? Infinity) && cardLive(x.hits)) },
+    { do: "until", mark: "app-back", what: "the app's card to take a tap again", timeoutS: 45, optional: true, test: (ev) => ev.labels.some((x) => x.at > (mark(ev, "offline") ?? Infinity) && cardLive(x.hits)) },
     { do: "sleep", s: 8 },
     { do: "screenshot", shot: "card-back" },
     { do: "mark", mark: "back" },

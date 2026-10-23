@@ -562,7 +562,16 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
     labels: [],
   };
   const probe: { run: { proc: ReturnType<typeof Bun.spawn>; file: string } | null } = { run: null };
-  const labels: { run: { proc: ReturnType<typeof Bun.spawn>; file: string } | null } = { run: null };
+  const labels: { run: { proc: ReturnType<typeof Bun.spawn>; file: string } | null; poll: ReturnType<typeof setInterval> | null } = { run: null, poll: null };
+  const readLabels = (file: string): Ev["labels"] =>
+    (existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean) : []).flatMap((l) => {
+      try {
+        const x = JSON.parse(l) as { t: number; hits: Ev["labels"][number]["hits"] };
+        return [{ at: x.t - t0, hits: x.hits }];
+      } catch {
+        return [];
+      }
+    });
   let phone: Phone | null = null;
   let relay: Relay | null = null;
   let losing: ((f: Frame) => boolean) | null = null;
@@ -668,18 +677,11 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
   }
   const read = labels.run;
   if (read) {
+    if (labels.poll) clearInterval(labels.poll);
     read.proc.kill("SIGTERM");
     await read.proc.exited;
     if (lease) pool.simctl(lease, "terminate", "dev.claudiobot.listprobe.UITests.xctrunner");
-    const lines = existsSync(read.file) ? readFileSync(read.file, "utf8").split("\n").filter(Boolean) : [];
-    ev.labels = lines.flatMap((l) => {
-      try {
-        const x = JSON.parse(l) as { t: number; hits: { label: string; button: boolean; enabled: boolean }[] };
-        return [{ at: x.t - t0, hits: x.hits }];
-      } catch {
-        return [];
-      }
-    });
+    ev.labels = readLabels(read.file);
     log(`label probe stopped: ${ev.labels.length} samples`);
   }
 
@@ -874,6 +876,8 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
           ),
         };
         await until(() => existsSync(file) && readFileSync(file, "utf8").includes("\n"), "the label probe's first sample", 120);
+        // Read as they come, so a setup step can wait on what the app shows.
+        labels.poll = setInterval(() => (ev.labels = readLabels(file)), 1000);
         log("label probe reading the app's labels");
         return;
       }

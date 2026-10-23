@@ -409,6 +409,12 @@ export function createSessions(deps: SessionsDeps): Sessions {
     now: deps.now,
     log: deps.log,
     sdk,
+    ties: (id) => (deps.world.sessions.get(id)?.sentAs ?? []).map(([item, clientId]) => [item as ItemId, clientId] as [ItemId, string]),
+    tie: (id, item, clientId) => {
+      const rec = recordOf(id);
+      rec.sentAs = [...(rec.sentAs ?? []).filter(([i]) => i !== item), [item, clientId] as [string, string]].slice(-SENT_KEPT);
+      deps.persist();
+    },
   });
 
   function recordOf(id: SessionId): SessionRecord {
@@ -468,18 +474,27 @@ export function createSessions(deps: SessionsDeps): Sessions {
     const w = driverOf(m.sessionId);
     if (w.kind === "none") return error(w.reason, about);
     const rec = recordOf(m.sessionId);
-    if (rec.sent?.includes(m.clientId)) return [];
+    const key = `${m.sessionId} ${m.clientId}`;
+    if (rec.sent?.includes(m.clientId)) {
+      // Still being routed: its own frame is on the way. Taken before: its echo may have been lost with a socket or a
+      // restart, so the reply names it again.
+      return routing.has(key) ? [] : threads.sentBack(m.sessionId, m.clientId);
+    }
     rec.sent = [...(rec.sent ?? []), m.clientId].slice(-SENT_KEPT);
+    routing.add(key);
     let ran = false;
     try {
       const replies = await route(m, w, about);
       ran = replies.length === 0;
       return replies;
     } finally {
+      routing.delete(key);
       if (!ran) rec.sent = rec.sent.filter((c) => c !== m.clientId);
       deps.persist();
     }
   }
+  /** Sends still being routed, by session and clientId. */
+  const routing = new Set<string>();
 
   async function route(m: Extract<SessionClientMessage, { type: "session_send" }>, w: Exclude<Writer, { kind: "none" }>, about: ErrorAbout): Promise<ServerMessage[]> {
     switch (w.kind) {

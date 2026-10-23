@@ -449,6 +449,11 @@ export type SessionRecord = {
    * a bridge restart runs nothing twice. Writer: sessions.ts. Absent until the phone sends.
    */
   sent?: string[];
+  /**
+   * [transcript item id, clientId] for the newest of those sends the transcript shows under its own id, so a frame
+   * after a restart still names the clientId. Writer: sessions.ts (threads.ts finds them).
+   */
+  sentAs?: [string, string][];
 };
 
 /** A session the user drives from the phone. Writer: own.ts, its session slice session.ts. */

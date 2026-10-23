@@ -560,6 +560,8 @@ export type SessionServerMessage =
   // Channel s:<id>, and the reply to watch_session when the ring still holds after.rev: then it is one frame with every
   // upsert and removal since then, and controls set. Items upsert by id, so a replayed one is a no-op. rev: the
   // thread's rev after this frame. controls: null when they did not change. An upsert of an item drops its live text.
+  // Also the reply to a session_send whose clientId the bridge already took, at the thread's current rev: the item that
+  // shows the message, and the removal of the clientId's own item, so a phone whose echo was lost stops resending.
   | { type: "session_items"; sessionId: SessionId; rev: number; items: SessionItem[]; removed: ItemId[]; controls: SessionControls | null }
   // Channel s:<id>, unsequenced, coalesced every 60 ms. Applies only when offset equals the length of the app's live
   // text for itemId (0 when it has none), counted in UTF-16 code units; any other is dropped, and the upsert brings

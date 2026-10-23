@@ -29,12 +29,22 @@ export type ThreadsDeps = {
   sdk?: SdkReaders;
   /** Threads nobody watches that stay read, newest first, so reopening one is instant. */
   keep?: number;
+  /** The clientId each transcript user item of the session showed a phone message under, kept across restarts. */
+  ties?(id: SessionId): Iterable<[ItemId, string]>;
+  /** A transcript user item now shows the phone message sent with clientId. */
+  tie?(id: SessionId, item: ItemId, clientId: string): void;
 };
 
 export type Threads = {
   /** The reply to watch_session: a replay since `after` while the ring holds it, else a snapshot. */
   watch(id: SessionId, after: ThreadPosition | null): Promise<ServerMessage[]>;
   page(id: SessionId, before: Cursor): Promise<ServerMessage[]>;
+  /**
+   * The reply to a session_send the bridge already took: one frame that names the clientId, so a phone whose echo was
+   * lost stops resending. It upserts the item that shows the message and removes the clientId's own item, or only
+   * removes it when no item shows the message any more.
+   */
+  sentBack(id: SessionId, clientId: string): Promise<ServerMessage[]>;
   tool(id: SessionId, toolUseId: string): ServerMessage[];
   /** The overlay or the controls of a session may have changed: an open thread publishes what did. */
   refresh(id: SessionId): void;
@@ -165,7 +175,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
           working: false,
           sentAt: deps.now().getTime(),
           shownByTranscript: new Set(),
-          sentAs: new Map(),
+          sentAs: new Map(deps.ties?.(id) ?? []),
           rev: 0,
           ring: [],
           live: null,
@@ -335,6 +345,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
       const mine = overlay.find((o) => o.kind === "user" && !s.shownByTranscript.has(o.id) && o.text.trim() === t.text.trim() && t.at >= o.at);
       if (!mine) continue;
       s.shownByTranscript.add(mine.id);
+      if (s.sentAs.get(t.id) !== mine.id) deps.tie?.(s.id, t.id, mine.id);
       s.sentAs.set(t.id, mine.id);
     }
   }
@@ -497,6 +508,15 @@ export function createThreads(deps: ThreadsDeps): Threads {
       const page = pageOf(merged(s), before as string as ItemId);
       if (!page) return [{ type: "error", message: "That part of the thread changed. Reopen the session to load it again.", about: { kind: "page", sessionId: id } }];
       return [{ type: "session_page", sessionId: id, items: page.items, before: page.before === null ? null : (page.before as string as Cursor) }];
+    },
+
+    async sentBack(id, clientId) {
+      const s = await load(id);
+      await s.queue;
+      const shown = merged(s).find((i) => i.kind === "user" && (i.id === clientId || i.clientId === clientId));
+      const items = shown ? [shown] : [];
+      const removed = shown?.id === clientId ? [] : [clientId as ItemId];
+      return [{ type: "session_items", sessionId: id, rev: s.rev, items, removed, controls: null }];
     },
 
     tool(id, toolUseId) {

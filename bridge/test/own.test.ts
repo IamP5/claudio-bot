@@ -2424,8 +2424,34 @@ describe("requests that outlive the socket", () => {
     sessions.stop();
     queries.length = 0;
     await start();
-    expect([await send("Once", "c_once"), await send("Twice", "c_two")]).toEqual([[], []]);
+    // Nothing shows the message any more, so the reply only removes its clientId: the phone's echo goes.
+    expect([await send("Once", "c_once"), await send("Twice", "c_two")]).toEqual([
+      [{ type: "session_items", sessionId: ASK, rev: 0, items: [], removed: ["c_once" as ItemId], controls: null }],
+      [],
+    ]);
     expect([queries.flatMap((q) => q.received), world.sessions.get(ASK)?.sent]).toEqual([["Twice"], ["c_once", "c_two"]]);
+  });
+
+  test("a resend after a restart is answered with the transcript's copy that names its clientId, and runs nothing", async () => {
+    await start();
+    await snapshot(ASK);
+    await send("First", "c_first");
+    const uuid = crypto.randomUUID();
+    const lines = readFileSync(fileOf(ASK), "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
+    const leaf = lines.findLast((l) => typeof l.uuid === "string" && l.type !== "queue-operation")!;
+    const at = new Date(clock).toISOString();
+    appendFileSync(fileOf(ASK), `${JSON.stringify({ parentUuid: leaf.uuid, isSidechain: false, type: "user", message: { role: "user", content: "First" }, uuid, timestamp: at, cwd: repo, sessionId: ASK })}\n`);
+    await sessions.sync();
+    queries[0]!.emit(result(0.01, { session_id: ASK }));
+    await flush();
+    sessions.stop();
+    queries.length = 0;
+    await start();
+    const mine: SessionItem = { kind: "user", id: uuid as ItemId, at, text: "First", from: "user", queued: false, clientId: "c_first" };
+    const [reply] = (await send("First", "c_first")) as Extract<ServerMessage, { type: "session_items" }>[];
+    expect([reply!.type, reply!.removed, reply!.items, queries.flatMap((q) => q.received)]).toEqual(["session_items", ["c_first" as ItemId], [mine], []]);
+    expect(world.sessions.get(ASK)?.sentAs).toEqual([[uuid, "c_first"]]);
+    expect((await snapshot(ASK)).items.filter((i) => i.kind === "user" && i.text === "First")).toEqual([mine]);
   });
 
   test("a resend that arrives while the first send still waits is dropped", async () => {

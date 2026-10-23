@@ -139,3 +139,12 @@ ts	decision	why
 2026-10-22T17:12:02Z	G18: only a turn a restart actually cut pushes "A Claude Code session was interrupted by a bridge restart", after the 60 s start grace (a phone back in time gets a local alert instead), once per run with a recorded key; held endings persist (newest 50)	away user must learn of a restart loss without repeats
 2026-10-22T17:12:02Z	G18: ps runs with LC_ALL=C and commands are compared in ps's own escapes; "< /dev/null" is optional in the eval match	pairs commands macOS ps rewrites or that carry their own <
 2026-10-22T17:12:02Z	G18: S6.7 now requires a surviving foreground command to read running while its process runs (offered as a task) and the run outcome to read failed with its cause; verifier must judge this is a correction, not a loosening	the old "nothing reads running" rubric demanded a false claim about a live process
+2026-10-23	G11	Missing tool output replies session_tool_output{output:null,error} not an error frame	per plan; older apps already spun forever
+2026-10-23	G11	Pending card decisions live per card in Store.decisions for all 3 kinds; failure/refusal shows on the card	one model replaces scattered @State; covers bot cards too
+2026-10-23	G11	A decision is this phone's only after the bridge's new decided ack (feature decide_ack); drop before ack names nobody	never claim an unobserved outcome
+2026-10-23	G11	Unechoed send reads "Not sent · Retry" after 10 s; auto-resent after each hello up to 3 copies, then only manual Retry with same clientId	bridge dedupes by clientId
+2026-10-23	G11	New Session Retry reuses the ref; bridge answers a repeated ref with the existing session	idempotent create
+2026-10-23	G11	Offline Start keeps visible "Start"; "Start (your Mac is unreachable)" is its AX label/tooltip; banner with Retry above the form	toolbar cannot fit the long label
+2026-10-23	G11	"Catching up…" is a status level below offline and is never spoken	settles under 500 ms
+2026-10-23	G11	An alert counts as seen only when a socket it went to was heard from; unseen owed alerts resend to open sockets (local notification may post twice, second replaces first)	signals were not replayed on reconnect
+2026-10-23	G11	S6h.2 allows 35 s for the card to come back	app max backoff 30 s plus margin; verifier to rule

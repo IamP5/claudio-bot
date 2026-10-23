@@ -236,6 +236,8 @@ class Phone {
   outbox: Frame[] = [];
   /** Each session_send by clientId, as the app keeps it until a frame shows it back. */
   private sent = new Map<string, Frame>();
+  /** clientIds whose frames are lost on the way to the phone until it reconnects. */
+  deaf = new Set<string>();
   /** Seconds the user takes to allow a card. */
   holdS = 0;
   private pinger: ReturnType<typeof setInterval> | null = null;
@@ -249,10 +251,11 @@ class Phone {
     private relay: Relay,
   ) {}
 
-  private record(dir: "in" | "out" | "held", name: string, f: Frame) {
+  private record(dir: "in" | "out" | "held" | "lost", name: string, f: Frame) {
     const at = this.ev.now();
     appendFileSync(join(this.out, "timeline.jsonl"), JSON.stringify({ at, dir, name, frame: f }) + "\n");
-    if (name !== "list" || dir !== "in") appendFileSync(join(this.out, "threads.txt"), `+${(at / 1000).toFixed(1)}s ${dir === "in" ? "<<" : dir === "out" ? ">>" : ">> (held offline)"} ${name} ${dir === "in" ? frameLine(f, true) : JSON.stringify(f)}\n`);
+    const arrow = { in: "<<", out: ">>", held: ">> (held offline)", lost: "<< (lost on the way)" }[dir];
+    if (name !== "list" || dir !== "in") appendFileSync(join(this.out, "threads.txt"), `+${(at / 1000).toFixed(1)}s ${arrow} ${name} ${dir === "in" ? frameLine(f, true) : JSON.stringify(f)}\n`);
   }
 
   send(m: Frame) {
@@ -280,8 +283,19 @@ class Phone {
 
   /** As the app does: a frame that names a send's clientId (an item's id, a user item's clientId, a removal) shows it back. */
   private shownBack(f: Frame) {
-    const ids = new Set<string>([...((f.items as Item[] | undefined) ?? []).flatMap((i) => [i.id, ...(typeof i.clientId === "string" ? [i.clientId] : [])]), ...((f.removed as string[] | undefined) ?? [])]);
-    for (const s of this.ev.sends) if (s.shownAt === null && ids.has(s.clientId)) s.shownAt = this.ev.now();
+    const items = (f.items as Item[] | undefined) ?? [];
+    const removed = (f.removed as string[] | undefined) ?? [];
+    for (const s of this.ev.sends) {
+      if (s.shownAt !== null) continue;
+      const by = items.some((i) => i.clientId === s.clientId) ? "clientId" : items.some((i) => i.id === s.clientId) ? "id" : removed.includes(s.clientId) ? "removed" : null;
+      if (by) (s.shownAt = this.ev.now()), (s.shownBy = by);
+    }
+  }
+
+  /** The frame names a clientId whose frames are being lost. */
+  private mentions(f: Frame, ids: Set<string>) {
+    const items = (f.items as Item[] | undefined) ?? [];
+    return items.some((i) => ids.has(i.id) || (typeof i.clientId === "string" && ids.has(i.clientId))) || ((f.removed as string[] | undefined) ?? []).some((id) => ids.has(id));
   }
 
   private thread(sid: string) {
@@ -348,6 +362,7 @@ class Phone {
       return;
     }
     const name = this.names.get(sid)!;
+    if (this.deaf.size && this.mentions(f, this.deaf)) return this.record("lost", name, f);
     this.record("in", name, f);
     this.ev.frameTimes.push({ at: this.ev.now(), name, type: f.type });
     if (f.type === "session" || f.type === "session_items") this.shownBack(f);
@@ -385,6 +400,7 @@ class Phone {
   async open(resume: boolean, listed?: () => void) {
     const c = await connect(this.run, { port: this.relay.port, resume: resume && this.cursor ? { epoch: this.cursor.epoch, after: this.cursor.seq } : null });
     this.c = c;
+    this.deaf.clear();
     // Frames that came with the hello (a replay) arrived before this handler; the reducer takes them first.
     const early = c.frames.slice();
     const inner = c.ws.onmessage;
@@ -694,10 +710,13 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
         p.watch(sid, false);
         return;
       }
-      case "send":
-        p.send({ type: "session_send", sessionId: ev.ids[a.name]!, text: a.text, clientId: `runner-${crypto.randomUUID()}`, interrupt: a.interrupt ?? false });
+      case "send": {
+        const clientId = `runner-${crypto.randomUUID()}`;
+        if (a.echoLost) p.deaf.add(clientId);
+        p.send({ type: "session_send", sessionId: ev.ids[a.name]!, text: a.text, clientId, interrupt: a.interrupt ?? false });
         if (a.mark) markNow(a.mark);
         return;
+      }
       case "until":
         try {
           await until(() => a.test(ev), a.what, a.timeoutS);
@@ -1007,7 +1026,7 @@ function describe(a: Action): string {
     case "create":
       return `New session \`${a.name}\` in demo (haiku, mode ${a.mode ?? "default"}): "${a.prompt.replace(/\n/g, " ")}"`;
     case "send":
-      return `Send in \`${a.name}\`${a.interrupt ? " with Stop and send (interrupt)" : ""}: "${a.text.replace(/\n/g, " ")}"${a.mark ? `; mark \`${a.mark}\`` : ""}.`;
+      return `Send in \`${a.name}\`${a.interrupt ? " with Stop and send (interrupt)" : ""}: "${a.text.replace(/\n/g, " ")}"${a.echoLost ? "; every frame naming it is lost on the way to the phone until it reconnects" : ""}${a.mark ? `; mark \`${a.mark}\`` : ""}.`;
     case "until":
       return `Wait up to ${a.timeoutS} s for ${a.what}; mark \`${a.mark}\`${a.optional ? " (optional)" : ""}.`;
     case "stop":

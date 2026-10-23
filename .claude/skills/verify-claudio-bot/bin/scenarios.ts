@@ -58,7 +58,7 @@ export type Ev = {
    * Every session_send the phone made, by clientId: when, how many copies it handed to a socket or the outbox, and
    * when a frame first showed it back (an item's id or clientId, or a removal), as the app counts it.
    */
-  sends: { at: number; name: string; clientId: string; text: string; shownAt: number | null; copies: number }[];
+  sends: { at: number; name: string; clientId: string; text: string; shownAt: number | null; copies: number; shownBy?: "id" | "clientId" | "removed" }[];
   /** Replies with no thread to file them under, and errors: decided, error, session_tool_output, session_created. */
   replies: { at: number; frame: Frame }[];
   /**
@@ -71,7 +71,15 @@ export type Ev = {
 export type Action =
   | { do: "create"; name: string; prompt: string; mode?: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" }
   /** The user sends in the thread. interrupt: "Stop and send". While the phone is offline the message waits for the next hello, as in the app. */
-  | { do: "send"; name: string; text: string; interrupt?: boolean; mark?: string }
+  | {
+      do: "send";
+      name: string;
+      text: string;
+      interrupt?: boolean;
+      mark?: string;
+      /** Every frame that names this send is lost on its way to the phone until it reconnects, as when its socket dies right after the send. */
+      echoLost?: boolean;
+    }
   | { do: "until"; mark: string; what: string; timeoutS: number; test: (ev: Ev) => boolean; optional?: boolean }
   /** task: stop only the running task whose label holds this text. turnOnly: "Stop the turn only". */
   | { do: "stop"; name: string; mark: string; task?: string; turnOnly?: boolean }
@@ -1767,6 +1775,7 @@ const S6e: Scenario = {
 
 const ONCE = "Use the Bash tool to run exactly: echo once >> once.txt\nThen reply with one line: done.";
 const RACE = "Use the Bash tool to run exactly: echo race >> race.txt\nThen reply with one line: done.";
+const LOST = "Use the Bash tool to run exactly: echo lost >> lost.txt\nThen reply with one line: done.";
 const LONG = "Use the Bash tool in the foreground (not in the background) to run exactly: perl -e 'sleep 3661'\nThen reply with one line: done.";
 /** The main transcript's prompts that hold `text`: the user's own lines, not tool results. */
 const prompts = (ev: Ev, name: string, text: string) =>
@@ -1814,6 +1823,7 @@ const S6g: Scenario = {
   journey: [
     "The user sends while the connection dies without a word (half-open), and again just as it drops. Each message must run exactly once once the phone is back, as the app resends what no frame showed back.",
     "The Mac's bridge restarts and the phone sends one of those messages again (its echo lost): it must not run twice.",
+    "A message the Mac ran whose echo was lost, sent again after the bridge restarted, must come back tied to the transcript's copy, never read as not sent.",
     "A Stop meant for an earlier turn must never stop the turn that runs now.",
     "Requests the Mac cannot meet must each end with words tied to the request: a tool output it does not have, a decision on a closed card, a refused Start. Every decision it took is acknowledged, and a retried Start makes no second session.",
   ],
@@ -1825,6 +1835,9 @@ const S6g: Scenario = {
     { do: "until", mark: "once-done", what: "once.txt and the turn's end", timeoutS: 150, test: (ev) => ev.exists("once.txt") && atRest("g1")(ev) },
     { do: "reconnect", how: "close", sendFirst: true, afterS: 3, mark: "race-send", compare: false, send: { name: "g1", text: RACE } },
     { do: "until", mark: "race-done", what: "race.txt and the turn's end", timeoutS: 150, test: (ev) => ev.exists("race.txt") && atRest("g1")(ev) },
+    { do: "send", name: "g1", text: LOST, echoLost: true, mark: "lost-echo" },
+    { do: "until", mark: "lost-echo-ran", what: "lost.txt, the turn's end and its prompt in the transcript", timeoutS: 150, test: (ev) => ev.exists("lost.txt") && atRest("g1")(ev) && prompts(ev, "g1", "echo lost >> lost.txt").length > 0 },
+    { do: "sleep", s: 2 },
     { do: "file", rel: "once.txt", as: "once-before-restart" },
     { do: "file", rel: "race.txt", as: "race-before-restart" },
     { do: "restart-bridge", mark: "restarted" },
@@ -1918,6 +1931,27 @@ const S6g: Scenario = {
         const ran = during(ev, "g1", mark(ev, "resent-after-restart") ?? at, at).some((s) => s.controls?.working === true);
         const bad = [got.length === 1 ? "" : `once.txt has ${got.length} lines`, said === 1 ? "" : `${said} prompts`, ran ? "a turn ran after the resend" : ""].filter(Boolean);
         return bad.length ? no(bad.join("; ")) : ok("one line, one prompt, no turn after the resend");
+      },
+    },
+    {
+      id: "S6g.10",
+      tell: "what",
+      lane: "protocol",
+      text: "A message the Mac ran but whose echo was lost is shown back after a bridge restart, tied to the transcript's copy, and runs once.",
+      pass: "After the restart, a frame shows the lost-echo send back by a user item whose clientId is the send's; lost.txt has one line; the transcript holds its prompt once.",
+      fail: "No frame names the clientId after the restart, so the app would read Not sent for a message that ran; or it ran twice.",
+      check: (ev) => {
+        const send = sendOf(ev, LOST);
+        const at = mark(ev, "restarted");
+        if (!send || at === undefined) return needMarks(ev, "restarted")!;
+        const got = lines(ev, "lost.txt").length;
+        const said = prompts(ev, "g1", "echo lost >> lost.txt").length;
+        const bad = [
+          send.shownAt === null ? "no frame named its clientId" : send.shownAt < at ? "shown back before the restart, so the echo was not lost" : send.shownBy === "clientId" ? "" : `shown back only by ${send.shownBy}, not tied to the transcript's copy`,
+          got === 1 ? "" : `lost.txt has ${got} lines`,
+          said === 1 ? "" : `${said} prompts`,
+        ].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok(`tied by clientId ${((send.shownAt! - at) / 1000).toFixed(1)} s after the restart; 1 line; 1 prompt`);
       },
     },
     {
@@ -2019,6 +2053,7 @@ const S6h: Scenario = {
   title: "An approval while the Mac is out of reach (X-empty-error-offline case 2)",
   needsSimulator: true,
   holdCardsS: 240,
+  tapApp: true,
   journey: [
     "A session asks to run a command and the card waits for the user. The Mac drops out of reach while the user looks at it.",
     "The card must say the answer cannot reach the Mac, and its choices must take no tap, so nothing is queued silently.",
@@ -2068,18 +2103,21 @@ const S6h: Scenario = {
       tell: "state",
       lane: "simulator",
       text: "Once the Mac is back, the card takes a tap again and no longer says the answer cannot reach it.",
-      pass: "Within 35 s of the Mac coming back (the app's backoff waits at most 30 s), a label sample shows Allow once enabled with no offline line, and every sample after it until mark back does too.",
+      pass: "Within 2 s of the app's own reconnect (its first watch of the thread after the drop, as the relay saw it), a label sample shows Allow once enabled with no offline line, and every sample after it until mark back does too.",
       fail: "The card stays disabled or keeps the offline line after the app is back, or goes back to it.",
       check: (ev) => {
         const from = mark(ev, "offline");
         const to = mark(ev, "back");
         if (from === undefined || to === undefined) return needMarks(ev, "offline", "back")!;
-        const xs = ev.labels.filter((x) => x.at >= from && x.at <= to);
+        const hello = ev.app.find((x) => x.at >= (mark(ev, "offline-dropped") ?? from) && x.dir === "out" && x.frame.type === "watch_session")?.at;
+        if (hello === undefined) return no("not judged: the relay saw no watch from the app after the drop");
+        const xs = ev.labels.filter((x) => x.at >= hello && x.at <= to);
         const first = xs.findIndex((x) => cardLive(x.hits));
-        if (first === -1) return no(`no sample in ${xs.length} after the reconnect shows the card live`);
-        const late = (xs[first]!.at - from) / 1000;
+        if (first === -1) return no(`no sample in ${xs.length} after the app's reconnect shows the card live`);
+        const late = (xs[first]!.at - hello) / 1000;
         const lapses = xs.slice(first).filter((x) => !cardLive(x.hits)).length;
-        return late <= 35 && lapses === 0 ? ok(`live ${late.toFixed(1)} s after the Mac was back; ${xs.length - first} samples stay live`) : no(`live ${late.toFixed(1)} s after; ${lapses} later samples not live`);
+        // A label sample is taken about once a second, so 2 s allows one sample of lag past the app's own redraw.
+        return late <= 2 && lapses === 0 ? ok(`live ${late.toFixed(1)} s after the app's reconnect; ${xs.length - first} samples stay live`) : no(`live ${late.toFixed(1)} s after the app's reconnect; ${lapses} later samples not live`);
       },
     },
     {

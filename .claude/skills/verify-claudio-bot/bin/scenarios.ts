@@ -2009,6 +2009,10 @@ const S6g: Scenario = {
   ],
 };
 
+type Hit = Ev["labels"][number]["hits"][number];
+/** The card's Allow once takes a tap and nothing says the answer cannot reach the Mac. */
+const cardLive = (hits: Hit[]) => hits.some((h) => h.button && h.label.startsWith("Allow once") && h.enabled) && !hits.some((h) => h.label.includes("Your answer can't reach your Mac"));
+
 const S6h: Scenario = {
   id: "S6h",
   area: "sessions",
@@ -2029,6 +2033,8 @@ const S6h: Scenario = {
     { do: "sleep", s: 3 },
     { do: "screenshot", shot: "card-online" },
     { do: "reconnect", how: "close", afterS: 20, mark: "offline", compare: false, shot: { name: "card-offline", afterS: 12 } },
+    // The app retries on its backoff (at most 30 s apart), so it may take that long to be back after the Mac is.
+    { do: "until", mark: "app-back", what: "the app's card to take a tap again", timeoutS: 45, optional: true, test: (ev) => ev.labels.length === 0 || ev.labels.some((x) => x.at > (mark(ev, "offline") ?? Infinity) && cardLive(x.hits)) },
     { do: "sleep", s: 8 },
     { do: "screenshot", shot: "card-back" },
     { do: "mark", mark: "back" },
@@ -2062,17 +2068,18 @@ const S6h: Scenario = {
       tell: "state",
       lane: "simulator",
       text: "Once the Mac is back, the card takes a tap again and no longer says the answer cannot reach it.",
-      pass: "In the label samples from 3 s after the reconnect to mark back, Allow once is enabled and the offline line is gone.",
-      fail: "The card stays disabled or keeps the offline line after the Mac is back.",
+      pass: "Within 35 s of the Mac coming back (the app's backoff waits at most 30 s), a label sample shows Allow once enabled with no offline line, and every sample after it until mark back does too.",
+      fail: "The card stays disabled or keeps the offline line after the app is back, or goes back to it.",
       check: (ev) => {
         const from = mark(ev, "offline");
         const to = mark(ev, "back");
         if (from === undefined || to === undefined) return needMarks(ev, "offline", "back")!;
-        const xs = ev.labels.filter((x) => x.at >= from + 3000 && x.at <= to);
-        if (!xs.length) return no("not judged: no label sample after the reconnect");
-        const live = xs.filter((x) => x.hits.some((h) => h.button && h.label.startsWith("Allow once") && h.enabled)).length;
-        const stale = xs.filter((x) => x.hits.some((h) => h.label.includes("Your answer can't reach your Mac"))).length;
-        return live === xs.length && stale === 0 ? ok(`${xs.length} samples: enabled, no offline line`) : no(`${live}/${xs.length} enabled; ${stale} with the offline line`);
+        const xs = ev.labels.filter((x) => x.at >= from && x.at <= to);
+        const first = xs.findIndex((x) => cardLive(x.hits));
+        if (first === -1) return no(`no sample in ${xs.length} after the reconnect shows the card live`);
+        const late = (xs[first]!.at - from) / 1000;
+        const lapses = xs.slice(first).filter((x) => !cardLive(x.hits)).length;
+        return late <= 35 && lapses === 0 ? ok(`live ${late.toFixed(1)} s after the Mac was back; ${xs.length - first} samples stay live`) : no(`live ${late.toFixed(1)} s after; ${lapses} later samples not live`);
       },
     },
     {
@@ -2080,12 +2087,12 @@ const S6h: Scenario = {
       tell: "state",
       lane: "simulator",
       text: "The thread is never left catching up once the Mac answered.",
-      pass: 'No label sample from 3 s after the reconnect to mark back holds "Catching up".',
+      pass: 'No label sample from 3 s after mark app-back to mark back holds "Catching up".',
       fail: '"Catching up" stays after the reply came.',
       check: (ev) => {
-        const from = mark(ev, "offline");
+        const from = mark(ev, "app-back");
         const to = mark(ev, "back");
-        if (from === undefined || to === undefined) return needMarks(ev, "offline", "back")!;
+        if (from === undefined || to === undefined) return needMarks(ev, "app-back", "back")!;
         const xs = ev.labels.filter((x) => x.at >= from + 3000 && x.at <= to);
         const stuck = xs.filter((x) => x.hits.some((h) => h.label.includes("Catching up"))).length;
         return xs.length && !stuck ? ok(`${xs.length} samples, none catching up`) : no(xs.length ? `${stuck}/${xs.length} samples catching up` : "not judged: no samples");

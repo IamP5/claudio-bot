@@ -719,6 +719,7 @@ struct PlanCard: View {
                         decide("Keep planning", .deny, cardId, primary: false, hint: "Claude stays in plan mode and revises the plan")
                     }
                     .disabled(sent != nil || offline)
+                    .opacity(offline ? 0.4 : 1)
                     DecisionStatusLine(offline: offline, note: store.decisionNote(cardId))
                 } else {
                     Text("Waiting for an answer where it was asked.")
@@ -858,6 +859,7 @@ struct AskCard: View {
                     }
                 }
                 .background(Theme.inset, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .opacity(offline ? 0.4 : 1)
                 TextField("Or type your own answer", text: Binding(get: { typed[q.question, default: ""] }, set: { typed[q.question] = $0 }), axis: .vertical)
                     .font(.subheadline)
                     .lineLimit(1...4)
@@ -892,7 +894,7 @@ struct AskCard: View {
                         .padding(.vertical, 11)
                         .foregroundStyle(.black)
                         .background(.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .opacity(draft.count == questions.count ? 1 : 0.4)
+                        .opacity(draft.count == questions.count && !offline ? 1 : 0.4)
                     }
                     .buttonStyle(.pressable)
                     .sending(sent)

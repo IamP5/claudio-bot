@@ -797,7 +797,8 @@ private struct PermissionCardBody: View {
             .padding(.vertical, 11)
             .foregroundStyle(foreground(choice))
             .background(background(choice), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .opacity(sent == nil || sent == choice ? 1 : 0.5)
+            // The custom style does not dim on its own, so a choice that cannot reach the Mac looks it.
+            .opacity(offline ? 0.4 : sent == nil || sent == choice ? 1 : 0.5)
         }
         .buttonStyle(.pressable)
         .sending(sent == choice)

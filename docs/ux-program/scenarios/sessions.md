@@ -486,6 +486,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S6.7 | state | protocol | When Claude Code dies mid-command, the row says the run failed and why, and a step reads running only while its command still runs on the Mac, as a task Stop can end. | At mark after-kill, row.outcome is failed with its cause; every Bash step that reads running names the perl sleep 90, which still runs (sample after-kill), and controls.tasks offers it; no other step reads running; the row reads failed, or working only while that task runs. | A step reads running whose command is gone or that no task offers, the command runs but its step reads failed or stopped, or the row gives no failure and cause. |
 | S6.8 | state | protocol | The failure outlives a bridge restart: the row and the thread still say the run failed. | At mark after-restart, the row reads failed (or its outcome is failed or lost) and the thread still holds a notice that says the run failed or that the bridge restarted. | After the restart the row reads idle, or the thread lost the notice. |
 | S6.9 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S6.10 | what | protocol | The message sent offline runs exactly once, and a frame shows it back so the app stops resending it. | The perl sleep 90 prompt is in the transcript once, and a frame named the send's clientId after resume-3. | It ran twice, never, or no frame named it, so the app would call it not sent. |
 
 ## S6b A thread frame lost on its way to the app
 
@@ -659,7 +660,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 | id | tells | lane | the user can tell | pass | fail |
 | --- | --- | --- | --- | --- | --- |
-| S6e.1 | state | protocol | Across the restart neither command's step ever reads stopped or failed while it runs, and the thread says the commands still run and Stop ends them. | In every e1 snapshot from the restart to the Stop, the Bash steps of sleep 3653 and sleep 3654 read running; a notice says they still run on this Mac with "Stop ends"; none says either stopped. | A snapshot shows either step stopped, failed, unsure or ended while it ran, no notice says they still run, or one says they stopped. |
+| S6e.1 | state | protocol | Across the restart neither command's step ever reads stopped or failed while it runs, and the thread says the commands still run and Stop ends them. | In every e1 snapshot from the restart to the Stop, the Bash steps of sleep 3653 and sleep 3654 read running; between the command becoming a task and the Stop, a notice says they still run on this Mac with "Stop ends" and none says either stopped. | A snapshot shows either step stopped, failed, unsure or ended while it ran, no notice says they still run, or one says they stopped. |
 | S6e.2 | stop | protocol | After the restart the session reads working with the foreground command as a task, so Stop is offered. | At mark e1-after-restart, controls.working is true and controls.tasks has one task whose step is the perl sleep 3654's. | The session rests, or no task offers the foreground command. |
 | S6e.3 | state | protocol | After Claude Code crashes, the run reads failed, yet neither command's step ever reads failed or stopped while it runs, and the thread says they still run. | Every e2 snapshot from the kill to the Stop has the Bash steps of sleep 3655 and sleep 3656 running; a notice says they still run on this Mac with "Stop ends"; at e2-after-crash row.outcome is failed with a cause and controls.tasks offers the perl sleep 3656. | A snapshot shows either step error or stopped while it ran, no notice says they run, the outcome is not failed, or no task offers the command. |
 | S6e.4 | stop | protocol | Stop ends the foreground commands on the Mac, and the thread says the user stopped them. | The perl sleeps 3654 and 3656 are gone 6 s after their Stops (sample after-stop), and each session holds a notice that starts "Stopped by you" and names its perl sleep, after its Stop. | A perl sleep still runs after its Stop, or a session has no such notice. |
@@ -700,6 +701,117 @@ Needs the simulator: no (simulator items run with `--sim`).
 | --- | --- | --- | --- | --- | --- |
 | S6f.1 | state | protocol | The user away from the phone hears once that the run was interrupted by the restart, in words that hold nothing of the session. | Between the first and second restart, exactly one push links to f1; it says the session "was interrupted by a bridge restart", names no command, and went out within 90 s of the restart. | No push, more than one, a push that names the command, or one that says the run finished or failed. |
 | S6f.2 | state | protocol | Another restart does not push the same interruption again. | From the second restart to mark after-second (75 s, past the start grace), no push links to f1. | A push about f1 goes out after the second restart. |
+
+## S6g Requests that outlive the socket
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. The user sends while the connection dies without a word (half-open), and again just as it drops. Each message must run exactly once once the phone is back, as the app resends what no frame showed back.
+2. The Mac's bridge restarts and the phone sends one of those messages again (its echo lost): it must not run twice.
+3. A message the Mac ran whose echo was lost, sent again after the bridge restarted, must come back tied to the transcript's copy, never read as not sent.
+4. A Stop meant for an earlier turn must never stop the turn that runs now.
+5. Requests the Mac cannot meet must each end with words tied to the request: a tool output it does not have, a decision on a closed card, a refused Start. Every decision it took is acknowledged, and a retried Start makes no second session.
+
+**Setup.**
+
+- New session `g1` in demo (haiku, mode default): "Reply with exactly one word: ready."
+- Wait up to 90 s for g1's turn to start; mark `g1-started`.
+- Wait up to 90 s for g1's first turn to end; mark `g1-rest`.
+- The network drops the phone half-open (nothing passes, no close on either side); the user sends in `g1` meanwhile: "Use the Bash tool to run exactly: echo once >> once.txt Then reply with one line: done."; wait 5 s, reconnect with the stream position (epoch, after) and resume each thread from its last position. Mark `lost-send`.
+- Wait up to 150 s for once.txt and the turn's end; mark `once-done`.
+- The network drops the phone (the socket closes); the user sends in `g1` as it drops (the frame races the drop): "Use the Bash tool to run exactly: echo race >> race.txt Then reply with one line: done."; wait 3 s, reconnect with the stream position (epoch, after) and resume each thread from its last position. Mark `race-send`.
+- Wait up to 150 s for race.txt and the turn's end; mark `race-done`.
+- Send in `g1`: "Use the Bash tool to run exactly: echo lost >> lost.txt Then reply with one line: done."; every frame naming it is lost on the way to the phone until it reconnects; mark `lost-echo`.
+- Wait up to 150 s for lost.txt, the turn's end and its prompt in the transcript; mark `lost-echo-ran`.
+- Wait 2 s.
+- Read `once.txt` in the seed project into the report as `once-before-restart`.
+- Read `race.txt` in the seed project into the report as `race-before-restart`.
+- Restart the bridge on the same port and home; the phone reconnects. Mark `restarted`.
+- The phone sends a frame the app can send, built from what it saw: the once.txt message again with its clientId, as an app whose echo was lost resends it. Mark `resent-after-restart`.
+- Wait 15 s.
+- Mark `after-resend`.
+- Send in `g1`: "Use the Bash tool in the foreground (not in the background) to run exactly: perl -e 'sleep 3661' Then reply with one line: done.".
+- Wait up to 150 s for the perl sleep 3661 to run on the Mac; mark `long-running`.
+- Wait 2 s.
+- The phone sends a frame the app can send, built from what it saw: a Stop aimed at g1's first turn (turnStartedAt as the thread showed it then). Mark `stale-stop`.
+- Wait 4 s.
+- Sample the Mac's processes matching `sleep 3661` in the seed project as `after-stale-stop`.
+- Press Stop on `g1` (session_stop); mark `real-stop`.
+- Wait 6 s.
+- Sample the Mac's processes matching `sleep 3661` in the seed project as `after-real-stop`.
+- The phone sends a frame the app can send, built from what it saw: session_tool for a toolUseId the transcript does not have. Mark `tool-asked`.
+- Wait 3 s.
+- The phone sends a frame the app can send, built from what it saw: session_decide on the first permission card, which is already answered. Mark `decide-again`.
+- Wait 3 s.
+- The phone sends a frame the app can send, built from what it saw: session_create for a project the Mac does not have. Mark `bad-create`.
+- Wait 3 s.
+- The phone sends a frame the app can send, built from what it saw: g1's own session_create again, with its ref, as the New Session sheet's Retry sends it. Mark `create-again`.
+- Wait 6 s.
+
+**Preconditions** (any failure fails the scenario):
+
+- session g1 was created
+- once.txt exists in the seed project
+- race.txt exists in the seed project
+- the bridge restarted
+- the perl sleep 3661 ran (sample after-stale-stop or the long-running mark)
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S6g.1 | what | protocol | A message sent into a connection that died without a word runs exactly once after the phone is back. | The send a half-open drop swallowed is shown back by a frame naming its clientId after the reconnect, once.txt has one line before the restart, and the transcript holds its prompt once. | It never runs, runs twice, or no frame names it so the app would keep resending it or call it not sent. |
+| S6g.2 | what | protocol | A message sent just as the connection drops runs exactly once after the phone is back. | Before the restart, race.txt has one line, the transcript holds its prompt once, and a frame showed the send back by its clientId. | It runs twice or never, or nothing shows it back. |
+| S6g.3 | what | protocol | A message sent again after the Mac's bridge restarted runs nothing a second time. | At after-resend, once.txt still has one line, the transcript holds the prompt once, and no turn ran after the resend. | The bridge forgot the clientIds it took when it restarted and ran the message again. |
+| S6g.10 | what | protocol | A message the Mac ran but whose echo was lost is shown back after a bridge restart, tied to the transcript's copy, and runs once. | After the restart, a frame shows the lost-echo send back by a user item whose clientId is the send's; lost.txt has one line; the transcript holds its prompt once. | No frame names the clientId after the restart, so the app would read Not sent for a message that ran; or it ran twice. |
+| S6g.4 | stop | protocol | A Stop meant for an earlier turn never stops the turn that runs now; the user's own Stop still does. | Within 5 s of stale-stop the bridge answers an error about this session's stop, the perl sleep 3661 still runs 4 s later (sample after-stale-stop), and it is gone after the real Stop (sample after-real-stop). | The stale Stop stopped the command, was not answered, or the real Stop did not end it. |
+| S6g.5 | state | protocol | Asking for a tool call's output the Mac does not have ends with the reason, on the request itself, so the sheet never spins. | Within 5 s of tool-asked a session_tool_output for toolu_g11_missing arrives with output null and an error in words. | No answer, or an error frame the sheet cannot tie to its request. |
+| S6g.6 | state | protocol | A decision on a card that is already closed is refused about that card, so the card can say Already answered. | Within 5 s of decide-again an error arrives whose about is {kind: decide} with this session and that card id. | No refusal, or one with no card to tie it to. |
+| S6g.7 | state | protocol | Every decision the Mac took from this phone is acknowledged, so the phone never calls another device's answer its own. | For every permission card of g1 the phone answered, a decided frame with its card id arrived. | A card the phone answered closed with no decided frame. |
+| S6g.8 | state | protocol | A Start the Mac refuses is refused about that Start, so the New Session sheet shows why. | Within 5 s of bad-create an error arrives whose about is {kind: create, ref: g11-bad}. | No refusal, or one the sheet cannot tie to its Start. |
+| S6g.9 | what | protocol | Retrying a Start the phone could not confirm makes no second session. | Within 6 s of create-again a session_created for ref g1 arrives with g1's first session id. | The retry made another session, or got no answer. |
+
+## S6h An approval while the Mac is out of reach (X-empty-error-offline case 2)
+
+Needs the simulator: yes.
+
+**User journey.**
+
+1. A session asks to run a command and the card waits for the user. The Mac drops out of reach while the user looks at it.
+2. The card must say the answer cannot reach the Mac, and its choices must take no tap, so nothing is queued silently.
+3. Once the Mac is back the card takes a tap again, and the thread is not left catching up.
+
+**Setup.**
+
+- The label probe (the same read-only XCUITest) records, about once a second until the setup ends, every element of the app whose label holds "Your answer can't reach your Mac", "Allow once", "Catching up", "Not sent", and whether each button among them is enabled (simulator lane).
+- New session `h1` in demo (haiku, mode default): "Use the Bash tool to run exactly: echo held > held.txt Then reply with one line: done."
+- Wait up to 90 s for h1's turn to start; mark `h1-started`.
+- Wait up to 120 s for h1's permission card; mark `card-open`.
+- Open `h1`'s thread: in the app by claudiobot://session/<id> (simulator lane), or watch it again if the phone had left it (protocol lane).
+- Wait 3 s.
+- Screenshot `card-online` (simulator lane).
+- The network drops the phone (the socket closes); screenshot `card-offline` 12 s into the drop (simulator lane); wait 20 s, reconnect with the stream position (epoch, after) and resume each thread from its last position. Mark `offline`.
+- Wait up to 45 s for the app's card to take a tap again; mark `app-back` (optional).
+- Wait 8 s.
+- Screenshot `card-back` (simulator lane).
+- Mark `back`.
+
+**Preconditions** (any failure fails the scenario):
+
+- session h1 was created
+- the card stayed open through the drop
+- the label probe read the app
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S6h.1 | state | simulator (list probe) | While the Mac is out of reach, the card says the answer cannot reach it and its choices take no tap. | In the label samples from 4 s into the drop to its end, "Your answer can't reach your Mac" shows, and every Allow once button seen is disabled. | The card offers live choices while nothing can reach the Mac, or says nothing. |
+| S6h.2 | state | simulator (list probe) | Once the Mac is back, the card takes a tap again and no longer says the answer cannot reach it. | Within 2 s of the app's own reconnect (its first watch of the thread after the drop, as the relay saw it), a label sample shows Allow once enabled with no offline line, and every sample after it until mark back does too. | The card stays disabled or keeps the offline line after the app is back, or goes back to it. |
+| S6h.3 | state | simulator (list probe) | The thread is never left catching up once the Mac answered. | No label sample from 3 s after mark app-back to mark back holds "Catching up". | "Catching up" stays after the reply came. |
+| S6h.4 | state | simulator (card-online, card-offline, card-back) | The card offline and back, as the user sees it. | card-offline shows the disabled choices with the offline line; card-back shows them live again. | Live choices offline, or a stale line after. |
 
 ## S7 Twelve sessions at once
 

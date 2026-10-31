@@ -28,7 +28,7 @@ import {
 } from "./protocol";
 import { refused, type Result } from "./result";
 import type { SessionEnd } from "./push";
-import type { SessionSpec } from "./session";
+import { stopPending, type SessionSpec } from "./session";
 import type { Persist } from "./store";
 import { RESTING, rowRun, runControls, runningSteps, runs, type StepPatch } from "./tasks";
 import { displayName, errorText } from "./text";
@@ -265,6 +265,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
           models: [],
           mode: "auto",
           modes: [],
+          ...stopPending(life),
           ...runControls(a, []),
         };
       }
@@ -482,11 +483,16 @@ export function createSessions(deps: SessionsDeps): Sessions {
     }
     rec.sent = [...(rec.sent ?? []), m.clientId].slice(-SENT_KEPT);
     routing.add(key);
+    // Stop and send is aimed at the turn the phone saw: once that turn has ended, the message goes without the interrupt.
+    const turn = controls(m.sessionId).turn ?? null;
+    const stale = m.interrupt && m.turnStartedAt !== undefined && turn?.startedAt !== m.turnStartedAt;
     let ran = false;
     try {
-      const replies = await route(m, w, about);
+      const replies = await route(stale ? { ...m, interrupt: false } : m, w, about);
       ran = replies.length === 0;
-      return replies;
+      if (!ran || !stale) return replies;
+      // A message queues only behind a turn that runs; with none, it starts now.
+      return error(`That turn had already ended. ${turn === null ? "Your message was sent." : "Your message is queued."}`, { kind: "stop", sessionId: m.sessionId });
     } finally {
       routing.delete(key);
       if (!ran) rec.sent = rec.sent.filter((c) => c !== m.clientId);

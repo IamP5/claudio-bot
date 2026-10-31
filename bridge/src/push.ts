@@ -245,6 +245,8 @@ export type AlertSockets = {
   alert(m: SessionAlert, only?: readonly number[]): number[];
   heard(ids: readonly number[], since: number): boolean;
   open(): number[];
+  /** When any socket, open or closed, was last heard from attended (ms): the user last looked at the app then. */
+  seenAt?(): number;
 };
 
 /** One session_alert: the frame, and each time it went out with the sockets it reached. */
@@ -337,7 +339,14 @@ export function createPush(deps: {
   const forRead = (f: Partial<Record<string, unknown>> | undefined) =>
     f?.kind === "cards" ? typeof f.session === "string" && texts(f.cards) : f?.kind === "ending" ? typeof f.session === "string" : f?.kind === "bot-card" ? typeof f.card === "string" : f?.kind === "bot";
   const owedRead = (o: Partial<OwedPush> | null) =>
-    typeof o === "object" && o !== null && texts(o.keys) && typeof o.text === "string" && typeof o.link === "string" && typeof o.high === "boolean" && forRead(o.for) && (o.unsure === undefined || !Number.isNaN(Date.parse(o.unsure)));
+    typeof o === "object" &&
+    o !== null &&
+    texts(o.keys) &&
+    typeof o.text === "string" &&
+    typeof o.link === "string" &&
+    typeof o.high === "boolean" &&
+    forRead(o.for) &&
+    [o.unsure, o.at].every((t) => t === undefined || !Number.isNaN(Date.parse(t)));
   if (sender === null || (world.push.failing !== undefined && !failingRead(world.push.failing))) {
     if (world.push.failing !== undefined) setFailing(null);
   } else if (failing()) {
@@ -378,9 +387,9 @@ export function createPush(deps: {
     const drive = world.sessions.get(id)?.own;
     return drive === undefined || (drive.outcome !== undefined && `${id}|${drive.outcome.at}|done` === key);
   };
-  /** Still worth a push: no phone is live, and what it is for still waits on the user. */
+  /** Still worth a push: no phone is live or looked since it was first tried, and what it is for still waits on the user. */
   function holds(o: OwedPush, now = deps.now().getTime()): boolean {
-    if (live(now)) return false;
+    if (live(now) || (o.at !== undefined && (deps.sockets?.seenAt?.() ?? 0) > Date.parse(o.at))) return false;
     const f = o.for;
     if (f.kind === "cards") return f.cards.some((c) => isOpen(f.session, c));
     if (f.kind === "ending") return current(f.session, o.keys[0]!);
@@ -452,7 +461,8 @@ export function createPush(deps: {
   const ready = (now: number) => owedPushes().filter((o) => !sending.has(pid(o)) && !(now < graceEnds && owedAtStart.has(pid(o))));
 
   /** Never throws into the caller, whatever the sender does. A try goes out only while the push still holds. */
-  async function deliver(o: OwedPush, what: string) {
+  async function deliver(first: OwedPush, what: string) {
+    const o = { ...first, at: iso(deps.now().getTime()) };
     sending.add(pid(o));
     try {
       for (let tries = 1; ; tries++) {

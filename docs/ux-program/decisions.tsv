@@ -186,3 +186,4 @@ ts	decision	why
 2026-10-31T18:24:20Z	G19: S2 command uses 	 tee bg.txt; S5 card hold 60 s; S9 card TTL 120 s|lets S2.13, S5.10, S9.7 be judgeable
 2026-10-31T18:24:20Z	G19: S6f.1 also accepts the Run 3 restart push text	G25 changes the text; only G19 edits bin/*
 2026-10-31T18:24:20Z	G19: Merge order: G19 before G20; G20 rebases its S4cl/S6g.11 scenario edits onto G19's	both edit scenarios.ts; G19 owns bin/*
+2026-10-31T18:41:28Z	BLOCKER: Xcode 26.6 cannot build the app without the iOS 26.5 platform (all destinations ineligible); the 26.2 pool rebuild does not avoid this. Bridge-only verification continues; iOS-touching PRs are held until the platform is installed	observed 2026-10-31 by xcodebuild -showdestinations

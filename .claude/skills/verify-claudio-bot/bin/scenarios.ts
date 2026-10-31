@@ -66,6 +66,12 @@ export type Ev = {
    * button: the element is a button; enabled: whether it takes a tap.
    */
   labels: { at: number; hits: { label: string; button: boolean; enabled: boolean }[] }[];
+  /** Each watch_session (on) and unwatch_session (off) the phone sent, and every watch a dropped socket lost (off). */
+  watches: { at: number; name: string; on: boolean }[];
+  /** The longest reply text each session streamed to the phone (session_delta, or a snapshot's live), by name. */
+  streamed: Record<string, string>;
+  /** Snapshots a second phone took (fresh-open): the thread as a fresh watch_session gives it. */
+  opens: { at: number; mark: string; name: string; items: Item[]; live: { itemId: string; text: string } | null; controls: Controls | null }[];
 };
 
 export type Action =
@@ -112,8 +118,10 @@ export type Action =
   | { do: "screenshot"; shot: string }
   /** The user opens the thread: the app by its link with --sim; on the protocol lane the phone watches it again if it had left. */
   | { do: "open-thread"; name: string }
-  /** With --sim, the app goes back to the Sessions list (it is relaunched on the list). Nothing on the protocol lane, where leave does it. */
+  /** The app goes back to the Sessions list: with --sim it is relaunched on the list; on the protocol lane the phone unwatches every thread it watches. */
   | { do: "show-list" }
+  /** A second phone opens the thread from scratch (watch_session with no position) and keeps the snapshot in ev.opens. */
+  | { do: "fresh-open"; name: string; mark: string }
   /** With --sim, Settings over the app and back. On the protocol lane the phone is suspended: its socket goes half-open, then it reconnects. */
   | { do: "app"; to: "background" | "foreground"; mark: string }
   /** Samples the Mac's processes matching `pattern` in the seed project into the report under `as`. */
@@ -385,7 +393,7 @@ export function appList(ev: Ev, names: string[]) {
 }
 
 /** Claude Code's own texts: a background launch ack, the subagent hand-back wrapper, the rejection boilerplate. */
-const ACK = /Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed/;
+const ACK = /Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed|<\/?tools-used-before-summary>/;
 const noAckOutput = (id: string, names: string[]): RubricItem => ({
   id,
   tell: "state",
@@ -520,6 +528,76 @@ const awayOnly = (ev: Ev): Verdict | null => (ev.away ? null : { ok: false, why:
 const BG = (cmd: string) =>
   `Use the Bash tool with run_in_background set to true to run exactly this command: ${cmd}\nDo not wait for it, do not check on it, do not run anything else. Reply with one line: started.`;
 
+/** How long the list may trail the thread: rows are coalesced every 500 ms (bridge/src/catalog.ts ROWS_COALESCE_MS). */
+const ROW_LAG_MS = 1_000;
+/** Each card the session raised: open from its own time until the first state that shows it answered. */
+const cardWindows = (ev: Ev, name: string) => {
+  const raised = new Map<string, number>();
+  const closed = new Map<string, number>();
+  for (const s of snaps(ev, name))
+    for (const i of s.items) {
+      if (!i.card) continue;
+      if (!raised.has(i.card.id)) raised.set(i.card.id, ev.atOf(i.at));
+      if (i.card.answer !== null && !closed.has(i.card.id)) closed.set(i.card.id, s.at);
+    }
+  return [...raised].map(([id, from]) => ({ from, to: closed.get(id) ?? Infinity }));
+};
+/** The part of [from, to] no card covers, each card counting until ROW_LAG_MS after its answer. */
+function uncovered(from: number, to: number, cards: { from: number; to: number }[]) {
+  let gap = 0;
+  let at = from;
+  for (const c of [...cards].sort((a, b) => a.from - b.from)) {
+    if (c.from > at) gap += Math.min(c.from, to) - at;
+    at = Math.max(at, c.to + ROW_LAG_MS);
+    if (at >= to) return gap;
+  }
+  return gap + (to - at);
+}
+/** A row's run fields (feature session_tasks), absent at rest. */
+type RowRun = { since?: string; running?: { agents: number; commands: number }; activity?: string; outcome?: { kind?: string; text?: string; at?: string } };
+const runOf = (s: Snap | undefined) => (s?.row ?? {}) as RowRun;
+/** A run time in words ("35s", "1m 2s", "after 1 s"), outside any quoted command or name. */
+const DURATION = /\b\d+(\.\d+)?\s?(ms|s|secs?|seconds?|m|mins?|minutes?|h)\b/i;
+const unquoted = (t: string) => t.replace(/"[^"]*"|\u201c[^\u201d]*\u201d/g, "");
+
+/** The row counts top-level work: the commands the subagents run themselves are not counted again (F-SES-289). */
+const topLevelCounts = (id: string, name: string): RubricItem => ({
+  id,
+  tell: "how-many",
+  lane: "protocol",
+  text: "The row's count of running work counts each subagent once, not again for the command it runs itself.",
+  pass: "The main thread runs no command, so every state between agents-from and agents-to whose row carries running has running.commands 0: each subagent's own command belongs under it.",
+  fail: "row.running counts the commands the subagents started, so three subagents each running a command read as six things.",
+  check: (ev) => {
+    const own = blocks(ev.transcript(name).main).uses.filter((u) => u.name === "Bash");
+    if (own.length) return no(`not judged: the main thread ran ${own.length} command(s) itself`);
+    const w = span(ev, "agents-from", "agents-to");
+    if (!w) return needMarks(ev, "agents-from", "agents-to")!;
+    const xs = during(ev, name, w[0], w[1]).filter((s) => runOf(s).running);
+    if (!xs.length) return no("not judged: no row carried running counts while the subagents ran");
+    const bad = xs.filter((s) => runOf(s).running!.commands > 0);
+    const seen = [...new Set(bad.map((s) => `${runOf(s).running!.agents} agents, ${runOf(s).running!.commands} commands`))];
+    return bad.length ? no(`${bad.length}/${xs.length} row states count the subagents' commands again: ${seen.join("; ")}`) : ok(`${xs.length} row states, each counting no command`);
+  },
+});
+
+/** Each background subagent's finished notice says how long it ran (F-SES-195). */
+const agentRunTimes = (id: string, name: string): RubricItem => ({
+  id,
+  tell: "how-long",
+  lane: "protocol",
+  text: "When a background subagent finishes, the thread's notice says how long it ran.",
+  pass: 'Each of the 3 sleepers has a task notice (reason task) that names it, and every such notice carries a run time such as "35s" outside the quoted name.',
+  fail: "A sleeper has no finished notice, or its notice says nothing of how long it ran.",
+  check: (ev) => {
+    const said = notices(ev, name).filter((i) => i.reason === "task" && /sleeper (one|two|three)/i.test(i.text ?? ""));
+    const named = new Set(said.map((i) => (i.text ?? "").match(/sleeper (one|two|three)/i)![1]!.toLowerCase()));
+    const bare = said.filter((i) => !DURATION.test(unquoted(i.text ?? "")));
+    if (named.size < 3) return no(`finished notices for ${named.size} of 3 sleepers: ${said.map((i) => `"${(i.text ?? "").slice(0, 60)}"`).join("; ") || "none"}`);
+    return bare.length ? no(`${bare.length}/${said.length} notices carry no run time: ${bare.map((i) => `"${(i.text ?? "").slice(0, 60)}"`).join("; ")}`) : ok(said.map((i) => `"${(i.text ?? "").slice(0, 60)}"`).join("; "));
+  },
+});
+
 // ---- the scenarios
 
 const fanOut = (id: "S1" | "S1b", background: boolean): Scenario => {
@@ -615,16 +693,30 @@ const fanOut = (id: "S1" | "S1b", background: boolean): Scenario => {
         id: `${id}.3`,
         tell: "state",
         lane: "protocol",
-        text: "While the subagents run, the Sessions list shows the session as working.",
-        pass: "row.status is working in every state between agents-from and agents-to (the subagents' own transcripts).",
-        fail: "The row reads idle (or another rest state) while subagents still run.",
+        text: "While the subagents run, the Sessions list shows the session as working, or as needing the user while a subagent's card waits.",
+        pass: `row.status is working in every state between agents-from and agents-to (the subagents' own transcripts), or awaiting_approval while a card raised in that window is open (up to ${ROW_LAG_MS / 1000} s after its answer, the list's coalescing).`,
+        fail: "The row reads idle, failed, parked or another rest state while subagents still run, or awaiting_approval with no open card.",
         check: (ev) => {
           const w = span(ev, "agents-from", "agents-to");
           if (!w) return needMarks(ev, "agents-from", "agents-to")!;
           const xs = during(ev, n, w[0], w[1]).filter((s) => s.row);
-          const bad = xs.filter((s) => s.row!.status !== "working");
-          const idle = bad.reduce((n, s, i) => n + ((xs[xs.indexOf(s) + 1]?.at ?? w[1]) - Math.max(s.at, w[0])), 0);
-          return bad.length ? no(`row ${statuses(bad)} for about ${Math.round(idle / 1000)} of the ${Math.round((w[1] - w[0]) / 1000)} s the subagents ran`) : ok(`row working in all ${xs.length} states`);
+          const cards = cardWindows(ev, n).filter((c) => c.from >= w[0] && c.from <= w[1]);
+          const why = new Set<string>();
+          let bad = 0;
+          xs.forEach((s, i) => {
+            const from = Math.max(s.at, w[0]);
+            const to = Math.min(xs[i + 1]?.at ?? w[1], w[1]);
+            if (to <= from || s.row!.status === "working") return;
+            const miss = s.row!.status === "awaiting_approval" ? uncovered(from, to, cards) : to - from;
+            if (miss <= 0) return;
+            bad += miss;
+            why.add(s.row!.status === "awaiting_approval" ? "awaiting_approval with no open card" : s.row!.status);
+          });
+          const secs = (ms: number) => Math.round(ms / 100) / 10;
+          const asked = xs.filter((s) => s.row!.status === "awaiting_approval").length;
+          return bad
+            ? no(`row ${[...why].join(", ")} for about ${secs(bad)} of the ${secs(w[1] - w[0])} s the subagents ran`)
+            : ok(`row working in all ${xs.length} states${asked ? `, or awaiting_approval while one of ${cards.length} cards was open (${asked} states)` : ""}`);
         },
       },
       {
@@ -674,6 +766,7 @@ const fanOut = (id: "S1" | "S1b", background: boolean): Scenario => {
       review(`${id}.9`, "state", "After the turn, the thread shows all three done and the session at rest.", "Three done rows, no spinner, composer ready.", "A spinner or running state remains.", ["done"]),
       noAckOutput(`${id}.10`, [n]),
       coalescedCards(`${id}.11`, n),
+      background ? agentRunTimes(`${id}.12`, n) : topLevelCounts(`${id}.12`, n),
     ],
   };
 };
@@ -726,7 +819,8 @@ const S2: Scenario = {
     "They want to tell, from the list and the thread, that it still runs, for how long, how to stop it, and when it finished.",
   ],
   setup: [
-    { do: "create", name: "s2", prompt: BG("sleep 75 && echo bg-done > bg.txt") },
+    // tee, so the command prints what it writes and its step has output to show (S2.13).
+    { do: "create", name: "s2", prompt: BG("sleep 75 && echo bg-done | tee bg.txt") },
     started("s2"),
     { do: "until", mark: "s2-ended", what: "the turn that starts the command to end", timeoutS: 180, test: turnEnded("s2") },
     ...awayAndBack("s2", "bg.txt"),
@@ -789,6 +883,22 @@ const S2: Scenario = {
     noAckOutput("S2.10", ["s2"]),
     comesToRest("S2.11", "s2", "bg-done", "the background command and the turn it woke"),
     noPhantomWork("S2.12", "s2"),
+    {
+      id: "S2.13",
+      tell: "state",
+      lane: "protocol",
+      text: "Once the background command has finished, its step shows what it printed.",
+      pass: 'At mark returned (the thread reopened after the command ended), the sleep 75 step reads ok and its output holds "bg-done", the line the command printed.',
+      fail: "The step reads ok with no output, or output without the command's own line, so done carries no result.",
+      check: (ev) => {
+        const at = mark(ev, "returned");
+        if (at === undefined) return needMarks(ev, "returned")!;
+        const step = commandStep(last(ev, "s2", at), "sleep 75");
+        if (!step) return no("no step for the sleep 75 command");
+        if (step.state !== "ok") return no(`the step reads ${step.state} ${step.cause ?? ""}`);
+        return /bg-done/.test(step.output ?? "") ? ok(`output ${JSON.stringify(step.output!.slice(-60))}`) : no(`ok with output ${JSON.stringify(step.output)}`);
+      },
+    },
   ],
 };
 
@@ -1057,12 +1167,12 @@ const S5: Scenario = {
     "The user's session runs one command that prints nothing for two minutes.",
     "They watch the thread and must tell it is still alive, not stuck: what runs, for how long, and how to stop it.",
   ],
-  holdCardsS: 10,
+  holdCardsS: 60,
   setup: [
     { do: "create", name: "s5", prompt: "Run exactly this Bash command in the foreground (not in the background), with timeout 200000: perl -e 'sleep 120' && echo slept > slept.txt\nThen reply with one line: slept." },
     started("s5"),
     { do: "open-thread", name: "s5" },
-    // The user takes 10 s to allow the card, so the call runs only once the process is there.
+    // The user takes 60 s to allow the card (S5.10 judges the wait), so the call runs only once the process is there.
     { do: "until", mark: "call-running", what: "the perl sleep 120 to run on the Mac", timeoutS: 150, test: (ev) => ev.procs("sleep 120").length > 0 },
     { do: "sleep", s: 30 },
     { do: "screenshot", shot: "at-30s" },
@@ -1153,7 +1263,7 @@ const S5: Scenario = {
       tell: "state",
       lane: "protocol",
       text: "While the command waits on its approval card, the thread says it waits, not that it runs.",
-      pass: "In every state with the Bash card open (the user takes 10 s to allow), the Bash step is on the wire in state waiting.",
+      pass: "In every state with the Bash card open (the user takes 60 s to allow), the Bash step is on the wire in state waiting.",
       fail: "A state with the card open shows the step running, or shows no step.",
       check: (ev) => {
         const open = snaps(ev, "s5").filter((s) => s.items.some((i) => i.kind === "permission" && i.card?.answer === null));
@@ -1164,6 +1274,85 @@ const S5: Scenario = {
       },
     },
     noAckOutput("S5.9", ["s5"]),
+    {
+      id: "S5.10",
+      tell: "state",
+      lane: "protocol",
+      text: "While the thread waits on the user's card, the bridge still says it is alive, so the phone never reads it as gone quiet.",
+      pass: "From the card's opening to its answer (the user takes 60 s), the longest gap between thread frames (session, session_items) about s5 is at most 30 s.",
+      fail: "A gap over 30 s while the card waits: a phone that counts 45 s of silence as quiet says no word from the Mac over an open card.",
+      check: (ev) => {
+        const card = cardWindows(ev, "s5")[0];
+        if (!card || card.to === Infinity) return no("not judged: no card opened and was answered");
+        if (card.to - card.from < 45_000) return no(`not judged: the card was open only ${Math.round((card.to - card.from) / 1000)} s`);
+        const ts = [card.from, ...ev.frameTimes.filter((f) => f.name === "s5" && ["session", "session_items"].includes(f.type) && f.at > card.from && f.at < card.to).map((f) => f.at), card.to];
+        const gap = Math.max(...ts.slice(1).map((t, i) => t - ts[i]!));
+        return gap <= 30_000 ? ok(`longest gap ${Math.round(gap / 1000)} s over the ${Math.round((card.to - card.from) / 1000)} s the card waited`) : no(`a ${Math.round(gap / 1000)} s gap while the card waited ${Math.round((card.to - card.from) / 1000)} s`);
+      },
+    },
+  ],
+};
+
+/** The time the phone first held an item. */
+const firstSeen = (ev: Ev, name: string, id: string) => snaps(ev, name).find((s) => s.items.some((i) => i.id === id))?.at;
+/** The first state whose task for `cmd` reads background, after one that read it foreground: Claude Code moved it. */
+const movedAt = (ev: Ev, name: string, cmd: string) => {
+  let fg = false;
+  for (const s of snaps(ev, name)) {
+    const t = ((s.controls?.tasks ?? []) as { label?: string; background?: boolean }[]).find((x) => String(x.label ?? "").includes(cmd));
+    if (t?.background === false) fg = true;
+    if (fg && t?.background === true) return s.at;
+  }
+  return undefined;
+};
+
+const S5t: Scenario = {
+  id: "S5t",
+  area: "sessions",
+  title: "A foreground command passes its time limit and moves to the background",
+  needsSimulator: false,
+  journey: [
+    "The user's session runs a command in the foreground with an 8 s time limit; the command sleeps 60 s.",
+    "Claude Code does not stop it at the limit: it moves it to the background and the turn goes on. The thread must say so when it happens.",
+  ],
+  setup: [
+    { do: "create", name: "s5t", prompt: "Run exactly this Bash command in the foreground (not in the background), with timeout 8000: perl -e 'sleep 60' && echo fin > fin.txt\nThen reply with one line: done." },
+    started("s5t"),
+    { do: "open-thread", name: "s5t" },
+    { do: "until", mark: "moved", what: "the command's task to turn background", timeoutS: 150, test: (ev) => movedAt(ev, "s5t", "sleep 60") !== undefined },
+    { do: "sleep", s: 5 },
+    { do: "mark", mark: "after-moved" },
+    { do: "until", mark: "fin", what: "fin.txt to appear", timeoutS: 90, optional: true, test: (ev) => ev.exists("fin.txt") },
+    { do: "until", mark: "s5t-rest", what: "the session to rest", timeoutS: 60, optional: true, test: atRest("s5t") },
+  ],
+  pre: [
+    created("s5t"),
+    {
+      what: "Claude Code moved the foreground command to the background at its time limit (its tool result says so)",
+      check: (ev) => {
+        const r = blocks(ev.transcript("s5t").main).results.find((x) => /moved to the background/i.test(x.text));
+        return r ? ok(r.text.slice(0, 100)) : no("no tool result says the command moved to the background");
+      },
+    },
+  ],
+  rubric: [
+    {
+      id: "S5t.1",
+      tell: "state",
+      lane: "protocol",
+      text: "When Claude Code moves a running command to the background at its time limit, the thread says so at once.",
+      pass: "A notice that says the command moved to (or kept running in) the background reaches the phone no later than 3 s after the state in which its task first reads background.",
+      fail: "The command silently turns into background work: no such notice, or one more than 3 s late.",
+      check: (ev) => {
+        const at = movedAt(ev, "s5t", "sleep 60");
+        if (at === undefined) return no("not judged: the task never turned background on the wire");
+        const said = notices(ev, "s5t").filter((i) => /background/i.test(i.text ?? "") && !/completed|exit code/i.test(i.text ?? ""));
+        const seen = said.map((i) => ({ i, seen: firstSeen(ev, "s5t", i.id)! })).sort((a, b) => a.seen - b.seen)[0];
+        if (!seen) return no(`no notice says it moved; notices: ${notices(ev, "s5t").map((i) => `"${(i.text ?? "").slice(0, 60)}"`).join("; ") || "none"}`);
+        const lag = (seen.seen - at) / 1000;
+        return lag <= 3 ? ok(`"${(seen.i.text ?? "").slice(0, 100)}" ${lag.toFixed(1)} s after the flip`) : no(`"${(seen.i.text ?? "").slice(0, 80)}" only ${lag.toFixed(1)} s after the flip`);
+      },
+    },
   ],
 };
 
@@ -1178,6 +1367,7 @@ const S6: Scenario = {
     "Each time, the thread must show the truth at once: still running, then done, with no duplicates, in the same order as a fresh open.",
     "Offline once more, the user sends a message; it goes out when the phone is back, and its command runs.",
     "Claude Code crashes mid-command, then the Mac's bridge restarts. The thread and the row must say the run failed, and keep saying it.",
+    "The user then sends a message, as the crash notice tells them to: the command that still runs shows no result, and no reply appears that Claude never gave.",
   ],
   setup: [
     { do: "create", name: "s6", prompt: "Run exactly this Bash command in the foreground (not in the background): perl -e 'sleep 40' && echo hi > s6.txt\nThen reply with one line: done." },
@@ -1210,6 +1400,10 @@ const S6: Scenario = {
     { do: "sleep", s: 8 },
     { do: "mark", mark: "after-restart" },
     { do: "screenshot", shot: "after-restart" },
+    { do: "send", name: "s6", text: "Reply with exactly one word: back.", mark: "sent-after-crash" },
+    { do: "until", mark: "back-replied", what: "the reply to the message sent after the crash", timeoutS: 90, optional: true, test: (ev) => !!last(ev, "s6")?.items.some((i) => i.kind === "assistant" && /^\W*back\W*$/i.test(i.text ?? "")) },
+    { do: "sleep", s: 3 },
+    { do: "mark", mark: "after-send" },
   ],
   pre: [
     created("s6"),
@@ -1341,6 +1535,80 @@ const S6: Scenario = {
         const said = prompts(ev, "s6", "perl -e 'sleep 90'").length;
         const bad = [send ? "" : "no such send", send && send.shownAt === null ? "no frame showed it back" : "", said === 1 ? "" : `${said} prompts`].filter(Boolean);
         return bad.length ? no(bad.join("; ")) : ok(`1 prompt; shown back at +${(send!.shownAt! / 1000).toFixed(1)}s after ${send!.copies} copies`);
+      },
+    },
+    {
+      id: "S6.11",
+      tell: "state",
+      lane: "protocol",
+      text: "After the crash and a new message, a step that still runs shows no result: Claude Code never saw its command end.",
+      pass: "In every state from sent-after-crash to after-send, no step that reads running carries output.",
+      fail: "A running step carries output, such as Claude Code's \"Tool call interrupted\" text, so a live command reads as if it had a result.",
+      check: (ev) => {
+        const w = span(ev, "sent-after-crash", "after-send");
+        if (!w) return needMarks(ev, "sent-after-crash", "after-send")!;
+        const hits = new Map<string, string>();
+        for (const s of during(ev, "s6", w[0], w[1])) for (const x of stepsOf(s)) if (x.state === "running" && (x.output ?? "") !== "") hits.set(x.id, `${x.label}: ${JSON.stringify(x.output!.slice(0, 80))}`);
+        return hits.size ? no([...hits.values()].join("; ")) : ok("no running step carries output");
+      },
+    },
+    {
+      id: "S6.12",
+      tell: "what",
+      lane: "protocol",
+      text: "After the crash and a new message, the thread shows no reply Claude never gave.",
+      pass: 'From sent-after-crash on, no assistant item reads "No response requested." (Claude Code\'s synthetic recovery line).',
+      fail: "An assistant item reads \"No response requested.\", a reply nobody asked for.",
+      check: (ev) => {
+        const at = mark(ev, "sent-after-crash");
+        if (at === undefined) return needMarks(ev, "sent-after-crash")!;
+        const hit = snaps(ev, "s6", at).flatMap((s) => s.items).find((i) => i.kind === "assistant" && /^\s*No response requested\.?\s*$/i.test(i.text ?? ""));
+        return hit ? no(`assistant item ${hit.id} at ${hit.at}: "${hit.text}"`) : ok("no synthetic reply shown");
+      },
+    },
+  ],
+};
+
+const S6k: Scenario = {
+  id: "S6k",
+  area: "sessions",
+  title: "Claude Code dies in the middle of a reply",
+  needsSimulator: false,
+  journey: [
+    "The user's session writes a long reply with no tools. Claude Code crashes while the text streams in.",
+    "The half-written reply must not stay on screen as if it were still arriving: it is kept as cut off, and the thread says what happened.",
+  ],
+  setup: [
+    { do: "create", name: "k1", prompt: "Do not use any tools. Write a 1500-word essay about the history of lighthouses, in plain paragraphs with no headings." },
+    started("k1"),
+    { do: "until", mark: "streaming", what: "300 characters of the reply to stream in", timeoutS: 120, test: (ev) => (ev.streamed.k1 ?? "").length >= 300 },
+    { do: "kill-claude", name: "k1", mark: "killed" },
+    { do: "sleep", s: 6 },
+    { do: "fresh-open", name: "k1", mark: "fresh" },
+  ],
+  pre: [
+    created("k1"),
+    { what: "Claude Code was killed while the reply streamed", check: (ev) => (ev.samples["kill-claude"]?.length && (ev.streamed.k1 ?? "").length >= 300 ? ok(`${(ev.streamed.k1 ?? "").length} characters streamed`) : no("no kill mid-reply")) },
+  ],
+  rubric: [
+    {
+      id: "S6k.1",
+      tell: "state",
+      lane: "protocol",
+      text: "After Claude Code dies mid-reply, the partial reply is an item followed by a notice, and nothing streams on.",
+      pass: "A fresh watch after the kill has live null, an assistant item that starts with the streamed text, and a notice after that item.",
+      fail: "A fresh watch still seeds the dead partial text as live, or the partial text is not kept as an item with a notice after it.",
+      check: (ev) => {
+        const o = ev.opens.find((x) => x.mark === "fresh");
+        if (!o) return no("not judged: no fresh open");
+        const head = (ev.streamed.k1 ?? "").trim().slice(0, 40);
+        const k = o.items.findIndex((i) => i.kind === "assistant" && (i.text ?? "").trim().startsWith(head));
+        const notice = k >= 0 && o.items.slice(k + 1).some((i) => i.kind === "notice");
+        const bad = [
+          o.live ? `live still holds ${o.live.text.length} characters` : "",
+          k < 0 ? `no assistant item holds the partial text (items: ${o.items.map((i) => i.kind).join(", ")})` : notice ? "" : "no notice after the partial reply",
+        ].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok(`live null; partial reply of ${(o.items[k]!.text ?? "").length} characters, then a notice`);
       },
     },
   ],
@@ -1539,6 +1807,11 @@ const endedSaid = (ev: Ev, name: string) => notices(ev, name).filter((i) => /end
 /** Every Bash step of the session in its latest snapshot at or before `at`. */
 const bashSteps = (ev: Ev, name: string, at: number) => stepsOf(last(ev, name, at) ?? ({ items: [] } as unknown as Snap)).filter((x) => x.tool === "Bash");
 
+const TWINS =
+  "Use the Bash tool twice, in two separate tool calls, each with run_in_background set to true, to run exactly this same command each time: exec >/dev/null 2>&1; sleep 53\nDo not wait for them, do not check on them, do not run anything else. Reply with one line: started.";
+/** vu3's two twin steps in its latest snapshot at or before `at`. */
+const twinSteps = (ev: Ev, at: number) => bashSteps(ev, "vu3", at).filter((x) => String(x.detail ?? x.label).includes("sleep 53"));
+
 const S6d: Scenario = {
   id: "S6d",
   area: "sessions",
@@ -1547,6 +1820,8 @@ const S6d: Scenario = {
   journey: [
     "Two long commands run in the background. One sends its output elsewhere at once, the other a little later, so after the bridge restarts it cannot prove either is still the command.",
     "Both end on their own. The thread must never show them running forever: once the bridge cannot tell, the steps say so and stop spinning, and the session rests.",
+    "A third session runs the same command twice at once, so the bridge cannot pair either with a process. Both must still read ended once no such process remains.",
+    "No finished alert may go out while the bridge cannot tell whether a command still runs, and each end is said within 10 s of the process going.",
   ],
   setup: [
     { do: "create", name: "vu1", prompt: BG("exec >/dev/null 2>&1; sleep 51") },
@@ -1555,22 +1830,33 @@ const S6d: Scenario = {
     { do: "create", name: "vu2", prompt: BG("sleep 25; exec >/dev/null 2>&1; sleep 52") },
     started("vu2"),
     { do: "until", mark: "vu2-ended", what: "vu2's turn to end", timeoutS: 180, test: turnEnded("vu2") },
-    { do: "until", mark: "bg-running", what: "both commands to run on the Mac", timeoutS: 60, test: (ev) => ev.procs("sleep 51").length > 0 && ev.procs("sleep 25").length > 0 },
+    { do: "create", name: "vu3", prompt: TWINS },
+    started("vu3"),
+    { do: "until", mark: "vu3-ended", what: "vu3's turn to end", timeoutS: 180, test: turnEnded("vu3") },
+    { do: "until", mark: "bg-running", what: "all commands to run on the Mac", timeoutS: 60, test: (ev) => ev.procs("sleep 51").length > 0 && ev.procs("sleep 25").length > 0 && ev.procs("sleep 53").length >= 2 },
+    { do: "ps", pattern: "sleep 53", as: "twins" },
     { do: "restart-bridge", mark: "restarted" },
     { do: "sleep", s: 8 },
     { do: "mark", mark: "after-restart" },
     { do: "until", mark: "vu1-gone", what: "vu1's command to end", timeoutS: 150, test: (ev) => ev.procs("sleep 51").length === 0 },
     { do: "until", mark: "vu2-gone", what: "vu2's command to end", timeoutS: 150, test: (ev) => ev.procs("sleep 52").length === 0 && ev.procs("sleep 25").length === 0 },
-    { do: "until", mark: "all-gone", what: "both commands to end", timeoutS: 150, test: (ev) => ev.procs("sleep 51").length === 0 && ev.procs("sleep 52").length === 0 && ev.procs("sleep 25").length === 0 },
+    { do: "until", mark: "vu3-gone", what: "vu3's twin commands to end", timeoutS: 150, test: (ev) => ev.procs("sleep 53").length === 0 },
+    { do: "until", mark: "all-gone", what: "every command to end", timeoutS: 150, test: (ev) => ev.procs("sleep 51").length === 0 && ev.procs("sleep 52").length === 0 && ev.procs("sleep 25").length === 0 && ev.procs("sleep 53").length === 0 },
     { do: "sleep", s: 10 },
     { do: "mark", mark: "after-ended" },
     { do: "sleep", s: 30 },
     { do: "mark", mark: "after-ended-40s" },
-    { do: "until", mark: "ended-said", what: "the bridge to say each command ended", timeoutS: 240, optional: true, test: (ev) => ["vu1", "vu2"].every((n) => endedSaid(ev, n).length > 0) },
+    { do: "until", mark: "ended-said", what: "the bridge to say each command ended", timeoutS: 240, optional: true, test: (ev) => ["vu1", "vu2"].every((n) => endedSaid(ev, n).length > 0) && twinSteps(ev, Infinity).filter((x) => x.state === "ended").length === 2 },
     { do: "sleep", s: 5 },
     { do: "mark", mark: "after-said" },
   ],
-  pre: [created("vu1"), created("vu2"), { what: "the bridge restarted", check: (ev) => (mark(ev, "after-restart") !== undefined ? ok("yes") : no("no")) }],
+  pre: [
+    created("vu1"),
+    created("vu2"),
+    created("vu3"),
+    { what: "the bridge restarted", check: (ev) => (mark(ev, "after-restart") !== undefined ? ok("yes") : no("no")) },
+    { what: "vu3 ran its command twice, as twin background steps", check: (ev) => (bgBash(ev.transcript("vu3").main).filter((u) => String(u.input.command).includes("sleep 53")).length === 2 ? ok("2 background calls") : no(`${bgBash(ev.transcript("vu3").main).length} background calls`)) },
+  ],
   rubric: [
     {
       id: "S6d.1",
@@ -1637,6 +1923,64 @@ const S6d: Scenario = {
         return bad.length ? no(bad.join("; ")) : ok("each said ended once, after its process was gone; steps ended");
       },
     },
+    {
+      id: "S6d.4",
+      tell: "state",
+      lane: "protocol",
+      text: "No session says it finished while the bridge cannot tell whether its command still runs.",
+      pass: "No finished alert for vu1, vu2 or vu3 arrives while a step of that session reads unsure.",
+      fail: "A finished alert arrives while a step reads unsure, so the user hears finished while the command may still run.",
+      check: (ev) => {
+        const bad = ev.alerts.filter((a) => ["vu1", "vu2", "vu3"].includes(a.name) && a.frame.reason === "finished").flatMap((a) => {
+          const unsure = stepsOf(last(ev, a.name, a.at) ?? ({ items: [] } as unknown as Snap)).filter((x) => x.state === "unsure");
+          return unsure.length ? [`${a.name} finished at +${Math.round(a.at / 1000)} s with ${unsure.length} step(s) unsure`] : [];
+        });
+        return bad.length ? no(bad.join("; ")) : ok(`${ev.alerts.filter((a) => a.frame.reason === "finished").length} finished alerts, none while a step was unsure`);
+      },
+    },
+    {
+      id: "S6d.5",
+      tell: "how-long",
+      lane: "protocol",
+      text: "Once a command the bridge could not check has ended, its step says ended within seconds.",
+      pass: "For vu1 and vu2, the Bash step first reads ended no later than 10 s after the run saw its process gone (vu1-gone, vu2-gone).",
+      fail: "A step still reads may still run more than 10 s after its process is gone.",
+      check: (ev) => {
+        const bad = ["vu1", "vu2"].flatMap((n) => {
+          const gone = mark(ev, `${n}-gone`);
+          if (gone === undefined) return [`${n}: never seen gone`];
+          const at = snaps(ev, n, gone - 10_000).find((s) => stepsOf(s).some((x) => x.tool === "Bash" && x.state === "ended"))?.at;
+          return at === undefined ? [`${n}: never ended`] : at - gone > 10_000 ? [`${n}: ended ${Math.round((at - gone) / 1000)} s after its process was gone`] : [];
+        });
+        return bad.length ? no(bad.join("; ")) : ok("each ended within 10 s of its process going");
+      },
+    },
+    {
+      id: "S6d.6",
+      tell: "state",
+      lane: "protocol",
+      text: "Two identical commands the bridge could not pair with a process both read ended once neither runs.",
+      pass: "At mark after-said (or the end of the run), both of vu3's sleep 53 steps read ended.",
+      fail: "A twin step still reads unsure (may still run) after every such process is gone.",
+      check: (ev) => {
+        if (mark(ev, "vu3-gone") === undefined) return needMarks(ev, "vu3-gone")!;
+        const steps = twinSteps(ev, mark(ev, "after-said") ?? Infinity);
+        if (steps.length !== 2) return no(`${steps.length} sleep 53 steps in vu3`);
+        return steps.every((x) => x.state === "ended") ? ok("both twins ended") : no(`twins read ${steps.map((x) => x.state).join(", ")}`);
+      },
+    },
+    {
+      id: "S6d.7",
+      tell: "state",
+      lane: "protocol",
+      text: "No notice claims the bridge no longer shows a command it still shows.",
+      pass: 'No notice in vu1, vu2 or vu3 says "no longer shows it".',
+      fail: "A notice says the bridge no longer shows the command, while its step is on screen and an earlier notice said Stop ends it.",
+      check: (ev) => {
+        const hits = ["vu1", "vu2", "vu3"].flatMap((n) => notices(ev, n).filter((i) => /no longer shows it/i.test(i.text ?? "")).map((i) => `${n}: "${(i.text ?? "").slice(0, 100)}"`));
+        return hits.length ? no(hits.join("; ")) : ok("no such notice");
+      },
+    },
   ],
 };
 
@@ -1664,6 +2008,7 @@ const S6e: Scenario = {
     "A turn runs a long command in the background, then one in the foreground. The Mac's bridge restarts mid-turn: Claude Code goes with it, but both commands keep running.",
     "In a second session the same, but Claude Code itself crashes mid-turn.",
     "Each time the turn is over, but the thread must say the commands still run, keep their steps running (never stopped or failed, not even for a moment), and offer Stop, which must end them on the Mac.",
+    "The crash and the restart are each told once, saying what still runs; the row never flickers, and stopping the leftovers does not hide the crash.",
   ],
   setup: [
     { do: "create", name: "e1", prompt: FG("sleep 3653", "perl -e 'sleep 3654'") },
@@ -1681,6 +2026,7 @@ const S6e: Scenario = {
     { do: "kill-claude", name: "e2", mark: "killed" },
     { do: "sleep", s: 8 },
     { do: "ps", pattern: "sleep 3656", as: "e2-after-crash" },
+    { do: "ps", pattern: "sleep 3655", as: "e2-bg-after-crash" },
     { do: "mark", mark: "e2-after-crash" },
     { do: "stop", name: "e1", task: "sleep 3654", mark: "e1-stop" },
     { do: "stop", name: "e2", mark: "e2-stop" },
@@ -1770,6 +2116,69 @@ const S6e: Scenario = {
         return said.every(Boolean) ? ok(said.map((i) => (i!.text ?? "").slice(0, 70)).join(" | ")) : no(`e1 notice ${!!said[0]}, e2 notice ${!!said[1]}`);
       },
     },
+    {
+      id: "S6e.5",
+      tell: "state",
+      lane: "protocol",
+      text: "When Claude Code crashes while its commands keep running, the user is told at once that it stopped with an error, and how many commands still run.",
+      pass: "Within 10 s of the kill, a session_alert for e2 with reason failed arrives whose running.commands is the number of e2's commands still alive 8 s after the kill (samples e2-bg-after-crash and e2-after-crash).",
+      fail: "No failed alert within 10 s, or one without running counts or with the wrong count.",
+      check: (ev) => {
+        const at = mark(ev, "killed");
+        if (at === undefined) return needMarks(ev, "killed")!;
+        const alive = ["e2-bg-after-crash", "e2-after-crash"].filter((k) => (ev.samples[k] ?? []).length > 0).length;
+        const a = ev.alerts.find((x) => x.name === "e2" && x.frame.reason === "failed" && x.at >= at && x.at <= at + 10_000);
+        if (!a) return no(`no failed alert within 10 s of the kill (e2 alerts: ${ev.alerts.filter((x) => x.name === "e2").map((x) => `${x.frame.reason} +${Math.round((x.at - at) / 1000)} s`).join(", ") || "none"})`);
+        const running = a.frame.running as { agents?: number; commands?: number } | undefined;
+        return running?.commands === alive ? ok(`failed +${((a.at - at) / 1000).toFixed(1)} s, running ${JSON.stringify(running)}`) : no(`failed alert carries running ${JSON.stringify(running ?? null)}; ${alive} commands were alive`);
+      },
+    },
+    {
+      id: "S6e.6",
+      tell: "state",
+      lane: "protocol",
+      text: "Stopping the commands that outlived the crash does not erase the crash from the row.",
+      pass: "From e2-stop to the end of the run, every e2 row outcome is kind failed.",
+      fail: "After the Stop the row's outcome reads stopped (or anything but failed), so the crash is gone from the list.",
+      check: (ev) => {
+        const at = mark(ev, "e2-stop");
+        if (at === undefined) return needMarks(ev, "e2-stop")!;
+        const kinds = during(ev, "e2", at, Infinity).map((s) => runOf(s).outcome?.kind ?? "none");
+        const bad = [...new Set(kinds.filter((k) => k !== "failed"))];
+        return kinds.length && !bad.length ? ok(`${kinds.length} states, outcome failed in each`) : no(`outcome after the Stop: ${[...new Set(kinds)].join(" then ") || "no state"}`);
+      },
+    },
+    {
+      id: "S6e.7",
+      tell: "state",
+      lane: "protocol",
+      text: "The row's status changes once per real change: no failed, working, failed flicker across the restart or the crash.",
+      pass: "From restarted to e1-stop for e1, and from killed to e2-stop for e2 (the state carried in included), no row status comes back after the row left it.",
+      fail: "A status returns after another one in between, such as working, failed, working.",
+      check: (ev) => {
+        const flicker = ([["e1", "restarted", "e1-stop"], ["e2", "killed", "e2-stop"]] as const).flatMap(([n, from, to]) => {
+          const w = span(ev, from, to);
+          if (!w) return [`${n}: marks ${from}, ${to} not reached`];
+          const seq = during(ev, n, w[0], w[1]).filter((s) => s.row).map((s) => s.row!.status).filter((x, i, xs) => i === 0 || x !== xs[i - 1]);
+          return new Set(seq).size < seq.length ? [`${n}: ${seq.join(" → ")}`] : [];
+        });
+        return flicker.length ? no(flicker.join("; ")) : ok("each row status held until a real change");
+      },
+    },
+    {
+      id: "S6e.8",
+      tell: "how-many",
+      lane: "protocol",
+      text: "The alert for the restart says that the commands still run, not only that the session was interrupted.",
+      pass: "e1's session_alert with reason lost carries running with at least 1 command.",
+      fail: "No lost alert, or one without running counts, so an away user hears the work died while it runs on.",
+      check: (ev) => {
+        const a = ev.alerts.find((x) => x.name === "e1" && x.frame.reason === "lost");
+        if (!a) return no(`no lost alert for e1 (${ev.alerts.filter((x) => x.name === "e1").map((x) => x.frame.reason).join(", ") || "none"})`);
+        const running = a.frame.running as { commands?: number } | undefined;
+        return (running?.commands ?? 0) >= 1 ? ok(`lost alert running ${JSON.stringify(running)}`) : no(`lost alert carries running ${JSON.stringify(running ?? null)}`);
+      },
+    },
   ],
 };
 
@@ -1824,7 +2233,7 @@ const S6g: Scenario = {
     "The user sends while the connection dies without a word (half-open), and again just as it drops. Each message must run exactly once once the phone is back, as the app resends what no frame showed back.",
     "The Mac's bridge restarts and the phone sends one of those messages again (its echo lost): it must not run twice.",
     "A message the Mac ran whose echo was lost, sent again after the bridge restarted, must come back tied to the transcript's copy, never read as not sent.",
-    "A Stop meant for an earlier turn must never stop the turn that runs now.",
+    "A Stop meant for an earlier turn must never stop the turn that runs now, and neither may a Stop and send aimed at an earlier turn.",
     "Requests the Mac cannot meet must each end with words tied to the request: a tool output it does not have, a decision on a closed card, a refused Start. Every decision it took is acknowledged, and a retried Start makes no second session.",
   ],
   setup: [
@@ -1863,6 +2272,16 @@ const S6g: Scenario = {
     },
     { do: "sleep", s: 4 },
     { do: "ps", pattern: "sleep 3661", as: "after-stale-stop" },
+    { do: "mark", mark: "before-stale-interrupt" },
+    {
+      do: "raw",
+      mark: "stale-interrupt",
+      what: "a Stop and send aimed at g1's first turn: session_send with interrupt and that turn's turnStartedAt",
+      frame: (ev) => ({ type: "session_send", sessionId: ev.ids.g1!, text: "Reply with exactly one word: queued.", clientId: `runner-${crypto.randomUUID()}`, interrupt: true, turnStartedAt: firstTurn(ev, "g1") ?? "2026-01-01T00:00:00.000Z" }),
+    },
+    { do: "sleep", s: 4 },
+    { do: "ps", pattern: "sleep 3661", as: "after-stale-interrupt" },
+    { do: "mark", mark: "after-stale-interrupt" },
     { do: "stop", name: "g1", mark: "real-stop" },
     { do: "sleep", s: 6 },
     { do: "ps", pattern: "sleep 3661", as: "after-real-stop" },
@@ -1967,6 +2386,23 @@ const S6g: Scenario = {
         const gone = (ev.samples["after-real-stop"] ?? []).length === 0;
         const bad = [refused.length ? "" : "no refusal about the stop", alive ? "" : "the command was gone after the stale stop", gone ? "" : "the command still ran after the real Stop"].filter(Boolean);
         return bad.length ? no(bad.join("; ")) : ok(`refused: "${String(refused[0]!.frame.message)}"; ran on; the real Stop ended it`);
+      },
+    },
+    {
+      id: "S6g.11",
+      tell: "stop",
+      lane: "protocol",
+      text: "A Stop and send aimed at an earlier turn never stops the turn that runs now.",
+      pass: "The perl sleep 3661 still runs 4 s after a session_send with interrupt and the first turn's turnStartedAt (sample after-stale-interrupt), and the turn that ran before it is still the one running.",
+      fail: "The stale Stop and send interrupted the newer turn: its command is gone, or another turn took its place.",
+      check: (ev) => {
+        const w = span(ev, "before-stale-interrupt", "after-stale-interrupt");
+        if (!w) return needMarks(ev, "before-stale-interrupt", "after-stale-interrupt")!;
+        const turn = (at: number) => (last(ev, "g1", at)?.controls?.turn as { startedAt?: string } | null | undefined)?.startedAt ?? null;
+        const alive = (ev.samples["after-stale-interrupt"] ?? []).length > 0;
+        const [before, after] = [turn(w[0]), turn(w[1])];
+        const bad = [alive ? "" : "the perl sleep 3661 was gone 4 s later", before !== null && before === after ? "" : `the running turn went from ${before} to ${after}`].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok(`turn ${before} ran on with its command`);
       },
     },
     {
@@ -2150,6 +2586,7 @@ const S6f: Scenario = {
     "The user starts a long command and puts the phone away. The Mac's bridge restarts mid-turn, so the turn is cut off.",
     "Once the bridge is back and no phone came back to look, the user must get one push that says the run was interrupted, with nothing of the session's content in it.",
     "A second restart must not push it again.",
+    "After each restart the row keeps the one interruption it already holds, and the command that outlived it keeps its foreground word.",
   ],
   setup: [
     { do: "create", name: "f1", prompt: "Use the Bash tool in the foreground (not in the background) to run exactly: perl -e 'sleep 3657'\nThen reply with one line: done." },
@@ -2184,7 +2621,8 @@ const S6f: Scenario = {
         const p = ps[0]!;
         if (/sleep|perl|3657/.test(`${p.title} ${p.body}`)) return no(`content in the push: ${p.body}`);
         const after = (ev.atOf(p.at) - sp[0]) / 1000;
-        return /was interrupted by a bridge restart/.test(p.body) && after <= 90 ? ok(`"${p.body}" ${after.toFixed(0)} s after the restart`) : no(`"${p.body}" ${after.toFixed(0)} s after the restart`);
+        // The second wording is the Run 3 call that names surviving work (decisions.tsv, "the restart alert names surviving work").
+        return /was interrupted by a bridge restart|^A bridge restart interrupted a Claude Code session\./.test(p.body) && after <= 90 ? ok(`"${p.body}" ${after.toFixed(0)} s after the restart`) : no(`"${p.body}" ${after.toFixed(0)} s after the restart`);
       },
     },
     {
@@ -2201,6 +2639,48 @@ const S6f: Scenario = {
         if (!sp) return needMarks(ev, "restarted-again", "after-second")!;
         const ps = ev.pushes().filter((p) => (p.click ?? "").includes(ev.ids.f1 ?? "-") && ev.atOf(p.at) >= sp[0] && ev.atOf(p.at) <= sp[1]);
         return ps.length === 0 ? ok("no push after the second restart") : no(ps.map((p) => p.body).join(" | "));
+      },
+    },
+    {
+      id: "S6f.3",
+      tell: "state",
+      lane: "protocol",
+      text: "Each restart leaves the row's interruption as it was, and says it in the thread once.",
+      pass: "The row outcome first seen after the first restart has the same kind and at in the last state before f1-stop, and no restart notice first appears after the second restart or repeats an earlier one's text.",
+      fail: "The second restart rewrites the outcome (another kind or time), or adds a second copy of the restart notice.",
+      check: (ev) => {
+        const w = span(ev, "restarted", "f1-stop");
+        const again = mark(ev, "restarted-again");
+        if (!w || again === undefined) return needMarks(ev, "restarted", "restarted-again", "f1-stop")!;
+        const xs = during(ev, "f1", w[0], w[1] - 1);
+        const first = xs.find((s) => s.at >= w[0] && runOf(s).outcome)?.row?.outcome as RowRun["outcome"];
+        const end = runOf(xs.at(-1)).outcome;
+        const said = notices(ev, "f1").filter((i) => i.reason === "restart");
+        const late = said.filter((i) => (firstSeen(ev, "f1", i.id) ?? 0) > again + 1_000 && ev.atOf(i.at) > again);
+        const twice = said.filter((i, k) => said.findIndex((j) => j.text === i.text) !== k);
+        const bad = [
+          !first ? "no outcome after the first restart" : end && end.kind === first.kind && end.at === first.at ? "" : `outcome ${first.kind} ${first.at} became ${end?.kind ?? "none"} ${end?.at ?? ""}`,
+          late.length ? `a restart notice after the second restart: "${(late[0]!.text ?? "").slice(0, 80)}"` : "",
+          twice.length ? `a restart notice twice: "${(twice[0]!.text ?? "").slice(0, 80)}"` : "",
+        ].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok(`outcome ${first!.kind} ${first!.at} kept; ${said.length} restart notice(s), each once`);
+      },
+    },
+    {
+      id: "S6f.4",
+      tell: "what",
+      lane: "protocol",
+      text: "The foreground command that outlives the restart keeps its foreground word on the row and in the task list.",
+      pass: "From restarted to f1-stop, no f1 row activity starts with Background, and every task for the perl sleep 3657 reads background false.",
+      fail: "The row says Background: perl … or the task reads background, for a command the user ran in the foreground.",
+      check: (ev) => {
+        const w = span(ev, "restarted", "f1-stop");
+        if (!w) return needMarks(ev, "restarted", "f1-stop")!;
+        const xs = during(ev, "f1", w[0], w[1]);
+        const said = [...new Set(xs.map((s) => runOf(s).activity ?? "").filter((a) => /^Background\b/i.test(a)))];
+        const bg = xs.some((s) => ((s.controls?.tasks ?? []) as { label?: string; background?: boolean }[]).some((t) => String(t.label ?? "").includes("sleep 3657") && t.background === true));
+        const bad = [said.length ? `row activity "${said[0]!.slice(0, 60)}"` : "", bg ? "the perl sleep 3657 task reads background" : ""].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok(`${xs.length} states, foreground kept`);
       },
     },
   ],
@@ -2255,6 +2735,9 @@ const S4b: Scenario = {
   ],
 };
 
+const S4K_PROMPT = "Run these two Bash commands one at a time, each in its own tool call: echo s4kone ; echo s4ktwo . Then reply with the single word done.";
+const S4K_FOLLOWUP = "Reply with the single word s4kafter.";
+
 const S4c: Scenario = {
   id: "S4c",
   area: "sessions",
@@ -2263,6 +2746,8 @@ const S4c: Scenario = {
   journey: [
     "Claude Code is frozen (a hung or busy Mac) when the user sends a prompt and presses Stop the turn only.",
     "Nothing may say the turn stopped while it is frozen. Once it resumes, the prompt must not run, and only then does the thread say the user stopped it.",
+    "In a second session Claude Code stays frozen for 24 s, past the bridge's 15 s Stop deadline, and the user sends a follow-up 3 s after Stop.",
+    "The thread must say a stop is pending at once, then that Claude Code did not answer and was ended; the stop sorts above the follow-up, and the stopped prompt stays in the thread.",
   ],
   setup: [
     { do: "create", name: "s4c", prompt: "Reply with the single word ready." },
@@ -2278,8 +2763,35 @@ const S4c: Scenario = {
     { do: "until", mark: "s4c-rest", what: "the session to rest after it resumes", timeoutS: 60, optional: true, test: atRest("s4c") },
     { do: "sleep", s: 8 },
     { do: "mark", mark: "after" },
+    { do: "create", name: "s4k", prompt: "Reply with the single word ready." },
+    started("s4k"),
+    { do: "until", mark: "s4k-ready", what: "s4k's first turn to end", timeoutS: 120, test: (ev) => replied(last(ev, "s4k")) && !isWorking(last(ev, "s4k")!) },
+    { do: "signal-claude", name: "s4k", signal: "SIGSTOP", mark: "k-frozen" },
+    { do: "send", name: "s4k", text: S4K_PROMPT, mark: "k-sent" },
+    { do: "until", mark: "k-turn-shown", what: "the prompt's turn to show", timeoutS: 30, test: (ev) => last(ev, "s4k")?.controls?.turn != null },
+    { do: "sleep", s: 1.5 },
+    { do: "stop", name: "s4k", turnOnly: true, mark: "k-stopped" },
+    { do: "sleep", s: 3 },
+    { do: "send", name: "s4k", text: S4K_FOLLOWUP, mark: "k-followup" },
+    { do: "sleep", s: 21 },
+    { do: "signal-claude", name: "s4k", signal: "SIGCONT", mark: "k-resumed" },
+    { do: "until", mark: "k-rest", what: "s4k to rest after the follow-up", timeoutS: 90, optional: true, test: atRest("s4k") },
+    { do: "sleep", s: 5 },
+    { do: "mark", mark: "k-after" },
+    { do: "fresh-open", name: "s4k", mark: "k-fresh" },
   ],
-  pre: [created("s4c"), { what: "Claude Code was frozen and resumed", check: (ev) => (mark(ev, "resumed") !== undefined ? ok("yes") : no("no")) }],
+  pre: [
+    created("s4c"),
+    { what: "Claude Code was frozen and resumed", check: (ev) => (mark(ev, "resumed") !== undefined ? ok("yes") : no("no")) },
+    created("s4k"),
+    {
+      what: "s4k's Claude Code stayed frozen past the 15 s Stop deadline (24 s from Stop to the resume)",
+      check: (ev) => {
+        const w = span(ev, "k-stopped", "k-resumed");
+        return w && w[1] - w[0] >= 20_000 ? ok(`${Math.round((w[1] - w[0]) / 1000)} s`) : no(w ? `${Math.round((w[1] - w[0]) / 1000)} s` : "never stopped and resumed");
+      },
+    },
+  ],
   rubric: [
     {
       id: "S4c.1",
@@ -2324,6 +2836,81 @@ const S4c: Scenario = {
         if (b === undefined) return needMarks(ev, "resumed")!;
         const it = notices(ev, "s4c", b).find((i) => i.reason === "stop" && (i.text ?? "").startsWith("Stopped by you") && ev.atOf(i.at) >= b);
         return it ? ok(it.text ?? "") : no("no bridge stop notice after the resume");
+      },
+    },
+    {
+      id: "S4c.4",
+      tell: "stop",
+      lane: "protocol",
+      text: "While the bridge waits for a frozen Claude Code to confirm Stop, the thread says a stop is pending, so no phone offers a live Stop.",
+      pass: "Within 1 s of k-stopped, s4k's controls carry stopping with at and deadline.",
+      fail: "No stopping in the controls within 1 s of Stop: the wire reads the turn as plain working.",
+      check: (ev) => {
+        const at = mark(ev, "k-stopped");
+        if (at === undefined) return needMarks(ev, "k-stopped")!;
+        const s = snaps(ev, "s4k", at, at + 1_000).find((x) => {
+          const st = x.controls?.stopping as { at?: unknown; deadline?: unknown } | null | undefined;
+          return typeof st?.at === "string" && typeof st.deadline === "string";
+        });
+        return s ? ok(`stopping ${JSON.stringify(s.controls!.stopping)} at +${((s.at - at) / 1000).toFixed(1)} s`) : no(`no stopping within 1 s; controls keys then: ${Object.keys(last(ev, "s4k", at + 1_000)?.controls ?? {}).join(",")}`);
+      },
+    },
+    {
+      id: "S4c.5",
+      tell: "stop",
+      lane: "protocol",
+      text: "When Claude Code never answers Stop and the bridge ends it, the thread says so, not only that the user stopped it.",
+      pass: "After k-stopped, a notice in s4k says Claude Code did not answer Stop and that the bridge ended it.",
+      fail: "No notice says Claude Code did not answer and was ended: a forced end reads like a confirmed stop.",
+      check: (ev) => {
+        const at = mark(ev, "k-stopped");
+        if (at === undefined) return needMarks(ev, "k-stopped")!;
+        const all = notices(ev, "s4k", at);
+        const it = all.find((i) => /did(n.t| not) answer/i.test(i.text ?? "") && /\bended\b/i.test(i.text ?? ""));
+        return it ? ok(it.text ?? "") : no(`notices: ${all.map((i) => `"${(i.text ?? "").slice(0, 80)}"`).join("; ") || "none"}`);
+      },
+    },
+    {
+      id: "S4c.6",
+      tell: "stop",
+      lane: "protocol",
+      text: "The stop sits where the user pressed it: timed at the Stop, above a follow-up sent after it.",
+      pass: "In s4k's thread at k-after, a stop notice (reason stop, starting \"Stopped by you\") is timed no later than the follow-up's send (3 s after Stop) and comes before the follow-up.",
+      fail: "No such notice, or it is timed later (at the kill) or sorts under the follow-up, so where it lands against the follow-up is a race.",
+      check: (ev) => {
+        const at = mark(ev, "k-after");
+        const sent = mark(ev, "k-followup");
+        if (at === undefined || sent === undefined) return needMarks(ev, "k-followup", "k-after")!;
+        const items = last(ev, "s4k", at)?.items ?? [];
+        const stop = items.findIndex((i) => i.kind === "notice" && i.reason === "stop" && (i.text ?? "").startsWith("Stopped by you"));
+        const follow = items.findIndex((i) => i.kind === "user" && (i.text ?? "").includes("s4kafter"));
+        if (follow < 0) return no("the follow-up is not in the thread");
+        if (stop < 0) return no("no stop notice in the thread");
+        const said = `"${(items[stop]!.text ?? "").slice(0, 80)}" timed ${((ev.atOf(items[stop]!.at) - sent) / 1000).toFixed(1)} s after the follow-up was sent`;
+        if (ev.atOf(items[stop]!.at) > sent) return no(said);
+        return stop < follow ? ok(`${said}, above it`) : no(`${said}, but sorts under it`);
+      },
+    },
+    {
+      id: "S4c.7",
+      tell: "what",
+      lane: "protocol",
+      text: "The prompt the user stopped stays in the thread, also when it is opened again, and the stop says which prompt it stopped, so they can see what did not run.",
+      pass: "At k-after, s4k's thread holds a user item with the stopped prompt (s4kone), and so does a fresh open of it (k-fresh); a stop notice names the prompt by its first words.",
+      fail: "The stopped prompt is gone from the thread, only the phone that saw it sent still holds it, or no stop notice names it.",
+      check: (ev) => {
+        const at = mark(ev, "k-after");
+        const fresh = ev.opens.find((o) => o.mark === "k-fresh");
+        if (at === undefined || !fresh) return needMarks(ev, "k-after", "k-fresh")!;
+        const stopped = (items: Item[]) => items.find((i) => i.kind === "user" && (i.text ?? "").includes("s4kone"));
+        const [seen, again] = [stopped(last(ev, "s4k", at)?.items ?? []), stopped(fresh.items)];
+        const named = notices(ev, "s4k").find((i) => i.reason === "stop" && (i.text ?? "").includes(S4K_PROMPT.slice(0, 30)));
+        const bad = [
+          again ? "" : seen ? "the phone still holds it, but a fresh open has no sign of it" : "gone from the thread",
+          again && !seen ? "a fresh open has it, but the phone's thread dropped it" : "",
+          named ? "" : `no stop notice names the prompt (${notices(ev, "s4k").filter((i) => i.reason === "stop").map((i) => `"${(i.text ?? "").slice(0, 60)}"`).join("; ") || "none"})`,
+        ].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok(`kept, also on a fresh open (${JSON.stringify({ queued: again!.queued, stopped: again!.stopped ?? null })}); "${(named!.text ?? "").slice(0, 100)}"`);
       },
     },
   ],
@@ -2585,6 +3172,32 @@ const S8: Scenario = {
     noAckOutput("S8.8", ["s8"]),
     comesToRest("S8.9", "s8", "bg-done", "the background command and the turn it woke"),
     noPhantomWork("S8.10", "s8"),
+    {
+      id: "S8.11",
+      tell: "how-many",
+      lane: "protocol",
+      text: "While starter waits on its own background command, the row keeps counting it and keeps one clock.",
+      pass: "From starter's first final reply (its transcript), when it starts to wait on its command, until its Agent step ends (the step's endedAt, else bg-done), every row state counts running.agents of at least 1 and keeps the since it had when the window opened.",
+      fail: "The row drops the agent (0 agents while its step still runs), or since jumps, so the clock restarts.",
+      check: (ev) => {
+        const replied = ev.transcript("s8").subagents.find((l) => isFinal(l) && l.timestamp);
+        const step = snaps(ev, "s8").flatMap(stepsOf).filter((x) => AGENT_TOOLS.has(x.tool) && /starter/i.test(x.label)).at(-1);
+        const end = typeof step?.endedAt === "string" ? ev.atOf(step.endedAt) : mark(ev, "bg-done");
+        if (!replied || end === undefined) return no("not judged: starter's reply or the end of its step was not seen");
+        const from = ev.atOf(replied.timestamp!);
+        if (end - from < 10_000) return no(`not judged: starter waited only ${Math.round((end - from) / 1000)} s`);
+        const xs = during(ev, "s8", from, end - 1).filter((s) => s.row);
+        if (!xs.length) return no("not judged: no row state in the window");
+        const since = runOf(xs[0]).since;
+        const drops = xs.filter((s) => (runOf(s).running?.agents ?? 0) < 1);
+        const moved = xs.filter((s) => runOf(s).since !== since);
+        const bad = [
+          drops.length ? `${drops.length}/${xs.length} states count ${[...new Set(drops.map((s) => runOf(s).running?.agents ?? "no"))].join(", ")} agents, first at +${Math.round(drops[0]!.at / 1000)} s` : "",
+          moved.length ? `since went from ${since} to ${runOf(moved[0]).since} at +${Math.round(moved[0]!.at / 1000)} s` : "",
+        ].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok(`${xs.length} states over ${Math.round((end - from) / 1000)} s, at least 1 agent, since ${since}`);
+      },
+    },
   ],
 };
 
@@ -2646,6 +3259,21 @@ const S8fg: Scenario = {
       },
     },
     noAckOutput("S8fg.3", ["s8"]),
+    {
+      id: "S8fg.4",
+      tell: "how-long",
+      lane: "protocol",
+      text: "The notice for the command Claude Code stopped says why and how long it ran.",
+      pass: 'The notice that names the command and starter says it was stopped when starter returned, and carries a run time ("after 1 s") outside the quoted command.',
+      fail: "The notice gives no cause beyond Claude Code stopping it, or no run time.",
+      check: (ev) => {
+        const hit = notices(ev, "s8").find((i) => /sleep 60|nested/i.test(i.text ?? "") && /starter/i.test(i.text ?? ""));
+        if (!hit) return no("no notice names the command and starter");
+        const t = hit.text ?? "";
+        const bad = [/when starter returned/i.test(t) ? "" : "no cause (when starter returned)", DURATION.test(unquoted(t)) ? "" : "no run time"].filter(Boolean);
+        return bad.length ? no(`${bad.join("; ")}: "${t.slice(0, 120)}"`) : ok(t.slice(0, 140));
+      },
+    },
   ],
 };
 
@@ -2708,6 +3336,22 @@ const S3b: Scenario = {
       },
     },
     review("S3b.3", "state", "With the Sessions list on screen, a notification says the session finished.", "A banner that names the session and says it finished.", "No banner.", ["alert"]),
+    {
+      id: "S3b.4",
+      tell: "state",
+      lane: "protocol",
+      text: "The finished alert reaches a phone that is elsewhere in the app, not one watching the thread.",
+      pass: "The phone's last watch or unwatch of s3b before the finished alert is an unwatch (the user went back to the list), so no watch was open when it arrived.",
+      fail: "The phone was watching s3b when the alert arrived, so S3b.1 and S3b.2 judged a thread on screen, not the list.",
+      check: (ev) => {
+        const a = ev.alerts.find((x) => x.name === "s3b" && x.frame.reason === "finished");
+        if (!a) return no("not judged: no finished alert for s3b");
+        const w = ev.watches.filter((x) => x.name === "s3b" && x.at <= a.at).at(-1);
+        if (!w) return no("the phone never watched or left s3b, so the runner cannot tell");
+        const s = ((a.at - w.at) / 1000).toFixed(1);
+        return w.on ? no(`watching s3b since +${(w.at / 1000).toFixed(1)} s, ${s} s before the alert`) : ok(`unwatched at +${(w.at / 1000).toFixed(1)} s, ${s} s before the alert`);
+      },
+    },
   ],
 };
 
@@ -2715,17 +3359,21 @@ const WAITED = "echo waited > waited.txt";
 const cardOf = (ev: Ev, name: string) => snaps(ev, name).flatMap((s) => s.items).find((i) => i.kind === "permission" && i.card);
 const cardIs = (name: string, answer: unknown) => (ev: Ev) => last(ev, name)?.items.some((i) => i.kind === "permission" && i.card?.answer === answer) === true;
 
+const S9_TTL_S = 120;
+
 const S9: Scenario = {
   id: "S9",
   area: "sessions",
   title: "A card waits while the user is away: push, failing push server, reminder, expiry",
   needsSimulator: false,
   away: true,
-  cardTtlS: 60,
+  // 120 s, so the reminder (at half) leaves room for an owed card push that is resent once the server recovers.
+  cardTtlS: S9_TTL_S,
   holdCardsS: 600,
   journey: [
     "The user is away from the phone when a session asks for approval; the push server is down at that moment.",
-    "The push server comes back. Half the card's time later the user is reminded.",
+    "The push server comes back after about 12 s. The card's push, owed since it failed, goes out then, and the push state reads on again without waiting for a new event.",
+    "Half the card's time later the user is reminded.",
     "Nobody answers, so the card expires, and the thread says what was refused.",
   ],
   setup: [
@@ -2736,9 +3384,10 @@ const S9: Scenario = {
     { do: "until", mark: "card-failed", what: "the card push to fail three times", timeoutS: 40, test: (ev) => ev.pushes().filter((p) => p.status === 500 && cardCount(p) !== null).length >= 3 },
     { do: "sleep", s: 1 },
     { do: "sink", fail: false },
-    { do: "until", mark: "reminded", what: "a reminder push", timeoutS: 60, test: (ev) => ev.pushes().some((p) => /still waiting/.test(p.body) && p.status === 200) },
+    { do: "mark", mark: "sink-back" },
+    { do: "until", mark: "reminded", what: "a reminder push", timeoutS: S9_TTL_S, test: (ev) => ev.pushes().some((p) => /still waiting/.test(p.body) && p.status === 200) },
     { do: "until", mark: "recovered", what: "the push state to read on again", timeoutS: 15, test: (ev) => ev.pushStates.at(-1)?.push.state === "on" },
-    { do: "until", mark: "expired", what: "the card to expire", timeoutS: 60, test: cardIs("s9", "expired") },
+    { do: "until", mark: "expired", what: "the card to expire", timeoutS: S9_TTL_S, test: cardIs("s9", "expired") },
     { do: "sleep", s: 3 },
   ],
   pre: [created("s9"), { what: "a permission card opened", check: (ev) => (cardOf(ev, "s9") ? ok(cardOf(ev, "s9")!.card!.label) : no("no card")) }],
@@ -2781,14 +3430,14 @@ const S9: Scenario = {
       tell: "state",
       lane: "protocol",
       text: "A card nobody answers reminds the user once, at half its time.",
-      pass: "One reminder push, 30 s (half the 60 s card time) after the card opened, give or take 3 s, linking to the card.",
+      pass: `One reminder push, ${S9_TTL_S / 2} s (half the ${S9_TTL_S} s card time) after the card opened, give or take 3 s, linking to the card.`,
       fail: "No reminder, more than one, or one at another time.",
       check: (ev) => {
         const card = cardOf(ev, "s9");
         const r = ev.pushes().filter((p) => /still waiting/.test(p.body));
         if (!card || r.length !== 1) return no(`${r.length} reminders`);
         const after = (ev.atOf(r[0]!.at) - ev.atOf(card.at)) / 1000;
-        return Math.abs(after - 30) <= 3 && (r[0]!.click ?? "").endsWith(`?card=${card.card!.id}`) ? ok(`"${r[0]!.body}" ${after.toFixed(1)} s after the card opened`) : no(`${after.toFixed(1)} s after the card, link ${r[0]!.click}`);
+        return Math.abs(after - S9_TTL_S / 2) <= 3 && (r[0]!.click ?? "").endsWith(`?card=${card.card!.id}`) ? ok(`"${r[0]!.body}" ${after.toFixed(1)} s after the card opened`) : no(`${after.toFixed(1)} s after the card, link ${r[0]!.click}`);
       },
     },
     {
@@ -2832,6 +3481,42 @@ const S9: Scenario = {
       check: (ev) => {
         const leaky = ev.pushes().filter((p) => /echo|waited/.test(`${p.title} ${p.body} ${p.click}`));
         return leaky.length ? no(leaky[0]!.body) : ok(ev.pushes().map((p) => p.body).join(" | "));
+      },
+    },
+    {
+      id: "S9.7",
+      tell: "state",
+      lane: "protocol",
+      text: "A card push the server refused while it was down still reaches the user once it is back, before any reminder.",
+      pass: "After sink-back, the sink answers 200 to a card push (\"needs your approval\") before the first reminder it answers 200.",
+      fail: "The card push is never sent again after its three failed tries, so the first the user hears of the card is the reminder, or nothing.",
+      check: (ev) => {
+        const back = mark(ev, "sink-back");
+        if (back === undefined) return needMarks(ev, "sink-back")!;
+        const ok200 = ev.pushes().filter((p) => p.status === 200 && ev.atOf(p.at) >= back);
+        const card = ok200.find((p) => cardCount(p) !== null);
+        const reminder = ok200.find((p) => /still waiting/.test(p.body));
+        if (!card) return no(`no card push got through after the server came back${reminder ? `; the reminder did, ${Math.round((ev.atOf(reminder.at) - back) / 1000)} s after` : ""}`);
+        const t = Math.round((ev.atOf(card.at) - back) / 100) / 10;
+        return !reminder || ev.atOf(card.at) < ev.atOf(reminder.at) ? ok(`"${card.body}" ${t} s after the server came back`) : no(`"${card.body}" ${t} s after the server came back, after the reminder`);
+      },
+    },
+    {
+      id: "S9.8",
+      tell: "state",
+      lane: "protocol",
+      text: "Once the push server is back, the phone hears that alerts work again without waiting for something new to push.",
+      pass: "A push_state frame reads on within 30 s of sink-back, and before the sink answered 200 to the first reminder (a new event).",
+      fail: "The state stays failing until the reminder happens to get through, or more than 30 s.",
+      check: (ev) => {
+        const back = mark(ev, "sink-back");
+        if (back === undefined) return needMarks(ev, "sink-back")!;
+        const reminder = ev.pushes().find((p) => p.status === 200 && /still waiting/.test(p.body) && ev.atOf(p.at) >= back);
+        const by = Math.min(back + 30_000, reminder ? ev.atOf(reminder.at) : Infinity);
+        const on = ev.pushStates.find((p) => p.at >= back && p.push.state === "on");
+        if (!on) return no("the push state never read on after the server came back");
+        const t = Math.round((on.at - back) / 100) / 10;
+        return on.at < by ? ok(`on ${t} s after the server came back`) : no(`on only ${t} s after the server came back${reminder && on.at >= ev.atOf(reminder.at) ? ", after the reminder got through" : ""}`);
       },
     },
   ],
@@ -2887,4 +3572,4 @@ const S9b: Scenario = {
   ],
 };
 
-export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S3b, S4, S4b, S4c, S5, S6, S6b, S6c, S6d, S6e, S6f, S6g, S6h, S7, S8, S8fg, S9, S9b];
+export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S3b, S4, S4b, S4c, S5, S5t, S6, S6b, S6c, S6d, S6e, S6f, S6g, S6h, S6k, S7, S8, S8fg, S9, S9b];

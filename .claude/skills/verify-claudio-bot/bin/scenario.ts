@@ -49,7 +49,7 @@ for (const event of ["uncaughtException", "unhandledRejection"] as const)
   });
 
 /** seen: the order each item was first seen in. */
-type Thread = { items: Map<string, Item>; seen: Map<string, number>; controls: Controls | null; epoch: string | null; rev: number };
+type Thread = { items: Map<string, Item>; seen: Map<string, number>; controls: Controls | null; epoch: string | null; rev: number; live: { itemId: string; text: string } | null };
 
 /**
  * An item put where the app's ThreadModel puts it (the order bridge/src/threads.ts ordered() gives a snapshot): by
@@ -269,6 +269,7 @@ class Phone {
       return;
     }
     if (name) this.record("out", name, m);
+    if (name && (m.type === "watch_session" || m.type === "unwatch_session")) this.ev.watches.push({ at: this.ev.now(), name, on: m.type === "watch_session" });
     this.c.send(m);
   }
 
@@ -300,7 +301,7 @@ class Phone {
 
   private thread(sid: string) {
     let t = this.threads.get(sid);
-    if (!t) this.threads.set(sid, (t = { items: new Map(), seen: new Map(), controls: null, epoch: null, rev: 0 }));
+    if (!t) this.threads.set(sid, (t = { items: new Map(), seen: new Map(), controls: null, epoch: null, rev: 0, live: null }));
     return t;
   }
 
@@ -367,6 +368,7 @@ class Phone {
     this.ev.frameTimes.push({ at: this.ev.now(), name, type: f.type });
     if (f.type === "session" || f.type === "session_items") this.shownBack(f);
     const t = this.thread(sid);
+    if (f.type === "session_delta") return this.stream(t, name, f);
     if (f.type === "session") {
       t.items = new Map();
       t.seen = new Map();
@@ -374,8 +376,11 @@ class Phone {
       t.controls = f.controls as Controls;
       t.epoch = f.epoch as string;
       t.rev = f.rev as number;
+      t.live = (f.live as Thread["live"]) ?? null;
+      if (t.live) this.stream(t, name, null);
     } else if (f.type === "session_items") {
       for (const i of f.items as Item[]) land(t, i);
+      if (t.live && (f.items as Item[]).some((i) => i.id === t.live!.itemId)) t.live = null;
       for (const id of f.removed as string[]) t.items.delete(id);
       if (f.controls) t.controls = f.controls as Controls;
       t.rev = f.rev as number;
@@ -438,6 +443,17 @@ class Phone {
     for (const [sid] of this.names) if (!this.away.has(sid)) this.send({ type: "unwatch_session", sessionId: sid });
   }
 
+  /** A delta applies, as in the app, only at the end of the live text; the longest text a thread streamed is kept. */
+  private stream(t: Thread, name: string, f: Frame | null) {
+    if (f) {
+      const at = Number(f.offset);
+      const mine = t.live && t.live.itemId === f.itemId ? t.live.text : "";
+      if (at !== mine.length) return;
+      t.live = { itemId: String(f.itemId), text: mine + String(f.text) };
+    }
+    if (t.live && t.live.text.length > (this.ev.streamed[name] ?? "").length) this.ev.streamed[name] = t.live.text;
+  }
+
   watch(sid: string, resume: boolean) {
     const t = this.thread(sid);
     this.away.delete(sid);
@@ -450,6 +466,7 @@ class Phone {
     this.c = null;
     if (this.pinger) clearInterval(this.pinger);
     if (!c) return;
+    for (const [sid, name] of this.names) if (!this.away.has(sid)) this.ev.watches.push({ at: this.ev.now(), name, on: false });
     c.ws.onmessage = null;
     c.close();
   }
@@ -576,6 +593,9 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
     sends: [],
     replies: [],
     labels: [],
+    watches: [],
+    streamed: {},
+    opens: [],
   };
   const probe: { run: { proc: ReturnType<typeof Bun.spawn>; file: string } | null } = { run: null };
   const labels: { run: { proc: ReturnType<typeof Bun.spawn>; file: string } | null; poll: ReturnType<typeof setInterval> | null } = { run: null, poll: null };
@@ -592,6 +612,8 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
   let relay: Relay | null = null;
   let losing: ((f: Frame) => boolean) | null = null;
   let app: pool.Build | null = null;
+  /** The Claude Code pids signal-claude froze, by session, so SIGCONT resumes exactly those. */
+  const frozen = new Map<string, number[]>();
   const markNow = (m: string) => {
     ev.marks[m] = ev.now();
     log(`mark ${m} at +${(ev.marks[m]! / 1000).toFixed(1)}s`);
@@ -800,7 +822,17 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
         return Bun.sleep(3000);
       }
       case "show-list":
-        if (!lease || !app) return;
+        if (!lease) {
+          // As the relaunched app does: nothing watches a thread while the list is on screen.
+          for (const [sid, name] of p.names) {
+            if (p.away.has(sid)) continue;
+            p.send({ type: "unwatch_session", sessionId: sid });
+            p.away.add(sid);
+            log(`show-list: unwatched ${name}`);
+          }
+          return;
+        }
+        if (!app) return;
         // The app has no link to the list; relaunched with -sidebarMode sessions it opens there and unwatches the thread.
         pool.installAndLaunch(lease, app);
         return Bun.sleep(4000);
@@ -828,12 +860,31 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
         return;
       case "signal-claude": {
         const sid = ev.ids[a.name]!;
+        if (a.signal === "SIGCONT" && frozen.has(sid)) {
+          // The process it froze may be gone (the bridge ended it at its Stop deadline); a new one was never frozen.
+          const pids = frozen.get(sid)!;
+          frozen.delete(sid);
+          const alive = pids.filter((pid) => {
+            try {
+              process.kill(pid, "SIGCONT");
+              return true;
+            } catch {
+              return false;
+            }
+          });
+          for (const pid of pids) if (paused.includes(pid)) paused.splice(paused.indexOf(pid), 1);
+          log(`SIGCONT ${alive.join(", ") || "none"}; already gone: ${pids.filter((pid) => !alive.includes(pid)).join(", ") || "none"}`);
+          return markNow(a.mark);
+        }
         const found = sh(["pgrep", "-P", String(run!.bridgePid), "-f", sid]).out.split("\n").filter(Boolean).map(Number);
         const lines = found.map((pid) => `${pid} ${sh(["ps", "-p", String(pid), "-o", "command="]).out.trim()}`).filter((l) => /(^|\/)claude$/.test(l.split(" ")[1] ?? ""));
         if (!lines.length) throw new PreconditionFailed(`no Claude Code process names session ${sid}`);
         for (const l of lines) process.kill(Number(l.split(" ")[0]), a.signal);
-        if (a.signal === "SIGSTOP") paused.push(...lines.map((l) => Number(l.split(" ")[0])));
-        else paused.splice(0);
+        if (a.signal === "SIGSTOP") {
+          const pids = lines.map((l) => Number(l.split(" ")[0]));
+          paused.push(...pids);
+          frozen.set(sid, pids);
+        }
         log(`${a.signal} ${lines.join(" | ").slice(0, 200)}`);
         return markNow(a.mark);
       }
@@ -899,6 +950,17 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
         labels.poll = setInterval(() => (ev.labels = readLabels(file)), 1000);
         log("label probe reading the app's labels");
         return;
+      }
+      case "fresh-open": {
+        const sid = ev.ids[a.name]!;
+        const fresh = await connect(run!);
+        const at = fresh.frames.length;
+        fresh.send({ type: "watch_session", sessionId: sid, after: null });
+        const snap = await until(() => fresh.frames.slice(at).find((f) => f.type === "session" && f.sessionId === sid), `a fresh snapshot of ${a.name}`, 30);
+        fresh.close();
+        ev.opens.push({ at: ev.now(), mark: a.mark, name: a.name, items: snap.items as Item[], live: (snap.live as Ev["opens"][number]["live"]) ?? null, controls: snap.controls as Controls });
+        log(`fresh open of ${a.name}: ${(snap.items as Item[]).length} items, live ${snap.live ? `${String((snap.live as { text: string }).text).length} chars` : "null"}`);
+        return markNow(a.mark);
       }
       case "restart-bridge": {
         p.drop();
@@ -1048,7 +1110,9 @@ function describe(a: Action): string {
     case "open-thread":
       return `Open \`${a.name}\`'s thread: in the app by claudiobot://session/<id> (simulator lane), or watch it again if the phone had left it (protocol lane).`;
     case "show-list":
-      return "The app goes back to the Sessions list (simulator lane: relaunched on the list).";
+      return "The app goes back to the Sessions list (simulator lane: relaunched on the list; protocol lane: the phone unwatches every thread it watches).";
+    case "fresh-open":
+      return `A second phone opens \`${a.name}\`'s thread from scratch (watch_session with no position) and keeps its snapshot; mark \`${a.mark}\`.`;
     case "app":
       return `Send the app to the ${a.to}${a.to === "background" ? " (simulator: Settings over it; protocol: as the app does, the phone says nobody is looking and leaves its threads, then its socket goes half-open)" : " (simulator: launch it again; protocol: reconnect and resume, mark `" + a.mark + "-list` when the list arrives)"}; mark \`${a.mark}\`.`;
     case "ps":
@@ -1056,7 +1120,7 @@ function describe(a: Action): string {
     case "kill-claude":
       return `SIGKILL the Claude Code process of \`${a.name}\`; mark \`${a.mark}\`.`;
     case "signal-claude":
-      return `Send ${a.signal} to the Claude Code process of \`${a.name}\` (${a.signal === "SIGSTOP" ? "it freezes" : "it resumes"}); mark \`${a.mark}\`.`;
+      return `Send ${a.signal} to the Claude Code process of \`${a.name}\` (${a.signal === "SIGSTOP" ? "it freezes" : "the process it froze resumes, if it still lives"}); mark \`${a.mark}\`.`;
     case "restart-bridge":
       return `Restart the bridge on the same port and home; the phone reconnects. Mark \`${a.mark}\`.`;
     case "lose-frame":

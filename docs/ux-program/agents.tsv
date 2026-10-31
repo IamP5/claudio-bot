@@ -33,8 +33,9 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-31T18:24:20Z	verifier	G19	ux/sessions-g19-runner-truth	PASS 9b1e491; no loosening; F1 S4c.1/.3 keep G20 arrival-time	3h	independent of owner
 2026-10-31T18:55:52Z	verifier	G20	ux/sessions-g20-frozen-stop	r2 PASS-PENDING-IOS a7a193b; P2 own.ts:423 notice uses now() -> owner small round	3h	fresh, independent of owner
 2026-10-31T19:04:55Z	verifier	G21	ux/sessions-g21-task-truth	PASS bd62652; P2-1 held note false cause + P3-3 -> owner small round	3h	independent of owner
-2026-10-31T19:05:18Z	owner	G22	ux/sessions-g22-push	PR #32 fix-forward round 2	5h	run 3 wave 2 (bridge-only; iOS groups wait for platform)
+2026-10-31T19:05:18Z	owner	G22	ux/sessions-g22-push	PR #32 round 2 at 4cadbc1; verifying	5h	run 3 wave 2 (bridge-only; iOS groups wait for platform)
 2026-10-31T19:48:18Z	verifier	G22	ux/sessions-g22-push	r1 FAIL 09b611c: P2 bot updates owed forever (burst, evict card); 5 P3	3h	independent of owner
 2026-10-31T20:02:37Z	verifier	G20	ux/sessions-g20-frozen-stop	iOS PASS 2ff75ad: 468 tests, swipe 72/0, S4/S6 sim + AX dark	2h	independent of owner
 2026-10-31T20:02:37Z	owner	G23	ux/sessions-g23-work-run	starting off main 75f2bbe	5h	run 3 wave 2
 2026-10-31T20:02:37Z	owner	G24	ux/sessions-g24-list	starting off main 75f2bbe	5h	run 3 wave 2
+2026-10-31T20:56:01Z	verifier	G22	ux/sessions-g22-push	r2 verifying 4cadbc1	3h	fresh, independent of owner

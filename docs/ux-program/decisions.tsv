@@ -208,3 +208,7 @@ ts	decision	why
 2026-10-31T19:48:18Z	G22: Poll looks back 60 s for clock skew	server clock behind the Mac
 2026-10-31T19:55:22Z	G21: a held stop note waits at most 2 s for its subagent's return, then posts without the cause; non-plain output files read "could not be read safely"	verifier P2-1, P3-3
 2026-10-31T20:02:37Z	iOS 26.5 platform installed by the user; builds work again. Pool stays on iOS 26.2 (devices FB82C652, 9E2BAEA0, E4237F6B) since they are valid destinations	avoid churn; app deploys to 18.0
+2026-10-31T20:56:01Z	G22: Each bot keeps at most its newest owed "has an update" push; cap evicts bot updates, then endings, bot cards, session cards	one ping after an outage, never at a card's cost (replaces the r1 call that all bot pushes stay owed)
+2026-10-31T20:56:01Z	G22: Write-only topic (poll 401/403): resend a timed-out push after the backoff; state stays failing until a real push succeeds	a lost needs-you push is worse than a rare double ring
+2026-10-31T20:56:01Z	G22: Pushes carry X-Sequence-ID (opaque hash of the push key); the poll matches on it, older ntfy falls back to text+link within 2 s	second ending never mistaken for the first; Android/web replace instead of adding
+2026-10-31T20:56:01Z	G22: "The phone looked" = any socket heard from while the app was open since the push's first try	matches how session alerts decide seen

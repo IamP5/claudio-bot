@@ -30,3 +30,4 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-31T17:51:40Z	owner	G20 ux/sessions-g20-frozen-stop		starting off main f2e9772	5h	run 3 wave 1
 2026-10-31T17:51:40Z	owner	G21 ux/sessions-g21-task-truth		starting off main f2e9772	5h	run 3 wave 1
 2026-10-31T18:22:29Z	verifier	G20	ux/sessions-g20-frozen-stop	verifying 9603f89	3h	independent of owner
+2026-10-31T18:24:20Z	verifier	G19	ux/sessions-g19-runner-truth	verifying 9b1e491	3h	independent of owner

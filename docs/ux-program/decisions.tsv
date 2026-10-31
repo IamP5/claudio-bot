@@ -180,3 +180,9 @@ ts	decision	why
 2026-10-31T18:22:29Z	G20: Outcome text drops "the turn": "Stopped by you before Claude replied" / "Stopped by you: 1 command" / "Stopped by you"	F-SES-287
 2026-10-31T18:22:29Z	G20: stopping.at is derived as deadline minus 15 s	no new saved state
 2026-10-31T18:22:29Z	G20: Stop notices name at most 3 items then "and N more" via fewNames	plan said at most 3
+2026-10-31T18:24:20Z	G19: S1.3 allows 1 s after a card is answered	bridge coalesces rows every 500 ms (verifier to rule)
+2026-10-31T18:24:20Z	G19: S4c long freeze runs as a second session s4k inside S4c, keeping ids S4c.4-.7	plan ids
+2026-10-31T18:24:20Z	G19: Plan S6g.10 is S6g.11; plan S8.12 is S8fg.4	id taken; command only killed in S8fg
+2026-10-31T18:24:20Z	G19: S2 command uses 	 tee bg.txt; S5 card hold 60 s; S9 card TTL 120 s|lets S2.13, S5.10, S9.7 be judgeable
+2026-10-31T18:24:20Z	G19: S6f.1 also accepts the Run 3 restart push text	G25 changes the text; only G19 edits bin/*
+2026-10-31T18:24:20Z	G19: Merge order: G19 before G20; G20 rebases its S4cl/S6g.11 scenario edits onto G19's	both edit scenarios.ts; G19 owns bin/*

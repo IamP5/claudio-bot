@@ -197,3 +197,12 @@ ts	decision	why
 2026-10-31T19:04:55Z	G21: "[exited with code N]" trailer stripped from shown output	the step already shows the ending
 2026-10-31T19:04:55Z	G21: Output files read only inside Claude Code's temp folder, named by the task's own id, never through a symlink	security
 2026-10-31T19:04:55Z	G21: An approved command's clock starts at the Allow tap	task and step agree
+2026-10-31T19:48:18Z	G22: Owed retry backoff 15 s, 30 s, 1 m, 2 m, 5 m from the last failed try	needs-you pushes are urgent; S9.8 gets real margin
+2026-10-31T19:48:18Z	G22: A timed-out or broken try is resent only after a poll of the topic shows ntfy lacks it; while out it is saved as "may have been taken"	ntfy has no dedupe; never twice, never dropped
+2026-10-31T19:48:18Z	G22: With nothing owed, a successful poll is the probe and sets push state "on"	otherwise a recovered server reads failing until the next push
+2026-10-31T19:48:18Z	G22: Push failure state persists; "on" at start means no failure on record	restart no longer hides a failure
+2026-10-31T19:48:18Z	G22: ntfy 5xx retries at once	S9.1
+2026-10-31T19:48:18Z	G22: A reminder replaces an owed push for the same card; an ending's alert is withdrawn when a newer run starts	one card never rings twice
+2026-10-31T19:48:18Z	G22: Owed pushes from before a restart wait the 60 s start grace	same as open cards at start
+2026-10-31T19:48:18Z	G22: Bot card and bot update pushes use the same owed queue	behavior change outside Sessions (verifier to judge)
+2026-10-31T19:48:18Z	G22: Poll looks back 60 s for clock skew	server clock behind the Mac

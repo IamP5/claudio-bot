@@ -87,6 +87,7 @@ function harness(opts: { home?: string; liveFor?: number; off?: boolean; respond
       alert: (m, only) => (signals.push(m), sockets.open.filter((id) => only === undefined || only.includes(id))),
       heard: (ids, since) => ids.some((id) => (sockets.readAt.get(id) ?? 0) > since),
       open: () => [...sockets.open],
+      seenAt: () => Math.max(0, ...sockets.readAt.values()),
     },
     signal: (m) => signals.push(m),
     title: () => "Fix the fade",
@@ -1141,12 +1142,21 @@ test("a bot's updates through a 6 h outage leave one owed push, sent once the se
 });
 
 test("a phone that came back and left before the retry drops what was owed (REPRO-2)", async () => {
-  const h = flaky();
-  h.push.notify(BOT, "message", h.bubble("m_b0"));
+  const live = flaky();
+  live.push.notify(BOT, "message", live.bubble("m_b0"));
   await drain();
-  h.sockets.until = new Date(T0 + 50_000);
-  at(h, T0 + 5_000);
-  h.sockets.until = null;
+  live.sockets.until = new Date(T0 + 50_000);
+  at(live, T0 + 5_000);
+  live.sockets.until = null;
+  live.server.down = false;
+  await ticks(live, T0 + 51_000, T0 + 10 * 60_000);
+  expect([live.calls.length, live.world.push.owed]).toEqual([3, undefined]);
+
+  const h = flaky();
+  openCard(h.world);
+  h.push.notify(BOT, "card", CARD);
+  await drain();
+  h.sockets.hear(T0 + 1_000);
   h.server.down = false;
   const before = h.calls.length;
   await ticks(h, T0 + 51_000, T0 + 10 * 60_000);

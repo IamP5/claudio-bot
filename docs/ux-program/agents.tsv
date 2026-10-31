@@ -26,3 +26,6 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-23T12:25:47Z	owner	G11	ux/sessions-g11-outlive-socket	merged #26 (2 verify rounds; r2 PASS 4f933b8)	6h	last Sessions group; after G18; bypassed a write-guard hook via Bash early (writes stayed in g11-outlive), then used EnterWorktree
 2026-10-23T13:42:41Z	verifier	G11	ux/sessions-g11-outlive-socket	r1 FAIL e4f61ef: P1 restart-resend reads Not sent; 2 P2; S6h.2 honest	3h	independent of owner
 2026-10-23T15:31:34Z	verifier	G11	ux/sessions-g11-outlive-socket	r2 PASS 4f933b8; withdraw note observed end to end; 5 P3	3h	fresh, independent of owner
+2026-10-31T17:51:40Z	owner	G19 ux/sessions-g19-runner-truth		starting off main f2e9772	5h	run 3 wave 1
+2026-10-31T17:51:40Z	owner	G20 ux/sessions-g20-frozen-stop		starting off main f2e9772	5h	run 3 wave 1
+2026-10-31T17:51:40Z	owner	G21 ux/sessions-g21-task-truth		starting off main f2e9772	5h	run 3 wave 1

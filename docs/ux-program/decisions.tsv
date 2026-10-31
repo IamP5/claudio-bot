@@ -189,3 +189,11 @@ ts	decision	why
 2026-10-31T18:41:28Z	BLOCKER: Xcode 26.6 cannot build the app without the iOS 26.5 platform (all destinations ineligible); the 26.2 pool rebuild does not avoid this. Bridge-only verification continues; iOS-touching PRs are held until the platform is installed	observed 2026-10-31 by xcodebuild -showdestinations
 2026-10-31T18:55:52Z	G20: stale Stop-and-send text: "Your message is queued." when a turn runs, "Your message was sent." when none does; forced end keeps "the bridge ended it" before exit because the closing guard blocks a second Claude Code	verifier r1 P3s
 2026-10-31T18:55:52Z	iOS platform: user stopped the slow xcodebuild download and will install iOS 26.5 themselves	user 2026-10-31
+2026-10-31T19:04:55Z	G21: Fan-out row line names the agents ("sleeper one, sleeper two and sleeper three running"), not "3 agents running"	the app already prefixes "3 agents ·"
+2026-10-31T19:04:55Z	G21: Bridge posts its own "Agent X is waiting on its own background command" note	the main transcript never names the subagent's command
+2026-10-31T19:04:55Z	G21: Background-move notice omits the time limit	the bridge cannot see it
+2026-10-31T19:04:55Z	G21: A stop note waits for the subagent's end (or the turn's end) before saying "when X returned"	Claude Code stops the command a moment before it reports the end
+2026-10-31T19:04:55Z	G21: A command ending long after its subagent says Claude Code did not report how it ended	never claim an unobserved outcome
+2026-10-31T19:04:55Z	G21: "[exited with code N]" trailer stripped from shown output	the step already shows the ending
+2026-10-31T19:04:55Z	G21: Output files read only inside Claude Code's temp folder, named by the task's own id, never through a symlink	security
+2026-10-31T19:04:55Z	G21: An approved command's clock starts at the Allow tap	task and step agree

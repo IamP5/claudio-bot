@@ -292,7 +292,7 @@ test("a card held back while the phone was live is pushed by the hub's clock onc
   world.bots.set(b.id, b);
   const sent: string[] = [];
   const quietAt = new Date(Date.now() + 45_000);
-  const push = createPush({ world, persist: () => {}, sender: async (n) => void sent.push(n.text), liveUntil: () => quietAt, now: () => new Date(), log: () => {} });
+  const push = createPush({ world, persist: () => {}, sender: { send: async (n) => void sent.push(n.text), taken: async () => [] }, liveUntil: () => quietAt, now: () => new Date(), log: () => {} });
   const h = hubOver(world, { push });
   h.homes.create(b.id, "# eng\n");
   await h.hub.handle({ type: "send", botId: b.id, text: "push it", uploads: [] });
@@ -913,7 +913,7 @@ test("hello lists every feature this bridge has, and usage only with a usage rea
 test("hello says whether phone pushes reach the user", () => {
   const world = emptyWorld();
   const off = createPush({ world, persist: () => {}, sender: null, liveUntil: () => null, now: () => new Date(), log: () => {} });
-  const on = createPush({ world, persist: () => {}, sender: async () => {}, liveUntil: () => null, now: () => new Date(), log: () => {} });
+  const on = createPush({ world, persist: () => {}, sender: { send: async () => {}, taken: async () => [] }, liveUntil: () => null, now: () => new Date(), log: () => {} });
   const push = (p: typeof off) => {
     const hello = hubOver(world, { push: p }).hub.hello(NO_RING);
     return hello.type === "hello" ? hello.push : undefined;

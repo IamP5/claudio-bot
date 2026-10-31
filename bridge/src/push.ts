@@ -2,7 +2,7 @@ import type { Tickable } from "./clock";
 import type { BotId, MessageId, PushState as Reach, SessionAlert, SessionAlertReason, SessionId, Signal } from "./protocol";
 import type { Persist } from "./store";
 import { BOT_NAME_MAX, displayName, errorText } from "./text";
-import { chatOf, own, ownCardId, ownCardOpen, type HeldEnding, type OwnCard, type PushState, type SessionEnd, type World } from "./world";
+import { chatOf, own, ownCardId, ownCardOpen, type HeldEnding, type OwedPush, type OwnCard, type PushFailing, type PushState, type SessionEnd, type World } from "./world";
 
 // Phone pushes: an ntfy-style POST to CLAUDIOBOT_PUSH_URL now, APNs later behind the same Sender. The only writer of
 // World.push.
@@ -12,8 +12,14 @@ import { chatOf, own, ownCardId, ownCardOpen, type HeldEnding, type OwnCard, typ
 // on iOS cannot withdraw a push once delivered, so the app says when the card it names was already answered.
 // Every push has keys, recorded and flushed before the send, so a crash never double-pushes: `${messageId}|${reason}`
 // for a bot, `${cardId}|card` and `${cardId}|reminder` for each card of a session, `${sessionId}|${at}|done` for a
-// session's run that came to rest at `at`. A send that fails is tried twice more, then the push state reads failing
-// until a send gets through.
+// session's run that came to rest at `at`. A try the server refused is tried twice more. A try it may have taken (it
+// timed out, or the connection broke after the request went) is never sent again before the server is asked whether it
+// holds it, since ntfy has no idempotency key and a second publish rings again. A push whose tries failed stays owed
+// while what it is for still waits on the user (an open card, a session ending no newer run replaced) and no phone is
+// live, and the push state reads failing. The oldest owed push goes again 15 s after the failure, then 30 s, 1, 2 and
+// 5 minutes apart; with none owed the bridge asks the server for its recent pushes every minute. Either one answered
+// puts the state back to on. The failing state and the owed pushes are kept on disk, and a failing state read at start
+// is checked at once.
 // A turn's first bubble pushes at most once per bot per 10 minutes; nothing else counts toward that or is held by it.
 // A session's cards that open within 2 s of the one before share one push (the burst waits at most 6 s); a later card
 // waits while that push's cards stay open, at most 10 minutes. A card's reminder pushes at half its time. A retry is
@@ -46,8 +52,23 @@ export type Push = Tickable & {
 /** What a transport receives. `text` and `link` are the whole user-visible payload. botId null: a session's push. */
 type Notification = { botId: BotId | null; text: string; link: string; high: boolean };
 
-/** One delivery attempt. Rejects with an Error whose message the user may read: no URL, no topic. */
-export type Sender = (n: Notification) => Promise<void>;
+/** A transport. Errors carry messages the user may read: no URL, no topic. */
+export type Sender = {
+  /** One try. Rejects with a PushFailure; any other error counts as one the server may have taken. */
+  send(n: Notification): Promise<void>;
+  /** The pushes the server holds that it took at or after `since` (ms). Rejects when the server cannot say. */
+  taken(since: number): Promise<{ text: string; link: string }[]>;
+};
+
+/** A failed try. maybe: the server may have taken the push. */
+export class PushFailure extends Error {
+  constructor(
+    message: string,
+    readonly maybe: boolean,
+  ) {
+    super(message);
+  }
+}
 
 export const MESSAGE_THROTTLE_MS = 10 * 60_000;
 // Far longer than any card stays open, so a key is never forgotten while its card can still remind.
@@ -63,6 +84,13 @@ export const SEND_TRIES = 3;
 const ALERTS_KEPT_MS = 24 * 3_600_000;
 /** The wait before the second try; each later one waits four times longer. */
 export const RETRY_MS = 2_000;
+/** After the tries fail, the waits before each try of the oldest owed push; the last repeats. */
+export const OWED_RETRY_MS = [15_000, 30_000, 60_000, 120_000, 300_000] as const;
+/** While failing with nothing owed, how often the bridge asks the server for its recent pushes. */
+export const PROBE_MS = 60_000;
+/** A server records a push's time in whole seconds, after the request began. */
+const TAKEN_SLACK_MS = 2_000;
+const OWED_KEPT = 50;
 
 const PHRASE: Record<PushReason, string> = {
   card: "needs you",
@@ -105,27 +133,56 @@ function cardsText(reason: "card" | "reminder", cards: readonly OwnCard[]): stri
   return "is still waiting for you";
 }
 
-/** The push server's answer in words the phone may show: never the URL, which holds the topic. */
-function plainFailure(e: unknown): string {
-  if (e instanceof Error && e.name === "TimeoutError") return `The push server did not answer within ${SEND_TIMEOUT_MS / 1000} s`;
-  return "Could not reach the push server";
+/** No connection was made, so the server never saw the request. */
+const refused = (e: unknown) => (e as { code?: unknown } | null)?.code === "ConnectionRefused" || /ECONNREFUSED/.test(errorText(e));
+
+/** A failed request in words the phone may show: never the URL, which holds the topic. */
+function plainFailure(e: unknown): PushFailure {
+  if (refused(e)) return new PushFailure("Could not reach the push server", false);
+  if (e instanceof Error && e.name === "TimeoutError") return new PushFailure(`The push server did not answer within ${SEND_TIMEOUT_MS / 1000} s`, true);
+  return new PushFailure("The connection to the push server broke before it answered", true);
 }
 
 export function ntfySender(url: string, fetchFn: typeof fetch = fetch): Sender {
-  return async (n) => {
-    let res: Response;
-    try {
-      // Bot names may be non-Latin-1, which fetch rejects in a header, so the name rides in the UTF-8 body.
-      res = await fetchFn(url, {
-        method: "POST",
-        body: n.text,
-        headers: { Title: "ClaudioBot", Click: n.link, ...(n.high && { Priority: "high" }) },
-        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+  return {
+    async send(n) {
+      let res: Response;
+      try {
+        // Bot names may be non-Latin-1, which fetch rejects in a header, so the name rides in the UTF-8 body.
+        res = await fetchFn(url, {
+          method: "POST",
+          body: n.text,
+          headers: { Title: "ClaudioBot", Click: n.link, ...(n.high && { Priority: "high" }) },
+          signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+        });
+      } catch (e) {
+        throw plainFailure(e);
+      }
+      // ntfy answers an error status before it publishes, except when its own cache write fails after.
+      if (!res.ok) throw new PushFailure(`The push server answered ${res.status}`, false);
+    },
+    // ntfy's poll of the topic's cache: one JSON message per line.
+    async taken(since) {
+      const poll = new URL(url);
+      poll.pathname = `${poll.pathname.replace(/\/$/, "")}/json`;
+      poll.searchParams.set("poll", "1");
+      poll.searchParams.set("since", String(Math.floor(since / 1000)));
+      let res: Response;
+      try {
+        res = await fetchFn(poll.href, { signal: AbortSignal.timeout(SEND_TIMEOUT_MS) });
+      } catch (e) {
+        throw plainFailure(e);
+      }
+      if (!res.ok) throw new PushFailure(`The push server answered ${res.status}`, true);
+      return (await res.text()).split("\n").flatMap((line) => {
+        try {
+          const m = JSON.parse(line) as { event?: unknown; message?: unknown; click?: unknown };
+          return m.event === "message" ? [{ text: String(m.message ?? ""), link: String(m.click ?? "") }] : [];
+        } catch {
+          return [];
+        }
       });
-    } catch (e) {
-      throw new Error(plainFailure(e));
-    }
-    if (!res.ok) throw new Error(`The push server answered ${res.status}`);
+    },
   };
 }
 
@@ -187,19 +244,21 @@ export function createPush(deps: {
   const openAtStart = new Set<MessageId>(world.gate.open.map((c) => c.cardId));
   type Deferred = { bot: { id: BotId; name: string }; reason: PushReason; messageId: MessageId };
   const deferred = new Map<string, Deferred>();
-  let reach: Reach = sender === null ? { state: "off" } : { state: "on" };
   /** Session keys a session_alert went out for, while a phone was live or push was off. Keys an alert covers share it. */
   const alerted = new Map<string, Alerted>();
   const held = (): readonly HeldEnding[] => (Array.isArray(world.push.held) ? world.push.held : []);
-  /** Saves the endings owed; one that cannot be saved is still owed while the bridge runs. */
-  function setHeld(next: HeldEnding[]) {
-    if (next.length > HELD_KEPT) deps.log(`push: ${next.length - HELD_KEPT} session endings owed were dropped, the oldest first`);
-    own<PushState>(world.push).held = next.slice(-HELD_KEPT);
+  /** What cannot be saved still holds while the bridge runs. */
+  function save(what: string) {
     try {
       deps.persist("now");
     } catch (e) {
-      deps.log(`push: could not save the session endings owed: ${errorText(e)}`);
+      deps.log(`push: could not save ${what}: ${errorText(e)}`);
     }
+  }
+  function setHeld(next: HeldEnding[]) {
+    if (next.length > HELD_KEPT) deps.log(`push: ${next.length - HELD_KEPT} session endings owed were dropped, the oldest first`);
+    own<PushState>(world.push).held = next.slice(-HELD_KEPT);
+    save("the session endings owed");
   }
   const readable = (h: Partial<HeldEnding>) =>
     typeof h.key === "string" && typeof h.id === "string" && typeof h.end === "string" && h.end in ENDED && typeof h.at === "string" && !Number.isNaN(Date.parse(h.at));
@@ -208,6 +267,41 @@ export function createPush(deps: {
   const restored = new Set(held().map((h) => h.key));
   /** A run a restart cut off, or an ending from before the start, waits out the grace a returning phone gets. */
   const waits = (h: HeldEnding, now: number) => now < graceEnds && (h.end === "lost" || restored.has(h.key));
+  const failing = (): PushFailing | undefined => world.push.failing;
+  const owedPushes = (): readonly OwedPush[] => (Array.isArray(world.push.owed) ? world.push.owed : []);
+  const reach = (): Reach => {
+    const f = failing();
+    return sender === null ? { state: "off" } : f ? { state: "failing", error: f.error, at: f.at } : { state: "on" };
+  };
+  function setFailing(next: PushFailing | null) {
+    const before = JSON.stringify(reach());
+    if (next === null) delete own<PushState>(world.push).failing;
+    else own<PushState>(world.push).failing = next;
+    save("the push state");
+    const after = reach();
+    if (JSON.stringify(after) !== before) deps.signal?.({ type: "push_state", push: after });
+  }
+  function setOwed(next: OwedPush[]) {
+    if (next.length === owedPushes().length && next.every((o, i) => o === owedPushes()[i])) return;
+    if (next.length > OWED_KEPT) deps.log(`push: ${next.length - OWED_KEPT} owed pushes were dropped, the oldest first`);
+    if (next.length === 0) delete own<PushState>(world.push).owed;
+    else own<PushState>(world.push).owed = next.slice(-OWED_KEPT);
+    save("the pushes owed");
+  }
+  const failingRead = (f: Partial<PushFailing> | undefined) =>
+    typeof f?.error === "string" && typeof f.at === "string" && typeof f.retryAt === "string" && !Number.isNaN(Date.parse(f.retryAt)) && Number.isInteger(f.retries);
+  const owedRead = (o: Partial<OwedPush>) =>
+    Array.isArray(o.keys) && typeof o.text === "string" && typeof o.link === "string" && typeof o.high === "boolean" && typeof o.for?.kind === "string" && (o.unsure === undefined || !Number.isNaN(Date.parse(o.unsure)));
+  if (sender === null || (world.push.failing !== undefined && !failingRead(world.push.failing))) {
+    if (world.push.failing !== undefined) setFailing(null);
+  } else if (failing()) {
+    // Restored from before this start: check now rather than read failing on old evidence.
+    own<PushState>(world.push).failing = { ...failing()!, retryAt: deps.now().toISOString() };
+  }
+  if (owedPushes().some((o) => !owedRead(o))) setOwed(owedPushes().filter(owedRead));
+  /** A retry of an owed push, or a probe, is on its way. */
+  let retrying = false;
+
   /** Each session's last card push: a later card waits while these stay open. */
   const lastCards = new Map<SessionId, { at: number; cards: MessageId[] }>();
 
@@ -228,10 +322,37 @@ export function createPush(deps: {
   /** Open cards whose own push has not gone out, for any reason but a failed record. */
   const heldCards = () => world.gate.open.filter((c) => !pushed(`${c.cardId}|card`));
 
-  function setReach(next: Reach) {
-    if (JSON.stringify(next) === JSON.stringify(reach)) return;
-    reach = next;
-    deps.signal?.({ type: "push_state", push: next });
+  /** A newer run of the session replaced the ending the key names. A session the phone does not drive cannot tell. */
+  const current = (id: SessionId, key: string) => {
+    const drive = world.sessions.get(id)?.own;
+    return drive === undefined || (drive.outcome !== undefined && `${id}|${drive.outcome.at}|done` === key);
+  };
+  /** Still worth a push: no phone is live, and what it is for still waits on the user. */
+  function holds(o: OwedPush, now = deps.now().getTime()): boolean {
+    if (live(now)) return false;
+    const f = o.for;
+    if (f.kind === "cards") return f.cards.some((c) => isOpen(f.session, c));
+    if (f.kind === "ending") return current(f.session, o.keys[0]!);
+    if (f.kind === "bot-card") return world.gate.open.some((c) => c.cardId === f.card);
+    return true;
+  }
+  const note = (o: OwedPush): Notification => ({ botId: o.botId, text: o.text, link: o.link, high: o.high });
+  const failure = (e: unknown) => (e instanceof PushFailure ? e : new PushFailure(displayName(errorText(e), 120), true));
+  const iso = (t: number) => new Date(t).toISOString();
+
+  /** A new push failed: the state reads failing, and an owed retry already planned keeps its time. */
+  function failed(error: string) {
+    const now = deps.now().getTime();
+    const f = failing();
+    setFailing({ error: displayName(error, 120), at: iso(now), retryAt: f?.retryAt ?? iso(now + OWED_RETRY_MS[0]), retries: f?.retries ?? 0 });
+  }
+  /** A retry or a probe failed: the next waits longer, or a minute when nothing is owed. */
+  function retryFailed(error: string) {
+    const now = deps.now().getTime();
+    const f = failing();
+    const retries = f ? f.retries + 1 : 0;
+    const wait = owedPushes().length > 0 ? OWED_RETRY_MS[Math.min(retries, OWED_RETRY_MS.length - 1)]! : PROBE_MS;
+    setFailing({ error: displayName(error, 120), at: iso(now), retryAt: iso(now + wait), retries });
   }
 
   /** Records the keys and flushes them. False when they could not be saved: never send unrecorded. */
@@ -249,23 +370,60 @@ export function createPush(deps: {
     }
   }
 
-  /** Never throws into the caller, whatever the sender does. owed: a retry goes out only while it still holds. */
-  async function deliver(n: Notification, what: string, owed: () => boolean = () => true) {
+  /** Never throws into the caller, whatever the sender does. A try goes out only while the push still holds. */
+  async function deliver(o: OwedPush, what: string) {
     for (let tries = 1; ; tries++) {
+      const began = deps.now().getTime();
       try {
-        await sender!(n);
-        setReach({ state: "on" });
+        await sender!.send(note(o));
+        if (failing()) setFailing(null);
         return;
       } catch (e) {
-        if (tries >= SEND_TRIES) {
-          const error = displayName(errorText(e), 120);
-          setReach({ state: "failing", error, at: deps.now().toISOString() });
-          deps.log(`push: ${what} failed after ${tries} tries: ${error}`);
-          return;
+        const f = failure(e);
+        if (!f.maybe && tries < SEND_TRIES) {
+          await wait(RETRY_MS * 4 ** (tries - 1));
+          if (!holds(o)) return;
+          continue;
         }
-        await wait(RETRY_MS * 4 ** (tries - 1));
-        if (!owed()) return;
+        deps.log(f.maybe ? `push: ${what} may not have gone out: ${f.message}` : `push: ${what} failed after ${tries} tries: ${f.message}`);
+        if (holds(o)) setOwed([...owedPushes(), f.maybe ? { ...o, unsure: iso(began) } : o]);
+        failed(f.message);
+        return;
       }
+    }
+  }
+
+  /**
+   * The oldest owed push goes again, once the server says it does not hold it if a try may have reached it. With none
+   * owed, asking the server for its recent pushes is the probe. Never throws into the caller.
+   */
+  async function retry() {
+    retrying = true;
+    try {
+      setOwed(owedPushes().filter((x) => holds(x)));
+      const o = owedPushes()[0];
+      const began = deps.now().getTime();
+      if (o === undefined) {
+        if (failing()) await sender!.taken(began);
+      } else if (o.unsure !== undefined && (await sender!.taken(Date.parse(o.unsure) - TAKEN_SLACK_MS)).some((t) => t.text === o.text && t.link === o.link)) {
+        deps.log(`push: ${o.keys.join(", ")} had gone out`);
+        setOwed(owedPushes().filter((x) => x !== o));
+      } else {
+        try {
+          await sender!.send(note(o));
+        } catch (e) {
+          const f = failure(e);
+          if (f.maybe) setOwed(owedPushes().map((x) => (x === o ? { ...x, unsure: iso(began) } : x)));
+          throw f;
+        }
+        deps.log(`push: ${o.keys.join(", ")} went out on a retry`);
+        setOwed(owedPushes().filter((x) => x !== o));
+      }
+      if (failing()) setFailing(null);
+    } catch (e) {
+      retryFailed(failure(e).message);
+    } finally {
+      retrying = false;
     }
   }
 
@@ -281,8 +439,12 @@ export function createPush(deps: {
     if (reason === "message" && throttled(bot.id, now)) return false;
     const what = `${reason} for ${bot.id}`;
     if (!record([key], what, now)) return false;
+    const card = reason === "card" || reason === "reminder";
     // The name is the one bot-controlled free text that leaves the Mac, so a renamed bot cannot smuggle content out.
-    void deliver({ botId: bot.id, text: `${displayName(bot.name, BOT_NAME_MAX)} ${PHRASE[reason]}`, link: linkTo(bot.id, messageId), high: reason === "card" || reason === "reminder" }, what);
+    void deliver(
+      { keys: [key], botId: bot.id, text: `${displayName(bot.name, BOT_NAME_MAX)} ${PHRASE[reason]}`, link: linkTo(bot.id, messageId), high: card, for: card ? { kind: "bot-card", card: messageId } : { kind: "bot" } },
+      what,
+    );
     return true;
   }
 
@@ -324,17 +486,18 @@ export function createPush(deps: {
   function pushCards(id: SessionId, reason: "card" | "reminder", cards: readonly OwnCard[], now: number) {
     const ids = cards.map(ownCardId);
     const what = `${reason} for session ${id}`;
-    if (!record(ids.map((c) => `${c}|${reason}`), what, now)) return;
+    const keys = ids.map((c) => `${c}|${reason}`);
+    if (!record(keys, what, now)) return;
     if (reason === "card") lastCards.set(id, { at: now, cards: ids });
-    // Answered, or the phone came back, while a try failed: nothing is owed any more.
-    const owed = () => !live(deps.now().getTime()) && ids.some((c) => isOpen(id, c));
-    void deliver({ botId: null, text: `${SESSION} ${cardsText(reason, cards)}`, link: sessionLink(id, ids[0]), high: true }, what, owed);
+    // A reminder speaks for its cards, so an owed push for those cards alone is not sent as well.
+    else setOwed(owedPushes().filter((o) => !(o.for.kind === "cards" && o.keys.every((k) => k.endsWith("|card") && ids.includes(idOf(k) as MessageId)))));
+    void deliver({ keys, botId: null, text: `${SESSION} ${cardsText(reason, cards)}`, link: sessionLink(id, ids[0]), high: true, for: { kind: "cards", session: id, cards: ids } }, what);
   }
 
   function pushEnd(id: SessionId, end: SessionEnd, key: string, now: number) {
     const what = `${end} for session ${id}`;
     if (!record([key], what, now)) return;
-    void deliver({ botId: null, text: ENDED[end], link: sessionLink(id), high: false }, what, () => !live(deps.now().getTime()));
+    void deliver({ keys: [key], botId: null, text: ENDED[end], link: sessionLink(id), high: false, for: { kind: "ending", session: id } }, what);
   }
 
   const isOpen = (id: SessionId, card: MessageId) => world.sessions.get(id)?.own?.cards.some((c) => ownCardId(c) === card && ownCardOpen(c)) ?? false;
@@ -394,6 +557,10 @@ export function createPush(deps: {
     const before = JSON.stringify(owed);
     const drop = (key: string) => (owed = owed.filter((x) => x.key !== key));
     for (const h of held()) {
+      if (!current(h.id, h.key)) {
+        if (act) drop(h.key);
+        continue;
+      }
       if (pushed(h.key)) {
         if (act) drop(h.key);
         continue;
@@ -405,7 +572,7 @@ export function createPush(deps: {
       if (isLive || sender === null) {
         if (!alerted.has(h.key) && act) {
           alert(h.id, h.end, [h.key], [], now);
-          owed = owed.flatMap((x) => (x.key !== h.key ? [x] : sender === null ? [] : [{ ...x, alerted: true, at: new Date(now).toISOString() }]));
+          owed = owed.map((x) => (x.key !== h.key ? x : { ...x, alerted: true, at: new Date(now).toISOString() }));
         }
         if (sender !== null) hold();
         continue;
@@ -420,6 +587,12 @@ export function createPush(deps: {
     }
     if (JSON.stringify(owed) !== before) setHeld(owed);
     if (isLive || sender === null) resend(now, act, later);
+    const f = failing();
+    if (sender !== null && !retrying && (f || owedPushes().length > 0)) {
+      const due = f ? Date.parse(f.retryAt) : now;
+      if (due > now || !act) later(due);
+      else void retry();
+    }
     return next;
   }
 
@@ -433,12 +606,12 @@ export function createPush(deps: {
       if (sender !== null && !live(now) && waits(ending, now)) return setHeld([...held(), ending]);
       if (sender === null || live(now)) {
         alert(id, end, [key], [], now);
-        if (sender !== null) setHeld([...held(), { ...ending, alerted: true }]);
+        setHeld([...held(), { ...ending, alerted: true }]);
         return;
       }
       pushEnd(id, end, key, now);
     },
-    state: () => reach,
+    state: reach,
     tick(now) {
       if (now.getTime() >= graceEnds) {
         for (const d of deferred.values()) if (world.gate.open.some((c) => c.cardId === d.messageId)) notify(d.bot, d.reason, d.messageId, now.getTime());

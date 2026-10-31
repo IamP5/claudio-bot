@@ -294,7 +294,7 @@ test("an unattended socket does not hold back a push; an attended one, or one th
   const push = createPush({
     world: loadWorld(tempHome()).world,
     persist: () => {},
-    sender: async (n) => void sent.push(n),
+    sender: { send: async (n) => void sent.push(n), taken: async () => [] },
     liveUntil: () => b.transport.liveUntil(),
     now: b.now,
     log: () => {},

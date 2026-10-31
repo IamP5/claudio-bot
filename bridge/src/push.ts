@@ -388,9 +388,13 @@ export function createPush(deps: {
     const drive = world.sessions.get(id)?.own;
     return drive === undefined || (drive.outcome !== undefined && `${id}|${drive.outcome.at}|done` === key);
   };
-  /** Still worth a push: no phone is live or looked since it was first tried, and what it is for still waits on the user. */
-  function holds(o: OwedPush, now = deps.now().getTime()): boolean {
-    if (live(now) || (o.at !== undefined && (deps.sockets?.lookedAt?.() ?? 0) > Date.parse(o.at))) return false;
+  /**
+   * Still worth a push: nobody looked at an app since it was first tried, and what it is for still waits on the user. A
+   * live app only delays it: a socket can be live with nobody looking, as an app reconnecting in the background is until
+   * its presence(false) lands.
+   */
+  function holds(o: OwedPush): boolean {
+    if (o.at !== undefined && (deps.sockets?.lookedAt?.() ?? 0) > Date.parse(o.at)) return false;
     const f = o.for;
     if (f.kind === "cards") return f.cards.some((c) => isOpen(f.session, c));
     if (f.kind === "ending") return current(f.session, o.keys[0]!);
@@ -471,8 +475,10 @@ export function createPush(deps: {
         if (f === null) return void (failing() && setFailing(null));
         if (!f.maybe && tries < SEND_TRIES) {
           await wait(RETRY_MS * 4 ** (tries - 1));
-          if (holds(o) && isOwed(o)) continue;
-          return dropOwed(o);
+          if (!holds(o) || !isOwed(o)) return dropOwed(o);
+          // An app came up meanwhile: the push stays owed and goes once it is quiet, unless someone looks.
+          if (live(deps.now().getTime())) return failed(f.message, "new");
+          continue;
         }
         deps.log(f.maybe ? `push: ${what} may not have gone out: ${f.message}` : `push: ${what} failed after ${tries} tries: ${f.message}`);
         if (!holds(o)) dropOwed(o);
@@ -526,6 +532,8 @@ export function createPush(deps: {
         if (took) deps.log(`push: ${o.keys.join(", ")} had gone out`);
         // The card may have been answered, a phone come back, or a reminder taken its place while the server was asked.
         if (!took && (!holds(o) || !isOwed(o))) return dropOwed(o);
+        // An app came up while the server was asked: the sweep sends it once the app is quiet.
+        if (!took && live(deps.now().getTime())) return;
         if (took) dropOwed(o);
         else {
           const f = await attempt(blind ? { ...o, blind } : o);
@@ -635,7 +643,7 @@ export function createPush(deps: {
     const later = (t: number) => (next = Math.min(next, t));
     const isLive = live(now);
     // A phone that came back saw what was owed, even if it left again before the next retry; an answered card owes nothing.
-    if (act) setOwed(owedPushes().filter((o) => sending.has(pid(o)) || holds(o, now)));
+    if (act) setOwed(owedPushes().filter((o) => sending.has(pid(o)) || holds(o)));
     const quiet = deps.liveUntil()?.getTime() ?? Infinity;
     // Held for a live phone: a push goes out when it goes quiet. With push off there is nothing to wait for.
     const hold = sender === null ? () => {} : () => later(quiet);
@@ -713,7 +721,8 @@ export function createPush(deps: {
       const free = ready(now);
       if (free.length < owedPushes().filter((o) => !sending.has(pid(o))).length) later(graceEnds);
       if (f || free.length > 0) {
-        const due = f ? Date.parse(f.retryAt) : now;
+        // A live app delays an owed push until it is quiet; a look, not liveness, is what ends it.
+        const due = Math.max(f ? Date.parse(f.retryAt) : now, free.length > 0 && isLive ? quiet : 0);
         if (due > now || !act) later(due);
         else void retry();
       }

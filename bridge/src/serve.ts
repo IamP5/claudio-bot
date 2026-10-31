@@ -56,6 +56,10 @@ type SocketData = {
   /** When it was last heard from while attended: the user last saw its threads then. */
   readAt: number;
   attended: boolean;
+  /** When it connected. Until it sends a message, pings alone keep it live no longer than LIVE_WINDOW_MS after that. */
+  connectedAt: number;
+  /** It has sent a message, not only pings. */
+  spoke: boolean;
   /**
    * The app's presence as its messages arrive, before its requests run in turn: a message after a presence(false) is
    * from nobody looking even while that presence still waits in turns.
@@ -193,7 +197,8 @@ export function serve(deps: ServeDeps): Transport {
     if (ws.data.looking && (m.type !== "presence" || m.attended === true)) lookedAt = ws.data.heardAt;
   }
   const open = () => [...sockets.values()].flatMap((set) => [...set]);
-  const quietAt = () => open().filter((ws) => ws.data.attended).map((ws) => ws.data.heardAt + LIVE_WINDOW_MS);
+  // A socket that never says a word, not even its presence, is not someone watching past the window after it connected.
+  const quietAt = () => open().filter((ws) => ws.data.attended).map((ws) => (ws.data.spoke ? ws.data.heardAt : ws.data.connectedAt) + LIVE_WINDOW_MS);
 
   const send = (ws: Socket, message: ServerMessage) => {
     const frame = ws.data.protocol === 3 ? message : forProtocol2(message);
@@ -284,7 +289,7 @@ export function serve(deps: ServeDeps): Transport {
         // The ring holds protocol 3 frames, and a protocol 2 app never asks to resume.
         const resume = epoch && protocol === 3 ? { epoch, after: Number(url.searchParams.get("after") ?? NaN) } : null;
         const limited = protocol === 2 || devices.list(null).some((d) => d.id === deviceId && d.legacy);
-        if (server.upgrade(req, { data: { id: ++nextId, deviceId, protocol, resume, heardAt: deps.now().getTime(), readAt: deps.now().getTime(), attended: true, looking: true, limited, threads: new Set(), turns: Promise.resolve() } })) return;
+        if (server.upgrade(req, { data: { id: ++nextId, deviceId, protocol, resume, heardAt: deps.now().getTime(), readAt: deps.now().getTime(), attended: true, looking: true, connectedAt: deps.now().getTime(), spoke: false, limited, threads: new Set(), turns: Promise.resolve() } })) return;
         return new Response("Expected a WebSocket upgrade", { status: 426 });
       }
       return new Response("Not found", { status: 404 });
@@ -326,6 +331,7 @@ export function serve(deps: ServeDeps): Transport {
       },
       message(ws, raw) {
         heard(ws);
+        ws.data.spoke = true;
         look(ws, String(raw));
         ws.data.turns = ws.data.turns.then(() => handle(ws, String(raw))).catch((e) => log(`serve: ${errorText(e)}`));
       },

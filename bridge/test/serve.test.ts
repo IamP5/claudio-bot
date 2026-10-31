@@ -188,7 +188,7 @@ test("revoking a phone closes its sockets and its token opens no new one", async
   expect(retry.status).toBe(401);
 });
 
-test("a socket is live only while the app was heard from within the window; its pings and messages renew it", async () => {
+test("a socket is live only while the app was heard from within the window; its messages renew it, and its pings once it has spoken", async () => {
   const b = boot(tempHome());
   const phone = await pairPhone(b);
   const client = connect(b, { bearer: phone.token, query: "?protocol=3" });
@@ -200,13 +200,20 @@ test("a socket is live only while the app was heard from within the window; its 
   expect(b.transport.live()).toBe(0);
   expect(b.transport.liveUntil()).toBeNull();
 
+  // A socket that never says a word is not someone watching, however long it pings.
   client.raw.ping();
-  await until(() => b.transport.live() === 1, "a ping to renew the socket");
+  await Bun.sleep(30);
+  expect(b.transport.live()).toBe(0);
+
+  client.send({ type: "open", botId: "b_1" });
+  await until(() => b.transport.live() === 1, "a message to renew the socket");
   expect(b.transport.liveUntil()).toEqual(new Date(b.now().getTime() + 45_000));
 
   b.advance(45_000);
-  client.send({ type: "open", botId: "b_1" });
-  await until(() => b.transport.live() === 1, "a message to renew the socket");
+  expect(b.transport.live()).toBe(0);
+  client.raw.ping();
+  await until(() => b.transport.live() === 1, "a ping to renew a socket that has spoken");
+  expect(b.transport.liveUntil()).toEqual(new Date(b.now().getTime() + 45_000));
 });
 
 test("a socket whose device is gone by the time it opens is closed before any hello", async () => {
@@ -621,8 +628,8 @@ test("a look is someone at an app speaking: never the connect, nor a socket whos
   await until(() => at() === b.now().getTime(), "a message from an app nobody said was away");
 });
 
-/** A bot card's push failed and is owed; then `between` happens, and the push server comes back. */
-async function owedThen(between: (b: Booted, token: string) => Promise<void>) {
+/** A bot card's push failed and is owed; then `between` happens (tick: a push tick now), and the push server comes back. */
+async function owedThen(between: (b: Booted, token: string, tick: () => void) => Promise<void>) {
   const b = boot(tempHome());
   const { world } = loadWorld(tempHome());
   const server = { down: true, sent: [] as string[] };
@@ -647,7 +654,7 @@ async function owedThen(between: (b: Booted, token: string) => Promise<void>) {
   push.notify({ id: "b_1" as BotId, name: "Claudio" }, "card", "m_1" as MessageId);
   await until(() => world.push.owed?.length === 1 && world.push.failing !== undefined, "the card push to be owed");
   b.advance(1_000);
-  await between(b, token);
+  await between(b, token, () => push.tick(b.now()));
   server.down = false;
   b.advance(60_000);
   push.tick(b.now());
@@ -679,4 +686,36 @@ test.each([
   }, []],
 ] as [string, (b: Booted, token: string) => Promise<void>, string[]][])("an owed card push once the server is back, when %s", async (_, between, rings) => {
   expect(await owedThen(between)).toEqual(rings);
+});
+
+test.each([
+  ["it connects and never says a word (V3-SILENT)", async (b: Booted, token: string, tick: () => void) => {
+    const s = connect(b, { bearer: token, query: "?protocol=3" });
+    await s.next("hello");
+    b.advance(1_000);
+    tick();
+    await Bun.sleep(20);
+    s.raw.close();
+    await Bun.sleep(20);
+  }],
+  ["a tick lands between its hello and its presence(false) (V3-RACE)", async (b: Booted, token: string, tick: () => void) => {
+    const s = connect(b, { bearer: token, query: "?protocol=3" });
+    await s.next("hello");
+    tick();
+    s.send({ type: "presence", attended: false });
+    await until(() => b.presences() > 0, "the presence");
+    s.raw.close();
+    await Bun.sleep(20);
+  }],
+  ["a tick lands after its presence(false) (V3-CONTROL)", async (b: Booted, token: string, tick: () => void) => {
+    const s = connect(b, { bearer: token, query: "?protocol=3" });
+    await s.next("hello");
+    s.send({ type: "presence", attended: false });
+    await until(() => b.presences() > 0, "the presence");
+    tick();
+    s.raw.close();
+    await Bun.sleep(20);
+  }],
+] as [string, (b: Booted, token: string, tick: () => void) => Promise<void>][])("a live socket nobody looks at delays an owed card push and never drops it: %s", async (_, between) => {
+  expect(await owedThen(between)).toEqual(["Claudio needs you"]);
 });

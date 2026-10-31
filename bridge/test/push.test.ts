@@ -896,19 +896,35 @@ test("an owed push goes again 15 s after the failure, then 30 s, 1, 2 and 5 minu
   expect(h.push.state!()).toEqual({ state: "failing", error: "The push server answered 500", at: iso(h.clock.t) });
 });
 
-test("an owed push is dropped once its card is answered or a phone comes back, and is never sent then", async () => {
-  for (const back of ["answered", "phone"] as const) {
+test("an owed push is dropped once its card is answered or someone looks, and is never sent then", async () => {
+  for (const back of ["answered", "looked"] as const) {
     const h = flaky();
     const [card] = drive(h, [permission("m_a", T0)]);
     at(h, T0 + 2_000);
     await drain();
     h.server.down = false;
     if (back === "answered") answer(card!);
-    else h.sockets.until = new Date(T0 + 60_000);
+    else h.sockets.hear(T0 + 5_000);
     at(h, T0 + 17_000);
     await drain();
     expect([back, h.calls.length, h.world.push.owed]).toEqual([back, 3, undefined]);
   }
+});
+
+test("a live app nobody looks at delays an owed push until it is quiet, and never drops it", async () => {
+  const h = flaky();
+  drive(h, [permission("m_a", T0)]);
+  at(h, T0 + 2_000);
+  await drain();
+  h.server.down = false;
+  h.sockets.until = new Date(T0 + 60_000);
+  at(h, T0 + 17_000);
+  await drain();
+  expect([h.calls.length, h.world.push.owed?.length, h.push.nextDeadline()]).toEqual([3, 1, iso(T0 + 60_000)]);
+  h.sockets.until = null;
+  at(h, T0 + 60_000);
+  await drain();
+  expect([h.calls.length, h.world.push.owed]).toEqual([4, undefined]);
 });
 
 test("a reminder speaks for its card, so a card push still owed is not sent as well", async () => {
@@ -1141,7 +1157,7 @@ test("a bot's updates through a 6 h outage leave one owed push, sent once the se
   expect(h.calls.slice(before).map((c) => c.init.body)).toEqual(["Claudio Bot has an update for you"]);
 });
 
-test("a phone that came back and left before the retry drops what was owed (REPRO-2)", async () => {
+test("a phone that looked and left before the retry drops what was owed; one live but never looking only delays it (REPRO-2)", async () => {
   const live = flaky();
   live.push.notify(BOT, "message", live.bubble("m_b0"));
   await drain();
@@ -1150,7 +1166,7 @@ test("a phone that came back and left before the retry drops what was owed (REPR
   live.sockets.until = null;
   live.server.down = false;
   await ticks(live, T0 + 51_000, T0 + 10 * 60_000);
-  expect([live.calls.length, live.world.push.owed]).toEqual([3, undefined]);
+  expect([live.calls.map((c) => c.init.body).slice(3), live.world.push.owed]).toEqual([["Claudio Bot has an update for you"], undefined]);
 
   const h = flaky();
   openCard(h.world);

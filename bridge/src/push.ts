@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Tickable } from "./clock";
 import type { BotId, MessageId, PushState as Reach, SessionAlert, SessionAlertReason, SessionId, Signal } from "./protocol";
 import type { Persist } from "./store";
@@ -17,10 +18,12 @@ import { chatOf, own, ownCardId, ownCardOpen, type HeldEnding, type OwedPush, ty
 // holds it, since ntfy has no idempotency key and a second publish rings again. While a try is out the push is kept on
 // disk as one the server may have taken, so a crash mid-try neither drops it nor repeats it. A push whose tries failed
 // stays owed while what it is for still waits on the user (an open card, a session ending no newer run replaced) and no
-// phone is live, and the push state reads failing. The oldest owed push goes again 15 s after the failure, then 30 s,
-// 1, 2 and 5 minutes apart; with none owed the bridge asks the server for its recent pushes a minute after the last
-// failure. Either one answered puts the state back to on. The failing state and the owed pushes are kept on disk; a
-// failing state read at start is checked at once, and pushes owed from before the start wait out the start grace.
+// phone is live, and the push state reads failing. A bot's update is owed only as its newest, and an owed card is
+// never dropped for one. The oldest owed push goes again 15 s after the failure, then 30 s, 1, 2 and 5 minutes apart;
+// with none owed the bridge asks the server for its recent pushes within a minute, and a topic it may not read leaves
+// the last failure standing until a push gets through. Either one answered puts the state back to on. The failing
+// state and the owed pushes are kept on disk; a failing state read at start is checked at once, and pushes owed from
+// before the start wait out the start grace.
 // A turn's first bubble pushes at most once per bot per 10 minutes; nothing else counts toward that or is held by it.
 // A session's cards that open within 2 s of the one before share one push (the burst waits at most 6 s); a later card
 // waits while that push's cards stay open, at most 10 minutes. A card's reminder pushes at half its time. A retry is
@@ -50,16 +53,28 @@ export type Push = Tickable & {
   state?(): Reach;
 };
 
-/** What a transport receives. `text` and `link` are the whole user-visible payload. botId null: a session's push. */
-type Notification = { botId: BotId | null; text: string; link: string; high: boolean };
+/**
+ * What a transport receives. `text` and `link` are the whole user-visible payload. botId null: a session's push. sid:
+ * the push's own id, the same on every try, so the server's record of a try can be told from another push's.
+ */
+type Notification = { botId: BotId | null; text: string; link: string; high: boolean; sid: string };
 
 /** A transport. Errors carry messages the user may read: no URL, no topic. */
 export type Sender = {
   /** One try. Rejects with a PushFailure; any other error counts as one the server may have taken. */
   send(n: Notification): Promise<void>;
-  /** The pushes the server holds that it took at or after `since` (ms). Rejects when the server cannot say. */
-  taken(since: number): Promise<{ text: string; link: string }[]>;
+  /**
+   * The pushes the server holds that it took at or after `since` (ms); sid when the server keeps it. Rejects when the
+   * server cannot say, with a PollForbidden when it will not let the bridge read.
+   */
+  taken(since: number): Promise<Taken[]>;
 };
+
+/** A push the server holds: at (ms) and sid when it says. */
+type Taken = { text: string; link: string; at?: number; sid?: string };
+
+/** The topic is write-only for the bridge: the server will never say what it holds. */
+export class PollForbidden extends Error {}
 
 /** A failed try. maybe: the server may have taken the push. */
 export class PushFailure extends Error {
@@ -89,12 +104,16 @@ export const RETRY_MS = 2_000;
 export const OWED_RETRY_MS = [15_000, 30_000, 60_000, 120_000, 300_000] as const;
 /** While failing with nothing owed, how often the bridge asks the server for its recent pushes. */
 export const PROBE_MS = 60_000;
-/**
- * How far before a try's start the server's record of it is looked for: its time is in whole seconds, and its clock may
- * be behind the Mac's. Only an earlier push with the same text and link inside it can be mistaken for the try.
- */
+/** How far before a try's start the server's record of it is looked for, for a server clock behind the Mac's. */
 const TAKEN_SLACK_MS = 60_000;
+/**
+ * A server that keeps no sequence id is matched by text and link, and only this close to the try: a session's earlier
+ * ending reads the same. Its time is in whole seconds.
+ */
+const UNMARKED_SLACK_MS = 2_000;
 const OWED_KEPT = 50;
+/** Over OWED_KEPT, the kind dropped first: a bot's update, then an ending, then a card. */
+const EVICT: Record<OwedPush["for"]["kind"], number> = { bot: 0, ending: 1, "bot-card": 2, cards: 3 };
 
 const PHRASE: Record<PushReason, string> = {
   card: "needs you",
@@ -137,6 +156,9 @@ function cardsText(reason: "card" | "reminder", cards: readonly OwnCard[]): stri
   return "is still waiting for you";
 }
 
+/** A proxy's answer after it may have handed the push on: a bad gateway, a gateway timeout, Cloudflare's 520 to 524. */
+const GATEWAY = new Set([502, 504, 520, 521, 522, 523, 524]);
+
 /** No connection was made, so the server never saw the request. */
 const refused = (e: unknown) => (e as { code?: unknown } | null)?.code === "ConnectionRefused" || /ECONNREFUSED/.test(errorText(e));
 
@@ -156,14 +178,15 @@ export function ntfySender(url: string, fetchFn: typeof fetch = fetch): Sender {
         res = await fetchFn(url, {
           method: "POST",
           body: n.text,
-          headers: { Title: "ClaudioBot", Click: n.link, ...(n.high && { Priority: "high" }) },
+          // ntfy (2.29 and later) keeps the sequence id and returns it in its poll; older servers ignore it.
+          headers: { Title: "ClaudioBot", Click: n.link, "X-Sequence-ID": n.sid, ...(n.high && { Priority: "high" }) },
           signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
         });
       } catch (e) {
         throw plainFailure(e);
       }
       // ntfy answers an error status before it publishes, except when its own cache write fails after.
-      if (!res.ok) throw new PushFailure(`The push server answered ${res.status}`, false);
+      if (!res.ok) throw new PushFailure(`The push server answered ${res.status}`, GATEWAY.has(res.status));
     },
     // ntfy's poll of the topic's cache: one JSON message per line.
     async taken(since) {
@@ -177,11 +200,13 @@ export function ntfySender(url: string, fetchFn: typeof fetch = fetch): Sender {
       } catch (e) {
         throw plainFailure(e);
       }
+      if (res.status === 401 || res.status === 403) throw new PollForbidden(`The push server answered ${res.status} to a read of the topic`);
       if (!res.ok) throw new PushFailure(`The push server answered ${res.status}`, true);
       return (await res.text()).split("\n").flatMap((line) => {
         try {
-          const m = JSON.parse(line) as { event?: unknown; message?: unknown; click?: unknown };
-          return m.event === "message" ? [{ text: String(m.message ?? ""), link: String(m.click ?? "") }] : [];
+          const m = JSON.parse(line) as { event?: unknown; message?: unknown; click?: unknown; time?: unknown; sequence_id?: unknown };
+          if (m.event !== "message") return [];
+          return [{ text: String(m.message ?? ""), link: String(m.click ?? ""), ...(typeof m.time === "number" && { at: m.time * 1000 }), ...(typeof m.sequence_id === "string" && { sid: m.sequence_id }) }];
         } catch {
           return [];
         }
@@ -203,6 +228,7 @@ export function senderFromEnv(value: string | undefined, log: (line: string) => 
 }
 
 const idOf = (key: string) => key.slice(0, key.lastIndexOf("|"));
+const iso = (t: number) => new Date(t).toISOString();
 const cardAt = (c: OwnCard) => Date.parse(c.kind === "permission" ? c.card.at : c.at);
 const cardUntil = (c: OwnCard) => Date.parse(c.kind === "permission" ? c.card.expiresAt : c.expiresAt);
 const remindAt = (c: OwnCard) => cardAt(c) + (cardUntil(c) - cardAt(c)) / 2;
@@ -291,9 +317,18 @@ export function createPush(deps: {
   const pid = (o: OwedPush) => o.keys[0]!;
   function setOwed(next: OwedPush[]) {
     if (next.length === owedPushes().length && next.every((o, i) => o === owedPushes()[i])) return;
-    if (next.length > OWED_KEPT) deps.log(`push: ${next.length - OWED_KEPT} owed pushes were dropped, the oldest first`);
-    if (next.length === 0) delete own<PushState>(world.push).owed;
-    else own<PushState>(world.push).owed = next.slice(-OWED_KEPT);
+    let kept = next;
+    while (kept.length > OWED_KEPT) {
+      const first = kept.reduce((v, o) => (EVICT[o.for.kind] < EVICT[v.for.kind] ? o : v));
+      kept = kept.filter((o) => o !== first);
+    }
+    if (kept.length < next.length) deps.log(`push: ${next.length - kept.length} owed pushes were dropped, updates before cards, the oldest first`);
+    if (kept.length === 0) delete own<PushState>(world.push).owed;
+    else own<PushState>(world.push).owed = kept;
+    // Nothing owed any more: the probe looks within a minute, whatever a long backoff said.
+    const f = failing();
+    const probeBy = deps.now().getTime() + PROBE_MS;
+    if (kept.length === 0 && f && Date.parse(f.retryAt) > probeBy) own<PushState>(world.push).failing = { ...f, retryAt: iso(probeBy) };
     save("the pushes owed");
   }
   const failingRead = (f: Partial<PushFailing> | undefined) =>
@@ -352,9 +387,12 @@ export function createPush(deps: {
     if (f.kind === "bot-card") return world.gate.open.some((c) => c.cardId === f.card);
     return true;
   }
-  const note = (o: OwedPush): Notification => ({ botId: o.botId, text: o.text, link: o.link, high: o.high });
+  const sidOf = (o: OwedPush) => `cb${createHash("sha256").update(pid(o)).digest("hex").slice(0, 32)}`;
+  const note = (o: OwedPush): Notification => ({ botId: o.botId, text: o.text, link: o.link, high: o.high, sid: sidOf(o) });
+  /** The server's record of a try of o: by sequence id when the server keeps one, else by what it says and links. */
+  const isTry = (o: OwedPush) => (t: Taken) =>
+    t.sid !== undefined ? t.sid === sidOf(o) : t.text === o.text && t.link === o.link && (t.at === undefined || t.at >= Date.parse(o.unsure!) - UNMARKED_SLACK_MS);
   const failure = (e: unknown) => (e instanceof PushFailure ? e : new PushFailure(displayName(errorText(e), 120), true));
-  const iso = (t: number) => new Date(t).toISOString();
 
   /**
    * A try failed. retry: a retry of an owed push, which waits longer the next time; a probe keeps the schedule and looks
@@ -389,7 +427,8 @@ export function createPush(deps: {
       return null;
     } catch (e) {
       const f = failure(e);
-      if (!f.maybe) putOwed(plain);
+      // A push dropped while the try was out (a reminder took its place, a phone came back) stays dropped.
+      if (!f.maybe && isOwed(o)) putOwed(plain);
       return f;
     }
   }
@@ -421,7 +460,7 @@ export function createPush(deps: {
         if (f === null) return void (failing() && setFailing(null));
         if (!f.maybe && tries < SEND_TRIES) {
           await wait(RETRY_MS * 4 ** (tries - 1));
-          if (holds(o)) continue;
+          if (holds(o) && isOwed(o)) continue;
           return dropOwed(o);
         }
         deps.log(f.maybe ? `push: ${what} may not have gone out: ${f.message}` : `push: ${what} failed after ${tries} tries: ${f.message}`);
@@ -445,10 +484,27 @@ export function createPush(deps: {
       setOwed(owedPushes().filter((x) => sending.has(pid(x)) || holds(x)));
       const o = ready(deps.now().getTime())[0];
       if (o === undefined) {
-        if (failing()) await sender!.taken(deps.now().getTime());
+        const f = failing();
+        if (f) {
+          try {
+            await sender!.taken(deps.now().getTime());
+          } catch (e) {
+            if (!(e instanceof PollForbidden)) throw e;
+            // A write-only topic never answers a read: the last real failure stands until a push gets through.
+            return setFailing({ ...f, retryAt: iso(deps.now().getTime() + PROBE_MS) });
+          }
+        }
       } else {
         how = "retry";
-        const took = o.unsure !== undefined && (await sender!.taken(Date.parse(o.unsure) - TAKEN_SLACK_MS)).some((t) => t.text === o.text && t.link === o.link);
+        let took = false;
+        if (o.unsure !== undefined) {
+          try {
+            took = (await sender!.taken(Date.parse(o.unsure) - TAKEN_SLACK_MS)).some(isTry(o));
+          } catch (e) {
+            // A write-only topic never says what it holds, so the push goes again: a rare second ring over a lost one.
+            if (!(e instanceof PollForbidden)) throw e;
+          }
+        }
         if (took) deps.log(`push: ${o.keys.join(", ")} had gone out`);
         // The card may have been answered, a phone come back, or a reminder taken its place while the server was asked.
         if (!took && (!holds(o) || !isOwed(o))) return dropOwed(o);
@@ -482,7 +538,9 @@ export function createPush(deps: {
     if (!record([key], what, now)) return false;
     const card = reason === "card" || reason === "reminder";
     // A reminder speaks for its card, so the card's own push still owed is not sent as well.
-    if (reason === "reminder") setOwed(owedPushes().filter((o) => sending.has(pid(o)) || pid(o) !== `${messageId}|card`));
+    if (reason === "reminder") setOwed(owedPushes().filter((o) => pid(o) !== `${messageId}|card`));
+    // One update per bot is owed at most: the newest says all an older one would.
+    else if (!card) setOwed(owedPushes().filter((o) => !(o.for.kind === "bot" && o.botId === bot.id)));
     // The name is the one bot-controlled free text that leaves the Mac, so a renamed bot cannot smuggle content out.
     void deliver(
       { keys: [key], botId: bot.id, text: `${displayName(bot.name, BOT_NAME_MAX)} ${PHRASE[reason]}`, link: linkTo(bot.id, messageId), high: card, for: card ? { kind: "bot-card", card: messageId } : { kind: "bot" } },
@@ -533,7 +591,7 @@ export function createPush(deps: {
     if (!record(keys, what, now)) return;
     if (reason === "card") lastCards.set(id, { at: now, cards: ids });
     // A reminder speaks for its cards, so an owed push for those cards alone is not sent as well.
-    else setOwed(owedPushes().filter((o) => sending.has(pid(o)) || !(o.for.kind === "cards" && o.keys.every((k) => k.endsWith("|card") && ids.includes(idOf(k) as MessageId)))));
+    else setOwed(owedPushes().filter((o) => !(o.for.kind === "cards" && o.keys.every((k) => k.endsWith("|card") && ids.includes(idOf(k) as MessageId)))));
     void deliver({ keys, botId: null, text: `${SESSION} ${cardsText(reason, cards)}`, link: sessionLink(id, ids[0]), high: true, for: { kind: "cards", session: id, cards: ids } }, what);
   }
 
@@ -558,6 +616,8 @@ export function createPush(deps: {
     let next = Infinity;
     const later = (t: number) => (next = Math.min(next, t));
     const isLive = live(now);
+    // A phone that came back saw what was owed, even if it left again before the next retry; an answered card owes nothing.
+    if (act) setOwed(owedPushes().filter((o) => sending.has(pid(o)) || holds(o, now)));
     const quiet = deps.liveUntil()?.getTime() ?? Infinity;
     // Held for a live phone: a push goes out when it goes quiet. With push off there is nothing to wait for.
     const hold = sender === null ? () => {} : () => later(quiet);
@@ -635,8 +695,7 @@ export function createPush(deps: {
       const free = ready(now);
       if (free.length < owedPushes().filter((o) => !sending.has(pid(o))).length) later(graceEnds);
       if (f || free.length > 0) {
-        // With nothing owed the probe looks a minute after the last failure, whatever a long backoff said.
-        const due = !f ? now : free.length > 0 ? Date.parse(f.retryAt) : Math.min(Date.parse(f.retryAt), Date.parse(f.at) + PROBE_MS);
+        const due = f ? Date.parse(f.retryAt) : now;
         if (due > now || !act) later(due);
         else void retry();
       }

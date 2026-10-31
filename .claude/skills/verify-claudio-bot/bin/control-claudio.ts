@@ -283,14 +283,28 @@ async function launch() {
   chmodSync(wrapper, 0o755);
 
   // The ntfy stand-in: every push the bridge sends becomes one JSON line in pushes.jsonl. While the run folder holds
-  // sink-fail, it answers 500, as a broken push server would, and the line says so.
+  // sink-fail, it answers 500, as a broken push server would, and the line says so. While it holds sink-slow (a number
+  // of seconds), it publishes a push and answers that much later, as a slow one would. A GET is ntfy's poll of what it
+  // published (?poll=1&since=<unix s>), logged to polls.jsonl, never pushes.jsonl.
   const sink = join(dir, "ntfy-sink.ts");
   writeFileSync(
     sink,
-    `import { appendFileSync, existsSync } from "node:fs";
-const s = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async (req) => {
+    `import { appendFileSync, existsSync, readFileSync } from "node:fs";
+const published: object[] = [];
+const s = Bun.serve({ port: 0, hostname: "127.0.0.1", idleTimeout: 0, fetch: async (req) => {
   const status = existsSync(${JSON.stringify(join(dir, "sink-fail"))}) ? 500 : 200;
-  appendFileSync(${JSON.stringify(join(dir, "pushes.jsonl"))}, JSON.stringify({ at: new Date().toISOString(), path: new URL(req.url).pathname, title: req.headers.get("title"), click: req.headers.get("click"), priority: req.headers.get("priority"), status, body: await req.text() }) + "\\n");
+  const url = new URL(req.url);
+  const now = new Date();
+  if (req.method === "GET") {
+    appendFileSync(${JSON.stringify(join(dir, "polls.jsonl"))}, JSON.stringify({ at: now.toISOString(), path: url.pathname, since: url.searchParams.get("since"), status }) + "\\n");
+    const since = Number(url.searchParams.get("since") ?? 0);
+    return new Response(status === 200 ? published.filter((m: any) => m.time >= since).map((m) => JSON.stringify(m)).join("\\n") : "{}", { status });
+  }
+  const slow = existsSync(${JSON.stringify(join(dir, "sink-slow"))}) ? Number(readFileSync(${JSON.stringify(join(dir, "sink-slow"))}, "utf8")) || 0 : 0;
+  const body = await req.text();
+  appendFileSync(${JSON.stringify(join(dir, "pushes.jsonl"))}, JSON.stringify({ at: now.toISOString(), path: url.pathname, title: req.headers.get("title"), click: req.headers.get("click"), priority: req.headers.get("priority"), status, ...(slow > 0 && { slowS: slow }), body }) + "\\n");
+  if (status === 200) published.push({ id: crypto.randomUUID(), time: Math.floor(now.getTime() / 1000), event: "message", topic: url.pathname.slice(1), message: body, click: req.headers.get("click") });
+  if (slow > 0) await Bun.sleep(slow * 1000);
   return new Response("{}", { status });
 } });
 console.log("ntfy-sink " + s.port);
@@ -774,6 +788,7 @@ async function evidence(run: Run, label: string) {
   copy(join(run.home, "usage"), "usage");
   copy(join(run.dir, "bridge.log"), "bridge.log");
   copy(join(run.dir, "pushes.jsonl"), "pushes.jsonl");
+  copy(join(run.dir, "polls.jsonl"), "polls.jsonl");
   copy(join(run.dir, "cloud-attempt.txt"), "cloud-attempt.txt");
   const { token: _t, ...rest } = run as Run & { token?: string };
   writeFileSync(join(out, "run.json"), JSON.stringify(rest, null, 2));

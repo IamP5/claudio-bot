@@ -89,11 +89,13 @@ struct BackgroundWorkSheet: View {
 
     private func words(_ task: SessionTask, _ line: String) -> some View {
         let refusal = refusal(of: task)
+        let command = command(of: task)
         return VStack(alignment: .leading, spacing: 4) {
-            Text(task.label)
-                .font(task.kind == .command ? .system(.subheadline, design: .monospaced) : .subheadline)
+            Text(title(of: task))
+                .font(task.kind == .command && command == nil ? .system(.subheadline, design: .monospaced) : .subheadline)
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
+            if let command { StepDetail(text: command, title: title(of: task)) }
             Text(line)
                 .font(.caption)
                 .monospacedDigit()
@@ -109,8 +111,28 @@ struct BackgroundWorkSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
-            task.label + ", " + Self.status(task, now: staleAt ?? .now, owner: owner(of: task), spoken: true) + (refusal.map { ". Error: couldn't stop. " + $0 } ?? "")
+            title(of: task) + ", " + Self.status(task, now: staleAt ?? .now, owner: owner(of: task), spoken: true) + (command.map { ", command: " + $0 } ?? "")
+                + (refusal.map { ". Error: couldn't stop. " + $0 } ?? "")
         )
+    }
+
+    private func step(of task: SessionTask) -> ToolStep? {
+        guard let id = task.stepId else { return nil }
+        for case let .work(_, _, steps) in model?.items ?? [] {
+            if let step = steps.first(where: { $0.id == id }) { return step }
+        }
+        return nil
+    }
+
+    /// A command's task is named by its step's title, "Sleep 75 seconds", and its command goes under it in full; the
+    /// task's own label is that command cut to one line (F-SES-203). Other tasks keep their label.
+    private func title(of task: SessionTask) -> String {
+        command(of: task).flatMap { _ in step(of: task)?.label } ?? task.label
+    }
+
+    private func command(of task: SessionTask) -> String? {
+        guard task.kind == .command, let step = step(of: task), let detail = step.detail, !detail.isEmpty, detail != step.label else { return nil }
+        return detail
     }
 
     private func refusal(of task: SessionTask) -> String? {
@@ -125,6 +147,7 @@ struct BackgroundWorkSheet: View {
     private func stop(_ task: SessionTask, clock: Date) -> some View {
         if store.has(.sessionTasks) {
             let phase = phase(.task(task.id), clock)
+            let name = title(of: task)
             Button {
                 client.send(.sessionStop(sessionId: sessionId, target: .task(task.id)))
             } label: {
@@ -135,7 +158,7 @@ struct BackgroundWorkSheet: View {
             .controlSize(.large)
             .tint(phase == .stopping ? Theme.secondary : Theme.danger)
             .disabled(phase == .stopping)
-            .accessibilityLabel(phase == .stopping ? "Stopping \(task.label)" : phase.retries ? "Not stopped yet. Try stopping \(task.label) again" : "Stop \(task.label)")
+            .accessibilityLabel(phase == .stopping ? "Stopping \(name)" : phase.retries ? "Not stopped yet. Try stopping \(name) again" : "Stop \(name)")
         }
     }
 

@@ -204,19 +204,19 @@ enum RunClock {
     }
 }
 
-/// A work item read as one run: what is live, what went wrong, and since when. tasks: the session's live tasks by
-/// the step that started them, which carry a subagent's progress. heardAt: the last sign of life for the session.
+/// A work item read as one run: what is live, what went wrong, and since when. tasks: the session's live tasks, which
+/// carry a subagent's progress and name the subagent that started them. heardAt: the last sign of life for the session.
 struct WorkRun {
     /// How long a running step may go without a sign of life before it reads as quiet.
     static let quietAfter: TimeInterval = 60
 
     let steps: [ToolStep]
-    let tasks: [String: SessionTask]
+    let tasks: [SessionTask]
     let heardAt: Date?
 
     init(steps: [ToolStep], controls: SessionControls? = nil) {
         self.steps = steps
-        tasks = Dictionary((controls?.tasks ?? []).compactMap { task in task.stepId.map { ($0, task) } }, uniquingKeysWith: { a, _ in a })
+        tasks = controls?.tasks ?? []
         heardAt = controls?.heardAt
     }
 
@@ -226,6 +226,15 @@ struct WorkRun {
     var isRunning: Bool { steps.contains { $0.state == .running } }
     /// Running with something that changes with time: a step's clock, or a quiet spell measured from a sign of life.
     var ticks: Bool { isRunning && (since != nil || heardAt != nil || !tasks.isEmpty) }
+    /// Work that may still run states its age, which grows by the minute.
+    var ages: Bool { steps.contains { $0.state == .unsure && $0.startedAt != nil } }
+
+    /// What a collapsed run shows: its live steps and, while any agent of the run is live, every finished agent beside
+    /// them, so an agent that ends first stays in view with how it ended (F-SES-195).
+    var collapsed: [ToolStep] {
+        let agentLive = steps.contains { $0.isAgent && $0.state.isLive }
+        return steps.filter { $0.state.isLive || (agentLive && $0.isAgent) }
+    }
 
     /// The run's clock: the earliest start among running steps. A waiting step has not started.
     var since: Date? { steps.filter { $0.state == .running }.compactMap(\.startedAt).min() }
@@ -236,13 +245,17 @@ struct WorkRun {
         return end.timeIntervalSince(start)
     }
 
-    /// "3 agents running · 1 waiting for approval · 1 stopped", or for a finished run "Ran 3 agents, 43s".
-    /// Spoken, the state leads: "Running: 3 agents, 1 waiting for approval". What may still run is never counted as ran.
+    /// "2 of 3 agents running · 1 done · 1 waiting for approval · 1 stopped", or for a finished run "Ran 3 agents, 43s".
+    /// Spoken, the state leads: "Running: 2 of 3 agents, 1 done". What may still run is never counted as ran.
     func headline(spoken: Bool = false) -> String {
         let format = spoken ? RunClock.spoken : RunClock.short
         var parts: [String] = []
         let running = steps.filter { $0.state == .running }
-        if !running.isEmpty { parts.append(spoken ? "Running: " + Self.nouns(running) : Self.nouns(running) + " running") }
+        let agents = steps.count(where: \.isAgent)
+        let nouns = Self.nouns(running, agents: agents)
+        if !running.isEmpty { parts.append(spoken ? "Running: " + nouns : nouns + " running") }
+        let done = steps.count { $0.isAgent && $0.state == .ok }
+        if steps.contains(where: { $0.isAgent && $0.state.isLive }), done > 0 { parts.append("\(done) done") }
         let waiting = steps.count { $0.state == .waiting }
         if waiting > 0 { parts.append("\(waiting) waiting for approval") }
         let settled = steps.filter { $0.state != .unsure }
@@ -256,12 +269,12 @@ struct WorkRun {
         return parts.joined(separator: spoken ? ", " : " · ")
     }
 
-    /// The failed steps, named when there is one: "broken helper failed: Agent type not found".
+    /// The first failed step, named, and how many more failed: "broken helper failed: Agent type not found, and 1 more failed".
     var failure: String? {
         let failed = steps.filter { $0.state == .error }
         guard let first = failed.first else { return nil }
-        guard failed.count == 1 else { return "\(failed.count) failed" }
-        return "\(first.label) failed" + (first.cause.map { ": " + $0 } ?? "")
+        let line = "\(first.label) failed" + (first.cause.map { ": " + $0 } ?? "")
+        return failed.count == 1 ? line : line + ", and \(failed.count - 1) more failed"
     }
 
     /// The header as VoiceOver speaks it: "Running: 3 agents, 2 minutes 5 seconds. broken helper failed: …".
@@ -272,20 +285,27 @@ struct WorkRun {
         return line
     }
 
-    func task(for step: ToolStep) -> SessionTask? { tasks[step.id] }
+    func task(for step: ToolStep) -> SessionTask? { tasks.first { $0.stepId == step.id } }
 
     /// The label of the subagent that made this call, when it is in the same run.
     func owner(of step: ToolStep) -> String? {
         step.owner.flatMap { id in steps.first { $0.id == id }?.label }
     }
 
-    /// How long a running step has gone without a sign of life, once that passes `quietAfter`. A task's progress is
-    /// the sign when it reports one, otherwise the session's: a background command reports none while it runs. A task
-    /// held by an approval card waits on the user, so it is never quiet.
+    /// How long a running step has gone without a sign of life, once that passes `quietAfter`. The signs are its task's
+    /// progress, the progress of each live task it started, and the session's last word. A live command reports no
+    /// progress while it runs, and a task held by an approval card waits on the user, so a step that is either, or
+    /// started one, is never quiet (F-SES-198, F-SES-213). A command a subagent runs in the foreground counts before
+    /// Claude Code registers its task.
     func quiet(_ step: ToolStep, now: Date) -> TimeInterval? {
         guard step.state == .running else { return nil }
-        let task = tasks[step.id]
-        guard task?.waiting == nil, let last = task?.progress?.at ?? heardAt else { return nil }
+        let own = task(for: step)
+        let started = tasks.filter { $0.owner == step.id }
+        let held = (own.map { [$0] } ?? []) + started
+        guard !held.contains(where: { $0.kind == .command || $0.waiting != nil }) else { return nil }
+        guard !steps.contains(where: { $0.owner == step.id && $0.tool == "Bash" && $0.state == .running }) else { return nil }
+        let signs = [own?.progress?.at, heardAt] + started.map { $0.progress?.at ?? $0.startedAt }
+        guard let last = signs.compactMap({ $0 }).max() else { return nil }
         let gap = now.timeIntervalSince(last)
         return gap > Self.quietAfter ? gap : nil
     }
@@ -293,27 +313,25 @@ struct WorkRun {
     /// One step's state and timing in words: "Running · 1m 12s · 3 tools, last Bash · started by sleeper two".
     func status(_ step: ToolStep, now: Date, spoken: Bool = false) -> [String] {
         let format = spoken ? RunClock.spoken : RunClock.short
-        let task = tasks[step.id]
+        let joint = spoken ? ", " : " · "
+        let task = task(for: step)
+        let ran = step.startedAt.flatMap { start in step.endedAt.map { format($0.timeIntervalSince(start)) } }
         var parts: [String] = []
         switch step.state {
         case .running:
-            parts.append("Running" + (step.startedAt.map { (spoken ? ", " : " · ") + format(now.timeIntervalSince($0)) } ?? ""))
+            parts.append("Running" + (step.startedAt.map { joint + format(now.timeIntervalSince($0)) } ?? ""))
         case .waiting:
             parts.append("Waiting for approval")
         case .ok, .error:
-            var word = step.state == .ok ? "Done" : "Failed"
-            if let start = step.startedAt, let end = step.endedAt {
-                word += (spoken ? ", " : " · ") + format(end.timeIntervalSince(start))
-            } else if let ms = step.usage?.ms {
-                word += (spoken ? ", " : " · ") + format(Double(ms) / 1000)
-            }
-            parts.append(word)
+            let time = ran ?? step.usage.map { format(Double($0.ms) / 1000) }
+            parts.append((step.state == .ok ? "Done" : "Failed") + (time.map { joint + $0 } ?? ""))
         case .stopped:
-            parts.append(step.cause ?? "Stopped")
+            parts.append((step.cause ?? "Stopped") + (ran.map { joint + $0 } ?? ""))
         case .denied:
             parts.append("Denied")
         case .unsure:
-            parts.append(ToolStep.mayStillRun)
+            let age = step.startedAt.map { (spoken ? RunClock.spoken : RunClock.coarse)(now.timeIntervalSince($0)) }
+            parts.append(ToolStep.mayStillRun + (age.map { joint + "started \($0) ago" } ?? ""))
         case .ended:
             parts.append(spoken ? "Ended, result unknown" : "Ended · result unknown")
         case .unknown(let raw):
@@ -332,18 +350,28 @@ struct WorkRun {
         return parts
     }
 
-    /// "3 agents", "2 agents, 1 command", "1 step".
-    static func nouns(_ steps: [ToolStep]) -> String {
+    /// "3 agents", "2 agents, 1 command", "1 step". agents: how many agents the run has, so a run that has more than
+    /// the ones counted says "2 of 3 agents".
+    static func nouns(_ steps: [ToolStep], agents: Int = 0) -> String {
         var counts: [(noun: String, n: Int)] = []
         for step in steps {
-            let noun = switch step.tool {
-            case "Task", "Agent": "agent"
-            case "Bash": "command"
-            default: "step"
-            }
+            let noun = step.isAgent ? "agent" : step.tool == "Bash" ? "command" : "step"
             if let at = counts.firstIndex(where: { $0.noun == noun }) { counts[at].n += 1 } else { counts.append((noun, 1)) }
         }
-        return counts.map { WorkSummary.plural($0.n, $0.noun) }.joined(separator: ", ")
+        return counts.map { count in
+            count.noun == "agent" && agents > count.n ? "\(count.n) of \(WorkSummary.plural(agents, "agent"))" : WorkSummary.plural(count.n, count.noun)
+        }.joined(separator: ", ")
+    }
+}
+
+extension ToolStep {
+    var isAgent: Bool { tool == "Agent" || tool == "Task" }
+
+    /// The output a step shows. A live step has none of its own yet: what it carries while it runs is an earlier
+    /// attempt's, such as Claude Code's "Tool call interrupted" from before a restart (F-SES-224).
+    var shownOutput: String? {
+        guard !state.isLive, let output, !output.isEmpty else { return nil }
+        return output
     }
 }
 

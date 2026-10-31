@@ -2778,6 +2778,7 @@ const S4c: Scenario = {
     { do: "until", mark: "k-rest", what: "s4k to rest after the follow-up", timeoutS: 90, optional: true, test: atRest("s4k") },
     { do: "sleep", s: 5 },
     { do: "mark", mark: "k-after" },
+    { do: "fresh-open", name: "s4k", mark: "k-fresh" },
   ],
   pre: [
     created("s4c"),
@@ -2873,33 +2874,38 @@ const S4c: Scenario = {
       id: "S4c.6",
       tell: "stop",
       lane: "protocol",
-      text: "The stop sits where the user pressed it: above a follow-up sent after Stop.",
-      pass: "In s4k's thread at k-after, a stop notice (reason stop, starting \"Stopped by you\") comes before the follow-up message sent 3 s after Stop.",
-      fail: "No such notice, or it sorts under the follow-up, as if the stop happened after it.",
+      text: "The stop sits where the user pressed it: timed at the Stop, above a follow-up sent after it.",
+      pass: "In s4k's thread at k-after, a stop notice (reason stop, starting \"Stopped by you\") is timed no later than the follow-up's send (3 s after Stop) and comes before the follow-up.",
+      fail: "No such notice, or it is timed later (at the kill) or sorts under the follow-up, so where it lands against the follow-up is a race.",
       check: (ev) => {
         const at = mark(ev, "k-after");
-        if (at === undefined) return needMarks(ev, "k-after")!;
+        const sent = mark(ev, "k-followup");
+        if (at === undefined || sent === undefined) return needMarks(ev, "k-followup", "k-after")!;
         const items = last(ev, "s4k", at)?.items ?? [];
         const stop = items.findIndex((i) => i.kind === "notice" && i.reason === "stop" && (i.text ?? "").startsWith("Stopped by you"));
         const follow = items.findIndex((i) => i.kind === "user" && (i.text ?? "").includes("s4kafter"));
         if (follow < 0) return no("the follow-up is not in the thread");
         if (stop < 0) return no("no stop notice in the thread");
-        return stop < follow ? ok(`"${(items[stop]!.text ?? "").slice(0, 80)}" above the follow-up`) : no(`"${(items[stop]!.text ?? "").slice(0, 80)}" sorts under the follow-up`);
+        const said = `"${(items[stop]!.text ?? "").slice(0, 80)}" timed ${((ev.atOf(items[stop]!.at) - sent) / 1000).toFixed(1)} s after the follow-up was sent`;
+        if (ev.atOf(items[stop]!.at) > sent) return no(said);
+        return stop < follow ? ok(`${said}, above it`) : no(`${said}, but sorts under it`);
       },
     },
     {
       id: "S4c.7",
       tell: "what",
       lane: "protocol",
-      text: "The prompt the user stopped stays in the thread, so they can see what did not run.",
-      pass: "At k-after, s4k's thread still holds a user item with the stopped prompt (s4kone).",
-      fail: "The stopped prompt is gone from the thread.",
+      text: "The prompt the user stopped stays in the thread, also when it is opened again, so they can see what did not run.",
+      pass: "At k-after, s4k's thread holds a user item with the stopped prompt (s4kone), and so does a fresh open of it (k-fresh).",
+      fail: "The stopped prompt is gone from the thread, or only the phone that saw it sent still holds it.",
       check: (ev) => {
         const at = mark(ev, "k-after");
-        if (at === undefined) return needMarks(ev, "k-after")!;
-        const it = (last(ev, "s4k", at)?.items ?? []).find((i) => i.kind === "user" && (i.text ?? "").includes("s4kone"));
-        const shown = snaps(ev, "s4k").some((s) => s.items.some((i) => i.kind === "user" && (i.text ?? "").includes("s4kone")));
-        return it ? ok(`kept: ${JSON.stringify({ queued: it.queued, stopped: it.stopped ?? null })}`) : no(shown ? "shown once, then removed" : "never in the thread");
+        const fresh = ev.opens.find((o) => o.mark === "k-fresh");
+        if (at === undefined || !fresh) return needMarks(ev, "k-after", "k-fresh")!;
+        const stopped = (items: Item[]) => items.find((i) => i.kind === "user" && (i.text ?? "").includes("s4kone"));
+        const [seen, again] = [stopped(last(ev, "s4k", at)?.items ?? []), stopped(fresh.items)];
+        if (!again) return no(seen ? "the phone still holds it, but a fresh open has no sign of it" : "gone from the thread");
+        return seen ? ok(`kept, also on a fresh open: ${JSON.stringify({ queued: again.queued, stopped: again.stopped ?? null })}`) : no("a fresh open has it, but the phone's thread dropped it");
       },
     },
   ],

@@ -48,8 +48,8 @@ struct ThreadRowView: View, Equatable {
                 SessionPermissionCard(sessionId: sessionId, permission: permission, model: model)
             case let .ask(_, _, questions, answers, cardId):
                 AskCard(sessionId: sessionId, questions: questions, answers: answers, cardId: cardId)
-            case let .notice(_, _, text, tone, _):
-                NoticeLine(text: text, tone: tone)
+            case let .notice(_, _, text, tone, reason):
+                NoticeLine(text: text, tone: tone, reason: reason)
             case .compaction:
                 CompactionDivider()
             case .unknown:
@@ -270,19 +270,14 @@ struct FoldRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
 
-    private var steps: [ToolStep] {
-        items.flatMap { item -> [ToolStep] in if case .work(_, _, let steps) = item { steps } else { [] } }
-    }
-
-    private var failed: Int { WorkSummary.errors(steps) }
-
     var body: some View {
+        let failure = WorkSummary.failure(items)
         // The folded rows are rows of the list, so the list's rows move and fade with this transaction.
         Button {
             withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) { toggle() }
         } label: {
             let stacked = typeSize.isAccessibilitySize
-            let diff = WorkSummary.diff(steps)
+            let diff = WorkSummary.diff(WorkSummary.steps(items))
             HStack(spacing: 8) {
                 if !stacked {
                     Image(systemName: "square.stack.3d.up")
@@ -293,8 +288,8 @@ struct FoldRow: View {
                     Text(WorkSummary.fold(items))
                         .font(.subheadline)
                         .foregroundStyle(Theme.secondary)
-                    if failed > 0 {
-                        Label("\(failed) failed", systemImage: "xmark.circle.fill")
+                    if let failure {
+                        Label(failure, systemImage: "xmark.circle.fill")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(Theme.danger)
                     }
@@ -313,7 +308,7 @@ struct FoldRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(WorkSummary.fold(items) + (failed > 0 ? ", \(failed) failed" : ""))
+        .accessibilityLabel(WorkSummary.fold(items) + (failure.map { ". " + $0 } ?? ""))
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
         .accessibilityHint(expanded ? "Hides these steps" : "Shows these steps")
     }
@@ -374,6 +369,9 @@ struct WorkRunRow: View {
     let run: WorkRun
     let onFullOutput: (ToolStep) -> Void
     @State private var open = false
+    /// The steps whose whole command is shown. Kept here, above the switch between a ticking and a still body, so a
+    /// command stays open when the run stops ticking, scrolls away or goes stale.
+    @State private var openCommands: Set<String> = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.runStateStale) private var staleAt
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -383,7 +381,7 @@ struct WorkRunRow: View {
 
     var body: some View {
         Group {
-            if onScreen, staleAt == nil, run.ticks {
+            if onScreen, staleAt == nil, run.ticks || run.ages {
                 TimelineView(.periodic(from: run.since ?? .now, by: 1)) { context in
                     content(now: context.date)
                 }
@@ -399,7 +397,7 @@ struct WorkRunRow: View {
     }
 
     private func content(now: Date) -> some View {
-        let shown = open ? run.steps : run.live
+        let shown = open ? run.steps : run.collapsed
         return VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { open.toggle() }
@@ -413,7 +411,14 @@ struct WorkRunRow: View {
             if !shown.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(shown) { step in
-                        ToolStepRow(step: step, run: run, now: now, onFullOutput: onFullOutput)
+                        ToolStepRow(
+                            step: step, run: run, now: now, brief: !open && !step.state.isLive,
+                            commandOpen: Binding(
+                                get: { openCommands.contains(step.id) },
+                                set: { if $0 { openCommands.insert(step.id) } else { openCommands.remove(step.id) } }
+                            ),
+                            onFullOutput: onFullOutput
+                        )
                             .background { if step.id == revealedStep { Theme.attention.opacity(0.14) } }
                             .id(step.id)
                         if step.id != shown.last?.id { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 34) }
@@ -479,6 +484,9 @@ struct ToolStepRow: View {
     let step: ToolStep
     let run: WorkRun
     let now: Date
+    /// A finished step kept in a collapsed run: its name and how it ended, nothing more.
+    var brief = false
+    @Binding var commandOpen: Bool
     let onFullOutput: (ToolStep) -> Void
     @Environment(\.runStateStale) private var staleAt
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -505,17 +513,20 @@ struct ToolStepRow: View {
             summary
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(spoken)
-            if let output = step.output, !output.isEmpty {
+            if !brief, let output = step.shownOutput {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(Self.tail(output))
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(step.state == .error ? Theme.danger.opacity(0.9) : Theme.secondary)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel("Output")
+                        .accessibilityValue(Self.tail(output))
                     Button("Full output") { onFullOutput(step) }
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.link)
                         .frame(minHeight: HitTarget.minHeight)
+                        .accessibilityLabel("Full output of \(step.label)")
                 }
                 .padding(.leading, indent)
             }
@@ -542,11 +553,8 @@ struct ToolStepRow: View {
                 StepState(state: step.state, stale: staleAt != nil)
             }
             VStack(alignment: .leading, spacing: 3) {
-                if let detail = step.detail, !detail.isEmpty, detail != step.label {
-                    Text(detail)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(Theme.secondary)
-                        .lineLimit(3)
+                if !brief, let detail = step.detail, !detail.isEmpty, detail != step.label {
+                    StepDetail(text: detail, title: step.label, open: $commandOpen)
                 }
                 Text(run.status(step, now: now).joined(separator: " · "))
                     .font(.caption)
@@ -573,7 +581,7 @@ struct ToolStepRow: View {
             }
         }
         if step.state == .error || step.state == .denied, let cause = step.cause { parts.append(cause) }
-        if let diff = step.diff { parts.append("\(diff.added) lines added, \(diff.removed) removed") }
+        if let diff = step.diff { parts.append(DiffStat.spoken(added: diff.added, removed: diff.removed)) }
         return parts.joined(separator: ", ")
     }
 
@@ -630,7 +638,97 @@ struct DiffStat: View {
         .font(.caption.monospacedDigit().weight(.medium))
         .fixedSize()
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(added) lines added, \(removed) removed")
+        .accessibilityLabel(Self.spoken(added: added, removed: removed))
+    }
+
+    /// "1 line added, 3 removed".
+    static func spoken(added: Int, removed: Int) -> String {
+        "\(WorkSummary.plural(added, "line")) added, \(removed) removed"
+    }
+}
+
+/// A step's command, three lines tall until the user asks for all of it (F-SES-203). At accessibility sizes all of it
+/// opens in a sheet, since inline it would take screens of its own. VoiceOver reads it whole in the step's label.
+struct StepDetail: View {
+    let text: String
+    /// The step's title, which names the sheet.
+    let title: String
+    @Binding var open: Bool
+
+    @State private var reading = false
+    @State private var shownHeight: CGFloat = 0
+    @State private var fullHeight: CGFloat = 0
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var cut: Bool { fullHeight > shownHeight + 1 }
+
+    var body: some View {
+        if cut || open {
+            Button {
+                if typeSize.isAccessibilitySize {
+                    reading = true
+                } else {
+                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { open.toggle() }
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    command
+                    Text(open ? "Show less" : "Show full command")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.link)
+                }
+                .frame(minHeight: HitTarget.minHeight)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .sheet(isPresented: $reading) { CommandSheet(title: title, text: text) }
+        } else {
+            command
+        }
+    }
+
+    private var command: some View {
+        Text(text)
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(Theme.secondary)
+            .lineLimit(open ? nil : 3)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self, of: \.size.height) { shownHeight = $0 }
+            .background(alignment: .topLeading) {
+                Text(text)
+                    .font(.system(.caption, design: .monospaced))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .hidden()
+                    .onGeometryChange(for: CGFloat.self, of: \.size.height) { fullHeight = $0 }
+            }
+    }
+}
+
+private struct CommandSheet: View {
+    let title: String
+    let text: String
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(text)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .textSelection(.enabled)
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(Theme.background)
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+        }
     }
 }
 
@@ -975,11 +1073,14 @@ private struct AskOptionRow: View {
 struct NoticeLine: View {
     let text: String
     let tone: NoticeTone
+    var reason: NoticeReason? = nil
 
     var body: some View {
+        // What became of a task the user started is news about their work, not a footnote (F-SES-200).
+        let task = reason == .task
         Label(text, systemImage: tone == .error ? "exclamationmark.triangle" : "info.circle")
-            .font(.footnote)
-            .foregroundStyle(tone == .error ? Theme.danger : Theme.tertiary)
+            .font(task ? .ui(.body) : .footnote)
+            .foregroundStyle(tone == .error ? Theme.danger : task ? Theme.secondary : Theme.tertiary)
             .multilineTextAlignment(.center)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 24)

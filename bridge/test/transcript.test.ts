@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionId, SessionItem } from "../src/protocol";
@@ -20,6 +20,8 @@ const IDS = {
   "agent-stopped": "77777777-7777-4777-8777-777777777777",
   "agent-killed": "88888888-8888-4888-8888-888888888888",
   "agent-own-work": "99999999-9999-4999-8999-999999999999",
+  "agents-tools-used": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "crash-resume-synthetic": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
 } as const;
 type Name = keyof typeof IDS;
 const ctx: ProjectContext = { cwd: "<cwd>", userName: "Alex", agent: false };
@@ -28,10 +30,21 @@ let config: string;
 let projects: string;
 let previous: string | undefined;
 const fileOf = (name: Name) => join(projects, "-cwd", `${IDS[name]}.jsonl`);
-const fixture = (name: Name) => readFileSync(join(FIXTURES, `${name}.jsonl`), "utf8");
+/** A folder like Claude Code's own temp folder, /tmp/claude-<uid>: the only place the bridge reads task output from. */
+const claudeDir = () => {
+  const dir = join(tmpdir(), `claude-${process.pid}${Date.now()}${Math.floor(Math.random() * 1e6)}`);
+  mkdirSync(dir);
+  return dir;
+};
+let claudeRoot: string;
+/** Claude Code's temp folder for the fixtures' project, where a background task's output file lives. */
+const claudeTmp = () => join(claudeRoot, "-cwd");
+/** A fixture as Claude Code would have left it here: its scrubbed temp folder is this run's. */
+const fixture = (name: Name) => readFileSync(join(FIXTURES, `${name}.jsonl`), "utf8").replaceAll("<tmp>", claudeTmp());
 
 beforeAll(() => {
   config = mkdtempSync(join(tmpdir(), "transcript-"));
+  claudeRoot = claudeDir();
   projects = join(config, "projects");
   mkdirSync(join(projects, "-cwd"), { recursive: true });
   for (const name of Object.keys(IDS) as Name[]) writeFileSync(fileOf(name), fixture(name));
@@ -42,6 +55,7 @@ afterAll(() => {
   if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = previous;
   rmSync(config, { recursive: true, force: true });
+  rmSync(claudeRoot, { recursive: true, force: true });
 });
 
 const itemsOf = async (name: Name, sdk: SdkReaders = sdkReaders) => {
@@ -378,10 +392,10 @@ describe("subagents and background work", () => {
       "user",
       "work",
       "assistant: The three sleeper agents are running in the background. I'll reply \"all done\" once all three have returned.",
-      'notice: Agent "sleeper one" finished',
-      'notice: Agent "sleeper two" finished',
+      'notice: Agent "sleeper one" finished · 34s · 1 tool',
+      'notice: Agent "sleeper two" finished · 33s · 1 tool',
       'assistant: Two of three sleeper agents have finished, both reporting "done". Still waiting on "sleeper three".',
-      'notice: Agent "sleeper three" finished',
+      'notice: Agent "sleeper three" finished · 33s · 1 tool',
       "assistant: all done",
     ]);
     expect(notices(items).every((n) => n.reason === "task" && n.tone === "info")).toBe(true);
@@ -412,8 +426,7 @@ describe("subagents and background work", () => {
     const items = await itemsOf("agent-stopped");
     const broken = stepNamed(items, "Agent: broken helper");
     expect(broken).toMatchObject({ state: "error", detail: "no-such-agent-type", endedAt: "2026-10-21T04:19:59.078Z" });
-    expect(broken.cause).toStartWith("Agent type 'no-such-agent-type' not found. Available agents: ");
-    expect(broken.cause!.length).toBeLessThanOrEqual(200);
+    expect(broken.cause).toBe("Agent type 'no-such-agent-type' not found.");
     expect(stepNamed(items, "Agent: long sleeper")).toMatchObject({ state: "stopped", cause: "Stopped by you", output: null, endedAt: "2026-10-21T04:20:10.564Z" });
     expect(notices(items).map((n) => n.text)).toEqual(["Interrupted"]);
   });
@@ -432,7 +445,7 @@ describe("subagents and background work", () => {
   test("an interim notification keeps the Agent running; the final one, named by task id only, settles it", async () => {
     const final = "<task-id>a889ddb94a6f914b7</task-id>\n<output-file>";
     const interim = await itemsBefore("agent-own-work", JSON.stringify(final).slice(1, -1));
-    expect(stepNamed(interim, "Agent: starter")).toMatchObject({ state: "running", background: true, output: "started" });
+    expect(stepNamed(interim, "Agent: starter")).toMatchObject({ state: "running", background: true, output: null });
     expect(notices(interim).map((n) => n.text)).toEqual(['Agent "starter" is waiting on its own background work']);
     const items = await itemsOf("agent-own-work");
     expect(stepNamed(items, "Agent: starter")).toMatchObject({
@@ -445,7 +458,7 @@ describe("subagents and background work", () => {
 
   test("no step anywhere shows Claude Code's launch acknowledgement, hand-back frame or reject text", async () => {
     for (const name of Object.keys(IDS) as Name[]) {
-      for (const s of stepsOf(await itemsOf(name))) expect(s.output ?? "").not.toMatch(/Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed|agentId:/);
+      for (const s of stepsOf(await itemsOf(name))) expect(s.output ?? "").not.toMatch(/Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed|agentId:|tools-used-before-summary/);
     }
   });
 
@@ -475,7 +488,7 @@ describe("step labels", () => {
   test("a description is masked as prose, a command as a secret", () => {
     expect(stepOf("Bash", { command: "ls", description: "Check token refresh handling" }).label).toBe("Check token refresh handling");
     const step = stepOf("Bash", { command: "curl -H 'Authorization: Bearer tok123456' x\nline 2\nline 3\nline 4" });
-    expect(step.detail).toBe("curl -H 'Authorization: Bearer «redacted:9 chars»' x\nline 2\nline 3");
+    expect(step.detail).toBe("curl -H 'Authorization: Bearer «redacted:9 chars»' x\nline 2\nline 3\nline 4");
     expect(step.label).not.toContain("tok123456");
   });
 
@@ -703,5 +716,120 @@ describe("step outcomes", () => {
     const done = project([...launch, note("completed")], ctx);
     expect([done.tail.open.size, done.tail.tools.size, done.tail.tasks.size]).toEqual([0, 0, 0]);
     expect(stepsOf(done.items)[0]!.state).toBe("ok");
+  });
+});
+
+describe("background commands and agents, as the thread shows them", () => {
+  const outputNote = (path: string, status = "completed", summary = 'Background command "make" completed (exit code 0)') =>
+    prompt(`<task-notification>\n<task-id>bg1</task-id>\n<tool-use-id>t1</tool-use-id>\n<output-file>${path}</output-file>\n<status>${status}</status>\n<summary>${summary}</summary>\n</task-notification>`);
+  const ran = (path: string, status?: string, summary?: string) =>
+    stepsOf(
+      project([prompt("go"), call("t1", "Bash", { command: "make", run_in_background: true }), answer("t1", `Command running in background with ID: bg1. Output is being written to: ${path}`), outputNote(path, status, summary)], ctx).items,
+    )[0]!;
+  const outputFile = (dir: string, task = "bg1") => {
+    const tasks = join(dir, "-cwd", "s1", "tasks");
+    mkdirSync(tasks, { recursive: true });
+    return join(tasks, `${task}.output`);
+  };
+
+  test("a finished command's step shows what it printed, read from the output file its notification names", () => {
+    const dir = claudeDir();
+    try {
+      const path = outputFile(dir);
+      writeFileSync(path, "compiling\nAPI_TOKEN=s3cr3tvalue1\nok: 3 files\n\n[exited with code 0]\n");
+      expect(ran(path)).toMatchObject({ state: "ok", output: "compiling\nAPI_TOKEN=«redacted:12 chars»\nok: 3 files\n" });
+      expect(ran(path).cause).toBeUndefined();
+      writeFileSync(path, "\n[exited with code 0]\n");
+      expect(ran(path)).toMatchObject({ state: "ok", output: null });
+      writeFileSync(path, `first line\n${"x".repeat(5000)}\nlast line\n[exited with code 2]\n`);
+      expect(ran(path, "completed", 'Background command "make" completed (exit code 2)')).toMatchObject({
+        state: "error",
+        cause: "Exit code 2",
+        output: `first line\n${"x".repeat(501)}\n…\n${"x".repeat(1526)}\nlast line`,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a command whose output file is gone says so; a file that is not its task's own output is never read", () => {
+    const dir = claudeDir();
+    try {
+      expect(ran(outputFile(dir))).toMatchObject({ state: "ok", output: null, cause: "Its output file was gone" });
+      const other = outputFile(dir, "elsewhere");
+      writeFileSync(other, "not this command's");
+      expect(ran(other)).toMatchObject({ state: "ok", output: null });
+      expect(ran(other).cause).toBeUndefined();
+      expect(ran("/etc/hosts")).toMatchObject({ state: "ok", output: null });
+      const outside = mkdtempSync(join(tmpdir(), "elsewhere-"));
+      try {
+        const tasks = join(outside, "claude-501", "-cwd", "s1", "tasks");
+        mkdirSync(tasks, { recursive: true });
+        writeFileSync(join(tasks, "bg1.output"), "outside Claude Code's temp folder");
+        expect(ran(join(tasks, "bg1.output"))).toMatchObject({ state: "ok", output: null });
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+      const linked = outputFile(dir);
+      symlinkSync("/etc/hosts", linked);
+      expect(ran(linked)).toMatchObject({ state: "ok", output: null, cause: "Its output file was gone" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a recorded background command whose output file Claude Code no longer has reads ok with that cause", async () => {
+    expect(stepNamed(await itemsOf("bash-background"), "Run in background: delayed background write of bg.txt")).toMatchObject({ state: "ok", output: null, cause: "Its output file was gone" });
+  });
+
+  test("a command's full output is its output file", () => {
+    const dir = claudeDir();
+    try {
+      const out = outputFile(dir);
+      writeFileSync(out, `${"y".repeat(3000)}\ndone\n\n[exited with code 0]\n`);
+      const path = join(dir, "s.jsonl");
+      const line = (o: object) => JSON.stringify({ parentUuid: null, timestamp: "2026-10-18T12:00:00.000Z", sessionId: "s", ...o });
+      const note = `<task-notification>\n<task-id>bg1</task-id>\n<tool-use-id>t1</tool-use-id>\n<output-file>${out}</output-file>\n<status>completed</status>\n<summary>s</summary>\n</task-notification>`;
+      writeFileSync(
+        path,
+        [
+          line({ type: "assistant", uuid: "a", message: { id: "m", role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "make", run_in_background: true } }] } }),
+          line({ type: "user", uuid: "r", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "Command running in background with ID: bg1. Output is being written to: x" }] } }),
+          line({ type: "user", uuid: "n", message: { role: "user", content: note } }),
+        ].join("\n") + "\n",
+      );
+      expect(toolOutput(path, "t1")).toBe(`${"y".repeat(3000)}\ndone\n`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a long command's step keeps every line, cut from the middle past 2 KB so its end still shows", () => {
+    const command = `echo ${"a".repeat(3000)} \\\n  && echo b > out.txt`;
+    const step = stepsOf(project([call("l1", "Bash", { command })], ctx).items)[0]!;
+    expect(step.detail).toBe(`echo ${"a".repeat(1019)}…${"a".repeat(999)} \\\n  && echo b > out.txt`);
+  });
+
+  test("a command cut in the middle never splits a character", () => {
+    const step = stepsOf(project([call("l1", "Bash", { command: `echo ${"😀".repeat(3000)}` })], ctx).items)[0]!;
+    expect(step.detail).toBe(`echo ${"😀".repeat(1019)}…${"😀".repeat(1023)}`);
+  });
+
+  test("Claude Code's stand-in reply after a crashed turn is not shown as Claude's", async () => {
+    const items = await itemsOf("crash-resume-synthetic");
+    expect(items.map((i) => (i.kind === "assistant" || i.kind === "user" ? `${i.kind}: ${i.text}` : i.kind))).toEqual([
+      "user: Use the Bash tool to run exactly: echo held > held.txt\nThen reply with one line: done.",
+      "work",
+      "user: Reply with one word: ok.",
+      "assistant: ok",
+    ]);
+  });
+
+  test("a subagent's report drops the tool list Claude Code puts before it", async () => {
+    expect(stepsOf(await itemsOf("agents-tools-used")).map((s) => [s.label, s.state, s.output])).toEqual([
+      ["Agent: sleeper one", "ok", "done"],
+      ["Agent: sleeper two", "ok", "done"],
+      ["Agent: sleeper three", "ok", "done"],
+    ]);
   });
 });

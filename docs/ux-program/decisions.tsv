@@ -207,3 +207,4 @@ ts	decision	why
 2026-10-31T19:48:18Z	G22: Bot card and bot update pushes use the same owed queue	behavior change outside Sessions (verifier to judge)
 2026-10-31T19:48:18Z	G22: Poll looks back 60 s for clock skew	server clock behind the Mac
 2026-10-31T19:55:22Z	G21: a held stop note waits at most 2 s for its subagent's return, then posts without the cause; non-plain output files read "could not be read safely"	verifier P2-1, P3-3
+2026-10-31T20:02:37Z	iOS 26.5 platform installed by the user; builds work again. Pool stays on iOS 26.2 (devices FB82C652, 9E2BAEA0, E4237F6B) since they are valid destinations	avoid churn; app deploys to 18.0

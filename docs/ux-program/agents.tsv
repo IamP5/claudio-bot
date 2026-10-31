@@ -35,3 +35,6 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-31T19:04:55Z	verifier	G21	ux/sessions-g21-task-truth	PASS bd62652; P2-1 held note false cause + P3-3 -> owner small round	3h	independent of owner
 2026-10-31T19:05:18Z	owner	G22	ux/sessions-g22-push	PR #32 at 09b611c; verifying	5h	run 3 wave 2 (bridge-only; iOS groups wait for platform)
 2026-10-31T19:48:18Z	verifier	G22	ux/sessions-g22-push	verifying 09b611c	3h	independent of owner
+2026-10-31T20:02:37Z	verifier	G20	ux/sessions-g20-frozen-stop	iOS half verifying 2ff75ad	2h	independent of owner
+2026-10-31T20:02:37Z	owner	G23	ux/sessions-g23-work-run	starting off main 75f2bbe	5h	run 3 wave 2
+2026-10-31T20:02:37Z	owner	G24	ux/sessions-g24-list	starting off main 75f2bbe	5h	run 3 wave 2

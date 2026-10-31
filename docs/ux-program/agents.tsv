@@ -33,3 +33,4 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-31T18:24:20Z	verifier	G19	ux/sessions-g19-runner-truth	PASS 9b1e491; no loosening; F1 S4c.1/.3 keep G20 arrival-time	3h	independent of owner
 2026-10-31T18:55:52Z	verifier	G20	ux/sessions-g20-frozen-stop	r2 verifying a7a193b	3h	fresh, independent of owner
 2026-10-31T19:04:55Z	verifier	G21	ux/sessions-g21-task-truth	verifying bd62652	3h	independent of owner
+2026-10-31T19:05:18Z	owner	G22	ux/sessions-g22-push	starting off main 30ba53c	5h	run 3 wave 2 (bridge-only; iOS groups wait for platform)

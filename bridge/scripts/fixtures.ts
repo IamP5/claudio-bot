@@ -266,6 +266,8 @@ export const server = [
   },
   { type: "session_items", sessionId: phoneRow.id, rev: 3, removed: [], items: runItems, controls: runControls },
   { type: "session_items", sessionId: phoneRow.id, rev: 4, removed: [], items: [], controls: { ...runControls, turn: { startedAt: later, wake: true }, tasks: [] } },
+  // Stop reached a turn Claude Code has not ended yet: the bridge ends Claude Code at the deadline.
+  { type: "session_items", sessionId: phoneRow.id, rev: 5, removed: [], items: [], controls: { ...controls, queued: 0, turn: { startedAt: at, wake: false }, stopping: { at: later, deadline: "2026-10-16T14:00:15.000Z" } } },
   { type: "push_state", push: { state: "failing", error: "The push server answered 500", at: later } },
   { type: "push_state", push: { state: "off" } },
   { type: "session_alert", sessionId: phoneRow.id, reason: "card", count: 3, title: phoneRow.title, cardId: "m30", cardKind: "permission" },
@@ -332,6 +334,7 @@ export const client = [
   { type: "session_page", sessionId: agentSession, before: "8812331:2b7c9e41" },
   { type: "session_send", sessionId: agentSession, text: "Also check it on Firefox", clientId: "c_4d2a", interrupt: false },
   { type: "session_send", sessionId: desktopRow.id, text: "Stop, use the Web Audio API instead", clientId: "c_4d2b", interrupt: true },
+  { type: "session_send", sessionId: desktopRow.id, text: "Stop, use the Web Audio API instead", clientId: "c_4d2c", interrupt: true, turnStartedAt: at },
   { type: "session_stop", sessionId: agentSession },
   { type: "session_stop", sessionId: agentSession, target: "turn", turnStartedAt: at },
   { type: "session_stop", sessionId: agentSession, target: { task: "bk2x9q7" }, turnStartedAt: at },

@@ -181,7 +181,14 @@ const sessionParsers: Record<SessionClientMessage["type"], (o: Obj) => SessionCl
   watch_session: (o) => ({ type: "watch_session", sessionId: sessionId(o), after: position(o.after) }),
   unwatch_session: (o) => ({ type: "unwatch_session", sessionId: sessionId(o) }),
   session_page: (o) => ({ type: "session_page", sessionId: sessionId(o), before: str(o, "before") as Cursor }),
-  session_send: (o) => ({ type: "session_send", sessionId: sessionId(o), text: prompt(o, "text"), clientId: str(o, "clientId"), interrupt: bool(o, "interrupt") }),
+  session_send: (o) => ({
+    type: "session_send",
+    sessionId: sessionId(o),
+    text: prompt(o, "text"),
+    clientId: str(o, "clientId"),
+    interrupt: bool(o, "interrupt"),
+    ...(o.turnStartedAt !== undefined && { turnStartedAt: str(o, "turnStartedAt") }),
+  }),
   session_stop: (o) => ({
     type: "session_stop",
     sessionId: sessionId(o),

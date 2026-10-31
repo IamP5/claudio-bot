@@ -280,7 +280,7 @@ final class AppStore {
     /// needs a bridge that drops a repeated clientId, which came with mute; every bridge with sessions drops a repeated
     /// session send.
     func sendStarted(_ msg: ClientMessage) {
-        if case let .sessionSend(sessionId, _, clientId, _) = msg { threads[sessionId]?.sendWaiting(clientId) }
+        if case let .sessionSend(sessionId, _, clientId, _, _) = msg { threads[sessionId]?.sendWaiting(clientId) }
         guard Self.clientId(of: msg) != nil, !unechoedSends.contains(where: { $0.message == msg }) else { return }
         if case .send = msg, !has(.mute) { return }
         unechoedSends.append((msg, 0))
@@ -291,7 +291,7 @@ final class AppStore {
     func sendTransmitted(_ msg: ClientMessage, at now: Date = .now) {
         guard let i = unechoedSends.firstIndex(where: { $0.message == msg }) else { return }
         unechoedSends[i].transmitted += 1
-        if case let .sessionSend(sessionId, _, clientId, _) = msg { threads[sessionId]?.sendTransmitted(clientId, at: now) }
+        if case let .sessionSend(sessionId, _, clientId, _, _) = msg { threads[sessionId]?.sendTransmitted(clientId, at: now) }
     }
 
     /// What to send again on the socket that just said hello, with the same clientIds. A send three sockets took
@@ -311,7 +311,7 @@ final class AppStore {
     private static func clientId(of msg: ClientMessage) -> String? {
         switch msg {
         case .send(_, _, _, let clientId, _): clientId
-        case .sessionSend(_, _, let clientId, _): clientId
+        case .sessionSend(_, _, let clientId, _, _): clientId
         default: nil
         }
     }
@@ -326,7 +326,7 @@ final class AppStore {
         }
         guard !shown.isEmpty else { return }
         unechoedSends.removeAll { pending in
-            if case let .sessionSend(id, _, clientId, _) = pending.message { id == sessionId && shown.contains(ItemID(clientId)) } else { false }
+            if case let .sessionSend(id, _, clientId, _, _) = pending.message { id == sessionId && shown.contains(ItemID(clientId)) } else { false }
         }
     }
 
@@ -425,7 +425,7 @@ final class AppStore {
                 return
             }
             if sessionErrors[sessionId]?.kind == .set { sessionErrors[sessionId] = nil }
-        case let .sessionSend(sessionId, _, _, _), let .sessionUnqueue(sessionId, _):
+        case let .sessionSend(sessionId, _, _, _, _), let .sessionUnqueue(sessionId, _):
             // A refused stop stays: the slot's Stop again needs its reason.
             if sessionErrors[sessionId]?.kind != .stop { sessionErrors[sessionId] = nil }
         default:

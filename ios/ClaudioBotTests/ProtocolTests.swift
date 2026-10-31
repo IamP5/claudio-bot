@@ -366,8 +366,9 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(step.detail == nil && step.startedAt == nil && step.endedAt == nil && !step.background && step.owner == nil && step.cause == nil && step.usage == nil)
         #expect(try jsonObject(Wire.encoder().encode(step)).allKeys.count == 6)
         let controls = try decode(SessionControls.self, #"{"canSend":true,"reason":null,"working":true,"queued":0,"model":null,"models":[],"mode":"default","modes":[]}"#)
-        #expect(controls.turn == nil && controls.tasks == nil && controls.heardAt == nil)
+        #expect(controls.turn == nil && controls.tasks == nil && controls.heardAt == nil && controls.stopping == nil)
         #expect(try jsonObject(Wire.encoder().encode(controls))["tasks"] == nil)
+        #expect(try jsonObject(Wire.encoder().encode(controls))["stopping"] == nil)
         let notice = try decode(SessionItem.self, #"{"kind":"notice","id":"n1","at":"2026-10-16T12:00:00.000Z","text":"Interrupted","tone":"info"}"#)
         #expect(notice == .notice(id: ItemID("n1"), at: at, text: "Interrupted", tone: .info, reason: nil))
         let hello = try decode(ServerMessage.self, #"{"type":"hello","protocol":3,"machine":"Mac","userName":"Alex","bots":[]}"#)
@@ -375,6 +376,15 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(old.push == nil)
         let stop = try decode(ClientMessage.self, #"{"type":"session_stop","sessionId":"s1"}"#)
         #expect(stop == .sessionStop(sessionId: SessionID("s1"), target: nil, turnStartedAt: nil))
+        let send = ClientMessage.sessionSend(sessionId: SessionID("s1"), text: "hi", clientId: "c1", interrupt: true)
+        #expect(try jsonObject(Wire.encoder().encode(send))["turnStartedAt"] == nil)
+    }
+
+    @Test func aStopClaudeCodeHasNotConfirmedSaysWhenTheBridgeGivesUpWaiting() throws {
+        let stopping = try Fixture.server().compactMap { frame -> SessionStopping? in
+            if case let .thread(_, .items(_, _, _, controls?)) = frame.message { controls.stopping } else { nil }
+        }
+        #expect(stopping == [SessionStopping(at: at.addingTimeInterval(7200), deadline: at.addingTimeInterval(7215))])
     }
 
     @Test(arguments: ["2026-10-21T07:21:24.608Z", "2026-10-21T07:21:24.6081Z", "2026-10-21T07:21:24Z"])
@@ -408,6 +418,10 @@ private func unknowns(in message: ServerMessage) -> [String] {
             .unwatchSession(sessionId: agent),
             .sessionPage(sessionId: agent, before: Cursor("8812331:2b7c9e41")),
             .sessionSend(sessionId: agent, text: "Also check it on Firefox", clientId: "c_4d2a", interrupt: false),
+            .sessionSend(
+                sessionId: SessionID("b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40"), text: "Stop, use the Web Audio API instead", clientId: "c_4d2c", interrupt: true,
+                turnStartedAt: "2026-10-16T12:00:00.000Z"
+            ),
             .sessionStop(sessionId: agent),
             .sessionStop(sessionId: agent, target: .turn, turnStartedAt: "2026-10-16T12:00:00.000Z"),
             .sessionStop(sessionId: agent, target: .task(TaskID("bk2x9q7")), turnStartedAt: "2026-10-16T12:00:00.000Z"),

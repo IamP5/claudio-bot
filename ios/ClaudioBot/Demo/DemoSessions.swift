@@ -498,7 +498,7 @@ enum DemoSessions {
                 try? await Task.sleep(for: .milliseconds(500))
                 store.apply(.thread(sessionId: id, .page(items: id == catalog ? older : [], before: nil)))
             }
-        case let .sessionSend(id, text, clientId, _):
+        case let .sessionSend(id, text, clientId, _, _):
             reply(to: text, clientId: clientId, in: id, store: store)
         case let .sessionStop(id, target, _):
             var c = store.threads[id]?.controls ?? controls()

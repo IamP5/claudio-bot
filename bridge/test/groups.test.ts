@@ -304,7 +304,7 @@ test("a card a member opens during a group turn shows in its own chat, and the g
 test("group posts push as the group, and a muted group pushes none", async () => {
   const sent: string[] = [];
   const world = emptyWorld();
-  const push = createPush({ world, persist: () => {}, sender: async (n) => void sent.push(`${n.botId} ${n.text}`), liveUntil: () => null, now: () => new Date(), log: () => {} });
+  const push = createPush({ world, persist: () => {}, sender: { send: async (n) => void sent.push(`${n.botId} ${n.text}`), taken: async () => [] }, liveUntil: () => null, now: () => new Date(), log: () => {} });
   const ana = bot("ana");
   const bo = bot("bo");
   world.bots.set(ana.id, ana);

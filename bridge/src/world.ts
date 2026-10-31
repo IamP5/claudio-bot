@@ -343,9 +343,29 @@ export type DeviceRecord = {
  */
 /**
  * sent: the keys of every push recorded, the newest week. held: session endings owed a push once no phone is live,
- * kept across restarts; alerted: the open app was told at `at`, so a phone heard from since saw it.
+ * kept across restarts; alerted: the open app was told at `at`, so a phone heard from since saw it. failing: the push
+ * server failed the last try; absent while it takes pushes. owed: pushes a try is out for or whose tries all failed,
+ * oldest first.
  */
-export type PushState = { sent: { key: string; at: string }[]; held?: HeldEnding[] };
+export type PushState = { sent: { key: string; at: string }[]; held?: HeldEnding[]; failing?: PushFailing; owed?: OwedPush[] };
+/** The last failed try at `at`, and when the bridge tries again: the oldest owed push, or a probe when none is owed. */
+export type PushFailing = { error: string; at: string; retryAt: string; retries: number };
+/**
+ * A push not yet taken by the server: a try is out for it, or every try failed and it goes again while what it is for
+ * still waits on the user. unsure: when a try began that the server may have taken; the server is asked whether it holds
+ * the push before it goes again.
+ */
+export type OwedPush = {
+  keys: string[];
+  botId: BotId | null;
+  text: string;
+  link: string;
+  high: boolean;
+  for: { kind: "cards"; session: SessionId; cards: MessageId[] } | { kind: "ending"; session: SessionId } | { kind: "bot-card"; card: MessageId } | { kind: "bot" };
+  /** When it was first tried: a phone looked at the app after that saw what it was for. */
+  at?: string;
+  unsure?: string;
+};
 /** How a run of a session the phone drives came to an end worth a push. A user's stop never is; a restart's cut is. */
 export type SessionEnd = "finished" | "failed" | "lost";
 export type HeldEnding = { key: string; id: SessionId; end: SessionEnd; at: string; alerted: boolean };

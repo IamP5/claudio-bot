@@ -111,9 +111,11 @@ const push = createPush({
     alert: (m) => transport.sockets.alert(m),
     heard: (ids, since) => transport.sockets.heard(ids, since),
     open: () => transport.sockets.open(),
+    seenAt: () => transport.sockets.seenAt?.() ?? 0,
   },
   signal: (message) => transport.signal(message),
   title: (id) => hub.sessionTitle(id),
+  poke: () => hub.poke(),
   now,
   log,
 });

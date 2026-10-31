@@ -359,6 +359,7 @@ export function serve(deps: ServeDeps): Transport {
         return ids.some((id) => (readAt.get(id) ?? closedReadAt.get(id) ?? 0) > since);
       },
       open: () => open().flatMap((ws) => (ws.data.protocol === 3 && ws.readyState === 1 ? [ws.data.id] : [])),
+      seenAt: () => Math.max(0, ...open().map((ws) => ws.data.readAt), ...closedReadAt.values()),
     },
     liveUntil: () => {
       const last = Math.max(0, ...quietAt());

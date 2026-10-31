@@ -84,3 +84,4 @@
 - F-SES-299 (P2, Sessions run 3): The Notifications toggle's footer describes bot alerts only, though it also turns off session alerts
 - F-SES-301 (P2, Sessions run 3): Full output sheet hides that it is only the last 64 KB, and opens scrolled to the bottom
 - F-SES-305 (P2, Sessions run 3): A tool step goes from waiting to running to denied when its approval expires or is denied
+- Runner: `pool ensure` refuses to clone when the newest runtime listed (even one only unavailable devices use) has no shut-down iPhone 17 Pro; it should rank only installed runtimes. Pool was cloned by hand on 2026-10-31. New pool devices need notification permission allowed once again.

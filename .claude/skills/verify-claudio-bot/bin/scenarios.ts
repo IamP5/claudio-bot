@@ -2895,17 +2895,22 @@ const S4c: Scenario = {
       id: "S4c.7",
       tell: "what",
       lane: "protocol",
-      text: "The prompt the user stopped stays in the thread, also when it is opened again, so they can see what did not run.",
-      pass: "At k-after, s4k's thread holds a user item with the stopped prompt (s4kone), and so does a fresh open of it (k-fresh).",
-      fail: "The stopped prompt is gone from the thread, or only the phone that saw it sent still holds it.",
+      text: "The prompt the user stopped stays in the thread, also when it is opened again, and the stop says which prompt it stopped, so they can see what did not run.",
+      pass: "At k-after, s4k's thread holds a user item with the stopped prompt (s4kone), and so does a fresh open of it (k-fresh); a stop notice names the prompt by its first words.",
+      fail: "The stopped prompt is gone from the thread, only the phone that saw it sent still holds it, or no stop notice names it.",
       check: (ev) => {
         const at = mark(ev, "k-after");
         const fresh = ev.opens.find((o) => o.mark === "k-fresh");
         if (at === undefined || !fresh) return needMarks(ev, "k-after", "k-fresh")!;
         const stopped = (items: Item[]) => items.find((i) => i.kind === "user" && (i.text ?? "").includes("s4kone"));
         const [seen, again] = [stopped(last(ev, "s4k", at)?.items ?? []), stopped(fresh.items)];
-        if (!again) return no(seen ? "the phone still holds it, but a fresh open has no sign of it" : "gone from the thread");
-        return seen ? ok(`kept, also on a fresh open: ${JSON.stringify({ queued: again.queued, stopped: again.stopped ?? null })}`) : no("a fresh open has it, but the phone's thread dropped it");
+        const named = notices(ev, "s4k").find((i) => i.reason === "stop" && (i.text ?? "").includes(S4K_PROMPT.slice(0, 30)));
+        const bad = [
+          again ? "" : seen ? "the phone still holds it, but a fresh open has no sign of it" : "gone from the thread",
+          again && !seen ? "a fresh open has it, but the phone's thread dropped it" : "",
+          named ? "" : `no stop notice names the prompt (${notices(ev, "s4k").filter((i) => i.reason === "stop").map((i) => `"${(i.text ?? "").slice(0, 60)}"`).join("; ") || "none"})`,
+        ].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok(`kept, also on a fresh open (${JSON.stringify({ queued: again!.queued, stopped: again!.stopped ?? null })}); "${(named!.text ?? "").slice(0, 100)}"`);
       },
     },
   ],
@@ -3172,14 +3177,16 @@ const S8: Scenario = {
       tell: "how-many",
       lane: "protocol",
       text: "While starter waits on its own background command, the row keeps counting it and keeps one clock.",
-      pass: "From starter's final reply (its transcript) until its Agent step ends (the step's endedAt, else bg-done), every row state counts running.agents of at least 1 and keeps the since it had when the window opened.",
+      pass: "From starter's first final reply (its transcript), when it starts to wait on its command, until its Agent step ends (the step's endedAt, else bg-done), every row state counts running.agents of at least 1 and keeps the since it had when the window opened.",
       fail: "The row drops the agent (0 agents while its step still runs), or since jumps, so the clock restarts.",
       check: (ev) => {
-        const span0 = [...subagentSpans(ev, "s8").values()].find((x) => x.done);
+        const replied = ev.transcript("s8").subagents.find((l) => isFinal(l) && l.timestamp);
         const step = snaps(ev, "s8").flatMap(stepsOf).filter((x) => AGENT_TOOLS.has(x.tool) && /starter/i.test(x.label)).at(-1);
         const end = typeof step?.endedAt === "string" ? ev.atOf(step.endedAt) : mark(ev, "bg-done");
-        if (!span0 || end === undefined) return no("not judged: starter's reply or the end of its step was not seen");
-        const xs = during(ev, "s8", span0.to, end - 1).filter((s) => s.row);
+        if (!replied || end === undefined) return no("not judged: starter's reply or the end of its step was not seen");
+        const from = ev.atOf(replied.timestamp!);
+        if (end - from < 10_000) return no(`not judged: starter waited only ${Math.round((end - from) / 1000)} s`);
+        const xs = during(ev, "s8", from, end - 1).filter((s) => s.row);
         if (!xs.length) return no("not judged: no row state in the window");
         const since = runOf(xs[0]).since;
         const drops = xs.filter((s) => (runOf(s).running?.agents ?? 0) < 1);
@@ -3188,7 +3195,7 @@ const S8: Scenario = {
           drops.length ? `${drops.length}/${xs.length} states count ${[...new Set(drops.map((s) => runOf(s).running?.agents ?? "no"))].join(", ")} agents, first at +${Math.round(drops[0]!.at / 1000)} s` : "",
           moved.length ? `since went from ${since} to ${runOf(moved[0]).since} at +${Math.round(moved[0]!.at / 1000)} s` : "",
         ].filter(Boolean);
-        return bad.length ? no(bad.join("; ")) : ok(`${xs.length} states over ${Math.round((end - span0.to) / 1000)} s, at least 1 agent, since ${since}`);
+        return bad.length ? no(bad.join("; ")) : ok(`${xs.length} states over ${Math.round((end - from) / 1000)} s, at least 1 agent, since ${since}`);
       },
     },
   ],

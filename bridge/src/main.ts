@@ -114,6 +114,7 @@ const push = createPush({
   },
   signal: (message) => transport.signal(message),
   title: (id) => hub.sessionTitle(id),
+  poke: () => hub.poke(),
   now,
   log,
 });

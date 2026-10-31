@@ -75,7 +75,7 @@ private func date(_ wire: String) -> Date {
         #expect(run.isLive)
         #expect(!run.isRunning)
         #expect(!run.ticks)
-        #expect(run.live.map(\.id) == ["2"])
+        #expect(run.collapsed.map(\.id) == ["2"])
         #expect(run.since == nil)
         #expect(run.headline() == "1 waiting for approval")
         #expect(run.duration == nil)
@@ -212,6 +212,19 @@ private func date(_ wire: String) -> Date {
         let run = WorkRun(steps: [step("1", "Agent", "sleeper one", state: .ok, started: 0, ended: 20), step("2", "Agent", "sleeper two", state: .waiting)])
         #expect(run.headline() == "1 done · 1 waiting for approval")
         #expect(run.collapsed.map(\.id) == ["1", "2"])
+    }
+
+    @Test func aFoldedTurnNamesItsFirstFailureAndCountsTheRest() {
+        let items: [SessionItem] = [
+            .work(id: ItemID("w1"), at: start, steps: [
+                step("1", "Bash", "List missing-a.txt", state: .error, started: 0, ended: 1, cause: "Exit code 1: ls: missing-a.txt: No such file or directory"),
+                step("2", "Bash", "List missing-b.txt", state: .error, started: 0, ended: 1, cause: "Exit code 1: ls: missing-b.txt: No such file or directory"),
+            ]),
+            .assistant(id: ItemID("a1"), at: start, text: "Both failed."),
+            .work(id: ItemID("w2"), at: start, steps: [step("3", "Bash", "Run echo checked", state: .ok, started: 2, ended: 3)]),
+        ]
+        #expect(WorkSummary.failure(items) == "List missing-a.txt failed: Exit code 1: ls: missing-a.txt: No such file or directory, and 1 more failed")
+        #expect(WorkSummary.failure([.work(id: ItemID("w2"), at: start, steps: [step("3", state: .ok)])]) == nil)
     }
 
     @Test func aRunningStepShowsNoOutput() {

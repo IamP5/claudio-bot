@@ -11,6 +11,7 @@ struct BackgroundWorkSheet: View {
     @Environment(BridgeClient.self) private var client
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var openCommands: Set<TaskID> = []
 
     private var model: ThreadModel? { store.threads[sessionId] }
     private var tasks: [SessionTask] { model?.controls?.tasks ?? [] }
@@ -95,7 +96,15 @@ struct BackgroundWorkSheet: View {
                 .font(task.kind == .command && command == nil ? .system(.subheadline, design: .monospaced) : .subheadline)
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
-            if let command { StepDetail(text: command, title: title(of: task)) }
+            if let command {
+                StepDetail(
+                    text: command, title: title(of: task),
+                    open: Binding(
+                        get: { openCommands.contains(task.id) },
+                        set: { if $0 { openCommands.insert(task.id) } else { openCommands.remove(task.id) } }
+                    )
+                )
+            }
             Text(line)
                 .font(.caption)
                 .monospacedDigit()

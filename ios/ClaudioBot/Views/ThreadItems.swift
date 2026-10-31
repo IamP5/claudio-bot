@@ -270,19 +270,14 @@ struct FoldRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
 
-    private var steps: [ToolStep] {
-        items.flatMap { item -> [ToolStep] in if case .work(_, _, let steps) = item { steps } else { [] } }
-    }
-
-    private var failed: Int { WorkSummary.errors(steps) }
-
     var body: some View {
+        let failure = WorkSummary.failure(items)
         // The folded rows are rows of the list, so the list's rows move and fade with this transaction.
         Button {
             withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) { toggle() }
         } label: {
             let stacked = typeSize.isAccessibilitySize
-            let diff = WorkSummary.diff(steps)
+            let diff = WorkSummary.diff(WorkSummary.steps(items))
             HStack(spacing: 8) {
                 if !stacked {
                     Image(systemName: "square.stack.3d.up")
@@ -293,8 +288,8 @@ struct FoldRow: View {
                     Text(WorkSummary.fold(items))
                         .font(.subheadline)
                         .foregroundStyle(Theme.secondary)
-                    if failed > 0 {
-                        Label("\(failed) failed", systemImage: "xmark.circle.fill")
+                    if let failure {
+                        Label(failure, systemImage: "xmark.circle.fill")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(Theme.danger)
                     }
@@ -313,7 +308,7 @@ struct FoldRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(WorkSummary.fold(items) + (failed > 0 ? ", \(failed) failed" : ""))
+        .accessibilityLabel(WorkSummary.fold(items) + (failure.map { ". " + $0 } ?? ""))
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
         .accessibilityHint(expanded ? "Hides these steps" : "Shows these steps")
     }
@@ -374,6 +369,9 @@ struct WorkRunRow: View {
     let run: WorkRun
     let onFullOutput: (ToolStep) -> Void
     @State private var open = false
+    /// The steps whose whole command is shown. Kept here, above the switch between a ticking and a still body, so a
+    /// command stays open when the run stops ticking, scrolls away or goes stale.
+    @State private var openCommands: Set<String> = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.runStateStale) private var staleAt
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -413,7 +411,14 @@ struct WorkRunRow: View {
             if !shown.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(shown) { step in
-                        ToolStepRow(step: step, run: run, now: now, brief: !open && !step.state.isLive, onFullOutput: onFullOutput)
+                        ToolStepRow(
+                            step: step, run: run, now: now, brief: !open && !step.state.isLive,
+                            commandOpen: Binding(
+                                get: { openCommands.contains(step.id) },
+                                set: { if $0 { openCommands.insert(step.id) } else { openCommands.remove(step.id) } }
+                            ),
+                            onFullOutput: onFullOutput
+                        )
                             .background { if step.id == revealedStep { Theme.attention.opacity(0.14) } }
                             .id(step.id)
                         if step.id != shown.last?.id { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 34) }
@@ -481,6 +486,7 @@ struct ToolStepRow: View {
     let now: Date
     /// A finished step kept in a collapsed run: its name and how it ended, nothing more.
     var brief = false
+    @Binding var commandOpen: Bool
     let onFullOutput: (ToolStep) -> Void
     @Environment(\.runStateStale) private var staleAt
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -548,7 +554,7 @@ struct ToolStepRow: View {
             }
             VStack(alignment: .leading, spacing: 3) {
                 if !brief, let detail = step.detail, !detail.isEmpty, detail != step.label {
-                    StepDetail(text: detail, title: step.label)
+                    StepDetail(text: detail, title: step.label, open: $commandOpen)
                 }
                 Text(run.status(step, now: now).joined(separator: " · "))
                     .font(.caption)
@@ -647,8 +653,8 @@ struct StepDetail: View {
     let text: String
     /// The step's title, which names the sheet.
     let title: String
+    @Binding var open: Bool
 
-    @State private var open = false
     @State private var reading = false
     @State private var shownHeight: CGFloat = 0
     @State private var fullHeight: CGFloat = 0

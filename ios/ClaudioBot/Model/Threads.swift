@@ -142,13 +142,22 @@ enum WorkSummary {
         return parts.joined(separator: ", ")
     }
 
+    static func steps(_ items: [SessionItem]) -> [ToolStep] {
+        items.flatMap { item -> [ToolStep] in if case .work(_, _, let steps) = item { steps } else { [] } }
+    }
+
     static func fold(_ items: [SessionItem]) -> String {
-        let steps = items.flatMap { item -> [ToolStep] in if case .work(_, _, let steps) = item { steps } else { [] } }
+        let steps = steps(items)
         let replies = items.count { if case .assistant = $0 { true } else { false } }
         var parts = steps.isEmpty ? [] : [text(steps)]
         if replies > 0 { parts.append(plural(replies, "message")) }
         if parts.isEmpty { return "Thought it through" }
         return parts.joined(separator: ", ")
+    }
+
+    /// A folded turn's failures as its run header names them (F-SES-304).
+    static func failure(_ items: [SessionItem]) -> String? {
+        WorkRun(steps: steps(items)).failure
     }
 
     static func errors(_ steps: [ToolStep]) -> Int {
@@ -220,7 +229,6 @@ struct WorkRun {
         heardAt = controls?.heardAt
     }
 
-    var live: [ToolStep] { steps.filter(\.state.isLive) }
     var isLive: Bool { steps.contains { $0.state.isLive } }
     /// Busy, as opposed to live: a run held only by approval cards is blocked, so it never looks busy.
     var isRunning: Bool { steps.contains { $0.state == .running } }

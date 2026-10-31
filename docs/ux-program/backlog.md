@@ -57,3 +57,30 @@
 - G11 r2 gaps: "Sent before it could be withdrawn" not observed end to end on the real bridge (needs a Withdraw tap; covered by unit tests with literal re-key frames) (P2); on the restart path a transcript copy carries its clientId only if the thread was watched when it appeared, else the sent-anyway note is lost (P3); Stop button still spins offline, only the composer line changed (P3).
 - G11 r2 verifier P3s: a send the Mac received reads "Not sent · Retry" while offline from 10 s until the next hello (settles ~70 ms after reconnect; wording claims something false); sentAs is not validated by the store schema (store.ts:172), so a corrupt value throws in ties()/tie() and that thread cannot load; offline Stop button spins and its a11y label says "Stopping the turn"; late withdraw shows a red "no longer queued" composer error under the calm "Sent before it could be withdrawn" note; rec.sent reaches disk only after routing, so a crash mid-route can rerun a message.
 - scenario.ts help text (default branch) does not list --away; the run usage error does (docs sync #28).
+- F-SES-234 (P2, Sessions run 3): Composer note and push-link note 'Dismiss' buttons are bare, and focus is lost when the note goes
+- F-SES-241 (P2, Sessions run 3): The failing-push message is a bare HTTP status, with no consequence and no way to retry or test
+- F-SES-242 (P2, Sessions run 3): The 'finished' alert fires 5 s after rest whether or not the user watched the session end, so leaving the thread in those 5 s gets a banner for something they just read
+- F-SES-244 (P2, Sessions run 3): Eight sessions finishing together send eight separate identical 'finished' pushes, with no count or grouping
+- F-SES-245 (P2, Sessions run 3): A session the user hid still raises Finished, Stopped-with-an-error and Needs-you alerts, and there is no way to silence it
+- F-SES-246 (P2, Sessions run 3): The iPhone app icon never shows a badge, so finished, unread or waiting-on-you sessions leave no trace on the home screen
+- F-SES-249 (P2, Sessions run 3): A session running on the Mac (terminal or desktop app) shows Working in the list, but when it finishes no 'finished' alert or push reaches the phone
+- F-SES-251 (P2, Sessions run 3): Push 'off' because of a malformed push URL tells the user to set a variable they already set
+- F-SES-252 (P2, Sessions run 3): The push-off notice says alerts are off but not what is missed, and its fix is a Mac environment variable
+- F-SES-253 (P2, Sessions run 3): Tapping 'Alerts when away are off' opens Settings at the top, far above the row that explains it
+- F-SES-254 (P2, Sessions run 3): The approval push and its reminder never say how long is left or that the request will be refused
+- F-SES-256 (P2, Sessions run 3): The 'finished' alert is just the session title plus 'Finished'. It can't say that a background command failed, because the bridge sends no outcome text
+- F-SES-261 (P2, Sessions run 3): In a fan-out of more than 20 agents, the earliest answered approval cards vanish from the thread while the agents are still running
+- F-SES-262 (P2, Sessions run 3): Approval card shows Expired or live Allow by the phone's clock against the Mac's deadline
+- F-SES-264 (P2, Sessions run 3): Elapsed time, 'no activity for' and row ages subtract the Mac's timestamps from the phone's clock with no offset
+- F-SES-265 (P2, Sessions run 3): An approval that timed out is called 'denied' in the notice and on the tool step, though the card says Expired
+- F-SES-266 (P2, Sessions run 3): A card that expired unanswered is re-asked within 3 s as a fresh identical card, with a new full-length wait (and, for an away user, a new push)
+- F-SES-271 (P2, Sessions run 3): A refused Start says only 'Unknown project', with no cause and no way forward
+- F-SES-275 (P2, Sessions run 3): After a bridge restart, a thread the user was reading shows an unread dot and a 'Finished' outcome for a reply they already saw
+- F-SES-285 (P2, Sessions run 3): Stopping a background task leaves the row's age and sort position at the earlier reply
+- F-SES-286 (P2, Sessions run 3): One Stop puts two notices in the thread: a bare 'Interrupted' and then 'Stopped by you: ...'
+- F-SES-292 (P2, Sessions run 3): After an approval, the thread's 'Working' clock and the row's run time still include the whole wait for the user
+- F-SES-293 (P2, Sessions run 3): Unread dot switches off for ~1.5 s while an unseen reply is still unread, because it follows the last transcript line's role
+- F-SES-296 (P2, Sessions run 3): Header plan-usage percentage keeps full strength offline and only dims if the Mac last said it was stale
+- F-SES-299 (P2, Sessions run 3): The Notifications toggle's footer describes bot alerts only, though it also turns off session alerts
+- F-SES-301 (P2, Sessions run 3): Full output sheet hides that it is only the last 64 KB, and opens scrolled to the bottom
+- F-SES-305 (P2, Sessions run 3): A tool step goes from waiting to running to denied when its approval expires or is denied

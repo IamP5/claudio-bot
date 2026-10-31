@@ -212,3 +212,7 @@ ts	decision	why
 2026-10-31T20:56:01Z	G22: Write-only topic (poll 401/403): resend a timed-out push after the backoff; state stays failing until a real push succeeds	a lost needs-you push is worse than a rare double ring
 2026-10-31T20:56:01Z	G22: Pushes carry X-Sequence-ID (opaque hash of the push key); the poll matches on it, older ntfy falls back to text+link within 2 s	second ending never mistaken for the first; Android/web replace instead of adding
 2026-10-31T20:56:01Z	G22: "The phone looked" = any socket heard from while the app was open since the push's first try	matches how session alerts decide seen
+2026-10-31T21:06:06Z	G23: Running now titles a command by its step title with the full command under it	no command printed twice
+2026-10-31T21:06:06Z	G23: A finished agent's line drops detail and output but keeps a failure cause	failure readable without opening the run
+2026-10-31T21:06:06Z	G23: "K done" counts only agents that ended ok	failed and stopped have their own line
+2026-10-31T21:06:06Z	G23: "Started" and "Ran" use only bridge-sent times; a run with no heardAt is never called quiet	never claim quiet from a guess

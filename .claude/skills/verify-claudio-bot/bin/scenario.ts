@@ -824,7 +824,12 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
       case "show-list":
         if (!lease) {
           // As the relaunched app does: nothing watches a thread while the list is on screen.
-          for (const [sid, name] of p.names) if (!p.away.has(sid)) (p.send({ type: "unwatch_session", sessionId: sid }), p.away.add(sid), log(`show-list: unwatched ${name}`));
+          for (const [sid, name] of p.names) {
+            if (p.away.has(sid)) continue;
+            p.send({ type: "unwatch_session", sessionId: sid });
+            p.away.add(sid);
+            log(`show-list: unwatched ${name}`);
+          }
           return;
         }
         if (!app) return;
@@ -868,8 +873,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
             }
           });
           for (const pid of pids) if (paused.includes(pid)) paused.splice(paused.indexOf(pid), 1);
-          log(`SIGCONT ${alive.join(", ") || "none"}${alive.length < pids.length ? `; already gone: ${pids.filter((p) => !alive.includes(p)).join(", ")}` : ""}`);
-          ev.samples[`${a.mark}-resumed`] = alive.map(String);
+          log(`SIGCONT ${alive.join(", ") || "none"}; already gone: ${pids.filter((pid) => !alive.includes(pid)).join(", ") || "none"}`);
           return markNow(a.mark);
         }
         const found = sh(["pgrep", "-P", String(run!.bridgePid), "-f", sid]).out.split("\n").filter(Boolean).map(Number);

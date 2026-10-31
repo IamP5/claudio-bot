@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BotId, MessageId, SessionId, Signal } from "../src/protocol";
-import { createPush, MESSAGE_THROTTLE_MS, ntfySender, OWED_RETRY_MS, PROBE_MS, PushFailure, senderFromEnv, START_GRACE_MS, type PushReason, type Sender } from "../src/push";
+import { createPush, MESSAGE_THROTTLE_MS, ntfySender, OWED_RETRY_MS, PollForbidden, PROBE_MS, PushFailure, senderFromEnv, START_GRACE_MS, type PushReason, type Sender } from "../src/push";
 import { createSaver, loadWorld } from "../src/store";
 import { botActor, emptySession, newBot, own, post, type GateState, type OwnCard, type PushState, type World } from "../src/world";
 
@@ -26,7 +26,7 @@ type Call = { url: string; init: RequestInit };
  * to a push; takes: whether it published one it failed to answer (it did not answer in time). The server's poll of its
  * cache answers from what it published, or with poll's answer.
  */
-function harness(opts: { home?: string; liveFor?: number; off?: boolean; respond?: () => Promise<Response>; takes?: () => boolean; hang?: boolean; poll?: () => Promise<Response> } = {}) {
+function harness(opts: { home?: string; liveFor?: number; off?: boolean; respond?: () => Promise<Response>; takes?: () => boolean; hang?: boolean; poll?: () => Promise<Response>; noSid?: boolean } = {}) {
   const home = opts.home ?? mkdtempSync(join(tmpdir(), "claudiobot-push-"));
   if (!opts.home) homes.push(home);
   const { world } = loadWorld(home);
@@ -41,7 +41,7 @@ function harness(opts: { home?: string; liveFor?: number; off?: boolean; respond
   const polls: string[] = [];
   const onDisk: string[][] = [];
   const clock = { t: T0 };
-  const published: { time: number; message: string; click: string }[] = [];
+  const published: { time: number; message: string; click: string; sequence_id?: string }[] = [];
   const fakeFetch = (async (url: string, init: RequestInit = {}) => {
     if (init.method !== "POST") {
       polls.push(url);
@@ -52,7 +52,8 @@ function harness(opts: { home?: string; liveFor?: number; off?: boolean; respond
     }
     calls.push({ url, init });
     onDisk.push(diskKeys(home));
-    const publish = () => published.push({ time: Math.floor(clock.t / 1000), message: String(init.body), click: (init.headers as Record<string, string>).Click! });
+    const headers = init.headers as Record<string, string>;
+    const publish = () => published.push({ time: Math.floor(clock.t / 1000), message: String(init.body), click: headers.Click!, ...(!opts.noSid && { sequence_id: headers["X-Sequence-ID"] }) });
     if (opts.hang) return publish(), new Promise<Response>(() => {});
     try {
       const res = await (opts.respond ? opts.respond() : Promise.resolve(new Response("ok")));
@@ -185,7 +186,7 @@ test("the payload is the bot's name, a fixed phrase and the deep link, never con
   expect(url).toBe(URL_);
   expect(init.method).toBe("POST");
   expect(init.body).toBe("Claudio Bot needs you");
-  expect(init.headers).toEqual({ Title: "ClaudioBot", Click: "claudiobot://bot/b_claudio?message=m_card", Priority: "high" });
+  expect(init.headers).toEqual({ Title: "ClaudioBot", Click: "claudiobot://bot/b_claudio?message=m_card", Priority: "high", "X-Sequence-ID": expect.stringMatching(/^cb[0-9a-f]{32}$/) });
   const wire = JSON.stringify({ url, body: init.body, headers: init.headers });
   for (const secret of [SECRET_COMMAND, "git push", "Push to the default branch", SECRET_CHAT, "plan-final.pdf", "Bash"]) {
     expect(wire).not.toContain(secret);
@@ -294,6 +295,7 @@ const drain = async () => {
 test.each([
   ["a refused connection", () => Promise.reject(Object.assign(new Error("Unable to connect. Is the computer able to access the url?"), { code: "ConnectionRefused" })), "Could not reach the push server"],
   ["a non-2xx response", () => Promise.resolve(new Response("nope", { status: 500 })), "The push server answered 500"],
+  ["a 503 from a proxy that did not reach the server", () => Promise.resolve(new Response("nope", { status: 503 })), "The push server answered 503"],
 ] as [string, () => Promise<Response>, string][])("%s is tried three times, then the push state reads failing, without the URL", async (_, respond, error) => {
   const h = harness({ respond });
   openCard(h.world);
@@ -312,7 +314,7 @@ test.each([
 
 test("a send that gets through on its second try, or after a failing one, puts the state back to on", async () => {
   let fails = 1;
-  const h = harness({ respond: async () => (fails-- > 0 ? new Response("", { status: 502 }) : new Response("ok")) });
+  const h = harness({ respond: async () => (fails-- > 0 ? new Response("", { status: 500 }) : new Response("ok")) });
   openCard(h.world);
   h.push.notify(BOT, "card", CARD);
   await drain();
@@ -373,7 +375,7 @@ test("a set URL sends to that URL", async () => {
   const urls: string[] = [];
   const fakeFetch = (async (url: string) => (urls.push(url), new Response("ok"))) as unknown as typeof fetch;
   const sender = senderFromEnv(` ${URL_} `, () => {}, fakeFetch);
-  await sender!.send({ botId: BOT.id, text: "Claudio Bot needs you", link: "claudiobot://bot/b_claudio?message=m_card", high: true });
+  await sender!.send({ botId: BOT.id, text: "Claudio Bot needs you", link: "claudiobot://bot/b_claudio?message=m_card", high: true, sid: "cb0" });
   expect(urls).toEqual([URL_]);
 });
 
@@ -991,15 +993,22 @@ test("a push that timed out goes again once the server says it does not hold it,
 });
 
 test("ntfy's transport: a refused connection is safe to send again, a timeout or a broken connection is not, and the poll reads the topic's cache", async () => {
-  const fail = (e: object) => ntfySender(URL_, (async () => Promise.reject(Object.assign(new Error("x"), e))) as unknown as typeof fetch).send({ botId: null, text: "t", link: "l", high: false });
+  const fail = (e: object) => ntfySender(URL_, (async () => Promise.reject(Object.assign(new Error("x"), e))) as unknown as typeof fetch).send({ botId: null, text: "t", link: "l", high: false, sid: "cb0" });
   const outcome = async (e: object) => fail(e).catch((x: PushFailure) => [x.message, x.maybe]);
   expect(await outcome({ code: "ConnectionRefused" })).toEqual(["Could not reach the push server", false]);
   expect(await outcome({ name: "TimeoutError" })).toEqual(["The push server did not answer within 10 s", true]);
   expect(await outcome({ code: "ECONNRESET" })).toEqual(["The connection to the push server broke before it answered", true]);
+  const answered = (status: number) =>
+    ntfySender(URL_, (async () => new Response("", { status })) as unknown as typeof fetch)
+      .send({ botId: null, text: "t", link: "l", high: false, sid: "cb0" })
+      .catch((x: PushFailure) => x.maybe);
+  expect(await Promise.all([500, 503, 429, 502, 504, 524].map(answered))).toEqual([false, false, false, true, true, true]);
+  const forbidden = ntfySender(URL_, (async () => new Response("", { status: 403 })) as unknown as typeof fetch).taken(T0);
+  expect(await forbidden.catch((x: Error) => x instanceof PollForbidden)).toBe(true);
   const urls: string[] = [];
-  const body = [{ event: "open" }, { event: "message", time: 1, message: "A Claude Code session finished", click: "claudiobot://session/s" }].map((m) => JSON.stringify(m)).join("\n");
+  const body = [{ event: "open" }, { event: "message", time: 1, message: "A Claude Code session finished", click: "claudiobot://session/s", sequence_id: "cb1" }].map((m) => JSON.stringify(m)).join("\n");
   const poll = ntfySender(`${URL_}?auth=tok`, (async (url: string) => (urls.push(url), new Response(body))) as unknown as typeof fetch);
-  expect(await poll.taken(T0 + 999)).toEqual([{ text: "A Claude Code session finished", link: "claudiobot://session/s" }]);
+  expect(await poll.taken(T0 + 999)).toEqual([{ text: "A Claude Code session finished", link: "claudiobot://session/s", at: 1_000, sid: "cb1" }]);
   expect(urls).toEqual([`https://ntfy.example/claudio-topic/json?auth=tok&poll=1&since=${Math.floor(T0 / 1000)}`]);
 });
 
@@ -1104,4 +1113,155 @@ test("unreadable owed pushes and push state on disk are dropped at start, and th
   expect([push.state!(), h.world.push.failing, h.world.push.owed]).toEqual([{ state: "on" }, undefined, [good]]);
   createPush({ world: h.world, persist: () => {}, sender: null, liveUntil: () => null, now: () => new Date(T0), log: () => {} });
   expect(h.world.push.owed).toBeUndefined();
+});
+
+const REFUSED = () => Promise.reject(Object.assign(new Error("Unable to connect."), { code: "ConnectionRefused" }));
+/** Ticks at `from`, then at each deadline the push module names, as the clock would, until `to`. */
+const ticks = async (h: ReturnType<typeof harness>, from: number, to: number) => {
+  for (let t = from; t < to; ) {
+    at(h, t);
+    await drain();
+    const next = h.push.nextDeadline();
+    t = next === null ? to : Math.max(Date.parse(next), t + 1_000);
+  }
+};
+
+test("a bot's updates through a 6 h outage leave one owed push, sent once the server is back (REPRO-1)", async () => {
+  const h = flaky();
+  for (let t = T0, n = 0; t < T0 + 6 * HOUR; t += 11 * 60_000, n++) {
+    at(h, t);
+    h.push.notify(BOT, "message", h.bubble(`m_b${n}`));
+    await drain();
+  }
+  expect(h.world.push.owed?.map((o) => o.keys)).toEqual([["m_b32|message"]]);
+  const before = h.calls.length;
+  h.server.down = false;
+  await ticks(h, T0 + 6 * HOUR, T0 + 6 * HOUR + 10 * 60_000);
+  expect(h.calls.slice(before).map((c) => c.init.body)).toEqual(["Claudio Bot has an update for you"]);
+});
+
+test("a phone that came back and left before the retry drops what was owed (REPRO-2)", async () => {
+  const h = flaky();
+  h.push.notify(BOT, "message", h.bubble("m_b0"));
+  await drain();
+  h.sockets.until = new Date(T0 + 50_000);
+  at(h, T0 + 5_000);
+  h.sockets.until = null;
+  h.server.down = false;
+  const before = h.calls.length;
+  await ticks(h, T0 + 51_000, T0 + 10 * 60_000);
+  expect([h.calls.length - before, h.world.push.owed]).toEqual([0, undefined]);
+});
+
+test("a write-only topic: a timed-out card push goes again after the backoff, and a probe keeps the real error (REPRO-3)", async () => {
+  let respond: () => Promise<Response> = TIMEOUT;
+  const h = harness({ respond: () => respond(), poll: async () => new Response("forbidden", { status: 403 }) });
+  const [card] = drive(h, [permission("m_a", T0)]);
+  at(h, T0 + 2_000);
+  await drain();
+  respond = async () => new Response("ok");
+  await ticks(h, T0 + 3_000, T0 + 60_000);
+  expect([h.calls.map((c) => c.init.body), h.push.state!(), h.world.push.owed]).toEqual([["A Claude Code session needs your approval", "A Claude Code session needs your approval"], { state: "on" }, undefined]);
+
+  respond = REFUSED;
+  answer(card!);
+  h.world.sessions.get(SID)!.own!.cards.push(permission("m_b", T0 + 70_000));
+  at(h, T0 + 72_000);
+  await drain();
+  h.world.sessions.get(SID)!.own!.cards.forEach(answer);
+  const polled = h.polls.length;
+  await ticks(h, T0 + 73_000, T0 + 300_000);
+  expect([h.polls.length - polled, h.push.state!()]).toEqual([4, { state: "failing", error: "Could not reach the push server", at: iso(T0 + 72_000) }]);
+});
+
+test("a gateway timeout after the server published is not sent again at 2 s; the poll finds it (REPRO-4)", async () => {
+  const h = harness({ respond: async () => new Response("gateway timeout", { status: 504 }), takes: () => true });
+  h.published.length = 0;
+  drive(h, [permission("m_a", T0)]);
+  at(h, T0 + 2_000);
+  await drain();
+  h.published.push({ time: Math.floor((T0 + 2_000) / 1000), message: "A Claude Code session needs your approval", click: `claudiobot://session/${SID}?card=m_a`, sequence_id: String((h.calls[0]!.init.headers as Record<string, string>)["X-Sequence-ID"]) });
+  await ticks(h, T0 + 3_000, T0 + 60_000);
+  expect([h.calls.length, h.push.state!(), h.world.push.owed]).toEqual([1, { state: "on" }, undefined]);
+});
+
+test("a session's second ending whose try timed out is told apart from the first ending's push and sent (REPRO-5)", async () => {
+  let respond: () => Promise<Response> = async () => new Response("ok");
+  const h = harness({ respond: () => respond() });
+  h.push.sessionEnded!(SID, "finished", iso(T0));
+  await drain();
+  respond = TIMEOUT;
+  at(h, T0 + 40_000);
+  h.push.sessionEnded!(SID, "finished", iso(T0 + 40_000));
+  await drain();
+  respond = async () => new Response("ok");
+  await ticks(h, T0 + 41_000, T0 + 10 * 60_000);
+  expect([h.calls.length, h.published.length]).toEqual([3, 2]);
+});
+
+test("on a server that keeps no sequence id, a session's second ending is told from its first by time, and sent (REPRO-5)", async () => {
+  let respond: () => Promise<Response> = async () => new Response("ok");
+  const h = harness({ respond: () => respond(), noSid: true });
+  h.push.sessionEnded!(SID, "finished", iso(T0));
+  await drain();
+  respond = TIMEOUT;
+  at(h, T0 + 40_000);
+  h.push.sessionEnded!(SID, "finished", iso(T0 + 40_000));
+  await drain();
+  respond = async () => new Response("ok");
+  await ticks(h, T0 + 41_000, T0 + 10 * 60_000);
+  expect([h.calls.length, h.published.length]).toEqual([3, 2]);
+});
+
+test("a server that keeps no sequence id is matched by text and link", async () => {
+  const h = harness({ respond: TIMEOUT, takes: () => true, noSid: true });
+  drive(h, [permission("m_a", T0)]);
+  at(h, T0 + 2_000);
+  await drain();
+  await ticks(h, T0 + 3_000, T0 + 30_000);
+  expect([h.calls.length, h.push.state!()]).toEqual([1, { state: "on" }]);
+});
+
+test("bot updates owed through an outage never push an owed card push out of the queue (REPRO-6)", async () => {
+  const h = flaky();
+  const card = permission("m_a", T0);
+  drive(h, [card.kind === "permission" ? { ...card, card: { ...card.card, expiresAt: iso(T0 + 24 * HOUR) } } : card]);
+  at(h, T0 + 2_000);
+  await drain();
+  for (let i = 0; i < 50; i++) {
+    at(h, T0 + 3_000 + i * 11 * 60_000);
+    await drain();
+    h.push.notify(BOT, "message", h.bubble(`m_b${i}`));
+    await drain();
+  }
+  expect((h.world.push.owed ?? []).map((o) => o.keys[0])).toEqual(expect.arrayContaining(["m_a|card"]));
+});
+
+test("over the cap, owed updates go before owed cards", () => {
+  const h = harness();
+  const update = (i: number) => ({ keys: [`m_${i}|message`], botId: BOT.id, text: "u", link: "l", high: false, for: { kind: "bot" as const } });
+  const cardPush = { keys: ["m_a|card"], botId: null, text: "c", link: "l", high: true, for: { kind: "cards" as const, session: SID, cards: ["m_a" as MessageId] } };
+  own<PushState>(h.world.push).owed = [cardPush, ...Array.from({ length: 51 }, (_, i) => update(i))];
+  const logs: string[] = [];
+  createPush({ world: h.world, persist: () => {}, sender: { send: async () => {}, taken: async () => [] }, liveUntil: () => null, now: () => new Date(T0), log: (l) => logs.push(l) }).notify(BOT, "card", CARD);
+  expect([h.world.push.owed?.[0]?.keys, h.world.push.owed?.length]).toEqual([["m_a|card"], 50]);
+});
+
+test("a reminder that goes while a retry of its card's push is out is not followed by that card push (REPRO-7)", async () => {
+  let next: () => Promise<Response> = REFUSED;
+  let release = () => {};
+  const h = harness({ respond: () => next() });
+  drive(h, [permission("m_a", T0)]);
+  at(h, T0 + 2_000);
+  await drain();
+  next = () => new Promise<Response>((_, rej) => (release = () => rej(Object.assign(new Error("Unable to connect."), { code: "ConnectionRefused" }))));
+  at(h, T0 + 17_000);
+  await drain();
+  next = async () => new Response("ok");
+  at(h, T0 + HOUR);
+  await drain();
+  release();
+  await drain();
+  await ticks(h, T0 + HOUR + 1_000, T0 + HOUR + 10 * 60_000);
+  expect(h.calls.slice(4).map((c) => c.init.body)).toEqual(["A Claude Code session is still waiting for your approval"]);
 });

@@ -303,7 +303,8 @@ const s = Bun.serve({ port: 0, hostname: "127.0.0.1", idleTimeout: 0, fetch: asy
   const slow = existsSync(${JSON.stringify(join(dir, "sink-slow"))}) ? Number(readFileSync(${JSON.stringify(join(dir, "sink-slow"))}, "utf8")) || 0 : 0;
   const body = await req.text();
   appendFileSync(${JSON.stringify(join(dir, "pushes.jsonl"))}, JSON.stringify({ at: now.toISOString(), path: url.pathname, title: req.headers.get("title"), click: req.headers.get("click"), priority: req.headers.get("priority"), status, ...(slow > 0 && { slowS: slow }), body }) + "\\n");
-  if (status === 200) published.push({ id: crypto.randomUUID(), time: Math.floor(now.getTime() / 1000), event: "message", topic: url.pathname.slice(1), message: body, click: req.headers.get("click") });
+  const id = crypto.randomUUID();
+  if (status === 200) published.push({ id, time: Math.floor(now.getTime() / 1000), event: "message", topic: url.pathname.slice(1), message: body, click: req.headers.get("click"), sequence_id: req.headers.get("x-sequence-id") ?? id });
   if (slow > 0) await Bun.sleep(slow * 1000);
   return new Response("{}", { status });
 } });

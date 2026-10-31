@@ -52,7 +52,7 @@ struct StopScope: Equatable, Sendable {
 
     /// "the turn, 2 agents and 1 command", "1 command".
     var what: String {
-        let parts = (turn ? ["the turn"] : []) + (ThreadStatus.nouns(tasks).map { $0.components(separatedBy: ", ") } ?? [])
+        let parts = (turn ? ["the turn"] : []) + TaskCount(tasks).parts
         return Self.listed(parts.isEmpty ? ["Claude"] : parts)
     }
 

@@ -254,14 +254,17 @@ struct WorkRun {
     }
 
     /// "2 of 3 agents running · 1 done · 1 waiting for approval · 1 stopped", or for a finished run "Ran 3 agents, 43s".
-    /// Spoken, the state leads: "Running: 2 of 3 agents, 1 done". What may still run is never counted as ran.
-    func headline(spoken: Bool = false) -> String {
+    /// Spoken, the state leads: "Running: 2 of 3 agents, 1 done", and an out-of-date run says so: "Running when last
+    /// updated: 2 of 3 agents". What may still run is never counted as ran. A call a running agent makes is that
+    /// agent's work, not counted again (Run3 call 16).
+    func headline(spoken: Bool = false, stale: Bool = false) -> String {
         let format = spoken ? RunClock.spoken : RunClock.short
         var parts: [String] = []
-        let running = steps.filter { $0.state == .running }
+        let live = Set(steps.filter { $0.isAgent && $0.state == .running }.map(\.id))
+        let running = steps.filter { $0.state == .running && !($0.owner.map(live.contains) ?? false) }
         let agents = steps.count(where: \.isAgent)
         let nouns = Self.nouns(running, agents: agents)
-        if !running.isEmpty { parts.append(spoken ? "Running: " + nouns : nouns + " running") }
+        if !running.isEmpty { parts.append(spoken ? (stale ? "Running when last updated: " : "Running: ") + nouns : nouns + " running") }
         let done = steps.count { $0.isAgent && $0.state == .ok }
         if steps.contains(where: { $0.isAgent && $0.state.isLive }), done > 0 { parts.append("\(done) done") }
         let waiting = steps.count { $0.state == .waiting }
@@ -285,9 +288,10 @@ struct WorkRun {
         return failed.count == 1 ? line : line + ", and \(failed.count - 1) more failed"
     }
 
-    /// The header as VoiceOver speaks it: "Running: 3 agents, 2 minutes 5 seconds. broken helper failed: …".
-    func spoken(now: Date) -> String {
-        var line = headline(spoken: true)
+    /// The header as VoiceOver speaks it: "Running: 3 agents, 2 minutes 5 seconds. broken helper failed: …". stale: the
+    /// thread may be out of date, so the clock is when it was last known, not now (F-SES-181).
+    func spoken(now: Date, stale: Bool = false) -> String {
+        var line = headline(spoken: true, stale: stale)
         if let since { line += ", " + RunClock.spoken(now.timeIntervalSince(since)) }
         if let failure { line += ". " + failure }
         return line
@@ -318,8 +322,9 @@ struct WorkRun {
         return gap > Self.quietAfter ? gap : nil
     }
 
-    /// One step's state and timing in words: "Running · 1m 12s · 3 tools, last Bash · started by sleeper two".
-    func status(_ step: ToolStep, now: Date, spoken: Bool = false) -> [String] {
+    /// One step's state and timing in words: "Running · 1m 12s · 3 tools, last Bash · started by sleeper two". Spoken
+    /// while stale, a running step says the clock is from the last update: "Running when last updated, 1 minute 12 seconds".
+    func status(_ step: ToolStep, now: Date, spoken: Bool = false, stale: Bool = false) -> [String] {
         let format = spoken ? RunClock.spoken : RunClock.short
         let joint = spoken ? ", " : " · "
         let task = task(for: step)
@@ -327,7 +332,7 @@ struct WorkRun {
         var parts: [String] = []
         switch step.state {
         case .running:
-            parts.append("Running" + (step.startedAt.map { joint + format(now.timeIntervalSince($0)) } ?? ""))
+            parts.append("Running" + (spoken && stale ? " when last updated" : "") + (step.startedAt.map { joint + format(now.timeIntervalSince($0)) } ?? ""))
         case .waiting:
             parts.append("Waiting for approval")
         case .ok, .error:

@@ -274,9 +274,9 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
     @Test func aLinkToAQuestionAnsweredElsewhereSaysSo() {
         let link = LinkedCard(sessionId: sid, cardId: MessageID("ask1"))
         let answered = ask("a1", answers: .answered(["Which library?": "Howler"]), cardId: "ask1")
-        #expect(link.note(in: [answered], decidedHere: [], at: at) == LinkedCard.answered)
+        #expect(link.note(in: [answered], decidedHere: [], at: at) == "Already answered. Nothing here waits on you now.")
         #expect(link.note(in: [answered], decidedHere: [MessageID("ask1")], at: at) == nil)
-        #expect(link.note(in: [plan("p1", .approved, cardId: "ask1")], decidedHere: [], at: at) == LinkedCard.answered)
+        #expect(link.note(in: [plan("p1", .approved, cardId: "ask1")], decidedHere: [], at: at) == "Already answered. Nothing here waits on you now.")
     }
 }
 
@@ -330,7 +330,7 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
             reach: .connected(machine: "Mac"), quietSince: nil, lastUpdate: at, controls: model.controls, card: nil, since: nil, outcome: nil,
             catchingUp: model.catchingUp
         )
-        #expect(status == .catchingUp(lastUpdate: at))
+        #expect(status == .catchingUp(lastUpdate: at, tasks: []))
         #expect(status?.text(now: at) == "Catching up…")
         #expect(status?.word == "Catching up")
         #expect(status?.staleAt == at, "clocks stop while the state may be old")

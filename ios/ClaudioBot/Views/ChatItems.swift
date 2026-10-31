@@ -531,6 +531,20 @@ extension View {
     ) -> some View {
         modifier(CloseAnnouncer(cardId: cardId, card: card, answer: answer, step: step, focus: focus))
     }
+
+    /// Speaks a plan or question card closing, whatever closed it (F-SES-178). closing: what the card says once it is
+    /// closed, nil while it is open.
+    func announcesClose(_ closing: String?) -> some View {
+        onChange(of: closing) { old, new in
+            guard old == nil, let new else { return }
+            var text = AttributedString(new)
+            text.accessibilitySpeechAnnouncementPriority = .high
+            AccessibilityNotification.Announcement(text).post()
+            #if DEBUG
+            a11yLog.debug("announced \(new, privacy: .public)")
+            #endif
+        }
+    }
 }
 
 private struct CloseAnnouncer: ViewModifier {
@@ -669,6 +683,7 @@ private struct PermissionCardBody: View {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Image(systemName: outcome.glyph)
                             .foregroundStyle(outcome.color)
+                            .accessibilityHidden(true)
                         Text(outcome.text)
                             .font(.ui(.subheadline, weight: outcome.tone == .ended ? .regular : .semibold))
                             .foregroundStyle(outcome.tone == .ended ? Theme.tertiary : Theme.secondary)
@@ -936,12 +951,14 @@ private struct OptionRow: View {
             Spacer(minLength: 0)
             if chosen != nil {
                 Image(systemName: "checkmark").font(.ui(size: 14, weight: .semibold)).foregroundStyle(AvatarColor.green.color)
+                    .accessibilityHidden(true)
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(chosen != nil ? .isSelected : [])
     }
 }
 

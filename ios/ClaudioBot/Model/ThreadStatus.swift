@@ -1,50 +1,79 @@
 import Foundation
 
-/// The newest card in a thread that waits on the user, as the status line shows it and VoiceOver announces it.
+/// The cards in a thread that wait on the user, as the status line shows them and VoiceOver announces them. The newest
+/// leads: the line scrolls to it and a new one is spoken. The count and the names cover every open card (F-SES-221).
 struct OpenCard: Equatable, Sendable {
-    enum Kind: Equatable, Sendable { case permission, ask, plan }
+    enum Kind: Hashable, Sendable { case permission, ask, plan }
 
+    /// The newest open card.
     let id: ItemID
     let kind: Kind
-    /// "Needs your approval: Bash in sleeper two".
+    /// The header's word for what the cards need: "Needs your approval", "Needs your answer", "Needs you".
+    let need: String
+    /// "Needs your approval: Bash in sleeper two", "Needs your approval: 3 requests (sleeper one, sleeper two, sleeper three)".
     let line: String
     /// "Approval needed. sleeper two wants to run Bash: perl -e 'sleep 30'".
     let announcement: String
-    /// When the card stops counting as open without a frame saying so.
+    /// The first moment an open card stops counting as open without a frame saying so.
     let expiresAt: Date?
+    /// When the oldest open card was raised: how long the thread has waited on the user (F-SES-297).
+    let since: Date
+    let count: Int
+    /// The kinds open now. Stop closes them all, and only a permission card says the stop itself.
+    let kinds: Set<Kind>
 
     /// A permission card whose deadline passed is no longer open, so it no longer hides the run's state.
-    static func newest(in items: [SessionItem], at now: Date) -> OpenCard? {
-        for item in items.reversed() {
+    static func waiting(in items: [SessionItem], at now: Date) -> OpenCard? {
+        var open: [(id: ItemID, at: Date, kind: Kind, asker: String, line: String, announcement: String, expiresAt: Date?)] = []
+        for item in items {
             switch item {
-            case let .permission(id, _, permission) where permission.card.answer(at: now) == nil:
+            case let .permission(id, at, permission) where permission.card.answer(at: now) == nil:
                 let card = permission.card
                 let who = permission.subagent.map { " in \($0)" } ?? ""
                 let asker = permission.subagent ?? "Claude"
-                return OpenCard(
-                    id: id, kind: .permission, line: "Needs your approval: \(card.tool)\(who)",
-                    announcement: "Approval needed. \(asker) wants to run \(card.tool)" + (Self.firstLine(card.detail).map { ": " + $0 } ?? "."),
-                    expiresAt: card.expiresAt
-                )
-            case let .ask(id, _, questions, nil, _?):
+                open.append((
+                    id, at, .permission, permission.subagent ?? card.tool, "Needs your approval: \(card.tool)\(who)",
+                    "Approval needed. \(asker) wants to run \(card.tool)" + (Self.firstLine(card.detail).map { ": " + $0 } ?? "."),
+                    card.expiresAt
+                ))
+            case let .ask(id, at, questions, nil, _?):
                 let first = questions.first?.question ?? ""
-                return OpenCard(
-                    id: id, kind: .ask,
-                    line: questions.count == 1 ? "Claude asks you a question" : "Claude asks you \(questions.count) questions",
-                    announcement: questions.count == 1 ? "Question: \(first)" : "\(questions.count) questions. First: \(first)",
-                    expiresAt: nil
-                )
-            case let .plan(id, _, text, .proposed, _?):
-                return OpenCard(
-                    id: id, kind: .plan, line: "A plan needs your approval",
-                    announcement: "Plan ready for your approval" + (Self.heading(text).map { ": " + $0 } ?? "."),
-                    expiresAt: nil
-                )
+                open.append((
+                    id, at, .ask, "a question",
+                    questions.count == 1 ? "Claude asks you a question" : "Claude asks you \(questions.count) questions",
+                    questions.count == 1 ? "Question: \(first)" : "\(questions.count) questions. First: \(first)",
+                    nil
+                ))
+            case let .plan(id, at, text, .proposed, _?):
+                open.append((
+                    id, at, .plan, "a plan", "A plan needs your approval",
+                    "Plan ready for your approval" + (Self.heading(text).map { ": " + $0 } ?? "."),
+                    nil
+                ))
             default:
                 continue
             }
         }
-        return nil
+        guard let newest = open.last else { return nil }
+        let since = open.map(\.at).min() ?? newest.at
+        let expiresAt = open.compactMap(\.expiresAt).min()
+        guard open.count > 1 else {
+            let need = newest.kind == .ask ? "Needs your answer" : "Needs your approval"
+            return OpenCard(
+                id: newest.id, kind: newest.kind, need: need, line: newest.line, announcement: newest.announcement, expiresAt: expiresAt,
+                since: since, count: 1, kinds: [newest.kind]
+            )
+        }
+        let kinds = Set(open.map(\.kind))
+        let need = kinds == [.ask] ? "Needs your answer" : kinds.contains(.ask) ? "Needs you" : "Needs your approval"
+        var names: [String] = []
+        for card in open where !names.contains(card.asker) { names.append(card.asker) }
+        return OpenCard(
+            id: newest.id, kind: newest.kind, need: need,
+            line: "\(need): \(open.count) requests (\(names.joined(separator: ", ")))",
+            announcement: "\(open.count) requests wait on you. Newest: \(newest.announcement)",
+            expiresAt: expiresAt, since: since, count: open.count, kinds: kinds
+        )
     }
 
     /// A command's first line, cut at `limit` characters so the line or announcement stays short.
@@ -68,40 +97,44 @@ struct LinkedCard: Equatable, Sendable {
     let sessionId: SessionID
     let cardId: MessageID
 
-    static let answered = "Already answered. Nothing here waits on you now."
-    static let expired = "That request expired."
-    static let closed = "That request is no longer open. Nothing here waits on you now."
+    enum Closing { case answered, expired, closed }
 
-    /// The note once the card is in `items`, closed, not decided on this phone, and no other card waits. nil says
-    /// nothing: the card is not loaded, still waits, or the user just answered it here.
+    /// The note once the card is in `items`, closed and not decided on this phone. nil says nothing: the card is not
+    /// loaded, still waits, or the user just answered it here. Another card that waits is named, not hidden behind the
+    /// closed one (F-SES-247).
     func note(in items: [SessionItem], decidedHere: Set<MessageID>, at now: Date) -> String? {
-        guard !decidedHere.contains(cardId), let note = closing(in: items, at: now) else { return nil }
-        return OpenCard.newest(in: items, at: now) == nil ? note : nil
+        guard !decidedHere.contains(cardId), let closing = closing(in: items, at: now) else { return nil }
+        let waits = OpenCard.waiting(in: items, at: now) != nil
+        return switch closing {
+        case .answered: waits ? "That request was answered. Another one waits on you." : "Already answered. Nothing here waits on you now."
+        case .expired: waits ? "That request expired. Another one waits on you." : "That request expired."
+        case .closed: waits ? "That request is no longer open. Another one waits on you." : "That request is no longer open. Nothing here waits on you now."
+        }
     }
 
     /// What closed the card; nil while it is open or not in `items`. An ask or plan drops its card id once it closes,
     /// so only an open one is ever found here.
-    private func closing(in items: [SessionItem], at now: Date) -> String? {
+    private func closing(in items: [SessionItem], at now: Date) -> Closing? {
         for item in items {
             switch item {
             case let .permission(_, _, permission) where permission.cardId == cardId:
                 switch permission.card.answer(at: now) {
                 case nil: return nil
-                case .expired: return Self.expired
-                case .stopped, .closed: return Self.closed
-                case .chose, .unknown: return Self.answered
+                case .expired: return .expired
+                case .stopped, .closed: return .closed
+                case .chose, .unknown: return .answered
                 }
             case let .ask(_, _, _, answers, id?) where id == cardId:
                 switch answers {
                 case nil: return nil
-                case .expired: return Self.expired
-                case .answered, .dismissed, .closed: return Self.answered
+                case .expired: return .expired
+                case .answered, .dismissed, .closed: return .answered
                 }
             case let .plan(_, _, _, state, id?) where id == cardId:
                 switch state {
                 case .proposed: return nil
-                case .expired: return Self.expired
-                case .approved, .rejected, .unknown: return Self.answered
+                case .expired: return .expired
+                case .approved, .rejected, .unknown: return .answered
                 }
             default:
                 continue
@@ -112,15 +145,18 @@ struct LinkedCard: Equatable, Sendable {
 }
 
 /// The thread's one status line (P-STATE-5). The highest level that holds wins: a dead socket never shows a live
-/// clock, and a run held by a card never reads as busy.
+/// clock, and a run held by a card never reads as busy. Every level that may have work keeps the last-known tasks, so
+/// Running now stays one tap away while anything runs or last ran (F-SES-220, F-SES-223).
 enum ThreadStatus: Equatable, Sendable {
     /// The Mac is out of reach. lastUpdate: when the app last heard from it; nil when this thread never loaded.
-    case offline(Reach, lastUpdate: Date?)
+    case offline(Reach, lastUpdate: Date?, tasks: [SessionTask])
     /// The thread shows what the app kept, and the Mac's reply to its watch has not come yet (F-SES-128).
-    case catchingUp(lastUpdate: Date?)
+    case catchingUp(lastUpdate: Date?, tasks: [SessionTask])
     /// The socket is up, but the Mac has sent nothing for a while although this thread works.
-    case quiet(since: Date)
-    case needsYou(OpenCard)
+    case quiet(since: Date, tasks: [SessionTask])
+    case needsYou(OpenCard, tasks: [SessionTask])
+    /// Claude Code stopped unexpectedly or was cut off, and work it started still runs (F-SES-196).
+    case orphaned(SessionOutcome, tasks: [SessionTask])
     /// A turn runs, or work runs that the bridge does not itemize. since: the turn's start.
     case working(since: Date?, tasks: [SessionTask])
     /// No turn, only tasks: background commands and subagents.
@@ -134,15 +170,18 @@ enum ThreadStatus: Equatable, Sendable {
         reach: Reach, quietSince: Date?, lastUpdate: Date?, controls: SessionControls?, card: OpenCard?,
         since: Date?, outcome: SessionOutcome?, catchingUp: Bool = false
     ) -> ThreadStatus? {
+        let tasks = controls?.tasks ?? []
         switch reach {
         case .connected, .unpaired: break
-        case .firstConnect, .reconnecting, .unreachable, .retrying, .unrecognized: return .offline(reach, lastUpdate: lastUpdate)
+        case .firstConnect, .reconnecting, .unreachable, .retrying, .unrecognized: return .offline(reach, lastUpdate: lastUpdate, tasks: tasks)
         }
-        if catchingUp { return .catchingUp(lastUpdate: lastUpdate) }
+        if catchingUp { return .catchingUp(lastUpdate: lastUpdate, tasks: tasks) }
         let working = controls?.working ?? false
-        if working, let quietSince { return .quiet(since: quietSince) }
-        if let card { return .needsYou(card) }
-        let tasks = controls?.tasks ?? []
+        if working, let quietSince { return .quiet(since: quietSince, tasks: tasks) }
+        if let card { return .needsYou(card, tasks: tasks) }
+        if let outcome, outcome.kind == .failed || outcome.kind == .lost, controls?.turn == nil, !tasks.isEmpty, outcome.at >= since ?? .distantPast {
+            return .orphaned(outcome, tasks: tasks)
+        }
         if let turn = controls?.turn { return .working(since: Date(wire: turn.startedAt), tasks: tasks) }
         if let start = tasks.map(\.startedAt).min() { return .background(since: start, tasks: tasks) }
         if working { return .working(since: since, tasks: []) }
@@ -153,30 +192,32 @@ enum ThreadStatus: Equatable, Sendable {
     /// Where running marks stop and dim: the last moment the thread's state was known true.
     var staleAt: Date? {
         switch self {
-        case .offline(_, let lastUpdate), .catchingUp(let lastUpdate): lastUpdate
-        case .quiet(let since): since
-        case .needsYou, .working, .background, .ended: nil
+        case .offline(_, let lastUpdate, _), .catchingUp(let lastUpdate, _): lastUpdate
+        case .quiet(let since, _): since
+        case .needsYou, .orphaned, .working, .background, .ended: nil
         }
     }
 
+    /// What runs, or ran when the Mac last answered.
     var tasks: [SessionTask] {
         switch self {
-        case .working(_, let tasks), .background(_, let tasks): tasks
-        case .offline, .catchingUp, .quiet, .needsYou, .ended: []
+        case .offline(_, _, let tasks), .catchingUp(_, let tasks), .quiet(_, let tasks), .needsYou(_, let tasks), .orphaned(_, let tasks),
+             .working(_, let tasks), .background(_, let tasks): tasks
+        case .ended: []
         }
     }
 
     /// The thread header's state, in one or two words.
     var word: String {
         switch self {
-        case .offline(.firstConnect, _): "Connecting"
+        case .offline(.firstConnect, _, _): "Connecting"
         case .offline: "Offline"
         case .catchingUp: "Catching up"
         case .quiet: "No word from your Mac"
-        case .needsYou(let card): card.kind == .ask ? "Needs your answer" : "Needs your approval"
+        case .needsYou(let card, _): card.need
         case .working: "Working"
         case .background: "Running in background"
-        case .ended(let outcome): Self.word(outcome.kind)
+        case .orphaned(let outcome, _), .ended(let outcome): Self.word(outcome.kind)
         }
     }
 
@@ -192,32 +233,47 @@ enum ThreadStatus: Equatable, Sendable {
 
     /// The line as shown. cause: the connection copy the Sessions banner uses, for the offline level.
     func text(now: Date, cause: String = "") -> String {
-        line(now: now, cause: cause, clock: RunClock.short)
+        line(now: now, cause: cause, spoken: false)
     }
 
     /// The line as VoiceOver reads it: whole words for times.
     func spoken(now: Date, cause: String = "") -> String {
-        line(now: now, cause: cause, clock: RunClock.spoken)
+        line(now: now, cause: cause, spoken: true)
     }
 
-    private func line(now: Date, cause: String, clock: (TimeInterval) -> String) -> String {
+    private func line(now: Date, cause: String, spoken: Bool) -> String {
+        let clock = spoken ? RunClock.spoken : RunClock.short
         switch self {
-        case let .offline(reach, lastUpdate):
+        case let .offline(reach, lastUpdate, tasks):
             let head = reach == .firstConnect ? "Connecting to your Mac…" : cause
             guard let lastUpdate else { return head + " This session loads when your Mac is back." }
-            return head + " Last update \(clock(now.timeIntervalSince(lastUpdate))) ago."
-        case .catchingUp:
-            return "Catching up…"
-        case .quiet(let since):
-            return "No word from your Mac for \(clock(now.timeIntervalSince(since)))"
-        case .needsYou(let card):
-            return card.line
+            let ago = clock(now.timeIntervalSince(lastUpdate))
+            guard let ran = TaskCount(tasks).were(spoken: spoken) else { return head + " Last update \(ago) ago." }
+            return head + " \(ran) running when your Mac last answered \(ago) ago."
+        case let .catchingUp(_, tasks):
+            return "Catching up…" + (TaskCount(tasks).were(spoken: spoken).map { " \($0) running at the last update." } ?? "")
+        case let .quiet(since, tasks):
+            let head = "No word from your Mac for \(clock(now.timeIntervalSince(since)))"
+            return [head, TaskCount(tasks).were(spoken: spoken).map { $0 + " running then" }].compactMap { $0 }.joined(separator: " · ")
+        case let .needsYou(card, tasks):
+            let running = TaskCount(tasks.filter { $0.waiting == nil }).top.count
+            // The wait counts in whole minutes from the first one: seconds would tick beside a card that just came. It goes
+            // last, so the cut at the largest text sizes takes it first.
+            let minutes = (now.timeIntervalSince(card.since) / 60).rounded(.down) * 60
+            let waited = minutes < 60 ? nil : spoken ? "waiting " + RunClock.spoken(minutes) : RunClock.coarse(minutes)
+            return [card.line, running > 0 ? "\(running) still running" : nil, waited].compactMap { $0 }.joined(separator: " · ")
+        case let .orphaned(outcome, tasks):
+            let count = TaskCount(tasks)
+            let one = count.top.count == 1
+            let crash = outcome.text.hasSuffix(".") ? String(outcome.text.dropLast()) : outcome.text
+            return [crash, (count.text(spoken: spoken) ?? "") + (one ? " still runs" : " still run"), one ? "Stop ends it" : "Stop ends them"].joined(separator: " · ")
         case let .working(since, tasks):
-            let what = Self.nouns(tasks)
+            let what = TaskCount(tasks).text(spoken: spoken)
             return ["Working" + (since.map { " " + clock(now.timeIntervalSince($0)) } ?? ""), what].compactMap { $0 }.joined(separator: " · ")
         case let .background(since, tasks):
             // One task is named, cut short so the clock stays in view. The sheet has the whole label.
-            let what = tasks.count == 1 ? OpenCard.firstLine(tasks[0].label, limit: 40) ?? "" : Self.nouns(tasks) ?? ""
+            let count = TaskCount(tasks)
+            let what = tasks.count == 1 ? OpenCard.firstLine(tasks[0].label, limit: 40) ?? "" : count.text(spoken: spoken) ?? ""
             return "Running in background: \(what) · " + clock(now.timeIntervalSince(since))
         case .ended(let outcome):
             return Self.outcome(outcome)
@@ -231,11 +287,24 @@ enum ThreadStatus: Equatable, Sendable {
         case .stopped, .finished, .unknown: outcome.text
         }
     }
+}
 
-    /// "3 agents", "2 agents, 1 command"; nil for none.
-    static func nouns(_ tasks: [SessionTask]) -> String? {
+/// Live work as a person counts it (Run3 call 16): a task a live subagent started is named under that subagent, not
+/// counted again, so three subagents with one command each read as three things, not six (F-SES-289).
+struct TaskCount: Equatable, Sendable {
+    /// The work no live subagent started.
+    let top: [SessionTask]
+    /// "3 agents (each running a command)", "1 command".
+    let parts: [String]
+    /// The same without what runs under each agent: "3 agents", "1 command".
+    let heads: [String]
+
+    init(_ tasks: [SessionTask]) {
+        let agents = Set(tasks.filter { $0.kind == .agent }.compactMap(\.stepId))
+        let under = tasks.filter { $0.owner.map(agents.contains) ?? false }
+        top = tasks.filter { !($0.owner.map(agents.contains) ?? false) }
         var counts: [(noun: String, n: Int)] = []
-        for task in tasks {
+        for task in top {
             let noun = switch task.kind {
             case .agent: "agent"
             case .command: "command"
@@ -243,8 +312,36 @@ enum ThreadStatus: Equatable, Sendable {
             }
             if let at = counts.firstIndex(where: { $0.noun == noun }) { counts[at].n += 1 } else { counts.append((noun, 1)) }
         }
-        return counts.isEmpty ? nil : counts.map { WorkSummary.plural($0.n, $0.noun) }.joined(separator: ", ")
+        heads = counts.map { WorkSummary.plural($0.n, $0.noun) }
+        let topAgents = Set(top.filter { $0.kind == .agent }.compactMap(\.stepId))
+        let started = under.filter { $0.owner.map(topAgents.contains) ?? false }
+        parts = counts.map { count in
+            let head = WorkSummary.plural(count.n, count.noun)
+            guard count.noun == "agent", !started.isEmpty else { return head }
+            return head + " (" + Self.under(agents: count.n, owners: Set(started.compactMap(\.owner)).count, started: started) + ")"
+        }
     }
+
+    /// "each running a command", "running 3 commands", "1 running a command".
+    private static func under(agents: Int, owners: Int, started: [SessionTask]) -> String {
+        let noun = started.allSatisfy { $0.kind == .command } ? "command" : "task"
+        let what = started.count == owners ? "a \(noun)" : WorkSummary.plural(started.count, noun)
+        if owners < agents { return "\(owners) running \(what)" }
+        return (agents > 1 && started.count == owners ? "each running " : "running ") + what
+    }
+
+    /// "3 agents (each running a command), 1 command"; nil for none.
+    var text: String? { text(spoken: true) }
+
+    /// Shown, what runs under each agent is left to Running now: at the largest text sizes the line is cut at three
+    /// lines, and a cut inside it lost the rest of the sentence.
+    func text(spoken: Bool) -> String? {
+        let words = spoken ? parts : heads
+        return words.isEmpty ? nil : words.joined(separator: ", ")
+    }
+
+    /// "3 agents were", "1 command was"; nil for none.
+    func were(spoken: Bool) -> String? { text(spoken: spoken).map { $0 + (top.count == 1 ? " was" : " were") } }
 }
 
 /// What VoiceOver hears when the thread's status changes. Only changes seen live are spoken: a status that follows an
@@ -258,7 +355,8 @@ enum ThreadAnnouncement {
         case .offline: "offline"
         case .catchingUp: "catching up"
         case .quiet: "quiet"
-        case .needsYou(let card): "card " + card.id.rawValue
+        case .needsYou(let card, _): "card " + card.id.rawValue
+        case .orphaned(let outcome, let tasks): "orphaned \(outcome.at.timeIntervalSince1970) " + tasks.map(\.id.rawValue).joined(separator: " ")
         case .working(_, let tasks): "working " + tasks.map(\.id.rawValue).joined(separator: " ")
         case .background(_, let tasks): "background " + tasks.map(\.id.rawValue).joined(separator: " ")
         case .ended(let outcome): "ended \(outcome.kind.rawValue) \(outcome.at.timeIntervalSince1970)"
@@ -266,51 +364,103 @@ enum ThreadAnnouncement {
     }
 
     /// heard: the last card spoken in this thread.
-    /// cardClosed: the run came to rest from an open card, whose close the card spoke itself.
-    static func of(from old: ThreadStatus?, to new: ThreadStatus?, first: Bool = false, heard: ItemID? = nil, cardClosed: Bool = false) -> String? {
-        if case .needsYou(let card) = new {
+    /// cardClosed: the run came to rest from an open permission card, whose close the card spoke itself.
+    /// name: a task as it is spoken once it ended, with how it ended when the thread shows that.
+    static func of(
+        from old: ThreadStatus?, to new: ThreadStatus?, first: Bool = false, heard: ItemID? = nil, cardClosed: Bool = false,
+        now: Date = .now, name: (SessionTask) -> EndedTask = { EndedTask(title: $0.label) }
+    ) -> String? {
+        if case .needsYou(let card, _) = new {
             return first || card.id != heard ? card.announcement : nil
         }
         guard !first, old != new else { return nil }
+        if case .quiet(let since, _) = new {
+            if case .quiet = old { return nil }
+            return "No word from your Mac for \(RunClock.spoken(now.timeIntervalSince(since))). The thread may be out of date."
+        }
         switch old {
         case .offline, .catchingUp, .quiet, .ended:
             return nil
         case nil:
             // The row brings the outcome after the thread's frame put it at rest, later than StatusAnnouncer waited.
             if case .ended(let outcome) = new, !(cardClosed && outcome.kind == .stopped) { return ThreadStatus.outcome(outcome) }
+            if case .orphaned = new { return new?.spoken(now: now) }
             return nil
-        case .needsYou:
-            // Stop closes the open card, and the card says so itself (ChatItems announcesClose).
-            if case .ended(let outcome) = new, outcome.kind != .stopped { return ThreadStatus.outcome(outcome) }
+        case .needsYou(let card, _):
+            // Stop closes an open permission card, and that card says so itself (ChatItems announcesClose). A plan or a
+            // question says only that it closed, so the stop is still news (F-SES-178).
+            if case .ended(let outcome) = new, outcome.kind != .stopped || card.kinds != [.permission] { return ThreadStatus.outcome(outcome) }
+            if case .orphaned = new { return new?.spoken(now: now) }
             return nil
+        case let .orphaned(outcome, was):
+            switch new {
+            case nil: return ended("Background work ended.", was, [], name)
+            case .ended(let ending) where ending == outcome: return ended("Background work ended.", was, [], name)
+            case .ended(let ending): return ThreadStatus.outcome(ending)
+            case .orphaned(_, let live), .working(_, let live), .background(_, let live): return ended("Ended in background.", was, live, name)
+            case .offline, .catchingUp, .quiet, .needsYou: return nil
+            }
         case let .working(_, was), let .background(_, was):
             switch new {
             case nil:
                 if case .working = old { return "Claude finished." }
-                return "Background work ended: " + labels(was) + "."
+                return ended("Background work ended.", was, [], name)
             case .ended(let outcome):
                 return ThreadStatus.outcome(outcome)
-            case .background(_, let now):
-                if case .working = old { return "Claude finished its turn. Still running in background: " + labels(now) + "." }
-                return ended(was, now)
-            case .working(_, let now):
-                return ended(was, now)
+            case .orphaned:
+                return new?.spoken(now: now)
+            case .background(_, let live):
+                if case .working = old { return "Claude finished its turn. Still running in background: " + live.map(\.label).joined(separator: ", ") + "." }
+                return ended("Ended in background.", was.filter(\.background), live, name)
+            case .working(_, let live):
+                return ended("Ended in background.", was.filter(\.background), live, name)
             case .offline, .catchingUp, .quiet, .needsYou:
                 return nil
             }
         }
     }
 
-    /// Background tasks that were live and are gone. Subagents of the turn come and go too often to speak each one.
-    private static func ended(_ was: [SessionTask], _ now: [SessionTask]) -> String? {
+    /// Tasks that were live and are gone, one sentence each: "Ended in background. Sleep 75 seconds, done." Subagents
+    /// of the turn come and go too often to speak each one, so the caller passes only the work worth naming. A task
+    /// the bridge can no longer follow is not called ended.
+    private static func ended(_ head: String, _ was: [SessionTask], _ now: [SessionTask], _ name: (SessionTask) -> EndedTask) -> String? {
         let live = Set(now.map(\.id))
-        let gone = was.filter { $0.background && !live.contains($0.id) }
-        return gone.isEmpty ? nil : "Ended in background: " + labels(gone) + "."
+        let gone = was.filter { !live.contains($0.id) }.map(name)
+        let over = gone.filter { !$0.mayStillRun }.map(\.spoken)
+        let unsure = gone.filter(\.mayStillRun).map { $0.title + " may still run on your Mac." }
+        let sentences = (over.isEmpty ? [] : [head] + over) + unsure
+        return sentences.isEmpty ? nil : sentences.joined(separator: " ")
     }
 
-    private static func labels(_ tasks: [SessionTask]) -> String {
-        tasks.map(\.label).joined(separator: ", ")
+    /// A task by its step's title, which names a command in words, and how the step ended (F-SES-232). A step the
+    /// thread still shows as running says nothing about how it ended.
+    static func name(_ task: SessionTask, in items: [SessionItem]) -> EndedTask {
+        var step: ToolStep?
+        for case let .work(_, _, steps) in items {
+            if let found = steps.first(where: { $0.id == task.stepId }) { step = found }
+        }
+        guard let step else { return EndedTask(title: task.label) }
+        let title = task.kind == .command ? step.label : task.label
+        let how: String? = switch step.state {
+        case .ok: "done"
+        case .error: "failed"
+        case .stopped: "stopped"
+        case .denied: "denied"
+        case .ended: "ended, result unknown"
+        case .unsure, .running, .waiting, .unknown: nil
+        }
+        return EndedTask(title: title, how: how, mayStillRun: step.state == .unsure)
     }
+}
+
+/// A task that left the running list, as it is spoken.
+struct EndedTask: Equatable, Sendable {
+    let title: String
+    var how: String?
+    var mayStillRun = false
+
+    /// "Sleep 75 seconds, done."
+    var spoken: String { title + (how.map { ", " + $0 } ?? "") + "." }
 }
 
 /// Decides when a thread's status is spoken. A status is spoken once it has held for `settle`. A run that comes to
@@ -322,10 +472,12 @@ final class StatusAnnouncer {
     private let rest: Duration
     /// The text, and whether the thread just opened.
     private let speak: (String, Bool) -> Void
+    /// A task as it is spoken once it ended. Read when the status lands, so a step's end that came meanwhile counts.
+    var name: (SessionTask) -> EndedTask = { EndedTask(title: $0.label) }
     private var spoken: ThreadStatus?
     private var once = false
     private var heardCard: ItemID?
-    /// The last run came to rest from an open card. A Stop closes the card, and the card says so itself.
+    /// The last run came to rest from an open permission card. A Stop closes the card, and the card says so itself.
     private var cardClosed = false
     private var pending: Task<Void, Never>?
 
@@ -339,10 +491,12 @@ final class StatusAnnouncer {
     func update(_ status: ThreadStatus?) {
         pending?.cancel()
         let live = switch spoken {
-        case .working, .background, .needsYou: true
+        case .working, .background, .needsYou, .orphaned: true
         default: false
         }
-        let wait = status == nil && live ? rest : settle
+        // A turn that ends and leaves work running may be a crash whose outcome the row brings later, like a rest.
+        let turnEnded = if case .working = spoken, case .background = status { true } else { false }
+        let wait = (status == nil && live) || turnEnded ? rest : settle
         pending = Task { [weak self] in
             try? await Task.sleep(for: wait)
             guard !Task.isCancelled else { return }
@@ -352,17 +506,17 @@ final class StatusAnnouncer {
 
     private func land(_ status: ThreadStatus?) {
         let first = !once
-        if let text = ThreadAnnouncement.of(from: spoken, to: status, first: first, heard: heardCard, cardClosed: cardClosed) {
+        if let text = ThreadAnnouncement.of(from: spoken, to: status, first: first, heard: heardCard, cardClosed: cardClosed, name: name) {
             speak(text, first)
         }
         switch status {
-        case .needsYou(let card):
+        case .needsYou(let card, _):
             heardCard = card.id
             cardClosed = false
-        case .working, .background:
+        case .working, .background, .orphaned:
             cardClosed = false
         case nil, .ended, .offline, .catchingUp, .quiet:
-            if case .needsYou = spoken { cardClosed = true }
+            if case .needsYou(let card, _) = spoken, card.kinds == [.permission] { cardClosed = true }
         }
         spoken = status
         once = true

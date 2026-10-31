@@ -77,8 +77,9 @@ struct SessionThreadView: View {
     static let column: CGFloat = 760
     #endif
 
+    /// A reconnect the app chose reads as reconnecting here as on the list, until a try fails (G24 `Store.rejoin`).
     private var reach: Reach {
-        Reach(store.connection, failures: client.failures, greeted: store.bridgeProtocol != nil)
+        Reach(store.connection, failures: client.failures, greeted: store.bridgeProtocol != nil, rejoining: store.rejoin != nil)
     }
 
     var body: some View {
@@ -145,7 +146,7 @@ struct SessionThreadView: View {
     private func thread(_ model: ThreadModel) -> some View {
         let botName = row?.agent.flatMap { store.bots[$0.botId]?.name }
         let rows = model.rows
-        let openCard = OpenCard.newest(in: model.items, at: max(cardClock, .now))
+        let openCard = OpenCard.waiting(in: model.items, at: max(cardClock, .now))
         let status = status(model, card: openCard)
         let banner = ThreadBanner.of(row: row, controls: model.controls)
         let linked = router.linkedCard.flatMap { link in
@@ -300,7 +301,10 @@ struct SessionThreadView: View {
             try? await Task.sleep(for: .seconds(at.timeIntervalSinceNow))
             if !Task.isCancelled { cardClock = .now }
         }
-        .onChange(of: ThreadAnnouncement.key(status), initial: true) { statuses.update(status) }
+        .onChange(of: ThreadAnnouncement.key(status), initial: true) {
+            statuses.name = { [store, sessionId] task in ThreadAnnouncement.name(task, in: store.threads[sessionId]?.items ?? []) }
+            statuses.update(status)
+        }
         .onChange(of: banner) { _, new in
             if let new { announcer.post(new.spoken) }
         }
@@ -325,25 +329,21 @@ struct SessionThreadView: View {
         return ConnectionBanner.cause(reach, address: address, lastRetryFailed: lastRetryFailed, brief: true)
     }
 
-    /// A card scrolls into view; work with tasks opens the list of what runs.
+    /// Any level with tasks opens the list of what runs, or ran when the Mac last answered. A card with nothing else
+    /// running scrolls into view.
     private func tap(_ status: ThreadStatus) -> (() -> Void)? {
-        switch status {
-        case .needsYou(let card):
-            return {
-                followsBottom = false
-                withAnimation(reduceMotion ? nil : .snappy(duration: 0.35)) { position.scrollTo(id: card.id, anchor: .center) }
-            }
-        case .working, .background:
-            return status.tasks.isEmpty ? nil : { showsWork = true }
-        case .offline, .catchingUp, .quiet, .ended:
-            return nil
+        if !status.tasks.isEmpty { return { showsWork = true } }
+        guard case .needsYou(let card, _) = status else { return nil }
+        return {
+            followsBottom = false
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.35)) { position.scrollTo(id: card.id, anchor: .center) }
         }
     }
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            let state = store.threads[sessionId].flatMap { status($0, card: OpenCard.newest(in: $0.items, at: max(cardClock, .now))) }
+            let state = store.threads[sessionId].flatMap { status($0, card: OpenCard.waiting(in: $0.items, at: max(cardClock, .now))) }
             ThreadHeader(
                 row: row, project: row.flatMap { store.sessions.project(of: $0) }, avatar: row?.agent.flatMap { store.bots[$0.botId]?.avatar },
                 state: state?.word
@@ -516,10 +516,9 @@ struct ThreadStatusLine: View {
 
     private var ticks: Bool {
         switch status {
-        case .offline(_, let at): at != nil
-        case .catchingUp: false
-        case .quiet, .working, .background: true
-        case .needsYou, .ended: false
+        case .offline(_, let at, _): at != nil
+        case .catchingUp, .orphaned, .ended: false
+        case .quiet, .needsYou, .working, .background: true
         }
     }
 
@@ -534,7 +533,7 @@ struct ThreadStatusLine: View {
     }
 
     private var retries: Bool {
-        if case .offline(let reach, _) = status { reach.lost } else { false }
+        if case .offline(let reach, _, _) = status { reach.lost } else { false }
     }
 
     private func line(now: Date) -> some View {
@@ -555,6 +554,13 @@ struct ThreadStatusLine: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityLabel(status.spoken(now: now, cause: cause))
+                .modifier(OpensWork(onTap: retries ? onTap : nil, hint: hint))
+            if onTap != nil, !(stacked && retries) {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.tertiary)
+                    .accessibilityHidden(true)
+            }
             if retries {
                 Button(action: onRetry) {
                     Text("Retry")
@@ -566,10 +572,6 @@ struct ThreadStatusLine: View {
                 .font(.footnote.weight(.semibold))
                 .buttonStyle(.pressable)
                 .accessibilityLabel("Retry connecting to your Mac")
-            } else if onTap != nil {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.tertiary)
             }
         }
         // The capsule is the element VoiceOver and a finger find, so it is at least a fingertip tall.
@@ -579,7 +581,26 @@ struct ThreadStatusLine: View {
         .glass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture { onTap?() }
-        .modifier(Spoken(text: status.spoken(now: now, cause: cause), onTap: onTap, retries: retries, hint: status.tasks.isEmpty ? "Shows the card" : "Lists what runs, with a Stop for each"))
+        .modifier(Spoken(text: status.spoken(now: now, cause: cause), onTap: onTap, retries: retries, hint: hint))
+    }
+
+    private var hint: String {
+        if status.tasks.isEmpty { return "Shows the card" }
+        return status.staleAt == nil ? "Lists what runs, with a Stop for each" : "Lists what was running when your Mac last answered"
+    }
+
+    /// Beside Retry the words are their own element, so they carry the tap that opens what runs.
+    private struct OpensWork: ViewModifier {
+        let onTap: (() -> Void)?
+        let hint: String
+
+        func body(content: Content) -> some View {
+            if let onTap {
+                content.accessibilityHint(hint).accessibilityAddTraits(.isButton).accessibilityAction { onTap() }
+            } else {
+                content
+            }
+        }
     }
 
     /// The capsule itself is the element, so its frame is the one a finger and VoiceOver find. With Retry, the words and
@@ -613,6 +634,7 @@ struct ThreadStatusLine: View {
         case .offline, .quiet: Theme.attention
         case .catchingUp: Theme.secondary
         case .needsYou: Theme.attention
+        case .orphaned: Theme.danger
         case .ended(let outcome): outcome.kind == .stopped ? Theme.secondary : Theme.danger
         case .working, .background: Theme.secondary
         }
@@ -627,6 +649,8 @@ struct ThreadStatusLine: View {
         case .needsYou: Image(systemName: "hand.raised").font(.footnote).foregroundStyle(Theme.attention)
         case .working: WorkingRing(size: slot * 0.7)
         case .background: WorkingRing(size: slot * 0.7, color: Theme.secondary)
+        case .orphaned:
+            Image(systemName: "exclamationmark.triangle").font(.footnote).foregroundStyle(tint)
         case .ended(let outcome):
             Image(systemName: outcome.kind == .stopped ? "stop.circle" : "exclamationmark.triangle")
                 .font(.footnote)
@@ -672,7 +696,7 @@ struct ThreadHeader: View {
                 .lineLimit(1)
             HStack(spacing: 4) {
                 if let row { OriginBadge(origin: row.origin, avatar: avatar, size: 12) }
-                Text([project?.name, row?.branch, wide ? state : nil].compactMap { $0 }.joined(separator: " · "))
+                Text([project?.shownName, row?.branch, wide ? state : nil].compactMap { $0 }.joined(separator: " · "))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }

@@ -405,7 +405,7 @@ struct WorkRunRow: View {
                 header(now: now)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(run.spoken(now: now))
+            .accessibilityLabel(run.spoken(now: now, stale: staleAt != nil))
             .accessibilityValue(open ? "Expanded" : "Collapsed")
             .accessibilityHint(open ? "Hides the finished steps" : "Shows every step")
             if !shown.isEmpty {
@@ -572,7 +572,7 @@ struct ToolStepRow: View {
     }
 
     private var spoken: String {
-        var parts = [step.label] + run.status(step, now: now, spoken: true)
+        var parts = [step.label] + run.status(step, now: now, spoken: true, stale: staleAt != nil)
         if let detail = step.detail, !detail.isEmpty, detail != step.label {
             switch step.tool {
             case "Bash": parts.append("command: " + detail)
@@ -752,6 +752,7 @@ struct TodoCard: View {
                     Image(systemName: Self.symbol(todo.state))
                         .font(.subheadline)
                         .foregroundStyle(todo.state == .done ? Color(hex: 0x3FB950) : todo.state == .inProgress ? AvatarColor.orange.color : Theme.tertiary)
+                        .accessibilityHidden(true)
                     Text(todo.text)
                         .font(.subheadline.weight(todo.state == .inProgress ? .semibold : .regular))
                         .foregroundStyle(todo.state == .done ? Theme.tertiary : .white)
@@ -840,6 +841,19 @@ struct PlanCard: View {
             }
         }
         .sensoryFeedback(trigger: sent) { _, choice in choice.map { $0.allows ? .success : .warning } }
+        .announcesClose(Self.closing(state))
+    }
+
+    /// What VoiceOver hears when the plan stops waiting. Stop closes a plan as expired on the wire, so expired says
+    /// only that nobody answered.
+    static func closing(_ state: PlanState) -> String? {
+        switch state {
+        case .proposed: nil
+        case .approved: "Plan approved."
+        case .rejected: "Plan not approved. Kept planning."
+        case .expired: "The plan closed without an answer."
+        case .unknown: "The plan closed."
+        }
     }
 
     private func decide(_ title: String, _ choice: PermissionChoice, _ cardId: MessageID, primary: Bool, hint: String) -> some View {
@@ -924,6 +938,32 @@ struct AskCard: View {
             if open { RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Theme.attention.opacity(0.35), lineWidth: 1) }
         }
         .sensoryFeedback(.success, trigger: sent) { _, now in now }
+        .announcesClose(Self.closing(answers, count: questions.count))
+    }
+
+    /// What VoiceOver hears when the question stops waiting. Stop closes a question as expired on the wire, so expired
+    /// says only that nobody answered.
+    static func closing(_ answers: AskAnswers?, count: Int) -> String? {
+        switch answers {
+        case nil: nil
+        case .answered: count == 1 ? "Question answered." : "Questions answered."
+        case .dismissed: "Question dismissed."
+        case .expired: "The question closed without an answer."
+        case .closed: "The question closed."
+        }
+    }
+
+    /// Why Send answers is dimmed: the questions with no answer yet (F-SES-231). nil once every one has an answer.
+    static func unanswered(_ questions: [AskQuestion], answered: Set<String>) -> String? {
+        let missing = questions.map(\.question).filter { !answered.contains($0) }
+        guard !missing.isEmpty else { return nil }
+        if questions.count == 1 { return "Pick or type an answer to send it." }
+        return "Still to answer: " + StopScope.listed(missing)
+    }
+
+    /// What names a question beside each of its controls when the card asks more than one (F-SES-230).
+    private func scope(_ q: AskQuestion) -> String? {
+        questions.count > 1 ? (q.header.isEmpty ? q.question : q.header) : nil
     }
 
     @ViewBuilder
@@ -950,7 +990,7 @@ struct AskCard: View {
                     ForEach(Array(q.options.enumerated()), id: \.offset) { index, option in
                         if index > 0 { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 48) }
                         Button { pick(option.label, in: q) } label: {
-                            AskOptionRow(index: index, option: option, multi: q.multiSelect, picked: picks[q.question]?.contains(option.label) == true)
+                            AskOptionRow(index: index, option: option, multi: q.multiSelect, picked: picks[q.question]?.contains(option.label) == true, question: scope(q))
                         }
                         .buttonStyle(.pressable)
                         .disabled(sent || offline)
@@ -965,6 +1005,7 @@ struct AskCard: View {
                     .padding(.vertical, 10)
                     .background(Theme.inset, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .disabled(sent || offline)
+                    .accessibilityLabel(scope(q).map { "Your own answer to \($0)" } ?? "Or type your own answer")
             } else if case .answered(let given) = answers, let answer = given[q.question] {
                 Label(answer, systemImage: "checkmark.circle.fill")
                     .font(.subheadline.weight(.medium))
@@ -997,6 +1038,13 @@ struct AskCard: View {
                     .buttonStyle(.pressable)
                     .sending(sent)
                     .disabled(sent || offline || draft.count != questions.count)
+                    .accessibilityHint(Self.unanswered(questions, answered: Set(draft.keys)) ?? "")
+                    if !sent, !draft.isEmpty, let missing = Self.unanswered(questions, answered: Set(draft.keys)) {
+                        Text(missing)
+                            .font(.footnote)
+                            .foregroundStyle(Theme.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 DecisionStatusLine(offline: offline, note: store.decisionNote(cardId))
             } else {
@@ -1037,6 +1085,8 @@ private struct AskOptionRow: View {
     let option: AskOption
     let multi: Bool
     let picked: Bool
+    /// The question this option answers, when the card asks more than one.
+    var question: String?
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -1045,6 +1095,7 @@ private struct AskOptionRow: View {
                     .font(.ui(size: 19))
                     .foregroundStyle(picked ? .white : Theme.tertiary)
                     .frame(width: 22, height: 22)
+                    .accessibilityHidden(true)
             } else {
                 LetterBadge(index: index, fill: picked ? .white : .white.opacity(0.08), ink: picked ? .black : Theme.tertiary)
             }
@@ -1066,6 +1117,7 @@ private struct AskOptionRow: View {
         .frame(minHeight: HitTarget.minHeight)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+        .accessibilityLabel([question, option.label, option.description].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", "))
         .accessibilityAddTraits(picked ? .isSelected : [])
     }
 }
@@ -1106,6 +1158,7 @@ struct CompactionDivider: View {
 /// The only view that reads the live text, so a delta redraws this and nothing else. What runs is the status line's.
 struct StreamingTail: View {
     let live: LiveText
+    @Environment(\.runStateStale) private var staleAt
 
     var body: some View {
         if live.itemId != nil, !live.text.isEmpty {
@@ -1115,7 +1168,8 @@ struct StreamingTail: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 14)
                 // A label of the growing text would be read again on every delta. The reply reads in full once it lands.
-                .accessibilityLabel("Claude is replying")
+                .accessibilityLabel(staleAt == nil ? "Claude is replying" : "Reply in progress when last updated")
+                .opacity(staleAt == nil ? 1 : 0.6)
         }
     }
 }

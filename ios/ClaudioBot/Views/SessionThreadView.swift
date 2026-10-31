@@ -462,7 +462,7 @@ extension Reach {
     var online: Bool {
         switch self {
         case .connected, .unpaired: true
-        case .firstConnect, .unreachable, .retrying, .unrecognized: false
+        case .firstConnect, .reconnecting, .unreachable, .retrying, .unrecognized: false
         }
     }
 }

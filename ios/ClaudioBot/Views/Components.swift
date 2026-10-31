@@ -164,14 +164,19 @@ extension ConnectionState {
 enum Reach: Equatable, Sendable {
     case connected(machine: String)
     case firstConnect
+    /// The app dropped a socket that worked to open a fresh one, as on coming back to the screen, and no try has
+    /// failed yet. Nothing says the Mac is gone.
+    case reconnecting
     case unreachable(nextTry: Date)
     case retrying
     case unrecognized
     case unpaired
 
-    init(_ state: ConnectionState, failures: Int, greeted: Bool) {
+    /// rejoining: the store's `rejoin`, a reconnect the app chose while the Mac answered.
+    init(_ state: ConnectionState, failures: Int, greeted: Bool, rejoining: Bool = false) {
         switch state {
         case .connected(let machine, _): self = .connected(machine: machine)
+        case .connecting where rejoining: self = .reconnecting
         case .connecting: self = failures > 0 || greeted ? .retrying : .firstConnect
         case .disconnected(let at): self = .unreachable(nextTry: at)
         case .unrecognized: self = .unrecognized
@@ -182,7 +187,7 @@ enum Reach: Equatable, Sendable {
     var lost: Bool {
         switch self {
         case .unreachable, .retrying: true
-        case .connected, .firstConnect, .unrecognized, .unpaired: false
+        case .connected, .firstConnect, .reconnecting, .unrecognized, .unpaired: false
         }
     }
 
@@ -194,7 +199,7 @@ enum Reach: Equatable, Sendable {
             old.lost || old == .unrecognized ? "Reconnected to \(machine)." : nil
         case .unrecognized:
             old == .unrecognized ? nil : "Your Mac doesn't recognize this \(ThisDevice.noun)."
-        case .firstConnect, .unpaired:
+        case .firstConnect, .reconnecting, .unpaired:
             nil
         }
     }

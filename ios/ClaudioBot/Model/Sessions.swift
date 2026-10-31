@@ -46,9 +46,9 @@ struct SessionTree: Equatable, Identifiable, Sendable {
     let descendants: [Descendant]
     var id: SessionID { row.id }
 
-    /// A row in it needs the user or runs, so no fold may hide it.
+    /// A row in it needs the user, runs or broke, so no fold may hide it.
     var isActive: Bool {
-        ListOrder.Rank(row) != .rest || descendants.contains { ListOrder.Rank($0.row) != .rest }
+        row.holdsAttention || descendants.contains { $0.row.holdsAttention }
     }
 }
 
@@ -62,16 +62,22 @@ struct ProjectSection: Equatable, Identifiable, Sendable {
     var rows: [SessionRow] { trees.flatMap { [$0.row] + $0.descendants.map(\.row) } }
 }
 
-/// What a project header counts: every row, children included, and how many of them run or need the user.
+/// What a project header counts: every row, children included, and how many of them run, need the user or broke.
 struct SectionTally: Equatable, Sendable {
     let total: Int
     let working: Int
     let needsYou: Int
+    let failed: Int
+    let unavailable: Int
+    let parked: Int
 
     init(_ rows: [SessionRow]) {
         total = rows.count
         working = rows.count { $0.status == .working }
         needsYou = rows.count(where: \.needsYou)
+        failed = rows.count { $0.status == .failed }
+        unavailable = rows.count { $0.status == .unavailable }
+        parked = rows.count { $0.status == .parked }
     }
 
     /// Offline the working count is a guess, so it is left out, as the Working chip leaves out its count. Each phrase
@@ -80,10 +86,13 @@ struct SectionTally: Equatable, Sendable {
         [
             freshness == .live && working > 0 ? "\(working) working" : nil,
             needsYou > 0 ? "\(needsYou) \(needsYou == 1 ? "needs" : "need") you" : nil,
+            failed > 0 ? "\(failed) failed" : nil,
+            unavailable > 0 ? "\(unavailable) unavailable" : nil,
+            parked > 0 ? "\(parked) parked" : nil,
         ].compactMap { $0?.replacingOccurrences(of: " ", with: "\u{00A0}") }
     }
 
-    /// "12 · 4 working · 1 needs you"
+    /// "12 · 4 working · 1 needs you · 1 failed"
     func shown(_ freshness: ListFreshness) -> String {
         (["\(total)"] + parts(freshness)).joined(separator: " · ")
     }
@@ -96,6 +105,41 @@ struct SectionTally: Equatable, Sendable {
 
 extension SessionRow {
     var needsYou: Bool { status == .awaitingApproval || status == .awaitingInput }
+
+    /// It needs the user, runs, or broke, so the list never folds it away (P-LIST-1).
+    var holdsAttention: Bool {
+        switch status {
+        case .working, .awaitingApproval, .awaitingInput, .failed, .unavailable, .parked: true
+        case .idle, .unknown: false
+        }
+    }
+}
+
+extension SessionProject {
+    /// The bridge labels projects that share a name, so the list never shows two that look the same.
+    var shownName: String { label ?? name }
+}
+
+/// Why the list shows no rows. It never calls rows the user only hid "none" (P-LIST-5).
+enum EmptyList: Equatable, Sendable {
+    case noSessions
+    case allHidden(Int)
+    case noMatch(SessionFilter)
+
+    /// The bridge sends a project with every row, so rows that are neither hidden nor filtered out always show.
+    init(hidden: Int, query: SessionQuery) {
+        if query.isNarrowed { self = .noMatch(query.filter) }
+        else if hidden > 0 && !query.showHidden { self = .allHidden(hidden) }
+        else { self = .noSessions }
+    }
+
+    var title: String {
+        switch self {
+        case .noSessions: "No Claude Code sessions on this Mac yet"
+        case .allHidden(let count): "\(count) hidden \(count == 1 ? "session" : "sessions")"
+        case .noMatch(let filter): filter == .all ? "No sessions match." : "No \(filter.title.lowercased()) sessions."
+        }
+    }
 }
 
 enum ListFreshness: Equatable, Sendable {
@@ -134,9 +178,14 @@ struct ListOrder: Equatable, Sendable {
         /// When the run started for a working row, its last activity otherwise.
         let at: Date
 
+        /// A failed row sorts by when it failed: its transcript's last write can be long before the crash.
         init(_ row: SessionRow) {
             rank = Rank(row)
-            at = rank == .working ? row.since ?? row.lastAt : row.lastAt
+            at = switch rank {
+            case .working: row.since ?? row.lastAt
+            case .rest where row.status == .failed: row.outcome?.at ?? row.lastAt
+            case .needsYou, .rest: row.lastAt
+            }
         }
 
         /// Higher in the list first.
@@ -333,7 +382,7 @@ final class SessionIndex {
 
     nonisolated private static func matches(_ row: SessionRow, _ needle: String, project: SessionProject?) -> Bool {
         guard !needle.isEmpty else { return true }
-        return [row.title, project?.name ?? "", row.branch ?? ""].contains { $0.localizedCaseInsensitiveContains(needle) }
+        return [row.title, project?.name ?? "", project?.label ?? "", row.branch ?? ""].contains { $0.localizedCaseInsensitiveContains(needle) }
     }
 
     nonisolated static func projectOrder(_ a: SessionProject, _ b: SessionProject) -> Bool {
@@ -370,7 +419,8 @@ enum SessionMark: Equatable, Sendable {
 
 /// A row's age, or a run's length, in the buckets the row shows, so what VoiceOver says matches what is on screen.
 enum SessionAge: Equatable, Sendable {
-    case now, minutes(Int), hours(Int), days(Int), date(String)
+    /// date: past a week the row shows the day, and a run's length is still counted in days.
+    case now, minutes(Int), hours(Int), days(Int), date(String, days: Int)
 
     /// A time ahead of the phone's clock, from a Mac whose clock runs ahead, reads as now.
     init(_ date: Date, now: Date, calendar: Calendar = .current) {
@@ -383,7 +433,7 @@ enum SessionAge: Equatable, Sendable {
         default:
             var style = Date.FormatStyle(locale: calendar.locale ?? .current, calendar: calendar, timeZone: calendar.timeZone).month(.abbreviated).day()
             if calendar.component(.year, from: date) != calendar.component(.year, from: now) { style = style.year() }
-            self = .date(date.formatted(style))
+            self = .date(date.formatted(style), days: Int(seconds / 86_400))
         }
     }
 
@@ -393,7 +443,7 @@ enum SessionAge: Equatable, Sendable {
         case .minutes(let n): "\(n)m"
         case .hours(let n): "\(n)h"
         case .days(let n): "\(n)d"
-        case .date(let text): text
+        case .date(let text, _): text
         }
     }
 
@@ -401,24 +451,25 @@ enum SessionAge: Equatable, Sendable {
     var ago: String {
         switch self {
         case .now: "just now"
-        case .date(let text): "on \(text)"
+        case .date(let text, _): "on \(text)"
         default: "\(span) ago"
         }
     }
 
-    /// How long a run has gone: "under a minute", "5 minutes".
+    /// How long a run has gone: "under a minute", "5 minutes", "9 days".
     var span: String {
         switch self {
         case .now: "under a minute"
         case .minutes(let n): n == 1 ? "1 minute" : "\(n) minutes"
         case .hours(let n): n == 1 ? "1 hour" : "\(n) hours"
         case .days(let n): n == 1 ? "1 day" : "\(n) days"
-        case .date(let text): "since \(text)"
+        case .date(_, let days): "\(days) days"
         }
     }
 }
 
-/// The time a row shows: how long its run has gone while it works, how long since its last activity otherwise.
+/// The time a row shows: how long its run has gone while it works, how long since it failed, how long since its last
+/// activity otherwise. A failed row sorts by when it failed, so its time agrees with its place.
 enum RowTime: Equatable, Sendable {
     case running(SessionAge)
     case ago(SessionAge)
@@ -426,6 +477,8 @@ enum RowTime: Equatable, Sendable {
     init(_ row: SessionRow, now: Date) {
         if row.status == .working, let since = row.since {
             self = .running(SessionAge(since, now: now))
+        } else if row.status == .failed, let outcome = row.outcome {
+            self = .ago(SessionAge(outcome.at, now: now))
         } else {
             self = .ago(SessionAge(row.lastAt, now: now))
         }
@@ -446,11 +499,20 @@ struct RowDetail: Equatable, Sendable {
     let parts: [String]
     let tone: Tone
 
-    /// A finished run is news only until the user has seen it. A failure or a stop stays until the next send.
+    /// A finished run is news only until the user has seen it. A failure or a stop stays until the next send, and
+    /// work that outlived a crash of its run does not hide the crash.
     init?(_ row: SessionRow) {
         if row.status == .parked {
             parts = [SessionText.parked(row.holder)]
             tone = .quiet
+        } else if row.status == .working || row.needsYou, let outcome = row.outcome, outcome.kind == .failed || outcome.kind == .lost,
+                  outcome.at >= row.since ?? .distantPast {
+            let left = row.running.flatMap { running in
+                SessionText.running(running).map { "\($0) still \(running.agents + running.commands == 1 ? "runs" : "run")" }
+            }
+            // The count leads: a crash's own text can be long, and the line is cut at one line.
+            parts = [left, outcome.text].compactMap { $0 }
+            tone = .alarm
         } else if row.status == .working || row.needsYou {
             parts = [row.running.flatMap(SessionText.running), row.activity].compactMap { $0 }
             tone = .quiet
@@ -487,15 +549,24 @@ enum SessionText {
     }
 
     /// What VoiceOver says once a filter or search has changed the list: "2 working sessions", "No sessions match".
-    static func matches(_ count: Int, query: SessionQuery) -> String {
+    /// A list kept from before the Mac went out of reach says how old its count is: "2 working sessions, as of 5
+    /// minutes ago".
+    static func matches(_ count: Int, query: SessionQuery, freshness: ListFreshness = .live, now: Date = .now) -> String {
         let noun = count == 1 ? "session" : "sessions"
-        switch query.filter {
-        case .all where query.needle.isEmpty: return "\(count) \(noun)"
-        case .all: return count == 0 ? "No sessions match" : "\(count) \(noun) match"
-        case .working: return count == 0 ? "No working sessions" : "\(count) working \(noun)"
-        case .needsYou: return count == 0 ? "No sessions need you" : "\(count) \(noun) \(count == 1 ? "needs" : "need") you"
-        case .unread: return count == 0 ? "No unread sessions" : "\(count) unread \(noun)"
+        let said = switch query.filter {
+        case .all where query.needle.isEmpty: "\(count) \(noun)"
+        case .all: count == 0 ? "No sessions match" : "\(count) \(noun) match"
+        case .working: count == 0 ? "No working sessions" : "\(count) working \(noun)"
+        case .needsYou: count == 0 ? "No sessions need you" : "\(count) \(noun) \(count == 1 ? "needs" : "need") you"
+        case .unread: count == 0 ? "No unread sessions" : "\(count) unread \(noun)"
         }
+        guard case .asOf(let date) = freshness else { return said }
+        let age = switch SessionAge(date, now: now) {
+        case .now: "a moment ago"
+        case .date(let text, _): text
+        case let age: age.ago
+        }
+        return "\(said), as of \(age)"
     }
 
     static func updated(_ date: Date, now: Date = .now) -> String {

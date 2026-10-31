@@ -48,7 +48,8 @@ export type Tasks = {
   stopped: Set<TaskId>;
   /**
    * Commands Claude Code stopped while the foreground subagent that started them still ran: it stops them as that
-   * subagent returns, and says the subagent ended only after, so the note waits for that word or the turn's end.
+   * subagent returns, and says the subagent ended only after, so the note waits for that word, at most RETURN_MS,
+   * or the turn's end.
    */
   held: Extract<TaskNote, { kind: "lost" }>[];
   /** Grows whenever a task or a main-thread call starts or ends, so a change is seen without comparing lists. */
@@ -71,6 +72,8 @@ export type TaskNote =
 export const emptyTasks = (): Tasks => ({ all: new Map(), listed: new Set(), commands: new Map(), raw: new Map(), asked: new Map(), calls: new Map(), stopped: new Set(), held: [], rev: 0 });
 
 const LABEL_MAX = 200;
+/** How close a stop and its subagent's return come when Claude Code stops the subagent's commands as it returns. */
+const RETURN_MS = 2_000;
 /** The whole command on one line, masked, cut from the middle so its end still shows. */
 const label = (text: string) => middleCut(displayName(maskSecrets(text.trim()), Infinity), LABEL_MAX);
 const kindOf = (type: string | undefined): Task["kind"] => (type === "local_agent" ? "agent" : type === "local_bash" ? "command" : "other");
@@ -139,6 +142,8 @@ const AGENT_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
  */
 export function observe(t: Tasks, m: SDKMessage, at: string): TaskNote[] {
   const notes: TaskNote[] = [];
+  // A stop its subagent's return does not follow at once was not that return's doing.
+  release(t, notes, (n) => Date.parse(at) - Date.parse(n.at) > RETURN_MS);
   if (m.type === "assistant") {
     for (const b of m.message.content) {
       if (b.type !== "tool_use" || !isRecord(b.input)) continue;
@@ -265,7 +270,6 @@ export function wakes(t: Tasks, id: TaskId, status: string): boolean {
 }
 
 const KIND_WORD: Record<Task["kind"], string> = { agent: "background agent", command: "background command", other: "background task" };
-const RETURN_MS = 2_000;
 const ran = (from: string, to: string) => runTime(Date.parse(to) - Date.parse(from));
 
 /** The thread's words for a task note. Session code posts every note it gets under this name. */
@@ -276,7 +280,7 @@ export function lostNotice(n: TaskNote): string {
   const what = `The ${KIND_WORD[n.task.kind]} ${name(n.task, n.command)}${n.owner === null ? "" : `, started by ${n.owner.label},`}`;
   const after = ran(n.task.startedAt, n.at);
   // Claude Code stops a subagent's commands as it returns; a command that ends long after did not end with it.
-  const returned = n.owner?.ended && (n.killed || Math.abs(Date.parse(n.at) - Date.parse(n.owner.endedAt ?? n.at)) <= RETURN_MS);
+  const returned = n.owner?.ended && Math.abs(Date.parse(n.at) - Date.parse(n.owner.endedAt ?? n.at)) <= RETURN_MS;
   if (returned && n.killed) return `${what} was stopped by Claude Code when ${n.owner!.label} returned, after ${after}. It did not finish.`;
   if (returned) return `${what} stopped when ${n.owner!.label} returned, after ${after}, and Claude Code did not say how it ended.`;
   if (n.killed) return `${what} was stopped by Claude Code after ${after}. It did not finish.`;

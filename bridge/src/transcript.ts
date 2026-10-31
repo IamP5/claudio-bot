@@ -1,7 +1,7 @@
 import { getSessionInfo, getSessionMessages, listSessions, type SDKSessionInfo } from "@anthropic-ai/claude-agent-sdk";
-import { closeSync, lstatSync, openSync, readdirSync, readSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, join, normalize, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, relative } from "node:path";
 import { PERMISSION_MODES, type AskQuestion, type ItemId, type PermissionMode, type SessionId, type SessionItem, type SessionPr, type ToolStep } from "./protocol";
 import { directHeader } from "./prompts";
 import { maskProse, maskSecrets, middleCut, runTime } from "./text";
@@ -469,7 +469,7 @@ export function toolOutput(path: string, toolUseId: string): string | null {
     for (const note of parseNotes(promptText(content))) {
       if (note.toolUseId !== toolUseId && !(task !== null && note.taskId === task)) continue;
       const file = tool === "Bash" && note.result === null ? taskOutput(note, FULL_OUTPUT_MAX, 0) : undefined;
-      output = file === undefined || file === GONE ? note.result : file || null;
+      output = typeof file !== "string" ? note.result : file || null;
     }
   }
   return output === null ? null : maskSecrets(output.slice(-FULL_OUTPUT_MAX));
@@ -792,6 +792,8 @@ export function maskSummary(summary: string, description: string | null): string
 
 
 const GONE = Symbol("gone");
+/** The output file is there but is not a plain file where its path says, so it is not read. */
+const REFUSED = Symbol("refused");
 /** The line Claude Code appends to a command's output file when it exits; the step's state already says how. */
 const EXIT_TRAILER = /\n?\[exited with code -?\d+\]\n?$/;
 /** Where Claude Code writes a background task's output: <tmp>/claude-<uid>/<project>/<session>/tasks/<task id>.output. */
@@ -800,29 +802,39 @@ const TEMP_ROOTS: ReadonlySet<string> = new Set(["/tmp", "/private/tmp", tmpdir(
 
 /**
  * What a command printed, from the file its notification names: enough of its start and end for `head` and `tail`
- * characters, the middle left out. undefined when the note names no such file of its own task; GONE when the file can
- * no longer be read.
+ * characters, the middle left out. undefined when the note names no such file of its own task; GONE when the file is
+ * no longer there; REFUSED when it is there but is no plain file, or its folders lead somewhere else.
  */
-function taskOutput(note: TaskNote, tail: number, head: number): string | typeof GONE | undefined {
+function taskOutput(note: TaskNote, tail: number, head: number): string | typeof GONE | typeof REFUSED | undefined {
   const path = note.outputFile;
   const shape = path === null ? null : TASK_OUTPUT.exec(path);
   if (path === null || !isAbsolute(path) || normalize(path) !== path || !shape || !TEMP_ROOTS.has(shape[1]!) || shape[2] !== note.taskId) return undefined;
-  let f: { size: number };
+  let fd: number;
   try {
-    const s = lstatSync(path);
-    if (!s.isFile()) return GONE;
-    f = s;
+    // No symlink as the file itself, and no wait on a FIFO.
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "ENOENT" ? GONE : REFUSED;
+  }
+  try {
+    const f = fstatSync(fd);
+    // The folders on the way may not lead elsewhere either: the file must sit where its path says.
+    if (!f.isFile() || realpathSync(dirname(path)) !== join(realpathSync(shape[1]!), relative(shape[1]!, dirname(path)))) return REFUSED;
+    // A character takes up to 4 bytes, so these many bytes always hold the characters asked for.
+    const [start, end] = [4 * head, 4 * tail];
+    if (f.size <= start + end) return readFd(fd, 0, f.size).replace(EXIT_TRAILER, "");
+    return `${readFd(fd, 0, start).replace(/\uFFFD+$/, "")}\n…\n${readFd(fd, f.size - end, f.size).replace(/^\uFFFD+/, "").replace(EXIT_TRAILER, "")}`;
   } catch {
     return GONE;
+  } finally {
+    closeSync(fd);
   }
-  // A character takes up to 4 bytes, so these many bytes always hold the characters asked for.
-  const [start, end] = [4 * head, 4 * tail];
-  try {
-    if (f.size <= start + end) return readRange(path, 0, f.size).replace(EXIT_TRAILER, "");
-    return `${readRange(path, 0, start).replace(/\uFFFD+$/, "")}\n…\n${readRange(path, f.size - end, f.size).replace(/^\uFFFD+/, "").replace(EXIT_TRAILER, "")}`;
-  } catch {
-    return GONE;
-  }
+}
+
+function readFd(fd: number, start: number, end: number): string {
+  const buf = Buffer.alloc(Math.max(0, end - start));
+  const n = buf.length === 0 ? 0 : readSync(fd, buf, 0, buf.length, start);
+  return buf.toString("utf8", 0, n);
 }
 
 function noteOutcome(note: TaskNote, summary: string): Outcome {
@@ -844,13 +856,14 @@ function noteOutcome(note: TaskNote, summary: string): Outcome {
 }
 
 /** A settled command's output, from its output file when the notification carries none. */
-function withOutput(outcome: Outcome, file: string | typeof GONE | undefined): Outcome {
+function withOutput(outcome: Outcome, file: string | typeof GONE | typeof REFUSED | undefined): Outcome {
   if (file === undefined || (outcome.kind !== "ok" && outcome.kind !== "error")) return outcome;
-  if (file === GONE) return outcome.kind === "ok" ? { ...outcome, output: null, cause: OUTPUT_GONE } : { ...outcome, output: null };
+  if (file === GONE || file === REFUSED) return outcome.kind === "ok" ? { ...outcome, output: null, cause: file === GONE ? OUTPUT_GONE : OUTPUT_REFUSED } : { ...outcome, output: null };
   return { ...outcome, output: file };
 }
 
 const OUTPUT_GONE = "Its output file was gone";
+const OUTPUT_REFUSED = "Its output file could not be read safely";
 const ERROR_HEAD = 512;
 /** An error's output keeps its head too, so the exit status at the top of a long output is never cut. */
 const shownOutput = (output: string | null, kind: "ok" | "error") => {

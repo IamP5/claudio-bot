@@ -423,7 +423,7 @@ const agentTask = (task_id: string, tool_use_id: string, description: string) =>
 const shellTask = (task_id: string, tool_use_id: string, description: string, parent_task_id?: string) => ({ task_id, tool_use_id, description, task_type: "local_bash", is_backgrounded: true, ...(parent_task_id && { parent_task_id }) });
 const taskStarted = (t: object) => sys("task_started", t);
 const level = (...ts: object[]) => sys("background_tasks_changed", { tasks: ts });
-const completed = (task_id: string) => sys("task_updated", { task_id, patch: { status: "completed", end_time: 0 } });
+const completed = (task_id: string) => sys("task_updated", { task_id, patch: { status: "completed", end_time: clock } });
 const notifiedOf = (task_id: string, tool_use_id: string, status = "completed") => sys("task_notification", { task_id, tool_use_id, status, summary: "done", output_file: "" });
 const wakeInit = () => sys("init", {});
 const progressOf = (task_id: string, tools: number, last: string) => sys("task_progress", { task_id, description: "Running", usage: { total_tokens: 1, tool_uses: tools, duration_ms: 1 }, last_tool_name: last });
@@ -526,11 +526,12 @@ describe("live work", () => {
     expect(await stepOf("toolu_starter")).toMatchObject({ label: "Agent: starter", state: "running" });
     expect(await controlsNow()).toMatchObject({ working: true, tasks: [{ id: "b1", kind: "command", owner: "toolu_starter" }] });
 
+    clock += 60_000;
     q.emit(wakeInit(), result(), level());
     await flush();
     expect((await noticesNow()).map((n) => [n.text, n.reason])).toEqual([
       ['Agent "starter" is waiting on its own background command "sleep 60 && echo nested-done > nested.txt", which started 0s before.', "task"],
-      ['The background command "sleep 60 && echo nested-done > nested.txt", started by starter, stopped after 0s, and Claude Code did not say how it ended.', "task"],
+      ['The background command "sleep 60 && echo nested-done > nested.txt", started by starter, stopped after 1m, and Claude Code did not say how it ended.', "task"],
     ]);
     expect(await stepOf("toolu_starter")).toMatchObject({ state: "ok" });
     expect((await controlsNow()).working).toBe(false);
@@ -769,6 +770,23 @@ describe("live work", () => {
     await flush();
     expect((await noticesNow()).map((n) => n.text)).toEqual(['The background command "sleep 60 && echo nested-done > nested.txt", started by starter, was stopped by Claude Code when starter returned, after 0s. It did not finish.']);
     expect(await controlsNow()).toMatchObject({ working: false, tasks: [] });
+  });
+
+  test("a foreground subagent that stops its own command long before it returns is not said to have stopped it by returning", async () => {
+    await start();
+    await send("Start a tester");
+    const q = queries[0]!;
+    const tester = { ...agentTask("at", "toolu_at", "tester"), is_backgrounded: false };
+    const shell = shellTask("bt", "toolu_bt", "Run a long sleep in background", "at");
+    q.emit(wakeInit(), taskStarted(tester), toolCall("toolu_bt", "Bash", { command: "sleep 600", run_in_background: true }, "toolu_at"), level(shell), taskStarted(shell));
+    await flush();
+    clock += 35_000;
+    q.emit(sys("task_updated", { task_id: "bt", patch: { status: "killed", end_time: clock } }), notifiedOf("bt", "toolu_bt", "stopped"), level());
+    await flush();
+    clock += 300_000;
+    q.emit(completed("at"), notifiedOf("at", "toolu_at"), result());
+    await flush();
+    expect((await noticesNow()).map((n) => n.text)).toEqual(['The background command "sleep 600", started by tester, was stopped by Claude Code after 35s. It did not finish.']);
   });
 
   test("a background task that ends during a turn does not make the session read working after the turn", async () => {

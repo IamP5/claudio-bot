@@ -772,7 +772,21 @@ describe("background commands and agents, as the thread shows them", () => {
       }
       const linked = outputFile(dir);
       symlinkSync("/etc/hosts", linked);
-      expect(ran(linked)).toMatchObject({ state: "ok", output: null, cause: "Its output file was gone" });
+      expect(ran(linked)).toMatchObject({ state: "ok", output: null, cause: "Its output file could not be read safely" });
+      const folder = join(dir, "-cwd", "s2");
+      const real = mkdtempSync(join(tmpdir(), "real-"));
+      try {
+        mkdirSync(join(real, "tasks"));
+        writeFileSync(join(real, "tasks", "bg1.output"), "outside");
+        symlinkSync(real, folder);
+        expect(ran(join(folder, "tasks", "bg1.output"))).toMatchObject({ state: "ok", output: null, cause: "Its output file could not be read safely" });
+      } finally {
+        rmSync(real, { recursive: true, force: true });
+      }
+      const fifo = join(dir, "-cwd", "s1", "tasks", "bg1.output");
+      rmSync(fifo);
+      Bun.spawnSync(["mkfifo", fifo]);
+      expect(ran(fifo)).toMatchObject({ state: "ok", output: null, cause: "Its output file could not be read safely" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

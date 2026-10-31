@@ -146,6 +146,22 @@ describe("what the thread and the row are told about tasks", () => {
     expect(notes.map(lostNotice)).toEqual(['The background command "sleep 60", started by starter, stopped after 1m, and Claude Code did not say how it ended.']);
   });
 
+  test("a command a foreground subagent stopped long before returning is named with no return as its cause, at once or after silence", () => {
+    const begin = (t: ReturnType<typeof emptyTasks>) => {
+      observe(t, sys("task_started", { task_id: "at", tool_use_id: "toolu_at", description: "tester", is_backgrounded: false, task_type: "local_agent" }), "2026-10-31T12:00:00.000Z");
+      observe(t, sys("task_started", { task_id: "bt", tool_use_id: "toolu_bt", description: "sleep 600", is_backgrounded: true, task_type: "local_bash", parent_task_id: "at" }), "2026-10-31T12:00:05.000Z");
+      return observe(t, sys("task_updated", { task_id: "bt", patch: { status: "killed", end_time: Date.parse("2026-10-31T12:00:40.000Z") } }), "2026-10-31T12:00:40.000Z");
+    };
+    const said = 'The background command "sleep 600", started by tester, was stopped by Claude Code after 35s. It did not finish.';
+    const busy = emptyTasks();
+    expect(begin(busy)).toEqual([]);
+    expect(observe(busy, sys("task_progress", { task_id: "at", usage: { tool_uses: 2 }, last_tool_name: "Bash" }), "2026-10-31T12:00:45.000Z").map(lostNotice)).toEqual([said]);
+    expect(observe(busy, sys("task_updated", { task_id: "at", patch: { status: "completed", end_time: Date.parse("2026-10-31T12:05:40.000Z") } }), "2026-10-31T12:05:40.000Z")).toEqual([]);
+    const silent = emptyTasks();
+    begin(silent);
+    expect(observe(silent, sys("task_updated", { task_id: "at", patch: { status: "completed", end_time: Date.parse("2026-10-31T12:05:40.000Z") } }), "2026-10-31T12:05:40.000Z").map(lostNotice)).toEqual([said]);
+  });
+
   test("a command task is named by its whole command on one line, cut from the middle so its end shows", () => {
     const t = emptyTasks();
     observe(t, bashCall("toolu_l", `echo ${"x".repeat(300)} \\\n  > out.txt`), "2026-10-31T12:00:00.000Z");

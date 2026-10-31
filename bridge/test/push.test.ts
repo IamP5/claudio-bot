@@ -26,7 +26,7 @@ type Call = { url: string; init: RequestInit };
  * to a push; takes: whether it published one it failed to answer (it did not answer in time). The server's poll of its
  * cache answers from what it published, or with poll's answer.
  */
-function harness(opts: { home?: string; liveFor?: number; off?: boolean; respond?: () => Promise<Response>; takes?: () => boolean; poll?: () => Promise<Response> } = {}) {
+function harness(opts: { home?: string; liveFor?: number; off?: boolean; respond?: () => Promise<Response>; takes?: () => boolean; hang?: boolean; poll?: () => Promise<Response> } = {}) {
   const home = opts.home ?? mkdtempSync(join(tmpdir(), "claudiobot-push-"));
   if (!opts.home) homes.push(home);
   const { world } = loadWorld(home);
@@ -53,6 +53,7 @@ function harness(opts: { home?: string; liveFor?: number; off?: boolean; respond
     calls.push({ url, init });
     onDisk.push(diskKeys(home));
     const publish = () => published.push({ time: Math.floor(clock.t / 1000), message: String(init.body), click: (init.headers as Record<string, string>).Click! });
+    if (opts.hang) return publish(), new Promise<Response>(() => {});
     try {
       const res = await (opts.respond ? opts.respond() : Promise.resolve(new Response("ok")));
       if (res.ok) publish();
@@ -75,6 +76,7 @@ function harness(opts: { home?: string; liveFor?: number; off?: boolean; respond
     },
   };
   const waits: number[] = [];
+  const pokes = { n: 0 };
   const push = createPush({
     world,
     persist: saver.schedule,
@@ -90,12 +92,13 @@ function harness(opts: { home?: string; liveFor?: number; off?: boolean; respond
     now: () => new Date(clock.t),
     log: (l) => logs.push(l),
     wait: async (ms) => void waits.push(ms),
+    poke: () => void pokes.n++,
   });
   const bubble = (id: string) => {
     post(world.bots.get(BOT.id)!, { kind: "bot", id: id as MessageId, at: new Date(clock.t).toISOString(), text: SECRET_CHAT });
     return id as MessageId;
   };
-  return { home, world, push, calls, polls, published, onDisk, logs, clock, sockets, bubble, signals, waits };
+  return { home, world, push, calls, polls, published, onDisk, logs, clock, sockets, bubble, signals, waits, pokes };
 }
 
 const diskKeys = (home: string): string[] =>
@@ -860,7 +863,7 @@ test("a card push whose tries all failed goes again once the server is back, bef
   at(h, T0 + 2_000);
   await drain();
   expect([h.calls.length, h.push.state!()]).toEqual([3, { state: "failing", error: "The push server answered 500", at: iso(T0 + 2_000) }]);
-  expect(h.push.nextDeadline()).toBe(iso(T0 + 2_000 + OWED_RETRY_MS[0]));
+  expect([h.push.nextDeadline(), h.pokes.n]).toEqual([iso(T0 + 2_000 + OWED_RETRY_MS[0]), 1]);
   h.server.down = false;
   at(h, T0 + 17_000);
   await drain();
@@ -940,7 +943,7 @@ test("with nothing owed, a failing state asks the server for its recent pushes, 
   expect(h.push.nextDeadline()).not.toBe(iso(T0 + 17_000 + 2 * PROBE_MS));
 });
 
-test("a restart keeps the failing state and the pushes owed: hello says failing, and the first tick sends the owed push", async () => {
+test("a restart keeps the failing state and the pushes owed: hello says failing, the first tick checks the server, and the owed push waits out the start grace", async () => {
   const a = flaky();
   a.push.notify(BOT, "message", a.bubble("m_b"));
   await drain();
@@ -950,7 +953,10 @@ test("a restart keeps the failing state and the pushes owed: hello says failing,
   expect(b.push.nextDeadline()).toBe(iso(T0));
   at(b, T0);
   await drain();
-  expect([b.calls.map((c) => c.init.body), b.push.state!(), b.world.push.owed, b.world.push.failing]).toEqual([["Claudio Bot has an update for you"], { state: "on" }, undefined, undefined]);
+  expect([b.calls.length, b.polls.length, b.push.state!(), b.push.nextDeadline()]).toEqual([0, 1, { state: "on" }, iso(T0 + START_GRACE_MS)]);
+  at(b, T0 + START_GRACE_MS);
+  await drain();
+  expect([b.calls.map((c) => c.init.body), b.world.push.owed, b.world.push.failing]).toEqual([["Claudio Bot has an update for you"], undefined, undefined]);
 });
 
 test("a push the server took but did not answer in time rings once: the bridge asks the server before it sends again", async () => {
@@ -963,7 +969,7 @@ test("a push the server took but did not answer in time rings once: the bridge a
   await drain();
   at(h, T0 + 18_000);
   await drain();
-  expect([h.calls.length, h.polls, h.push.state!(), h.world.push.owed]).toEqual([1, [`${URL_}/json?poll=1&since=${Math.floor(T0 / 1000)}`], { state: "on" }, undefined]);
+  expect([h.calls.length, h.polls, h.push.state!(), h.world.push.owed]).toEqual([1, [`${URL_}/json?poll=1&since=${Math.floor((T0 + 2_000 - 60_000) / 1000)}`], { state: "on" }, undefined]);
   expect(h.logs).toEqual([`push: card for session ${SID} may not have gone out: The push server did not answer within 10 s`, "push: m_a|card had gone out"]);
 });
 
@@ -1031,4 +1037,71 @@ test("with push off, an ending told while no socket was open goes to the next so
   at(h, T0 + 5_000);
   expect(h.signals.map((s) => s.type === "session_alert" && s.reason)).toEqual(["failed", "failed"]);
   expect([keys(h.world), h.world.push.held]).toEqual([[`${SID}|${iso(T0)}|done`], []]);
+});
+
+test("a bridge that dies while a try is out asks the server after the restart: one ring if it took the push, and the push if not", async () => {
+  for (const took of [true, false]) {
+    const a = harness({ hang: true });
+    a.push.notify(BOT, "message", a.bubble("m_b"));
+    await drain();
+    if (!took) a.published.length = 0;
+    expect(a.world.push.owed?.map((o) => [o.keys, o.unsure])).toEqual([[["m_b|message"], iso(T0)]]);
+    const b = harness({ home: a.home });
+    b.published.push(...a.published);
+    at(b, T0 + START_GRACE_MS);
+    await drain();
+    expect([took, b.calls.map((c) => c.init.body), b.polls.length, b.world.push.owed]).toEqual([took, took ? [] : ["Claudio Bot has an update for you"], 1, undefined]);
+  }
+});
+
+test("a failed probe does not stretch the backoff: a new push that fails is tried again 15 s later", async () => {
+  const h = flaky({ poll: async () => new Response("", { status: 502 }) });
+  const [card] = drive(h, [permission("m_a", T0)]);
+  at(h, T0 + 2_000);
+  await drain();
+  answer(card!);
+  for (const t of [17_000, 77_000, 137_000]) {
+    at(h, T0 + t);
+    await drain();
+  }
+  expect([h.polls.length, h.world.push.failing?.retries]).toEqual([3, 0]);
+  h.world.sessions.get(SID)!.own!.cards.push(permission("m_b", T0 + 140_000));
+  at(h, T0 + 142_000);
+  await drain();
+  expect([h.calls.length, h.push.nextDeadline()]).toEqual([6, iso(T0 + 142_000 + OWED_RETRY_MS[0])]);
+});
+
+test("a card answered while the server was asked about its timed-out push is not sent again", async () => {
+  let card: OwnCard | undefined;
+  const h = harness({ respond: TIMEOUT, poll: async () => (answer(card!), new Response("")) });
+  [card] = drive(h, [permission("m_a", T0)]);
+  at(h, T0 + 2_000);
+  await drain();
+  at(h, T0 + 17_000);
+  await drain();
+  expect([h.calls.length, h.polls.length, h.world.push.owed]).toEqual([1, 1, undefined]);
+});
+
+test("a bot card's reminder speaks for it, so its card push still owed is not sent as well", async () => {
+  const h = flaky();
+  openCard(h.world);
+  h.push.notify(BOT, "card", CARD);
+  await drain();
+  h.server.down = false;
+  h.push.notify(BOT, "reminder", CARD);
+  await drain();
+  at(h, T0 + 20_000);
+  await drain();
+  expect([h.calls.map((c) => c.init.body), h.world.push.owed]).toEqual([["Claudio Bot needs you", "Claudio Bot needs you", "Claudio Bot needs you", "Claudio Bot is still waiting for you"], undefined]);
+});
+
+test("unreadable owed pushes and push state on disk are dropped at start, and the bridge still starts", () => {
+  const h = harness();
+  const state = own<PushState>(h.world.push);
+  const good = { keys: ["m_b|message"], botId: BOT.id, text: "Claudio Bot has an update for you", link: "claudiobot://bot/b_claudio?message=m_b", high: false, for: { kind: "bot" as const } };
+  Object.assign(state, { failing: { error: 3 }, owed: [null, { ...good, keys: ["x|card"], for: { kind: "cards", session: SID } }, { ...good, keys: ["y|card"], for: { kind: "elsewhere" } }, good] });
+  const push = createPush({ world: h.world, persist: () => {}, sender: { send: async () => {}, taken: async () => [] }, liveUntil: () => null, now: () => new Date(T0), log: () => {} });
+  expect([push.state!(), h.world.push.failing, h.world.push.owed]).toEqual([{ state: "on" }, undefined, [good]]);
+  createPush({ world: h.world, persist: () => {}, sender: null, liveUntil: () => null, now: () => new Date(T0), log: () => {} });
+  expect(h.world.push.owed).toBeUndefined();
 });

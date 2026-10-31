@@ -105,6 +105,8 @@ export type Hub = {
   left(sessionId: SessionId, at: Date): Promise<void>;
   /** Who looks at an app changed: a held push may be due, and what reads as unread may differ. */
   presence(): void;
+  /** A deadline moved outside a tick (a push try came back): the clock looks again. */
+  poke(): void;
   /** The title a session's row shows, for a session alert. */
   sessionTitle(id: SessionId): string;
   /** Runs every stored-deadline owner once at `now`. One that throws is logged and the rest still run. */
@@ -1301,6 +1303,7 @@ export function createHub(deps: HubDeps): Hub {
       sessions?.presence();
       poke();
     },
+    poke: () => poke(),
     sessionTitle: (id) => sessions?.title(id) ?? "Claude Code session",
     tick: (at) => tickEach(tickers, at, deps.log),
 

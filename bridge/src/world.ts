@@ -365,6 +365,8 @@ export type OwedPush = {
   /** When it was first tried: a phone looked at the app after that saw what it was for. */
   at?: string;
   unsure?: string;
+  /** Sent again once with no word from the server on the try before (a write-only topic): never sent blind twice. */
+  blind?: boolean;
 };
 /** How a run of a session the phone drives came to an end worth a push. A user's stop never is; a restart's cut is. */
 export type SessionEnd = "finished" | "failed" | "lost";

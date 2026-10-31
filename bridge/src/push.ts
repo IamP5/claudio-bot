@@ -178,7 +178,7 @@ export function ntfySender(url: string, fetchFn: typeof fetch = fetch): Sender {
         res = await fetchFn(url, {
           method: "POST",
           body: n.text,
-          // ntfy (2.29 and later) keeps the sequence id and returns it in its poll; older servers ignore it.
+          // ntfy 2.16.0 and later keeps the sequence id and returns it in its poll; older servers ignore it.
           headers: { Title: "ClaudioBot", Click: n.link, "X-Sequence-ID": n.sid, ...(n.high && { Priority: "high" }) },
           signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
         });
@@ -245,8 +245,8 @@ export type AlertSockets = {
   alert(m: SessionAlert, only?: readonly number[]): number[];
   heard(ids: readonly number[], since: number): boolean;
   open(): number[];
-  /** When any socket, open or closed, was last heard from attended (ms): the user last looked at the app then. */
-  seenAt?(): number;
+  /** When someone last looked at an app (ms): it said it is looked at and spoke. Never a connect alone. */
+  lookedAt?(): number;
 };
 
 /** One session_alert: the frame, and each time it went out with the sockets it reached. */
@@ -346,7 +346,8 @@ export function createPush(deps: {
     typeof o.link === "string" &&
     typeof o.high === "boolean" &&
     forRead(o.for) &&
-    [o.unsure, o.at].every((t) => t === undefined || !Number.isNaN(Date.parse(t)));
+    [o.unsure, o.at].every((t) => t === undefined || !Number.isNaN(Date.parse(t))) &&
+    (o.blind === undefined || typeof o.blind === "boolean");
   if (sender === null || (world.push.failing !== undefined && !failingRead(world.push.failing))) {
     if (world.push.failing !== undefined) setFailing(null);
   } else if (failing()) {
@@ -389,7 +390,7 @@ export function createPush(deps: {
   };
   /** Still worth a push: no phone is live or looked since it was first tried, and what it is for still waits on the user. */
   function holds(o: OwedPush, now = deps.now().getTime()): boolean {
-    if (live(now) || (o.at !== undefined && (deps.sockets?.seenAt?.() ?? 0) > Date.parse(o.at))) return false;
+    if (live(now) || (o.at !== undefined && (deps.sockets?.lookedAt?.() ?? 0) > Date.parse(o.at))) return false;
     const f = o.for;
     if (f.kind === "cards") return f.cards.some((c) => isOpen(f.session, c));
     if (f.kind === "ending") return current(f.session, o.keys[0]!);
@@ -507,12 +508,19 @@ export function createPush(deps: {
       } else {
         how = "retry";
         let took = false;
+        let blind = false;
         if (o.unsure !== undefined) {
           try {
             took = (await sender!.taken(Date.parse(o.unsure) - TAKEN_SLACK_MS)).some(isTry(o));
           } catch (e) {
-            // A write-only topic never says what it holds, so the push goes again: a rare second ring over a lost one.
             if (!(e instanceof PollForbidden)) throw e;
+            // A write-only topic never says what it holds. The push goes again once, a second ring over a lost one; a
+            // server that again does not answer may be taking each try, so it is not tried a third time.
+            if (o.blind) {
+              deps.log(`push: ${o.keys.join(", ")} not sent again: the push server did not answer twice and will not say whether it took it`);
+              return dropOwed(o);
+            }
+            blind = true;
           }
         }
         if (took) deps.log(`push: ${o.keys.join(", ")} had gone out`);
@@ -520,7 +528,7 @@ export function createPush(deps: {
         if (!took && (!holds(o) || !isOwed(o))) return dropOwed(o);
         if (took) dropOwed(o);
         else {
-          const f = await attempt(o);
+          const f = await attempt(blind ? { ...o, blind } : o);
           if (f !== null) throw f;
           deps.log(`push: ${o.keys.join(", ")} went out on a retry`);
         }

@@ -87,7 +87,7 @@ function harness(opts: { home?: string; liveFor?: number; off?: boolean; respond
       alert: (m, only) => (signals.push(m), sockets.open.filter((id) => only === undefined || only.includes(id))),
       heard: (ids, since) => ids.some((id) => (sockets.readAt.get(id) ?? 0) > since),
       open: () => [...sockets.open],
-      seenAt: () => Math.max(0, ...sockets.readAt.values()),
+      lookedAt: () => Math.max(0, ...sockets.readAt.values()),
     },
     signal: (m) => signals.push(m),
     title: () => "Fix the fade",
@@ -1274,4 +1274,14 @@ test("a reminder that goes while a retry of its card's push is out is not follow
   await drain();
   await ticks(h, T0 + HOUR + 1_000, T0 + HOUR + 10 * 60_000);
   expect(h.calls.slice(4).map((c) => c.init.body)).toEqual(["A Claude Code session is still waiting for your approval"]);
+});
+
+test("a write-only topic whose server takes each push but never answers rings at most twice: one blind resend, then the push ends", async () => {
+  const h = harness({ respond: TIMEOUT, takes: () => true, poll: async () => new Response("forbidden", { status: 403 }) });
+  drive(h, [permission("m_a", T0)]);
+  at(h, T0 + 2_000);
+  await drain();
+  await ticks(h, T0 + 3_000, T0 + 30 * 60_000);
+  expect([h.published.length, h.world.push.owed, h.push.state!().state]).toEqual([2, undefined, "failing"]);
+  expect(h.logs.at(-1)).toBe("push: m_a|card not sent again: the push server did not answer twice and will not say whether it took it");
 });

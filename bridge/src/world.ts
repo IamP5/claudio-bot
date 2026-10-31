@@ -344,14 +344,16 @@ export type DeviceRecord = {
 /**
  * sent: the keys of every push recorded, the newest week. held: session endings owed a push once no phone is live,
  * kept across restarts; alerted: the open app was told at `at`, so a phone heard from since saw it. failing: the push
- * server failed the last try; absent while it takes pushes. owed: pushes whose tries all failed, oldest first.
+ * server failed the last try; absent while it takes pushes. owed: pushes a try is out for or whose tries all failed,
+ * oldest first.
  */
 export type PushState = { sent: { key: string; at: string }[]; held?: HeldEnding[]; failing?: PushFailing; owed?: OwedPush[] };
 /** The last failed try at `at`, and when the bridge tries again: the oldest owed push, or a probe when none is owed. */
 export type PushFailing = { error: string; at: string; retryAt: string; retries: number };
 /**
- * A push every try of which failed, sent again while what it is for still waits on the user. unsure: when a try began
- * that the server may have taken; the server is asked whether it holds the push before it goes again.
+ * A push not yet taken by the server: a try is out for it, or every try failed and it goes again while what it is for
+ * still waits on the user. unsure: when a try began that the server may have taken; the server is asked whether it holds
+ * the push before it goes again.
  */
 export type OwedPush = {
   keys: string[];

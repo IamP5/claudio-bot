@@ -40,7 +40,7 @@ struct HomeView: View {
                 UnrecognizedBanner()
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-            } else if store.machine == nil {
+            } else if !store.showsOnline {
                 ConnectionBanner(state: store.connection, lastRetryFailed: $lastRetryFailed)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
@@ -377,10 +377,14 @@ struct ConnectionBanner: View {
         switch reach {
         case .firstConnect:
             return "Connecting to your Mac\(at)."
+        case .reconnecting:
+            return "Reconnecting…"
         case .unreachable, .retrying:
             let head = lastRetryFailed ? "Still no answer from your Mac\(at)." : "Your Mac isn't answering\(at)."
             return brief ? head : head + " Check the bridge is running. Away from home, connect with your Mac's Tailscale name, or pair again."
-        case .connected, .unrecognized, .unpaired:
+        case .unrecognized:
+            return UnrecognizedBanner.cause
+        case .connected, .unpaired:
             return "ClaudioBot needs the bridge running on your Mac. Your bots keep working there while this \(ThisDevice.casualNoun) is away."
         }
     }
@@ -397,21 +401,24 @@ struct ConnectionBanner: View {
     }
 
     var body: some View {
-        let reach = Reach(state, failures: client.failures, greeted: store.bridgeProtocol != nil)
+        let reach = Reach(state, failures: client.failures, greeted: store.bridgeProtocol != nil, rejoining: store.rejoin != nil)
         VStack(alignment: .leading, spacing: 8) {
-            ConnectionBadge(state: state)
-            Text(Self.cause(reach, address: client.pairing?.url.bridgeAddress, lastRetryFailed: lastRetryFailed, brief: typeSize.isAccessibilitySize))
-                .font(.footnote)
-                .foregroundStyle(Theme.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            if let staleSince {
-                TimelineView(.periodic(from: .now, by: 30)) { context in
-                    Text(SessionText.updated(staleSince, now: context.date) + (typeSize.isAccessibilitySize ? "." : ". Rows show what your Mac said then."))
-                        .font(.footnote)
-                        .foregroundStyle(Theme.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            if reach == .reconnecting {
+                // A socket the app chose to replace: no cause to name and nothing to do yet.
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text(Self.cause(reach, address: nil, lastRetryFailed: false))
                 }
+                .font(.footnote.weight(.medium))
+                .accessibilityElement(children: .combine)
+            } else {
+                ConnectionBadge(state: state)
+                Text(Self.cause(reach, address: client.pairing?.url.bridgeAddress, lastRetryFailed: lastRetryFailed, brief: typeSize.isAccessibilitySize))
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            if let staleSince { StaleListLine(since: staleSince) }
             if reach.lost {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 8) { actions(trying: reach == .retrying) }
@@ -441,19 +448,43 @@ struct ConnectionBanner: View {
     }
 }
 
+/// How old a list kept from before the Mac went out of reach is: "Last updated 12 min. ago. Rows show what your Mac
+/// said then."
+struct StaleListLine: View {
+    let since: Date
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            Text(SessionText.updated(since, now: context.date) + (typeSize.isAccessibilitySize ? "." : ". Rows show what your Mac said then."))
+                .font(.footnote)
+                .foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 /// The bridge answered with 401. The pairing is kept: this may be another network, or the Mac may need a new code.
 struct UnrecognizedBanner: View {
+    /// When the list on screen last heard from the Mac; nil where no list shows.
+    var staleSince: Date?
+    /// Set by a screen that is itself a sheet: it must close before pairing can open.
+    var pairAgain: (() -> Void)?
     @Environment(AppModel.self) private var app
     @Environment(BridgeClient.self) private var client
+
+    static let cause = "This bridge doesn't recognize this \(ThisDevice.noun). Pair again, or retry once you are back on your Mac's network."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ConnectionBadge(state: .unrecognized)
-            Text("This bridge doesn't recognize this \(ThisDevice.noun). Pair again, or retry once you are back on your Mac's network.")
+            Text(Self.cause)
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let staleSince { StaleListLine(since: staleSince) }
             HStack(spacing: 8) {
-                Button("Pair again") { app.beginPairing() }
+                Button("Pair again") { (pairAgain ?? app.beginPairing)() }
                     .bannerProminent()
                 Button("Retry") { client.retryNow() }
                     .buttonStyle(.bordered)

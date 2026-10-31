@@ -136,7 +136,7 @@ enum ThreadStatus: Equatable, Sendable {
     ) -> ThreadStatus? {
         switch reach {
         case .connected, .unpaired: break
-        case .firstConnect, .unreachable, .retrying, .unrecognized: return .offline(reach, lastUpdate: lastUpdate)
+        case .firstConnect, .reconnecting, .unreachable, .retrying, .unrecognized: return .offline(reach, lastUpdate: lastUpdate)
         }
         if catchingUp { return .catchingUp(lastUpdate: lastUpdate) }
         let working = controls?.working ?? false

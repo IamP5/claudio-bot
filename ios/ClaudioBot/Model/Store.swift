@@ -238,10 +238,41 @@ final class AppStore {
         (bridgeProtocol ?? 0) >= 3
     }
 
+    /// A reconnect the app chose while the Mac answered: back on screen after a while away, a new network, a probe
+    /// with no pong. For `rejoinGrace` the list stays as it was, as the thread does (P-CONN-4). Then it says it is
+    /// reconnecting and its rows are last known, until the first failed try says the Mac is out of reach. Tries the
+    /// app restarts itself never fail, so after `rejoinPatience` the reconnect counts as lost all the same.
+    enum Rejoin: Equatable, Sendable { case grace, showing }
+
+    static let rejoinGrace: Duration = .milliseconds(400)
+    static let rejoinPatience: Duration = .seconds(10)
+
+    private(set) var rejoin: Rejoin?
+    @ObservationIgnored private var rejoinClock: Task<Void, Never>?
+
+    /// Screens may show what they hold as current: the Mac answers, or a reconnect the app chose is still in its grace.
+    var showsOnline: Bool {
+        machine != nil || rejoin == .grace
+    }
+
     /// Transport changes from the client. Unpairing forgets everything the Mac sent.
     func setConnection(_ state: ConnectionState) {
+        let rejoining = state == .connecting && (machine != nil || rejoin != nil)
         connection = state
-        if machine == nil { sessions.markStale() }
+        if !rejoining {
+            endRejoin()
+        } else if rejoin == nil {
+            rejoin = .grace
+            rejoinClock = Task { [weak self] in
+                try? await Task.sleep(for: Self.rejoinGrace)
+                guard let self, !Task.isCancelled, rejoin == .grace else { return }
+                rejoin = .showing
+                sessions.markStale()
+                try? await Task.sleep(for: Self.rejoinPatience)
+                if !Task.isCancelled, rejoin == .showing { rejoin = nil }
+            }
+        }
+        if machine == nil && rejoin != .grace { sessions.markStale() }
         if state == .unpaired {
             userName = ""
             bots = [:]
@@ -274,6 +305,12 @@ final class AppStore {
             sessions.reset()
             threads.reset()
         }
+    }
+
+    private func endRejoin() {
+        rejoin = nil
+        rejoinClock?.cancel()
+        rejoinClock = nil
     }
 
     /// A frame sent on a socket that dropped may never have arrived, so a send stays here until its echo. A bot's send
@@ -512,6 +549,7 @@ final class AppStore {
         switch msg {
         case let .hello(hello):
             connection = .connected(machine: hello.machine)
+            endRejoin()
             userName = hello.userName
             protocolMismatch = ProtocolMismatch(bridge: hello.protocol)
             bridgeProtocol = hello.protocol

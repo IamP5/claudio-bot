@@ -258,7 +258,8 @@ export const server = [
   { type: "session_removed", sessionId: agentSession, movedTo: "f2c8b4a6-1e3d-4f9b-a7c5-6d2e8b1f4a37" },
   { type: "session_removed", sessionId: desktopRow.id, movedTo: null },
   {
-    type: "session_rows", removed: [], projects: [], rows: [
+    // A fork of claudio-bot checked out beside it: the bridge labels both, since they share a name.
+    type: "session_rows", removed: [], projects: [{ ...claudio, label: "alex/claudio-bot" }, { ...claudio, id: "4d1b8e6f0a2c9e73", path: "/Users/alex/forks/claudio-bot", githubRepo: "IamP5/claudio-bot", label: "IamP5/claudio-bot" }], rows: [
       phoneRow,
       { ...desktopRow, status: "failed", outcome: { kind: "failed", text: "Claude Code exited: out of memory", at: later } },
       { ...childRow, status: "idle", outcome: { kind: "stopped", text: "Stopped by you: the turn, 2 agents", at: later } },

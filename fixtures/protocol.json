@@ -1699,7 +1699,26 @@
     {
       "type": "session_rows",
       "removed": [],
-      "projects": [],
+      "projects": [
+        {
+          "id": "9c2e5b7a1d3f4e60",
+          "name": "claudio-bot",
+          "path": "/Users/alex/Dev/projects/claudio-bot",
+          "githubRepo": "alex/claudio-bot",
+          "lastAt": "2026-10-16T12:00:00.000Z",
+          "canCloud": false,
+          "label": "alex/claudio-bot"
+        },
+        {
+          "id": "4d1b8e6f0a2c9e73",
+          "name": "claudio-bot",
+          "path": "/Users/alex/forks/claudio-bot",
+          "githubRepo": "IamP5/claudio-bot",
+          "lastAt": "2026-10-16T12:00:00.000Z",
+          "canCloud": false,
+          "label": "IamP5/claudio-bot"
+        }
+      ],
       "rows": [
         {
           "id": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",

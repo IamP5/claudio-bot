@@ -589,6 +589,8 @@ enum StartPhase: Equatable, Sendable {
     static let startingLine = "Starting session…"
     static let unconfirmedLine = "Couldn't confirm. Check the list or retry."
     static let offlineLabel = "Start (your Mac is unreachable)"
+    static let reconnectingLabel = "Start (reconnecting to your Mac)"
+    static let unrecognizedLabel = "Start (your Mac doesn't recognize this \(ThisDevice.noun))"
 }
 
 struct NewSessionSheet: View {
@@ -598,6 +600,7 @@ struct NewSessionSheet: View {
     @Environment(BridgeClient.self) private var client
     @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppModel.self) private var app
     @State private var project: ProjectID?
     @State private var caret = 0
     @State private var model: String?
@@ -614,6 +617,15 @@ struct NewSessionSheet: View {
         if case .starting = phase { true } else { false }
     }
 
+    private var startLabel: String {
+        switch store.connection {
+        case .connected: Self.startTitle
+        case .unrecognized: StartPhase.unrecognizedLabel
+        case .connecting where store.rejoin != nil: StartPhase.reconnectingLabel
+        default: StartPhase.offlineLabel
+        }
+    }
+
     private var canStart: Bool {
         project != nil && !router.newSessionDraft.isBlank && !starting && store.machine != nil
     }
@@ -623,7 +635,15 @@ struct NewSessionSheet: View {
         NavigationStack {
             Form {
                 // Start needs the Mac, so the sheet says when it is out of reach and offers Retry (F-SES-154).
-                if store.machine == nil {
+                if store.connection == .unrecognized {
+                    Section {
+                        UnrecognizedBanner {
+                            dismiss()
+                            app.beginPairing()
+                        }
+                        .listRowInsets(EdgeInsets())
+                    }
+                } else if !store.showsOnline {
                     Section {
                         ConnectionBanner(state: store.connection, lastRetryFailed: $lastRetryFailed)
                             .listRowInsets(EdgeInsets())
@@ -632,7 +652,7 @@ struct NewSessionSheet: View {
                 Section {
                     Picker("Project", selection: $project) {
                         ForEach(store.sessions.orderedProjects) { project in
-                            Text(project.name).tag(Optional(project.id))
+                            Text(project.shownName).tag(Optional(project.id))
                         }
                     }
                     .pickerStyle(.navigationLink)
@@ -692,8 +712,8 @@ struct NewSessionSheet: View {
                     } else {
                         Button(Self.startTitle, action: start)
                             .disabled(!canStart)
-                            .accessibilityLabel(store.machine == nil ? StartPhase.offlineLabel : Self.startTitle)
-                            .help(store.machine == nil ? StartPhase.offlineLabel : Self.startTitle)
+                            .accessibilityLabel(startLabel)
+                            .help(startLabel)
                     }
                 }
             }

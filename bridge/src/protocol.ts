@@ -364,7 +364,8 @@ export type PhoneMode = (typeof PHONE_MODES)[number];
  * remote is on GitHub ("solta-o-som" for ~/Dev/projects/br-soundless), else the folder name. lastAt: the newest
  * lastAt of its sessions, null when it has none. canCloud: reserved for phone-started cloud sessions, false in v1.
  */
-export type SessionProject = { id: ProjectId; name: string; path: string; githubRepo: string | null; lastAt: string | null; canCloud: boolean };
+/** label: set when another project has the same name (`projectLabels`), for the phone to show in its place. */
+export type SessionProject = { id: ProjectId; name: string; path: string; githubRepo: string | null; lastAt: string | null; canCloud: boolean; label?: string };
 
 /** state null: the transcript names the PR without its state. */
 export type SessionPr = { number: number; url: string; state: "open" | "merged" | "closed" | null };

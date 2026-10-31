@@ -170,3 +170,32 @@ export function createProjects(opts: { file: string | null }): { of(cwd: string)
     },
   };
 }
+
+/**
+ * Labels for projects that share a name, case-insensitively, by id, so the phone never shows two that look the same:
+ * the GitHub "owner/repo" when no namesake has the same remote, else the shortest tail of the path that no namesake
+ * shares ("work/app"). A project whose name is its own has no label.
+ */
+export function projectLabels(projects: readonly LabelInput[]): Map<ProjectId, string> {
+  const byName = Map.groupBy(projects, (p) => p.name.toLowerCase());
+  const labels = new Map<ProjectId, string>();
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    const segments = new Map(group.map((p) => [p.id, p.path.split("/").filter((s) => s !== "")]));
+    const tail = (p: LabelInput, n: number) => segments.get(p.id)!.slice(-n).join("/");
+    for (const p of group) {
+      const repo = p.githubRepo?.toLowerCase();
+      if (p.githubRepo && group.filter((q) => q.githubRepo?.toLowerCase() === repo).length === 1) {
+        labels.set(p.id, p.githubRepo);
+        continue;
+      }
+      const depth = segments.get(p.id)!.length;
+      let n = Math.min(2, depth);
+      while (n < depth && group.some((q) => q.id !== p.id && tail(q, n) === tail(p, n))) n++;
+      labels.set(p.id, tail(p, n));
+    }
+  }
+  return labels;
+}
+
+type LabelInput = { id: ProjectId; name: string; path: string; githubRepo: string | null };

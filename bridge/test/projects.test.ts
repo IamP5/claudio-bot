@@ -2,7 +2,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createProjects, findProject, parseGithubRepo, type Project, scanProjects } from "../src/projects";
+import { createProjects, findProject, parseGithubRepo, type Project, projectLabels, scanProjects } from "../src/projects";
+import type { ProjectId } from "../src/protocol";
 
 test.each([
   ["git@github.com:acme/web.git", "acme/web"],
@@ -111,4 +112,27 @@ test("findProject matches path, folder name, then GitHub repo", () => {
   expect(findProject(projects, "BR-Soundless")?.name).toBe("br-soundless");
   expect(findProject(projects, " /p/web ")?.name).toBe("web");
   expect(findProject(projects, "nope")).toBeUndefined();
+});
+
+describe("labels for projects that share a name", () => {
+  const project = (id: string, path: string, githubRepo: string | null = null) => ({ id: id as ProjectId, name: path.split("/").pop()!.replace(/\.git$/, ""), path, githubRepo });
+
+  test("forks of one repo are told apart by owner", () => {
+    const labels = projectLabels([project("a", "/Users/me/code/app", "alice/app"), project("b", "/Users/me/forks/app", "bob/app"), project("c", "/Users/me/code/web")]);
+    expect(Object.fromEntries(labels)).toEqual({ a: "alice/app", b: "bob/app" });
+  });
+
+  test("two clones of the same remote, or folders with no remote, are told apart by their parent folder", () => {
+    const labels = projectLabels([project("a", "/Users/me/work/app", "acme/app"), project("b", "/Users/me/home/app", "Acme/App"), project("c", "/Users/me/old/App")]);
+    expect(Object.fromEntries(labels)).toEqual({ a: "work/app", b: "home/app", c: "old/App" });
+  });
+
+  test("a shared parent folder reaches further up until the paths differ", () => {
+    const labels = projectLabels([project("a", "/Users/me/a/src/app"), project("b", "/Users/me/b/src/app")]);
+    expect(Object.fromEntries(labels)).toEqual({ a: "a/src/app", b: "b/src/app" });
+  });
+
+  test("a project whose name is its own gets no label", () => {
+    expect(projectLabels([project("a", "/Users/me/code/app"), project("b", "/Users/me/code/web")]).size).toBe(0);
+  });
 });

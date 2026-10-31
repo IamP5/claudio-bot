@@ -2,7 +2,7 @@ import { watch } from "node:fs";
 import { basename, join } from "node:path";
 import type { Tickable } from "./clock";
 import type { ClaudeApps, Live } from "./claudeApps";
-import type { ProjectOf } from "./projects";
+import { projectLabels, type ProjectOf } from "./projects";
 import type { Holder, SessionId, SessionOrigin, SessionProject, SessionRow, SessionsChannelFrame, SessionStatus } from "./protocol";
 import { isTranscriptName, type Head, type Heads } from "./transcript";
 import type { AgentRecord, World } from "./world";
@@ -160,7 +160,10 @@ export function createCatalog(deps: CatalogDeps): Catalog {
     const shown = new Set(rows.map((r) => r.id));
     for (const r of rows) if (r.parentId !== null && !shown.has(r.parentId)) r.parentId = null;
     rows.sort((a, b) => b.lastAt.localeCompare(a.lastAt));
-    const ordered = [...projects.values()].sort((a, b) => (b.lastAt ?? "").localeCompare(a.lastAt ?? "") || a.name.localeCompare(b.name));
+    const labels = projectLabels([...projects.values()]);
+    const ordered = [...projects.values()]
+      .map((p) => (labels.has(p.id) ? { ...p, label: labels.get(p.id)! } : p))
+      .sort((a, b) => (b.lastAt ?? "").localeCompare(a.lastAt ?? "") || a.name.localeCompare(b.name));
     return { projects: ordered, rows };
   }
 

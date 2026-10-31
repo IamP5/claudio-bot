@@ -1542,8 +1542,10 @@ struct SessionProject: Codable, Hashable, Sendable, Identifiable {
     var lastAt: Date?
     /// Reserved for phone-started cloud sessions; false for now.
     var canCloud: Bool
+    /// Set when another project has the same name: its GitHub owner and repo, or the tail of its path.
+    var label: String? = nil
 
-    private enum CodingKeys: String, CodingKey { case id, name, path, githubRepo, lastAt, canCloud }
+    private enum CodingKeys: String, CodingKey { case id, name, path, githubRepo, lastAt, canCloud, label }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -1553,6 +1555,7 @@ struct SessionProject: Codable, Hashable, Sendable, Identifiable {
         try c.encode(githubRepo, forKey: .githubRepo)
         try c.encode(lastAt, forKey: .lastAt)
         try c.encode(canCloud, forKey: .canCloud)
+        try c.encodeIfPresent(label, forKey: .label)
     }
 }
 

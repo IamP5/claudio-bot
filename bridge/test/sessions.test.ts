@@ -139,6 +139,21 @@ test("the list groups every transcript under its project, with what each row nee
   expect(rowOf(frame.rows, ASK)).toMatchObject({ projectId: frame.projects[0]!.id, origin: "sdk", status: "idle", holder: "none", unread: false, worktree: false, mirror: "none", hidden: false, agent: null, parentId: null });
 });
 
+test("projects that share a name carry labels that tell them apart, and a project with its own name has none", async () => {
+  const ids = ["33333333-3333-4333-8333-333333333331", "33333333-3333-4333-8333-333333333332"] as SessionId[];
+  for (const [i, where] of ["work", "personal"].entries()) {
+    const cwd = join(base, where, "app");
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+    const dir = join(base, "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${ids[i]}.jsonl`), readFileSync(join(FIXTURES, "own-ask.jsonl"), "utf8").replaceAll("<cwd>", cwd));
+  }
+  await start();
+  const frame = (await one({ type: "watch_sessions" })) as Extract<ServerMessage, { type: "sessions" }>;
+  const shown = Object.fromEntries(frame.projects.map((p) => [p.path, p.label ?? null]));
+  expect(shown).toEqual({ [repo]: null, [join(base, "work", "app")]: "work/app", [join(base, "personal", "app")]: "personal/app" });
+});
+
 test("a session another Claude Code holds busy shows working in the Claude app", async () => {
   await start();
   holders.set(ASK, { pid: 1, sessionId: ASK, entrypoint: "claude-desktop", kind: "interactive", cwd: repo, status: "busy", waitingFor: null });

@@ -398,7 +398,10 @@ export type SessionRow = {
   /** When the current run started: its turn, or its oldest live task. */
   since?: string;
   running?: { agents: number; commands: number };
-  /** One line while busy: "Run perl -e 'sleep 60'", "Waiting for approval: Bash", "Background: sleep 75". */
+  /**
+   * One line while busy: "Run perl -e 'sleep 60'", "Waiting for approval: Bash", "Background: sleep 75", "Still running
+   * after Claude Code stopped: perl -e 'sleep 90'".
+   */
   activity?: string;
   /** How the last run ended, kept until the next send. */
   outcome?: SessionOutcome;
@@ -463,6 +466,8 @@ export type SessionTask = {
   owner: string | null;
   progress: { tools: number; last: string | null; at: string } | null;
   waiting: MessageId | null;
+  /** It outlived the Claude Code that ran it (Claude Code died or the bridge restarted); only the bridge follows it now. */
+  outlived?: true;
 };
 
 /** One AskUserQuestion question. The app offers a free answer besides the options, as Claude Code does. */
@@ -587,6 +592,7 @@ export type SessionServerMessage =
   // phone push for it (a phone is live, or push is off), so the app shows a local notification unless that session is
   // on screen. count: the cards it covers, 1 for an ending. title: the session's title. cardId: its first card.
   // cardKind: the kind of every card it covers when they are all one kind; null when they are mixed, and for an ending.
+  // running: on a failed or lost ending, the work that outlived Claude Code and still runs on the Mac; absent when none.
   // An alert the app may have missed (it went to a socket that died unseen) is sent again to the sockets open now, so
   // the app can get the same alert twice.
   | {
@@ -597,6 +603,7 @@ export type SessionServerMessage =
       title: string;
       cardId: MessageId | null;
       cardKind: "permission" | "ask" | "plan" | null;
+      running?: { agents: number; commands: number };
     };
 
 /** Sent on channel "sessions". */

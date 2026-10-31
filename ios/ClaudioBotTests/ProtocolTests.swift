@@ -320,12 +320,16 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(controls.working && controls.turn == SessionTurn(startedAt: "2026-10-16T12:00:00.000Z", wake: false))
         #expect(controls.heardAt == at.addingTimeInterval(7200))
         let tasks = try #require(controls.tasks)
-        #expect(tasks.map(\.kind) == [.agent, .command])
+        #expect(tasks.map(\.kind) == [.agent, .command, .command])
         #expect(tasks[0].waiting == MessageID("m23") && tasks[0].progress?.tools == 3 && tasks[0].progress?.last == "Bash")
         #expect(tasks[1].owner == "toolu_01Ac1" && tasks[1].progress == nil && tasks[1].background)
+        #expect(tasks.map(\.outlived) == [false, false, true])
+        #expect(tasks[2].label == "perl -e 'sleep 90'" && !tasks[2].background)
+        #expect(try jsonObject(Wire.encoder().encode(tasks[2]))["outlived"] as? Bool == true)
+        #expect(try jsonObject(Wire.encoder().encode(tasks[0]))["outlived"] == nil)
 
         guard case let .work(_, _, steps) = items.first else { Issue.record("no work item first"); return }
-        #expect(steps.map(\.state) == [.running, .waiting, .running, .error, .stopped, .unsure, .ended])
+        #expect(steps.map(\.state) == [.running, .waiting, .running, .error, .stopped, .unsure, .ended, .running])
         #expect(tasks.compactMap(\.stepId).allSatisfy { id in steps.contains { $0.id == id } }, "every task names a step in the thread")
         #expect(steps[0].background && steps[0].detail == "general-purpose" && steps[0].startedAt == at)
         #expect(!steps[1].background && steps[1].owner == "toolu_01Ac1" && steps[1].startedAt == nil)
@@ -1099,6 +1103,26 @@ private func unknowns(in message: ServerMessage) -> [String] {
         ))
     }
 
+    private func ending(_ reason: SessionAlertReason, agents: Int, commands: Int) -> Alert {
+        .session(SessionAlert(
+            sessionId: SessionID("s1"), reason: reason, count: 1, title: "Sleep in parallel", cardId: nil,
+            running: SessionRunning(agents: agents, commands: commands)
+        ))
+    }
+
+    @Test func endingAlertsFromTheBridgeNameWhatStillRuns() throws {
+        let endings = try Fixture.server().compactMap { frame -> SessionAlert? in
+            if case .sessionAlert(let alert) = frame.message, alert.reason == .failed || alert.reason == .lost { alert } else { nil }
+        }
+        #expect(endings.map(\.reason) == [.lost, .failed, .lost])
+        #expect(endings.map(\.running) == [nil, SessionRunning(agents: 0, commands: 2), SessionRunning(agents: 0, commands: 1)])
+        #expect(endings.compactMap { Notifier.text(of: $0)?.body } == [
+            "Interrupted by a bridge restart",
+            "Stopped with an error. 2 commands still run on your Mac.",
+            "Interrupted by a bridge restart. 1 command still runs on your Mac.",
+        ])
+    }
+
     @Test func aSessionHasOneNotificationInItsOwnThread() {
         let card = session("s1", .card, count: 3)
         let done = session("s1", .finished)
@@ -1122,6 +1146,11 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(text(session("s1", .finished, title: "  ")) == ["Claude Code session", "Finished"])
         #expect(text(session("s1", .failed)) == ["Sleep in parallel", "Stopped with an error"])
         #expect(text(session("s1", .lost)) == ["Sleep in parallel", "Interrupted by a bridge restart"])
+        #expect(text(ending(.failed, agents: 0, commands: 2)) == ["Sleep in parallel", "Stopped with an error. 2 commands still run on your Mac."])
+        #expect(text(ending(.lost, agents: 0, commands: 1)) == ["Sleep in parallel", "Interrupted by a bridge restart. 1 command still runs on your Mac."])
+        #expect(text(ending(.lost, agents: 1, commands: 0)) == ["Sleep in parallel", "Interrupted by a bridge restart. 1 agent still runs on your Mac."])
+        #expect(text(ending(.failed, agents: 1, commands: 1)) == ["Sleep in parallel", "Stopped with an error. 1 agent, 1 command still run on your Mac."])
+        #expect(text(ending(.failed, agents: 0, commands: 0)) == ["Sleep in parallel", "Stopped with an error"])
         #expect(text(session("s1", .unknown("paused"))) == nil)
     }
 

@@ -116,6 +116,7 @@ const runControls: Wire<SessionControls> = {
   tasks: [
     { id: "a7f3c2e9b1d40e58", stepId: "toolu_01Ac1", kind: "agent", label: "sleeper two", background: true, startedAt: at, owner: null, progress: { tools: 3, last: "Bash", at: later }, waiting: "m23" },
     { id: "bk2x9q7", stepId: "toolu_01Ac3", kind: "command", label: "sleep 60", background: true, startedAt: at, owner: "toolu_01Ac1", progress: null, waiting: null },
+    { id: "toolu_01Ac9", stepId: "toolu_01Ac9", kind: "command", label: "perl -e 'sleep 90'", background: false, startedAt: at, owner: null, progress: null, waiting: null, outlived: true },
   ],
   heardAt: later,
 };
@@ -128,6 +129,7 @@ const runItems = [
     { id: "toolu_01Ac5", tool: "Agent", label: "sleeper one", state: "stopped", diff: null, output: null, detail: "general-purpose", startedAt: at, endedAt: later, cause: "Stopped by you", usage: { tools: 4, ms: 31000 } },
     { id: "toolu_01Ac7", tool: "Bash", label: "Run in background: sleep 600", state: "unsure", diff: null, output: null, detail: "sleep 600", startedAt: at, background: true, cause: "Can't tell whether this still runs on your Mac" },
     { id: "toolu_01Ac8", tool: "Bash", label: "Run in background: sleep 700", state: "ended", diff: null, output: null, detail: "sleep 700", startedAt: at, background: true, cause: "It ended without a result" },
+    { id: "toolu_01Ac9", tool: "Bash", label: "Sleep for 90 seconds", state: "running", diff: null, output: null, detail: "perl -e 'sleep 90'", startedAt: at },
   ] },
   { kind: "permission", id: "m23", at: later, card: { ...permission, id: "m23", label: "Bash", detail: "rm -rf build", always: "rm -rf build in solta-o-som, for this session" }, stepId: "toolu_01Ac2", subagent: "sleeper two" },
   { kind: "permission", id: "m24", at: later, card: { ...permission, id: "m24", label: "Bash", detail: "sleep 30", always: "sleep in solta-o-som, for this session", answer: "stopped" }, stepId: "toolu_01Ac6", subagent: "sleeper one" },
@@ -276,6 +278,8 @@ export const server = [
   { type: "session_alert", sessionId: phoneRow.id, reason: "card", count: 1, title: phoneRow.title, cardId: "m32", cardKind: "ask" },
   { type: "session_alert", sessionId: phoneRow.id, reason: "finished", count: 1, title: phoneRow.title, cardId: null, cardKind: null },
   { type: "session_alert", sessionId: phoneRow.id, reason: "lost", count: 1, title: phoneRow.title, cardId: null, cardKind: null },
+  { type: "session_alert", sessionId: phoneRow.id, reason: "failed", count: 1, title: phoneRow.title, cardId: null, cardKind: null, running: { agents: 0, commands: 2 } },
+  { type: "session_alert", sessionId: phoneRow.id, reason: "lost", count: 1, title: phoneRow.title, cardId: null, cardKind: null, running: { agents: 0, commands: 1 } },
   { type: "decided", cardId: "m20" },
   { type: "error", message: "Nothing is running.", about: { kind: "stop", sessionId: agentSession } },
   { type: "error", message: "Claude Code kept the mode Ask before edits: the session is busy.", about: { kind: "set", sessionId: agentSession } },

@@ -1155,6 +1155,8 @@ struct SessionAlert: Hashable, Sendable {
     let cardId: MessageID?
     /// What every card it covers is. nil: they are of mixed kinds, it is an ending, or the bridge does not say.
     var cardKind: SessionCardKind? = nil
+    /// On a failed or lost ending: the work that outlived Claude Code and still runs on the Mac. nil when none.
+    var running: SessionRunning? = nil
 }
 
 /// The kind of card a session alert covers.
@@ -1832,8 +1834,10 @@ struct SessionTask: Codable, Hashable, Sendable, Identifiable {
     var owner: String?
     var progress: TaskProgress?
     var waiting: MessageID?
+    /// It outlived the Claude Code that ran it (Claude Code died or the bridge restarted); only the bridge follows it.
+    var outlived = false
 
-    private enum CodingKeys: String, CodingKey { case id, stepId, kind, label, background, startedAt, owner, progress, waiting }
+    private enum CodingKeys: String, CodingKey { case id, stepId, kind, label, background, startedAt, owner, progress, waiting, outlived }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -1846,6 +1850,23 @@ struct SessionTask: Codable, Hashable, Sendable, Identifiable {
         try c.encode(owner, forKey: .owner)
         try c.encode(progress, forKey: .progress)
         try c.encode(waiting, forKey: .waiting)
+        if outlived { try c.encode(true, forKey: .outlived) }
+    }
+}
+
+extension SessionTask {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(TaskID.self, forKey: .id)
+        stepId = try c.decodeIfPresent(String.self, forKey: .stepId)
+        kind = try c.decode(SessionTaskKind.self, forKey: .kind)
+        label = try c.decode(String.self, forKey: .label)
+        background = try c.decode(Bool.self, forKey: .background)
+        startedAt = try c.decode(Date.self, forKey: .startedAt)
+        owner = try c.decodeIfPresent(String.self, forKey: .owner)
+        progress = try c.decodeIfPresent(TaskProgress.self, forKey: .progress)
+        waiting = try c.decodeIfPresent(MessageID.self, forKey: .waiting)
+        outlived = try c.decodeIfPresent(Bool.self, forKey: .outlived) ?? false
     }
 }
 
@@ -2361,7 +2382,7 @@ enum ServerMessage: Codable, Sendable {
         case `protocol`, epoch, seq, resumed, features, push
         case agentId, text, at, facts, connectors, skills, routineId, url, token, commands, peer, usage
         case projects, rows, mirror, removed, sessionId, rev, items, before, controls, live, itemId, offset, toolUseId, output, movedTo
-        case about, reason, count, title, cardId, cardKind, error
+        case about, reason, count, title, cardId, cardKind, running, error
     }
 
     init(from decoder: Decoder) throws {
@@ -2503,7 +2524,8 @@ enum ServerMessage: Codable, Sendable {
                 sessionId: try session(), reason: try c.decode(SessionAlertReason.self, forKey: .reason),
                 count: try c.decode(Int.self, forKey: .count), title: try c.decode(String.self, forKey: .title),
                 cardId: try c.decodeIfPresent(MessageID.self, forKey: .cardId),
-                cardKind: try c.decodeIfPresent(SessionCardKind.self, forKey: .cardKind)
+                cardKind: try c.decodeIfPresent(SessionCardKind.self, forKey: .cardKind),
+                running: try c.decodeIfPresent(SessionRunning.self, forKey: .running)
             ))
         case "decided":
             self = .decided(cardId: try c.decode(MessageID.self, forKey: .cardId))
@@ -2671,6 +2693,7 @@ enum ServerMessage: Codable, Sendable {
             try c.encode(alert.title, forKey: .title)
             try c.encode(alert.cardId, forKey: .cardId)
             try c.encode(alert.cardKind, forKey: .cardKind)
+            try c.encodeIfPresent(alert.running, forKey: .running)
         case let .decided(cardId):
             try c.encode("decided", forKey: .type)
             try c.encode(cardId, forKey: .cardId)

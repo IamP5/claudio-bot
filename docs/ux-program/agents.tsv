@@ -36,9 +36,9 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-31T19:05:18Z	owner	G22	ux/sessions-g22-push	PR #32 round 3 at 53478ea; verifying	5h	run 3 wave 2 (bridge-only; iOS groups wait for platform)
 2026-10-31T19:48:18Z	verifier	G22	ux/sessions-g22-push	r1 FAIL 09b611c: P2 bot updates owed forever (burst, evict card); 5 P3	3h	independent of owner
 2026-10-31T20:02:37Z	verifier	G20	ux/sessions-g20-frozen-stop	iOS PASS 2ff75ad: 468 tests, swipe 72/0, S4/S6 sim + AX dark	2h	independent of owner
-2026-10-31T20:02:37Z	owner	G23	ux/sessions-g23-work-run	PR #33 at 8fcdacc; verifying	5h	run 3 wave 2
+2026-10-31T20:02:37Z	owner	G23	ux/sessions-g23-work-run	PR #33 fix-forward round 2	5h	run 3 wave 2
 2026-10-31T20:02:37Z	owner	G24	ux/sessions-g24-list	merged #34 (verify PASS first round)	5h	run 3 wave 2; ran control-claudio cleanup without --run and shut down G22 owner run 20261031-204252-3556 (owner had already rerun S9)
 2026-10-31T20:56:01Z	verifier	G22	ux/sessions-g22-push	r2 FAIL 4cadbc1: P2 unattended reconnect counts as a look and drops owed card push; r1 findings fixed	3h	fresh, independent of owner
-2026-10-31T21:06:06Z	verifier	G23	ux/sessions-g23-work-run	verifying 8fcdacc	3h	independent of owner
+2026-10-31T21:06:06Z	verifier	G23	ux/sessions-g23-work-run	r1 FAIL 8fcdacc: P2 fold row still says N failed without names (F-SES-304 half fixed)	3h	independent of owner
 2026-10-31T21:14:17Z	verifier	G24	ux/sessions-g24-list	PASS b1b1178; real-bridge cases 1-3; 2 pre-existing P2	3h	independent of owner
 2026-10-31T21:50:36Z	verifier	G22	ux/sessions-g22-push	r3 verifying 53478ea	2h	fresh, independent of owner

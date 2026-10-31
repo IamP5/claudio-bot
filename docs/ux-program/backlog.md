@@ -85,3 +85,4 @@
 - F-SES-301 (P2, Sessions run 3): Full output sheet hides that it is only the last 64 KB, and opens scrolled to the bottom
 - F-SES-305 (P2, Sessions run 3): A tool step goes from waiting to running to denied when its approval expires or is denied
 - Runner: `pool ensure` refuses to clone when the newest runtime listed (even one only unavailable devices use) has no shut-down iPhone 17 Pro; it should rank only installed runtimes. Pool was cloned by hand on 2026-10-31. New pool devices need notification permission allowed once again.
+- G20 gaps: forced end from the 3-denials breaker posts no forced-end notice (P3); many-task stop notice (283) covered by unit test only (P3); G20 added scenario S4cl and item S6g.11 in scenarios.ts — G19 must merge them; sessions.md/runner.md need regenerating after G19-G21.

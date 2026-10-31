@@ -221,3 +221,5 @@ ts	decision	why
 2026-10-31T21:14:17Z	G24: Same-name projects get a label only on collision: owner/repo if unique, else the shortest unique path tail; search matches it	tell projects apart without noise
 2026-10-31T21:14:17Z	G24: "Reconnecting…" yields to the normal offline banner with Retry after 10 s without a hello	never hide a real outage
 2026-10-31T21:14:17Z	G24: All-hidden empty state: "You hid every session in this list. They are still on your Mac." with Show hidden	F-SES all-hidden claims no sessions
+2026-10-31T21:50:36Z	G22: a look is presence(true) or any message from an app whose last word was not presence(false); a connect alone never counts (replaces the r2 "any socket heard" rule)	r2 verifier P2: unattended reconnects dropped owed card pushes
+2026-10-31T21:50:36Z	G22: write-only topic cap (Option A): one blind resend when the poll is forbidden, then the push ends with a log line and state stays failing; the card reminder still comes. Rejected B (no cap, up to ~6 rings in 10 min)	owner recommendation accepted by root; rare case (write-only token + server hanging twice)

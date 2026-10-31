@@ -216,3 +216,8 @@ ts	decision	why
 2026-10-31T21:06:06Z	G23: A finished agent's line drops detail and output but keeps a failure cause	failure readable without opening the run
 2026-10-31T21:06:06Z	G23: "K done" counts only agents that ended ok	failed and stopped have their own line
 2026-10-31T21:06:06Z	G23: "Started" and "Ran" use only bridge-sent times; a run with no heardAt is never called quiet	never claim quiet from a guess
+2026-10-31T21:14:17Z	G24: Outlived row reads "N command(s) still run(s) · Claude Code stopped unexpectedly (…)", count first, no "Stop ends them"	line is cut at one line; the row has no Stop
+2026-10-31T21:14:17Z	G24: Header counts failed, unavailable and parked rows; none of the three fold; the failed count stays offline	past facts, not live guesses
+2026-10-31T21:14:17Z	G24: Same-name projects get a label only on collision: owner/repo if unique, else the shortest unique path tail; search matches it	tell projects apart without noise
+2026-10-31T21:14:17Z	G24: "Reconnecting…" yields to the normal offline banner with Retry after 10 s without a hello	never hide a real outage
+2026-10-31T21:14:17Z	G24: All-hidden empty state: "You hid every session in this list. They are still on your Mac." with Show hidden	F-SES all-hidden claims no sessions

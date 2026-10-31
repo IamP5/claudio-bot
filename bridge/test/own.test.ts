@@ -468,7 +468,7 @@ describe("live work", () => {
       { id: "a1" as TaskId, stepId: "toolu_a1", kind: "agent", label: "sleeper one", background: true, startedAt: "2026-10-18T12:00:00.000Z", owner: null, progress: { tools: 1, last: "Bash", at: "2026-10-18T12:00:01.000Z" }, waiting: null },
       { id: "a2" as TaskId, stepId: "toolu_a2", kind: "agent", label: "sleeper two", background: true, startedAt: "2026-10-18T12:00:01.000Z", owner: null, progress: null, waiting: null },
     ]);
-    expect(await rowOf(ASK)).toMatchObject({ status: "working", holder: "claudio", since: "2026-10-18T12:00:00.000Z", running: { agents: 2, commands: 0 }, activity: "Background: sleeper one and 1 more" });
+    expect(await rowOf(ASK)).toMatchObject({ status: "working", holder: "claudio", since: "2026-10-18T12:00:00.000Z", running: { agents: 2, commands: 0 }, activity: "sleeper one and sleeper two running" });
 
     clock += 30_000;
     q.emit(completed("a1"), notifiedOf("a1", "toolu_a1"), level(agentTask("a2", "toolu_a2", "sleeper two")), wakeInit());
@@ -529,7 +529,8 @@ describe("live work", () => {
     q.emit(wakeInit(), result(), level());
     await flush();
     expect((await noticesNow()).map((n) => [n.text, n.reason])).toEqual([
-      ['The background command "sleep 60 && echo nested-done > nested.txt", started by starter, was stopped when starter returned.', "task"],
+      ['Agent "starter" is waiting on its own background command "sleep 60 && echo nested-done > nested.txt", which started 0s before.', "task"],
+      ['The background command "sleep 60 && echo nested-done > nested.txt", started by starter, stopped after 0s, and Claude Code did not say how it ended.', "task"],
     ]);
     expect(await stepOf("toolu_starter")).toMatchObject({ state: "ok" });
     expect((await controlsNow()).working).toBe(false);
@@ -728,7 +729,7 @@ describe("live work", () => {
     await flush();
     expect((await noticesNow()).map((n) => [n.text, n.tone])).toEqual([
       ["Couldn't stop sleep 600. It may still be running.", "error"],
-      ['The background command "sleep 600" was stopped by Claude Code.', "info"],
+      ['The background command "sleep 600" was stopped by Claude Code after 0s. It did not finish.', "info"],
     ]);
   });
 
@@ -766,7 +767,7 @@ describe("live work", () => {
     await flush();
     q.emit(sys("task_updated", { task_id: "bs", patch: { status: "killed" } }), notifiedOf("bs", "toolu_bs", "stopped"), level(), completed("af"), notifiedOf("af", "toolu_af"), result());
     await flush();
-    expect((await noticesNow()).map((n) => n.text)).toEqual(['The background command "sleep 60 && echo nested-done > nested.txt", started by starter, was stopped by Claude Code.']);
+    expect((await noticesNow()).map((n) => n.text)).toEqual(['The background command "sleep 60 && echo nested-done > nested.txt", started by starter, was stopped by Claude Code when starter returned, after 0s. It did not finish.']);
     expect(await controlsNow()).toMatchObject({ working: false, tasks: [] });
   });
 

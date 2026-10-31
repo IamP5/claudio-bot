@@ -240,7 +240,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     const a = session?.activity() ?? RESTING;
     const working = (session?.working ?? false) || runs(a);
     const status: SessionStatus = working ? "working" : session?.parkedFor ? "parked" : AGENT_STATUS[w.rec.agent.status];
-    return { status, working, ...(working && rowRun(a, null, (c, target) => stepLabel(c.tool, c.input, w.rec.cwd, target))) };
+    return { status, working, ...(working && rowRun(a, [], (c, target) => stepLabel(c.tool, c.input, w.rec.cwd, target))) };
   }
 
   function controls(id: SessionId): SessionControls {
@@ -265,7 +265,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
           models: [],
           mode: "auto",
           modes: [],
-          ...runControls(a, () => null),
+          ...runControls(a, []),
         };
       }
       case "open":

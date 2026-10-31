@@ -1053,7 +1053,6 @@ export function createOwn(deps: OwnDeps): Own {
       const inFlight = life && (life.kind === "working" || life.kind === "stopping") ? 1 : 0;
       const wait = deps.blocked(rec.id);
       const a = activityOf(rec);
-      const open = rec.own?.cards.filter((c) => c.kind === "permission" && isOpen(c) && c.agent) ?? [];
       return {
         canSend: wait === null,
         reason: wait,
@@ -1063,10 +1062,7 @@ export function createOwn(deps: OwnDeps): Own {
         models: MODELS,
         mode: modeOf(rec),
         modes: [...PHONE_MODES],
-        ...runControls(a, (t) => {
-          const card = open.find((c) => c.kind === "permission" && c.agent?.id === t.id);
-          return card ? cardIdOf(card) : null;
-        }),
+        ...runControls(a, rec.own?.cards ?? []),
       };
     },
 
@@ -1075,9 +1071,8 @@ export function createOwn(deps: OwnDeps): Own {
       const open = rec.own?.cards.filter(isOpen) ?? [];
       const a = activityOf(rec);
       const working = (s?.working ?? false) || runs(a);
-      const asking = open.find((c) => c.kind === "permission");
       const cwd = rec.own?.cwd ?? "";
-      const run = rowRun(a, asking?.kind === "permission" ? asking.card.tool : null, (c, target) => stepLabel(c.tool, c.input, cwd, target));
+      const run = rowRun(a, rec.own?.cards ?? [], (c, target) => stepLabel(c.tool, c.input, cwd, target));
       const outcome = rec.own?.outcome;
       const ended = outcome ? { outcome } : {};
       if (s?.unavailable && deps.blocked(rec.id) === null) return { status: "unavailable", working, ...ended };
@@ -1107,7 +1102,7 @@ export function createOwn(deps: OwnDeps): Own {
       }
       for (const id of rec.own?.stoppedSteps ?? []) out.set(id, { ...out.get(id), ended: { state: "stopped", cause: STOPPED_BY_YOU } });
       const a = activityOf(rec);
-      for (const t of a.all.values()) if (t.ended && t.told && t.stepId !== null) out.set(t.stepId, { ...out.get(t.stepId), told: true });
+      for (const t of a.all.values()) if (t.ended && t.stepId !== null) out.set(t.stepId, { ...out.get(t.stepId), ...(t.told && { told: true as const }), ...(t.endedAt !== undefined && { endedAt: t.endedAt }) });
       for (const [id, p] of runningSteps(a)) out.set(id, { ...p, ...out.get(id), state: "running" });
       return out;
     },

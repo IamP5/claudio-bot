@@ -1,9 +1,10 @@
 import { getSessionInfo, getSessionMessages, listSessions, type SDKSessionInfo } from "@anthropic-ai/claude-agent-sdk";
-import { closeSync, openSync, readdirSync, readSync, statSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readSync, realpathSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, normalize, relative } from "node:path";
 import { PERMISSION_MODES, type AskQuestion, type ItemId, type PermissionMode, type SessionId, type SessionItem, type SessionPr, type ToolStep } from "./protocol";
 import { directHeader } from "./prompts";
-import { maskProse, maskSecrets } from "./text";
+import { maskProse, maskSecrets, middleCut, runTime } from "./text";
 
 // The only reader of Claude Code's transcripts (~/.claude/projects/<folder>/<id>.jsonl). Heads come from the SDK's
 // listSessions plus a small head and tail read; a thread is every line of the file put in the SDK's chain order;
@@ -465,7 +466,11 @@ export function toolOutput(path: string, toolUseId: string): string | null {
         output = outcome.kind === "ok" || outcome.kind === "error" ? outcome.output : null;
       }
     }
-    for (const note of parseNotes(promptText(content))) if (note.toolUseId === toolUseId || (task !== null && note.taskId === task)) output = note.result;
+    for (const note of parseNotes(promptText(content))) {
+      if (note.toolUseId !== toolUseId && !(task !== null && note.taskId === task)) continue;
+      const file = tool === "Bash" && note.result === null ? taskOutput(note, FULL_OUTPUT_MAX, 0) : undefined;
+      output = typeof file !== "string" ? note.result : file || null;
+    }
   }
   return output === null ? null : maskSecrets(output.slice(-FULL_OUTPUT_MAX));
 }
@@ -565,8 +570,6 @@ function host(u: string): string {
 
 const capped = (line: string, max: number) => (line.length > max ? `${line.slice(0, max - 1)}…` : line);
 const firstLine = (s: string, max = 80) => capped(s.trim().split("\n")[0] ?? "", max);
-/** Cut from the middle, so two long labels that differ at the end still differ. */
-const middleCut = (s: string, max: number) => (s.length <= max ? s : `${s.slice(0, Math.ceil((max - 1) / 2))}…${s.slice(s.length - Math.floor((max - 1) / 2))}`);
 
 const AGENT_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
 const AGENT_LABEL_MAX = 120;
@@ -575,13 +578,8 @@ const words = (s: string) => s.replace(/\s+/g, " ").trim();
 const repeatsCommand = (description: string, command: string | null) => command !== null && [command, command.trim().split("\n")[0]!].some((c) => words(c) === words(description));
 const backgroundLabel = (label: string) => (/\bin (?:the )?background\b/i.test(label) ? label : `Run in background: ${label.replace(/^Run /, "")}`);
 
-/** What a Bash step shows it runs: the command's first 3 lines, each capped, secrets masked. */
-const commandDetail = (command: string) =>
-  maskSecrets(command.trim())
-    .split("\n")
-    .slice(0, 3)
-    .map((l) => capped(l, 200))
-    .join("\n");
+/** What a Bash step shows it runs: every line, secrets masked, cut from the middle past 2 KB so the app can expand it whole. */
+const commandDetail = (command: string) => middleCut(maskSecrets(command.trim()), OUTPUT_TAIL);
 
 /**
  * The call in words: "Edit src/app.ts", "Run bun test", the model's own description of a command. Words the model
@@ -662,13 +660,13 @@ type Usage = NonNullable<ToolStep["usage"]>;
 type Outcome =
   /** An async Agent's or a background Bash's acknowledgement: the step runs on as `task`. */
   | { kind: "launched"; task: string }
-  | { kind: "ok"; output: string | null; usage?: Usage; detail?: string }
+  | { kind: "ok"; output: string | null; usage?: Usage; detail?: string; cause?: string }
   | { kind: "error"; output: string | null; cause: string }
   /** reject: Claude Code's bare "doesn't want to proceed", which an interrupt right after makes a stop. */
   | { kind: "denied"; cause: string; reject: boolean }
   | { kind: "stopped"; cause: string }
-  /** The task stopped for now with work of its own still running. */
-  | { kind: "interim"; output: string | null };
+  /** The task stopped for now with work of its own still running: what it said so far is not its result. */
+  | { kind: "interim" };
 
 const CAUSE_MAX = 200;
 const STOPPED_BY_YOU = "Stopped by you";
@@ -685,6 +683,11 @@ const HAND_BACK = /^\[Subagent hand-back\][^\n]*\n/;
 /** The usage block that ends a hand-back or a notification; the report or result before it may quote one. */
 const USAGE_BLOCK = /\n?<usage>((?:(?!<usage>)[\s\S])*)<\/usage>\s*$/;
 const ERROR_TAGS = /<\/?tool_use_error>/g;
+/** The tool list Claude Code puts before a subagent's report. */
+const TOOLS_USED = /^\s*<tools-used-before-summary>[\s\S]*?<\/tools-used-before-summary>\s*/;
+const summaryOnly = (report: string) => report.replace(TOOLS_USED, "");
+/** A subagent's failure in its first sentence: Claude Code follows "Agent type 'x' not found." with every type it knows. */
+const firstSentence = (line: string) => line.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? line;
 
 /** A number the text gives as "key: N" (a hand-back's usage) or as <key>N</key> (a notification's). */
 const counted = (s: string, key: string) => {
@@ -709,7 +712,7 @@ function handBack(text: string, toolResult: unknown): { output: string | null; u
   const tools = typeof r.totalToolUseCount === "number" ? r.totalToolUseCount : counted(usageText, "tool_uses");
   const ms = typeof r.totalDurationMs === "number" ? r.totalDurationMs : counted(usageText, "duration_ms");
   const agentType = str(r.agentType);
-  return { output: report.trim() || null, ...(tools !== null && ms !== null && { usage: { tools, ms } }), ...(agentType && { detail: agentType }) };
+  return { output: summaryOnly(report).trim() || null, ...(tools !== null && ms !== null && { usage: { tools, ms } }), ...(agentType && { detail: agentType }) };
 }
 
 /** A failure in one line: "Exit code 1: ls: late.txt: No such file or directory". */
@@ -730,7 +733,8 @@ function classifyResult(tool: string, text: string, toolResult: unknown, isError
     if (REJECTED.test(text) || toolResult === "User rejected tool use") return { kind: "denied", cause: "Denied by you", reject: true };
     if (STOPPED.test(text.replace(ERROR_TAGS, ""))) return { kind: "stopped", cause: STOPPED_BY_YOU };
     if (DENIED.test(text)) return { kind: "denied", cause: firstLine(maskSecrets(text.replace(ERROR_TAGS, "")), CAUSE_MAX), reject: false };
-    return { kind: "error", output: text === "" ? null : text, cause: maskSecrets(failureCause(text)) };
+    const cause = failureCause(text);
+    return { kind: "error", output: text === "" ? null : text, cause: maskSecrets(AGENT_TOOLS.has(tool) ? firstSentence(cause) : cause) };
   }
   const r = isRecord(toolResult) ? toolResult : {};
   const task =
@@ -745,7 +749,7 @@ function classifyResult(tool: string, text: string, toolResult: unknown, isError
 }
 
 /** One <task-notification> block: Claude Code's word that a background task stopped. */
-type TaskNote = { taskId: string | null; toolUseId: string | null; status: string; summary: string; note: string; result: string | null; usage?: Usage };
+type TaskNote = { taskId: string | null; toolUseId: string | null; outputFile: string | null; status: string; summary: string; note: string; result: string | null; usage?: Usage };
 
 const unescapeXml = (s: string) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 
@@ -758,13 +762,15 @@ function parseNotes(text: string): TaskNote[] {
     const usage = body!.match(USAGE_BLOCK)?.[1] ?? "";
     const tools = counted(usage, "tool_uses");
     const ms = counted(usage, "duration_ms");
+    const result = tag("result");
     return {
       taskId: tag("task-id"),
       toolUseId: tag("tool-use-id"),
+      outputFile: tag("output-file"),
       status: tag("status") ?? "",
       summary: tag("summary") ?? "",
       note: tag("note") ?? "",
-      result: tag("result"),
+      result: result === null ? null : summaryOnly(result),
       ...(tools !== null && ms !== null && { usage: { tools, ms } }),
     };
   });
@@ -785,10 +791,56 @@ export function maskSummary(summary: string, description: string | null): string
 
 
 
+const GONE = Symbol("gone");
+/** The output file is there but is not a plain file where its path says, so it is not read. */
+const REFUSED = Symbol("refused");
+/** The line Claude Code appends to a command's output file when it exits; the step's state already says how. */
+const EXIT_TRAILER = /\n?\[exited with code -?\d+\]\n?$/;
+/** Where Claude Code writes a background task's output: <tmp>/claude-<uid>/<project>/<session>/tasks/<task id>.output. */
+const TASK_OUTPUT = /^(.*)\/claude-\d+\/[^/]+\/[^/]+\/tasks\/([\w-]+)\.output$/;
+const TEMP_ROOTS: ReadonlySet<string> = new Set(["/tmp", "/private/tmp", tmpdir().replace(/\/$/, ""), `/private${tmpdir().replace(/\/$/, "")}`]);
+
+/**
+ * What a command printed, from the file its notification names: enough of its start and end for `head` and `tail`
+ * characters, the middle left out. undefined when the note names no such file of its own task; GONE when the file is
+ * no longer there; REFUSED when it is there but is no plain file, or its folders lead somewhere else.
+ */
+function taskOutput(note: TaskNote, tail: number, head: number): string | typeof GONE | typeof REFUSED | undefined {
+  const path = note.outputFile;
+  const shape = path === null ? null : TASK_OUTPUT.exec(path);
+  if (path === null || !isAbsolute(path) || normalize(path) !== path || !shape || !TEMP_ROOTS.has(shape[1]!) || shape[2] !== note.taskId) return undefined;
+  let fd: number;
+  try {
+    // No symlink as the file itself, and no wait on a FIFO.
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "ENOENT" ? GONE : REFUSED;
+  }
+  try {
+    const f = fstatSync(fd);
+    // The folders on the way may not lead elsewhere either: the file must sit where its path says.
+    if (!f.isFile() || realpathSync(dirname(path)) !== join(realpathSync(shape[1]!), relative(shape[1]!, dirname(path)))) return REFUSED;
+    // A character takes up to 4 bytes, so these many bytes always hold the characters asked for.
+    const [start, end] = [4 * head, 4 * tail];
+    if (f.size <= start + end) return readFd(fd, 0, f.size).replace(EXIT_TRAILER, "");
+    return `${readFd(fd, 0, start).replace(/\uFFFD+$/, "")}\n…\n${readFd(fd, f.size - end, f.size).replace(/^\uFFFD+/, "").replace(EXIT_TRAILER, "")}`;
+  } catch {
+    return GONE;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function readFd(fd: number, start: number, end: number): string {
+  const buf = Buffer.alloc(Math.max(0, end - start));
+  const n = buf.length === 0 ? 0 : readSync(fd, buf, 0, buf.length, start);
+  return buf.toString("utf8", 0, n);
+}
+
 function noteOutcome(note: TaskNote, summary: string): Outcome {
   switch (note.status) {
     case "completed": {
-      if (/may be interim/.test(note.note) || /is waiting on its own background work/.test(note.summary)) return { kind: "interim", output: note.result };
+      if (/may be interim/.test(note.note) || /is waiting on its own background work/.test(note.summary)) return { kind: "interim" };
       const exit = note.summary.match(/\(exit code (-?\d+)\)/)?.[1];
       if (exit !== undefined && exit !== "0") return { kind: "error", output: note.result, cause: `Exit code ${exit}` };
       return { kind: "ok", output: note.result, ...(note.usage && { usage: note.usage }) };
@@ -799,10 +851,19 @@ function noteOutcome(note: TaskNote, summary: string): Outcome {
     case "stopped":
       return { kind: "stopped", cause: /stopped by user/i.test(note.summary) ? STOPPED_BY_YOU : capped(summary, CAUSE_MAX) };
     default:
-      return { kind: "interim", output: note.result };
+      return { kind: "interim" };
   }
 }
 
+/** A settled command's output, from its output file when the notification carries none. */
+function withOutput(outcome: Outcome, file: string | typeof GONE | typeof REFUSED | undefined): Outcome {
+  if (file === undefined || (outcome.kind !== "ok" && outcome.kind !== "error")) return outcome;
+  if (file === GONE || file === REFUSED) return outcome.kind === "ok" ? { ...outcome, output: null, cause: file === GONE ? OUTPUT_GONE : OUTPUT_REFUSED } : { ...outcome, output: null };
+  return { ...outcome, output: file };
+}
+
+const OUTPUT_GONE = "Its output file was gone";
+const OUTPUT_REFUSED = "Its output file could not be read safely";
 const ERROR_HEAD = 512;
 /** An error's output keeps its head too, so the exit status at the top of a long output is never cut. */
 const shownOutput = (output: string | null, kind: "ok" | "error") => {
@@ -819,13 +880,14 @@ function settleStep(step: ToolStep, outcome: Outcome, at: string): ToolStep {
     case "launched":
       return { ...base, state: "running", output: null, background: true, label: step.tool === "Bash" && !step.background ? backgroundLabel(step.label) : step.label };
     case "interim":
-      return { ...base, state: "running", output: shownOutput(outcome.output, "ok") };
+      return { ...base, state: "running", output: null };
     case "ok":
       return {
         ...base,
         state: "ok",
         output: shownOutput(outcome.output, "ok"),
         ...ended,
+        ...(outcome.cause && { cause: outcome.cause }),
         ...(outcome.usage && { usage: outcome.usage }),
         ...(outcome.detail && step.detail === undefined && { detail: outcome.detail }),
       };
@@ -965,6 +1027,8 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
         put({ kind: "notice", id: e.uuid as ItemId, at: e.at, text: promptText(content) || "Claude Code reported an error.", tone: "error" }, false);
         continue;
       }
+      // Claude Code's stand-in reply, written when it resumes after a turn that never ended: no one asked for it.
+      if (e.message?.model === "<synthetic>") continue;
       blocks.forEach((b, i) => {
         const seen = tail.blocks.get(mid) ?? 0;
         const index = e.blockIndex !== null ? e.blockIndex + i : seen;
@@ -1098,11 +1162,14 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
     const item = toolId === undefined ? undefined : tail.open.get(tail.tools.get(toolId)!);
     const description = toolId === undefined ? null : (tail.descriptions.get(toolId) ?? null);
     const summary = maskSummary(note.summary, description);
-    const outcome = noteOutcome(note, summary);
+    const step = item?.kind === "work" ? item.steps.find((s) => s.id === toolId) : undefined;
+    const said = noteOutcome(note, summary);
+    const outcome = withOutput(said, step?.tool === "Bash" && note.result === null ? taskOutput(note, OUTPUT_TAIL, said.kind === "error" ? ERROR_HEAD : 0) : undefined);
     if (toolId !== undefined && item) updateStep(item.id, toolId, (s) => settleStep(s, outcome, at));
     if (toolId !== undefined) tail.notes.set(id as ItemId, toolId);
     closeWork();
-    put({ kind: "notice", id: id as ItemId, at, text: summary, tone: outcome.kind === "error" ? "error" : "info", reason: "task" }, false);
+    const usage = outcome.kind === "ok" && note.usage ? ` · ${runTime(note.usage.ms)} · ${note.usage.tools} ${note.usage.tools === 1 ? "tool" : "tools"}` : "";
+    put({ kind: "notice", id: id as ItemId, at, text: summary + usage, tone: outcome.kind === "error" ? "error" : "info", reason: "task" }, false);
   }
 
   return { items: [...changed.values()], tail };

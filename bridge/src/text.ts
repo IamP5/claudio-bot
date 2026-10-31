@@ -27,6 +27,21 @@ export function displayName(name: string, max: number): string {
   return chars.length <= max ? chars.join("") : `${chars.slice(0, max - 1).join("")}\u2026`;
 }
 
+/** Cut from the middle, so two long labels that differ at the end still differ. */
+export function middleCut(s: string, max: number): string {
+  const chars = Array.from(s);
+  if (chars.length <= max) return s;
+  return `${chars.slice(0, Math.ceil((max - 1) / 2)).join("")}…${chars.slice(chars.length - Math.floor((max - 1) / 2)).join("")}`;
+}
+
+/** How long something ran, as the app shows a step's: "0s", "35s", "1m 5s", "2h 3m". */
+export function runTime(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return s % 60 === 0 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
 const SECRET_PATTERNS: readonly RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
   /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}/g,

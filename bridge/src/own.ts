@@ -262,8 +262,8 @@ export function createOwn(deps: OwnDeps): Own {
    */
   const awaiting = new Map<SessionId, { task: Task; ofRun: boolean }[]>();
   const turnStops = new Map<SessionId, TurnStop>();
-  /** Foreground commands of a turn whose Stop ended with the bridge closing Claude Code: the process table says which stopped. */
-  const leftByKill = new Map<SessionId, Task[]>();
+  /** Foreground commands of a turn whose Stop ended with the bridge closing Claude Code, and when that Stop was: the process table says which stopped. */
+  const leftByKill = new Map<SessionId, { tasks: Task[]; at: string }>();
   /** Tasks a Stop is ending right now: a second Stop of one leaves the saying to the first. */
   const beingStopped = new Map<SessionId, Map<TaskId, Task>>();
   /** When the user's Stop last ended each task, so a Stop of it that comes after is not refused. */
@@ -417,15 +417,15 @@ export function createOwn(deps: OwnDeps): Own {
     if (turnStops.get(rec.id) === stop) turnStops.delete(rec.id);
     const stopped = stop.ended === "stopped";
     const covered = stop.killed ? stop.covered.filter((t) => t.kind !== "command") : stop.covered;
-    if (stop.killed && covered.length < stop.covered.length) leftByKill.set(rec.id, stop.covered.filter((t) => t.kind === "command"));
+    if (stop.killed && covered.length < stop.covered.length) leftByKill.set(rec.id, { tasks: stop.covered.filter((t) => t.kind === "command"), at: stop.at });
     if (stopped) markStopped(rec, covered, true);
     const tasks = [...stop.said, ...(stopped ? covered : [])];
-    if (stop.ended === "finished") notice(rec.id, "Claude finished this turn before your stop reached it.", "info", "stop");
+    // Said where the Stop was, so it sits above a message sent or queued after it, which starts as the turn ends.
+    const at = stop.at;
+    if (stop.ended === "finished") notice(rec.id, "Claude finished this turn before your stop reached it.", "info", "stop", at);
     const parts = [...(stopped ? ["the turn"] : []), ...tasks.map(taskName)];
     if (parts.length === 0) return;
     const early = stop.early && stopped && tasks.length === 0;
-    // Said where the Stop was, so it sits above a message sent or queued after it, which starts as the turn ends.
-    const at = stop.at;
     const named = stop.prompt === null ? "" : ` to "${displayName(maskSecrets(stop.prompt), PROMPT_NAMED)}"`;
     notice(rec.id, early ? `${STOPPED_BY_YOU} before Claude replied${named}.` : `${STOPPED_BY_YOU}: ${fewNames(parts, listed)}.`, "info", "stop", at);
     if (stop.killed && stopped) notice(rec.id, FORCED_END, "info", "stop", at);
@@ -451,12 +451,12 @@ export function createOwn(deps: OwnDeps): Own {
    * A command that still runs is followed, and one the bridge cannot check is said to maybe still run.
    */
   function lost(rec: SessionRecord, fate: Fate, cause: GoneCause) {
-    const left = leftByKill.get(rec.id) ?? [];
+    const left = leftByKill.get(rec.id);
     leftByKill.delete(rec.id);
-    const ended = left.filter((t) => fate.stopped.some((s) => s.id === t.id));
+    const ended = (left?.tasks ?? []).filter((t) => fate.stopped.some((s) => s.id === t.id));
     if (ended.length > 0) {
       markStopped(rec, ended, true);
-      notice(rec.id, `${STOPPED_BY_YOU}: ${fewNames(ended.map(taskName), listed)}.`, "info", "stop");
+      notice(rec.id, `${STOPPED_BY_YOU}: ${fewNames(ended.map(taskName), listed)}.`, "info", "stop", left?.at);
     }
     const stopped = fate.stopped.filter((t) => !t.foreground);
     if (stopped.length > 0) {

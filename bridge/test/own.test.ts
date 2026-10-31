@@ -2307,6 +2307,8 @@ describe("the thread says what stopped only once it did", () => {
         "Claude Code didn't answer Stop, so the bridge ended it. Your next message starts it again.",
         `Stopped by you: command "perl -e 'sleep bf'".`,
       ]);
+      // Every line of the stop sits where the user pressed it, also the one said once the command was found gone.
+      expect(new Set((await noticesNow()).filter((n) => n.reason === "stop").map((n) => n.at)).size).toBe(1);
       expect(await stepOf("toolu_bf")).toMatchObject({ state: "stopped", cause: "Stopped by you" });
     } finally {
       await fg.end();
@@ -2420,6 +2422,24 @@ describe("a Stop Claude Code never answers, and Stop and send for one turn", () 
     const tail = (await snapshot(ASK)).items.slice(-2).map((i) => [i.kind, "text" in i ? i.text : "", i.at]);
     expect(tail).toEqual([
       ["notice", "Stopped by you: the turn.", "2026-10-18T12:00:00.000Z"],
+      ["user", "Then this", "2026-10-18T12:00:01.000Z"],
+    ]);
+  });
+
+  test("a turn that finished before the stop reached it says so above the queued message that starts after it", async () => {
+    await start();
+    await send("Go");
+    queries[0]!.emit(toolCall("toolu_p", "Bash", { command: "perl -e 'sleep 40'" }));
+    await flush();
+    await send("Then this", "c_then");
+    clock = stopAt;
+    await handle({ type: "session_stop", sessionId: ASK, target: "turn" });
+    clock += 1_000;
+    queries[0]!.emit(result(0));
+    await flush();
+    const tail = (await snapshot(ASK)).items.slice(-2).map((i) => [i.kind, "text" in i ? i.text : "", i.at]);
+    expect(tail).toEqual([
+      ["notice", "Claude finished this turn before your stop reached it.", "2026-10-18T12:00:00.000Z"],
       ["user", "Then this", "2026-10-18T12:00:01.000Z"],
     ]);
   });

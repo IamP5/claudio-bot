@@ -95,3 +95,4 @@
 - G22 gaps (P3): ntfy with cache off can ring a taken timed-out push twice; ntfy 500 after publishing (cache write fail) or a proxy 502/504 after publish rings twice on immediate retry; network-down/TLS errors now wait 15 s for a poll instead of quick retries; the probe assumes an ntfy-style URL (non-ntfy URL with nothing owed stays failing); S6f.4 reportedly flaky.
 - G21: a folder swapped for a symlink between open and the folder check is still a tiny window (needs per-directory openat) (P3).
 - S6f.4 is deterministic, not flaky: fails 3/3 on main and head with row activity "Background: perl …" (G22 verifier) — G25 item.
+- Runner: S6 after-resume-1 shot is taken right at the resume and can catch the offline→working change mid-animation (overlapping lines); add a short settle pause (G20 iOS verifier, P3).

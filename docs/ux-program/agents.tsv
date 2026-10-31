@@ -27,7 +27,7 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-23T13:42:41Z	verifier	G11	ux/sessions-g11-outlive-socket	r1 FAIL e4f61ef: P1 restart-resend reads Not sent; 2 P2; S6h.2 honest	3h	independent of owner
 2026-10-23T15:31:34Z	verifier	G11	ux/sessions-g11-outlive-socket	r2 PASS 4f933b8; withdraw note observed end to end; 5 P3	3h	fresh, independent of owner
 2026-10-31T17:51:40Z	owner	G19	ux/sessions-g19-runner-truth	merged #30 (verify PASS first round)	5h	run 3 wave 1
-2026-10-31T17:51:40Z	owner	G20	ux/sessions-g20-frozen-stop	PR #29 rebased on G21 at 2ff75ad; waits only for iOS tests + swipe-check	5h	run 3 wave 1
+2026-10-31T17:51:40Z	owner	G20	ux/sessions-g20-frozen-stop	merged #29 (r1/r2 PASS-PENDING-IOS, r3 reviewed, iOS PASS 2ff75ad)	5h	run 3 wave 1
 2026-10-31T17:51:40Z	owner	G21	ux/sessions-g21-task-truth	merged #31 (verify PASS; honesty round ba562f5 reviewed by root)	5h	run 3 wave 1
 2026-10-31T18:22:29Z	verifier	G20	ux/sessions-g20-frozen-stop	r1 PASS-PENDING-IOS 9603f89; P2 queued-follow-up notice order + P3s -> owner rebase	3h	independent of owner
 2026-10-31T18:24:20Z	verifier	G19	ux/sessions-g19-runner-truth	PASS 9b1e491; no loosening; F1 S4c.1/.3 keep G20 arrival-time	3h	independent of owner
@@ -35,6 +35,6 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-31T19:04:55Z	verifier	G21	ux/sessions-g21-task-truth	PASS bd62652; P2-1 held note false cause + P3-3 -> owner small round	3h	independent of owner
 2026-10-31T19:05:18Z	owner	G22	ux/sessions-g22-push	PR #32 fix-forward round 2	5h	run 3 wave 2 (bridge-only; iOS groups wait for platform)
 2026-10-31T19:48:18Z	verifier	G22	ux/sessions-g22-push	r1 FAIL 09b611c: P2 bot updates owed forever (burst, evict card); 5 P3	3h	independent of owner
-2026-10-31T20:02:37Z	verifier	G20	ux/sessions-g20-frozen-stop	iOS half verifying 2ff75ad	2h	independent of owner
+2026-10-31T20:02:37Z	verifier	G20	ux/sessions-g20-frozen-stop	iOS PASS 2ff75ad: 468 tests, swipe 72/0, S4/S6 sim + AX dark	2h	independent of owner
 2026-10-31T20:02:37Z	owner	G23	ux/sessions-g23-work-run	starting off main 75f2bbe	5h	run 3 wave 2
 2026-10-31T20:02:37Z	owner	G24	ux/sessions-g24-list	starting off main 75f2bbe	5h	run 3 wave 2

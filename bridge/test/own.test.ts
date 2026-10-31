@@ -941,7 +941,7 @@ describe("how a run ends", () => {
     q.emit(interrupted(), sys("task_updated", { task_id: "bk", patch: { status: "killed" } }), level());
     await flush();
     expect((await noticesNow()).map((n) => [n.text, n.reason])).toEqual([['Stopped by you: the turn and command "sleep 600".', "stop"]]);
-    expect(await rowOf(ASK)).toMatchObject({ status: "idle", outcome: { kind: "stopped", text: "Stopped by you: the turn, 1 command" } });
+    expect(await rowOf(ASK)).toMatchObject({ status: "idle", outcome: { kind: "stopped", text: "Stopped by you: 1 command" } });
     await send("Next");
     expect((await rowOf(ASK)).outcome).toBeUndefined();
   });
@@ -1001,14 +1001,14 @@ describe("how a run ends", () => {
     const tail = async () => (await snapshot(ASK)).items.slice(-2).map((i) => [i.kind, i.id === ("c_haiku" as never) || ("text" in i && i.text)]);
     const kept = [
       ["user", true],
-      ["notice", "Stopped by you before Claude replied."],
+      ["notice", 'Stopped by you before Claude replied to "Write a haiku".'],
     ];
     expect(await tail()).toEqual(kept);
     await restart();
     expect(await tail()).toEqual(kept);
   });
 
-  test("Stop on one background task waits for Claude Code, and its step reads stopped once the task is gone; the answered turn reads finished", async () => {
+  test("Stop on one background task waits for Claude Code, and its step reads stopped once the task is gone; the run it ended reads stopped", async () => {
     await start();
     await send("Start it");
     const q = queries[0]!;
@@ -1021,7 +1021,7 @@ describe("how a run ends", () => {
     q.emit(sys("task_updated", { task_id: "bk", patch: { status: "killed" } }), level());
     await flush();
     expect(await stepOf("toolu_k")).toMatchObject({ state: "stopped", cause: "Stopped by you" });
-    expect(await rowOf(ASK)).toMatchObject({ status: "idle", outcome: { kind: "finished" } });
+    expect(await rowOf(ASK)).toMatchObject({ status: "idle", outcome: { kind: "stopped", text: "Stopped by you: 1 command" } });
   });
 
   test("when Claude Code dies, its running step and card end, the row says why, and all of it outlives a bridge restart", async () => {
@@ -1176,7 +1176,7 @@ describe("how a run ends", () => {
     expect((await cardItem()).card.answer).toBe("closed");
   });
 
-  test("a task stop Claude Code takes late counts once the task is gone: its card and step read stopped, and the answered turn finished", async () => {
+  test("a task stop Claude Code takes late counts once the task is gone: its card, its step and the run it ended read stopped", async () => {
     await start();
     await send("Fan out");
     const q = queries[0]!;
@@ -1199,7 +1199,7 @@ describe("how a run ends", () => {
     expect((await cardItem()).card.answer).toBe("stopped");
     expect(await stepOf("toolu_a1")).toMatchObject({ state: "stopped", cause: "Stopped by you" });
     expect((await noticesNow()).map((n) => n.text).at(-1)).toBe('Stopped by you: agent "sleeper one".');
-    expect((await rowOf(ASK)).outcome).toMatchObject({ kind: "finished" });
+    expect((await rowOf(ASK)).outcome).toMatchObject({ kind: "stopped", text: "Stopped by you: 1 agent" });
   }, 10_000);
 
   test("a stopped task's step still reads stopped after a bridge restart, and a step left running at rest ends", async () => {
@@ -1283,7 +1283,7 @@ describe("how a run ends", () => {
     const tail = (await snapshot(ASK)).items.slice(-4).map((i) => [i.kind, "text" in i ? i.text : ""]);
     expect(tail).toEqual([
       ["user", "Write a haiku"],
-      ["notice", "Stopped by you before Claude replied."],
+      ["notice", 'Stopped by you before Claude replied to "Write a haiku".'],
       ["user", "Next one"],
       ["assistant", "Here it is."],
     ]);
@@ -1380,7 +1380,7 @@ describe("telling the phone how a run ended", () => {
     expect(endings).toEqual([["finished", restedAt]]);
   });
 
-  test("a run the user stopped is never told; one where they stopped only a task is told finished", async () => {
+  test("a run the user stopped is never told, also when their stop of a task ended it", async () => {
     await begin();
     await send("Work");
     const q = queries[0]!;
@@ -1400,7 +1400,7 @@ describe("telling the phone how a run ended", () => {
     q.emit(sys("task_updated", { task_id: "bk", patch: { status: "killed" } }), level());
     await flush();
     wait(END_SETTLE_MS);
-    expect(endings.map(([end]) => end)).toEqual(["finished"]);
+    expect(endings).toEqual([]);
   });
 
   test("a failed run is told failed", async () => {
@@ -1506,8 +1506,8 @@ describe("the thread says what stopped only once it did", () => {
     expect([q.interrupts, await stopLines()]).toEqual([2, []]);
     q.emit(interrupted());
     await flush();
-    expect(await stopLines()).toEqual(["Stopped by you before Claude replied."]);
-    expect(await rowOf(ASK)).toMatchObject({ status: "idle", outcome: { kind: "stopped" } });
+    expect(await stopLines()).toEqual(['Stopped by you before Claude replied to "Run three commands".']);
+    expect(await rowOf(ASK)).toMatchObject({ status: "idle", outcome: { kind: "stopped", text: "Stopped by you before Claude replied" } });
   });
 
   test("a turn Claude Code finishes before the stop reaches it reads finished, and the thread says the stop came too late", async () => {
@@ -2302,7 +2302,13 @@ describe("the thread says what stopped only once it did", () => {
       clock += 15_000;
       sessions.tick(new Date(clock));
       await until(async () => (await stopLines()).some((t) => t.includes("sleep bf")));
-      expect(await stopLines()).toEqual(["Stopped by you: the turn.", `Stopped by you: command "perl -e 'sleep bf'".`]);
+      expect(await stopLines()).toEqual([
+        "Stopped by you: the turn.",
+        "Claude Code didn't answer Stop, so the bridge ended it. Your next message starts it again.",
+        `Stopped by you: command "perl -e 'sleep bf'".`,
+      ]);
+      // Every line of the stop sits where the user pressed it, also the one said once the command was found gone.
+      expect(new Set((await noticesNow()).filter((n) => n.reason === "stop").map((n) => n.at)).size).toBe(1);
       expect(await stepOf("toolu_bf")).toMatchObject({ state: "stopped", cause: "Stopped by you" });
     } finally {
       await fg.end();
@@ -2337,6 +2343,150 @@ describe("the thread says what stopped only once it did", () => {
     } finally {
       for (const s of Object.values(shells_)) await s.end();
     }
+  });
+});
+
+describe("a Stop Claude Code never answers, and Stop and send for one turn", () => {
+  const stopLines = async () => (await noticesNow()).filter((n) => n.reason === "stop").map((n) => n.text);
+  const stopAt = new Date(Date.UTC(2026, 9, 18, 12, 0, 0)).getTime();
+
+  test("controls say a stop is pending, and until when, from the Stop until Claude Code ends the turn", async () => {
+    await start();
+    await send("Write a haiku", "c_haiku");
+    await snapshot(ASK);
+    thread.length = 0;
+    clock = stopAt;
+    await handle({ type: "session_stop", sessionId: ASK, target: "turn" });
+    await flush();
+    const pushed = thread.map((t) => (t.frame.type === "session_items" ? t.frame.controls?.stopping : undefined));
+    expect(pushed).toEqual([{ at: "2026-10-18T12:00:00.000Z", deadline: "2026-10-18T12:00:15.000Z" }]);
+    expect((await controlsNow()).stopping).toEqual({ at: "2026-10-18T12:00:00.000Z", deadline: "2026-10-18T12:00:15.000Z" });
+    queries[0]!.emit(result(0, { subtype: "error_during_execution", is_error: true, errors: [] }));
+    await flush();
+    expect((await controlsNow()).stopping).toBeUndefined();
+  });
+
+  test("a Stop Claude Code never answers is said in its own words, at the Stop, above a message sent after it, and keeps the prompt", async () => {
+    await start();
+    await send("Run these three Bash commands one at a time", "c_three");
+    queries[0]!.holdStop = new Promise<void>(() => {});
+    clock = stopAt;
+    await handle({ type: "session_stop", sessionId: ASK, target: "turn" });
+    clock += 3_000;
+    await send("Reply after", "c_after");
+    clock += 12_000;
+    sessions.tick(new Date(clock));
+    await flush();
+    const items = (await snapshot(ASK)).items.slice(-4).map((i) => [i.kind, "text" in i ? i.text : "", i.at]);
+    expect(items).toEqual([
+      ["user", "Run these three Bash commands one at a time", expect.any(String)],
+      ["notice", 'Stopped by you before Claude replied to "Run these three Bash commands one at a time".', "2026-10-18T12:00:00.000Z"],
+      ["notice", "Claude Code didn't answer Stop, so the bridge ended it. Your next message starts it again.", "2026-10-18T12:00:00.000Z"],
+      ["user", "Reply after", "2026-10-18T12:00:15.000Z"],
+    ]);
+  });
+
+  test("a confirmed stop keeps its plain words", async () => {
+    await start();
+    await send("Write a haiku", "c_haiku");
+    await handle({ type: "session_stop", sessionId: ASK, target: "turn" });
+    queries[0]!.emit(result(0, { subtype: "error_during_execution", is_error: true, errors: [] }));
+    await flush();
+    expect(await stopLines()).toEqual(['Stopped by you before Claude replied to "Write a haiku".']);
+  });
+
+  test("Stop and send aimed at a turn that has ended queues the message and leaves the running turn alone", async () => {
+    await start();
+    await send("Go");
+    const turn = (await controlsNow()).turn!;
+    const stale = { type: "session_send", sessionId: ASK, text: "Then this", clientId: "c_then", interrupt: true, turnStartedAt: "2026-10-18T11:00:00.000Z" } as const;
+    expect(await handle(stale)).toEqual([{ type: "error", message: "That turn had already ended. Your message is queued.", about: { kind: "stop", sessionId: ASK } }]);
+    expect([queries[0]!.interrupts, (await controlsNow()).queued]).toEqual([0, 1]);
+    await handle(stale);
+    expect(queries[0]!.interrupts).toBe(0);
+    expect(await handle({ ...stale, clientId: "c_now", turnStartedAt: turn.startedAt })).toEqual([]);
+    expect(queries[0]!.interrupts).toBe(1);
+  });
+
+  test("a confirmed stop's notice sits above the queued message that starts as the stopped turn ends", async () => {
+    await start();
+    await send("Go");
+    queries[0]!.emit(toolCall("toolu_p", "Bash", { command: "perl -e 'sleep 40'" }));
+    await flush();
+    await send("Then this", "c_then");
+    clock = stopAt;
+    await handle({ type: "session_stop", sessionId: ASK, target: "turn" });
+    clock += 1_000;
+    queries[0]!.emit(result(0, { subtype: "error_during_execution", is_error: true, errors: [] }));
+    await flush();
+    const tail = (await snapshot(ASK)).items.slice(-2).map((i) => [i.kind, "text" in i ? i.text : "", i.at]);
+    expect(tail).toEqual([
+      ["notice", "Stopped by you: the turn.", "2026-10-18T12:00:00.000Z"],
+      ["user", "Then this", "2026-10-18T12:00:01.000Z"],
+    ]);
+  });
+
+  test("a turn that finished before the stop reached it says so above the queued message that starts after it", async () => {
+    await start();
+    await send("Go");
+    queries[0]!.emit(toolCall("toolu_p", "Bash", { command: "perl -e 'sleep 40'" }));
+    await flush();
+    await send("Then this", "c_then");
+    clock = stopAt;
+    await handle({ type: "session_stop", sessionId: ASK, target: "turn" });
+    clock += 1_000;
+    queries[0]!.emit(result(0));
+    await flush();
+    const tail = (await snapshot(ASK)).items.slice(-2).map((i) => [i.kind, "text" in i ? i.text : "", i.at]);
+    expect(tail).toEqual([
+      ["notice", "Claude finished this turn before your stop reached it.", "2026-10-18T12:00:00.000Z"],
+      ["user", "Then this", "2026-10-18T12:00:01.000Z"],
+    ]);
+  });
+
+  test("Stop and send aimed at an ended turn, with no turn running, says the message went", async () => {
+    await start();
+    expect(await handle({ type: "session_send", sessionId: ASK, text: "Go", clientId: "c_go", interrupt: true, turnStartedAt: "2026-10-18T11:00:00.000Z" })).toEqual([
+      { type: "error", message: "That turn had already ended. Your message was sent.", about: { kind: "stop", sessionId: ASK } },
+    ]);
+    await flush();
+    expect(queries[0]!.received).toEqual(["Go"]);
+  });
+
+  test("a stop of many tasks names three at most, then how many more", async () => {
+    await start();
+    await send("Start them");
+    const q = queries[0]!;
+    const listed = ["b1", "b2", "b3", "b4", "b5"].map((id) => shellTask(id, `toolu_${id}`, `sleep ${id}`));
+    q.emit(...listed.map(taskStarted), level(...listed), result());
+    await flush();
+    await handle({ type: "session_stop", sessionId: ASK });
+    await flush();
+    expect(await stopLines()).toEqual(['Stopped by you: command "sleep b1", command "sleep b2" and 3 more.']);
+  });
+
+  test("a background step a Stop ends reads stopped by you in every frame, never as ended without a result", async () => {
+    await start();
+    await send("Start it");
+    const q = queries[0]!;
+    await transcribe(calledEntry("toolu_k", "Bash", { command: "sleep 600", run_in_background: true }), resultEntry("toolu_k", "Command running in background with ID: bk."));
+    const shell = shellTask("bk", "toolu_k", "sleep 600");
+    q.emit(taskStarted(shell), level(shell), result());
+    await flush();
+    await snapshot(ASK);
+    thread.length = 0;
+    let take = () => {};
+    q.holdStop = new Promise<void>((r) => (take = r));
+    const stopped = handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } });
+    await flush();
+    q.emit(sys("task_updated", { task_id: "bk", patch: { status: "killed" } }), level());
+    await flush();
+    take();
+    expect(await stopped).toEqual([]);
+    await flush();
+    const causes = thread.flatMap((t) => (t.frame.type === "session_items" ? t.frame.items : [])).flatMap((i) => (i.kind === "work" ? i.steps : [])).filter((s) => s.id === "toolu_k" && s.state !== "running").map((s) => s.cause);
+    expect(causes.length).toBeGreaterThan(0);
+    expect(new Set(causes)).toEqual(new Set(["Stopped by you"]));
   });
 });
 

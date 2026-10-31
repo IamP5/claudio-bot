@@ -16,7 +16,7 @@ import type { Tickable } from "./clock";
 import type { Headroom, Ledger } from "./ledger";
 import { notices as noticeText, withNotices, type SessionInput } from "./prompts";
 import { evalArg, groupAlive, psText, shellGroups, shellLeaders, taskRun, type TaskRun } from "./procs";
-import type { NoticeReason, StopTarget, TaskId } from "./protocol";
+import type { NoticeReason, SessionControls, StopTarget, TaskId } from "./protocol";
 import { sandboxFailure } from "./sandbox";
 import type { Persist } from "./store";
 import { emptyTasks, liveTasks, lostNotice, observe, wakes, type Activity, type Tasks } from "./tasks";
@@ -270,6 +270,10 @@ export type Core = { session: SessionState; parkedUntil: string | null; memo: Me
 type StepContext = { now: Date; headroom: (initiator: Initiator) => Headroom; userName: string; quiet?: boolean };
 
 const turnOf = (life: Lifecycle): ActiveTurn | null => (life.kind === "working" || life.kind === "stopping" ? life.turn : null);
+
+/** A Stop Claude Code has not confirmed yet, as the thread's controls carry it. */
+export const stopPending = (life: Lifecycle): Pick<SessionControls, "stopping"> =>
+  life.kind === "stopping" ? { stopping: { at: new Date(Date.parse(life.deadline) - STOP_DEADLINE_MS).toISOString(), deadline: life.deadline } } : {};
 
 /**
  * The lifecycle, total over (Lifecycle x Event) and pure. Invariants it keeps:

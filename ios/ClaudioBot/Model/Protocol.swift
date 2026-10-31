@@ -2152,11 +2152,18 @@ struct SessionTurn: Codable, Hashable, Sendable {
     var wake: Bool
 }
 
+/// A Stop Claude Code has not confirmed yet: when the bridge took it, and when the bridge ends Claude Code if it never does.
+struct SessionStopping: Codable, Hashable, Sendable {
+    var at: Date
+    var deadline: Date
+}
+
 /// What the composer may do now. canSend false comes with the reason in words. working: something runs, so Stop shows;
 /// with feature sessionTasks a turn, a wake turn or a live task, without it the turn alone. queued: the user's messages
 /// waiting. model nil: the transcript's last model, else the user's default. modes: what the mode menu offers.
 /// Feature sessionTasks fills the rest. turn nil: no turn runs, so a message does not queue. tasks: the live tasks.
-/// heardAt: the last sign of life from Claude Code, refreshed at least every 25 s while working.
+/// heardAt: the last sign of life from Claude Code, refreshed at least every 25 s while working. stopping: a Stop
+/// Claude Code has not confirmed yet.
 struct SessionControls: Codable, Hashable, Sendable {
     var canSend: Bool
     var reason: String?
@@ -2169,8 +2176,9 @@ struct SessionControls: Codable, Hashable, Sendable {
     var turn: SessionTurn? = nil
     var tasks: [SessionTask]? = nil
     var heardAt: Date? = nil
+    var stopping: SessionStopping? = nil
 
-    private enum CodingKeys: String, CodingKey { case canSend, reason, working, queued, model, models, mode, modes, turn, tasks, heardAt }
+    private enum CodingKeys: String, CodingKey { case canSend, reason, working, queued, model, models, mode, modes, turn, tasks, heardAt, stopping }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -2185,6 +2193,7 @@ struct SessionControls: Codable, Hashable, Sendable {
         try c.encodeIfPresent(turn, forKey: .turn)
         try c.encodeIfPresent(tasks, forKey: .tasks)
         try c.encodeIfPresent(heardAt, forKey: .heardAt)
+        try c.encodeIfPresent(stopping, forKey: .stopping)
     }
 }
 
@@ -2819,7 +2828,8 @@ enum ClientMessage: Codable, Hashable, Sendable {
     case unwatchSession(sessionId: SessionID)
     case sessionPage(sessionId: SessionID, before: Cursor)
     /// clientId: the queued user item's id until the transcript's own entry replaces it. interrupt: "Stop and send".
-    case sessionSend(sessionId: SessionID, text: String, clientId: String, interrupt: Bool)
+    /// turnStartedAt: controls.turn.startedAt as received, so the interrupt reaches only that turn; the message still goes.
+    case sessionSend(sessionId: SessionID, text: String, clientId: String, interrupt: Bool, turnStartedAt: String? = nil)
     /// target nil: everything, as on a bridge without sessionTasks. turnStartedAt: controls.turn.startedAt as received,
     /// so the bridge refuses a stop meant for an earlier run.
     case sessionStop(sessionId: SessionID, target: StopTarget? = nil, turnStartedAt: String? = nil)
@@ -2907,7 +2917,8 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case "session_send":
             self = .sessionSend(
                 sessionId: try session(), text: try c.decode(String.self, forKey: .text),
-                clientId: try c.decode(String.self, forKey: .clientId), interrupt: try c.decode(Bool.self, forKey: .interrupt)
+                clientId: try c.decode(String.self, forKey: .clientId), interrupt: try c.decode(Bool.self, forKey: .interrupt),
+                turnStartedAt: try c.decodeIfPresent(String.self, forKey: .turnStartedAt)
             )
         case "session_stop":
             self = .sessionStop(
@@ -3073,12 +3084,13 @@ enum ClientMessage: Codable, Hashable, Sendable {
             try c.encode("session_page", forKey: .type)
             try c.encode(sessionId, forKey: .sessionId)
             try c.encode(before, forKey: .before)
-        case let .sessionSend(sessionId, text, clientId, interrupt):
+        case let .sessionSend(sessionId, text, clientId, interrupt, turnStartedAt):
             try c.encode("session_send", forKey: .type)
             try c.encode(sessionId, forKey: .sessionId)
             try c.encode(text, forKey: .text)
             try c.encode(clientId, forKey: .clientId)
             try c.encode(interrupt, forKey: .interrupt)
+            try c.encodeIfPresent(turnStartedAt, forKey: .turnStartedAt)
         case let .sessionStop(sessionId, target, turnStartedAt):
             try c.encode("session_stop", forKey: .type)
             try c.encode(sessionId, forKey: .sessionId)

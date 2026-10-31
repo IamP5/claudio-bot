@@ -2053,6 +2053,48 @@
       }
     },
     {
+      "type": "session_items",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "rev": 5,
+      "removed": [],
+      "items": [],
+      "controls": {
+        "canSend": true,
+        "reason": null,
+        "working": true,
+        "queued": 0,
+        "model": null,
+        "models": [
+          {
+            "id": "default",
+            "label": "Default (recommended)"
+          },
+          {
+            "id": "opus",
+            "label": "Opus"
+          },
+          {
+            "id": "sonnet",
+            "label": "Sonnet"
+          }
+        ],
+        "mode": "acceptEdits",
+        "modes": [
+          "default",
+          "acceptEdits",
+          "plan"
+        ],
+        "turn": {
+          "startedAt": "2026-10-16T12:00:00.000Z",
+          "wake": false
+        },
+        "stopping": {
+          "at": "2026-10-16T14:00:00.000Z",
+          "deadline": "2026-10-16T14:00:15.000Z"
+        }
+      }
+    },
+    {
       "type": "push_state",
       "push": {
         "state": "failing",
@@ -2442,6 +2484,14 @@
       "text": "Stop, use the Web Audio API instead",
       "clientId": "c_4d2b",
       "interrupt": true
+    },
+    {
+      "type": "session_send",
+      "sessionId": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
+      "text": "Stop, use the Web Audio API instead",
+      "clientId": "c_4d2c",
+      "interrupt": true,
+      "turnStartedAt": "2026-10-16T12:00:00.000Z"
     },
     {
       "type": "session_stop",

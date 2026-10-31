@@ -408,6 +408,8 @@ const noAckOutput = (id: string, names: string[]): RubricItem => ({
   },
 });
 
+/** When an item first reached the phone, in ms since the start; its own at is when it happened, which can be earlier. */
+const arrived = (ev: Ev, name: string, id: string) => snaps(ev, name).find((s) => s.items.some((i) => i.id === id))?.at ?? Infinity;
 /** The notice items a session showed from `from` on. A notice is written by the bridge; assistant prose never counts. */
 const notices = (ev: Ev, name: string, from = 0) => [...new Map(snaps(ev, name, from).flatMap((s) => s.items).filter((i) => i.kind === "notice").map((i) => [i.id, i])).values()];
 
@@ -2186,6 +2188,7 @@ const ONCE = "Use the Bash tool to run exactly: echo once >> once.txt\nThen repl
 const RACE = "Use the Bash tool to run exactly: echo race >> race.txt\nThen reply with one line: done.";
 const LOST = "Use the Bash tool to run exactly: echo lost >> lost.txt\nThen reply with one line: done.";
 const LONG = "Use the Bash tool in the foreground (not in the background) to run exactly: perl -e 'sleep 3661'\nThen reply with one line: done.";
+const STALE_SEND_ID = "runner-stale-interrupt";
 /** The main transcript's prompts that hold `text`: the user's own lines, not tool results. */
 const prompts = (ev: Ev, name: string, text: string) =>
   ev.transcript(name).main.filter((l) => l.type === "user" && !JSON.stringify(l.message?.content ?? "").includes("tool_result") && JSON.stringify(l.message?.content ?? "").includes(text));
@@ -2272,12 +2275,14 @@ const S6g: Scenario = {
     },
     { do: "sleep", s: 4 },
     { do: "ps", pattern: "sleep 3661", as: "after-stale-stop" },
+    // Past S6g.4's 5 s window, so a refusal of this send is never read as the refusal of the stale Stop.
+    { do: "sleep", s: 2 },
     { do: "mark", mark: "before-stale-interrupt" },
     {
       do: "raw",
       mark: "stale-interrupt",
       what: "a Stop and send aimed at g1's first turn: session_send with interrupt and that turn's turnStartedAt",
-      frame: (ev) => ({ type: "session_send", sessionId: ev.ids.g1!, text: "Reply with exactly one word: queued.", clientId: `runner-${crypto.randomUUID()}`, interrupt: true, turnStartedAt: firstTurn(ev, "g1") ?? "2026-01-01T00:00:00.000Z" }),
+      frame: (ev) => ({ type: "session_send", sessionId: ev.ids.g1!, text: "Reply with exactly one word: queued.", clientId: STALE_SEND_ID, interrupt: true, turnStartedAt: firstTurn(ev, "g1") ?? "2026-01-01T00:00:00.000Z" }),
     },
     { do: "sleep", s: 4 },
     { do: "ps", pattern: "sleep 3661", as: "after-stale-interrupt" },
@@ -2378,13 +2383,19 @@ const S6g: Scenario = {
       tell: "stop",
       lane: "protocol",
       text: "A Stop meant for an earlier turn never stops the turn that runs now; the user's own Stop still does.",
-      pass: "Within 5 s of stale-stop the bridge answers an error about this session's stop, the perl sleep 3661 still runs 4 s later (sample after-stale-stop), and it is gone after the real Stop (sample after-real-stop).",
-      fail: "The stale Stop stopped the command, was not answered, or the real Stop did not end it.",
+      pass: "Within 5 s of stale-stop the bridge answers an error about this session's stop, the perl sleep 3661 still runs 4 s later (sample after-stale-stop) and just before the real Stop (sample after-stale-interrupt), and it is gone after the real Stop (sample after-real-stop).",
+      fail: "The stale Stop stopped the command, was not answered, nothing was left for the real Stop to end, or the real Stop did not end it.",
       check: (ev) => {
         const refused = repliesAfter(ev, "stale-stop", 5, "error", (f) => about(f).kind === "stop" && about(f).sessionId === ev.ids.g1);
         const alive = (ev.samples["after-stale-stop"] ?? []).length > 0;
+        const before = (ev.samples["after-stale-interrupt"] ?? []).length > 0;
         const gone = (ev.samples["after-real-stop"] ?? []).length === 0;
-        const bad = [refused.length ? "" : "no refusal about the stop", alive ? "" : "the command was gone after the stale stop", gone ? "" : "the command still ran after the real Stop"].filter(Boolean);
+        const bad = [
+          refused.length ? "" : "no refusal about the stop",
+          alive ? "" : "the command was gone after the stale stop",
+          before ? "" : "the command was gone before the real Stop, so it ended nothing",
+          gone ? "" : "the command still ran after the real Stop",
+        ].filter(Boolean);
         return bad.length ? no(bad.join("; ")) : ok(`refused: "${String(refused[0]!.frame.message)}"; ran on; the real Stop ended it`);
       },
     },
@@ -2392,17 +2403,48 @@ const S6g: Scenario = {
       id: "S6g.11",
       tell: "stop",
       lane: "protocol",
-      text: "A Stop and send aimed at an earlier turn never stops the turn that runs now.",
-      pass: "The perl sleep 3661 still runs 4 s after a session_send with interrupt and the first turn's turnStartedAt (sample after-stale-interrupt), and the turn that ran before it is still the one running.",
-      fail: "The stale Stop and send interrupted the newer turn: its command is gone, or another turn took its place.",
+      text: "A Stop and send aimed at an earlier turn never stops the turn that runs now; the message is kept and the phone is told the stop did not go.",
+      pass: "The perl sleep 3661 still runs 4 s after a session_send with interrupt and the first turn's turnStartedAt (sample after-stale-interrupt), the turn that ran before it is still the one running, an error about this session's stop arrives within 5 s and before real-stop, no stop notice reaches the phone before real-stop, and the message shows as a user item.",
+      fail: "The stale Stop and send interrupted the newer turn (its command is gone, or another turn took its place), the phone was not told, or the message was lost.",
       check: (ev) => {
         const w = span(ev, "before-stale-interrupt", "after-stale-interrupt");
-        if (!w) return needMarks(ev, "before-stale-interrupt", "after-stale-interrupt")!;
+        const real = mark(ev, "real-stop");
+        if (!w || real === undefined) return needMarks(ev, "before-stale-interrupt", "after-stale-interrupt", "real-stop")!;
         const turn = (at: number) => (last(ev, "g1", at)?.controls?.turn as { startedAt?: string } | null | undefined)?.startedAt ?? null;
         const alive = (ev.samples["after-stale-interrupt"] ?? []).length > 0;
         const [before, after] = [turn(w[0]), turn(w[1])];
-        const bad = [alive ? "" : "the perl sleep 3661 was gone 4 s later", before !== null && before === after ? "" : `the running turn went from ${before} to ${after}`].filter(Boolean);
-        return bad.length ? no(bad.join("; ")) : ok(`turn ${before} ran on with its command`);
+        const refused = repliesAfter(ev, "stale-interrupt", 5, "error", (f) => about(f).kind === "stop" && about(f).sessionId === ev.ids.g1).filter((r) => r.at < real);
+        const stopped = notices(ev, "g1", w[0]).filter((i) => i.reason === "stop" && arrived(ev, "g1", i.id) < real);
+        const kept = snaps(ev, "g1", w[0]).some((s) => s.items.some((i) => i.kind === "user" && (i.id === STALE_SEND_ID || i.clientId === STALE_SEND_ID)));
+        const bad = [
+          alive ? "" : "the perl sleep 3661 was gone 4 s later",
+          before !== null && before === after ? "" : `the running turn went from ${before} to ${after}`,
+          refused.length ? "" : "no refusal about the stop",
+          stopped.length ? `stop notice: ${stopped.map((i) => i.text).join(" | ")}` : "",
+          kept ? "" : "the message never showed",
+        ].filter(Boolean);
+        return bad.length ? no(bad.join("; ")) : ok(`turn ${before} ran on with its command; refused: "${String(refused[0]!.frame.message)}"; message shown`);
+      },
+    },
+    {
+      id: "S6g.12",
+      tell: "stop",
+      lane: "protocol",
+      text: "A stop notice sits where the user pressed Stop, above the message that waited behind the stopped turn and starts as it ends.",
+      pass: "In every state of g1 from before-stale-interrupt on, each stop notice that arrived after it sits above the stale-interrupt message, and at least one such notice and the message are shown.",
+      fail: "A stop notice sorts under the message that ran after the stop, so it reads as if that message was stopped.",
+      check: (ev) => {
+        const from = mark(ev, "before-stale-interrupt");
+        if (from === undefined) return needMarks(ev, "before-stale-interrupt")!;
+        let both = false;
+        for (const s of during(ev, "g1", from, Infinity)) {
+          const msg = s.items.findIndex((i) => i.kind === "user" && (i.id === STALE_SEND_ID || i.clientId === STALE_SEND_ID));
+          const under = s.items.findIndex((i, k) => k > msg && i.kind === "notice" && i.reason === "stop" && arrived(ev, "g1", i.id) > from);
+          if (msg < 0 || !s.items.some((i) => i.kind === "notice" && i.reason === "stop" && arrived(ev, "g1", i.id) > from)) continue;
+          both = true;
+          if (under >= 0) return no(`at +${(s.at / 1000).toFixed(1)} s "${(s.items[under]!.text ?? "").slice(0, 60)}" (${s.items[under]!.at}) sits under the message (${s.items[msg]!.at})`);
+        }
+        return both ? ok("every stop notice sits above the message") : no("no state shows both a stop notice and the message");
       },
     },
     {
@@ -2798,12 +2840,12 @@ const S4c: Scenario = {
       tell: "stop",
       lane: "protocol",
       text: "While Claude Code is frozen, nothing says the turn stopped.",
-      pass: "No notice with reason stop appears between Stop and the resume.",
-      fail: "A stop notice appears while Claude Code is still frozen.",
+      pass: "No notice with reason stop reaches the phone between Stop and the resume.",
+      fail: "A stop notice reaches the phone while Claude Code is still frozen.",
       check: (ev) => {
         const [a, b] = [mark(ev, "stopped"), mark(ev, "resumed")];
         if (a === undefined || b === undefined) return needMarks(ev, "stopped", "resumed")!;
-        const early = notices(ev, "s4c", a).find((i) => i.reason === "stop" && ev.atOf(i.at) < b);
+        const early = notices(ev, "s4c", a).find((i) => i.reason === "stop" && arrived(ev, "s4c", i.id) < b);
         return early ? no(`said while frozen: ${early.text}`) : ok("nothing said while frozen");
       },
     },
@@ -2829,12 +2871,12 @@ const S4c: Scenario = {
       tell: "stop",
       lane: "protocol",
       text: "Once the turn ended, the thread says the user stopped it, in the bridge's own words.",
-      pass: 'After the resume, a notice with reason "stop" starts "Stopped by you".',
+      pass: 'After the resume, a notice with reason "stop" that starts "Stopped by you" reaches the phone.',
       fail: "No such notice.",
       check: (ev) => {
         const b = mark(ev, "resumed");
         if (b === undefined) return needMarks(ev, "resumed")!;
-        const it = notices(ev, "s4c", b).find((i) => i.reason === "stop" && (i.text ?? "").startsWith("Stopped by you") && ev.atOf(i.at) >= b);
+        const it = notices(ev, "s4c", b).find((i) => i.reason === "stop" && (i.text ?? "").startsWith("Stopped by you") && arrived(ev, "s4c", i.id) >= b);
         return it ? ok(it.text ?? "") : no("no bridge stop notice after the resume");
       },
     },
@@ -2843,7 +2885,7 @@ const S4c: Scenario = {
       tell: "stop",
       lane: "protocol",
       text: "While the bridge waits for a frozen Claude Code to confirm Stop, the thread says a stop is pending, so no phone offers a live Stop.",
-      pass: "Within 1 s of k-stopped, s4k's controls carry stopping with at and deadline.",
+      pass: "Within 1 s of k-stopped, s4k's controls carry stopping with at and a deadline after it.",
       fail: "No stopping in the controls within 1 s of Stop: the wire reads the turn as plain working.",
       check: (ev) => {
         const at = mark(ev, "k-stopped");
@@ -2852,7 +2894,10 @@ const S4c: Scenario = {
           const st = x.controls?.stopping as { at?: unknown; deadline?: unknown } | null | undefined;
           return typeof st?.at === "string" && typeof st.deadline === "string";
         });
-        return s ? ok(`stopping ${JSON.stringify(s.controls!.stopping)} at +${((s.at - at) / 1000).toFixed(1)} s`) : no(`no stopping within 1 s; controls keys then: ${Object.keys(last(ev, "s4k", at + 1_000)?.controls ?? {}).join(",")}`);
+        if (!s) return no(`no stopping within 1 s; controls keys then: ${Object.keys(last(ev, "s4k", at + 1_000)?.controls ?? {}).join(",")}`);
+        const st = s.controls!.stopping as { at: string; deadline: string };
+        if (!(Date.parse(st.deadline) > Date.parse(st.at))) return no(`deadline ${st.deadline} is not after ${st.at}`);
+        return ok(`stopping ${JSON.stringify(st)} at +${((s.at - at) / 1000).toFixed(1)} s`);
       },
     },
     {
@@ -2866,7 +2911,7 @@ const S4c: Scenario = {
         const at = mark(ev, "k-stopped");
         if (at === undefined) return needMarks(ev, "k-stopped")!;
         const all = notices(ev, "s4k", at);
-        const it = all.find((i) => /did(n.t| not) answer/i.test(i.text ?? "") && /\bended\b/i.test(i.text ?? ""));
+        const it = all.find((i) => /Claude Code did(n.t| not) answer Stop/.test(i.text ?? "") && /ended it/.test(i.text ?? ""));
         return it ? ok(it.text ?? "") : no(`notices: ${all.map((i) => `"${(i.text ?? "").slice(0, 80)}"`).join("; ") || "none"}`);
       },
     },
@@ -2875,12 +2920,18 @@ const S4c: Scenario = {
       tell: "stop",
       lane: "protocol",
       text: "The stop sits where the user pressed it: timed at the Stop, above a follow-up sent after it.",
-      pass: "In s4k's thread at k-after, a stop notice (reason stop, starting \"Stopped by you\") is timed no later than the follow-up's send (3 s after Stop) and comes before the follow-up.",
-      fail: "No such notice, or it is timed later (at the kill) or sorts under the follow-up, so where it lands against the follow-up is a race.",
+      pass: "In s4k's thread at k-after, a stop notice (reason stop, starting \"Stopped by you\") is timed no later than the follow-up's send (3 s after Stop) and comes before the follow-up, and in no state from k-stopped to k-after does it sit under the follow-up.",
+      fail: "No such notice, or it is timed later (at the kill) or sorts under the follow-up at any point, so where it lands against the follow-up is a race.",
       check: (ev) => {
         const at = mark(ev, "k-after");
         const sent = mark(ev, "k-followup");
-        if (at === undefined || sent === undefined) return needMarks(ev, "k-followup", "k-after")!;
+        const from = mark(ev, "k-stopped");
+        if (at === undefined || sent === undefined || from === undefined) return needMarks(ev, "k-stopped", "k-followup", "k-after")!;
+        for (const s of during(ev, "s4k", from, at)) {
+          const stop = s.items.findIndex((i) => i.kind === "notice" && i.reason === "stop" && (i.text ?? "").startsWith("Stopped by you"));
+          const follow = s.items.findIndex((i) => i.kind === "user" && (i.text ?? "").includes("s4kafter"));
+          if (stop >= 0 && follow >= 0 && stop > follow) return no(`at +${(s.at / 1000).toFixed(1)} s the stop notice (${s.items[stop]!.at}) sits under the follow-up (${s.items[follow]!.at})`);
+        }
         const items = last(ev, "s4k", at)?.items ?? [];
         const stop = items.findIndex((i) => i.kind === "notice" && i.reason === "stop" && (i.text ?? "").startsWith("Stopped by you"));
         const follow = items.findIndex((i) => i.kind === "user" && (i.text ?? "").includes("s4kafter"));
@@ -2910,7 +2961,7 @@ const S4c: Scenario = {
           again && !seen ? "a fresh open has it, but the phone's thread dropped it" : "",
           named ? "" : `no stop notice names the prompt (${notices(ev, "s4k").filter((i) => i.reason === "stop").map((i) => `"${(i.text ?? "").slice(0, 60)}"`).join("; ") || "none"})`,
         ].filter(Boolean);
-        return bad.length ? no(bad.join("; ")) : ok(`kept, also on a fresh open (${JSON.stringify({ queued: again!.queued, stopped: again!.stopped ?? null })}); "${(named!.text ?? "").slice(0, 100)}"`);
+        return bad.length ? no(bad.join("; ")) : ok(`kept, also on a fresh open (queued: ${String(again!.queued)}); "${(named!.text ?? "").slice(0, 100)}"`);
       },
     },
   ],

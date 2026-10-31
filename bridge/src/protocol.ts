@@ -518,6 +518,8 @@ export type NoticeReason = "stop" | "task" | "restart" | "failure" | "approval";
  * Feature session_tasks adds the rest. turn: the foreground turn, absent when none runs; wake: Claude Code started it
  * on its own after background work ended. A message queues only while a turn runs. tasks: the live tasks, [] when
  * none. heardAt: the last sign of life from Claude Code for this session, refreshed at least every 25 s while working.
+ * stopping: a Stop Claude Code has not confirmed yet; at is when the bridge took it, deadline when the bridge ends
+ * Claude Code if it still has not.
  */
 export type SessionControls = {
   canSend: boolean;
@@ -531,6 +533,7 @@ export type SessionControls = {
   turn?: { startedAt: string; wake: boolean };
   tasks?: SessionTask[];
   heardAt?: string;
+  stopping?: { at: string; deadline: string };
 };
 
 /** Where a thread stands. rev counts upserts per session within one bridge epoch (the epoch in hello). */
@@ -617,7 +620,9 @@ export type SessionClientMessage =
   | { type: "unwatch_session"; sessionId: SessionId }
   | { type: "session_page"; sessionId: SessionId; before: Cursor }
   // clientId: the queued user item's id until the transcript's own entry replaces it. interrupt: "Stop and send": stops the turn in flight, then queues.
-  | { type: "session_send"; sessionId: SessionId; text: string; clientId: string; interrupt: boolean }
+  // turnStartedAt: controls.turn.startedAt as the app saw it. When that turn has ended the message is queued without
+  // the interrupt, and an error about the stop says so.
+  | { type: "session_send"; sessionId: SessionId; text: string; clientId: string; interrupt: boolean; turnStartedAt?: string }
   // Stops what target names: "all" (also when absent) is the turn and every live task, "turn" the turn alone, {task}
   // one task; the last two need feature session_tasks. turnStartedAt: controls.turn.startedAt as the app saw it, so a
   // stop meant for an earlier run is refused. The user's queued messages still run.

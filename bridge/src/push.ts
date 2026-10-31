@@ -14,12 +14,13 @@ import { chatOf, own, ownCardId, ownCardOpen, type HeldEnding, type OwedPush, ty
 // for a bot, `${cardId}|card` and `${cardId}|reminder` for each card of a session, `${sessionId}|${at}|done` for a
 // session's run that came to rest at `at`. A try the server refused is tried twice more. A try it may have taken (it
 // timed out, or the connection broke after the request went) is never sent again before the server is asked whether it
-// holds it, since ntfy has no idempotency key and a second publish rings again. A push whose tries failed stays owed
-// while what it is for still waits on the user (an open card, a session ending no newer run replaced) and no phone is
-// live, and the push state reads failing. The oldest owed push goes again 15 s after the failure, then 30 s, 1, 2 and
-// 5 minutes apart; with none owed the bridge asks the server for its recent pushes every minute. Either one answered
-// puts the state back to on. The failing state and the owed pushes are kept on disk, and a failing state read at start
-// is checked at once.
+// holds it, since ntfy has no idempotency key and a second publish rings again. While a try is out the push is kept on
+// disk as one the server may have taken, so a crash mid-try neither drops it nor repeats it. A push whose tries failed
+// stays owed while what it is for still waits on the user (an open card, a session ending no newer run replaced) and no
+// phone is live, and the push state reads failing. The oldest owed push goes again 15 s after the failure, then 30 s,
+// 1, 2 and 5 minutes apart; with none owed the bridge asks the server for its recent pushes a minute after the last
+// failure. Either one answered puts the state back to on. The failing state and the owed pushes are kept on disk; a
+// failing state read at start is checked at once, and pushes owed from before the start wait out the start grace.
 // A turn's first bubble pushes at most once per bot per 10 minutes; nothing else counts toward that or is held by it.
 // A session's cards that open within 2 s of the one before share one push (the burst waits at most 6 s); a later card
 // waits while that push's cards stay open, at most 10 minutes. A card's reminder pushes at half its time. A retry is

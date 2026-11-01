@@ -291,6 +291,23 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(store.mirrorNote == nil, "the next change clears it")
     }
 
+    @Test func aMirrorSettingThatNeverWentIsToastedOnlyWhenSettingsIsClosed() {
+        let store = store()
+        store.apply(.sessions(.list(projects: [], rows: [], mirror: .auto)))
+        store.settingsShown = true
+        store.sessionRequestSent(.sessionPrefs(mirror: .never))
+        store.requestDropped(.sessionPrefs(mirror: .never))
+        #expect(store.mirrorNote == "Not changed: your Mac was unreachable.")
+        #expect(store.lastError == nil, "Settings shows and speaks it beside the picker")
+
+        store.settingsShown = false
+        store.sessionRequestSent(.sessionPrefs(mirror: .tap))
+        store.requestDropped(.sessionPrefs(mirror: .tap))
+        #expect(store.sessions.mirror == .auto)
+        #expect(store.lastError?.message == "The Claude app setting was not changed: your Mac was unreachable.", "Settings was closed, so a toast says it")
+        #expect(store.mirrorNote == "Not changed: your Mac was unreachable.", "and the note waits for the next look")
+    }
+
     @Test func aDroppedStopSaysSoUnderTheComposer() {
         let store = store(controls: controls(working: true, turn: "2026-10-16T12:00:00.000Z"))
         let stop = ClientMessage.sessionStop(sessionId: sid, target: .all, turnStartedAt: "2026-10-16T12:00:00.000Z")

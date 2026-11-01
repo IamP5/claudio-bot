@@ -12,6 +12,13 @@ struct SettingsView: View {
     @State private var editingAddress = false
 
     var body: some View {
+        content
+            .onAppear { store.settingsShown = true }
+            .onDisappear { store.settingsShown = false }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         #if os(macOS)
         // The Settings window names itself after its tab and closes with its own button, so no title or Done here.
         form

@@ -225,6 +225,8 @@ final class AppStore {
     @ObservationIgnored private var mirrorAsked: MirrorChange?
     /// Why the Claude app setting went back, shown beside it until the next change.
     private(set) var mirrorNote: String?
+    /// Settings is on screen, so the mirror note beside the picker is seen and spoken there. Elsewhere it needs a toast.
+    @ObservationIgnored var settingsShown = false
 
     private struct MirrorChange {
         let before: MirrorPref?
@@ -497,6 +499,7 @@ final class AppStore {
             if let before = mirrorAsked?.before { sessions.setMirror(before) }
             mirrorAsked = nil
             mirrorNote = "Not changed: your Mac was unreachable."
+            if !settingsShown { lastError = ErrorNotice(message: "The Claude app setting was not changed: your Mac was unreachable.") }
         case let .sessionSend(sessionId, _, clientId, _, _):
             unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId }
             // A Retry of one a socket took before may have arrived the first time: it keeps saying so.

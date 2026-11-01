@@ -254,3 +254,10 @@ ts	decision	why
 2026-11-01T02:46:52Z	G27: pairLoose never pairs a shell when two tasks share a command line	never signal what is not provably the command
 2026-11-01T03:37:13Z	G27: an unpaired command ends only on a 0 count after some look counted it running; a shell that exec'd a plain program is counted by that program's command line; complex execs stay unsure	verifier r1 P1: a first-look 0 falsely ended a running command
 2026-11-01T03:56:27Z	G27 r3 rule: an unpaired command may end on a 0 count only if its text has no exec (except redirect-only), no &/nohup/setsid/disown/backgrounded subshell, and an earlier look counted it; everything else stays "can't tell"	root call after two false-ended rounds; never claim ended falsely, unsure longer is acceptable
+2026-11-01T04:01:02Z	G28: Stop and send older than 60 s is not sent automatically; Retry keeps the interrupt and turnStartedAt queues it if that turn ended	call 1 forbids automatic resend past 60 s
+2026-11-01T04:01:02Z	G28: Discard drops only the phone's copy; a later echo shows the message again	the Mac may have run it
+2026-11-01T04:01:02Z	G28: Stopped plan/question/permission cards read "Closed when the turn was stopped."	G25 "stopped" close value
+2026-11-01T04:01:02Z	G28: One OutboxRule table over every ClientMessage decides which offline requests expire at 60 s	call 2
+2026-11-01T04:01:02Z	G28: Bot-side sends keep their old rule without an age limit	outside the Sessions scope
+2026-11-01T04:01:02Z	G28: Outlived foreground command status reads "Still running after Claude Code stopped: <cmd> · <time>"	G25 outlived flag
+2026-11-01T04:01:02Z	G28: iOS starts unattended; first time on screen sends presence(true); a background relaunch says presence(false) first	G22 look rule

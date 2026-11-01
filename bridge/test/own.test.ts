@@ -2004,7 +2004,7 @@ describe("the thread says what stopped only once it did", () => {
   });
 
   test("a command no shell was found for is watched by its command line across another restart: Stop says it cannot tell, and how to check, until no process runs it", async () => {
-    const command = `exec >/dev/null 2>&1; sleep 30 # café ${process.pid}-${clock}`;
+    const command = `exec >/dev/null 2>&1; sleep ${30_000 + (process.pid % 9_000)}`;
     const shell = evalShell(command);
     const look = async () => {
       clock += OUTLIVED_LOOK_MS;
@@ -2074,12 +2074,15 @@ describe("the thread says what stopped only once it did", () => {
     expect((await handle({ type: "session_stop", sessionId: ASK, target: "all" }))[0]).toMatchObject({ type: "error", message: expect.stringContaining("can't tell") });
   });
 
+  const sourced = join(mkdtempSync(join(tmpdir(), "src-")), "run.sh");
+  writeFileSync(sourced, `exec sleep ${31_000 + (process.pid % 9_000)}\n`);
   for (const [name, tail] of [
     ["perl with quotes", 'exec perl -e "sleep 30"'],
-    ["env, which execs again", "exec env CLAUDIO=1 sleep 30"],
+    ["env, which execs again", `exec env CLAUDIO=1 sleep ${32_000 + (process.pid % 9_000)}`],
+    ["a script it sources", `. ${sourced}`],
   ] as const)
     test(`a command counted while its shell showed, which then execs into ${name}, never reads ended from a count of none`, async () => {
-      const command = `exec >/dev/null 2>&1; sleep 3; ${tail} # ${process.pid}-${name.length}`;
+      const command = `exec >/dev/null 2>&1; sleep 3; ${tail}`;
       const a = evalShell(command);
       const b = evalShell(command);
       try {
@@ -2345,7 +2348,7 @@ describe("the thread says what stopped only once it did", () => {
   });
 
   test("two commands alike, which no shell can be paired with, read may still run while either runs, and both ended at the first look after neither does", async () => {
-    const command = `sleep 30 # twin-${process.pid}-${clock}`;
+    const command = `sleep ${20_000 + (process.pid % 9_000)}`;
     const a = evalShell(command);
     const b = evalShell(command);
     const look = async () => {

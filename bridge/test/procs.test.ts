@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { commandCounts, endGroup, evalArg, groupAlive, mayHide, psText, read, shellGroups, shellLeaders, taskRun } from "../src/procs";
+import { commandCounts, countable, endGroup, evalArg, groupAlive, psText, read, shellGroups, shellLeaders, taskRun } from "../src/procs";
 import { backgroundCommand, evalShell } from "./shells";
 
 const started: number[] = [];
@@ -132,12 +132,31 @@ test("commandCounts counts the shells that run exactly a command, whoever starte
   expect((await commandCounts([command]))!.get(command)).toBe(0);
 });
 
-test("mayHide: a command that execs into another program or leaves a child behind can run on out of the count's sight", () => {
-  const hides = [
-    'exec >/dev/null 2>&1; sleep 95; exec perl -e "sleep 120"',
-    "exec >/dev/null 2>&1; sleep 96; exec env CLAUDIO=1 sleep 178",
-    "exec sleep 1",
-    "exec >/dev/null 2>&1 && exec sleep 2",
+test("countable: only a command whose whole text is plain words, ; && || |, and plain redirects, led by no shell trick, may end on a count of none", () => {
+  const Q = "exec >/dev/null 2>&1; ";
+  const plain = [
+    `${Q}sleep 53`,
+    "sleep 25; exec >/dev/null 2>&1; sleep 52",
+    "exec 2>&1 >log; sleep 5",
+    "exec</dev/null; sleep 4",
+    "exec>/dev/null; sleep 9",
+    "a && b 2>/dev/null || c | d >>out",
+    "echo executor; sleep 3",
+    "FOO=1 sleep 3",
+    "/bin/sleep 3",
+    `${Q}sleep 175`,
+  ];
+  const cantTell = [
+    // round 2 and 3
+    `${Q}exec sleep 170`,
+    `${Q}exec sleep 160`,
+    `${Q}sleep 95; exec perl -e "sleep 120"`,
+    `${Q}sleep 96; exec env CLAUDIO=1 sleep 178`,
+    `${Q}sleep 97; exec sleep 179`,
+    `${Q}exec perl -e "sleep 185"`,
+    `${Q}N=186; exec sleep $N`,
+    `${Q}exec sleep 187 </dev/null`,
+    `${Q}while [ ! -e /tmp/x/F5 ]; do sleep 0.2; done`,
     "exec >f sleep 4",
     'eval "exec sleep 1"',
     'sh -c "exec sleep 9"',
@@ -148,7 +167,38 @@ test("mayHide: a command that execs into another program or leaves a child behin
     "setsid sleep 9",
     "coproc sleep 1",
     "a |& b",
+    "if true; then exec sleep 201; fi",
+    "{ exec sleep 202; }",
+    "command exec sleep 203",
+    "builtin exec sleep 204",
+    "exec -a zz sleep 205",
+    // round 4
+    `${Q}. /tmp/x/src6.sh`,
+    `${Q}source ./run.sh`,
+    `${Q}eval "$(cat /tmp/x/src7.txt)"`,
+    `${Q}e''xec sleep 208`,
+    `${Q}exec >'/tmp/x/o;' sleep 209`,
+    "ex\\ec sleep 218",
+    "x=ex; ${x}ec sleep 217",
+    "echo 209 | xargs sleep",
+    "script -q /dev/null sleep 211",
+    "cat >/dev/null <<EOF\nhello\nEOF\nsleep 214",
+    "x=$(sleep 215 & echo hi)",
+    "case a in a) true ;& b) sleep 216 ;; esac",
+    "perl -e 'fork and exit; sleep 216'",
+    "exec 2>/dev/null\nsleep 9",
+    "exec &>/dev/null; sleep 9",
+    "exec > >(tee log); sleep 9",
+    "exec {fd}>f; sleep 9",
+    "ls >&2; sleep 9",
+    "sleep 9 2>&-",
+    "FOO=1 exec sleep 3",
+    "/usr/bin/env sleep 3",
+    "exec; sleep 9",
+    "sleep 9;; sleep 1",
+    "sleep 9 >",
+    "time sleep 9",
+    "nice sleep 9",
   ];
-  const plain = ["exec >/dev/null 2>&1; sleep 53", "sleep 25; exec >/dev/null 2>&1; sleep 52", "exec</dev/null; sleep 4", "exec 2>&1 >log; sleep 5", "a && b 2>&1 &>f; c >&2", "echo executor; sleep 3"];
-  expect([hides.filter((c) => !mayHide(c)), plain.filter(mayHide)]).toEqual([[], []]);
+  expect([plain.filter((c) => !countable(c)), cantTell.filter(countable)]).toEqual([[], []]);
 });

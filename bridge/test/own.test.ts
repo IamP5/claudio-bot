@@ -2209,6 +2209,54 @@ describe("the thread says what stopped only once it did", () => {
     }
   }, 15_000);
 
+  test("a pending step dropped past 20 still holds the run: once the 20 kept end, no finished alert goes out and Stop says it cannot tell", async () => {
+    const endings: [string, string][] = [];
+    const tag = 40_000 + (process.pid % 9_000);
+    const q0cmd = `exec >/dev/null 2>&1; exec sleep ${tag}`;
+    const q0 = evalShell(q0cmd);
+    const pairs = Array.from({ length: 10 }, (_, k) => `exec >/dev/null 2>&1; sleep 2; exec sleep ${tag + 1 + k}`);
+    const sh = pairs.map((c) => [evalShell(c), evalShell(c)] as const);
+    const ids = ["q0", ...pairs.flatMap((_, k) => [`a${k}`, `b${k}`])];
+    const cmdOf = (id: string) => (id === "q0" ? q0cmd : pairs[Number(id.slice(1))]!);
+    const line = (c: string) => `/bin/zsh -c source snap.sh && eval '${c.replace(/'/g, `'"'"'`)}' < /dev/null && pwd -P >| /tmp/cwd`;
+    leaders = async () => sh.flatMap(([a, b], k) => [a, b].map((x) => ({ group: x.pid, command: line(pairs[k]!), started: clock })));
+    try {
+      await start();
+      await send("Start them");
+      const q = queries[0]!;
+      await transcribe(...ids.flatMap((id) => [calledEntry(`toolu_${id}`, "Bash", { command: cmdOf(id), description: "Sleep", run_in_background: true }), resultEntry(`toolu_${id}`, `Command running in background with ID: ${id}.`)]));
+      const listed = ids.map((id) => shellTask(id, `toolu_${id}`, "Sleep"));
+      q.emit(...ids.map((id) => toolCall(`toolu_${id}`, "Bash", { command: cmdOf(id) })), ...listed.map(taskStarted), level(...listed), result());
+      await flush();
+      await flush();
+      await Bun.sleep(500);
+      sessions.stop();
+      queries.length = 0;
+      await start({ ended: (_, end, at) => void endings.push([end, at]) });
+      await flush();
+      await until(async () => (await restartLines()).length === 1);
+      for (const [a, b] of sh) {
+        await a.end();
+        await b.end();
+      }
+      for (let i = 0; i < 3; i++) await lookNow();
+      for (let i = 0; i < 4; i++) {
+        clock += END_SETTLE_MS;
+        sessions.tick(new Date(clock));
+        await Bun.sleep(50);
+      }
+      const kept = await Promise.all(ids.slice(1).map(async (id) => (await stepOf(`toolu_${id}`)).state));
+      expect([alive(q0.pid), (await stepOf("toolu_q0")).state, kept.filter((st) => st === "ended").length, endings]).toEqual([true, "unsure", 20, []]);
+      expect((await handle({ type: "session_stop", sessionId: ASK, target: "all" }))[0]).toMatchObject({ type: "error", message: expect.stringContaining("can't tell") });
+    } finally {
+      await q0.end();
+      for (const [a, b] of sh) {
+        await a.end();
+        await b.end();
+      }
+    }
+  }, 30_000);
+
   test("past 20 pending unpaired steps the oldest is no longer looked at, and its step still reads can't tell", async () => {
     const ids = Array.from({ length: 21 }, (_, i) => `p${i}`);
     await start();

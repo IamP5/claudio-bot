@@ -233,3 +233,11 @@ ts	decision	why
 2026-11-01T00:10:02Z	G26: Closed plan/question cards speak "closed without an answer", never "expired"	Stop closes them as expired on the wire
 2026-11-01T00:10:02Z	G26: A turn ending with work left waits 1.5 s before speaking	a crash is never first spoken as a finished turn
 2026-11-01T00:10:02Z	G26: "Stopped" is muted only when every open card was a permission card	only permission cards speak their own stop
+2026-11-01T00:31:57Z	G25: One notice per Claude Code death, naming the surviving commands, rewritten in place ~1 s later once survivors are known	one notice, no gap; S6e patterns unchanged
+2026-11-01T00:31:57Z	G25: Survivor counts in alerts and pushes are read when they go out	never claim a command still runs after it ended
+2026-11-01T00:31:57Z	G25: A crash or restart tells its ending only after the survivor lookup; the row keeps working until then	no failed→working flicker
+2026-11-01T00:31:57Z	G25: Stopping leftovers keeps the crash: "<crash text> · you stopped its N commands"	call 10
+2026-11-01T00:31:57Z	G25: The finished outcome is each turn's last reply line, including wake turns	never a subagent's summary
+2026-11-01T00:31:57Z	G25: Notices kept 24 h, up to 200; one about the current ending stays while that outcome holds	bounded history
+2026-11-01T00:31:57Z	G25: A turn stop (including Stop and send) never ends outlived work	the notice promises a message keeps them running
+2026-11-01T00:31:57Z	G25: New wire value "stopped" for ask answers and plan state when Stop closes a card; expiry stays "expired"	the app said "Expired" for a stopped card

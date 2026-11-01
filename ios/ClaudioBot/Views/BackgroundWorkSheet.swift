@@ -28,7 +28,7 @@ struct BackgroundWorkSheet: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.background)
-            .navigationTitle("Running now")
+            .navigationTitle(Self.title(count: tasks.count, stale: staleAt != nil))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
@@ -173,11 +173,11 @@ struct BackgroundWorkSheet: View {
 
     private func stopAll(clock: Date) -> some View {
         let phase = phase(.all, clock)
-        let what = model?.controls?.turn == nil ? "all background work" : "the turn and all background work"
+        let label = Self.stopAll(count: tasks.count, turn: model?.controls?.turn != nil, phase: phase)
         return Button(role: .destructive) {
             client.send(.sessionStop(sessionId: sessionId, target: .all, turnStartedAt: model?.controls?.turn?.startedAt))
         } label: {
-            Text(phase == .stopping ? "Stopping all…" : phase.retries ? "Not stopped yet. Stop all again" : "Stop all")
+            Text(label)
                 .font(.body.weight(.semibold))
                 .frame(maxWidth: .infinity)
         }
@@ -186,7 +186,19 @@ struct BackgroundWorkSheet: View {
         .tint(Theme.danger)
         .disabled(phase == .stopping)
         .padding(.top, 16)
-        .accessibilityLabel(phase == .stopping ? "Stopping \(what)" : "Stop \(what)")
+        .accessibilityLabel(label)
+    }
+
+    /// "6 running"; while the thread may be out of date, what ran when the Mac last answered.
+    static func title(count: Int, stale: Bool) -> String {
+        count == 0 ? "Running now" : stale ? "\(count) were running" : "\(count) running"
+    }
+
+    /// Stop all says everything it ends, the turn too, in the words the user sees and hears (F-SES-177, F-SES-208).
+    static func stopAll(count: Int, turn: Bool, phase: StopPhase) -> String {
+        let what = (count == 1 ? "the 1 task" : "all \(count)") + (turn ? " and the current turn" : "")
+        if phase == .stopping { return "Stopping \(what)…" }
+        return phase.retries ? "Not stopped yet. Stop \(what) again" : "Stop \(what)"
     }
 
     /// The subagent that started the task: another live task, else the step it ran as.

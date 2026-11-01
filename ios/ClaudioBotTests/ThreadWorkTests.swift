@@ -49,10 +49,10 @@ private func date(_ wire: String) -> Date {
 
         #expect(run.isLive)
         #expect(run.since == noon)
-        #expect(run.headline() == "1 of 2 agents, 1 command running · 1 waiting for approval · 1 stopped · 1 may still run · 1 ended")
+        #expect(run.headline() == "1 of 2 agents running · 1 waiting for approval · 1 stopped · 1 may still run · 1 ended", "sleep 60 is sleeper two's own command")
         #expect(run.failure == "List the late files failed: Exit code 1: ls: late.txt: No such file or directory")
         #expect(run.spoken(now: noon + 125) ==
-            "Running: 1 of 2 agents, 1 command, 1 waiting for approval, 1 stopped, 1 may still run, 1 ended, 2 minutes 5 seconds. List the late files failed: Exit code 1: ls: late.txt: No such file or directory")
+            "Running: 1 of 2 agents, 1 waiting for approval, 1 stopped, 1 may still run, 1 ended, 2 minutes 5 seconds. List the late files failed: Exit code 1: ls: late.txt: No such file or directory")
     }
 
     @Test func eachFixtureStepSaysItsStateTimeAndOwner() throws {
@@ -327,5 +327,25 @@ private func date(_ wire: String) -> Date {
     @Test func theWireStateDecodesAndAnOlderUnknownOneStillDegrades() throws {
         #expect(ToolStepState(wire: "unsure") == .unsure && ToolStepState.unsure.rawValue == "unsure")
         #expect(ToolStepState(wire: "paused") == .unknown("paused"))
+    }
+}
+
+@Suite struct ThreadWorkStaleTests {
+    @Test func anOutOfDateRunSaysItsClockIsFromTheLastUpdate() {
+        let run = WorkRun(steps: [step("1", "Agent", "sleeper one", state: .running, started: 0), step("2", "Agent", "sleeper two", state: .running, started: 0)])
+        #expect(run.spoken(now: start + 125, stale: true) == "Running when last updated: 2 agents, 2 minutes 5 seconds")
+        #expect(run.spoken(now: start + 125) == "Running: 2 agents, 2 minutes 5 seconds")
+        #expect(run.status(run.steps[0], now: start + 72, spoken: true, stale: true).first == "Running when last updated, 1 minute 12 seconds")
+        #expect(run.status(run.steps[0], now: start + 72, stale: true).first == "Running · 1m 12s", "the shown line keeps its words; the dimmed marks say it is old")
+    }
+
+    @Test func aCommandARunningAgentMakesIsNotCountedAgain() {
+        let steps = [
+            step("a1", "Agent", state: .running), step("a2", "Agent", state: .running),
+            step("c1", "Bash", state: .running, owner: "a1"), step("c2", "Bash", state: .running, owner: "a2"), step("c3", "Bash", state: .running),
+        ]
+        #expect(WorkRun(steps: steps).headline() == "2 agents, 1 command running")
+        let ended = [step("a1", "Agent", state: .ok), step("c1", "Bash", state: .running, owner: "a1")]
+        #expect(WorkRun(steps: ended).headline() == "1 command running", "an agent that ended no longer holds its command")
     }
 }

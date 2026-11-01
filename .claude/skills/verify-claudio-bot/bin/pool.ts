@@ -1,11 +1,11 @@
-// The simulator pool for scenario runs: three cloned iPhones, a per-device lease, and the only code that boots them.
+// The simulator pool for scenario runs: six cloned iPhones, a per-device lease, and the only code that boots them.
 // A lease is a directory leases/<device>/ made with mkdir (atomic), holding owner.json and a heartbeat file the holder
 // touches; a heartbeat older than STALE_MS marks the lease reclaimable. Nothing here touches a device outside POOL.
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BASE, REPO } from "./control-claudio";
 
-export const POOL = ["ClaudioBot-UX-1", "ClaudioBot-UX-2", "ClaudioBot-UX-3"] as const;
+export const POOL = ["ClaudioBot-UX-1", "ClaudioBot-UX-2", "ClaudioBot-UX-3", "ClaudioBot-UX-4", "ClaudioBot-UX-5", "ClaudioBot-UX-6"] as const;
 export type PoolDevice = (typeof POOL)[number];
 export const BUNDLE = "dev.claudiobot.app";
 export const STALE_MS = 10 * 60_000;
@@ -29,6 +29,13 @@ function devices(): { runtime: string; d: SimDevice }[] {
   if (!r.ok) throw new Error(`simctl list: ${r.err}`);
   const byRuntime = JSON.parse(r.out).devices as Record<string, SimDevice[]>;
   return Object.entries(byRuntime).flatMap(([runtime, ds]) => ds.map((d) => ({ runtime, d })));
+}
+/** The iOS runtimes installed and available; devices left behind by a removed runtime name one that is not. */
+function installedIosRuntimes(): string[] {
+  const r = run(["xcrun", "simctl", "list", "runtimes", "-j"]);
+  if (!r.ok) throw new Error(`simctl list runtimes: ${r.err}`);
+  const all = JSON.parse(r.out).runtimes as { identifier: string; isAvailable: boolean }[];
+  return all.filter((x) => x.isAvailable && x.identifier.includes("SimRuntime.iOS-")).map((x) => x.identifier);
 }
 const runtimeVersion = (id: string) => (id.match(/iOS-(\d+)-(\d+)/)?.slice(1).map(Number) ?? [0, 0]) as [number, number];
 const isPool = (name: string): name is PoolDevice => (POOL as readonly string[]).includes(name);
@@ -56,7 +63,7 @@ export function ensurePool() {
     });
   const source = candidates[0] ?? null;
   if (!source) throw new Error(`no shut-down ${CLONE_SOURCE_NAME} to clone`);
-  const newest = devices().filter((x) => x.runtime.includes("SimRuntime.iOS-")).map((x) => runtimeVersion(x.runtime)).sort((a, b) => b[0] - a[0] || b[1] - a[1])[0]!;
+  const newest = installedIosRuntimes().map(runtimeVersion).sort((a, b) => b[0] - a[0] || b[1] - a[1])[0]!;
   if (runtimeVersion(source.runtime).join(".") !== newest.join(".")) throw new Error(`the newest runtime has no shut-down ${CLONE_SOURCE_NAME}; refusing an older one`);
   for (const d of missing) {
     const r = run(["xcrun", "simctl", "clone", source.d.udid, d.name]);

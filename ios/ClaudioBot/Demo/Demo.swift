@@ -61,8 +61,10 @@ enum Demo {
         store.apply(.agent(agents[0], messages: agentMessages))
         store.apply(.file(botId: BotID("claude"), path: "library/merge-plan.md", file: BotFile(mime: "text/markdown", content: plan, data: nil)))
         if features.contains(.sessions) {
-            DemoSessions.load(into: store, empty: screen == "sessionsempty")
-            DemoSessions.streamParity(into: store)
+            if screen != "atworkwaiting" {
+                DemoSessions.load(into: store, empty: screen == "sessionsempty")
+                DemoSessions.streamParity(into: store)
+            }
         }
 
         router.sidebar = .bots
@@ -187,6 +189,15 @@ enum Demo {
                 try? await Task.sleep(for: .seconds(1.5))
                 store.setConnection(.disconnected(retryAt: .now + 25))
             }
+        case "atwork", "atworkoffline", "atworkwaiting":
+            router.sidebar = .sessions
+            router.columns = .detailOnly
+            if screen != "atwork" { store.setConnection(.disconnected(retryAt: .now + 25)) }
+        case "atworkchip", "atworkchipoffline":
+            router.sidebar = .sessions
+            router.open(.session(DemoSessions.parity))
+            router.columns = .detailOnly
+            if screen == "atworkchipoffline" { store.setConnection(.disconnected(retryAt: .now + 25)) }
         case "threadwaiting":
             store.setConnection(.disconnected(retryAt: .now + 25))
             router.open(.session(DemoSessions.audit))
@@ -202,6 +213,11 @@ enum Demo {
     /// `-demoColumns` opens the iPad with the sidebar beside the detail. A simulator in portrait cannot be turned from
     /// inside the app, and this is the split view a landscape iPad shows.
     static let showsAllColumns = arguments.contains("-demoColumns")
+    /// The `atwork` screens lay the window out as a wide one, so a phone shows the split view's at-work pane and chip:
+    /// `atwork` (nothing chosen, the list hidden as on an iPad in portrait), `atworkoffline` (the same with the Mac lost), `atworkwaiting` (no list yet, Mac lost),
+    /// `atworkchip` and `atworkchipoffline` (a thread with the list hidden).
+    /// `-wideLayout` does the same for the app paired with a bridge, so the live chip and pane can be seen on a phone.
+    static var forcesWide: Bool { screen?.hasPrefix("atwork") == true || arguments.contains("-wideLayout") }
     /// `toolfailed`: the thread opens a step's full output, which the Mac does not have.
     static var toolFails: Bool { screen == "toolfailed" }
 

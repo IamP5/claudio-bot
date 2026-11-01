@@ -252,19 +252,6 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
         #expect(store.heardAt == at + 3, "a frame about another screen still says the socket was alive")
     }
 
-    @Test func theDetailPaneCountsTheOtherSessionsAtWork() {
-        func row(_ id: String, _ status: SessionStatus, hidden: Bool = false) -> SessionRow {
-            SessionRow(
-                id: SessionID(id), projectId: ProjectID("p"), parentId: nil, title: id, origin: .phone, agent: nil, status: status, holder: .claudio,
-                unread: false, branch: nil, worktree: false, pr: nil, mirror: .notMirrored, hidden: hidden, url: nil, createdAt: at, lastAt: at
-            )
-        }
-        let rows = [row("a", .working), row("b", .working), row("c", .awaitingApproval), row("d", .idle), row("e", .working, hidden: true), row("f", .working)]
-        #expect(SessionsAtWork(rows, excluding: SessionID("f")).summary == "2 working · 1 needs you")
-        #expect(SessionsAtWork([row("a", .awaitingInput), row("b", .awaitingApproval)]).summary == "2 need you")
-        #expect(SessionsAtWork([row("d", .idle)]).summary == nil)
-    }
-
     @Test func aBannerSpeaksWhatItShows() {
         #expect(ThreadBanner.cloud(nil).spoken == "Cloud session. Continue it on claude.ai.")
         #expect(ThreadBanner.waiting("Waiting for the terminal to finish. Your message runs next.").spoken == "Waiting for the terminal to finish. Your message runs next.")

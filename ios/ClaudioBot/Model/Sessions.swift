@@ -153,6 +153,13 @@ enum ListFreshness: Equatable, Sendable {
         }
     }
 
+    /// How old a kept list is, for a surface that shows it away from the list: "as of 5m ago", "as of 5 minutes ago".
+    /// Nil while the list is live.
+    func asOf(now: Date, spoken: Bool) -> String? {
+        guard case .asOf(let date) = self else { return nil }
+        return "as of " + SessionAge(date, now: now).ago(spoken: spoken)
+    }
+
     func visibleCounts(_ counts: [SessionFilter: Int]) -> [SessionFilter: Int] {
         guard case .asOf = self else { return counts }
         return counts.filter { $0.key != .working }
@@ -453,6 +460,16 @@ enum SessionAge: Equatable, Sendable {
         case .now: "just now"
         case .date(let text, _): "on \(text)"
         default: "\(span) ago"
+        }
+    }
+
+    /// "5m ago", "just now", "Oct 3"; spoken, as `ago`.
+    func ago(spoken: Bool) -> String {
+        switch self {
+        case _ where spoken: ago
+        case .now: "just now"
+        case .date(let text, _): text
+        default: short + " ago"
         }
     }
 

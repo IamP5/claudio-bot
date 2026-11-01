@@ -61,6 +61,11 @@ export type Threads = {
    * transcript has it (message.id:block index), as session_delta frames at most every 60 ms.
    */
   stream(id: SessionId, m: SDKMessage): void;
+  /**
+   * The live query died: the reply it was streaming, whole as far as it got, is taken off the live text, so no snapshot
+   * seeds it again. Null when no reply was streaming or the transcript has it.
+   */
+  cutOff(id: SessionId): ThreadLive | null;
   /** A socket left: a thread nobody watches is kept only among the newest `keep`. */
   release(id: SessionId): void;
   open(id: SessionId): boolean;
@@ -613,6 +618,16 @@ export function createThreads(deps: ThreadsDeps): Threads {
           st.itemId = null;
           break;
       }
+    },
+
+    cutOff(id) {
+      const st = streams.get(id);
+      streams.delete(id);
+      if (st?.timer) clearTimeout(st.timer);
+      const s = states.get(id);
+      if (s) s.live = null;
+      if (!st || st.itemId === null || st.text === "" || s?.index.has(st.itemId)) return null;
+      return { itemId: st.itemId, text: st.text };
     },
 
     release(id) {

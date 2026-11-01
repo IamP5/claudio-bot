@@ -26,7 +26,7 @@ type Call = { url: string; init: RequestInit };
  * to a push; takes: whether it published one it failed to answer (it did not answer in time). The server's poll of its
  * cache answers from what it published, or with poll's answer.
  */
-function harness(opts: { home?: string; liveFor?: number; off?: boolean; respond?: () => Promise<Response>; takes?: () => boolean; hang?: boolean; poll?: () => Promise<Response>; noSid?: boolean } = {}) {
+function harness(opts: { home?: string; start?: number; liveFor?: number; off?: boolean; respond?: () => Promise<Response>; takes?: () => boolean; hang?: boolean; poll?: () => Promise<Response>; noSid?: boolean } = {}) {
   const home = opts.home ?? mkdtempSync(join(tmpdir(), "claudiobot-push-"));
   if (!opts.home) homes.push(home);
   const { world } = loadWorld(home);
@@ -40,7 +40,7 @@ function harness(opts: { home?: string; liveFor?: number; off?: boolean; respond
   const calls: Call[] = [];
   const polls: string[] = [];
   const onDisk: string[][] = [];
-  const clock = { t: T0 };
+  const clock = { t: opts.start ?? T0 };
   const published: { time: number; message: string; click: string; sequence_id?: string }[] = [];
   const fakeFetch = (async (url: string, init: RequestInit = {}) => {
     if (init.method !== "POST") {
@@ -730,6 +730,52 @@ test("a run a restart cut off waits out the start grace, then pushes once in pla
   expect(again.calls).toEqual([]);
 });
 
+/** The session's Claude Code died at T0 and left these commands running, which only the bridge follows now. */
+function survived(h: ReturnType<typeof harness>, end: "failed" | "lost", commands: string[], over: string[] = [], at = T0) {
+  drive(h, []);
+  const own = h.world.sessions.get(SID)!.own!;
+  own.outcome = { kind: end, text: "Claude Code stopped unexpectedly (terminated by signal SIGKILL)", at: iso(at) };
+  own.outlived = [...commands.map((id) => ({ id, group: 4242, foreground: true as const })), ...over.map((id) => ({ id, group: 4243, over: "ended" as const }))];
+}
+
+test("a death that left commands running is pushed with how many still run, and nothing of what they are", async () => {
+  const h = harness();
+  survived(h, "failed", ["perl-a", "perl-b"], ["gone"]);
+  h.push.sessionEnded!(SID, "failed", iso(T0));
+  await settle();
+  expect(sent(h)).toEqual([["A Claude Code session stopped with an error. 2 commands still run on your Mac.", `claudiobot://session/${SID}`, "default"]]);
+});
+
+test("the alert for a death or a restart counts the work that still runs; a finished one never does", async () => {
+  const h = harness();
+  survived(h, "lost", ["perl-a"]);
+  h.sockets.until = new Date(T0 + 120_000);
+  h.push.sessionEnded!(SID, "lost", iso(T0));
+  at(h, T0 + 1_000);
+  survived(h, "failed", ["perl-a", "perl-b"], [], T0 + 1_000);
+  h.push.sessionEnded!(SID, "failed", iso(T0 + 1_000));
+  expect(h.signals.map((f) => f.type === "session_alert" && [f.reason, f.running ?? null])).toEqual([
+    ["lost", { agents: 0, commands: 1 }],
+    ["failed", { agents: 0, commands: 2 }],
+  ]);
+  const done = harness();
+  survived(done, "failed", ["perl-a"]);
+  done.sockets.until = new Date(T0 + 120_000);
+  done.push.sessionEnded!(SID, "finished", iso(T0 + 5_000));
+  expect(done.signals.map((f) => f.type === "session_alert" && [f.reason, f.running ?? null])).toEqual([["finished", null]]);
+});
+
+test("a run a restart cut off keeps the grace it started with: a second restart does not start it over", async () => {
+  const h = harness();
+  h.push.sessionEnded!(SID, "lost", iso(T0));
+  at(h, T0 + 50_000);
+  const again = harness({ home: h.home, start: T0 + 50_000 });
+  expect(again.push.nextDeadline()).toBe(iso(T0 + START_GRACE_MS));
+  at(again, T0 + START_GRACE_MS);
+  await settle();
+  expect(sent(again).map((c) => c[0])).toEqual(["A Claude Code session was interrupted by a bridge restart"]);
+});
+
 test("a phone back within the start grace hears of a run a restart cut off as an alert, and no push follows once it was seen", async () => {
   const h = harness();
   h.push.sessionEnded!(SID, "lost", iso(T0));
@@ -1300,4 +1346,33 @@ test("a write-only topic whose server takes each push but never answers rings at
   await ticks(h, T0 + 3_000, T0 + 30 * 60_000);
   expect([h.published.length, h.world.push.owed, h.push.state!().state]).toEqual([2, undefined, "failing"]);
   expect(h.logs.at(-1)).toBe("push: m_a|card not sent again: the push server did not answer twice and will not say whether it took it");
+});
+
+test("an ending's alert sent again, and its push tried again, count what still runs at that moment", async () => {
+  const h = harness();
+  survived(h, "failed", ["perl-a", "perl-b"]);
+  h.sockets.until = new Date(T0 + 120_000);
+  h.push.sessionEnded!(SID, "failed", iso(T0));
+  const own = h.world.sessions.get(SID)!.own!;
+  own.outlived = [own.outlived![0]!, { ...own.outlived![1]!, over: "ended" }];
+  h.sockets.open = [1, 2];
+  at(h, T0 + 1_000);
+  expect(h.signals.map((f) => f.type === "session_alert" && f.running)).toEqual([
+    { agents: 0, commands: 2 },
+    { agents: 0, commands: 1 },
+  ]);
+
+  const away = flaky();
+  survived(away, "failed", ["perl-a", "perl-b"]);
+  away.push.sessionEnded!(SID, "failed", iso(T0));
+  await drain();
+  const left = away.world.sessions.get(SID)!.own!;
+  left.outlived = [left.outlived![0]!, { ...left.outlived![1]!, over: "stopped" }];
+  away.server.down = false;
+  at(away, T0 + OWED_RETRY_MS[0]);
+  await drain();
+  expect(sent(away).map((c) => c[0])).toEqual([
+    ...Array(3).fill("A Claude Code session stopped with an error. 2 commands still run on your Mac."),
+    "A Claude Code session stopped with an error. 1 command still runs on your Mac.",
+  ]);
 });

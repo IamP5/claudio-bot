@@ -296,6 +296,9 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(try decode(SessionMirror.self, #""none""#) == .notMirrored)
         #expect(try decode(PermissionMode.self, #""yolo""#) == .unknown("yolo"))
         #expect(try decode(AskAnswers.self, #""withdrawn""#) == .closed("withdrawn"))
+        // A card the user's Stop closed: this app has no word for it yet and reads it as closed, not expired.
+        #expect(try decode(AskAnswers.self, #""stopped""#) == .closed("stopped"))
+        #expect(try decode(PlanState.self, #""stopped""#) == .unknown("stopped"))
         #expect(try decode(AskAnswers.self, #""expired""#) == .expired)
         #expect(try Wire.encoder().encode(SessionHolder.nobody) == Data(#""none""#.utf8))
     }
@@ -323,6 +326,8 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(tasks.map(\.kind) == [.agent, .command])
         #expect(tasks[0].waiting == MessageID("m23") && tasks[0].progress?.tools == 3 && tasks[0].progress?.last == "Bash")
         #expect(tasks[1].owner == "toolu_01Ac1" && tasks[1].progress == nil && tasks[1].background)
+        #expect(tasks.map(\.outlived) == [false, false])
+        #expect(try jsonObject(Wire.encoder().encode(tasks[0]))["outlived"] == nil)
 
         guard case let .work(_, _, steps) = items.first else { Issue.record("no work item first"); return }
         #expect(steps.map(\.state) == [.running, .waiting, .running, .error, .stopped, .unsure, .ended])
@@ -342,7 +347,12 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(reasons == [.task, .stop])
 
         let wake = frames[1].controls
-        #expect(wake.working && wake.turn?.wake == true && wake.tasks == [])
+        #expect(wake.working && wake.turn?.wake == true)
+        let outlived = try #require(wake.tasks?.first)
+        #expect(wake.tasks?.count == 1 && outlived.outlived && !outlived.background && outlived.label == "perl -e 'sleep 90'")
+        #expect(try jsonObject(Wire.encoder().encode(outlived))["outlived"] as? Bool == true)
+        guard case let .work(_, _, wakeSteps) = frames[1].items.first else { Issue.record("no work item in the wake frame"); return }
+        #expect(wakeSteps.map(\.id) == [outlived.stepId], "the outlived task names a step in the thread")
     }
 
     @Test func pushStateAndErrorsAboutARequestDecodeToTypedValues() throws {
@@ -1099,6 +1109,26 @@ private func unknowns(in message: ServerMessage) -> [String] {
         ))
     }
 
+    private func ending(_ reason: SessionAlertReason, agents: Int, commands: Int) -> Alert {
+        .session(SessionAlert(
+            sessionId: SessionID("s1"), reason: reason, count: 1, title: "Sleep in parallel", cardId: nil,
+            running: SessionRunning(agents: agents, commands: commands)
+        ))
+    }
+
+    @Test func endingAlertsFromTheBridgeNameWhatStillRuns() throws {
+        let endings = try Fixture.server().compactMap { frame -> SessionAlert? in
+            if case .sessionAlert(let alert) = frame.message, alert.reason == .failed || alert.reason == .lost { alert } else { nil }
+        }
+        #expect(endings.map(\.reason) == [.lost, .failed, .lost])
+        #expect(endings.map(\.running) == [nil, SessionRunning(agents: 0, commands: 2), SessionRunning(agents: 0, commands: 1)])
+        #expect(endings.compactMap { Notifier.text(of: $0)?.body } == [
+            "Interrupted by a bridge restart",
+            "Stopped with an error. 2 commands still run on your Mac.",
+            "Interrupted by a bridge restart. 1 command still runs on your Mac.",
+        ])
+    }
+
     @Test func aSessionHasOneNotificationInItsOwnThread() {
         let card = session("s1", .card, count: 3)
         let done = session("s1", .finished)
@@ -1122,6 +1152,11 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(text(session("s1", .finished, title: "  ")) == ["Claude Code session", "Finished"])
         #expect(text(session("s1", .failed)) == ["Sleep in parallel", "Stopped with an error"])
         #expect(text(session("s1", .lost)) == ["Sleep in parallel", "Interrupted by a bridge restart"])
+        #expect(text(ending(.failed, agents: 0, commands: 2)) == ["Sleep in parallel", "Stopped with an error. 2 commands still run on your Mac."])
+        #expect(text(ending(.lost, agents: 0, commands: 1)) == ["Sleep in parallel", "Interrupted by a bridge restart. 1 command still runs on your Mac."])
+        #expect(text(ending(.lost, agents: 1, commands: 0)) == ["Sleep in parallel", "Interrupted by a bridge restart. 1 agent still runs on your Mac."])
+        #expect(text(ending(.failed, agents: 1, commands: 1)) == ["Sleep in parallel", "Stopped with an error. 1 agent, 1 command still run on your Mac."])
+        #expect(text(ending(.failed, agents: 0, commands: 0)) == ["Sleep in parallel", "Stopped with an error"])
         #expect(text(session("s1", .unknown("paused"))) == nil)
     }
 

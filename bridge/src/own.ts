@@ -30,7 +30,7 @@ import type { SessionEnd } from "./push";
 import type { Persist } from "./store";
 import { RESTING, rowRun, runControls, runningSteps, runs, type Activity, type StepPatch, type Task } from "./tasks";
 import { displayName, errorText, fewNames, maskSecrets } from "./text";
-import { maskSummary, stepLabel } from "./transcript";
+import { stepLabel } from "./transcript";
 import { emptySession, newMessageId, ownCardId, ownCardOpen, type BackgroundTask, type Cut, type Lifecycle, type OwnCard, type OwnDrive, type SessionRecord, type World } from "./world";
 
 // The drivers of sessions the user drives from the phone: one session.ts Session per id, opened in the transcript's
@@ -64,6 +64,8 @@ export type OwnDeps = {
   cardTtlMs?: number;
   /** Every message of the live query, for the streaming text. */
   observe?(id: SessionId, m: Parameters<SessionSpec["onMessage"]>[0]): void;
+  /** The reply that was streaming when the live query died, taken off the live text: null when none was. */
+  cutOff?(id: SessionId): { itemId: ItemId; text: string } | null;
   /** Extra query options (the streaming text needs partial messages). */
   options?: Partial<Options>;
   now(): Date;
@@ -110,7 +112,10 @@ export const END_SETTLE_MS = 5_000;
 /** An own session's query with nothing to do closes after this; an agent's stays 15 minutes. */
 export const OWN_IDLE_MS = 10 * 60_000;
 const SETTLED_KEPT = 20;
-const NOTICES_KEPT = 10;
+/** A notice stays this long, and one that says how the run held now ended stays while that ending holds. */
+const NOTICES_KEPT_MS = 24 * 3_600_000;
+const NOTICES_MAX = 200;
+const ENDING_REASONS: ReadonlySet<NoticeReason | undefined> = new Set(["failure", "stop", "restart"]);
 const PROMPTS_KEPT = 5;
 const STOPPED_STEPS_KEPT = 20;
 /** A Stop of a task the user stopped this recently is the same Stop, sent again or queued behind the first. */
@@ -136,12 +141,17 @@ const counted = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`
 const KIND_WORD: Record<Task["kind"], string> = { agent: "agent", command: "command", other: "task" };
 const taskName = (t: Task) => `${KIND_WORD[t.kind]} "${t.label}"`;
 /** A stopped run's outcome, as its row reads it: what stopped, not that a turn did. */
+const stoppedWhat = (tasks: readonly Task[]) => {
+  const of = (kind: Task["kind"]) => tasks.filter((t) => t.kind === kind).length;
+  return (["agent", "command", "other"] as const).flatMap((k) => (of(k) > 0 ? [counted(of(k), KIND_WORD[k])] : []));
+};
 const stoppedText = (early: boolean, tasks: readonly Task[]) => {
   if (early) return `${STOPPED_BY_YOU} before Claude replied`;
-  const of = (kind: Task["kind"]) => tasks.filter((t) => t.kind === kind).length;
-  const what = (["agent", "command", "other"] as const).flatMap((k) => (of(k) > 0 ? [counted(of(k), KIND_WORD[k])] : []));
+  const what = stoppedWhat(tasks);
   return what.length > 0 ? `${STOPPED_BY_YOU}: ${what.join(", ")}` : STOPPED_BY_YOU;
 };
+/** What a failed or lost outcome reads once the user stopped what it left running. */
+const STOP_ADDED = " · you stopped ";
 /** A refusal the phone shows under its composer: at most two commands, each cut short between words (a masked secret
  *  stays whole), then how many more. */
 const fewOf = (tasks: readonly Task[]) => {
@@ -252,8 +262,6 @@ export function createOwn(deps: OwnDeps): Own {
   const underway = new Set<SessionId>();
   /** Sessions the user stopped something on in this run. */
   const stoppedBy = new Set<SessionId>();
-  /** Claude Code's summary of the last background task that ended in the run: the row's line when the run finishes. */
-  const lastTask = new Map<SessionId, string>();
   /** Subagent cards a task stop covers: when their query gives up on them, the user's stop closed them. */
   const stopping = new Set<MessageId>();
   /**
@@ -277,6 +285,15 @@ export function createOwn(deps: OwnDeps): Own {
   const rested = new Map<SessionId, string>();
   /** Runs that came to rest, by when, until their ending is told or a new run takes over. */
   const ending = new Map<SessionId, number>();
+  /**
+   * Claude Code died under a turn (it exited, or a bridge restart took it): an ending of its own, told once what outlived
+   * it is known, whatever still runs. notice: the thread's one notice of it, which then names what still runs.
+   */
+  const deaths = new Map<SessionId, { end: "failed" | "lost"; at: string; notice: ItemId; head: string; error: string | null; session: Session | undefined }>();
+  /** The outcome time of each session's last ending told, so a later rest of the same run is not told again. */
+  const told = new Map<SessionId, string>();
+  /** Sessions whose run left steps the bridge cannot tell about and cannot look at again. */
+  const unsureRun = new Set<SessionId>();
   /** Queued messages the user withdrew, so asking again says so. */
   const withdrawn = new Map<SessionId, string[]>();
   /** The turn in flight on each session and when Claude Code took its message, which is where the message shows. */
@@ -295,6 +312,8 @@ export function createOwn(deps: OwnDeps): Own {
   const nameOf = (o: Outlived) => taskName(outlivedTask(o, bootAt));
 
   const working = (rec: SessionRecord) => (drivers.get(rec.id)?.working ?? false) || runs(activityOf(rec));
+  /** Work the bridge cannot tell has ended: the run is not over while it may still run, though nothing shows working. */
+  const unsure = (rec: SessionRecord) => allOutlived(rec).some((o) => o.over === "unsure") || (unsureRun.has(rec.id) && (rec.own?.unsure?.length ?? 0) > 0);
 
   /** A new run starts: how the last one ended no longer shows. */
   function begin(rec: SessionRecord) {
@@ -303,7 +322,8 @@ export function createOwn(deps: OwnDeps): Own {
     delete drive.endedTurn;
     stoppedBy.delete(rec.id);
     endedByStop.delete(rec.id);
-    lastTask.delete(rec.id);
+    delete drive.reply;
+    unsureRun.delete(rec.id);
     delete drive.unchecked;
     deps.persist("now");
   }
@@ -328,8 +348,9 @@ export function createOwn(deps: OwnDeps): Own {
         rested.delete(id);
       } else {
         if (!rested.has(id)) rested.set(id, now());
+        if (unsure(rec)) underway.add(id);
         // A stop not yet said is the run's ending, so the run's rest waits for it.
-        if (!turnStops.has(id) && underway.delete(id)) {
+        else if (!turnStops.has(id) && underway.delete(id)) {
           if (!drive.outcome || drive.outcome.kind === "finished") {
             // The last work to end was the user's stop of it, so the run ends as stopped, never as finished.
             const byStop = endedByStop.get(id) ?? [];
@@ -337,7 +358,7 @@ export function createOwn(deps: OwnDeps): Own {
               ? { kind: "stopped", text: STOPPED_BY_YOU, at: now() }
               : byStop.length > 0
                 ? { kind: "stopped", text: stoppedText(false, byStop), at: now() }
-                : { kind: "finished", text: lastTask.get(id) ?? "Finished", at: now() };
+                : { kind: "finished", text: drive.reply ?? "Finished", at: now() };
             deps.persist("now");
           }
           ending.set(id, deps.now().getTime());
@@ -442,7 +463,7 @@ export function createOwn(deps: OwnDeps): Own {
 
   /** The run ends as the user's stop: what it stopped, and with a stop of everything that all landed, a cut of every step. */
   function stoppedRun(rec: SessionRecord, o: { early: boolean; tasks: readonly Task[]; at: string; envelope: string | null; whole: boolean }) {
-    end(rec, { kind: "stopped", text: stoppedText(o.early, o.tasks), at: o.at }, o.envelope, o.whole ? { state: "stopped", cause: STOPPED_BY_YOU } : undefined);
+    end(rec, { kind: "stopped", text: stoppedText(o.early, o.tasks), at: o.at }, o.envelope, o.whole ? { state: "stopped", cause: STOPPED_BY_YOU } : undefined, o.tasks);
   }
 
   /**
@@ -481,6 +502,7 @@ export function createOwn(deps: OwnDeps): Own {
   function markUnsure(rec: SessionRecord, tasks: readonly BackgroundTask[]) {
     if (tasks.length === 0) return;
     const drive = driveOf(rec);
+    unsureRun.add(rec.id);
     drive.unchecked = true;
     drive.unsure = [...(drive.unsure ?? []), ...tasks.map((t) => t.stepId ?? `task:${t.id}`)].slice(-STOPPED_STEPS_KEPT);
     deps.persist("now");
@@ -500,8 +522,19 @@ export function createOwn(deps: OwnDeps): Own {
     if (add.length === 0) return;
     driveOf(rec).outlived = [...allOutlived(rec), ...add];
     deps.persist("now");
+    const said = (tasks: readonly Outlived[]) => `still ${pick(tasks.length, "runs", "run")} on this Mac. Stop ends ${pick(tasks.length, "it", "them")}.`;
+    const death = deaths.get(rec.id);
+    if (death && driveOf(rec).notices?.some((n) => n.id === death.notice)) {
+      // One notice per death: what happened, what still runs, and the next steps in order.
+      const left = followed(allOutlived(rec));
+      const next = `Send a message to start Claude Code again; the ${pick(left.length, "command keeps", "commands keep")} running until you stop ${pick(left.length, "it", "them")}.`;
+      const text = `${death.head} ${upper(fewNames(left.map(nameOf), listed))} ${said(left)} ${next}${death.error === null ? "" : `\n${death.error}`}`;
+      driveOf(rec).notices = driveOf(rec).notices!.map((n) => (n.id === death.notice ? { ...n, text } : n));
+      deps.persist("now");
+      return changed(rec.id);
+    }
     const names = fewNames(add.map(nameOf), listed);
-    const runs = `still ${pick(add.length, "runs", "run")} on this Mac. Stop ends ${pick(add.length, "it", "them")}.`;
+    const runs = said(add);
     notice(
       rec.id,
       cause === "restart" ? `The bridge restarted, and Claude Code no longer follows ${names}, which ${runs}` : `Claude Code is no longer running, but ${names} ${runs}`,
@@ -552,7 +585,7 @@ export function createOwn(deps: OwnDeps): Own {
     lookingAtOutlived.add(rec.id);
     const free = (o: Outlived) => !(beingStopped.get(rec.id)?.has(o.id as TaskId) ?? false);
     const drive = driveOf(rec);
-    const before = { outlived: drive.outlived, notices: drive.notices, last: lastTask.get(rec.id) };
+    const before = { outlived: drive.outlived, notices: drive.notices };
     try {
       const watched = outlivedOf(rec).filter(free);
       const runs = await Promise.all(watched.map(runOf));
@@ -562,39 +595,51 @@ export function createOwn(deps: OwnDeps): Own {
       for (const o of unsureGone) unsureLooks.delete(`${rec.id}:${o.id}`);
       const ended = [...now("gone"), ...unsureGone];
       const unsure = now("unsure");
-      Object.assign(before, { outlived: drive.outlived, notices: drive.notices, last: lastTask.get(rec.id) });
+      Object.assign(before, { outlived: drive.outlived, notices: drive.notices });
       if (ended.length === 0 && unsure.length === 0) return;
       letGo(rec, ended.map((o) => o.id), "ended");
       letGo(rec, unsure.map((o) => o.id), "unsure");
-      if (ended.length > 0) {
-        lastTask.set(rec.id, `${upper(listed(ended.map(nameOf)))} ended`);
-        notice(rec.id, endedText(ended), "info", "task");
-      }
+      if (ended.length > 0) notice(rec.id, endedText(ended), "info", "task");
       if (unsure.length > 0) notice(rec.id, unsureText(fewNames(unsure.map(nameOf), listed), unsure.length), "info", "task");
     } catch (e) {
       drive.outlived = before.outlived;
       drive.notices = before.notices;
-      if (before.last === undefined) lastTask.delete(rec.id);
-      else lastTask.set(rec.id, before.last);
       deps.log(`own ${rec.id}: looking at outlived commands failed: ${errorText(e)}`);
     } finally {
       lookingAtOutlived.delete(rec.id);
     }
   }
 
-  /** at: where it sits in the thread, now when absent. */
-  function notice(id: SessionId, text: string, tone: "info" | "error" = "info", reason?: NoticeReason, at = now()) {
+  /** at: where it sits in the thread, now when absent. Returns the notice's id. */
+  function notice(id: SessionId, text: string, tone: "info" | "error" = "info", reason?: NoticeReason, at = now()): ItemId | null {
     const drive = deps.world.sessions.get(id)?.own;
-    if (!drive) return;
+    if (!drive) return null;
     const item = { kind: "notice", id: `n_${crypto.randomUUID()}` as ItemId, at, text, tone, ...(reason && { reason }) } as const;
-    drive.notices = [...(drive.notices ?? []), item].slice(-NOTICES_KEPT);
+    const since = new Date(deps.now().getTime() - NOTICES_KEPT_MS).toISOString();
+    const outcome = drive.outcome;
+    const holds = (n: typeof item | NonNullable<OwnDrive["notices"]>[number]) => outcome !== undefined && ENDING_REASONS.has(n.reason) && n.at >= outcome.at;
+    const kept = [...(drive.notices ?? []), item].filter((n) => n.at >= since || holds(n));
+    const over = kept.length - NOTICES_MAX;
+    const dropped = new Set(kept.filter((n) => !holds(n)).slice(0, Math.max(0, over)));
+    drive.notices = kept.filter((n) => !dropped.has(n));
     deps.persist("now");
     changed(id);
+    return item.id;
   }
 
-  /** turn: the envelope whose turn this ended, if any. */
-  function end(rec: SessionRecord, outcome: SessionOutcome, turn: string | null, cut?: Omit<Cut, "at">) {
+  /**
+   * turn: the envelope whose turn this ended, if any. A stop of what a failure or a restart left running never hides
+   * that failure: the stop is added to its outcome, which keeps its kind, time and cut.
+   */
+  function end(rec: SessionRecord, outcome: SessionOutcome, turn: string | null, cut?: Omit<Cut, "at">, stopped?: readonly Task[]) {
     const drive = driveOf(rec);
+    const prev = drive.outcome;
+    if (outcome.kind === "stopped" && (prev?.kind === "failed" || prev?.kind === "lost")) {
+      const what = stoppedWhat(stopped ?? []);
+      drive.outcome = { ...prev, text: `${prev.text.split(STOP_ADDED)[0]}${STOP_ADDED}${what.length > 0 ? `its ${what.join(", ")}` : "what was left"}` };
+      deps.persist("now");
+      return;
+    }
     drive.outcome = outcome;
     if (turn === null) delete drive.endedTurn;
     else drive.endedTurn = turn;
@@ -609,7 +654,16 @@ export function createOwn(deps: OwnDeps): Own {
     if (DIED.test(error)) {
       const cause = `Claude Code stopped unexpectedly (${line(error).replace(/^Claude Code process /, "")})`;
       end(rec, { kind: "failed", text: cause, at }, turn, { state: "error", cause });
-      return notice(rec.id, `Claude Code stopped unexpectedly. Send a message to start it again.\n${maskSecrets(error)}`, "error", "failure");
+      // The reply it was writing stays as far as it got, right above the notice; Claude Code never writes it down.
+      const cut = deps.cutOff?.(rec.id) ?? null;
+      if (cut) {
+        const drive = driveOf(rec);
+        drive.cutOff = [...(drive.cutOff ?? []).filter((r) => r.id !== cut.itemId), { id: cut.itemId, at, text: cut.text }].slice(-PROMPTS_KEPT);
+      }
+      const head = `Claude Code stopped unexpectedly${cut ? " while writing this reply" : ""}.`;
+      const id = notice(rec.id, `${head} Send a message to start it again.\n${maskSecrets(error)}`, "error", "failure", at);
+      if (id !== null) deaths.set(rec.id, { end: "failed", at, notice: id, head, error: maskSecrets(error), session: drivers.get(rec.id) });
+      return;
     }
     end(rec, { kind: "failed", text: line(error), at }, turn, { state: "error", cause: line(error) });
     notice(rec.id, maskSecrets(error), "error", "failure");
@@ -622,9 +676,11 @@ export function createOwn(deps: OwnDeps): Own {
    */
   function lose(rec: SessionRecord, text: string, turn: string | null) {
     const at = now();
-    if (turn !== null) deps.ended?.(rec.id, "lost", at);
+    // The restart already ended this run; what else it cut off is said, but the run keeps the one ending.
+    if (turn === null && deaths.has(rec.id)) return void notice(rec.id, text, "info", "restart");
     end(rec, { kind: "lost", text: line(text), at }, turn, { state: "stopped", cause: RESTARTED });
-    notice(rec.id, text, "info", "restart");
+    const id = notice(rec.id, text, "info", "restart", at);
+    if (turn !== null && id !== null) deaths.set(rec.id, { end: "lost", at, notice: id, head: text, error: null, session: drivers.get(rec.id) });
   }
 
   /** A prompt a stop ended stays in the thread, whether or not Claude Code wrote it down. */
@@ -681,11 +737,11 @@ export function createOwn(deps: OwnDeps): Own {
         break;
       case "ask":
         if (reply.kind === "choice") return refused("A question takes answers");
-        card.answers = reply.kind === "answers" ? reply.answers : reply.kind === "dismissed" ? "dismissed" : "expired";
+        card.answers = reply.kind === "answers" ? reply.answers : reply.kind === "dismissed" || reply.kind === "stopped" ? reply.kind : "expired";
         break;
       case "plan":
         if (reply.kind === "answers" || reply.kind === "dismissed") return refused("A plan takes a choice");
-        card.state = reply.kind !== "choice" ? "expired" : reply.choice === "once" || reply.choice === "always" ? "approved" : "rejected";
+        card.state = reply.kind === "stopped" ? "stopped" : reply.kind !== "choice" ? "expired" : reply.choice === "once" || reply.choice === "always" ? "approved" : "rejected";
         break;
     }
     prune(rec);
@@ -838,9 +894,14 @@ export function createOwn(deps: OwnDeps): Own {
         };
       },
       onMessage: (m) => {
-        if (m.type === "system" && m.subtype === "task_notification" && m.status !== "stopped" && m.summary) {
-          const task = drivers.get(id)?.activity().all.get(m.task_id as TaskId);
-          lastTask.set(id, displayName(maskSummary(m.summary.split("\n")[0] ?? "", task?.label ?? null), LINE_MAX));
+        // Each turn's result, a wake turn's included, is its last reply. The turn rests a moment before its result is
+        // read, so a finished outcome already set takes it then.
+        if (m.type === "result" && m.subtype === "success" && line(m.result) !== "") {
+          const reply = line(m.result);
+          const drive = driveOf(rec);
+          drive.reply = reply;
+          if (drive.outcome?.kind === "finished") drive.outcome = { ...drive.outcome, text: reply };
+          deps.persist("now");
         }
         deps.observe?.(id, m);
       },
@@ -876,6 +937,8 @@ export function createOwn(deps: OwnDeps): Own {
         else notice(id, text, "info", reason);
       },
       onDormant() {
+        // What outlived the query is still being looked up: closing now would cut the lookup's word short of the thread.
+        if (session.settling) return;
         drivers.delete(id);
         session.close();
       },
@@ -893,7 +956,7 @@ export function createOwn(deps: OwnDeps): Own {
 
   /** Whether stopping target ends this task: it is the task or runs under it, or a turn stop reaches its foreground work. */
   const ends = (a: Activity, target: StopTarget, id: TaskId): boolean =>
-    target === "all" ? true : typeof target === "object" ? chain(a, id).some((t) => t.id === target.task) : !chain(a, id).some((t) => t.background);
+    target === "all" ? true : typeof target === "object" ? chain(a, id).some((t) => t.id === target.task) : !chain(a, id).some((t) => t.background || t.outlived);
 
   /**
    * Stop closes the turn's cards, then interrupts. A subagent's card closes with its task, once Claude Code takes the
@@ -1094,6 +1157,7 @@ export function createOwn(deps: OwnDeps): Own {
       const life = drive.session.lifecycle;
       const turn = life.kind === "working" || life.kind === "stopping" ? life.turn : null;
       for (const k of drive.kept ?? []) items.push({ kind: "user", id: k.id, at: k.at, text: k.text, from: "user", queued: false });
+      for (const r of drive.cutOff ?? []) items.push({ kind: "assistant", id: r.id, at: r.at, text: r.text });
       for (const p of drive.session.pending) {
         if (p.clientId === undefined) continue;
         const took = p.id === turn?.pending ? turn.startedAt : null;
@@ -1133,6 +1197,8 @@ export function createOwn(deps: OwnDeps): Own {
       const outcome = rec.own?.outcome;
       const ended = outcome ? { outcome } : {};
       if (s?.unavailable && deps.blocked(rec.id) === null) return { status: "unavailable", working, ...ended };
+      // Until the bridge has looked up what outlived Claude Code, the row keeps reading as it did when it died: working.
+      if (!working && s?.settling && deaths.has(rec.id)) return { status: "working", working: true, ...ended };
       if (open.some((c) => c.kind !== "ask")) return { status: "awaiting_approval", working, ...run, ...ended };
       if (open.length > 0) return { status: "awaiting_input", working, ...run, ...ended };
       if ((rec.own?.session.pending.length ?? 0) > 0 && deps.blocked(rec.id) !== null) return { status: "parked", working: false, ...ended };
@@ -1227,15 +1293,31 @@ export function createOwn(deps: OwnDeps): Own {
           }
         }
       }
+      // The session that died is asked, not the session's current driver: one that went dormant still looks.
+      for (const [id, d] of deaths) {
+        if (d.session?.settling) continue;
+        deaths.delete(id);
+        if (deps.world.sessions.get(id)?.own?.outcome?.at !== d.at) continue;
+        told.set(id, d.at);
+        deps.ended?.(id, d.end, d.at);
+      }
       for (const [id, since] of ending) {
-        if (at.getTime() - since < END_SETTLE_MS) continue;
+        if (at.getTime() - since < END_SETTLE_MS || deaths.has(id)) continue;
         const rec = deps.world.sessions.get(id);
         const s = drivers.get(id);
         if (rec?.own && !working(rec) && (s?.wakeDue || s?.settling)) continue;
         ending.delete(id);
         const outcome = rec?.own?.outcome;
-        if (!rec?.own || working(rec) || !outcome) continue;
-        if (outcome.kind === "finished" || outcome.kind === "failed") deps.ended?.(id, outcome.kind, outcome.at);
+        if (!rec?.own || working(rec) || !outcome || told.get(id) === outcome.at) continue;
+        // Work that may still run keeps the run going: it ends once that work has.
+        if (unsure(rec)) {
+          underway.add(id);
+          continue;
+        }
+        if (outcome.kind === "finished" || outcome.kind === "failed") {
+          told.set(id, outcome.at);
+          deps.ended?.(id, outcome.kind, outcome.at);
+        }
       }
       for (const s of drivers.values()) s.tick(at);
       if (at.getTime() >= nextOutlivedLook) {
@@ -1258,6 +1340,8 @@ export function createOwn(deps: OwnDeps): Own {
         const s = drivers.get(id);
         if (!(s?.wakeDue || s?.settling)) consider(new Date(since + END_SETTLE_MS).toISOString());
       }
+      // A death is told as soon as the lookup of what outlived it is done; the clock looks again each second until then.
+      if (deaths.size > 0) consider(deps.now().toISOString());
       if ([...deps.world.sessions.values()].some((rec) => allOutlived(rec).some((o) => o.over === undefined || o.over === "unsure")))
         consider(new Date(nextOutlivedLook).toISOString());
       return next;

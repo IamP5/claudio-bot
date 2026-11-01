@@ -266,7 +266,12 @@ export const server = [
     ],
   },
   { type: "session_items", sessionId: phoneRow.id, rev: 3, removed: [], items: runItems, controls: runControls },
-  { type: "session_items", sessionId: phoneRow.id, rev: 4, removed: [], items: [], controls: { ...runControls, turn: { startedAt: later, wake: true }, tasks: [] } },
+  // A wake turn of a new Claude Code while a command the last one ran in the foreground outlived it.
+  {
+    type: "session_items", sessionId: phoneRow.id, rev: 4, removed: [],
+    items: [{ kind: "work", id: "toolu_01Ac9", at, steps: [{ id: "toolu_01Ac9", tool: "Bash", label: "Sleep for 90 seconds", state: "running", diff: null, output: null, detail: "perl -e 'sleep 90'", startedAt: at }] }],
+    controls: { ...runControls, turn: { startedAt: later, wake: true }, tasks: [{ id: "bf90", stepId: "toolu_01Ac9", kind: "command", label: "perl -e 'sleep 90'", background: false, startedAt: at, owner: null, progress: null, waiting: null, outlived: true }] },
+  },
   // Stop reached a turn Claude Code has not ended yet: the bridge ends Claude Code at the deadline.
   { type: "session_items", sessionId: phoneRow.id, rev: 5, removed: [], items: [], controls: { ...controls, queued: 0, turn: { startedAt: at, wake: false }, stopping: { at: later, deadline: "2026-10-16T14:00:15.000Z" } } },
   { type: "push_state", push: { state: "failing", error: "The push server answered 500", at: later } },
@@ -276,6 +281,8 @@ export const server = [
   { type: "session_alert", sessionId: phoneRow.id, reason: "card", count: 1, title: phoneRow.title, cardId: "m32", cardKind: "ask" },
   { type: "session_alert", sessionId: phoneRow.id, reason: "finished", count: 1, title: phoneRow.title, cardId: null, cardKind: null },
   { type: "session_alert", sessionId: phoneRow.id, reason: "lost", count: 1, title: phoneRow.title, cardId: null, cardKind: null },
+  { type: "session_alert", sessionId: phoneRow.id, reason: "failed", count: 1, title: phoneRow.title, cardId: null, cardKind: null, running: { agents: 0, commands: 2 } },
+  { type: "session_alert", sessionId: phoneRow.id, reason: "lost", count: 1, title: phoneRow.title, cardId: null, cardKind: null, running: { agents: 0, commands: 1 } },
   { type: "decided", cardId: "m20" },
   { type: "error", message: "Nothing is running.", about: { kind: "stop", sessionId: agentSession } },
   { type: "error", message: "Claude Code kept the mode Ask before edits: the session is busy.", about: { kind: "set", sessionId: agentSession } },

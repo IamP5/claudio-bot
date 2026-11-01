@@ -98,11 +98,17 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         case .card: body = Self.cards(session.count, session.cardKind)
         case .reminder: body = Self.reminder(session.count, session.cardKind)
         case .finished: body = "Finished"
-        case .failed: body = "Stopped with an error"
-        case .lost: body = "Interrupted by a bridge restart"
+        case .failed: body = Self.ending("Stopped with an error", session.running)
+        case .lost: body = Self.ending("Interrupted by a bridge restart", session.running)
         case .unknown: return nil
         }
         return (title.isEmpty ? "Claude Code session" : title, body)
+    }
+
+    /// "Stopped with an error. 2 commands still run on your Mac.", or the bare ending when nothing outlived Claude Code.
+    static func ending(_ ending: String, _ running: SessionRunning?) -> String {
+        guard let running, let counted = SessionText.running(running) else { return ending }
+        return "\(ending). \(counted) still \(running.agents + running.commands == 1 ? "runs" : "run") on your Mac."
     }
 
     /// Named by what the cards ask for. Mixed kinds, or a bridge that does not say, name none (as the bridge's push does).

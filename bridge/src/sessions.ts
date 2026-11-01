@@ -355,6 +355,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     ...(deps.ended && { ended: deps.ended }),
     ...(deps.cardTtlMs !== undefined && { cardTtlMs: deps.cardTtlMs }),
     observe: (id, m) => threads.stream(id, m),
+    cutOff: (id) => threads.cutOff(id),
     options: { includePartialMessages: true },
     now: deps.now,
     log: deps.log,

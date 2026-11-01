@@ -2048,9 +2048,10 @@ describe("the thread says what stopped only once it did", () => {
 
   /** Claude Code ran `command` twice in the background, and the bridge restarted before it found a shell for either. */
   /** Claude Code's own shells as ps lists them, running `command`, started at the tests' clock. */
+  let shellStartLag = 0;
   const claudeShells = (command: string, ...groups: number[]) => {
     const line = `/bin/zsh -c source snap.sh && eval '${command.replace(/'/g, `'"'"'`)}' < /dev/null && pwd -P >| /tmp/cwd`;
-    leaders = async () => groups.map((group) => ({ group, command: line, started: clock }));
+    leaders = async () => groups.map((group) => ({ group, command: line, started: clock + shellStartLag }));
   };
   /** Claude Code ran `command` once per id in the background, from the shells `groups`, and then the bridge restarted. */
   const twinsRestarted = async (command: string, groups: number[] = [], ids = ["ea", "eb"]) => {
@@ -2159,6 +2160,69 @@ describe("the thread says what stopped only once it did", () => {
       await unrelated.end();
     }
   }, 15_000);
+
+  test("x1: a step with no shells of its own never ends on the shells later runs of its text recorded, a shell paired with another task included", async () => {
+    const command = `exec >/dev/null 2>&1; sleep 4; exec sleep ${36_000 + (process.pid % 9_000)}`;
+    const hidden = Bun.spawn(["sleep", "30"]);
+    const shells = [evalShell(command), evalShell(command), evalShell(command)];
+    try {
+      await twinsRestarted(command, [], ["ea"]);
+      const run = (id: string) => [calledEntry(`toolu_${id}`, "Bash", { command, description: "Sleep", run_in_background: true }), resultEntry(`toolu_${id}`, `Command running in background with ID: ${id}.`)];
+      const task = (id: string) => shellTask(id, `toolu_${id}`, "Sleep");
+      claudeShells(command, shells[0]!.pid);
+      await send("Run it three times");
+      const q = queries.at(-1)!;
+      await transcribe(...run("b1"), ...run("b2"), ...run("b3"));
+      q.emit(toolCall("toolu_b1", "Bash", { command }), taskStarted(task("b1")), level(task("b1")));
+      await Bun.sleep(300);
+      claudeShells(command, ...shells.map((x) => x.pid));
+      q.emit(...["b2", "b3"].map((id) => toolCall(`toolu_${id}`, "Bash", { command })), ...["b2", "b3"].map((id) => taskStarted(task(id))), level(task("b1"), task("b2"), task("b3")), result());
+      await Bun.sleep(1_500);
+      await restart();
+      for (const x of shells) await x.end();
+      for (let i = 0; i < 2; i++) await lookNow();
+      const all = async () => Promise.all(["ea", "b1", "b2", "b3"].map(async (id) => (await stepOf(`toolu_${id}`)).state));
+      await until(async () => (await all()).slice(1).every((st) => st === "ended"));
+      expect([await all(), hidden.exitCode]).toEqual([["unsure", "ended", "ended", "ended"], null]);
+      expect((await handle({ type: "session_stop", sessionId: ASK, target: "all" }))[0]).toMatchObject({ type: "error", message: expect.stringContaining("can't tell") });
+    } finally {
+      hidden.kill("SIGKILL");
+      for (const x of shells) await x.end();
+    }
+  }, 20_000);
+
+  test("a shell that started over 30 s after its command's call is not taken as the command's: its twins stay can't-tell after it ends", async () => {
+    const command = `exec >/dev/null 2>&1; sleep 4; exec sleep ${37_000 + (process.pid % 9_000)}`;
+    const a = evalShell(command);
+    const b = evalShell(command);
+    shellStartLag = 31_000;
+    try {
+      const states = await twinsRestarted(command, [a.pid, b.pid]);
+      await a.end();
+      await b.end();
+      for (let i = 0; i < 2; i++) await lookNow();
+      expect(await states()).toEqual(["unsure", "unsure"]);
+    } finally {
+      shellStartLag = 0;
+      await a.end();
+      await b.end();
+    }
+  }, 15_000);
+
+  test("past 20 pending unpaired steps the oldest is no longer looked at, and its step still reads can't tell", async () => {
+    const ids = Array.from({ length: 21 }, (_, i) => `p${i}`);
+    await start();
+    await send("Start them");
+    const q = queries[0]!;
+    await transcribe(...ids.flatMap((id) => [calledEntry(`toolu_${id}`, "Bash", { command: `sleep ${id}`, run_in_background: true }), resultEntry(`toolu_${id}`, `Command running in background with ID: ${id}.`)]));
+    const listed = ids.map((id) => shellTask(id, `toolu_${id}`, `sleep ${id}`));
+    q.emit(...ids.map((id) => toolCall(`toolu_${id}`, "Bash", { command: `sleep ${id}` })), ...listed.map(taskStarted), level(...listed), result());
+    await flush();
+    await flush();
+    await restart();
+    await until(async () => (await restartLines()).length === 1);
+    expect([world.sessions.get(ASK)!.own!.unpaired?.length, (await stepOf("toolu_p0")).state, (await stepOf("toolu_p20")).state]).toEqual([20, "unsure", "unsure"]);
+  });
 
   test("r2: the same command run again in the session after the restart takes its own shell, and never ends the earlier step", async () => {
     const command = `exec >/dev/null 2>&1; sleep 4; exec sleep ${35_000 + (process.pid % 9_000)}`;

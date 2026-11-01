@@ -50,8 +50,9 @@ ts	role	group	branch	state	stuck_after	note
 2026-11-01T01:03:39Z	owner	G29	ux/sessions-g29-wide	merged #37 (verify PASS first round)	4h	run 3 wave 4
 2026-11-01T01:26:06Z	verifier	G25	ux/sessions-g25-crash-restart	r2 PASS af0e618; S6e 6/6 incl. under load	3h	fresh, independent of owner
 2026-11-01T01:57:03Z	verifier	G29	ux/sessions-g29-wide	PASS 366975e; live stale pane/chip verified	2h	independent of owner
-2026-11-01T02:08:58Z	owner	G27	ux/sessions-g27-unsure	PR #38 fix-forward round 3 (conservative count rule)	5h	run 3 wave 4; carries wedged-lookup item
+2026-11-01T02:08:58Z	owner	G27	ux/sessions-g27-unsure	PR #38 round 3 at 6dc4292; verifying	5h	run 3 wave 4; carries wedged-lookup item
 2026-11-01T02:08:58Z	owner	G28	ux/sessions-g28-requests	PR #39 at fa3b35f; verifying	6h	run 3 wave 4; carries stopped-card render, link note, iOS presence gap
 2026-11-01T02:46:52Z	verifier	G27	ux/sessions-g27-unsure	r1 FAIL ebe8997: P1 exec'd unpaired command reads ended while running (count 0 on first look)	3h	independent of owner
 2026-11-01T03:37:13Z	verifier	G27	ux/sessions-g27-unsure	r2 FAIL 4636a07: P1 counted via eval shell then exec'd into hidden form, ended while running	2h	fresh, independent of owner
 2026-11-01T04:01:02Z	verifier	G28	ux/sessions-g28-requests	verifying fa3b35f	3h	independent of owner
+2026-11-01T04:12:00Z	verifier	G27	ux/sessions-g27-unsure	r3 verifying 6dc4292	2h	fresh, independent of owner

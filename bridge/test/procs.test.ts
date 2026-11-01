@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { commandCounts, endGroup, evalArg, execTail, groupAlive, psText, read, shellGroups, shellLeaders, taskRun } from "../src/procs";
+import { commandCounts, endGroup, evalArg, groupAlive, mayHide, psText, read, shellGroups, shellLeaders, taskRun } from "../src/procs";
 import { backgroundCommand, evalShell } from "./shells";
 
 const started: number[] = [];
@@ -132,13 +132,23 @@ test("commandCounts counts the shells that run exactly a command, whoever starte
   expect((await commandCounts([command]))!.get(command)).toBe(0);
 });
 
-test("a command whose shell exec'd a plain program is counted by that program, and one whose last exec cannot be read is not", async () => {
-  const n = 40_000 + (process.pid % 9_000);
-  const p = Bun.spawn(["sleep", String(n)]);
-  ends.push(async () => void p.kill("SIGKILL"));
-  await Bun.sleep(100);
-  const plain = `exec >/dev/null 2>&1; exec sleep ${n}`;
-  const quoted = `exec >/dev/null 2>&1; exec perl -e "sleep ${n}"`;
-  expect([execTail(plain), execTail(quoted), execTail("exec >/dev/null 2>&1; sleep 53")]).toEqual([`sleep ${n}`, null, null]);
-  expect(await commandCounts([plain, quoted])).toEqual(new Map([[plain, 1], [quoted, 0]]));
+test("mayHide: a command that execs into another program or leaves a child behind can run on out of the count's sight", () => {
+  const hides = [
+    'exec >/dev/null 2>&1; sleep 95; exec perl -e "sleep 120"',
+    "exec >/dev/null 2>&1; sleep 96; exec env CLAUDIO=1 sleep 178",
+    "exec sleep 1",
+    "exec >/dev/null 2>&1 && exec sleep 2",
+    "exec >f sleep 4",
+    'eval "exec sleep 1"',
+    'sh -c "exec sleep 9"',
+    "sleep 9 &",
+    "(sleep 1)&",
+    "sleep 9 & disown",
+    "nohup sleep 9",
+    "setsid sleep 9",
+    "coproc sleep 1",
+    "a |& b",
+  ];
+  const plain = ["exec >/dev/null 2>&1; sleep 53", "sleep 25; exec >/dev/null 2>&1; sleep 52", "exec</dev/null; sleep 4", "exec 2>&1 >log; sleep 5", "a && b 2>&1 &>f; c >&2", "echo executor; sleep 3"];
+  expect([hides.filter((c) => !mayHide(c)), plain.filter(mayHide)]).toEqual([[], []]);
 });

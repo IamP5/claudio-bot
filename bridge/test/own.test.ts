@@ -2074,28 +2074,27 @@ describe("the thread says what stopped only once it did", () => {
     expect((await handle({ type: "session_stop", sessionId: ASK, target: "all" }))[0]).toMatchObject({ type: "error", message: expect.stringContaining("can't tell") });
   });
 
-  test("twin commands whose shells exec'd away are counted by the program they became, and read ended once neither runs", async () => {
-    const n = 30_000 + (process.pid % 9_000);
-    const a = Bun.spawn(["sleep", String(n)]);
-    const b = Bun.spawn(["sleep", String(n)]);
-    try {
-      const states = await twinsRestarted(`exec >/dev/null 2>&1; exec sleep ${n}`);
-      await lookNow();
-      expect(await states()).toEqual(["unsure", "unsure"]);
-      a.kill("SIGKILL");
-      await a.exited;
-      await lookNow();
-      expect(await states()).toEqual(["unsure", "unsure"]);
-      b.kill("SIGKILL");
-      await b.exited;
-      await lookNow();
-      await until(async () => (await states()).every((st) => st === "ended"));
-      expect(await states()).toEqual(["ended", "ended"]);
-    } finally {
-      a.kill("SIGKILL");
-      b.kill("SIGKILL");
-    }
-  }, 15_000);
+  for (const [name, tail] of [
+    ["perl with quotes", 'exec perl -e "sleep 30"'],
+    ["env, which execs again", "exec env CLAUDIO=1 sleep 30"],
+  ] as const)
+    test(`a command counted while its shell showed, which then execs into ${name}, never reads ended from a count of none`, async () => {
+      const command = `exec >/dev/null 2>&1; sleep 3; ${tail} # ${process.pid}-${name.length}`;
+      const a = evalShell(command);
+      const b = evalShell(command);
+      try {
+        const states = await twinsRestarted(command);
+        await lookNow();
+        await Bun.sleep(3_500);
+        for (let i = 0; i < 3; i++) await lookNow();
+        expect([await states(), alive(a.pid), alive(b.pid)]).toEqual([["unsure", "unsure"], true, true]);
+        expect((await handle({ type: "session_stop", sessionId: ASK, target: "all" }))[0]).toMatchObject({ type: "error", message: expect.stringContaining("can't tell") });
+        expect((await noticesNow()).some((n) => n.text.includes("ended."))).toBe(false);
+      } finally {
+        await a.end();
+        await b.end();
+      }
+    }, 15_000);
 
   test("a look at what became of a crashed Claude Code's work that never answers is given up on: the work may still run", async () => {
     const running = backgroundCommand("bk");

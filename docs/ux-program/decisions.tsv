@@ -241,3 +241,4 @@ ts	decision	why
 2026-11-01T00:31:57Z	G25: Notices kept 24 h, up to 200; one about the current ending stays while that outcome holds	bounded history
 2026-11-01T00:31:57Z	G25: A turn stop (including Stop and send) never ends outlived work	the notice promises a message keeps them running
 2026-11-01T00:31:57Z	G25: New wire value "stopped" for ask answers and plan state when Stop closes a card; expiry stays "expired"	the app said "Expired" for a stopped card
+2026-11-01T01:26:06Z	G25: the last reply line is persisted with the drive so a finished outcome keeps it across a restart; alert and push counts are recomputed at every send	verifier r1 P3s

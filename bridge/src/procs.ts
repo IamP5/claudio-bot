@@ -100,76 +100,22 @@ export function psText(command: string): string {
 }
 
 /**
- * Programs and shell words that can make a command's work outlive or replace the shell that ran it, or run text the
- * bridge cannot read: a simple command led by one of them is never taken as plain.
+ * The process groups of the processes that run each command as Claude Code's shells run one (evalArg of their command
+ * line), whoever started them; null when the process table could not be read. A group only says where the command may
+ * still run: a shell that exec's, or leaves its pipeline's last stage behind, keeps its work in its group.
  */
-const HIDERS = new Set([
-  ..."exec eval source . builtin command nohup setsid disown coproc trap env sh bash zsh dash ksh xargs script nice time timeout caffeinate".split(" "),
-  // Shell keywords group commands (if, while, { }, case), so the word that leads a simple command is not its command.
-  ..."if then else elif fi do done while until for in case esac select function".split(" "),
-]);
-const PLAIN_TOKEN = /\s+|2>&1|2>|>>|&&|\|\||[;|<>]|[A-Za-z0-9_./:=,@%+-]+|./gy;
-const SEPARATORS = new Set([";", "&&", "||", "|"]);
-const REDIRECTS = new Set([">", ">>", "2>", "<"]);
-
-/**
- * Whether a count of no process running `command` means it ended: all of its text is plain, so its shell is the only
- * place its work runs. Plain is words of [A-Za-z0-9_./:=,@%+-] (no quotes, escapes, expansions or globs), separated by
- * ; && || or |, with redirects > >> 2> 2>&1 < to a plain word, and no simple command led (after VAR=value words) by a
- * program in HIDERS. An exec with nothing but redirects changes no process, so it is plain. Anything else, the bridge
- * cannot tell.
- */
-export function countable(command: string): boolean {
-  const tokens: string[] = [];
-  for (const m of command.matchAll(PLAIN_TOKEN)) {
-    if (m[0].length === 1 && /[^;|<>A-Za-z0-9_./:=,@%+-]/.test(m[0]) && !/\s/.test(m[0])) return false;
-    if (/^\s+$/.test(m[0])) {
-      if (m[0].includes("\n")) return false;
-      continue;
-    }
-    tokens.push(m[0]);
-  }
-  let words: string[] = [];
-  let redirected = false;
-  const simple = () => {
-    const at = words.findIndex((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
-    const program = at < 0 ? undefined : words[at]!;
-    const name = program?.split("/").at(-1);
-    const ok = (words.length > 0 || redirected) && (name === undefined || !HIDERS.has(name) || (name === "exec" && words.length === at + 1 && redirected));
-    words = [];
-    redirected = false;
-    return ok;
-  };
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i]!;
-    if (SEPARATORS.has(t)) {
-      if (!simple()) return false;
-    } else if (t === "2>&1") redirected = true;
-    else if (REDIRECTS.has(t)) {
-      const target = tokens[++i];
-      if (target === undefined || SEPARATORS.has(target) || REDIRECTS.has(target) || target === "2>&1") return false;
-      redirected = true;
-    } else words.push(t);
-  }
-  return simple();
-}
-
-/**
- * How many processes run each command as Claude Code's shells run one (evalArg of their command line), whoever started
- * them; null when the process table could not be read. A count can only say a command may still run, never which
- * process is it.
- */
-export async function commandCounts(commands: readonly string[]): Promise<Map<string, number> | null> {
-  const out = await read(["ps", "-axww", "-o", "command="], READ_TIMEOUT_MS, { ...process.env, LC_ALL: "C" });
+export async function commandGroups(commands: readonly string[]): Promise<Map<string, number[]> | null> {
+  const out = await read(["ps", "-axww", "-o", "pgid=,command="], READ_TIMEOUT_MS, { ...process.env, LC_ALL: "C" });
   // ps lists itself at least, so an empty table was not read.
   if (out === null || out.trim() === "") return null;
-  const counts = new Map(commands.map((c) => [c, 0]));
+  const groups = new Map(commands.map((c) => [c, [] as number[]]));
   const wanted = new Map(commands.map((c) => [psText(c), c]));
   for (const line of out.split("\n")) {
-    const command = wanted.get(evalArg(line) ?? "");
-    if (command !== undefined) counts.set(command, counts.get(command)! + 1);
+    const m = /^\s*(\d+)\s(.*)$/.exec(line);
+    const command = m ? wanted.get(evalArg(m[2]!) ?? "") : undefined;
+    if (command !== undefined) groups.get(command)!.push(Number(m![1]));
   }
-  return counts;
+  return groups;
 }
 
 /** By task id, the process group of each background shell Claude Code (process `pid`) runs. Empty when none is found. */

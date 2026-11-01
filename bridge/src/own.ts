@@ -4,7 +4,7 @@ import type { Tickable } from "./clock";
 import { failClosed, resolveReal, toCall, toHookOutput } from "./gate";
 import type { Ledger } from "./ledger";
 import { detailOf, floors, type Scope } from "./policy";
-import { commandCounts, countable, groupAlive } from "./procs";
+import { commandGroups, groupAlive } from "./procs";
 import { doubted, endOutlived, followed, OUTLIVED_LOOK_MS, outlivedSteps, runOf, settled, withOutlived, type Outlived } from "./outlived";
 import {
   PHONE_MODES,
@@ -634,32 +634,38 @@ export function createOwn(deps: OwnDeps): Own {
       // Only a group the process table showed as the command's can be shown so again; a loose one never writes its output.
       const recheck = doubtedNow().filter((o) => o.loose === undefined && unsureDue(rec, o, deps.now().getTime()));
       const pending = unpaired(rec);
-      const [runs, again, counts] = await Promise.all([
+      const [runs, again, shells] = await Promise.all([
         Promise.all(watched.map(runOf)),
         Promise.all(recheck.map(runOf)),
-        pending.length > 0 ? commandCounts([...new Set(pending.map((u) => u.command))]) : null,
+        pending.length > 0 ? commandGroups([...new Set(pending.map((u) => u.command))]) : null,
       ]);
       const found = (kind: string) => watched.filter((o, i) => runs[i] === kind && free(o) && outlivedOf(rec).some((x) => x.id === o.id));
       const seen = now();
       const back = recheck.filter((o, i) => again[i] === "runs" && doubtedNow().some((x) => x.id === o.id));
       const doubtedGone = doubtedNow().filter((o) => !back.includes(o) && !groupAlive(o.group));
-      // A count of none means gone only for a command whose text is plain enough that its shell is the only place it runs,
-      // and that some look counted: before that it may run in a form ps does not show.
-      const unpairedSeen = counts === null ? [] : unpaired(rec).filter((u) => u.counted === undefined && (counts.get(u.command) ?? 0) > 0);
-      const unpairedGone = counts === null ? [] : unpaired(rec).filter((u) => u.counted === true && countable(u.command) && counts.get(u.command) === 0);
+      // Each look records the process groups of the shells that run an unpaired command: whatever the shell exec's or
+      // leaves behind stays in its group. The command ended once every group recorded for it is empty, and only when one
+      // was recorded for each of its steps, since a step whose shell no look saw may run in a form ps does not show.
+      const groupsOf = new Map<string, number[]>();
+      for (const u of unpaired(rec)) groupsOf.set(u.command, [...new Set([...(groupsOf.get(u.command) ?? []), ...(u.groups ?? []), ...(shells?.get(u.command) ?? [])])]);
+      const unpairedSeen = unpaired(rec).filter((u) => (u.groups?.length ?? 0) < groupsOf.get(u.command)!.length);
+      const unpairedGone = unpaired(rec).filter((u) => {
+        const groups = groupsOf.get(u.command)!;
+        return groups.length >= unpaired(rec).filter((x) => x.command === u.command).length && groups.every((g) => !groupAlive(g));
+      });
       for (const o of [...back, ...doubtedGone]) unsureLooks.delete(`${rec.id}:${o.id}`);
       const ended = [...found("gone"), ...doubtedGone];
       const unsure = found("unsure");
       Object.assign(before, { outlived: drive.outlived, unpaired: drive.unpaired, notices: drive.notices });
       if (unpairedSeen.length > 0) {
-        drive.unpaired = (drive.unpaired ?? []).map((u) => (unpairedSeen.includes(u) ? { ...u, counted: true as const } : u));
+        drive.unpaired = (drive.unpaired ?? []).map((u) => (unpairedSeen.some((x) => x.id === u.id) ? { ...u, groups: groupsOf.get(u.command)! } : u));
         deps.persist("now");
       }
       if (ended.length + unsure.length + back.length + unpairedGone.length === 0) return;
       letGo(rec, ended.map((o) => o.id), "ended", seen);
       letGo(rec, unsure.map((o) => o.id), "unsure");
       if (back.length > 0) drive.outlived = allOutlived(rec).map((o) => (back.some((b) => b.id === o.id) ? (({ over: _, ...rest }) => rest)(o) : o));
-      if (unpairedGone.length > 0) drive.unpaired = (drive.unpaired ?? []).map((u) => (unpairedGone.includes(u) ? { ...u, endedAt: seen } : u));
+      if (unpairedGone.length > 0) drive.unpaired = (drive.unpaired ?? []).map((u) => (unpairedGone.some((x) => x.id === u.id) ? { ...u, endedAt: seen } : u));
       deps.persist("now");
       if (ended.length + unpairedGone.length > 0) notice(rec.id, endedText([...ended, ...unpairedGone]), "info", "task");
       if (unsure.length > 0) notice(rec.id, unsureText(names(unsure), unsure.length), "info", "task");

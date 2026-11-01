@@ -1082,16 +1082,16 @@ describe("how a run ends", () => {
     expect(await rowOf(ASK)).toMatchObject({ status: "failed", outcome: { kind: "failed", text: said } });
   });
 
-  test("a run that finishes background work ends on Claude Code's own summary", async () => {
+  test("a run that finishes background work ends on the first line of its last reply, never on a task's summary", async () => {
     await start();
     await send("Start it");
     const q = queries[0]!;
-    q.emit(taskStarted(shellTask("bp", "toolu_bg", "Sleep")), level(shellTask("bp", "toolu_bg", "Sleep")), result());
+    q.emit(taskStarted(shellTask("bp", "toolu_bg", "Sleep")), level(shellTask("bp", "toolu_bg", "Sleep")), result(0, { result: "started." }));
     await flush();
     const summary = 'Background command "sleep 75" completed (exit code 0)';
-    q.emit(completed("bp"), sys("task_notification", { task_id: "bp", tool_use_id: "toolu_bg", status: "completed", summary, output_file: "" }), level(), wakeInit(), result());
+    q.emit(completed("bp"), sys("task_notification", { task_id: "bp", tool_use_id: "toolu_bg", status: "completed", summary, output_file: "" }), level(), wakeInit(), result(0, { result: "The sleep is over.\nNothing else ran." }));
     await flush();
-    expect(await rowOf(ASK)).toMatchObject({ status: "idle", outcome: { kind: "finished", text: summary } });
+    expect(await rowOf(ASK)).toMatchObject({ status: "idle", outcome: { kind: "finished", text: "The sleep is over." } });
   });
 
   test("a subagent's call the user denied shows on its Agent step, which no longer reads a plain ok", async () => {
@@ -1425,6 +1425,7 @@ describe("telling the phone how a run ended", () => {
     };
     await restart();
     const lostAt = (await rowOf(ASK)).outcome?.at;
+    wait(1);
     expect(endings).toEqual([["lost", lostAt!]]);
     await restart();
     wait(END_SETTLE_MS);
@@ -1767,6 +1768,61 @@ describe("the thread says what stopped only once it did", () => {
     } finally {
       await running.end();
     }
+  });
+
+  test("a run whose command the bridge can no longer tell about is not told finished until that command has ended", async () => {
+    const running = backgroundCommand("bk");
+    const endings: [string, string][] = [];
+    const tick = (ms: number) => {
+      clock += ms;
+      sessions.tick(new Date(clock));
+    };
+    try {
+      await startedInBackground({ bk: running.pid });
+      sessions.stop();
+      queries.length = 0;
+      await start({ ended: (_, end, at) => void endings.push([end, at]) });
+      await until(async () => (await controlsNow()).working === true);
+      await running.redirect();
+      tick(10_000);
+      await until(async () => (await controlsNow()).working === false);
+      for (let i = 0; i < 3; i++) tick(END_SETTLE_MS);
+      expect([endings, (await stepOf("toolu_bk")).state]).toEqual([[], "unsure"]);
+      await running.end();
+      for (let i = 0; i < 4 && (await stepOf("toolu_bk")).state !== "ended"; i++) {
+        tick(30_000);
+        await until(async () => (await stepOf("toolu_bk")).state === "ended");
+      }
+      tick(END_SETTLE_MS);
+      const outcome = (await rowOf(ASK)).outcome!;
+      expect([endings, outcome.kind]).toEqual([[["finished", outcome.at]], "finished"]);
+    } finally {
+      await running.end();
+    }
+  }, 15_000);
+
+  test("a notice stays for a day however many come after it, and one that says how the run ended stays while that ending holds", async () => {
+    await start({ cardTtlMs: 1_000 });
+    await send("Ask a lot");
+    const q = queries[0]!;
+    q.emit(result(0, { subtype: "error_during_execution", is_error: true, errors: ["overloaded"] }));
+    await until(async () => (await noticesNow()).length === 1);
+    const expire = async (command: string) => {
+      void asked(q, "Bash", { command });
+      await flush();
+      clock += 1_001;
+      sessions.tick(new Date(clock));
+    };
+    for (let i = 0; i < 12; i++) await expire(`echo ${i}`);
+    await until(async () => (await noticesNow()).length === 13);
+    expect((await noticesNow()).map((n) => n.reason)).toEqual(["failure", ...Array(12).fill("approval")]);
+    clock += 25 * 3_600_000;
+    await expire("echo late");
+    await until(async () => (await noticesNow()).length === 2);
+    expect((await noticesNow()).map((n) => [n.reason, n.text.split(" ").slice(0, 5).join(" ")])).toEqual([
+      ["failure", "Claude Code stopped with an"],
+      ["approval", 'The request to allow "Bash:'],
+    ]);
   });
 
   test("a state write that fails while the bridge looks at outlived commands is logged, not thrown", async () => {
@@ -2151,9 +2207,9 @@ describe("the thread says what stopped only once it did", () => {
   }, 15_000);
 
   /** A turn runs `perl -e 'sleep bf'` in the foreground; Claude Code has made it a task and the bridge found its shell. */
-  const runningInForeground = async (pids: Record<string, number>) => {
+  const runningInForeground = async (pids: Record<string, number>, over: Parameters<typeof start>[0] = {}) => {
     shells = async () => new Map(Object.entries(pids));
-    await start();
+    await start(over);
     await send("Run it");
     const q = queries[0]!;
     await transcribe(calledEntry("toolu_bf", "Bash", { command: "perl -e 'sleep bf'" }));
@@ -2168,12 +2224,12 @@ describe("the thread says what stopped only once it did", () => {
     try {
       await runningInForeground({ bf: running.pid });
       await restart();
-      await until(async () => (await restartLines()).length === 2);
+      await until(async () => (await restartLines()).some((t) => t.includes("still runs")));
       expect(await restartLines()).toEqual([
-        "The bridge restarted during this turn.",
-        `The bridge restarted, and Claude Code no longer follows command "perl -e 'sleep bf'", which still runs on this Mac. Stop ends it.`,
+        `The bridge restarted during this turn. Command "perl -e 'sleep bf'" still runs on this Mac. Stop ends it. Send a message to start Claude Code again; the command keeps running until you stop it.`,
       ]);
-      expect((await controlsNow()).tasks?.map((t) => [t.id, t.label, t.stepId])).toEqual([["bf", "perl -e 'sleep bf'", "toolu_bf"]]);
+      expect((await controlsNow()).tasks?.map((t) => [t.id, t.label, t.stepId, t.background, t.outlived])).toEqual([["bf", "perl -e 'sleep bf'", "toolu_bf", false, true]]);
+      expect((await rowOf(ASK)).activity).toBe(`Still running after Claude Code stopped: perl -e 'sleep bf'`);
       expect([(await stepOf("toolu_bf")).state, (await controlsNow()).working, (await rowOf(ASK)).outcome?.kind]).toEqual(["running", true, "lost"]);
       // A later Claude Code writes off the call it never saw end; the command still runs.
       const interrupted = "[Tool call interrupted: the session ended before this call's result was recorded, so its outcome is unknown.]";
@@ -2195,9 +2251,12 @@ describe("the thread says what stopped only once it did", () => {
       const q = await runningInForeground({ bf: running.pid });
       q.crash("Claude Code process terminated by signal SIGKILL");
       await until(async () => (await noticesNow()).some((n) => n.text.includes("still runs")));
-      expect((await noticesNow()).map((n) => n.text.split("\n")[0])).toEqual([
-        "Claude Code stopped unexpectedly. Send a message to start it again.",
-        `Claude Code is no longer running, but command "perl -e 'sleep bf'" still runs on this Mac. Stop ends it.`,
+      expect((await noticesNow()).map((n) => [n.text, n.tone, n.reason])).toEqual([
+        [
+          `Claude Code stopped unexpectedly. Command "perl -e 'sleep bf'" still runs on this Mac. Stop ends it. Send a message to start Claude Code again; the command keeps running until you stop it.\nClaude Code process terminated by signal SIGKILL`,
+          "error",
+          "failure",
+        ],
       ]);
       expect([(await stepOf("toolu_bf")).state, (await controlsNow()).tasks?.map((t) => t.id as string)]).toEqual(["running", ["bf"]]);
       expect((await rowOf(ASK)).outcome).toMatchObject({ kind: "failed", text: "Claude Code stopped unexpectedly (terminated by signal SIGKILL)" });
@@ -2207,6 +2266,74 @@ describe("the thread says what stopped only once it did", () => {
       await running.end();
     }
   }, 15_000);
+
+  test("Claude Code's death is told once as failed, as soon as the bridge knows what outlived it, while that command still runs", async () => {
+    const running = backgroundCommand("bf");
+    const endings: [string, string][] = [];
+    try {
+      const q = await runningInForeground({ bf: running.pid }, { ended: (_, end, at) => void endings.push([end, at]) });
+      q.crash("Claude Code process terminated by signal SIGKILL");
+      await flush();
+      expect((await rowOf(ASK)).status).toBe("working");
+      await until(async () => (await controlsNow()).tasks?.length === 1);
+      clock += 1;
+      sessions.tick(new Date(clock));
+      const outcome = (await rowOf(ASK)).outcome!;
+      expect([endings, (await rowOf(ASK)).status, alive(running.pid)]).toEqual([[["failed", outcome.at]], "working", true]);
+      clock += END_SETTLE_MS * 4;
+      sessions.tick(new Date(clock));
+      expect(endings).toEqual([["failed", outcome.at]]);
+    } finally {
+      await running.end();
+    }
+  }, 15_000);
+
+  test("stopping what outlived Claude Code's death adds the stop to the failure, which the row keeps", async () => {
+    const running = backgroundCommand("bf");
+    const endings: [string, string][] = [];
+    try {
+      const q = await runningInForeground({ bf: running.pid }, { ended: (_, end, at) => void endings.push([end, at]) });
+      q.crash("Claude Code process terminated by signal SIGKILL");
+      await until(async () => (await controlsNow()).tasks?.length === 1);
+      const before = (await rowOf(ASK)).outcome!;
+      expect(await handle({ type: "session_stop", sessionId: ASK, target: "all" })).toEqual([]);
+      expect(alive(running.pid)).toBe(false);
+      const row = await rowOf(ASK);
+      expect([row.status, row.outcome]).toEqual([
+        "failed",
+        { kind: "failed", text: "Claude Code stopped unexpectedly (terminated by signal SIGKILL) · you stopped its 1 command", at: before.at },
+      ]);
+      clock += END_SETTLE_MS * 2;
+      sessions.tick(new Date(clock));
+      sessions.tick(new Date(clock + END_SETTLE_MS * 2));
+      expect(endings).toEqual([["failed", before.at]]);
+    } finally {
+      await running.end();
+    }
+  }, 15_000);
+
+  test("a reply Claude Code dies in the middle of stays as far as it got, with the notice after it, and no longer streams", async () => {
+    await start();
+    await send("Write an essay");
+    const q = queries[0]!;
+    const ev = (event: object) => ({ type: "stream_event", event, parent_tool_use_id: null, uuid: "u", session_id: ASK }) as unknown as SDKMessage;
+    await snapshot(ASK);
+    // Claude Code thought first, so the turn has output, as a real long reply does by the time it streams text.
+    const thought = { type: "assistant", uuid: "u_t", session_id: ASK, parent_tool_use_id: null, message: { id: "msg_cut", content: [{ type: "thinking", thinking: "An essay." }] } } as unknown as SDKMessage;
+    q.emit(thought, ev({ type: "message_start", message: { id: "msg_cut" } }), ev({ type: "content_block_start", index: 0, content_block: { type: "text" } }), ev({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Lighthouses began as fires" } }));
+    await Bun.sleep(100);
+    expect((await snapshot(ASK)).live).toEqual({ itemId: "msg_cut:0" as ItemId, text: "Lighthouses began as fires" });
+    q.crash("Claude Code process terminated by signal SIGKILL");
+    await until(async () => (await snapshot(ASK)).live === null);
+    const fresh = await snapshot(ASK);
+    const k = fresh.items.findIndex((i) => i.id === "msg_cut:0");
+    expect([fresh.live, fresh.items[k], fresh.items[k + 1]?.kind, (fresh.items[k + 1] as { text?: string } | undefined)?.text?.split("\n")[0]]).toEqual([
+      null,
+      { kind: "assistant", id: "msg_cut:0" as ItemId, at: new Date(clock).toISOString(), text: "Lighthouses began as fires" },
+      "notice",
+      "Claude Code stopped unexpectedly while writing this reply. Send a message to start it again.",
+    ]);
+  });
 
   test("a foreground command gone with its Claude Code reads cut off, with no notice of its own", async () => {
     const gone = backgroundCommand("bf");

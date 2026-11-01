@@ -29,6 +29,8 @@ export type Task = {
   endedAt?: string;
   /** Claude Code said it completed or failed. A stop says nothing of the work. */
   told: boolean;
+  /** It outlived the Claude Code that ran it, and only the bridge follows it. */
+  outlived?: true;
 };
 
 export type Tasks = {
@@ -327,6 +329,7 @@ function wireTasks(a: Activity, cards: readonly OwnCard[]): SessionTask[] {
       owner: t.parent === null ? null : (a.all.get(t.parent)?.stepId ?? null),
       progress: t.progress,
       waiting: card ? ownCardId(card) : null,
+      ...(t.outlived && { outlived: true as const }),
     };
   });
 }
@@ -360,7 +363,9 @@ export function rowRun(a: Activity, cards: readonly OwnCard[], call: CallLabel):
   const registered = new Set([...a.all.values()].map((t) => t.stepId));
   const unregistered = a.calls.filter((c) => c.tool === "Bash" && !registered.has(c.id) && !open.some((o) => o.toolUseId === c.id));
   const starts = [...(a.turn ? [a.turn.startedAt] : []), ...a.tasks.map((t) => startOf(t, cards)), ...agents.map((t) => startOf(t, cards))].sort();
-  const background = a.tasks.filter((t) => t.background);
+  const background = a.tasks.filter((t) => t.background && !t.outlived);
+  const outlived = a.tasks.filter((t) => t.outlived);
+  const more = (ts: readonly Task[]) => `${ts[0]!.label}${ts.length > 1 ? ` and ${ts.length - 1} more` : ""}`;
   const last = a.calls.at(-1);
   const asking = cards.find((c) => c.kind !== "permission" && ownCardOpen(c));
   const first = open[0];
@@ -372,9 +377,11 @@ export function rowRun(a: Activity, cards: readonly OwnCard[], call: CallLabel):
         ? `${fewNames(agents.map((t) => t.label), (names) => (names.length === 2 ? names.join(" and ") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`))} running`
         : last
           ? (WAITS[last.tool] ?? call(last, target))
-          : background.length > 0
-            ? `Background: ${background[0]!.label}${background.length > 1 ? ` and ${background.length - 1} more` : ""}`
-            : null;
+          : outlived.length > 0
+            ? `Still running after Claude Code stopped: ${more(outlived)}`
+            : background.length > 0
+              ? `Background: ${more(background)}`
+              : null;
   return {
     since: starts[0]!,
     running: { agents: agents.length, commands: commands.length + unregistered.length },

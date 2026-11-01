@@ -510,6 +510,8 @@ export type OwnDrive = {
   notices?: Extract<SessionItem, { kind: "notice" }>[];
   /** Prompts a stop ended before Claude Code wrote them down, shown until the transcript has their words. */
   kept?: { id: ItemId; at: string; text: string }[];
+  /** Replies Claude Code died while writing, as far as they streamed, by the id the streaming text had. It never writes them down. */
+  cutOff?: { id: ItemId; at: string; text: string }[];
   /**
    * Background commands that outlived the Claude Code that ran them, which only the bridge follows. over: since when it
    * no longer does: the command ended unseen, the user stopped it, or the bridge can no longer tell it is the command.

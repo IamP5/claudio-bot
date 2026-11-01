@@ -98,6 +98,8 @@ struct CardDecision: Equatable, Sendable {
     var phase: Phase
     /// The card's buttons wait for it to close, with a spinner on the one tapped.
     var holds: Bool
+    /// When it was tapped.
+    let at: Date
 
     mutating func fail(_ note: DecisionNote) {
         phase = .failed(note)
@@ -113,9 +115,12 @@ enum DecisionNote: Equatable, Sendable {
     case tooLate
     /// The Mac refused it, in its words.
     case refused(String)
+    /// Nobody can say whether it landed: the socket dropped, or no ack came within AppStore.decisionPatience.
+    case unsure
 
     var text: String {
         switch self {
+        case .unsure: "Your answer may not have reached your Mac · Tap again"
         case .notSent: "Not sent · Try again"
         case .tooLate: "Not sent: your Mac was unreachable · Try again"
         case .refused(let why): why.localizedCaseInsensitiveContains("already answered") ? "Already answered" : why.hasSuffix(".") ? why : why + "."
@@ -386,15 +391,31 @@ final class AppStore {
 
     /// The buttons hold until the card closes. On a bridge that acks decisions, the Mac's ack makes it this phone's;
     /// on one that does not, the socket taking it does, as before.
-    func decisionSent(_ choice: PermissionChoice?, for card: MessageID) {
-        decisions[card] = CardDecision(choice: choice, phase: has(.decideAck) ? .sending : .taken, holds: true)
+    func decisionSent(_ choice: PermissionChoice?, for card: MessageID, at now: Date = .now) {
+        let acks = has(.decideAck)
+        decisions[card] = CardDecision(choice: choice, phase: acks ? .sending : .taken, holds: true, at: now)
         decided.removeAll { $0 == card }
         decided.append(card)
         // The newest are enough: a card's close is announced within seconds, and a push link names a recent card.
         while decided.count > Self.decisionsKept { decisions[decided.removeFirst()] = nil }
+        guard acks else { return }
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.decisionPatience))
+            self?.lapseDecisions(at: .now)
+        }
     }
 
     static let decisionsKept = 200
+    /// How long a decision may wait for its ack before nobody can say whether it landed (F-SES-229).
+    static let decisionPatience: TimeInterval = 10
+
+    /// Decisions with no ack within the patience: the card takes a tap again and says why.
+    func lapseDecisions(at now: Date) {
+        for (card, decision) in decisions where decision.phase == .sending && now.timeIntervalSince(decision.at) >= Self.decisionPatience {
+            decisions[card]?.phase = .unsure
+            decisions[card]?.holds = false
+        }
+    }
     /// The cards in `decisions`, oldest first.
     @ObservationIgnored private var decided: [MessageID] = []
 
@@ -432,9 +453,13 @@ final class AppStore {
         }
     }
 
-    /// Why a card's last decision did not count, until the next tap.
+    /// Why a card's last decision did not count, or may not have, until the next tap.
     func decisionNote(_ card: MessageID) -> DecisionNote? {
-        if case .failed(let note)? = decisions[card]?.phase { note } else { nil }
+        switch decisions[card]?.phase {
+        case .failed(let note)?: note
+        case .unsure?: .unsure
+        case .sending?, .taken?, nil: nil
+        }
     }
 
     /// A message held offline was not sent: no socket took it within OutboxRule.maxAge of the tap, and later it would

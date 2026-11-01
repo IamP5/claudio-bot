@@ -362,6 +362,29 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(PermissionAnswer.chose(.once).announcement(card: card, here: false) == "Answered on another device. Allowed once. Bash: ls")
     }
 
+    @Test func aDecisionWhoseFateIsUnknownAfterAReconnectSaysSoAndTakesATapAgain() {
+        let store = store([.sessions, .decideAck])
+        store.decisionSent(.once, for: MessageID("m1"), at: at)
+        #expect(store.decisionNote(MessageID("m1")) == nil, "on its way: the spinner says it")
+        store.apply(.hello(Hello(features: [.sessions, .decideAck], machine: "Mac", userName: "Alex", bots: [])))
+        #expect(store.decisionNote(MessageID("m1"))?.text == "Your answer may not have reached your Mac · Tap again")
+    }
+
+    @Test func aDecisionWithNoAckInTenSecondsOnALiveSocketBecomesUnsure() {
+        let store = store([.sessions, .decideAck])
+        store.decisionSent(.once, for: MessageID("m1"), at: at)
+        store.lapseDecisions(at: at + 9)
+        #expect(store.holds(MessageID("m1")) && store.decisionNote(MessageID("m1")) == nil)
+        store.lapseDecisions(at: at + 10)
+        #expect(!store.holds(MessageID("m1")))
+        #expect(store.decisionNote(MessageID("m1"))?.text == "Your answer may not have reached your Mac · Tap again")
+        #expect(store.decidedHere(MessageID("m1")) == nil)
+        store.decisionSent(.once, for: MessageID("m2"), at: at)
+        store.apply(.decided(cardId: MessageID("m2")))
+        store.lapseDecisions(at: at + 60)
+        #expect(store.decisionNote(MessageID("m2")) == nil, "acked in time")
+    }
+
     @Test func onABridgeWithoutAcksTheSocketTakingItIsEnough() {
         let store = store()
         store.decisionSent(.once, for: MessageID("m1"))

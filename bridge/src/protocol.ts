@@ -487,12 +487,14 @@ export type PermissionMessage = Extract<Message, { kind: "permission" }>;
  * - todo: the turn's TodoWrite list, upserted in place.
  * - plan: an ExitPlanMode plan. Open while state is "proposed". cardId: what the phone decides it with
  *   (session_decide: "once" approves, "deny" keeps planning). It stays once the plan is decided, so a link to the card
- *   still finds it. null only when it was proposed elsewhere.
+ *   still finds it. null only when it was proposed elsewhere. expired: nobody answered in time; stopped: the user's Stop
+ *   closed it unanswered (an older app reads an unknown state as closed).
  * - permission: a card the gate or the session holds. Open while card.answer is null. stepId: the ToolStep it holds
  *   back. subagent: the label of the subagent that asked, absent when the main thread did.
  * - ask: an AskUserQuestion. answers: by question text, a multi-select's labels comma-separated; null while open.
  *   cardId: what the phone answers it with (session_answer). It stays once the question is closed, so a link to the
- *   card still finds it. null only when it was asked elsewhere.
+ *   card still finds it. null only when it was asked elsewhere. "expired": nobody answered in time; "stopped": the
+ *   user's Stop closed it unanswered.
  * - notice: a line the bridge adds ("This session's transcript is gone"). reason: what it reports, absent for any
  *   other line; the app treats an unknown reason as absent.
  * - compaction: Claude Code compacted the conversation here.
@@ -503,9 +505,9 @@ export type SessionItem =
   | { kind: "thinking"; id: ItemId; at: string; text: string; ms: number | null }
   | { kind: "work"; id: ItemId; at: string; steps: ToolStep[] }
   | { kind: "todo"; id: ItemId; at: string; todos: { text: string; state: "pending" | "in_progress" | "done" }[] }
-  | { kind: "plan"; id: ItemId; at: string; text: string; state: "proposed" | "approved" | "rejected" | "expired"; cardId: MessageId | null }
+  | { kind: "plan"; id: ItemId; at: string; text: string; state: "proposed" | "approved" | "rejected" | "expired" | "stopped"; cardId: MessageId | null }
   | { kind: "permission"; id: ItemId; at: string; card: PermissionMessage; stepId?: string; subagent?: string }
-  | { kind: "ask"; id: ItemId; at: string; questions: AskQuestion[]; answers: Record<string, string> | "dismissed" | "expired" | null; cardId: MessageId | null }
+  | { kind: "ask"; id: ItemId; at: string; questions: AskQuestion[]; answers: Record<string, string> | "dismissed" | "expired" | "stopped" | null; cardId: MessageId | null }
   | { kind: "notice"; id: ItemId; at: string; text: string; tone: "info" | "error"; reason?: NoticeReason }
   | { kind: "compaction"; id: ItemId; at: string };
 

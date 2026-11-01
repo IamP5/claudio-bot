@@ -739,11 +739,11 @@ export function createOwn(deps: OwnDeps): Own {
         break;
       case "ask":
         if (reply.kind === "choice") return refused("A question takes answers");
-        card.answers = reply.kind === "answers" ? reply.answers : reply.kind === "dismissed" ? "dismissed" : "expired";
+        card.answers = reply.kind === "answers" ? reply.answers : reply.kind === "dismissed" || reply.kind === "stopped" ? reply.kind : "expired";
         break;
       case "plan":
         if (reply.kind === "answers" || reply.kind === "dismissed") return refused("A plan takes a choice");
-        card.state = reply.kind !== "choice" ? "expired" : reply.choice === "once" || reply.choice === "always" ? "approved" : "rejected";
+        card.state = reply.kind === "stopped" ? "stopped" : reply.kind !== "choice" ? "expired" : reply.choice === "once" || reply.choice === "always" ? "approved" : "rejected";
         break;
     }
     prune(rec);

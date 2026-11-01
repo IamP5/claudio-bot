@@ -563,7 +563,7 @@ export type OwnCard =
       at: string;
       expiresAt: string;
       questions: AskQuestion[];
-      answers: Record<string, string> | "dismissed" | "expired" | null;
+      answers: Record<string, string> | "dismissed" | "expired" | "stopped" | null;
     }
   | {
       kind: "plan";
@@ -572,7 +572,7 @@ export type OwnCard =
       at: string;
       expiresAt: string;
       text: string;
-      state: "proposed" | "approved" | "rejected" | "expired";
+      state: "proposed" | "approved" | "rejected" | "expired" | "stopped";
       modeBefore: PermissionMode;
     };
 

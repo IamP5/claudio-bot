@@ -333,6 +333,28 @@ describe("what Claude Code asks", () => {
     expect(await late).toMatchObject({ behavior: "deny", message: expect.stringContaining("expired") });
   });
 
+  test("a question or plan the user's Stop closed reads stopped, and one nobody answered in time reads expired", async () => {
+    await start();
+    await send("Ask and plan");
+    const q = queries[0]!;
+    const questions = [{ question: "Pick a color", header: "Color", multiSelect: false, options: [{ label: "Red", description: "" }] }];
+    const question = asked(q, "AskUserQuestion", { questions }, { toolUseID: "toolu_ask_stop" });
+    const plan = asked(q, "ExitPlanMode", { plan: "Do it" }, { toolUseID: "toolu_plan_stop" });
+    await flush();
+    await handle({ type: "session_stop", sessionId: ASK, target: "turn" });
+    await Promise.all([question, plan]);
+    const ask = (await openCard("ask", "toolu_ask_stop")) as Extract<SessionItem, { kind: "ask" }>;
+    const planned = (await openCard("plan", "toolu_plan_stop")) as Extract<SessionItem, { kind: "plan" }>;
+    expect([ask.answers, planned.state]).toEqual(["stopped", "stopped"]);
+
+    const late = asked(q, "AskUserQuestion", { questions }, { toolUseID: "toolu_ask_late" });
+    await flush();
+    clock += OWN_CARD_TTL_MS + 1;
+    sessions.tick(new Date(clock));
+    await late;
+    expect(((await openCard("ask", "toolu_ask_late")) as Extract<SessionItem, { kind: "ask" }>).answers).toBe("expired");
+  });
+
   test("AskUserQuestion is answered from the phone with updatedInput, as the recording shows Claude Code expects", async () => {
     const recorded = replay("own-ask").prompts.find((p) => p.tool === "AskUserQuestion")!;
     await start();

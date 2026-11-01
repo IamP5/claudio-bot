@@ -296,9 +296,10 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(try decode(SessionMirror.self, #""none""#) == .notMirrored)
         #expect(try decode(PermissionMode.self, #""yolo""#) == .unknown("yolo"))
         #expect(try decode(AskAnswers.self, #""withdrawn""#) == .closed("withdrawn"))
-        // A card the user's Stop closed: this app has no word for it yet and reads it as closed, not expired.
-        #expect(try decode(AskAnswers.self, #""stopped""#) == .closed("stopped"))
-        #expect(try decode(PlanState.self, #""stopped""#) == .unknown("stopped"))
+        // A card the user's Stop closed reads as stopped, never as expired or answered.
+        #expect(try decode(AskAnswers.self, #""stopped""#) == .stopped)
+        #expect(try decode(PlanState.self, #""stopped""#) == .stopped)
+        #expect(try decode(PlanState.self, #""withdrawn""#) == .unknown("withdrawn"))
         #expect(try decode(AskAnswers.self, #""expired""#) == .expired)
         #expect(try Wire.encoder().encode(SessionHolder.nobody) == Data(#""none""#.utf8))
     }

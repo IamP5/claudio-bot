@@ -59,6 +59,23 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
         #expect(status(controls: controls(working: false, turn: false)) == nil)
     }
 
+    @Test func aForegroundCommandThatOutlivedACrashIsNeverCalledBackgroundWork() {
+        var perl = task("t1", .command, "perl -e 'sleep 3656'", background: false, started: at - 72)
+        perl.outlived = true
+        var sleeper = task("t2", .command, "sleep 3655", started: at - 72)
+        sleeper.outlived = true
+        let later = SessionOutcome(kind: .finished, text: "Done.", at: at - 5)
+        let after = status(controls: controls(working: true, turn: false, tasks: [perl]), since: at - 30, outcome: later)
+        #expect(after?.text(now: at) == "Still running after Claude Code stopped: perl -e 'sleep 3656' · 1m 12s")
+        #expect(after?.word == "Still running")
+        #expect(ThreadAnnouncement.of(from: .working(since: at - 30, tasks: [perl]), to: after)
+            == "Still running after Claude Code stopped: perl -e 'sleep 3656'.")
+        let background = status(controls: controls(working: true, turn: false, tasks: [sleeper]), since: at - 30, outcome: later)
+        #expect(background?.text(now: at) == "Running in background: sleep 3655 · 1m 12s", "a background command keeps its word")
+        let crash = status(controls: controls(working: true, turn: false, tasks: [perl]), since: at - 80, outcome: failed)
+        #expect(crash?.text(now: at) == "Claude Code stopped unexpectedly (terminated by signal SIGKILL) · 1 command still runs · Stop ends it")
+    }
+
     @Test func aQuietSocketCountsOnlyWhileThisThreadWorks() {
         #expect(status(quietSince: at, controls: controls(working: false, turn: false)) == nil)
         #expect(status(quietSince: at, controls: controls(working: false, turn: false), card: card) == .needsYou(card, tasks: []))
@@ -369,7 +386,8 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
 
     @Test func aCardClosedElsewhereSaysNothingWaits() {
         #expect(note([permission("p1", answer: .chose(.once))]) == "Already answered. Nothing here waits on you now.")
-        #expect(note([permission("p1", answer: .stopped)]) == "That request is no longer open. Nothing here waits on you now.")
+        #expect(note([permission("p1", answer: .closed)]) == "That request is no longer open. Nothing here waits on you now.")
+        #expect(note([permission("p1", answer: .stopped)]) == "That request closed when the turn was stopped.")
     }
 
     @Test func anExpiredCardSaysItExpired() {
@@ -384,7 +402,8 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
     @Test func aClosedCardIsNamedEvenWhenAnotherOneWaits() {
         #expect(note([permission("p1", answer: .chose(.deny)), ask("a2", ["Which branch?"])]) == "That request was answered. Another one waits on you.")
         #expect(note([permission("p1", answer: .expired), permission("p2")]) == "That request expired. Another one waits on you.")
-        #expect(note([permission("p1", answer: .stopped), permission("p2")]) == "That request is no longer open. Another one waits on you.")
+        #expect(note([permission("p1", answer: .closed), permission("p2")]) == "That request is no longer open. Another one waits on you.")
+        #expect(note([permission("p1", answer: .stopped), permission("p2")]) == "That request closed when the turn was stopped. Another one waits on you.")
     }
 
     @Test func nothingIsSaidForACardNotLoadedOrAnsweredOnThisPhone() {

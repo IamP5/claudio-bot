@@ -18,15 +18,31 @@ struct PendingSend: Equatable, Sendable {
         case waiting
         /// A socket took it at `since`, and the Mac has not shown it back.
         case sending(since: Date)
-        /// No sign of it within the patience of the last try, or the Mac refused it in these words.
+        /// A socket took it and no echo came within the patience: it may have gone through.
+        case unechoed
+        /// No socket took it within OutboxRule.maxAge of the tap, or the Mac refused it in these words.
         case notSent(String?)
     }
 
-    /// How long a message a socket took may go unseen before it reads as not sent.
+    /// How long a message a socket took may go unseen before it reads as unechoed.
     static let patience: TimeInterval = 10
     let text: String
     let at: Date
+    let interrupt: Bool
+    let turnStartedAt: String?
     var state = State.waiting
+
+    /// What VoiceOver hears as a pending send moves on (F-SES-179). old, new: its state before and after, nil when it is
+    /// not pending. echoedQueued: once it is gone, whether the thread shows it queued; nil when the thread does not show
+    /// it, as after Discard. A refusal says nothing here: the composer's error note speaks it.
+    static func announcement(old: State?, new: State?, echoedQueued: Bool?) -> String? {
+        switch (old, new) {
+        case (.some, nil): echoedQueued.map { $0 ? "Queued behind the current turn." : "Sent." }
+        case (.sending?, .unechoed?): "No word from your Mac yet. Your message may not have arrived."
+        case (.waiting?, .notSent(nil)?): "Your message was not sent. Your Mac was unreachable."
+        default: nil
+        }
+    }
 }
 
 /// What the composer's Stop ends (P-A11Y-2): the turn, if one runs, and every live task.
@@ -81,6 +97,8 @@ struct StopRequest: Equatable, Sendable {
         case confirmed
         /// The Mac's refusal, in its words: "Claude Code did not stop sleep 75."
         case refused(String)
+        /// The socket refused the frame. It waits for the next hello, under the outbox's age.
+        case notSent
     }
 
     let target: StopTarget
@@ -92,6 +110,15 @@ struct StopRequest: Equatable, Sendable {
 
     /// How long a stop may stay unconfirmed before the control offers to stop again.
     static let patience: TimeInterval = 10
+    /// How long past the bridge's own deadline the app still waits for a stop Claude Code has not confirmed.
+    static let deadlineGrace: TimeInterval = 5
+
+    /// When the stop reads unconfirmed: after the patience, or after the bridge's deadline while it waits on Claude Code.
+    func unconfirmedAt(_ controls: SessionControls?) -> Date {
+        let own = at + Self.patience
+        guard let stopping = controls?.stopping else { return own }
+        return max(own, stopping.deadline + Self.deadlineGrace)
+    }
 
     /// The run on screen is still the one this stop was aimed at: no newer turn has started since. Stop again may only
     /// retry it while that holds; a newer turn goes through Stop and its confirmation like any other.
@@ -116,24 +143,39 @@ struct StopRequest: Equatable, Sendable {
 enum StopPhase: Equatable, Sendable {
     case ready
     case stopping
-    /// No word from the Mac within `StopRequest.patience`: it may not have stopped.
+    /// Past the patience, Claude Code has the stop and the bridge waits on it until its deadline.
+    case claudeStopping
+    /// No word from the Mac within `StopRequest.unconfirmedAt`: it may not have stopped.
     case unconfirmed
+    /// The socket refused the frame.
+    case notSent
     case refused(String)
 
-    init(_ request: StopRequest?, at now: Date) {
+    init(_ request: StopRequest?, controls: SessionControls?, at now: Date) {
         guard let request else { self = .ready; return }
         switch request.state {
         case .confirmed: self = .ready
         case .refused(let why): self = .refused(why)
-        case .pending: self = now.timeIntervalSince(request.at) >= StopRequest.patience ? .unconfirmed : .stopping
+        case .notSent: self = .notSent
+        case .pending:
+            if now.timeIntervalSince(request.at) < StopRequest.patience {
+                self = .stopping
+            } else {
+                self = controls?.stopping != nil && now < request.unconfirmedAt(controls) ? .claudeStopping : .unconfirmed
+            }
         }
     }
 
     var retries: Bool {
         switch self {
-        case .unconfirmed, .refused: true
-        case .ready, .stopping: false
+        case .unconfirmed, .notSent, .refused: true
+        case .ready, .stopping, .claudeStopping: false
         }
+    }
+
+    /// A stop on its way shows a spinner in place of its glyph, and a tap does nothing.
+    var spins: Bool {
+        self == .stopping || self == .claudeStopping
     }
 }
 
@@ -170,6 +212,11 @@ struct SetRequest: Equatable, Sendable {
 
     /// "Changing the mode to Accept edits…".
     var line: String { "Changing the \(field) to \(target)…" }
+
+    /// Said while the Mac is out of reach.
+    var waitsLine: String {
+        (field == "model" ? "Model" : "Mode") + " change waits for your Mac. It goes if the connection is back within a minute."
+    }
 
     /// The change took too long: what still runs. kept: the value the controls show.
     func unconfirmed(kept: String) -> String {
@@ -214,8 +261,9 @@ struct ComposerState: Equatable, Sendable {
         case now
         /// A turn runs, so the message waits for it. Held, the control offers Stop turn and send.
         case queue
-        /// The draft just went. It reads Sent until work starts or the field changes.
-        case sent(queued: Bool)
+        /// The draft just went. It reads Sending until the Mac shows it back (echoed), then Sent, until work starts or the
+        /// field changes.
+        case sent(queued: Bool, echoed: Bool)
     }
 
     enum Slot: Equatable, Sendable {
@@ -227,19 +275,22 @@ struct ComposerState: Equatable, Sendable {
     /// nil while nothing runs, or for a session this phone cannot stop.
     let stop: (scope: StopScope, phase: StopPhase)?
 
-    /// lastSend: when the field was last sent, and whether it queued. stop: the newest stop this phone asked for.
-    init(controls: SessionControls?, hasText: Bool, canStop: Bool, lastSend: (at: Date, queued: Bool)?, stop: StopRequest?, now: Date) {
+    /// lastSend: when the field was last sent, whether it queued, and whether the Mac showed it back. stop: the newest
+    /// stop this phone asked for.
+    init(
+        controls: SessionControls?, hasText: Bool, canStop: Bool, lastSend: (at: Date, queued: Bool, echoed: Bool)?, stop: StopRequest?, now: Date
+    ) {
         let queues = Self.queues(controls)
         if hasText {
             send = queues ? .queue : .now
         } else if let lastSend, now.timeIntervalSince(lastSend.at) < Self.sentShown {
-            send = .sent(queued: lastSend.queued)
+            send = .sent(queued: lastSend.queued, echoed: lastSend.echoed)
         } else {
             send = .empty
         }
         if let controls, controls.working, canStop {
             let request = stop.flatMap { $0.covers(controls) ? $0 : nil }
-            let phase = StopPhase(request, at: now)
+            let phase = StopPhase(request, controls: controls, at: now)
             // While a stop is on its way or refused, the control speaks of what that stop asked for.
             let scope = phase == .ready ? StopScope(controls) : StopScope(controls, target: request?.target ?? .all)
             self.stop = (scope, phase)
@@ -280,10 +331,10 @@ struct ComposerState: Equatable, Sendable {
         queues(controls) ? "Message, waits for the current turn" : "Message"
     }
 
-    /// Spoken once Send lands (F-SES-146). Offline the message only waits on this phone, so it is never called sent.
-    static func sentAnnouncement(queued: Bool, interrupt: Bool = false, offline: Bool = false) -> String {
-        if offline { return "Not sent yet. It goes when your Mac is back." }
-        return interrupt ? "Stopping the turn. Your message goes next." : queued ? "Queued behind the current turn." : "Sent."
+    /// Spoken at the tap (F-SES-146, F-SES-179). Nothing is sent until the Mac shows it back, which
+    /// PendingSend.announcement speaks. Offline the message only waits on this phone.
+    static func sentAnnouncement(offline: Bool) -> String {
+        offline ? "Not sent yet. It goes if your Mac is back within a minute." : "Sending."
     }
 
     static let stopWaitsLine = "Stop waits for your Mac. It goes if the connection is back within a minute."
@@ -293,7 +344,9 @@ struct ComposerState: Equatable, Sendable {
         switch phase {
         case .ready: nil
         case .stopping: "Stopping \(scope.what)."
+        case .claudeStopping: "Waiting for Claude Code to stop."
         case .unconfirmed: "Your Mac has not confirmed the stop. Stop again to retry."
+        case .notSent: ComposerNote.stopNotSent.text
         case .refused(let why): "Couldn't stop. " + why
         }
     }
@@ -319,19 +372,17 @@ extension ComposerState.Slot {
         switch self {
         case .send(.now), .send(.queue): true
         case .send(.empty), .send(.sent): false
-        case .stop(_, .stopping): false
-        case .stop: true
+        case .stop(_, let phase): !phase.spins
         }
     }
 
-    /// A stop on its way shows a spinner in place of its glyph.
     var spins: Bool {
-        if case .stop(_, .stopping) = self { true } else { false }
+        if case .stop(_, let phase) = self { phase.spins } else { false }
     }
 
     var symbol: String {
         switch self {
-        case .send(.sent): "checkmark"
+        case .send(.sent(_, let echoed)): echoed ? "checkmark" : "arrow.up"
         case .send: "arrow.up"
         case .stop: "stop.fill"
         }
@@ -341,10 +392,11 @@ extension ComposerState.Slot {
         switch self {
         case .send(.empty), .send(.now): "Send"
         case .send(.queue): "Queue message"
-        case .send(.sent(let queued)): queued ? "Queued" : "Sent"
+        case .send(.sent(let queued, let echoed)): echoed ? (queued ? "Queued" : "Sent") : "Sending"
         case .stop(let scope, .ready): scope.label
         case .stop(let scope, .stopping): "Stopping \(scope.what)"
-        case .stop(let scope, .unconfirmed), .stop(let scope, .refused): "Stop again: \(scope.what)"
+        case .stop(_, .claudeStopping): "Waiting for Claude Code to stop"
+        case .stop(let scope, .unconfirmed), .stop(let scope, .notSent), .stop(let scope, .refused): "Stop again: \(scope.what)"
         }
     }
 
@@ -353,8 +405,9 @@ extension ComposerState.Slot {
         case .send(.queue): "Sends when the current turn ends. Hold for Stop turn and send."
         case .stop(let scope, .ready): scope.asks ? "Asks before it stops background work." : nil
         case .stop(_, .unconfirmed): "Your Mac has not confirmed the stop."
+        case .stop(_, .notSent): "Stop did not reach your Mac."
         case .stop(_, .refused(let why)): why
-        case .send, .stop(_, .stopping): nil
+        case .send, .stop(_, .stopping), .stop(_, .claudeStopping): nil
         }
     }
 }
@@ -385,8 +438,15 @@ enum ComposerNote: Equatable, Sendable {
     /// A Stop tapped while the Mac is out of reach: it waits on this phone, and goes only if the Mac is back within a
     /// minute.
     case stopWaits
+    /// Claude Code has the stop, and the bridge waits on it.
+    case claudeStopping
+    /// The socket refused the Stop's frame. It waits on this phone like a Stop tapped offline.
+    case stopNotSent
     case unconfirmed
     case changing(SetRequest)
+    /// A change made while the Mac is out of reach: it waits on this phone, and goes only if the Mac is back within a
+    /// minute.
+    case changeWaits(SetRequest)
     /// The change took longer than SetRequest.patience. text: what still runs.
     case changeUnconfirmed(SetRequest, text: String)
 
@@ -395,9 +455,15 @@ enum ComposerNote: Equatable, Sendable {
         offline: Bool = false
     ) -> ComposerNote? {
         if let error { return .error(error) }
-        if let stop, stop.phase == .stopping { return offline ? .stopWaits : .stopping(stop.scope) }
-        if stop?.phase == .unconfirmed { return .unconfirmed }
+        switch stop?.phase {
+        case .stopping?: if let stop { return offline ? .stopWaits : .stopping(stop.scope) }
+        case .claudeStopping?: return .claudeStopping
+        case .notSent?: return .stopNotSent
+        case .unconfirmed?: return .unconfirmed
+        case .ready?, .refused?, nil: break
+        }
         guard let set else { return nil }
+        if offline { return .changeWaits(set) }
         if now.timeIntervalSince(set.at) < SetRequest.patience { return .changing(set) }
         return controls.map { .changeUnconfirmed(set, text: set.unconfirmed(kept: set.kept($0))) }
     }
@@ -407,8 +473,11 @@ enum ComposerNote: Equatable, Sendable {
         case .error(let error): error.text
         case .stopping(let scope): "Stopping \(scope.what)…"
         case .stopWaits: ComposerState.stopWaitsLine
+        case .claudeStopping: "Waiting for Claude Code to stop…"
+        case .stopNotSent: "Stop not sent. It goes if your Mac is back within a minute."
         case .unconfirmed: "Your Mac has not confirmed the stop. It may still be running."
         case .changing(let set): set.line
+        case .changeWaits(let set): set.waitsLine
         case .changeUnconfirmed(_, let text): text
         }
     }

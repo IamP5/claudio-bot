@@ -12,6 +12,13 @@ struct SettingsView: View {
     @State private var editingAddress = false
 
     var body: some View {
+        content
+            .onAppear { store.settingsShown = true }
+            .onDisappear { store.settingsShown = false }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         #if os(macOS)
         // The Settings window names itself after its tab and closes with its own button, so no title or Done here.
         form
@@ -52,18 +59,26 @@ struct SettingsView: View {
                 Section {
                     Picker("Show agent sessions in the Claude app", selection: Binding(
                         get: { store.sessions.mirror ?? .auto },
-                        set: { pref in
-                            store.sessions.setMirror(pref)
-                            client.send(.sessionPrefs(mirror: pref))
-                        }
+                        set: { client.send(.sessionPrefs(mirror: $0)) }
                     )) {
                         ForEach(MirrorPref.allCases, id: \.self) { Text(Copy.mirror($0)).tag($0) }
                     }
                     .pickerStyle(.navigationLink)
+                    // Beside the picker it names, so a change that never went is not only a toast under this sheet.
+                    if let note = store.mirrorNote {
+                        Label(note, systemImage: "wifi.slash")
+                            .font(.footnote)
+                            .foregroundStyle(Theme.attention)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityLabel("Show agent sessions in the Claude app: " + note)
+                    }
                 } header: {
                     Text("Sessions")
                 } footer: {
                     Text(Copy.sessionsFooter)
+                }
+                .onChange(of: store.mirrorNote) { _, note in
+                    if let note { AccessibilityNotification.Announcement("Show agent sessions in the Claude app: " + note).post() }
                 }
             }
 

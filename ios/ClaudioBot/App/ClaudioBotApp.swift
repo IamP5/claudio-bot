@@ -164,6 +164,11 @@ final class AppModel {
         }
         #endif
         if let pairing = PairingVault.app.load() {
+            #if os(iOS)
+            // A notification action can launch the app in the background. Until the first time on screen it is
+            // unattended, so the bridge does not hold pushes for it.
+            client.attended = false
+            #endif
             client.start(pairing)
         }
         network.pathUpdateHandler = { path in

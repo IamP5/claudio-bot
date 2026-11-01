@@ -848,9 +848,9 @@ struct DecisionStatusLine: View {
                     .foregroundStyle(Theme.attention)
                     .fixedSize(horizontal: false, vertical: true)
             } else if let note {
-                Label(note.text, systemImage: note.answered ? "checkmark.circle" : "exclamationmark.triangle")
+                Label(note.text, systemImage: note.answered ? "checkmark.circle" : note == .unsure ? "questionmark.circle" : "exclamationmark.triangle")
                     .font(.ui(.footnote))
-                    .foregroundStyle(note.answered ? Theme.secondary : Theme.danger)
+                    .foregroundStyle(note.answered ? Theme.secondary : note == .unsure ? Theme.attention : Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

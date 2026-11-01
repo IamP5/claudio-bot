@@ -97,7 +97,7 @@ struct LinkedCard: Equatable, Sendable {
     let sessionId: SessionID
     let cardId: MessageID
 
-    enum Closing { case answered, expired, closed }
+    enum Closing { case answered, expired, stopped, closed }
 
     /// The note once the card is in `items`, closed and not decided on this phone. nil says nothing: the card is not
     /// loaded, still waits, or the user just answered it here. Another card that waits is named, not hidden behind the
@@ -108,6 +108,8 @@ struct LinkedCard: Equatable, Sendable {
         return switch closing {
         case .answered: waits ? "That request was answered. Another one waits on you." : "Already answered. Nothing here waits on you now."
         case .expired: waits ? "That request expired. Another one waits on you." : "That request expired."
+        case .stopped:
+            waits ? "That request closed when the turn was stopped. Another one waits on you." : "That request closed when the turn was stopped."
         case .closed: waits ? "That request is no longer open. Another one waits on you." : "That request is no longer open. Nothing here waits on you now."
         }
     }
@@ -121,19 +123,22 @@ struct LinkedCard: Equatable, Sendable {
                 switch permission.card.answer(at: now) {
                 case nil: return nil
                 case .expired: return .expired
-                case .stopped, .closed: return .closed
+                case .stopped: return .stopped
+                case .closed: return .closed
                 case .chose, .unknown: return .answered
                 }
             case let .ask(_, _, _, answers, id?) where id == cardId:
                 switch answers {
                 case nil: return nil
                 case .expired: return .expired
+                case .stopped: return .stopped
                 case .answered, .dismissed, .closed: return .answered
                 }
             case let .plan(_, _, _, state, id?) where id == cardId:
                 switch state {
                 case .proposed: return nil
                 case .expired: return .expired
+                case .stopped: return .stopped
                 case .approved, .rejected, .unknown: return .answered
                 }
             default:
@@ -216,7 +221,7 @@ enum ThreadStatus: Equatable, Sendable {
         case .quiet: "No word from your Mac"
         case .needsYou(let card, _): card.need
         case .working: "Working"
-        case .background: "Running in background"
+        case .background(_, let tasks): Self.outlives(tasks) ? "Still running" : "Running in background"
         case .orphaned(let outcome, _), .ended(let outcome): Self.word(outcome.kind)
         }
     }
@@ -274,10 +279,20 @@ enum ThreadStatus: Equatable, Sendable {
             // One task is named, cut short so the clock stays in view. The sheet has the whole label.
             let count = TaskCount(tasks)
             let what = tasks.count == 1 ? OpenCard.firstLine(tasks[0].label, limit: 40) ?? "" : count.text(spoken: spoken) ?? ""
-            return "Running in background: \(what) · " + clock(now.timeIntervalSince(since))
+            return Self.backgroundHead(tasks) + ": \(what) · " + clock(now.timeIntervalSince(since))
         case .ended(let outcome):
             return Self.outcome(outcome)
         }
+    }
+
+    /// A foreground command that outlived a Claude Code crash or a bridge restart keeps its foreground word (Run3 call
+    /// 7): once a later run has its own outcome, the line says what it outlived instead of calling it background work.
+    static func outlives(_ tasks: [SessionTask]) -> Bool {
+        tasks.contains { $0.outlived && !$0.background }
+    }
+
+    static func backgroundHead(_ tasks: [SessionTask]) -> String {
+        outlives(tasks) ? "Still running after Claude Code stopped" : "Running in background"
     }
 
     /// A run that failed or was cut off says how to go on.
@@ -410,7 +425,11 @@ enum ThreadAnnouncement {
             case .orphaned:
                 return new?.spoken(now: now)
             case .background(_, let live):
-                if case .working = old { return "Claude finished its turn. Still running in background: " + live.map(\.label).joined(separator: ", ") + "." }
+                if case .working = old {
+                    // Work that outlived Claude Code means the turn did not finish: never say it did (G26).
+                    let what = live.map(\.label).joined(separator: ", ") + "."
+                    return ThreadStatus.outlives(live) ? "Still running after Claude Code stopped: " + what : "Claude finished its turn. Still running in background: " + what
+                }
                 return ended("Ended in background.", was.filter(\.background), live, name)
             case .working(_, let live):
                 return ended("Ended in background.", was.filter(\.background), live, name)

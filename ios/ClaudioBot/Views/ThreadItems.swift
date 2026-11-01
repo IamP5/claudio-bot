@@ -66,10 +66,23 @@ extension ThreadRowView {
     }
 
     private func actions(_ id: ItemID, _ text: String, queued: Bool) -> SessionUserBubble.Actions? {
-        // Until the Mac shows it back the message is this phone's alone: the only thing to do with it is send it again.
+        // Until the Mac shows it back the message is this phone's alone: send the same frame again, or give it up.
         if let pending = model.pendingSends[id] {
-            guard case .notSent = pending.state else { return nil }
-            return .notSent(retry: { client.send(.sessionSend(sessionId: model.id, text: pending.text, clientId: id.rawValue, interrupt: false)) })
+            switch pending.state {
+            case .unechoed, .notSent:
+                return .undelivered(
+                    retry: {
+                        client.send(
+                            .sessionSend(
+                                sessionId: model.id, text: pending.text, clientId: id.rawValue, interrupt: pending.interrupt,
+                                turnStartedAt: pending.turnStartedAt
+                            ))
+                    },
+                    discard: { client.discard(sessionId: model.id, clientId: id.rawValue) }
+                )
+            case .waiting, .sending:
+                return nil
+            }
         }
         if let withdrawal = model.withdrawals[id] {
             guard withdrawal.lapsed else { return nil }
@@ -104,8 +117,9 @@ struct SessionUserBubble: View {
         case resend(() -> Void)
         /// A withdrawal the Mac never confirmed: try it again, or, when the text is not in the composer yet, edit it.
         case unconfirmed(retry: () -> Void, edit: (() -> Void)?)
-        /// The Mac never showed the message back, or refused it: send it again, with the same id so it runs once.
-        case notSent(retry: () -> Void)
+        /// The Mac never showed the message back, or refused it: send it again, with the same id so it runs once, or
+        /// give it up.
+        case undelivered(retry: () -> Void, discard: () -> Void)
     }
 
     /// Where a message the user took back stands.
@@ -139,6 +153,7 @@ struct SessionUserBubble: View {
         switch delivery {
         case .waiting: "Not sent yet · Goes when your Mac is back"
         case .sending: "Sending…"
+        case .unechoed: "No word from your Mac yet. It may have gone through."
         case .notSent(let why?): "Not sent: " + why
         case .notSent(nil): "Not sent"
         }
@@ -191,8 +206,9 @@ struct SessionUserBubble: View {
                 case let .unconfirmed(retry, edit)?:
                     Button("Try again", action: retry)
                     if let edit { Button("Edit", action: edit) }
-                case .notSent(let retry)?:
+                case let .undelivered(retry, discard)?:
                     Button("Retry", action: retry)
+                    Button("Discard", action: discard)
                 case nil:
                     EmptyView()
                 }
@@ -223,12 +239,19 @@ struct SessionUserBubble: View {
             } label: {
                 captionLabel("Couldn't confirm the withdraw · Try again", symbol: "exclamationmark.triangle")
             }
-        case .notSent(let retry)?:
-            Button(action: retry) {
-                captionLabel((delivery.map(Self.words) ?? "Not sent") + " · Retry", symbol: "exclamationmark.triangle")
-                    .foregroundStyle(Theme.danger)
+        case let .undelivered(retry, discard)?:
+            let unechoed = delivery == .unechoed
+            VStack(alignment: .trailing, spacing: 0) {
+                Label(delivery.map(Self.words) ?? "Not sent", systemImage: unechoed ? "questionmark.circle" : "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(unechoed ? Theme.attention : Theme.danger)
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 16) { undeliveredButtons(retry: retry, discard: discard, unechoed: unechoed) }
+                    VStack(alignment: .trailing, spacing: 0) { undeliveredButtons(retry: retry, discard: discard, unechoed: unechoed) }
+                }
             }
-            .buttonStyle(.plain)
         case nil:
             if let delivery {
                 Label(Self.words(delivery), systemImage: delivery == .waiting ? "wifi.slash" : "arrow.up.circle")
@@ -244,6 +267,15 @@ struct SessionUserBubble: View {
                     .foregroundStyle(Theme.tertiary)
             }
         }
+    }
+
+    @ViewBuilder
+    private func undeliveredButtons(retry: @escaping () -> Void, discard: @escaping () -> Void, unechoed: Bool) -> some View {
+        Button(action: retry) { captionLabel("Retry", symbol: "arrow.clockwise") }
+            .buttonStyle(.plain)
+            .accessibilityHint(unechoed ? "Safe to retry: your Mac runs it only once." : "")
+        Button(action: discard) { captionLabel("Discard", symbol: "xmark") }
+            .buttonStyle(.plain)
     }
 
     private func captionLabel(_ title: String, symbol: String) -> some View {

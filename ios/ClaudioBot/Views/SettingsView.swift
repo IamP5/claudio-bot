@@ -52,10 +52,7 @@ struct SettingsView: View {
                 Section {
                     Picker("Show agent sessions in the Claude app", selection: Binding(
                         get: { store.sessions.mirror ?? .auto },
-                        set: { pref in
-                            store.sessions.setMirror(pref)
-                            client.send(.sessionPrefs(mirror: pref))
-                        }
+                        set: { client.send(.sessionPrefs(mirror: $0)) }
                     )) {
                         ForEach(MirrorPref.allCases, id: \.self) { Text(Copy.mirror($0)).tag($0) }
                     }

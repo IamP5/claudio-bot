@@ -449,7 +449,7 @@ private func scratchVault() -> PairingVault {
         let bridge = try FakeBridge(onOpen: { $0.send(threadsHello) })
         let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
         var timing = quick
-        timing.staleStop = 0
+        timing.outboxAge = 0
         let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: timing)
         client.send(.sessionStop(sessionId: SessionID("s1"), target: .all, turnStartedAt: "2026-10-16T12:00:00.000Z"))
         client.send(.markUnread(botId: BotID("b1")))
@@ -457,7 +457,43 @@ private func scratchVault() -> PairingVault {
         client.start(pairing)
         try await eventually("the queued message") { bridge.texts.contains { $0.contains("mark_unread") } }
         #expect(!bridge.texts.contains { $0.contains(#""type":"session_stop""#) })
-        #expect(client.store.sessionErrors[SessionID("s1")]?.text == "Stop not sent: the connection came back too late.")
+        #expect(client.store.sessionErrors[SessionID("s1")]?.text == "Stop not sent: your Mac was unreachable.")
+        client.stop()
+    }
+
+    @Test func aRequestHeldOfflineSaysItWasNotSentWhenItsAgeRunsOutWithNoHelloAtAll() async throws {
+        var timing = quick
+        timing.outboxAge = 0.05
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: timing)
+        let sid = SessionID("s1")
+        client.store.apply(.sessions(.list(projects: [], rows: [], mirror: .auto)))
+
+        client.send(.sessionSet(sessionId: sid, patch: SessionPatch(mode: .plan)))
+        try await eventually("the mode change's note", within: .seconds(1)) {
+            client.store.sessionErrors[sid]?.text == "Mode change not sent: your Mac was unreachable."
+        }
+        client.send(.sessionSet(sessionId: sid, patch: SessionPatch(hidden: true)))
+        try await eventually("the hide toast", within: .seconds(1)) { client.store.lastError?.message == "Hide not sent: your Mac was unreachable." }
+        client.send(.sessionPrefs(mirror: .never))
+        #expect(client.store.sessions.mirror == .never)
+        try await eventually("the setting put back", within: .seconds(1)) { client.store.sessions.mirror == .auto }
+        #expect(client.store.lastError?.message == "The Claude app setting was not changed: your Mac was unreachable.")
+    }
+
+    @Test func discardTakesASendOutOfTheOutboxSoTheNextHelloNeverSendsIt() async throws {
+        let bridge = try threadBridge()
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        let sid = SessionID("s1")
+        let model = client.store.threads.open(sid)
+        model.echo(clientId: "c1", text: "Run the tests")
+        client.send(.sessionSend(sessionId: sid, text: "Run the tests", clientId: "c1", interrupt: false))
+        client.discard(sessionId: sid, clientId: "c1")
+        #expect(model.pendingSends.isEmpty && model.items.isEmpty)
+        client.send(.markUnread(botId: BotID("b1")))
+        client.start(pairing)
+        try await eventually("the queued message") { bridge.texts.contains { $0.contains("mark_unread") } }
+        #expect(!bridge.texts.contains { $0.contains(#""type":"session_send""#) })
         client.stop()
     }
 
@@ -465,7 +501,7 @@ private func scratchVault() -> PairingVault {
         let bridge = try FakeBridge(onOpen: { $0.send(hello()) })
         let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
         var timing = quick
-        timing.staleStop = 0
+        timing.outboxAge = 0
         let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: timing)
         client.send(.stop(botId: BotID("b1")))
         client.send(.markUnread(botId: BotID("b1")))

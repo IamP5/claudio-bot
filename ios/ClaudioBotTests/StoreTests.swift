@@ -958,9 +958,9 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
     @Test func aStopQueuedOfflineIsDroppedAfterAMinuteAndOtherMessagesAreNot() {
         let stop = ClientMessage.stop(botId: BotID("b1"))
         let send = ClientMessage.send(botId: BotID("b1"), text: "hi", uploads: [], clientId: "c1")
-        #expect(BridgeClient.stillWanted(stop, queuedAt: at, now: at + 30, staleStop: 60))
-        #expect(!BridgeClient.stillWanted(stop, queuedAt: at, now: at + 61, staleStop: 60))
-        #expect(!BridgeClient.stillWanted(.stopAgent(agentId: AgentID("a1")), queuedAt: at, now: at + 61, staleStop: 60))
-        #expect(BridgeClient.stillWanted(send, queuedAt: at, now: at + 3600, staleStop: 60))
+        #expect(BridgeClient.stillWanted(stop, queuedAt: at, now: at + 30, maxAge: 60))
+        #expect(!BridgeClient.stillWanted(stop, queuedAt: at, now: at + 61, maxAge: 60))
+        #expect(!BridgeClient.stillWanted(.stopAgent(agentId: AgentID("a1")), queuedAt: at, now: at + 61, maxAge: 60))
+        #expect(BridgeClient.stillWanted(send, queuedAt: at, now: at + 3600, maxAge: 60))
     }
 }

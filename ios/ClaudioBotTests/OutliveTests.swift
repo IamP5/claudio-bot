@@ -66,24 +66,73 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(model.pendingSends.isEmpty)
     }
 
-    @Test func aSendNoFrameShowsBackWithinTenSecondsReadsNotSent() throws {
+    @Test func aSendASocketTookWithNoEchoInTenSecondsMayHaveGoneThroughAndDiscardForgetsIt() throws {
         let store = store()
         let model = try #require(store.threads[sid])
         model.echo(clientId: "c1", text: "Run the tests", at: at)
-        store.sendStarted(send("c1"))
+        store.sendStarted(send("c1"), at: at)
         store.sendTransmitted(send("c1"), at: at)
         model.lapseSends(at: at + 9)
         #expect(model.pendingSends[ItemID("c1")]?.state == .sending(since: at))
         model.lapseSends(at: at + 10)
-        #expect(model.pendingSends[ItemID("c1")]?.state == .notSent(nil))
+        #expect(model.pendingSends[ItemID("c1")]?.state == .unechoed, "a socket took it, so it is never called not sent")
+        #expect(SessionUserBubble.words(.unechoed) == "No word from your Mac yet. It may have gone through.")
+        #expect(SessionUserBubble.words(.sending(since: at)) == "Sending…")
         #expect(SessionUserBubble.words(.notSent(nil)) == "Not sent")
+        #expect(SessionUserBubble.words(.notSent("This session's transcript is gone.")) == "Not sent: This session's transcript is gone.")
+        #expect(model.items.map(\.id) == [ItemID("c1")])
+
+        store.discardSend(sessionId: sid, clientId: "c1")
+        #expect(store.unechoedSends.isEmpty)
+        #expect(model.pendingSends.isEmpty)
+        #expect(model.items.isEmpty, "its echo leaves the thread")
+        #expect(store.resendsAfterHello(now: at + 1).isEmpty)
+    }
+
+    @Test func aSessionSendIsResentAfterHelloOnlyWithinAMinuteOfTheTap() {
+        let store = store()
+        store.sendStarted(send("c1"), at: at)
+        #expect(store.resendsAfterHello(now: at + 59) == [send("c1")])
+        #expect(store.resendsAfterHello(now: at + 61).isEmpty)
+        #expect(store.unechoedSends.isEmpty, "no longer owed: only Retry sends it now")
+        store.sendStarted(send("c2"), at: at)
+        store.sendStarted(send("c2"), at: at + 100)
+        #expect(store.resendsAfterHello(now: at + 130) == [send("c2")], "Retry starts its age again")
+    }
+
+    @Test func aSendHeldOfflinePastItsAgeReadsNotSent() throws {
+        let store = store()
+        let model = try #require(store.threads[sid])
+        model.echo(clientId: "c1", text: "Run the tests", at: at)
+        store.sendStarted(send("c1"), at: at)
+        store.requestDropped(send("c1"))
+        #expect(model.pendingSends[ItemID("c1")]?.state == .notSent(nil))
+        #expect(store.unechoedSends.isEmpty)
+    }
+
+    @Test func aSendIsSpokenAsSendingThenSentOnlyOnceTheMacShowsItBack() {
+        #expect(ComposerState.sentAnnouncement(offline: false) == "Sending.")
+        #expect(ComposerState.sentAnnouncement(offline: true) == "Not sent yet. It goes when your Mac is back.")
+        #expect(PendingSend.announcement(old: .sending(since: at), new: nil, echoedQueued: false) == "Sent.")
+        #expect(PendingSend.announcement(old: .sending(since: at), new: nil, echoedQueued: true) == "Queued behind the current turn.")
+        #expect(PendingSend.announcement(old: .unechoed, new: nil, echoedQueued: nil) == nil, "discarded: nothing to say")
+        #expect(PendingSend.announcement(old: .sending(since: at), new: .unechoed, echoedQueued: nil) == "No word from your Mac yet. Your message may not have arrived.")
+        #expect(PendingSend.announcement(old: .waiting, new: .notSent(nil), echoedQueued: nil) == "Your message was not sent. Your Mac was unreachable.")
+        #expect(PendingSend.announcement(old: .waiting, new: .notSent("This session's transcript is gone."), echoedQueued: nil) == nil)
+        #expect(PendingSend.announcement(old: .waiting, new: .sending(since: at), echoedQueued: nil) == nil)
+    }
+
+    @Test func theEchoTellsWhetherTheMessageQueued() throws {
+        let store = store()
+        let model = try #require(store.threads[sid])
+        model.echo(clientId: "c1", text: "Run the tests", at: at)
+        items(store, rev: 2, [user("t-9", queued: true, clientId: "c1")], removed: ["c1"])
+        #expect(model.shownQueued(ItemID("c1")) == true)
+        #expect(model.shownQueued(ItemID("c2")) == nil)
     }
 
     @Test func aSendOfflineIsNeverCalledSent() {
         #expect(SessionUserBubble.words(.waiting) == "Not sent yet · Goes when your Mac is back")
-        #expect(ComposerState.sentAnnouncement(queued: false, offline: true) == "Not sent yet. It goes when your Mac is back.")
-        #expect(ComposerState.sentAnnouncement(queued: true, offline: true) == "Not sent yet. It goes when your Mac is back.")
-        #expect(ComposerState.sentAnnouncement(queued: false) == "Sent.")
     }
 
     @Test func aSnapshotThatDoesNotHaveThePendingMessageYetKeepsItsEcho() throws {
@@ -170,11 +219,59 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
 @Suite struct StaleRequestTests {
     @Test func stopsAndDecisionsHeldPastAMinuteAreNotWanted() {
         let stop = ClientMessage.sessionStop(sessionId: sid, target: .all, turnStartedAt: "2026-10-16T12:00:00.000Z")
-        #expect(BridgeClient.stillWanted(stop, queuedAt: at, now: at + 60, staleStop: 60))
-        #expect(!BridgeClient.stillWanted(stop, queuedAt: at, now: at + 61, staleStop: 60))
-        #expect(!BridgeClient.stillWanted(.sessionDecide(sessionId: sid, cardId: MessageID("m1"), choice: .once), queuedAt: at, now: at + 61, staleStop: 60))
-        #expect(!BridgeClient.stillWanted(.sessionAnswer(sessionId: sid, cardId: MessageID("m1"), answers: nil), queuedAt: at, now: at + 61, staleStop: 60))
-        #expect(BridgeClient.stillWanted(send("c1"), queuedAt: at, now: at + 3600, staleStop: 60))
+        #expect(BridgeClient.stillWanted(stop, queuedAt: at, now: at + 60, maxAge: 60))
+        #expect(!BridgeClient.stillWanted(stop, queuedAt: at, now: at + 61, maxAge: 60))
+        #expect(!BridgeClient.stillWanted(.sessionDecide(sessionId: sid, cardId: MessageID("m1"), choice: .once), queuedAt: at, now: at + 61, maxAge: 60))
+        #expect(!BridgeClient.stillWanted(.sessionAnswer(sessionId: sid, cardId: MessageID("m1"), answers: nil), queuedAt: at, now: at + 61, maxAge: 60))
+    }
+
+    @Test func everySessionRequestHeldPastAMinuteIsNotWantedWhileABotMessageStillIs() {
+        let requests: [ClientMessage] = [
+            .sessionSet(sessionId: sid, patch: SessionPatch(mode: .plan)), .sessionSet(sessionId: sid, patch: SessionPatch(hidden: true)),
+            .sessionOpenDesktop(sessionId: sid), .sessionPrefs(mirror: .never), send("c1"),
+            .sessionSend(sessionId: sid, text: "Do this instead", clientId: "c2", interrupt: true, turnStartedAt: "2026-10-16T12:00:00.000Z"),
+        ]
+        for msg in requests {
+            #expect(OutboxRule.of(msg) == .expires)
+            #expect(BridgeClient.stillWanted(msg, queuedAt: at, now: at + 60, maxAge: OutboxRule.maxAge))
+            #expect(!BridgeClient.stillWanted(msg, queuedAt: at, now: at + 61, maxAge: OutboxRule.maxAge))
+        }
+        let botSend = ClientMessage.send(botId: BotID("b1"), text: "hi", uploads: [])
+        #expect(OutboxRule.of(botSend) == .waits)
+        #expect(BridgeClient.stillWanted(botSend, queuedAt: at, now: at + 3600, maxAge: OutboxRule.maxAge))
+        #expect(OutboxRule.maxAge == 60)
+    }
+
+    @Test func eachDroppedRequestSaysWhatWasNotSent() {
+        let store = store()
+        store.sessionRequestSent(.sessionSet(sessionId: sid, patch: SessionPatch(mode: .plan)), at: at)
+        store.requestDropped(.sessionSet(sessionId: sid, patch: SessionPatch(mode: .plan)))
+        #expect(store.sets[sid] == nil)
+        #expect(store.sessionErrors[sid]?.kind == .set)
+        #expect(store.sessionErrors[sid]?.text == "Mode change not sent: your Mac was unreachable.")
+        store.requestDropped(.sessionSet(sessionId: sid, patch: SessionPatch(model: .some("opus"))))
+        #expect(store.sessionErrors[sid]?.text == "Model change not sent: your Mac was unreachable.")
+        store.requestDropped(.sessionSet(sessionId: sid, patch: SessionPatch(hidden: true)))
+        #expect(store.lastError?.message == "Hide not sent: your Mac was unreachable.")
+        store.requestDropped(.sessionSet(sessionId: sid, patch: SessionPatch(hidden: false)))
+        #expect(store.lastError?.message == "Show not sent: your Mac was unreachable.")
+        store.requestDropped(.sessionSet(sessionId: sid, patch: SessionPatch(title: "Fix the build")))
+        #expect(store.lastError?.message == "Rename not sent: your Mac was unreachable.")
+        store.requestDropped(.sessionOpenDesktop(sessionId: sid))
+        #expect(store.lastError?.message == "Open in the Claude app not sent: your Mac was unreachable.")
+        store.requestDropped(.stopAgent(agentId: AgentID("a1")))
+        #expect(store.lastError?.message == "Stop not sent: your Mac was unreachable.")
+    }
+
+    @Test func aMirrorSettingThatNeverWentPutsThePickerBack() {
+        let store = store()
+        store.apply(.sessions(.list(projects: [], rows: [], mirror: .auto)))
+        store.sessionRequestSent(.sessionPrefs(mirror: .tap))
+        store.sessionRequestSent(.sessionPrefs(mirror: .never))
+        #expect(store.sessions.mirror == .never, "shown at once")
+        store.requestDropped(.sessionPrefs(mirror: .tap))
+        #expect(store.sessions.mirror == .auto, "back to the value before the first change")
+        #expect(store.lastError?.message == "The Claude app setting was not changed: your Mac was unreachable.")
     }
 
     @Test func aDroppedStopSaysSoUnderTheComposer() {
@@ -184,7 +281,7 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(store.latestStop(in: sid, [.all]) != nil)
         store.requestDropped(stop)
         #expect(store.latestStop(in: sid, [.all]) == nil)
-        #expect(store.sessionErrors[sid]?.text == "Stop not sent: the connection came back too late.")
+        #expect(store.sessionErrors[sid]?.text == "Stop not sent: your Mac was unreachable.")
     }
 
     @Test func aStopTappedOfflineSaysItWaitsNotThatItStops() {
@@ -208,7 +305,7 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         store.decisionSent(.once, for: MessageID("m1"))
         store.requestDropped(.sessionDecide(sessionId: sid, cardId: MessageID("m1"), choice: .once))
         #expect(store.pendingDecisions.isEmpty)
-        #expect(store.decisionNote(MessageID("m1"))?.text == "Not sent: the connection came back too late · Try again")
+        #expect(store.decisionNote(MessageID("m1"))?.text == "Not sent: your Mac was unreachable · Try again")
     }
 }
 

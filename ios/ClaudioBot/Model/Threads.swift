@@ -578,10 +578,11 @@ final class ThreadModel {
     }
 
     /// The user's message, shown queued at once under the clientId the bridge keeps until the transcript replaces it.
-    /// It stays pending until a frame from the Mac shows it back.
-    func echo(clientId: String, text: String, at now: Date = .now) {
+    /// It stays pending until a frame from the Mac shows it back. interrupt and turnStartedAt: the frame it went in, so
+    /// Retry sends the same one.
+    func echo(clientId: String, text: String, interrupt: Bool = false, turnStartedAt: String? = nil, at now: Date = .now) {
         let id = ItemID(clientId)
-        pendingSends[id] = PendingSend(text: text, at: now)
+        pendingSends[id] = PendingSend(text: text, at: now, interrupt: interrupt, turnStartedAt: turnStartedAt)
         upsert(.user(id: id, at: now, text: text, from: .user, queued: true))
         relayout()
     }
@@ -591,7 +592,7 @@ final class ThreadModel {
         pendingSends[ItemID(clientId)]?.state = .waiting
     }
 
-    /// A socket took the message. Without a sign of it from the Mac within the patience, it reads as not sent.
+    /// A socket took the message. Without a sign of it from the Mac within the patience, it may or may not have arrived.
     func sendTransmitted(_ clientId: String, at now: Date = .now) {
         let id = ItemID(clientId)
         guard pendingSends[id] != nil else { return }
@@ -604,13 +605,23 @@ final class ThreadModel {
 
     func lapseSends(at now: Date) {
         for (id, send) in pendingSends {
-            if case .sending(let since) = send.state, now.timeIntervalSince(since) >= PendingSend.patience { pendingSends[id]?.state = .notSent(nil) }
+            if case .sending(let since) = send.state, now.timeIntervalSince(since) >= PendingSend.patience { pendingSends[id]?.state = .unechoed }
         }
     }
 
-    /// The Mac refused the message, in its words.
-    func sendRefused(_ clientId: String, _ why: String) {
+    /// The Mac refused the message, in its words, or no socket took it in time (nil).
+    func sendRefused(_ clientId: String, _ why: String?) {
         pendingSends[ItemID(clientId)]?.state = .notSent(why)
+    }
+
+    /// The user gave up on a message the Mac never showed back, so its echo goes. An echo the Mac sends later shows it again.
+    func discardSend(_ clientId: String) {
+        let id = ItemID(clientId)
+        guard pendingSends.removeValue(forKey: id) != nil, index[id] != nil else { return }
+        items.removeAll { $0.id == id }
+        arrival[id] = nil
+        reindex()
+        relayout()
     }
 
     /// A frame that shows a pending message back, under its clientId or as the transcript's copy, or removes it, means

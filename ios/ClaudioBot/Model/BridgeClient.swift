@@ -52,6 +52,30 @@ struct StreamCursor: Equatable, Sendable {
     }
 }
 
+/// How long a request the user made may wait for a socket (Run3 calls 1 and 2). Every case of ClientMessage is listed,
+/// so a new request has to choose.
+enum OutboxRule: Equatable, Sendable {
+    /// It waits for the next hello however long that takes.
+    case waits
+    /// It goes only within `maxAge` of the tap. After that it is dropped, and the screen says so.
+    case expires
+
+    static let maxAge: TimeInterval = 60
+
+    static func of(_ msg: ClientMessage) -> OutboxRule {
+        switch msg {
+        case .sessionSend, .sessionStop, .sessionUnqueue, .sessionDecide, .sessionAnswer, .sessionCreate, .sessionSet, .sessionOpenDesktop,
+             .sessionPrefs, .stop, .stopAgent, .decide:
+            .expires
+        case .createBot, .open, .send, .answer, .dismiss, .updateBot, .markUnread, .deleteBot, .setRoutine, .runRoutine, .details, .agent,
+             .file, .memory, .setFact, .forgetFact, .confirmFact, .connectors, .setConnector, .skills, .deleteSkill, .webhookToken,
+             .removeWorktree, .commands, .exchange, .createGroup, .devices, .revokeDevice, .pairCode, .presence, .refreshUsage,
+             .watchSessions, .unwatchSessions, .watchSession, .unwatchSession, .sessionPage, .sessionTool:
+            .waits
+        }
+    }
+}
+
 /// What the phone's network looks like. A change can kill the socket without telling it, or bring the Mac back.
 struct NetworkPath: Equatable, Sendable {
     var satisfied: Bool
@@ -68,9 +92,9 @@ final class BridgeClient {
         var health: TimeInterval = 10
         var reply: Duration = .seconds(10)
         var legacyRetry: Duration = .seconds(600)
-        /// A Stop or a decision queued offline for longer than this is dropped: by the time it arrives it would stop a
-        /// later turn, or answer a card the user no longer has in mind.
-        var staleStop: TimeInterval = 60
+        /// A request that expires (OutboxRule) and waited longer than this is dropped: by the time it arrived it would
+        /// stop a later turn, or change what the user no longer has in mind.
+        var outboxAge: TimeInterval = OutboxRule.maxAge
         /// How often the socket is pinged, and how long the pong may take before the socket counts as dead.
         var ping: Duration = .seconds(20)
         var pong: Duration = .seconds(5)
@@ -144,7 +168,7 @@ final class BridgeClient {
     @ObservationIgnored private var nap: Task<Void, Never>?
     @ObservationIgnored private var upgrade: Task<Void, Never>?
     @ObservationIgnored private var pairCodeReply: (@Sendable (PairCode?) -> Void)?
-    /// What the user did offline, with when, sent after the next hello.
+    /// What the user did offline, with when it was tapped, sent after the next hello.
     @ObservationIgnored private var outbox: [(message: ClientMessage, at: Date)] = []
     /// Kept across reconnects to one bridge, because the store still holds what came before.
     @ObservationIgnored private var cursor = StreamCursor()
@@ -328,12 +352,13 @@ final class BridgeClient {
         store.setConnection(.connected(machine: machine, quietSince: heardAt))
     }
 
-    /// Sends now when connected; otherwise holds the message until the next hello.
-    func send(_ msg: ClientMessage) {
+    /// Sends now when connected; otherwise holds the message until the next hello. tappedAt: when the user asked for it,
+    /// which a message replayed from the outbox keeps.
+    func send(_ msg: ClientMessage, tappedAt: Date = .now) {
         switch msg {
         case let .decide(_, card, choice), let .sessionDecide(_, card, choice): store.decisionSent(choice, for: card)
         case let .sessionAnswer(_, card, _): store.decisionSent(nil, for: card)
-        case .sessionSend: store.sendStarted(msg)
+        case .sessionSend: store.sendStarted(msg, at: tappedAt)
         default: break
         }
         store.sessionRequestSent(msg)
@@ -341,10 +366,50 @@ final class BridgeClient {
         if Demo.isEnabled { return Demo.respond(to: msg, store: store) }
         #endif
         if let socket, store.machine != nil {
-            transmitCounted(msg, on: socket)
+            transmitCounted(msg, on: socket, tappedAt: tappedAt)
         } else {
-            outbox.append((msg, .now))
+            hold(msg, tappedAt: tappedAt)
         }
+    }
+
+    /// Discard on a message the Mac never showed back: it is not sent again, and leaves the thread.
+    func discard(sessionId: SessionID, clientId: String) {
+        outbox.removeAll { held in
+            if case .sessionSend(sessionId, _, clientId, _, _) = held.message { true } else { false }
+        }
+        store.discardSend(sessionId: sessionId, clientId: clientId)
+    }
+
+    /// The same request again replaces the held one and keeps the newest tap, so Retry or Stop again never holds two.
+    /// One that expires is dropped, with its words, when its age runs out, not at the next hello.
+    private func hold(_ msg: ClientMessage, tappedAt: Date) {
+        outbox.removeAll { $0.message == msg }
+        outbox.append((msg, tappedAt))
+        guard OutboxRule.of(msg) == .expires else { return }
+        Task { [weak self, age = timing.outboxAge] in
+            try? await Task.sleep(for: .seconds(max(0, age - Date.now.timeIntervalSince(tappedAt))) + .milliseconds(5))
+            self?.expireOutbox(now: .now)
+        }
+    }
+
+    private func expireOutbox(now: Date) {
+        let stale = outbox.filter { !Self.stillWanted($0.message, queuedAt: $0.at, now: now, maxAge: timing.outboxAge) }
+        guard !stale.isEmpty else { return }
+        outbox.removeAll { held in stale.contains { $0.message == held.message } }
+        stale.forEach { store.requestDropped($0.message) }
+    }
+
+    /// The socket refused the frame, so it goes back to the outbox, under the outbox's rules. A decision is not: its
+    /// card says Not sent and takes a tap again.
+    private func notTaken(_ msg: ClientMessage, tappedAt: Date) {
+        switch msg {
+        case .decide, .sessionDecide, .sessionAnswer: return
+        case let .sessionStop(sessionId, target, _): store.stopNotSent(sessionId: sessionId, target: target ?? .all)
+        case let .sessionSend(sessionId, _, clientId, _, _): store.threads[sessionId]?.sendWaiting(clientId)
+        default: break
+        }
+        guard OutboxRule.of(msg) == .expires else { return }
+        hold(msg, tappedAt: tappedAt)
     }
 
     /// Pull to refresh: the bridge answers a repeated watch with a fresh list.
@@ -354,11 +419,8 @@ final class BridgeClient {
 
     /// Whether a message queued offline still means what the user meant. A Stop is for the turn on screen when it was
     /// tapped; a minute later it would stop whatever turn runs by then. A decision is for the card as the user saw it.
-    nonisolated static func stillWanted(_ msg: ClientMessage, queuedAt: Date, now: Date, staleStop: TimeInterval) -> Bool {
-        switch msg {
-        case .stop, .stopAgent, .sessionStop, .decide, .sessionDecide, .sessionAnswer: now.timeIntervalSince(queuedAt) <= staleStop
-        default: true
-        }
+    nonisolated static func stillWanted(_ msg: ClientMessage, queuedAt: Date, now: Date, maxAge: TimeInterval) -> Bool {
+        OutboxRule.of(msg) == .waits || now.timeIntervalSince(queuedAt) <= maxAge
     }
 
     private func forget(reason: String?) {
@@ -391,15 +453,13 @@ final class BridgeClient {
         transmit(.watchSession(sessionId: id, after: store.threads.willWatch(id)), on: socket)
     }
 
-    /// A send's frame counts toward giving up its resends only once a socket took it.
-    private func transmitCounted(_ msg: ClientMessage, on socket: URLSessionWebSocketTask) {
-        switch msg {
-        case .send, .sessionSend: break
-        default: return transmit(msg, on: socket)
-        }
-        let store = store
-        transmit(msg, on: socket) { ok in
-            if ok { Task { @MainActor in store.sendTransmitted(msg) } }
+    /// A send's frame counts toward giving up its resends only once a socket took it. A request the socket refused
+    /// goes back to the outbox.
+    private func transmitCounted(_ msg: ClientMessage, on socket: URLSessionWebSocketTask, tappedAt: Date) {
+        transmit(msg, on: socket) { [weak self] ok in
+            Task { @MainActor in
+                if ok { self?.store.sendTransmitted(msg) } else { self?.notTaken(msg, tappedAt: tappedAt) }
+            }
         }
     }
 
@@ -579,14 +639,16 @@ final class BridgeClient {
                     if onScreen.sessionsList { transmit(.watchSessions, on: ws) }
                     if awaySince == nil { onScreen.sessions.sorted { $0.rawValue < $1.rawValue }.forEach { watchThread($0, on: ws) } }
                 }
-                let resent = store.resendsAfterHello()
-                resent.forEach { transmitCounted($0, on: ws) }
+                let now = Date.now
+                let resent = store.resendsAfterHello(now: now)
+                for msg in resent {
+                    transmitCounted(msg, on: ws, tappedAt: store.unechoedSends.first { $0.message == msg }?.at ?? now)
+                }
                 let pending = outbox
                 outbox.removeAll()
-                let now = Date.now
                 for held in pending where !resent.contains(held.message) {
-                    if Self.stillWanted(held.message, queuedAt: held.at, now: now, staleStop: timing.staleStop) {
-                        send(held.message)
+                    if Self.stillWanted(held.message, queuedAt: held.at, now: now, maxAge: timing.outboxAge) {
+                        send(held.message, tappedAt: held.at)
                     } else {
                         store.requestDropped(held.message)
                     }

@@ -117,7 +117,7 @@ enum DecisionNote: Equatable, Sendable {
     var text: String {
         switch self {
         case .notSent: "Not sent · Try again"
-        case .tooLate: "Not sent: the connection came back too late · Try again"
+        case .tooLate: "Not sent: your Mac was unreachable · Try again"
         case .refused(let why): why.localizedCaseInsensitiveContains("already answered") ? "Already answered" : why.hasSuffix(".") ? why : why + "."
         }
     }
@@ -209,9 +209,16 @@ final class AppStore {
     private(set) var sets: [SessionID: SetRequest] = [:]
     /// What the Mac refused in a session, shown under its composer until dismissed.
     private(set) var sessionErrors: [SessionID: SessionError] = [:]
-    /// Sends the bridge has not echoed back yet, oldest first, each with how many times a socket took it. In memory
-    /// only: quitting the app forgets them.
-    private(set) var unechoedSends: [(message: ClientMessage, transmitted: Int)] = []
+    /// Sends the bridge has not echoed back yet, oldest first, each with how many times a socket took it and when it was
+    /// tapped. In memory only: quitting the app forgets them.
+    private(set) var unechoedSends: [(message: ClientMessage, transmitted: Int, at: Date)] = []
+    /// The Claude app setting before this phone changed it, while the change is not confirmed, so a change that never
+    /// went can put it back.
+    @ObservationIgnored private var mirrorAsked: MirrorChange?
+
+    private struct MirrorChange {
+        let before: MirrorPref?
+    }
     /// The Sessions list. Its own observable, so a list diff never re-renders a reader of the bots.
     let sessions = SessionIndex()
     let threads = SessionThreads()
@@ -299,6 +306,7 @@ final class AppStore {
             usage = nil
             pushState = nil
             unechoedSends = []
+            mirrorAsked = nil
             stops = [:]
             sets = [:]
             sessionErrors = [:]
@@ -315,12 +323,19 @@ final class AppStore {
 
     /// A frame sent on a socket that dropped may never have arrived, so a send stays here until its echo. A bot's send
     /// needs a bridge that drops a repeated clientId, which came with mute; every bridge with sessions drops a repeated
-    /// session send.
-    func sendStarted(_ msg: ClientMessage) {
+    /// session send. A Retry of one still held starts its age again.
+    func sendStarted(_ msg: ClientMessage, at now: Date = .now) {
         if case let .sessionSend(sessionId, _, clientId, _, _) = msg { threads[sessionId]?.sendWaiting(clientId) }
-        guard Self.clientId(of: msg) != nil, !unechoedSends.contains(where: { $0.message == msg }) else { return }
+        guard Self.clientId(of: msg) != nil else { return }
+        if let i = unechoedSends.firstIndex(where: { $0.message == msg }) { return unechoedSends[i].at = now }
         if case .send = msg, !has(.mute) { return }
-        unechoedSends.append((msg, 0))
+        unechoedSends.append((msg, 0, now))
+    }
+
+    /// The user gave up on a session send the Mac never showed back.
+    func discardSend(sessionId: SessionID, clientId: String) {
+        unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId }
+        threads[sessionId]?.discardSend(clientId)
     }
 
     /// A socket took the frame. Only these count toward giving up, so a send made offline survives any number of
@@ -332,13 +347,15 @@ final class AppStore {
     }
 
     /// What to send again on the socket that just said hello, with the same clientIds. A send three sockets took
-    /// without an echo is given up, so one the bridge refuses is not repeated forever.
-    func resendsAfterHello() -> [ClientMessage] {
+    /// without an echo is given up, so one the bridge refuses is not repeated forever. A session send goes again only
+    /// within OutboxRule.maxAge of the tap; after that only the user's Retry sends it.
+    func resendsAfterHello(now: Date = .now) -> [ClientMessage] {
         unechoedSends.removeAll { pending in
             switch pending.message {
             // The bridge drops a repeated clientId from the same release that added mute; an older one would post it twice.
             case .send(let botId, _, _, _, _): !has(.mute) || bots[botId] == nil || pending.transmitted >= 3
-            case .sessionSend: !has(.sessions) || pending.transmitted >= 3
+            case .sessionSend:
+                !has(.sessions) || pending.transmitted >= 3 || now.timeIntervalSince(pending.at) > OutboxRule.maxAge
             default: true
             }
         }
@@ -420,19 +437,44 @@ final class AppStore {
         if case .failed(let note)? = decisions[card]?.phase { note } else { nil }
     }
 
-    /// A message held offline was not sent: by the time the connection came back it no longer meant what the user meant.
+    /// A message held offline was not sent: no socket took it within OutboxRule.maxAge of the tap, and later it would
+    /// no longer mean what the user meant.
     func requestDropped(_ msg: ClientMessage) {
+        let unreachable = " not sent: your Mac was unreachable."
         switch msg {
         case let .sessionStop(sessionId, target, _):
             stops[sessionId]?[target ?? .all] = nil
-            sessionErrors[sessionId] = SessionError(kind: .stop, text: "Stop not sent: the connection came back too late.")
+            sessionErrors[sessionId] = SessionError(kind: .stop, text: "Stop" + unreachable)
         case .stop, .stopAgent:
-            lastError = ErrorNotice(message: "Stop not sent: the connection came back too late.")
+            lastError = ErrorNotice(message: "Stop" + unreachable)
         case .decide(_, let card, _), .sessionDecide(_, let card, _), .sessionAnswer(_, let card, _):
             decisions[card]?.fail(.tooLate)
+        case let .sessionSet(sessionId, patch):
+            if patch.mode != nil || patch.model != nil {
+                sets[sessionId] = nil
+                sessionErrors[sessionId] = SessionError(kind: .set, text: (patch.mode != nil ? "Mode change" : "Model change") + unreachable)
+            } else if let hidden = patch.hidden {
+                lastError = ErrorNotice(message: (hidden ? "Hide" : "Show") + unreachable)
+            } else if patch.title != nil {
+                lastError = ErrorNotice(message: "Rename" + unreachable)
+            }
+        case .sessionOpenDesktop:
+            lastError = ErrorNotice(message: "Open in the Claude app" + unreachable)
+        case .sessionPrefs:
+            if let before = mirrorAsked?.before { sessions.setMirror(before) }
+            mirrorAsked = nil
+            lastError = ErrorNotice(message: "The Claude app setting was not changed: your Mac was unreachable.")
+        case let .sessionSend(sessionId, _, clientId, _, _):
+            unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId }
+            threads[sessionId]?.sendRefused(clientId, nil)
         default:
             break
         }
+    }
+
+    /// The socket refused a Stop's frame. It waits for the next hello, under the outbox's age.
+    func stopNotSent(sessionId: SessionID, target: StopTarget) {
+        stops[sessionId]?[target]?.state = .notSent
     }
 
     func dismissError(_ notice: ErrorNotice) {
@@ -465,6 +507,10 @@ final class AppStore {
         case let .sessionSend(sessionId, _, _, _, _), let .sessionUnqueue(sessionId, _):
             // A refused stop stays: the slot's Stop again needs its reason.
             if sessionErrors[sessionId]?.kind != .stop { sessionErrors[sessionId] = nil }
+        case let .sessionPrefs(pref):
+            // Shown at once. A change made again while one is unconfirmed keeps the value from before the first.
+            if mirrorAsked == nil { mirrorAsked = MirrorChange(before: sessions.mirror) }
+            sessions.setMirror(pref)
         default:
             break
         }
@@ -681,6 +727,7 @@ final class AppStore {
             return []
 
         case let .sessions(frame):
+            if case .list = frame { mirrorAsked = nil }
             sessions.apply(frame)
             return []
 

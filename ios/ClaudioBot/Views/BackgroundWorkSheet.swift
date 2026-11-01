@@ -149,7 +149,7 @@ struct BackgroundWorkSheet: View {
     }
 
     private func phase(_ target: StopTarget, _ clock: Date) -> StopPhase {
-        StopPhase(store.stops[sessionId]?[target], at: clock)
+        StopPhase(store.stops[sessionId]?[target], controls: model?.controls, at: clock)
     }
 
     @ViewBuilder
@@ -160,14 +160,14 @@ struct BackgroundWorkSheet: View {
             Button {
                 client.send(.sessionStop(sessionId: sessionId, target: .task(task.id)))
             } label: {
-                Text(phase == .stopping ? "Stopping…" : phase.retries ? "Try again" : "Stop")
+                Text(phase.spins ? "Stopping…" : phase.retries ? "Try again" : "Stop")
                     .font(.subheadline.weight(.semibold))
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
-            .tint(phase == .stopping ? Theme.secondary : Theme.danger)
-            .disabled(phase == .stopping)
-            .accessibilityLabel(phase == .stopping ? "Stopping \(name)" : phase.retries ? "Not stopped yet. Try stopping \(name) again" : "Stop \(name)")
+            .tint(phase.spins ? Theme.secondary : Theme.danger)
+            .disabled(phase.spins)
+            .accessibilityLabel(phase.spins ? "Stopping \(name)" : phase.retries ? "Not stopped yet. Try stopping \(name) again" : "Stop \(name)")
         }
     }
 
@@ -184,7 +184,7 @@ struct BackgroundWorkSheet: View {
         .buttonStyle(.bordered)
         .controlSize(.large)
         .tint(Theme.danger)
-        .disabled(phase == .stopping)
+        .disabled(phase.spins)
         .padding(.top, 16)
         .accessibilityLabel(label)
     }
@@ -197,7 +197,7 @@ struct BackgroundWorkSheet: View {
     /// Stop all says everything it ends, the turn too, in the words the user sees and hears (F-SES-177, F-SES-208).
     static func stopAll(count: Int, turn: Bool, phase: StopPhase) -> String {
         let what = (count == 1 ? "the 1 task" : "all \(count)") + (turn ? " and the current turn" : "")
-        if phase == .stopping { return "Stopping \(what)…" }
+        if phase.spins { return "Stopping \(what)…" }
         return phase.retries ? "Not stopped yet. Stop \(what) again" : "Stop \(what)"
     }
 

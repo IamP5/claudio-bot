@@ -25,7 +25,7 @@ private func controls(
 }
 
 private func state(
-    _ controls: SessionControls?, text: Bool = false, sent: (at: Date, queued: Bool)? = nil, stop: StopRequest? = nil, now: Date = at
+    _ controls: SessionControls?, text: Bool = false, sent: (at: Date, queued: Bool, echoed: Bool)? = nil, stop: StopRequest? = nil, now: Date = at
 ) -> ComposerState {
     ComposerState(controls: controls, hasText: text, canStop: true, lastSend: sent, stop: stop, now: now)
 }
@@ -91,16 +91,65 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         #expect(ComposerState.queues(controls(turn: false, tasks: nil)), "a bridge without tasks: working means a turn")
     }
 
-    @Test func theSlotIsAlwaysThereAndReadsSentAfterSend() {
+    @Test func theSlotIsAlwaysThereAndReadsSentOnlyOnceTheMacShowsItBack() {
         let resting = controls(working: false, turn: false)
         let empty = state(resting).slot
         #expect(empty == .send(.empty) && !empty.acts && empty.label == "Send", "drawn but dimmed, so focus has a place to stay")
-        let sent = state(resting, sent: (at, false), now: at + 1).slot
-        #expect(sent == .send(.sent(queued: false)) && sent.label == "Sent")
-        #expect(state(resting, sent: (at, false), now: at + 5).slot == .send(.empty), "Sent fades once no work starts")
-        #expect(state(controls(), sent: (at, true), now: at + 1).slot == .stop(StopScope(controls()), .ready), "work started: the same slot is Stop")
-        #expect(ComposerState.sentAnnouncement(queued: false) == "Sent.")
-        #expect(ComposerState.sentAnnouncement(queued: true) == "Queued behind the current turn.")
+        let sending = state(resting, sent: (at, false, false), now: at + 1).slot
+        #expect(sending == .send(.sent(queued: false, echoed: false)) && sending.label == "Sending" && sending.symbol == "arrow.up")
+        let sent = state(resting, sent: (at, false, true), now: at + 1).slot
+        #expect(sent == .send(.sent(queued: false, echoed: true)) && sent.label == "Sent" && sent.symbol == "checkmark")
+        #expect(state(resting, sent: (at, true, true), now: at + 1).slot.label == "Queued")
+        #expect(state(resting, sent: (at, false, true), now: at + 5).slot == .send(.empty), "Sent fades once no work starts")
+        #expect(state(controls(), sent: (at, true, true), now: at + 1).slot == .stop(StopScope(controls()), .ready), "work started: the same slot is Stop")
+        #expect(ComposerState.sentAnnouncement(offline: false) == "Sending.")
+        #expect(ComposerState.sentAnnouncement(offline: true) == "Not sent yet. It goes when your Mac is back.")
+    }
+
+    @Test func stopAndSendNamesTheTurnItStops() {
+        let busy = controls()
+        #expect(
+            SessionComposer.message(sessionId: sid, text: "Do this instead", clientId: "c1", interrupt: true, controls: busy)
+                == .sessionSend(sessionId: sid, text: "Do this instead", clientId: "c1", interrupt: true, turnStartedAt: "2026-10-21T12:00:00.000Z")
+        )
+        #expect(
+            SessionComposer.message(sessionId: sid, text: "Then lint", clientId: "c2", interrupt: false, controls: busy)
+                == .sessionSend(sessionId: sid, text: "Then lint", clientId: "c2", interrupt: false, turnStartedAt: nil)
+        )
+    }
+
+    @Test func aStopClaudeCodeHasWaitsForTheBridgesDeadlineBeforeItReadsUnconfirmed() {
+        let request = StopRequest(target: .all, turnStartedAt: turnStart, at: at)
+        var held = controls(tasks: [sleeper])
+        held.stopping = SessionStopping(at: at + 1, deadline: at + 15)
+        #expect(StopPhase(request, controls: held, at: at + 9) == .stopping)
+        #expect(StopPhase(request, controls: held, at: at + 12) == .claudeStopping)
+        #expect(StopPhase(request, controls: held, at: at + 19) == .claudeStopping)
+        #expect(StopPhase(request, controls: held, at: at + 20) == .unconfirmed)
+        #expect(StopPhase(request, controls: controls(tasks: [sleeper]), at: at + 10) == .unconfirmed)
+        #expect(request.unconfirmedAt(held) == at + 20 && request.unconfirmedAt(controls()) == at + 10)
+
+        let waiting = state(held, stop: request, now: at + 12)
+        #expect(waiting.slot.label == "Waiting for Claude Code to stop" && !waiting.slot.acts && waiting.slot.spins)
+        let note = ComposerNote.of(error: nil, stop: waiting.stop, set: nil, controls: held, now: at + 12)
+        #expect(note?.text == "Waiting for Claude Code to stop…")
+        #expect(ComposerState.announcement(.claudeStopping, StopScope(held)) == "Waiting for Claude Code to stop.")
+    }
+
+    @Test func aStopTheSocketRefusedSaysNotSentAndOffersStopAgain() {
+        let store = store(controls(tasks: [sleeper]))
+        store.sessionRequestSent(.sessionStop(sessionId: sid, target: .all, turnStartedAt: turnStart), at: at)
+        store.stopNotSent(sessionId: sid, target: .all)
+        let busy = controls(tasks: [sleeper])
+        #expect(StopPhase(store.latestStop(in: sid, [.all]), controls: busy, at: at + 1) == .notSent)
+        let slot = state(busy, stop: store.latestStop(in: sid, [.all]), now: at + 1).slot
+        #expect(slot.label == "Stop again: the turn and 1 agent" && slot.acts && slot.hint == "Stop did not reach your Mac.")
+        let note = ComposerNote.of(error: nil, stop: state(busy, stop: store.latestStop(in: sid, [.all]), now: at + 1).stop, set: nil, controls: busy, now: at + 1)
+        #expect(note?.text == "Stop not sent. It goes if your Mac is back within a minute.")
+        #expect(ComposerState.announcement(.notSent, StopScope(busy)) == "Stop not sent. It goes if your Mac is back within a minute.")
+        #expect(BackgroundWorkSheet.stopAll(count: 1, turn: true, phase: .notSent) == "Not stopped yet. Stop the 1 task and the current turn again")
+        store.sessionRequestSent(.sessionStop(sessionId: sid, target: .all, turnStartedAt: turnStart), at: at + 2)
+        #expect(store.latestStop(in: sid, [.all])?.state == .pending, "the outbox's replay asks again")
     }
 
     @Test func aStopShowsStoppingThenEitherLandsOrOffersToTryAgain() {
@@ -254,7 +303,7 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         let store = store(controls(turn: false, tasks: [sleep75]))
         store.sessionRequestSent(.sessionStop(sessionId: sid, target: .task(sleep75.id), turnStartedAt: nil), at: at)
         store.apply(.error(message: "Claude Code has not confirmed the stop of sleep 75 yet.", about: .stop(sessionId: sid)))
-        #expect(StopPhase(store.stops[sid]?[.task(sleep75.id)], at: at + 1) == .refused("Claude Code has not confirmed the stop of sleep 75 yet."))
+        #expect(StopPhase(store.stops[sid]?[.task(sleep75.id)], controls: nil, at: at + 1) == .refused("Claude Code has not confirmed the stop of sleep 75 yet."))
     }
 
     @Test func aModelOrModeChangeShowsTheValueThatRunsUntilClaudeCodeTakesIt() {
@@ -281,6 +330,17 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         frame(store, rev: 2, controls: opus, at: at + 30)
         #expect(store.sets[sid] == nil, "landed: the controls carry the new model")
         #expect(asked?.landedLine == "The model is now Opus (5.5).")
+    }
+
+    @Test func aChangeMadeOfflineSaysItWaitsNotThatItIsChanging() {
+        let store = store(controls())
+        store.sessionRequestSent(.sessionSet(sessionId: sid, patch: SessionPatch(mode: .plan)), at: at)
+        let c = store.threads[sid]?.controls
+        #expect(ComposerNote.of(error: nil, stop: nil, set: store.sets[sid], controls: c, now: at + 20, offline: true)?.text
+            == "Mode change waits for your Mac. It goes if the connection is back within a minute.")
+        store.sessionRequestSent(.sessionSet(sessionId: sid, patch: SessionPatch(model: .some("opus"))), at: at)
+        #expect(ComposerNote.of(error: nil, stop: nil, set: store.sets[sid], controls: c, now: at + 1, offline: true)?.text
+            == "Model change waits for your Mac. It goes if the connection is back within a minute.")
     }
 
     @Test func aPromptAStopCutOffBeforeAnyReplyCanBeEditedAndSentAgain() {

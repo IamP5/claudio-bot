@@ -23,6 +23,8 @@ struct SessionComposer: View {
     @State private var stops = 0
     @State private var sentAt: Date?
     @State private var sentQueued = false
+    /// The last message sent from this field, so Sent waits for the Mac to show it back.
+    @State private var sentClientId: ItemID?
     /// Redraws the composer when Sent or a pending stop runs out of time.
     @State private var clock = Date.now
     @State private var confirming: StopScope?
@@ -44,7 +46,7 @@ struct SessionComposer: View {
     private func state(at now: Date) -> ComposerState {
         ComposerState(
             controls: controls, hasText: !model.draft.isBlank, canStop: canStop,
-            lastSend: sentAt.map { ($0, sentQueued) }, stop: stopRequest, now: now
+            lastSend: sentAt.map { ($0, sentQueued, sentClientId.map { model.pendingSends[$0] == nil } ?? true) }, stop: stopRequest, now: now
         )
     }
 
@@ -104,10 +106,19 @@ struct SessionComposer: View {
             try? await Task.sleep(for: .seconds(max(0, SetRequest.patience - Date.now.timeIntervalSince(set.at))))
             if !Task.isCancelled { clock = .now }
         }
-        .task(id: stopRequest) {
+        .task(id: StopWake(request: stopRequest, stopping: controls?.stopping)) {
             guard let request = stopRequest, request.state == .pending else { return }
-            try? await Task.sleep(for: .seconds(max(0, StopRequest.patience - Date.now.timeIntervalSince(request.at))))
-            if !Task.isCancelled { clock = .now }
+            for wake in [request.at + StopRequest.patience, request.unconfirmedAt(controls)] where wake > .now {
+                try? await Task.sleep(for: .seconds(wake.timeIntervalSinceNow))
+                if Task.isCancelled { return }
+                clock = .now
+            }
+        }
+        .onChange(of: model.pendingSends) { old, new in
+            for id in Set(old.keys).union(new.keys).sorted(by: { $0.rawValue < $1.rawValue }) {
+                let echoed = new[id] == nil ? model.shownQueued(id) : nil
+                if let text = PendingSend.announcement(old: old[id]?.state, new: new[id]?.state, echoedQueued: echoed) { announce(text) }
+            }
         }
         .onChange(of: state.stop?.phase) { _, phase in
             guard let phase, let scope = state.stop?.scope, let text = ComposerState.announcement(phase, scope) else { return }
@@ -257,9 +268,9 @@ struct SessionComposer: View {
                 switch note {
                 case .error:
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.danger)
-                case .stopping, .changing:
+                case .stopping, .claudeStopping, .changing:
                     ProgressView().controlSize(.mini)
-                case .stopWaits:
+                case .stopWaits, .stopNotSent, .changeWaits:
                     Image(systemName: "wifi.slash").foregroundStyle(Theme.attention)
                 case .unconfirmed, .changeUnconfirmed:
                     Image(systemName: "questionmark.circle").foregroundStyle(Theme.attention)
@@ -321,7 +332,7 @@ struct SessionComposer: View {
         switch note {
         case .error(let error): { store.dismissSessionError(error, in: sessionId) }
         case .changeUnconfirmed: { store.dismissSet(in: sessionId) }
-        case .stopping, .stopWaits, .unconfirmed, .changing: nil
+        case .stopping, .stopWaits, .claudeStopping, .stopNotSent, .unconfirmed, .changing, .changeWaits: nil
         }
     }
 
@@ -463,15 +474,24 @@ struct SessionComposer: View {
         let queued = !interrupt && ComposerState.queues(controls)
         let offline = store.machine == nil
         let clientId = UUID().uuidString
-        model.echo(clientId: clientId, text: text)
-        client.send(.sessionSend(sessionId: sessionId, text: text, clientId: clientId, interrupt: interrupt))
+        let message = Self.message(sessionId: sessionId, text: text, clientId: clientId, interrupt: interrupt, controls: controls)
+        if case let .sessionSend(_, _, _, interrupt, turnStartedAt) = message {
+            model.echo(clientId: clientId, text: text, interrupt: interrupt, turnStartedAt: turnStartedAt)
+        }
+        client.send(message)
         model.draft = ComposerDraft()
         caret = 0
         sends += 1
         sentAt = offline ? nil : .now
         sentQueued = queued
-        announce(ComposerState.sentAnnouncement(queued: queued, interrupt: interrupt, offline: offline))
+        sentClientId = ItemID(clientId)
+        announce(ComposerState.sentAnnouncement(offline: offline))
         onSend()
+    }
+
+    /// Stop and send names the turn it stops, so a frame that arrives after that turn ended never stops a newer one.
+    static func message(sessionId: SessionID, text: String, clientId: String, interrupt: Bool, controls: SessionControls?) -> ClientMessage {
+        .sessionSend(sessionId: sessionId, text: text, clientId: clientId, interrupt: interrupt, turnStartedAt: interrupt ? controls?.turn?.startedAt : nil)
     }
 
     /// Only a stop that would end background work asks first (P-STOP-3). Trying again after a refusal does not ask twice: it
@@ -551,6 +571,12 @@ private struct ChipFlow: Layout {
     }
 }
 
+/// What the composer's stop clock wakes for: a new stop, or a change to the bridge's deadline.
+private struct StopWake: Equatable {
+    let request: StopRequest?
+    let stopping: SessionStopping?
+}
+
 private extension ComposerNote {
     var isError: Bool {
         if case .error = self { true } else { false }
@@ -558,6 +584,13 @@ private extension ComposerNote {
 }
 
 extension ThreadModel {
+    /// Whether the thread shows the phone's message queued, under its clientId or as the transcript's copy; nil when it
+    /// does not show it.
+    func shownQueued(_ clientId: ItemID) -> Bool? {
+        for case let .user(id, _, _, _, queued, copyOf) in items where id == clientId || copyOf == clientId.rawValue { return queued }
+        return nil
+    }
+
     /// The user's messages that wait for the turn, oldest first.
     var queuedMessages: [(id: ItemID, text: String)] {
         items.compactMap { if case let .user(id, _, text, .user, true, _) = $0, !withdrawing.contains(id) { (id, text) } else { nil } }

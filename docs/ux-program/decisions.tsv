@@ -247,3 +247,8 @@ ts	decision	why
 2026-11-01T01:57:03Z	G29: Hidden sessions count only while running or needing you, marked hidden; stopped sessions count only while unread	the user's own stops don't pile up
 2026-11-01T01:57:03Z	G29: Empty detail pane says "Waiting for your Mac" before the first list or when unreachable with nothing to show	"Pick a session" was wrong then
 2026-11-01T01:57:03Z	G29: iPad/wide layout is checked through a Debug-only -wideLayout flag on the iPhone pool devices	program allows only the 3 iPhone pool devices
+2026-11-01T02:46:52Z	G27: Notices and a refused Stop end with "Check it on your Mac (Activity Monitor, or ps)."	the app shows notice text as typed
+2026-11-01T02:46:52Z	G27: Commands named `command "<step title>" (<command>)`, cut at 80 chars; bracket dropped when the title holds the command	users find the step they saw
+2026-11-01T02:46:52Z	G27: While lsof cannot be read at a crash, the row reads working up to 60 s; after recovery a new notice says the bridge can see the command again	G25's ending-waits-for-lookup rule; one crash notice
+2026-11-01T02:46:52Z	G27: ps polled every 5 s only while unpaired commands may still run	bounded cost
+2026-11-01T02:46:52Z	G27: pairLoose never pairs a shell when two tasks share a command line	never signal what is not provably the command

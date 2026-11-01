@@ -1437,13 +1437,14 @@ export function createSession(spec: SessionSpec): Session {
       l.loose.set(b.id, hits[0]!.group);
       taken.add(hits[0]!.group);
     }
-    // A command left unpaired is watched through Claude Code's own shells that run exactly its text, recorded only
-    // while there is one such shell for each live task given that text, so each task's own shell is among them. A task
-    // takes only shells that started by its call plus SHELL_START_SLACK_MS: a later run of the same text is not its own.
+    // A command left unpaired is watched through this Claude Code's own shells that run exactly its text and that no
+    // other task was paired with, recorded only while there is one such shell for each unpaired task given that text, so
+    // each task's own shell is among them. A task takes only shells that started by its call plus SHELL_START_SLACK_MS:
+    // a later run of the same text is not its own.
     const unpaired = work.filter((w) => w.given !== undefined && !l.groups.has(w.b.id) && !l.loose.has(w.b.id));
     for (const given of new Set(unpaired.map((w) => w.given!))) {
-      const hits = shellsOf.filter((s) => evalArg(s.command) === psText(given));
-      if (hits.length !== work.filter((w) => w.given === given).length) continue;
+      const hits = shellsOf.filter((s) => evalArg(s.command) === psText(given) && !taken.has(s.group));
+      if (hits.length !== unpaired.filter((w) => w.given === given).length) continue;
       for (const { b } of unpaired.filter((w) => w.given === given)) {
         const call = Date.parse(l.tasks.all.get(b.id as TaskId)?.startedAt ?? "");
         const own = hits.filter((h) => h.started === undefined || h.started <= call + SHELL_START_SLACK_MS).map((h) => h.group);

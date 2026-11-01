@@ -118,6 +118,8 @@ const NOTICES_MAX = 200;
 const ENDING_REASONS: ReadonlySet<NoticeReason | undefined> = new Set(["failure", "stop", "restart"]);
 const PROMPTS_KEPT = 5;
 const STOPPED_STEPS_KEPT = 20;
+/** Steps that read that the bridge cannot tell and that nothing looks at, by key: small, and dropping one would let it read cut. */
+const UNSURE_KEPT = 200;
 /** A Stop of a task the user stopped this recently is the same Stop, sent again or queued behind the first. */
 const RESTOP_MS = 60_000;
 const LINE_MAX = 160;
@@ -332,8 +334,9 @@ export function createOwn(deps: OwnDeps): Own {
   const names = (tasks: readonly BackgroundTask[]) => fewNames(tasks.map(workName), listed);
   /** Unpaired commands no look has yet found gone. */
   const unpaired = (rec: SessionRecord) => (rec.own?.unpaired ?? []).filter((u) => u.endedAt === undefined);
-  /** Work that outlived Claude Code and may still run, which the clock looks at. */
-  const watching = (rec: SessionRecord) => allOutlived(rec).some((o) => o.over === undefined || o.over === "unsure") || unpaired(rec).length > 0;
+  /** Work that outlived Claude Code and may still run, which the clock looks at: an unpaired step only with shells to look at. */
+  const watching = (rec: SessionRecord) =>
+    allOutlived(rec).some((o) => o.over === undefined || o.over === "unsure") || unpaired(rec).some((u) => (u.shells?.length ?? 0) > 0);
 
   const working = (rec: SessionRecord) => (drivers.get(rec.id)?.working ?? false) || runs(activityOf(rec));
   /** Work the bridge cannot tell has ended: the run is not over while it may still run, though nothing shows working. */
@@ -519,14 +522,25 @@ export function createOwn(deps: OwnDeps): Own {
     if (grouped.length > 0) driveOf(rec).outlived = settled([...allOutlived(rec), ...grouped], grouped.map((t) => t.id), "unsure");
     const counted = fate.unknown.filter((t): t is BackgroundTask & { command: string } => !looked(t) && t.command !== undefined && !(rec.own?.unpaired ?? []).some((u) => u.id === t.id));
     if (counted.length > 0) {
-      // Every step still pending stays; of those that ended, the newest few.
+      // The newest few of the pending and of the ended steps. A pending step dropped is no longer looked at, but its
+      // step still reads that the bridge cannot tell.
       const all: NonNullable<OwnDrive["unpaired"]> = [...(rec.own?.unpaired ?? []), ...counted];
       const ended = all.filter((u) => u.endedAt !== undefined);
-      const drop = new Set(ended.slice(0, Math.max(0, ended.length - STOPPED_STEPS_KEPT)));
+      const pending = all.filter((u) => u.endedAt === undefined);
+      const dropped = pending.slice(0, Math.max(0, pending.length - STOPPED_STEPS_KEPT));
+      const drop = new Set([...ended.slice(0, Math.max(0, ended.length - STOPPED_STEPS_KEPT)), ...dropped]);
       driveOf(rec).unpaired = all.filter((u) => !drop.has(u));
+      keepUnsure(rec, dropped);
     }
     markUnsure(rec, fate.unknown.filter((t) => !looked(t) && t.command === undefined));
     adopt(rec, fate.running, fate.unknown, cause);
+  }
+
+  /** Steps that keep reading that the bridge cannot tell, though nothing looks at them any more. */
+  function keepUnsure(rec: SessionRecord, tasks: readonly BackgroundTask[]) {
+    if (tasks.length === 0) return;
+    const drive = driveOf(rec);
+    drive.unsure = [...(drive.unsure ?? []), ...tasks.map((t) => t.stepId ?? `task:${t.id}`)].slice(-UNSURE_KEPT);
   }
 
   /** Background work the bridge cannot check and cannot look at again: its steps say the bridge cannot tell. */
@@ -535,7 +549,7 @@ export function createOwn(deps: OwnDeps): Own {
     const drive = driveOf(rec);
     unsureRun.add(rec.id);
     drive.unchecked = true;
-    drive.unsure = [...(drive.unsure ?? []), ...tasks.map((t) => t.stepId ?? `task:${t.id}`)].slice(-STOPPED_STEPS_KEPT);
+    keepUnsure(rec, tasks);
     deps.persist("now");
   }
 
@@ -644,13 +658,9 @@ export function createOwn(deps: OwnDeps): Own {
       const seen = now();
       const back = recheck.filter((o, i) => again[i] === "runs" && doubtedNow().some((x) => x.id === o.id));
       const doubtedGone = doubtedNow().filter((o) => !back.includes(o) && !groupAlive(o.group));
-      // Steps given the same command end together, once their shells hold a group for each step (so each step's own is
-      // among them, whatever its shell exec'd or left behind) and every one is empty.
-      const unpairedGone = unpaired(rec).filter((u) => {
-        const alike = unpaired(rec).filter((x) => x.command === u.command);
-        const groups = [...new Set(alike.flatMap((x) => x.shells ?? []))];
-        return groups.length >= alike.length && groups.every((g) => !groupAlive(g));
-      });
+      // A step ends on its own shells only: its own shell's group is among them, whatever that shell exec'd or left
+      // behind, so once every one is empty its work has ended. A step with none stays as the bridge cannot tell.
+      const unpairedGone = unpaired(rec).filter((u) => (u.shells?.length ?? 0) > 0 && u.shells!.every((g) => !groupAlive(g)));
       for (const o of [...back, ...doubtedGone]) unsureLooks.delete(`${rec.id}:${o.id}`);
       const ended = [...found("gone"), ...doubtedGone];
       const unsure = found("unsure");

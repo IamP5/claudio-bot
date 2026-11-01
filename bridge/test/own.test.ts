@@ -1627,7 +1627,7 @@ describe("the thread says what stopped only once it did", () => {
 
       expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } })).toEqual([]);
       expect(alive(running.pid)).toBe(false);
-      expect((await stopLines()).at(-1)).toBe('Stopped by you: command "sleep bk".');
+      expect((await stopLines()).at(-1)).toBe('Stopped by you: command "Run in background: sleep bk".');
       expect(await stepOf("toolu_bk")).toMatchObject({ state: "stopped", cause: "Stopped by you" });
       expect((await controlsNow()).working).toBe(false);
     } finally {
@@ -1898,7 +1898,7 @@ describe("the thread says what stopped only once it did", () => {
       await until(async () => (await controlsNow()).working === true);
       expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } })).toEqual([]);
       expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } })).toEqual([]);
-      expect((await stopLines()).filter((t) => t.startsWith("Stopped by you"))).toEqual(['Stopped by you: command "sleep bk".']);
+      expect((await stopLines()).filter((t) => t.startsWith("Stopped by you"))).toEqual(['Stopped by you: command "Run in background: sleep bk".']);
     } finally {
       await running.end();
     }
@@ -2131,7 +2131,7 @@ describe("the thread says what stopped only once it did", () => {
       await until(async () => (await controlsNow()).working === true);
       const stops = [0, 1].map(() => handle({ type: "session_stop", sessionId: ASK, target: { task: "bk" as TaskId } }));
       expect(await Promise.all(stops)).toEqual([[], []]);
-      expect((await stopLines()).filter((t) => t.startsWith("Stopped by you"))).toEqual(['Stopped by you: command "sleep bk".']);
+      expect((await stopLines()).filter((t) => t.startsWith("Stopped by you"))).toEqual(['Stopped by you: command "Run in background: sleep bk".']);
     } finally {
       await running.end();
     }
@@ -2382,7 +2382,7 @@ describe("the thread says what stopped only once it did", () => {
 
       expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bf" as TaskId } })).toEqual([]);
       expect(alive(running.pid)).toBe(false);
-      expect((await stopLines()).at(-1)).toBe(`Stopped by you: command "perl -e 'sleep bf'".`);
+      expect((await stopLines()).at(-1)).toBe(`Stopped by you: command "Run perl -e 'sleep bf'".`);
       expect(await stepOf("toolu_bf")).toMatchObject({ state: "stopped", cause: "Stopped by you" });
     } finally {
       await running.end();

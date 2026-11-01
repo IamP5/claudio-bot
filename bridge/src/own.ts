@@ -1109,7 +1109,12 @@ export function createOwn(deps: OwnDeps): Own {
     const held = stop !== undefined && stop.envelope !== null;
     if (held) addNew(stop!.said, confirmed);
     else if (confirmed.length > 0) {
-      notice(rec.id, `${STOPPED_BY_YOU}: ${fewNames(confirmed.map(taskName), listed)}.`, "info", "stop");
+      // A command that outlived its Claude Code is named as the notices about it named it.
+      const named = (t: Task) => {
+        const o = alone.find((x) => x.id === t.id);
+        return o ? workName(o) : taskName(t);
+      };
+      notice(rec.id, `${STOPPED_BY_YOU}: ${fewNames(confirmed.map(named), listed)}.`, "info", "stop");
       if (one === null) stoppedRun(rec, { early: false, tasks: confirmed, at, envelope: null, whole });
     }
     if (stop) {

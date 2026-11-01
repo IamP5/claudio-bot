@@ -1347,3 +1347,32 @@ test("a write-only topic whose server takes each push but never answers rings at
   expect([h.published.length, h.world.push.owed, h.push.state!().state]).toEqual([2, undefined, "failing"]);
   expect(h.logs.at(-1)).toBe("push: m_a|card not sent again: the push server did not answer twice and will not say whether it took it");
 });
+
+test("an ending's alert sent again, and its push tried again, count what still runs at that moment", async () => {
+  const h = harness();
+  survived(h, "failed", ["perl-a", "perl-b"]);
+  h.sockets.until = new Date(T0 + 120_000);
+  h.push.sessionEnded!(SID, "failed", iso(T0));
+  const own = h.world.sessions.get(SID)!.own!;
+  own.outlived = [own.outlived![0]!, { ...own.outlived![1]!, over: "ended" }];
+  h.sockets.open = [1, 2];
+  at(h, T0 + 1_000);
+  expect(h.signals.map((f) => f.type === "session_alert" && f.running)).toEqual([
+    { agents: 0, commands: 2 },
+    { agents: 0, commands: 1 },
+  ]);
+
+  const away = flaky();
+  survived(away, "failed", ["perl-a", "perl-b"]);
+  away.push.sessionEnded!(SID, "failed", iso(T0));
+  await drain();
+  const left = away.world.sessions.get(SID)!.own!;
+  left.outlived = [left.outlived![0]!, { ...left.outlived![1]!, over: "stopped" }];
+  away.server.down = false;
+  at(away, T0 + OWED_RETRY_MS[0]);
+  await drain();
+  expect(sent(away).map((c) => c[0])).toEqual([
+    ...Array(3).fill("A Claude Code session stopped with an error. 2 commands still run on your Mac."),
+    "A Claude Code session stopped with an error. 1 command still runs on your Mac.",
+  ]);
+});

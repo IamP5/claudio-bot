@@ -370,17 +370,17 @@ struct SessionThreadView: View {
             let elsewhere = SessionsAtWork(store.sessions.rows.values, freshness: store.sessions.freshness(online: store.showsOnline), excluding: sessionId)
             if !elsewhere.isEmpty {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { router.columns = .all } label: {
-                        // A kept list's age moves; nothing else here does without a frame.
-                        TimelineView(.periodic(from: .now, by: 30)) { context in
+                    // A kept list's age moves; nothing else here does without a frame.
+                    TimelineView(.periodic(from: .now, by: 30)) { context in
+                        Button { router.columns = .all } label: {
                             Label(elsewhere.summary(now: context.date) ?? "", systemImage: Self.chipSymbol(elsewhere))
                                 .labelStyle(.titleAndIcon)
                                 .font(.footnote.weight(.semibold))
                                 .foregroundStyle(Self.chipTone(elsewhere))
-                                .accessibilityLabel("Other sessions: " + (elsewhere.spoken(now: context.date) ?? ""))
                         }
+                        .accessibilityLabel("Other sessions: " + (elsewhere.spoken(now: context.date) ?? ""))
+                        .accessibilityHint("Shows the sessions list")
                     }
-                    .accessibilityHint("Shows the sessions list")
                 }
             }
         }

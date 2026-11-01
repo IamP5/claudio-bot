@@ -12,7 +12,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 1. The user creates a bot and waits for its greeting.
 2. They open the chat and send a short message.
-3. They watch the bot work and read its reply.
+3. They read its reply (C3 judges the working state on screen; haiku answers this one too fast to catch).
 4. They leave and open the chat again.
 
 **Setup.**
@@ -22,8 +22,6 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Wait up to 180 s for `c1`'s first turn to end; mark `c1-ready`.
 - Open the chat with `c1`: in the app by claudiobot://bot/<id> (simulator lane), or send `open` as the app does (protocol lane). Mark `c1-open`.
 - The phone sends a frame the app can send, built from what it saw: send in `c1`: "Reply with one short sentence that contains the word pong.". Mark `c1-send`.
-- Wait 2 s.
-- Screenshot `c1-working` (simulator lane).
 - Wait up to 150 s for `c1`'s reply and the bot at rest; mark `c1-done`.
 - Wait 2 s.
 - Screenshot `c1-done` (simulator lane).
@@ -44,8 +42,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | C1.3 | state | protocol | The bot never says it is done before its reply is in. | from the first working status to the last reply, every bot frame says working | an idle status between the send and the reply: the typing row vanishes while the bot still writes |
 | C1.4 | state | protocol | When the reply is in, the bot stops saying it is working. | a bot frame with a status other than working arrives within 5 s of the last reply | the bot stays working (Typing…) after its reply, or never says it is done |
 | C1.5 | recover | protocol | Opening the chat again shows the same messages. | the conversation that answers the second open holds the user message and the reply | either is missing from the reopened chat |
-| C1.6 | state | simulator (c1-working) | While the bot works, the chat shows it: the user's bubble, the typing row and a Stop button. | Typing… under the user's bubble, Stop in place of Send | no typing row, or Send instead of Stop, or the bubble missing |
-| C1.7 | clarity | simulator (c1-done) | After the reply, the chat is at rest and the reply reads whole. | the reply in full, no typing row, Send back | a typing row left over, the reply cut, or the composer stuck on Stop |
+| C1.6 | clarity | simulator (c1-done) | After the reply, the chat is at rest and the reply reads whole. | the reply in full, no typing row, Send back | a typing row left over, the reply cut, or the composer stuck on Stop |
 
 ## C2 The bot asks the user a question
 

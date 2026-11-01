@@ -134,13 +134,11 @@ const C1: Scenario = {
   title: "A plain message and its reply",
   needsSimulator: false,
   sidebar: "bots",
-  journey: ["The user creates a bot and waits for its greeting.", "They open the chat and send a short message.", "They watch the bot work and read its reply.", "They leave and open the chat again."],
+  journey: ["The user creates a bot and waits for its greeting.", "They open the chat and send a short message.", "They read its reply (C3 judges the working state on screen; haiku answers this one too fast to catch).", "They leave and open the chat again."],
   setup: [
     ...newBot("c1"),
     { do: "open-bot", ref: "c1", mark: "c1-open" },
     say("c1", "Reply with one short sentence that contains the word pong.", "c1-send"),
-    { do: "sleep", s: 2 },
-    { do: "screenshot", shot: "c1-working" },
     answered("c1", "c1-send", "c1-done"),
     { do: "sleep", s: 2 },
     { do: "screenshot", shot: "c1-done" },
@@ -213,8 +211,7 @@ const C1: Scenario = {
         return mine && ms.some((m) => m.id === reply) ? ok(`${ms.length} messages, both present`) : no(`user message ${mine ? "present" : "missing"}, reply ${ms.some((m) => m.id === reply) ? "present" : "missing"}`);
       },
     },
-    shot("C1.6", "state", "While the bot works, the chat shows it: the user's bubble, the typing row and a Stop button.", "Typing… under the user's bubble, Stop in place of Send", "no typing row, or Send instead of Stop, or the bubble missing", ["c1-working"]),
-    shot("C1.7", "clarity", "After the reply, the chat is at rest and the reply reads whole.", "the reply in full, no typing row, Send back", "a typing row left over, the reply cut, or the composer stuck on Stop", ["c1-done"]),
+    shot("C1.6", "clarity", "After the reply, the chat is at rest and the reply reads whole.", "the reply in full, no typing row, Send back", "a typing row left over, the reply cut, or the composer stuck on Stop", ["c1-done"]),
   ],
 };
 

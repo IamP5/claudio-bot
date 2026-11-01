@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { commandGroups, endGroup, evalArg, groupAlive, psText, read, shellGroups, shellLeaders, taskRun } from "../src/procs";
+import { endGroup, evalArg, groupAlive, psText, read, shellGroups, shellLeaders, taskRun } from "../src/procs";
 import { backgroundCommand, evalShell } from "./shells";
 
 const started: number[] = [];
@@ -120,15 +120,10 @@ test("a read that runs past its timeout is given up on then, even while a child 
   expect(Date.now() - at).toBeLessThan(1_000);
 });
 
-test("commandGroups finds the group of each shell that runs exactly a command, whoever started it, and none once it ends", async () => {
-  const command = `sleep ${50_000 + (process.pid % 9_000)}`;
-  const near = `${command} `;
-  const shells = [evalShell(command), evalShell(command), evalShell(near)];
-  ends.push(...shells.map((s) => s.end));
+test("shellLeaders gives each group-leading shell a process started, with when it started", async () => {
+  const shell = evalShell(`sleep ${50_000 + (process.pid % 9_000)}`);
+  ends.push(shell.end);
   await Bun.sleep(300);
-  const found = (await commandGroups([command, near, "sleep 1"]))!;
-  expect([[...found.get(command)!].sort(), found.get(near), found.get("sleep 1")]).toEqual([[shells[0]!.pid, shells[1]!.pid].sort(), [shells[2]!.pid], []]);
-  await shells[0]!.end();
-  await shells[1]!.end();
-  expect((await commandGroups([command]))!.get(command)).toEqual([]);
+  const found = (await shellLeaders(process.pid)).find((l) => l.group === shell.pid);
+  expect([found?.command.includes("eval 'sleep"), Math.abs(found!.started - Date.now()) < 5_000]).toEqual([true, true]);
 });

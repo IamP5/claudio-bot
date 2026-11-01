@@ -2003,7 +2003,7 @@ describe("the thread says what stopped only once it did", () => {
     }
   });
 
-  test("a command no shell was found for is watched by its command line across another restart: Stop says it cannot tell, and how to check, until no process runs it", async () => {
+  test("a command Claude Code's shell ran exactly is watched across another restart: Stop says it cannot tell, and how to check, until its group is gone", async () => {
     const command = `exec >/dev/null 2>&1; sleep ${30_000 + (process.pid % 9_000)}`;
     const shell = evalShell(command);
     const look = async () => {
@@ -2012,6 +2012,7 @@ describe("the thread says what stopped only once it did", () => {
       await Bun.sleep(300);
     };
     try {
+      claudeShells(command, shell.pid);
       await start();
       await send("Start it");
       const q = queries[0]!;
@@ -2046,11 +2047,17 @@ describe("the thread says what stopped only once it did", () => {
   }, 15_000);
 
   /** Claude Code ran `command` twice in the background, and the bridge restarted before it found a shell for either. */
-  const twinsRestarted = async (command: string) => {
+  /** Claude Code's own shells as ps lists them, running `command`, started at the tests' clock. */
+  const claudeShells = (command: string, ...groups: number[]) => {
+    const line = `/bin/zsh -c source snap.sh && eval '${command.replace(/'/g, `'"'"'`)}' < /dev/null && pwd -P >| /tmp/cwd`;
+    leaders = async () => groups.map((group) => ({ group, command: line, started: clock }));
+  };
+  /** Claude Code ran `command` once per id in the background, from the shells `groups`, and then the bridge restarted. */
+  const twinsRestarted = async (command: string, groups: number[] = [], ids = ["ea", "eb"]) => {
+    claudeShells(command, ...groups);
     await start();
     await send("Start them");
     const q = queries[0]!;
-    const ids = ["ea", "eb"];
     await transcribe(...ids.flatMap((id) => [calledEntry(`toolu_${id}`, "Bash", { command, description: "Sleep", run_in_background: true }), resultEntry(`toolu_${id}`, `Command running in background with ID: ${id}.`)]));
     const listed = ids.map((id) => shellTask(id, `toolu_${id}`, "Sleep"));
     q.emit(...ids.map((id) => toolCall(`toolu_${id}`, "Bash", { command })), ...listed.map(taskStarted), level(...listed), result());
@@ -2058,7 +2065,7 @@ describe("the thread says what stopped only once it did", () => {
     await flush();
     await restart();
     await until(async () => (await restartLines()).length === 1);
-    return async () => [(await stepOf("toolu_ea")).state, (await stepOf("toolu_eb")).state];
+    return async () => Promise.all(ids.map(async (id) => (await stepOf(`toolu_${id}`)).state));
   };
   const lookNow = async () => {
     clock += OUTLIVED_LOOK_MS;
@@ -2098,7 +2105,7 @@ describe("the thread says what stopped only once it did", () => {
       const a = evalShell(command);
       const b = evalShell(command);
       try {
-        const states = await twinsRestarted(command);
+        const states = await twinsRestarted(command, [a.pid, b.pid]);
         await lookNow();
         await Bun.sleep(3_500);
         for (let i = 0; i < 3; i++) await lookNow();
@@ -2116,6 +2123,66 @@ describe("the thread says what stopped only once it did", () => {
         await b.end();
       }
     }, 20_000);
+
+  test("t2: twins of which one shell had left its command line when the bridge looked record no group, so an unrelated shell's end never ends them", async () => {
+    const command = `exec >/dev/null 2>&1; sleep ${33_000 + (process.pid % 9_000)}`;
+    const a = evalShell(command);
+    const hidden = Bun.spawn(["sleep", "30"]);
+    const unrelated = evalShell(command);
+    try {
+      const states = await twinsRestarted(command, [a.pid]);
+      await lookNow();
+      await unrelated.end();
+      await a.end();
+      for (let i = 0; i < 2; i++) await lookNow();
+      expect([await states(), hidden.exitCode]).toEqual([["unsure", "unsure"], null]);
+      expect((await handle({ type: "session_stop", sessionId: ASK, target: "all" }))[0]).toMatchObject({ type: "error", message: expect.stringContaining("can't tell") });
+    } finally {
+      hidden.kill("SIGKILL");
+      await a.end();
+      await unrelated.end();
+    }
+  }, 15_000);
+
+  test("r3: a command whose shell had left its command line is never ended by an unrelated shell running the same text", async () => {
+    const command = `exec >/dev/null 2>&1; sleep 4; exec sleep ${34_000 + (process.pid % 9_000)}`;
+    const hidden = Bun.spawn(["sleep", "30"]);
+    const unrelated = evalShell(command);
+    try {
+      const states = await twinsRestarted(command, [], ["ea"]);
+      await lookNow();
+      await unrelated.end();
+      for (let i = 0; i < 2; i++) await lookNow();
+      expect([await states(), hidden.exitCode]).toEqual([["unsure"], null]);
+    } finally {
+      hidden.kill("SIGKILL");
+      await unrelated.end();
+    }
+  }, 15_000);
+
+  test("r2: the same command run again in the session after the restart takes its own shell, and never ends the earlier step", async () => {
+    const command = `exec >/dev/null 2>&1; sleep 4; exec sleep ${35_000 + (process.pid % 9_000)}`;
+    const hidden = Bun.spawn(["sleep", "30"]);
+    const again = evalShell(command);
+    try {
+      const states = await twinsRestarted(command, [], ["ea"]);
+      claudeShells(command, again.pid);
+      await send("Run it again");
+      const q = queries.at(-1)!;
+      await transcribe(calledEntry("toolu_ag", "Bash", { command, description: "Sleep", run_in_background: true }), resultEntry("toolu_ag", "Command running in background with ID: ag."));
+      q.emit(toolCall("toolu_ag", "Bash", { command }), taskStarted(shellTask("ag", "toolu_ag", "Sleep")), level(shellTask("ag", "toolu_ag", "Sleep")), result());
+      await flush();
+      await flush();
+      await Bun.sleep(300);
+      await lookNow();
+      await again.end();
+      for (let i = 0; i < 2; i++) await lookNow();
+      expect([await states(), hidden.exitCode]).toEqual([["unsure"], null]);
+    } finally {
+      hidden.kill("SIGKILL");
+      await again.end();
+    }
+  }, 15_000);
 
   test("a look at what became of a crashed Claude Code's work that never answers is given up on: the work may still run", async () => {
     const running = backgroundCommand("bk");
@@ -2365,7 +2432,7 @@ describe("the thread says what stopped only once it did", () => {
     }
   });
 
-  test("two commands alike, which no shell can be paired with, read may still run while either runs, and both ended at the first look after neither does", async () => {
+  test("two commands alike, which no shell can be paired with, read may still run while either Claude Code shell runs, and both ended at the first look after neither does", async () => {
     const command = `sleep ${20_000 + (process.pid % 9_000)}`;
     const a = evalShell(command);
     const b = evalShell(command);
@@ -2375,8 +2442,7 @@ describe("the thread says what stopped only once it did", () => {
       await Bun.sleep(300);
     };
     try {
-      // When the bridge looks, only the first twin's shell has started: it is still not taken as either command's.
-      leaders = async () => [{ group: a.pid, command: `/bin/zsh -c source snap.sh && eval '${command}' < /dev/null && pwd -P >| /tmp/cwd` }];
+      claudeShells(command, a.pid, b.pid);
       await start();
       await send("Start them");
       const q = queries[0]!;

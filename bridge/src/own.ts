@@ -262,8 +262,6 @@ export function createOwn(deps: OwnDeps): Own {
   const underway = new Set<SessionId>();
   /** Sessions the user stopped something on in this run. */
   const stoppedBy = new Set<SessionId>();
-  /** The first line of the run's last reply: the row's line when the run finishes. */
-  const lastReply = new Map<SessionId, string>();
   /** Subagent cards a task stop covers: when their query gives up on them, the user's stop closed them. */
   const stopping = new Set<MessageId>();
   /**
@@ -291,7 +289,7 @@ export function createOwn(deps: OwnDeps): Own {
    * Claude Code died under a turn (it exited, or a bridge restart took it): an ending of its own, told once what outlived
    * it is known, whatever still runs. notice: the thread's one notice of it, which then names what still runs.
    */
-  const deaths = new Map<SessionId, { end: "failed" | "lost"; at: string; notice: ItemId; head: string; error: string | null }>();
+  const deaths = new Map<SessionId, { end: "failed" | "lost"; at: string; notice: ItemId; head: string; error: string | null; session: Session | undefined }>();
   /** The outcome time of each session's last ending told, so a later rest of the same run is not told again. */
   const told = new Map<SessionId, string>();
   /** Sessions whose run left steps the bridge cannot tell about and cannot look at again. */
@@ -324,7 +322,7 @@ export function createOwn(deps: OwnDeps): Own {
     delete drive.endedTurn;
     stoppedBy.delete(rec.id);
     endedByStop.delete(rec.id);
-    lastReply.delete(rec.id);
+    delete drive.reply;
     unsureRun.delete(rec.id);
     delete drive.unchecked;
     deps.persist("now");
@@ -360,7 +358,7 @@ export function createOwn(deps: OwnDeps): Own {
               ? { kind: "stopped", text: STOPPED_BY_YOU, at: now() }
               : byStop.length > 0
                 ? { kind: "stopped", text: stoppedText(false, byStop), at: now() }
-                : { kind: "finished", text: lastReply.get(id) ?? "Finished", at: now() };
+                : { kind: "finished", text: drive.reply ?? "Finished", at: now() };
             deps.persist("now");
           }
           ending.set(id, deps.now().getTime());
@@ -664,7 +662,7 @@ export function createOwn(deps: OwnDeps): Own {
       }
       const head = `Claude Code stopped unexpectedly${cut ? " while writing this reply" : ""}.`;
       const id = notice(rec.id, `${head} Send a message to start it again.\n${maskSecrets(error)}`, "error", "failure", at);
-      if (id !== null) deaths.set(rec.id, { end: "failed", at, notice: id, head, error: maskSecrets(error) });
+      if (id !== null) deaths.set(rec.id, { end: "failed", at, notice: id, head, error: maskSecrets(error), session: drivers.get(rec.id) });
       return;
     }
     end(rec, { kind: "failed", text: line(error), at }, turn, { state: "error", cause: line(error) });
@@ -682,7 +680,7 @@ export function createOwn(deps: OwnDeps): Own {
     if (turn === null && deaths.has(rec.id)) return void notice(rec.id, text, "info", "restart");
     end(rec, { kind: "lost", text: line(text), at }, turn, { state: "stopped", cause: RESTARTED });
     const id = notice(rec.id, text, "info", "restart", at);
-    if (turn !== null && id !== null) deaths.set(rec.id, { end: "lost", at, notice: id, head: text, error: null });
+    if (turn !== null && id !== null) deaths.set(rec.id, { end: "lost", at, notice: id, head: text, error: null, session: drivers.get(rec.id) });
   }
 
   /** A prompt a stop ended stays in the thread, whether or not Claude Code wrote it down. */
@@ -900,12 +898,10 @@ export function createOwn(deps: OwnDeps): Own {
         // read, so a finished outcome already set takes it then.
         if (m.type === "result" && m.subtype === "success" && line(m.result) !== "") {
           const reply = line(m.result);
-          lastReply.set(id, reply);
           const drive = driveOf(rec);
-          if (drive.outcome?.kind === "finished" && drive.outcome.text !== reply) {
-            drive.outcome = { ...drive.outcome, text: reply };
-            deps.persist("now");
-          }
+          drive.reply = reply;
+          if (drive.outcome?.kind === "finished") drive.outcome = { ...drive.outcome, text: reply };
+          deps.persist("now");
         }
         deps.observe?.(id, m);
       },
@@ -941,6 +937,8 @@ export function createOwn(deps: OwnDeps): Own {
         else notice(id, text, "info", reason);
       },
       onDormant() {
+        // What outlived the query is still being looked up: closing now would cut the lookup's word short of the thread.
+        if (session.settling) return;
         drivers.delete(id);
         session.close();
       },
@@ -1295,8 +1293,9 @@ export function createOwn(deps: OwnDeps): Own {
           }
         }
       }
+      // The session that died is asked, not the session's current driver: one that went dormant still looks.
       for (const [id, d] of deaths) {
-        if (drivers.get(id)?.settling) continue;
+        if (d.session?.settling) continue;
         deaths.delete(id);
         if (deps.world.sessions.get(id)?.own?.outcome?.at !== d.at) continue;
         told.set(id, d.at);

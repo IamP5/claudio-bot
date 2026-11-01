@@ -1646,6 +1646,8 @@ describe("the thread says what stopped only once it did", () => {
       await until(async () => (await controlsNow()).working === false);
       expect((await noticesNow()).at(-1)?.text).toBe('Command "sleep bk" ended. Claude Code no longer followed it, so how it ended is not known.');
       expect((await rowOf(ASK)).status).toBe("idle");
+      // The reply from before the restart is still the run's last.
+      expect((await rowOf(ASK)).outcome).toMatchObject({ kind: "finished", text: "ok" });
       expect(await stepOf("toolu_bk")).toMatchObject({ state: "ended", cause: "It ended without a result" });
     } finally {
       await running.end();
@@ -2305,6 +2307,26 @@ describe("the thread says what stopped only once it did", () => {
       clock += END_SETTLE_MS * 4;
       sessions.tick(new Date(clock));
       expect(endings).toEqual([["failed", outcome.at]]);
+    } finally {
+      await running.end();
+    }
+  }, 15_000);
+
+  test("a death is told only after the lookup of what outlived it, however often the clock looks meanwhile", async () => {
+    const running = backgroundCommand("bf");
+    const told: [string, number][] = [];
+    try {
+      const q = await runningInForeground({ bf: running.pid }, { ended: (id, end) => void told.push([end, world.sessions.get(id)?.own?.outlived?.length ?? 0]) });
+      q.crash("Claude Code process terminated by signal SIGKILL");
+      await until(async () => (await noticesNow()).length === 1);
+      for (let i = 0; i < 600 && !(await noticesNow()).some((n) => n.text.includes("still runs")); i++) {
+        clock += 100;
+        sessions.tick(new Date(clock));
+        await Bun.sleep(2);
+      }
+      clock += 1;
+      sessions.tick(new Date(clock));
+      expect([told, (await noticesNow()).length]).toEqual([[["failed", 1]], 1]);
     } finally {
       await running.end();
     }

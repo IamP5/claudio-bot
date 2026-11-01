@@ -500,6 +500,8 @@ export type OwnDrive = {
   // How runs end, kept across bridge restarts. Writer: own.ts.
   /** How the last run ended, until a new run starts: the next send, or a queued turn after the one that ended. */
   outcome?: SessionOutcome;
+  /** The first line of the run's last reply, which a finished outcome reads, also once the bridge has restarted. */
+  reply?: string;
   /** The envelope whose turn that ending ended; a turn of any other envelope starts a new run. */
   endedTurn?: string;
   /** The steps of tasks the user stopped: they read stopped once the task is gone, before the transcript says so. */

@@ -100,30 +100,31 @@ export function psText(command: string): string {
 }
 
 /**
- * What a command's shell becomes when the command ends by exec-ing a plain program (`…; exec sleep 170`): the program
- * and its words, as ps shows them. null when the last exec redirects, quotes, expands or chains anything, since what
- * runs then cannot be told from the text.
+ * Whether a command can go on running once no shell shows its `eval '…'` line: it execs into another program (an
+ * `exec` that only redirects does not), or leaves a child behind (`&`, nohup, setsid, disown, coproc). A count of none
+ * says nothing about such a command.
  */
-export function execTail(command: string): string | null {
-  const m = /(?:^|;|&&|\|\||\n)\s*exec\s+([^;&|<>$`'"()\\\n#*?[\]{}~]+)$/.exec(command.trim());
-  const words = m?.[1]!.trim().split(/\s+/) ?? [];
-  return words.length === 0 || /^-|^\d*$/.test(words[0]!) ? null : words.join(" ");
+export function mayHide(command: string): boolean {
+  const redirectOnly = /\bexec(?:\s*\d*(?:>>?|<|&>)&?\s*[^\s;&|()]+)+\s*(?=;|&&|\|\||\n|$)/g;
+  const rest = command.replace(redirectOnly, " ");
+  if (/\b(?:exec|nohup|setsid|disown|coproc)\b/.test(rest)) return true;
+  // What is left of & once && and the redirections that name a descriptor (2>&1, >&2, &>file) are taken out.
+  return rest.replace(/&&|\d*[<>]&\d*-?|&>>?/g, " ").includes("&");
 }
 
 /**
- * How many processes run each command as Claude Code's shells run one (evalArg of their command line), or as the program
- * the shell exec'd into (execTail), whoever started them; null when the process table could not be read. A count can
- * only say a command may still run, never which process is it, and a form it cannot see counts nothing.
+ * How many processes run each command as Claude Code's shells run one (evalArg of their command line), whoever started
+ * them; null when the process table could not be read. A count can only say a command may still run, never which
+ * process is it.
  */
 export async function commandCounts(commands: readonly string[]): Promise<Map<string, number> | null> {
   const out = await read(["ps", "-axww", "-o", "command="], READ_TIMEOUT_MS, { ...process.env, LC_ALL: "C" });
   // ps lists itself at least, so an empty table was not read.
   if (out === null || out.trim() === "") return null;
   const counts = new Map(commands.map((c) => [c, 0]));
-  const shells = new Map(commands.map((c) => [psText(c), c]));
-  const execs = new Map(commands.flatMap((c) => (execTail(c) === null ? [] : [[psText(execTail(c)!), c] as const])));
+  const wanted = new Map(commands.map((c) => [psText(c), c]));
   for (const line of out.split("\n")) {
-    const command = shells.get(evalArg(line) ?? "") ?? execs.get(line.trim());
+    const command = wanted.get(evalArg(line) ?? "");
     if (command !== undefined) counts.set(command, counts.get(command)! + 1);
   }
   return counts;

@@ -216,7 +216,8 @@ enum Demo {
     /// The `atwork` screens lay the window out as a wide one, so a phone shows the split view's at-work pane and chip:
     /// `atwork` (nothing chosen, the list hidden as on an iPad in portrait), `atworkoffline` (the same with the Mac lost), `atworkwaiting` (no list yet, Mac lost),
     /// `atworkchip` and `atworkchipoffline` (a thread with the list hidden).
-    static var forcesWide: Bool { screen?.hasPrefix("atwork") == true }
+    /// `-wideLayout` does the same for the app paired with a bridge, so the live chip and pane can be seen on a phone.
+    static var forcesWide: Bool { screen?.hasPrefix("atwork") == true || arguments.contains("-wideLayout") }
     /// `toolfailed`: the thread opens a step's full output, which the Mac does not have.
     static var toolFails: Bool { screen == "toolfailed" }
 

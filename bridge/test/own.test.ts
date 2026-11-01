@@ -2074,14 +2074,26 @@ describe("the thread says what stopped only once it did", () => {
     expect((await handle({ type: "session_stop", sessionId: ASK, target: "all" }))[0]).toMatchObject({ type: "error", message: expect.stringContaining("can't tell") });
   });
 
-  const sourced = join(mkdtempSync(join(tmpdir(), "src-")), "run.sh");
-  writeFileSync(sourced, `exec sleep ${31_000 + (process.pid % 9_000)}\n`);
-  for (const [name, tail] of [
-    ["perl with quotes", 'exec perl -e "sleep 30"'],
-    ["env, which execs again", `exec env CLAUDIO=1 sleep ${32_000 + (process.pid % 9_000)}`],
-    ["a script it sources", `. ${sourced}`],
-  ] as const)
-    test(`a command counted while its shell showed, which then execs into ${name}, never reads ended from a count of none`, async () => {
+  const forms = (() => {
+    const n = (k: number) => 31_000 + k * 100 + (process.pid % 97);
+    const dir = mkdtempSync(join(tmpdir(), "forms-"));
+    writeFileSync(join(dir, "run.sh"), `sleep 1\nexec sleep ${n(7)}\n`);
+    writeFileSync(join(dir, "cmd.txt"), `exec sleep ${n(8)}`);
+    return [
+      ["K1, an fd redirect before exec", `1>/dev/null exec sleep ${n(1)}`],
+      ["K2, zsh's noglob before exec", `noglob exec sleep ${n(2)}`],
+      ["K3, a zsh += assignment before exec", `A+=1 exec sleep ${n(3)}`],
+      ["K4, a pipe whose last stage exits the shell", `sleep ${n(4)} | exit`],
+      ["H1, an exec of perl with quotes", `exec perl -e "sleep ${n(5)}"`],
+      ["H2, an exec of env, which execs again", `exec env CLAUDIO=1 sleep ${n(6)}`],
+      ["B1, a sourced script that exec's", `. ${join(dir, "run.sh")}`],
+      ["B2, an eval of a file's text", `eval "$(cat ${join(dir, "cmd.txt")})"`],
+      ["B3, a quoted exec", `e''xec sleep ${n(9)}`],
+      ["B4, a redirect to a file named with a ;", `exec >'${join(dir, "o;")}' sleep ${n(10)}`],
+    ] as const;
+  })();
+  for (const [name, tail] of forms)
+    test(`twins that leave their shell's command line by ${name} read may still run while their process group runs, and ended once it is empty`, async () => {
       const command = `exec >/dev/null 2>&1; sleep 3; ${tail}`;
       const a = evalShell(command);
       const b = evalShell(command);
@@ -2092,12 +2104,18 @@ describe("the thread says what stopped only once it did", () => {
         for (let i = 0; i < 3; i++) await lookNow();
         expect([await states(), alive(a.pid), alive(b.pid)]).toEqual([["unsure", "unsure"], true, true]);
         expect((await handle({ type: "session_stop", sessionId: ASK, target: "all" }))[0]).toMatchObject({ type: "error", message: expect.stringContaining("can't tell") });
-        expect((await noticesNow()).some((n) => n.text.includes("ended."))).toBe(false);
+        await a.end();
+        await lookNow();
+        expect(await states()).toEqual(["unsure", "unsure"]);
+        await b.end();
+        await lookNow();
+        await until(async () => (await states()).every((st) => st === "ended"));
+        expect([await states(), (await stepOf("toolu_ea")).endedAt]).toEqual([["ended", "ended"], new Date(clock).toISOString()]);
       } finally {
         await a.end();
         await b.end();
       }
-    }, 15_000);
+    }, 20_000);
 
   test("a look at what became of a crashed Claude Code's work that never answers is given up on: the work may still run", async () => {
     const running = backgroundCommand("bk");

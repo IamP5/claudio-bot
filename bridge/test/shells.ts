@@ -42,17 +42,23 @@ export function alive(group: number): boolean {
   }
 }
 
-/** A shell that runs `command` as Claude Code's shells do, through eval, so ps shows it on its command line. */
+/**
+ * A zsh that runs `command` as Claude Code's shells do, through eval with each single quote written as '"'"', leading a
+ * process group of its own, so ps shows the command on its command line until the shell exec's or exits.
+ */
 export function evalShell(command: string) {
-  const p = spawn("/bin/sh", ["-c", `eval '${command}' < /dev/null && true`], { detached: true, stdio: "ignore" });
+  const quoted = command.replace(/'/g, `'"'"'`);
+  const p = spawn("/bin/zsh", ["-c", `eval '${quoted}' < /dev/null && pwd -P >| /dev/null`], { detached: true, stdio: "ignore" });
   const exited = new Promise<void>((r) => p.once("exit", () => r()));
   return {
     pid: p.pid!,
+    /** Ends every process of its group, also what the shell exec'd into or left behind once it exited. */
     async end() {
       try {
         process.kill(-p.pid!, "SIGKILL");
       } catch {}
       await exited;
+      for (let i = 0; i < 50 && alive(p.pid!); i++) await Bun.sleep(20);
     },
   };
 }

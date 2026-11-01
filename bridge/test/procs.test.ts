@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { commandCounts, countable, endGroup, evalArg, groupAlive, psText, read, shellGroups, shellLeaders, taskRun } from "../src/procs";
+import { commandGroups, endGroup, evalArg, groupAlive, psText, read, shellGroups, shellLeaders, taskRun } from "../src/procs";
 import { backgroundCommand, evalShell } from "./shells";
 
 const started: number[] = [];
@@ -120,85 +120,15 @@ test("a read that runs past its timeout is given up on then, even while a child 
   expect(Date.now() - at).toBeLessThan(1_000);
 });
 
-test("commandCounts counts the shells that run exactly a command, whoever started them, and none once they end", async () => {
-  const command = `sleep 30 # count-${process.pid}-${Date.now()}`;
+test("commandGroups finds the group of each shell that runs exactly a command, whoever started it, and none once it ends", async () => {
+  const command = `sleep ${50_000 + (process.pid % 9_000)}`;
   const near = `${command} `;
   const shells = [evalShell(command), evalShell(command), evalShell(near)];
   ends.push(...shells.map((s) => s.end));
-  await Bun.sleep(200);
-  expect(await commandCounts([command, near, "sleep 1 # nobody"])).toEqual(new Map([[command, 2], [near, 1], ["sleep 1 # nobody", 0]]));
+  await Bun.sleep(300);
+  const found = (await commandGroups([command, near, "sleep 1"]))!;
+  expect([[...found.get(command)!].sort(), found.get(near), found.get("sleep 1")]).toEqual([[shells[0]!.pid, shells[1]!.pid].sort(), [shells[2]!.pid], []]);
   await shells[0]!.end();
   await shells[1]!.end();
-  expect((await commandCounts([command]))!.get(command)).toBe(0);
-});
-
-test("countable: only a command whose whole text is plain words, ; && || |, and plain redirects, led by no shell trick, may end on a count of none", () => {
-  const Q = "exec >/dev/null 2>&1; ";
-  const plain = [
-    `${Q}sleep 53`,
-    "sleep 25; exec >/dev/null 2>&1; sleep 52",
-    "exec 2>&1 >log; sleep 5",
-    "exec</dev/null; sleep 4",
-    "exec>/dev/null; sleep 9",
-    "a && b 2>/dev/null || c | d >>out",
-    "echo executor; sleep 3",
-    "FOO=1 sleep 3",
-    "/bin/sleep 3",
-    `${Q}sleep 175`,
-  ];
-  const cantTell = [
-    // round 2 and 3
-    `${Q}exec sleep 170`,
-    `${Q}exec sleep 160`,
-    `${Q}sleep 95; exec perl -e "sleep 120"`,
-    `${Q}sleep 96; exec env CLAUDIO=1 sleep 178`,
-    `${Q}sleep 97; exec sleep 179`,
-    `${Q}exec perl -e "sleep 185"`,
-    `${Q}N=186; exec sleep $N`,
-    `${Q}exec sleep 187 </dev/null`,
-    `${Q}while [ ! -e /tmp/x/F5 ]; do sleep 0.2; done`,
-    "exec >f sleep 4",
-    'eval "exec sleep 1"',
-    'sh -c "exec sleep 9"',
-    "sleep 9 &",
-    "(sleep 1)&",
-    "sleep 9 & disown",
-    "nohup sleep 9",
-    "setsid sleep 9",
-    "coproc sleep 1",
-    "a |& b",
-    "if true; then exec sleep 201; fi",
-    "{ exec sleep 202; }",
-    "command exec sleep 203",
-    "builtin exec sleep 204",
-    "exec -a zz sleep 205",
-    // round 4
-    `${Q}. /tmp/x/src6.sh`,
-    `${Q}source ./run.sh`,
-    `${Q}eval "$(cat /tmp/x/src7.txt)"`,
-    `${Q}e''xec sleep 208`,
-    `${Q}exec >'/tmp/x/o;' sleep 209`,
-    "ex\\ec sleep 218",
-    "x=ex; ${x}ec sleep 217",
-    "echo 209 | xargs sleep",
-    "script -q /dev/null sleep 211",
-    "cat >/dev/null <<EOF\nhello\nEOF\nsleep 214",
-    "x=$(sleep 215 & echo hi)",
-    "case a in a) true ;& b) sleep 216 ;; esac",
-    "perl -e 'fork and exit; sleep 216'",
-    "exec 2>/dev/null\nsleep 9",
-    "exec &>/dev/null; sleep 9",
-    "exec > >(tee log); sleep 9",
-    "exec {fd}>f; sleep 9",
-    "ls >&2; sleep 9",
-    "sleep 9 2>&-",
-    "FOO=1 exec sleep 3",
-    "/usr/bin/env sleep 3",
-    "exec; sleep 9",
-    "sleep 9;; sleep 1",
-    "sleep 9 >",
-    "time sleep 9",
-    "nice sleep 9",
-  ];
-  expect([plain.filter((c) => !countable(c)), cantTell.filter(countable)]).toEqual([[], []]);
+  expect((await commandGroups([command]))!.get(command)).toEqual([]);
 });

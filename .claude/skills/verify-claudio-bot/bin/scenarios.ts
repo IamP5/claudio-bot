@@ -2,6 +2,7 @@
 // A precondition is what the scenario must produce to be judged at all; a rubric item is what the user must be able
 // to tell. A failed precondition fails the scenario; a failed rubric item is a finding.
 import type { Frame, Row } from "./control-claudio";
+import { AREAS } from "./areas";
 
 export type Step = { id: string; tool: string; label: string; state: string; output: string | null; [k: string]: unknown };
 export type Item = { kind: string; id: string; at: string; text?: string; steps?: Step[]; card?: { id: string; answer: unknown; label: string; detail: string }; tone?: string; [k: string]: unknown };
@@ -72,6 +73,13 @@ export type Ev = {
   streamed: Record<string, string>;
   /** Snapshots a second phone took (fresh-open): the thread as a fresh watch_session gives it. */
   opens: { at: number; mark: string; name: string; items: Item[]; live: { itemId: string; text: string } | null; controls: Controls | null }[];
+  /** Every frame the phone received that is not about sessions (hello, bot, message, activity, devices, memory, error…). */
+  inbox: { at: number; frame: Frame }[];
+  /**
+   * Each POST /pair another phone made (action pair); ms: how long the answer took. With connect: hello, its socket's
+   * hello arrived; closed, how and when the bridge closed it; rejoined, whether its token opened a socket again after.
+   */
+  pairs: { at: number; ms: number; mark: string; name: string; status: number; error: string | null; deviceId: string | null; hello: boolean; closed: { at: number; code: number; reason: string } | null; rejoined: boolean | null }[];
 };
 
 export type Action =
@@ -141,9 +149,15 @@ export type Action =
   /** Reads a file of the seed project, line by line, into the report's samples under `as`. */
   | { do: "file"; rel: string; as: string }
   /** With --sim, the label probe records the app's elements whose label holds one of `phrases` until the setup ends, into ev.labels. */
-  | { do: "watch-labels"; phrases: string[] };
+  | { do: "watch-labels"; phrases: string[] }
+  /** The user opens a bot's chat: with --sim by claudiobot://bot/<id>; on the protocol lane the phone sends open, as the app does. */
+  | { do: "open-bot"; ref: string; mark: string }
+  /** With --sim, an XCUITest taps the app's element with this label. */
+  | { do: "tap"; label: string; mark?: string }
+  /** Another phone sends POST /pair with the code; with connect, it opens a socket with the token it got and keeps it. */
+  | { do: "pair"; mark: string; name: string; what: string; code: (ev: Ev) => string; connect?: boolean };
 
-export type Tell = "what" | "how-many" | "how-long" | "state" | "stop";
+export type Tell = "what" | "how-many" | "how-long" | "state" | "stop" | "clarity" | "responsive" | "recover";
 export type Verdict = { ok: boolean; why: string };
 export type RubricItem = {
   id: string;
@@ -159,7 +173,7 @@ export type RubricItem = {
 export type Precondition = { what: string; check: (ev: Ev) => Verdict };
 export type Scenario = {
   id: string;
-  area: "sessions";
+  area: "sessions" | "chat" | "home" | "pairing" | "settings";
   title: string;
   needsSimulator: boolean;
   journey: string[];
@@ -178,6 +192,10 @@ export type Scenario = {
   pushOff?: boolean;
   /** Seconds a session card waits before it expires; its reminder is at half. */
   cardTtlS?: number;
+  /** With --sim, the app opens on this sidebar (default sessions). */
+  sidebar?: "sessions" | "bots";
+  /** With --sim, simctl ui settings for the run; --content-size and --appearance override them. */
+  ui?: { contentSize?: string; appearance?: string };
 };
 
 // ---- reading the evidence
@@ -3623,4 +3641,4 @@ const S9b: Scenario = {
   ],
 };
 
-export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S3b, S4, S4b, S4c, S5, S5t, S6, S6b, S6c, S6d, S6e, S6f, S6g, S6h, S6k, S7, S8, S8fg, S9, S9b];
+export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S3b, S4, S4b, S4c, S5, S5t, S6, S6b, S6c, S6d, S6e, S6f, S6g, S6h, S6k, S7, S8, S8fg, S9, S9b, ...AREAS];

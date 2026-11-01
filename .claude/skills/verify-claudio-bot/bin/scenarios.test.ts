@@ -32,6 +32,8 @@ function evidence(over: Partial<Ev>): Ev {
     watches: [],
     streamed: {},
     opens: [],
+    inbox: [],
+    pairs: [],
     ...over,
   };
 }
@@ -192,5 +194,33 @@ describe("S9.7 and S9.8 after the push server recovers", () => {
       { ok: false, why: "no card push got through after the server came back; the reminder did, 48 s after" },
       { ok: false, why: "on only 18.5 s after the server came back, after the reminder got through" },
     ]);
+  });
+});
+
+describe("bot areas", () => {
+  const created = { at: 100, frame: { type: "created", ref: "c1", botId: "b1" } };
+  const bot = (at: number, status: string) => ({ at, frame: { type: "bot", bot: { id: "b1", status, unread: 0, question: null, preview: "", lastAt: iso(at) } } });
+  const reply = (at: number) => ({ at, frame: { type: "message", botId: "b1", message: { kind: "bot", id: `m${at}`, at: iso(at), text: "pong" } } });
+  test("C1.3: idle between the send and the reply fails, working throughout passes", () => {
+    const marks = { "c1-send": 1_000 };
+    const early = evidence({ marks, inbox: [created, bot(1_500, "working"), bot(3_000, "idle"), reply(6_000), bot(6_100, "idle")] });
+    const honest = evidence({ marks, inbox: [created, bot(1_500, "working"), reply(6_000), bot(6_100, "idle")] });
+    expect([judge("C1.3", early), judge("C1.3", honest)]).toEqual([
+      { ok: false, why: "idle at +2.0 s, reply at +5.0 s" },
+      { ok: true, why: "working until the reply" },
+    ]);
+  });
+  const paired = (closed: { at: number; code: number; reason: string } | null) => ({ at: 500, ms: 40, mark: "p3-paired", name: "UX second phone", status: 200, error: null, deviceId: "d2", hello: true, closed, rejoined: false });
+  test("P3.1: a 4001 close within 2 s of the revoke passes; a plain close fails", () => {
+    const marks = { "p3-revoke": 1_000 };
+    expect([judge("P3.1", evidence({ marks, pairs: [paired({ at: 1_050, code: 4001, reason: "revoked" })] })), judge("P3.1", evidence({ marks, pairs: [paired({ at: 1_050, code: 1006, reason: "" })] }))]).toEqual([
+      { ok: true, why: '4001 "revoked" after 0.1 s' },
+      { ok: false, why: '1006 "" after 0.1 s' },
+    ]);
+  });
+  test("T3.2: Reconnecting read more than 62 s into the drop fails", () => {
+    const marks = { "t3-back-dropped": 0, "t3-back": 80_000 };
+    const labels = [{ at: 70_000, hits: [{ label: "Status, Reconnecting", button: false, enabled: true }] }];
+    expect(judge("T3.2", evidence({ marks, labels }))).toEqual({ ok: false, why: 'Reconnecting in 1/1 samples, e.g. "Status, Reconnecting"' });
   });
 });

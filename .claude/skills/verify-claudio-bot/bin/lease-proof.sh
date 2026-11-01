@@ -1,6 +1,6 @@
 #!/bin/sh
 # Proves the simulator pool's lease rules and writes the log to $1 (default docs/ux-program/evidence/step0-lease-proof.txt):
-# five lease-holding jobs start at once against three devices, never more than three pool devices boot, the other two
+# eight lease-holding jobs start at once against six devices, never more than six pool devices boot, the other two
 # wait, all finish and every pool device ends shut down; then a lease with a heartbeat older than 10 minutes is
 # reclaimed and a fresh one is not. Run from the repo root.
 set -u
@@ -13,17 +13,17 @@ booted() { xcrun simctl list devices booted | grep -c 'ClaudioBot-UX-' ; }
 {
   echo "# Step 0 lease proof, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo
-  echo "## 1. Five jobs, three devices"
+  echo "## 1. Eight jobs, six devices"
   echo
   bun "$H" pool status
   bun "$H" lease status
   echo
   pids=""
-  for i in 1 2 3 4 5; do
+  for i in 1 2 3 4 5 6 7 8; do
     bun "$H" sim-job --label "job$i" --hold 60 >"$logs/job$i.log" 2>&1 &
     pids="$pids $!"
   done
-  echo "started 5 jobs:$pids"
+  echo "started 8 jobs:$pids"
   max=0
   while :; do
     alive=0
@@ -39,13 +39,13 @@ booted() { xcrun simctl list devices booted | grep -c 'ClaudioBot-UX-' ; }
   done
   echo
   echo "### job logs"
-  for i in 1 2 3 4 5; do sed "s/^/  job$i | /" "$logs/job$i.log"; done
+  for i in 1 2 3 4 5 6 7 8; do sed "s/^/  job$i | /" "$logs/job$i.log"; done
   echo
   echo "### after"
   xcrun simctl list devices | grep 'ClaudioBot-UX-' | sed 's/^ */  /'
   bun "$H" lease status
-  echo "max ClaudioBot-UX booted at once: $max (limit 3)"
-  [ "$max" -le 3 ] && [ "$(booted)" -eq 0 ] && echo "RESULT ok: at most 3 booted, all pool devices shut down at the end" || echo "RESULT FAILED"
+  echo "max ClaudioBot-UX booted at once: $max (limit 6)"
+  [ "$max" -le 6 ] && [ "$(booted)" -eq 0 ] && echo "RESULT ok: at most 6 booted, all pool devices shut down at the end" || echo "RESULT FAILED"
 
   echo
   echo "## 2. Stale lease reclaim"

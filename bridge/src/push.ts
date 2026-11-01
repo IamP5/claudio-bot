@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Tickable } from "./clock";
 import type { BotId, MessageId, PushState as Reach, SessionAlert, SessionAlertReason, SessionId, Signal } from "./protocol";
+import { followed } from "./outlived";
 import type { Persist } from "./store";
 import { BOT_NAME_MAX, displayName, errorText } from "./text";
 import { chatOf, own, ownCardId, ownCardOpen, type HeldEnding, type OwedPush, type OwnCard, type PushFailing, type PushState, type SessionEnd, type World } from "./world";
@@ -133,6 +134,18 @@ const ENDED: Record<SessionEnd, string> = {
   failed: `${SESSION} stopped with an error`,
   lost: `${SESSION} was interrupted by a bridge restart`,
 };
+type Running = NonNullable<SessionAlert["running"]>;
+/** What the push says of an ending, and of the work that outlived Claude Code and still runs; counts, never names. */
+function endedText(end: SessionEnd, running: Running | undefined): string {
+  if (!running || end === "finished") return ENDED[end];
+  const n = running.agents + running.commands;
+  const what = [
+    ...(running.agents > 0 ? [`${running.agents} ${running.agents === 1 ? "agent" : "agents"}`] : []),
+    ...(running.commands > 0 ? [`${running.commands} ${running.commands === 1 ? "command" : "commands"}`] : []),
+  ].join(", ");
+  const head = end === "failed" ? `${SESSION} stopped with an error.` : "A bridge restart interrupted a Claude Code session.";
+  return `${head} ${what} still ${n === 1 ? "runs" : "run"} on your Mac.`;
+}
 /** The most session endings kept owed at once; the oldest go first. */
 const HELD_KEPT = 50;
 
@@ -299,8 +312,18 @@ export function createPush(deps: {
   if (held().some((h) => !readable(h))) setHeld(held().filter(readable));
   /** Endings held from before this start: a phone that was open may be about to come back. */
   const restored = new Set(held().map((h) => h.key));
-  /** A run a restart cut off, or an ending from before the start, waits out the grace a returning phone gets. */
-  const waits = (h: HeldEnding, now: number) => now < graceEnds && (h.end === "lost" || restored.has(h.key));
+  /**
+   * A run a restart cut off, or an ending from before the start, waits out the grace a returning phone gets. A cut-off
+   * run's grace runs from when it was first held, so a later restart does not start it over.
+   */
+  const graceOf = (h: HeldEnding) => (h.end === "lost" ? Math.min(graceEnds, Date.parse(h.at) + START_GRACE_MS) : graceEnds);
+  const waits = (h: HeldEnding, now: number) => now < graceOf(h) && (h.end === "lost" || restored.has(h.key));
+  /** The work that outlived a session's Claude Code and still runs, which only the bridge follows now. */
+  const survivors = (id: SessionId): Running | undefined => {
+    const left = followed(world.sessions.get(id)?.own?.outlived ?? []);
+    const agents = left.filter((o) => o.kind === "agent").length;
+    return left.length === 0 ? undefined : { agents, commands: left.length - agents };
+  };
   const failing = (): PushFailing | undefined => world.push.failing;
   const owedPushes = (): readonly OwedPush[] => (Array.isArray(world.push.owed) ? world.push.owed : []);
   const reach = (): Reach => {
@@ -578,6 +601,7 @@ export function createPush(deps: {
   /** cards: what a card or reminder alert covers; none for an ending. */
   function alert(id: SessionId, reason: SessionAlertReason, keys: readonly string[], cards: readonly OwnCard[], now: number) {
     if (keys.every((k) => alerted.has(k))) return;
+    const running = reason === "failed" || reason === "lost" ? survivors(id) : undefined;
     const frame: SessionAlert = {
       type: "session_alert",
       sessionId: id,
@@ -586,6 +610,7 @@ export function createPush(deps: {
       title: deps.title?.(id) ?? "Claude Code session",
       cardId: cards[0] ? ownCardId(cards[0]) : null,
       cardKind: kindOf(cards),
+      ...(running && { running }),
     };
     const a: Alerted = { frame, sent: [{ at: now, to: deps.sockets?.alert(frame) ?? [] }] };
     for (const k of keys) if (!alerted.has(k)) alerted.set(k, a);
@@ -624,7 +649,7 @@ export function createPush(deps: {
   function pushEnd(id: SessionId, end: SessionEnd, key: string, now: number) {
     const what = `${end} for session ${id}`;
     if (!record([key], what, now)) return;
-    void deliver({ keys: [key], botId: null, text: ENDED[end], link: sessionLink(id), high: false, for: { kind: "ending", session: id } }, what);
+    void deliver({ keys: [key], botId: null, text: endedText(end, survivors(id)), link: sessionLink(id), high: false, for: { kind: "ending", session: id } }, what);
   }
 
   const isOpen = (id: SessionId, card: MessageId) => world.sessions.get(id)?.own?.cards.some((c) => ownCardId(c) === card && ownCardOpen(c)) ?? false;
@@ -707,7 +732,7 @@ export function createPush(deps: {
         continue;
       }
       if (waits(h, now)) {
-        later(graceEnds);
+        later(graceOf(h));
         continue;
       }
       if (!act) continue;

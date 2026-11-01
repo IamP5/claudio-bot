@@ -528,8 +528,8 @@ export type OwnDrive = {
   /**
    * Commands the bridge found no shell of their own for (two alike, or none exact), watched by how many processes run
    * exactly that command: they may still run while any does, and are never signalled. counted: some look found one
-   * running. A count of none after that is the command gone, unless the command can run on out of the count's sight
-   * (procs mayHide), which then stays as the bridge cannot tell. endedAt: the first look that found it gone.
+   * running. A count of none after that is the command gone only when its text is plain (procs countable); any other
+   * stays as the bridge cannot tell. endedAt: the first look that found it gone.
    */
   unpaired?: (BackgroundTask & { command: string; counted?: true; endedAt?: string })[];
   /**

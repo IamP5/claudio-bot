@@ -4,7 +4,7 @@ import type { Tickable } from "./clock";
 import { failClosed, resolveReal, toCall, toHookOutput } from "./gate";
 import type { Ledger } from "./ledger";
 import { detailOf, floors, type Scope } from "./policy";
-import { commandCounts, groupAlive, mayHide } from "./procs";
+import { commandCounts, countable, groupAlive } from "./procs";
 import { doubted, endOutlived, followed, OUTLIVED_LOOK_MS, outlivedSteps, runOf, settled, withOutlived, type Outlived } from "./outlived";
 import {
   PHONE_MODES,
@@ -643,10 +643,10 @@ export function createOwn(deps: OwnDeps): Own {
       const seen = now();
       const back = recheck.filter((o, i) => again[i] === "runs" && doubtedNow().some((x) => x.id === o.id));
       const doubtedGone = doubtedNow().filter((o) => !back.includes(o) && !groupAlive(o.group));
-      // A count of none means gone only for a command that cannot run on out of sight of the count, and that some look
-      // counted: before that it may run in a form ps does not show.
+      // A count of none means gone only for a command whose text is plain enough that its shell is the only place it runs,
+      // and that some look counted: before that it may run in a form ps does not show.
       const unpairedSeen = counts === null ? [] : unpaired(rec).filter((u) => u.counted === undefined && (counts.get(u.command) ?? 0) > 0);
-      const unpairedGone = counts === null ? [] : unpaired(rec).filter((u) => u.counted === true && !mayHide(u.command) && counts.get(u.command) === 0);
+      const unpairedGone = counts === null ? [] : unpaired(rec).filter((u) => u.counted === true && countable(u.command) && counts.get(u.command) === 0);
       for (const o of [...back, ...doubtedGone]) unsureLooks.delete(`${rec.id}:${o.id}`);
       const ended = [...found("gone"), ...doubtedGone];
       const unsure = found("unsure");

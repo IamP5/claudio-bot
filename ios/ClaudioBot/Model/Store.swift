@@ -491,7 +491,8 @@ final class AppStore {
             lastError = ErrorNotice(message: "The Claude app setting was not changed: your Mac was unreachable.")
         case let .sessionSend(sessionId, _, clientId, _, _):
             unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId }
-            threads[sessionId]?.sendRefused(clientId, nil)
+            // A Retry of one a socket took before may have arrived the first time: it keeps saying so.
+            if threads[sessionId]?.pendingSends[ItemID(clientId)]?.state == .waiting { threads[sessionId]?.sendRefused(clientId, nil) }
         default:
             break
         }

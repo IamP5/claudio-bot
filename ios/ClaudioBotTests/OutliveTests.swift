@@ -110,6 +110,19 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(store.unechoedSends.isEmpty)
     }
 
+    @Test func aRetryOfASendThatMayHaveGoneThroughNeverReadsNotSent() throws {
+        let store = store()
+        let model = try #require(store.threads[sid])
+        model.echo(clientId: "c1", text: "Run the tests", at: at)
+        store.sendStarted(send("c1"), at: at)
+        store.sendTransmitted(send("c1"), at: at)
+        model.lapseSends(at: at + 10)
+        store.sendStarted(send("c1"), at: at + 20)
+        #expect(model.pendingSends[ItemID("c1")]?.state == .unechoed, "retried offline: the first copy may have arrived")
+        store.requestDropped(send("c1"))
+        #expect(model.pendingSends[ItemID("c1")]?.state == .unechoed)
+    }
+
     @Test func aSendIsSpokenAsSendingThenSentOnlyOnceTheMacShowsItBack() {
         #expect(ComposerState.sentAnnouncement(offline: false) == "Sending.")
         #expect(ComposerState.sentAnnouncement(offline: true) == "Not sent yet. It goes when your Mac is back.")

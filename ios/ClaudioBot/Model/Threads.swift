@@ -587,9 +587,14 @@ final class ThreadModel {
         relayout()
     }
 
-    /// The message waits for a socket again: offline, or the user retried it.
+    /// The message waits for a socket again: offline, or the user retried it. One a socket already took may have
+    /// arrived, so it keeps saying so.
     func sendWaiting(_ clientId: String) {
-        pendingSends[ItemID(clientId)]?.state = .waiting
+        let id = ItemID(clientId)
+        switch pendingSends[id]?.state {
+        case .waiting?, .notSent?: pendingSends[id]?.state = .waiting
+        case .sending?, .unechoed?, nil: break
+        }
     }
 
     /// A socket took the message. Without a sign of it from the Mac within the patience, it may or may not have arrived.

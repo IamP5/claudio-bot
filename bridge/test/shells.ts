@@ -41,3 +41,18 @@ export function alive(group: number): boolean {
     return false;
   }
 }
+
+/** A shell that runs `command` as Claude Code's shells do, through eval, so ps shows it on its command line. */
+export function evalShell(command: string) {
+  const p = spawn("/bin/sh", ["-c", `eval '${command}' < /dev/null && true`], { detached: true, stdio: "ignore" });
+  const exited = new Promise<void>((r) => p.once("exit", () => r()));
+  return {
+    pid: p.pid!,
+    async end() {
+      try {
+        process.kill(-p.pid!, "SIGKILL");
+      } catch {}
+      await exited;
+    },
+  };
+}

@@ -6,13 +6,14 @@ import { join } from "node:path";
 import type { CanUseTool, HookCallback, Options, PermissionResult, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeApps, DesktopEntry, Live } from "../src/claudeApps";
 import { alwaysText, END_SETTLE_MS, OWN_CARD_TTL_MS } from "../src/own";
+import { OUTLIVED_LOOK_MS } from "../src/outlived";
 import type { TaskRun } from "../src/procs";
 import type { AgentId, BotId, ItemId, MessageId, ServerMessage, SessionId, SessionItem, SessionRow, TaskId, ThreadChannelFrame } from "../src/protocol";
 import { EXIT_SETTLE_MS, GONE_ERROR, GONE_LOOK_MAX_MS } from "../src/session";
 import { createSessions, type Sessions } from "../src/sessions";
 import { emptySession, emptyWorld, type AgentRecord, type World } from "../src/world";
 import { FakeQuery, result } from "./hub-kit";
-import { alive, backgroundCommand } from "./shells";
+import { alive, backgroundCommand, evalShell } from "./shells";
 import { player, replay } from "./transcript";
 
 // The phone driving Claude Code sessions: through the Sessions facade, over a fake Claude Code whose canUseTool and
@@ -1088,7 +1089,7 @@ describe("how a run ends", () => {
     await flush();
     await restart();
     expect(queries).toHaveLength(0);
-    expect((await noticesNow()).map((n) => [n.text, n.reason])).toEqual([["The bridge restarted, so Claude Code's background work stopped: sleep 600.", "restart"]]);
+    expect((await noticesNow()).map((n) => [n.text, n.reason])).toEqual([["The bridge restarted, so Claude Code's background work stopped: command \"Run in background: sleep 600\".", "restart"]]);
     expect(await rowOf(ASK)).toMatchObject({ status: "failed", outcome: { kind: "lost" } });
     expect(await stepOf("toolu_k")).toMatchObject({ state: "stopped", cause: "The bridge restarted" });
   });
@@ -1616,8 +1617,8 @@ describe("the thread says what stopped only once it did", () => {
       await restart();
       await until(async () => (await restartLines()).length === 2);
       expect(await restartLines()).toEqual([
-        "The bridge restarted, so Claude Code's background work stopped: sleep bw.",
-        'The bridge restarted, and Claude Code no longer follows command "sleep bk", which still runs on this Mac. Stop ends it.',
+        "The bridge restarted, so Claude Code's background work stopped: command \"Run in background: sleep bw\".",
+        'The bridge restarted, and Claude Code no longer follows command "Run in background: sleep bk", which still runs on this Mac. Stop ends it.',
       ]);
       expect((await controlsNow()).tasks?.map((t) => [t.id, t.label, t.stepId])).toEqual([["bk", "sleep bk", "toolu_bk"]]);
       expect([(await controlsNow()).working, (await rowOf(ASK)).status]).toEqual([true, "working"]);
@@ -1644,7 +1645,7 @@ describe("the thread says what stopped only once it did", () => {
       clock += 10_000;
       sessions.tick(new Date(clock));
       await until(async () => (await controlsNow()).working === false);
-      expect((await noticesNow()).at(-1)?.text).toBe('Command "sleep bk" ended. Claude Code no longer followed it, so how it ended is not known.');
+      expect((await noticesNow()).at(-1)?.text).toBe('Command "Run in background: sleep bk" ended. Claude Code no longer followed it, so how it ended is not known.');
       expect((await rowOf(ASK)).status).toBe("idle");
       // The reply from before the restart is still the run's last.
       expect((await rowOf(ASK)).outcome).toMatchObject({ kind: "finished", text: "ok" });
@@ -1660,7 +1661,7 @@ describe("the thread says what stopped only once it did", () => {
       await startedInBackground({ bk: other.pid });
       await restart();
       await until(async () => (await restartLines()).length === 1);
-      expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: sleep bk."]);
+      expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: command \"Run in background: sleep bk\"."]);
       expect([(await controlsNow()).tasks, (await controlsNow()).working, alive(other.pid), (await rowOf(ASK)).status]).toEqual([[], false, true, "idle"]);
       expect(await stepOf("toolu_bk")).toMatchObject({ state: "unsure", cause: "Can't tell whether this still runs on your Mac" });
       clock += 10_000;
@@ -1673,7 +1674,7 @@ describe("the thread says what stopped only once it did", () => {
         sessions.tick(new Date(clock));
         await until(async () => (await noticesNow()).some((n) => n.text.includes("ended.")));
       }
-      expect((await noticesNow()).filter((n) => n.text.includes("ended.")).map((n) => n.text)).toEqual(['Command "sleep bk" ended. Claude Code no longer followed it, so how it ended is not known.']);
+      expect((await noticesNow()).filter((n) => n.text.includes("ended.")).map((n) => n.text)).toEqual(['Command "Run in background: sleep bk" ended. Claude Code no longer followed it, so how it ended is not known.']);
       expect(await stepOf("toolu_bk")).toMatchObject({ state: "ended", cause: "It ended without a result" });
     } finally {
       await other.end();
@@ -1688,7 +1689,7 @@ describe("the thread says what stopped only once it did", () => {
     await flush();
     await restart();
     await until(async () => (await restartLines()).length === 1);
-    expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: sleep 600."]);
+    expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: command \"Run in background: sleep 600\"."]);
     expect((await rowOf(ASK)).outcome?.kind).not.toBe("lost");
     expect([(await stepOf("toolu_k")), (await controlsNow()).working]).toMatchObject([{ state: "unsure", cause: "Can't tell whether this still runs on your Mac" }, false]);
   });
@@ -1768,7 +1769,7 @@ describe("the thread says what stopped only once it did", () => {
       ]);
       expect(alive(running.pid)).toBe(true);
       expect((await noticesNow()).map((n) => n.text).filter((t) => t.startsWith("Stopped by you"))).toEqual([]);
-      expect((await noticesNow()).at(-1)?.text).toContain("may still run on this Mac");
+      expect((await noticesNow()).at(-1)?.text).toBe('The bridge can no longer confirm command "Run in background: sleep bk" is the one it followed. It is now shown as may still run, and Stop can\'t end it. The earlier note that Stop ends it no longer holds. Check it on your Mac (Activity Monitor, or ps).');
       expect([(await controlsNow()).working, await stepOf("toolu_bk")]).toMatchObject([false, { state: "unsure", cause: "Can't tell whether this still runs on your Mac" }]);
     } finally {
       await running.end();
@@ -1787,7 +1788,7 @@ describe("the thread says what stopped only once it did", () => {
       await until(async () => (await controlsNow()).working === false);
       const said = (await noticesNow()).map((n) => n.text);
       expect(said.some((t) => t.includes("ended"))).toBe(false);
-      expect(said.at(-1)).toContain("may still run on this Mac");
+      expect(said.at(-1)).toContain("now shown as may still run");
       expect(alive(running.pid)).toBe(true);
     } finally {
       await running.end();
@@ -1881,7 +1882,7 @@ describe("the thread says what stopped only once it did", () => {
       clock += 10_000;
       sessions.tick(new Date(clock));
       await until(async () => (await noticesNow()).some((n) => n.text.includes("ended.")));
-      expect((await noticesNow()).at(-1)?.text).toBe('Command "sleep bk" ended. Claude Code no longer followed it, so how it ended is not known.');
+      expect((await noticesNow()).at(-1)?.text).toBe('Command "Run in background: sleep bk" ended. Claude Code no longer followed it, so how it ended is not known.');
       expect((await controlsNow()).working).toBe(false);
     } finally {
       failing = false;
@@ -1929,7 +1930,7 @@ describe("the thread says what stopped only once it did", () => {
         sessions.tick(new Date(clock));
         await until(async () => (await noticesNow()).some((n) => n.text.includes("ended.")));
       }
-      expect((await noticesNow()).filter((n) => n.text.includes("ended.")).map((n) => n.text)).toEqual(['Command "sleep bk" ended. Claude Code no longer followed it, so how it ended is not known.']);
+      expect((await noticesNow()).filter((n) => n.text.includes("ended.")).map((n) => n.text)).toEqual(['Command "Run in background: Sleep" (sleep bk) ended. Claude Code no longer followed it, so how it ended is not known.']);
       expect(await stepOf("toolu_bk")).toMatchObject({ state: "ended", cause: "It ended without a result" });
     } finally {
       await shell.end();
@@ -1993,7 +1994,7 @@ describe("the thread says what stopped only once it did", () => {
         await until(async () => (await noticesNow()).some((n) => n.text.includes("ended.")));
       }
       expect((await noticesNow()).filter((n) => n.text.includes("ended.")).map((n) => n.text)).toEqual([
-        'Command "exec >/dev/null 2>&1; sleep 34312" ended. Claude Code no longer followed it, so how it ended is not known.',
+        'Command "Run in background: Sleep" (exec >/dev/null 2>&1; sleep 34312) ended. Claude Code no longer followed it, so how it ended is not known.',
       ]);
       expect([(await stepOf("toolu_ba")).state, (await stepOf("toolu_bb")).state, alive(a.pid)]).toEqual(["unsure", "ended", true]);
     } finally {
@@ -2002,24 +2003,34 @@ describe("the thread says what stopped only once it did", () => {
     }
   });
 
-  test("work the bridge cannot check stays so across another restart: until a new run, Stop says it cannot tell", async () => {
+  test("a command no shell was found for is watched by its command line across another restart: Stop says it cannot tell, and how to check, until no process runs it", async () => {
     await start();
     await send("Start it");
     const q = queries[0]!;
     const listed = [shellTask("bu", "toolu_bu", "Sleep")];
-    q.emit(toolCall("toolu_bu", "Bash", { command: "exec >/dev/null 2>&1; sleep 3641 # café" }), taskStarted(listed[0]!), level(...listed), result());
+    const command = "exec >/dev/null 2>&1; sleep 3641 # café";
+    await transcribe(calledEntry("toolu_bu", "Bash", { command, description: "Sleep", run_in_background: true }), resultEntry("toolu_bu", "Command running in background with ID: bu."));
+    q.emit(toolCall("toolu_bu", "Bash", { command }), taskStarted(listed[0]!), level(...listed), result());
     await flush();
     await flush();
     const stopAll = async () => handle({ type: "session_stop", sessionId: ASK, target: "all" });
-    const cantTell: ServerMessage[] = [{ type: "error", message: "The bridge can't tell whether its background work still runs on your Mac, so it has nothing it can stop.", about: { kind: "stop", sessionId: ASK } }];
+    const cantTell: ServerMessage[] = [
+      {
+        type: "error",
+        message:
+          'The bridge can\'t tell whether command "Run in background: Sleep" (exec >/dev/null 2>&1; sleep 3641 # café) still runs on your Mac, so it has nothing it can stop. Check it on your Mac (Activity Monitor, or ps).',
+        about: { kind: "stop", sessionId: ASK },
+      },
+    ];
     await restart();
     await until(async () => (await restartLines()).length === 1);
     expect(await stopAll()).toEqual(cantTell);
     await restart();
-    expect(await stopAll()).toEqual(cantTell);
-    await send("Say hi");
-    queries.at(-1)!.emit(result());
-    await flush();
+    expect([await stopAll(), (await stepOf("toolu_bu")).state]).toEqual([cantTell, "unsure"]);
+    clock += OUTLIVED_LOOK_MS;
+    sessions.tick(new Date(clock));
+    await until(async () => (await stepOf("toolu_bu")).state === "ended");
+    expect(await stepOf("toolu_bu")).toMatchObject({ state: "ended", endedAt: new Date(clock).toISOString() });
     expect(await stopAll()).toEqual([{ type: "error", message: "Nothing is running.", about: { kind: "stop", sessionId: ASK } }]);
   });
 
@@ -2068,7 +2079,7 @@ describe("the thread says what stopped only once it did", () => {
       await a.end();
       await restart();
       await until(async () => (await restartLines()).length === 1);
-      expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: Sleep; Sleep."]);
+      expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: command \"Run in background: Sleep\" (sleep twin) and command \"Run in background: Sleep\" (sleep twin)."]);
     } finally {
       await a.end();
       await b.end();
@@ -2224,7 +2235,7 @@ describe("the thread says what stopped only once it did", () => {
       await until(async () => (await noticesNow()).some((n) => n.text.includes("still runs")));
       const said = (await noticesNow()).map((n) => n.text);
       expect(said.filter((t) => t.startsWith("Stopped by you"))).toEqual([]);
-      expect(said.at(-1)).toBe('Claude Code is no longer running, but command "sleep bk" still runs on this Mac. Stop ends it.');
+      expect(said.at(-1)).toBe('Claude Code is no longer running, but command "Run in background: sleep bk" still runs on this Mac. Stop ends it.');
     } finally {
       await running.end();
     }
@@ -2243,6 +2254,115 @@ describe("the thread says what stopped only once it did", () => {
     return q;
   };
 
+  test("a command the bridge can no longer tell about reads ended at the first look after its group is gone, stamped with that look", async () => {
+    const running = backgroundCommand("bk");
+    const look = () => {
+      clock += OUTLIVED_LOOK_MS;
+      sessions.tick(new Date(clock));
+    };
+    try {
+      await startedInBackground({ bk: running.pid });
+      await restart();
+      await until(async () => (await controlsNow()).working === true);
+      await running.redirect();
+      look();
+      await until(async () => (await stepOf("toolu_bk")).state === "unsure");
+      look();
+      await Bun.sleep(100);
+      await running.end();
+      look();
+      await until(async () => (await stepOf("toolu_bk")).state === "ended");
+      expect(await stepOf("toolu_bk")).toMatchObject({ state: "ended", cause: "It ended without a result", endedAt: new Date(clock).toISOString() });
+      expect((await noticesNow()).filter((n) => n.text.includes("ended.")).map((n) => [n.text, n.at])).toEqual([
+        ['Command "Run in background: sleep bk" ended. Claude Code no longer followed it, so how it ended is not known.', new Date(clock).toISOString()],
+      ]);
+      expect((await noticesNow()).some((n) => /no longer shows/.test(n.text))).toBe(false);
+    } finally {
+      await running.end();
+    }
+  });
+
+  test("two commands alike, which no shell can be paired with, read may still run while either runs, and both ended at the first look after neither does", async () => {
+    const command = `sleep 30 # twin-${process.pid}-${clock}`;
+    const a = evalShell(command);
+    const b = evalShell(command);
+    const look = async () => {
+      clock += OUTLIVED_LOOK_MS;
+      sessions.tick(new Date(clock));
+      await Bun.sleep(300);
+    };
+    try {
+      // When the bridge looks, only the first twin's shell has started: it is still not taken as either command's.
+      leaders = async () => [{ group: a.pid, command: `/bin/zsh -c source snap.sh && eval '${command}' < /dev/null && pwd -P >| /tmp/cwd` }];
+      await start();
+      await send("Start them");
+      const q = queries[0]!;
+      const ids = ["ta", "tb"];
+      await transcribe(...ids.flatMap((id) => [calledEntry(`toolu_${id}`, "Bash", { command, description: "Sleep", run_in_background: true }), resultEntry(`toolu_${id}`, `Command running in background with ID: ${id}.`)]));
+      const listed = ids.map((id) => shellTask(id, `toolu_${id}`, "Sleep"));
+      q.emit(...ids.map((id) => toolCall(`toolu_${id}`, "Bash", { command })), ...listed.map(taskStarted), level(...listed), result());
+      await flush();
+      await flush();
+      await restart();
+      await until(async () => (await restartLines()).length === 1);
+      const states = async () => [(await stepOf("toolu_ta")).state, (await stepOf("toolu_tb")).state];
+      await look();
+      expect(await states()).toEqual(["unsure", "unsure"]);
+      await a.end();
+      await look();
+      expect(await states()).toEqual(["unsure", "unsure"]);
+      await b.end();
+      await look();
+      await until(async () => (await states()).every((st) => st === "ended"));
+      expect(await states()).toEqual(["ended", "ended"]);
+      expect((await stepOf("toolu_tb")).endedAt).toBe(new Date(clock).toISOString());
+      expect((await noticesNow()).filter((n) => n.text.includes("ended.")).map((n) => n.text)).toEqual([
+        `Command "Run in background: Sleep" (${command}) and command "Run in background: Sleep" (${command}) ended. Claude Code no longer followed them, so how they ended is not known.`,
+      ]);
+      expect((await rowOf(ASK)).status).toBe("idle");
+    } finally {
+      await a.end();
+      await b.end();
+    }
+  }, 15_000);
+
+  test("a death whose lookup cannot read the process table says what may still run in its one notice, and once the table reads again the command is followed and Stop ends it", async () => {
+    const running = backgroundCommand("bf");
+    try {
+      taskRunOf = async () => "unread";
+      const q = await runningInForeground({ bf: running.pid });
+      jest.useFakeTimers();
+      try {
+        q.crash("Claude Code process terminated by signal SIGKILL");
+        for (let ms = 0; ms <= EXIT_SETTLE_MS + GONE_LOOK_MAX_MS; ms += 500) {
+          for (let i = 0; i < 20; i++) await Promise.resolve();
+          jest.advanceTimersByTime(500);
+        }
+      } finally {
+        jest.useRealTimers();
+      }
+      await until(async () => (await noticesNow()).some((n) => n.text.includes("may still run")));
+      expect((await noticesNow()).map((n) => n.text)).toEqual([
+        `Claude Code stopped unexpectedly. Command "Run perl -e 'sleep bf'" may still run on this Mac, but the bridge can't tell, so Stop can't end it. Check it on your Mac (Activity Monitor, or ps). Send a message to start Claude Code again.\nClaude Code process terminated by signal SIGKILL`,
+      ]);
+      expect((await stepOf("toolu_bf")).state).toBe("unsure");
+      for (const gap of [OUTLIVED_LOOK_MS, 30_000]) {
+        clock += gap;
+        sessions.tick(new Date(clock));
+        await Bun.sleep(300);
+      }
+      await until(async () => (await controlsNow()).tasks?.length === 1);
+      expect([(await stepOf("toolu_bf")).state, (await noticesNow()).at(-1)?.text]).toEqual([
+        "running",
+        `The bridge can see command "Run perl -e 'sleep bf'" again: it still runs on this Mac. Stop ends it.`,
+      ]);
+      expect(await handle({ type: "session_stop", sessionId: ASK, target: { task: "bf" as TaskId } })).toEqual([]);
+      expect(alive(running.pid)).toBe(false);
+    } finally {
+      await running.end();
+    }
+  }, 15_000);
+
   test("after a restart, a foreground command still running on the Mac is said to run, stays a task Stop can end, and its step is never cut off", async () => {
     const running = backgroundCommand("bf");
     try {
@@ -2250,7 +2370,7 @@ describe("the thread says what stopped only once it did", () => {
       await restart();
       await until(async () => (await restartLines()).some((t) => t.includes("still runs")));
       expect(await restartLines()).toEqual([
-        `The bridge restarted during this turn. Command "perl -e 'sleep bf'" still runs on this Mac. Stop ends it. Send a message to start Claude Code again; the command keeps running until you stop it.`,
+        `The bridge restarted during this turn. Command "Run perl -e 'sleep bf'" still runs on this Mac. Stop ends it. Send a message to start Claude Code again; the command keeps running until you stop it.`,
       ]);
       expect((await controlsNow()).tasks?.map((t) => [t.id, t.label, t.stepId, t.background, t.outlived])).toEqual([["bf", "perl -e 'sleep bf'", "toolu_bf", false, true]]);
       expect((await rowOf(ASK)).activity).toBe(`Still running after Claude Code stopped: perl -e 'sleep bf'`);
@@ -2277,7 +2397,7 @@ describe("the thread says what stopped only once it did", () => {
       await until(async () => (await noticesNow()).some((n) => n.text.includes("still runs")));
       expect((await noticesNow()).map((n) => [n.text, n.tone, n.reason])).toEqual([
         [
-          `Claude Code stopped unexpectedly. Command "perl -e 'sleep bf'" still runs on this Mac. Stop ends it. Send a message to start Claude Code again; the command keeps running until you stop it.\nClaude Code process terminated by signal SIGKILL`,
+          `Claude Code stopped unexpectedly. Command "Run perl -e 'sleep bf'" still runs on this Mac. Stop ends it. Send a message to start Claude Code again; the command keeps running until you stop it.\nClaude Code process terminated by signal SIGKILL`,
           "error",
           "failure",
         ],
@@ -2455,7 +2575,7 @@ describe("the thread says what stopped only once it did", () => {
       await until(async () => (await noticesNow()).some((n) => n.text.includes("still run")));
       const said = (await noticesNow()).map((n) => n.text);
       expect(said.filter((t) => /stopped: |work stopped/.test(t) && /sleep b/.test(t))).toEqual([]);
-      expect(said.at(-1)).toBe(`Claude Code is no longer running, but command "sleep bk" and command "perl -e 'sleep bf'" still run on this Mac. Stop ends them.`);
+      expect(said.at(-1)).toBe(`Claude Code is no longer running, but command "Run in background: sleep bk" and command "Run perl -e 'sleep bf'" still run on this Mac. Stop ends them.`);
       expect([(await stepOf("toolu_bk")).state, (await stepOf("toolu_bf")).state, alive(bg.pid), alive(fg.pid)]).toEqual(["running", "running", true, true]);
     } finally {
       await bg.end();

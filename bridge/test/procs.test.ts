@@ -3,8 +3,8 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { endGroup, evalArg, groupAlive, psText, read, shellGroups, shellLeaders, taskRun } from "../src/procs";
-import { backgroundCommand } from "./shells";
+import { commandCounts, endGroup, evalArg, groupAlive, psText, read, shellGroups, shellLeaders, taskRun } from "../src/procs";
+import { backgroundCommand, evalShell } from "./shells";
 
 const started: number[] = [];
 const ends: (() => Promise<void>)[] = [];
@@ -118,4 +118,16 @@ test("a read that runs past its timeout is given up on then, even while a child 
   const at = Date.now();
   expect(await read(["/bin/sh", "-c", "/bin/sleep 2 & wait"], 200)).toBeNull();
   expect(Date.now() - at).toBeLessThan(1_000);
+});
+
+test("commandCounts counts the shells that run exactly a command, whoever started them, and none once they end", async () => {
+  const command = `sleep 30 # count-${process.pid}-${Date.now()}`;
+  const near = `${command} `;
+  const shells = [evalShell(command), evalShell(command), evalShell(near)];
+  ends.push(...shells.map((s) => s.end));
+  await Bun.sleep(200);
+  expect(await commandCounts([command, near, "sleep 1 # nobody"])).toEqual(new Map([[command, 2], [near, 1], ["sleep 1 # nobody", 0]]));
+  await shells[0]!.end();
+  await shells[1]!.end();
+  expect((await commandCounts([command]))!.get(command)).toBe(0);
 });

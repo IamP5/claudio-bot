@@ -221,7 +221,7 @@ enum ThreadStatus: Equatable, Sendable {
         case .quiet: "No word from your Mac"
         case .needsYou(let card, _): card.need
         case .working: "Working"
-        case .background: "Running in background"
+        case .background(_, let tasks): Self.outlives(tasks) ? "Still running" : "Running in background"
         case .orphaned(let outcome, _), .ended(let outcome): Self.word(outcome.kind)
         }
     }
@@ -279,10 +279,20 @@ enum ThreadStatus: Equatable, Sendable {
             // One task is named, cut short so the clock stays in view. The sheet has the whole label.
             let count = TaskCount(tasks)
             let what = tasks.count == 1 ? OpenCard.firstLine(tasks[0].label, limit: 40) ?? "" : count.text(spoken: spoken) ?? ""
-            return "Running in background: \(what) · " + clock(now.timeIntervalSince(since))
+            return Self.backgroundHead(tasks) + ": \(what) · " + clock(now.timeIntervalSince(since))
         case .ended(let outcome):
             return Self.outcome(outcome)
         }
+    }
+
+    /// A foreground command that outlived a Claude Code crash or a bridge restart keeps its foreground word (Run3 call
+    /// 7): once a later run has its own outcome, the line says what it outlived instead of calling it background work.
+    static func outlives(_ tasks: [SessionTask]) -> Bool {
+        tasks.contains { $0.outlived && !$0.background }
+    }
+
+    static func backgroundHead(_ tasks: [SessionTask]) -> String {
+        outlives(tasks) ? "Still running after Claude Code stopped" : "Running in background"
     }
 
     /// A run that failed or was cut off says how to go on.
@@ -415,7 +425,7 @@ enum ThreadAnnouncement {
             case .orphaned:
                 return new?.spoken(now: now)
             case .background(_, let live):
-                if case .working = old { return "Claude finished its turn. Still running in background: " + live.map(\.label).joined(separator: ", ") + "." }
+                if case .working = old { return "Claude finished its turn. " + (ThreadStatus.outlives(live) ? "Still running after Claude Code stopped: " : "Still running in background: ") + live.map(\.label).joined(separator: ", ") + "." }
                 return ended("Ended in background.", was.filter(\.background), live, name)
             case .working(_, let live):
                 return ended("Ended in background.", was.filter(\.background), live, name)

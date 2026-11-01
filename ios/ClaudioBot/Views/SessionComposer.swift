@@ -421,10 +421,10 @@ struct SessionComposer: View {
                 ForEach(waiting, id: \.id) { message in
                     Section(OpenCard.firstLine(message.text, limit: 40) ?? "Message") {
                         Button { client.withdraw(message.id, text: message.text, from: model, edit: true) } label: {
-                            Label("Edit", systemImage: "pencil")
+                            Label(Self.queuedAction("Edit", message.text), systemImage: "pencil")
                         }
                         Button(role: .destructive) { client.withdraw(message.id, text: message.text, from: model, edit: false) } label: {
-                            Label("Withdraw", systemImage: "arrow.uturn.backward")
+                            Label(Self.queuedAction("Withdraw", message.text), systemImage: "arrow.uturn.backward")
                         }
                     }
                 }
@@ -439,6 +439,11 @@ struct SessionComposer: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(label)
         }
+    }
+
+    /// "Edit “Fix the tests”": each message's buttons name it, so a list of them never reads the same twice (F-SES-235).
+    static func queuedAction(_ verb: String, _ text: String) -> String {
+        "\(verb) “\(OpenCard.firstLine(text, limit: 24) ?? "message")”"
     }
 
     /// short: the words kept in a crowded bar; none by default, so the chip shows its icon. Its spoken label stays whole.

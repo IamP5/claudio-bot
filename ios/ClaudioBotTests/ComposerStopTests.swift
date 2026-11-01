@@ -370,6 +370,8 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         #expect(model.queuedMessages.map(\.id) == [ItemID("c1")])
         #expect(ComposerState.queuedLabel(1) == "1 message queued", "F-SES-083")
         #expect(ComposerState.queuedLabel(2) == "2 messages queued")
+        #expect(SessionComposer.queuedAction("Edit", "Fix the tests\nand then lint") == "Edit “Fix the tests”")
+        #expect(SessionComposer.queuedAction("Withdraw", "Refactor the composer state machine") == "Withdraw “Refactor the composer s…”")
     }
 
     @Test func anUnqueueRefusalIsTheSessionsNotTheToasts() {

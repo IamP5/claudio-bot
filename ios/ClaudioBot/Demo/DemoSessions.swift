@@ -483,6 +483,7 @@ enum DemoSessions {
     static func respond(to msg: ClientMessage, store: AppStore) -> Bool {
         switch msg {
         case .watchSessions:
+            guard case .connected = store.connection else { break }
             store.apply(.sessions(.list(projects: projects, rows: Array(store.sessions.rows.values), mirror: store.sessions.mirror ?? .auto)))
         case .unwatchSessions:
             break

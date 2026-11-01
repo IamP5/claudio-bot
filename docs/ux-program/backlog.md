@@ -125,3 +125,4 @@
 - Settings says "Reconnecting" rather than unreachable after more than 60 s offline (P3, not G28).
 - G27 r5 gaps: a heredoc command can read ended late when its process group stays occupied (slow, not false; P3); an unrelated shell running the identical eval line gets its group recorded (errs alive; contrived three-part case could end twins early; P3).
 - S6d.3 runner flake: haiku sometimes runs a command twice ("2 ended notices") (P3); session end wiped the shared scratchpad — evidence paths under scratchpad from earlier sessions may be gone; groupAlive treats EPERM as gone (pre-existing, P3).
+- HOST: disk at 96% (21 GB free); macOS purged /private/tmp mid-run and wiped verifier/owner scratchpads (2026-11-01). Merged group worktrees removed; .claude/worktrees still ~20 GB, mostly agent-* worktrees from earlier rounds (left for the user to decide).

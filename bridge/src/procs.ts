@@ -58,14 +58,15 @@ const taskOf = (path: string) => /\/([^/]+)\.output$/.exec(path)?.[1];
 
 /**
  * The processes Claude Code (process `pid`) started that lead a process group of their own, with their command lines
- * as ps writes them in the C locale (see psText).
+ * as ps writes them in the C locale (see psText) and when each started (ps lstart, to the second).
  */
-export async function shellLeaders(pid: number): Promise<{ group: number; command: string }[]> {
-  return ((await read(["ps", "-axww", "-o", "pid=,ppid=,pgid=,command="], READ_TIMEOUT_MS, { ...process.env, LC_ALL: "C" })) ?? "")
+export async function shellLeaders(pid: number): Promise<{ group: number; command: string; started: number }[]> {
+  // In UTC, so the start reads the same whatever time zone the bridge runs in.
+  return ((await read(["ps", "-axww", "-o", "pid=,ppid=,pgid=,lstart=,command="], READ_TIMEOUT_MS, { ...process.env, LC_ALL: "C", TZ: "UTC" })) ?? "")
     .split("\n")
-    .map((l) => /^\s*(\d+)\s+(\d+)\s+(\d+)\s(.*)$/.exec(l))
+    .map((l) => /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s+(.*)$/.exec(l))
     .filter((m): m is RegExpExecArray => m !== null && Number(m[2]) === pid && m[1] === m[3])
-    .map((m) => ({ group: Number(m[1]), command: m[4]! }));
+    .map((m) => ({ group: Number(m[1]), command: m[5]!, started: Date.parse(`${m[4]!} UTC`) }));
 }
 
 /**

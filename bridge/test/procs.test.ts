@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { endGroup, evalArg, groupAlive, psText, read, shellGroups, shellLeaders, taskRun } from "../src/procs";
-import { backgroundCommand } from "./shells";
+import { backgroundCommand, evalShell } from "./shells";
 
 const started: number[] = [];
 const ends: (() => Promise<void>)[] = [];
@@ -118,4 +118,12 @@ test("a read that runs past its timeout is given up on then, even while a child 
   const at = Date.now();
   expect(await read(["/bin/sh", "-c", "/bin/sleep 2 & wait"], 200)).toBeNull();
   expect(Date.now() - at).toBeLessThan(1_000);
+});
+
+test("shellLeaders gives each group-leading shell a process started, with when it started", async () => {
+  const shell = evalShell(`sleep ${50_000 + (process.pid % 9_000)}`);
+  ends.push(shell.end);
+  await Bun.sleep(300);
+  const found = (await shellLeaders(process.pid)).find((l) => l.group === shell.pid);
+  expect([found?.command.includes("eval 'sleep"), Math.abs(found!.started - Date.now()) < 5_000]).toEqual([true, true]);
 });

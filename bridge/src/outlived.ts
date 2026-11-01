@@ -39,9 +39,9 @@ export function withOutlived(a: Activity, list: readonly Outlived[], startedAt: 
   return { ...a, tasks: [...a.tasks, ...left], all: new Map([...a.all, ...left.map((t) => [t.id, t] as const)]) };
 }
 
-/** The list with these as `over`, keeping the newest few the bridge no longer follows. */
-export function settled(list: readonly Outlived[], ids: readonly string[], over: NonNullable<Outlived["over"]>): Outlived[] {
-  const out = list.map((o) => (ids.includes(o.id) ? { ...o, over } : o));
+/** The list with these as `over`, keeping the newest few the bridge no longer follows. at: when an unseen end was seen. */
+export function settled(list: readonly Outlived[], ids: readonly string[], over: NonNullable<Outlived["over"]>, at?: string): Outlived[] {
+  const out = list.map((o) => (ids.includes(o.id) ? { ...o, over, ...(over === "ended" && at !== undefined && { endedAt: at }) } : o));
   const done = out.filter((o) => o.over !== undefined);
   const drop = new Set(done.slice(0, Math.max(0, done.length - KEPT)));
   return out.filter((o) => !drop.has(o));
@@ -57,10 +57,16 @@ export function outlivedSteps(list: readonly Outlived[], causes: { unseen: strin
     const step = o.stepId ?? `task:${o.id}`;
     if (o.over === undefined) out.set(step, { state: "running", outlived: true, ...(o.startedAt !== undefined && { startedAt: o.startedAt }) });
     else if (o.over === "stopped") out.set(step, { outlived: true });
-    else out.set(step, { ended: o.over === "ended" ? { state: "ended", cause: causes.unseen } : { state: "unsure", cause: causes.cantTell }, outlived: true });
+    else out.set(step, { ...doubted(o, causes), outlived: true });
   }
   return out;
 }
+
+/** A command the bridge cannot tell about: unsure until it was seen gone, then ended unseen as of that look. */
+export const doubted = (o: { endedAt?: string; over?: Outlived["over"] }, causes: { unseen: string; cantTell: string }): StepPatch =>
+  o.over === "ended" || (o.over === undefined && o.endedAt !== undefined)
+    ? { ended: { state: "ended", cause: causes.unseen }, ...(o.endedAt !== undefined && { endedAt: o.endedAt }) }
+    : { ended: { state: "unsure", cause: causes.cantTell } };
 
 export async function runOf(o: Outlived): Promise<TaskRun> {
   return taskRun(o.group, o.id);

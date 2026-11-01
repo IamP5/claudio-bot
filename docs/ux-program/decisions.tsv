@@ -242,3 +242,8 @@ ts	decision	why
 2026-11-01T00:31:57Z	G25: A turn stop (including Stop and send) never ends outlived work	the notice promises a message keeps them running
 2026-11-01T00:31:57Z	G25: New wire value "stopped" for ask answers and plan state when Stop closes a card; expiry stays "expired"	the app said "Expired" for a stopped card
 2026-11-01T01:26:06Z	G25: the last reply line is persisted with the drive so a finished outcome keeps it across a restart; alert and push counts are recomputed at every send	verifier r1 P3s
+2026-11-01T01:57:03Z	G29: A stale at-work chip/pane keeps needs-you and failed counts and drops the working count; working rows show a stopped clock "Working for 57s when last updated"	same as G24's list header
+2026-11-01T01:57:03Z	G29: Stale chip/header say "as of <age>" (or "Sessions as of <age>"), not "Mac unreachable"	the state also covers an app-chosen reconnect
+2026-11-01T01:57:03Z	G29: Hidden sessions count only while running or needing you, marked hidden; stopped sessions count only while unread	the user's own stops don't pile up
+2026-11-01T01:57:03Z	G29: Empty detail pane says "Waiting for your Mac" before the first list or when unreachable with nothing to show	"Pick a session" was wrong then
+2026-11-01T01:57:03Z	G29: iPad/wide layout is checked through a Debug-only -wideLayout flag on the iPhone pool devices	program allows only the 3 iPhone pool devices

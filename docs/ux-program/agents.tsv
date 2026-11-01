@@ -47,5 +47,6 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-31T23:08:52Z	owner	G25	ux/sessions-g25-crash-restart	PR #36 round 2 at af0e618; verifying	5h	run 3 wave 3
 2026-11-01T00:10:02Z	verifier	G26	ux/sessions-g26-status	PASS e44e716; three-card line and Reconnecting shown live	3h	independent of owner
 2026-11-01T00:31:57Z	verifier	G25	ux/sessions-g25-crash-restart	r1 FAIL bf29e22: P1 failed alert races the survivor lookup (onDormant) — S6e.5 fails 2/2	3h	independent of owner
-2026-11-01T01:03:39Z	owner	G29	ux/sessions-g29-wide	starting off main fa75ca3	4h	run 3 wave 4
+2026-11-01T01:03:39Z	owner	G29	ux/sessions-g29-wide	PR #37 at 366975e; verifying	4h	run 3 wave 4
 2026-11-01T01:26:06Z	verifier	G25	ux/sessions-g25-crash-restart	r2 verifying af0e618	3h	fresh, independent of owner
+2026-11-01T01:57:03Z	verifier	G29	ux/sessions-g29-wide	verifying 366975e	2h	independent of owner

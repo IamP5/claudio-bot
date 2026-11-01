@@ -931,3 +931,506 @@ Section 2's sketch is superseded. The wire contract is `bridge/src/protocol.ts` 
 - **Rule:** the same as G17: report foreground work after a restart or crash from the process table, adopt it as stoppable, never claim stopped or failed while it runs.
 - **Files (expected):** `bridge/src/own.ts`, `bridge/src/session.ts`, `bridge/src/outlived.ts`, `bridge/src/procs.ts`. Runs after G17 merges, before or alongside G13 depending on file overlap.
 - **Added after G13:** a bridge restart mid-run must tell the away user: push "stopped with an error" (or honest restart wording) once per run the restart lost, with a recorded key so it never repeats; endings held for a live phone must survive a restart (G13 verifier P2-4). Also the ~15 s "stopped (The bridge restarted)" label shown while lsof hangs (G17 final verifier).
+
+## Run 3 (Step 4 rerun audit, 2026-10-31)
+
+The Step 4 rerun on main `b0925fc` filed 135 survivors as F-SES-177 to F-SES-311: 52 P1 and 83 P2, with no P0. The full evidence and the three skeptic votes per finding are in `.claude/ux-evidence/sessions-s4-audit.json` (git-ignored, never copied here). This section triages every P1, groups the real ones as G19 to G29, folds in 56 P2s and sends the other 27 to `backlog.md`.
+
+**Code checked.** Main is `f2e9772`. Its product tree equals the audit base: `git diff --quiet b0925fc origin/main -- bridge ios .claude` is empty, because #28 changed only `docs/ux-program/`. Every `file:line` a skeptic confirmed at `b0925fc` therefore holds on main, and the line numbers below point at main.
+
+### R3.1 P1 triage
+
+Totals: 40 real, 0 duplicates, 1 already fixed on main, 11 in conflict with a recorded call. The 11 conflicts are real defects too. Each gets a new product call (R3.4) and a group. No rubric was loosened to close one.
+
+No pair of P1s is the same defect. The near pairs were checked and kept apart because each needs its own change: 198 and 213 (a command step versus an agent step, two branches of `WorkRun.quiet`), 220 and 223 (a card-held line versus an offline or quiet line), 196 and 211 (the row while orphaned work runs versus the row after the user stops it), 222 and 226 (what is owed versus what is said).
+
+| Finding | Verdict | Group | Note |
+| --- | --- | --- | --- |
+| F-SES-177 | real | G26 | `BackgroundWorkSheet.swift:157` has no retries branch in the label. |
+| F-SES-178 | real | G26 | Only permission cards use `.announcesClose` (`ChatItems.swift:361`, `:413`). |
+| F-SES-179 | real | G28 | `SessionComposer.swift:473` speaks "Sent." before any frame. |
+| F-SES-180 | real | G26 | `ThreadAnnouncement.of` has no quiet case. |
+| F-SES-181 | real | G26 | `WorkRun.spoken(now:)` (`Threads.swift:268`) takes no stale flag. |
+| F-SES-182 | real | G28 | `Store.decisionNote` (`Store.swift:382-384`) returns nothing for `.unsure`. |
+| F-SES-183 | real | G28 | `BridgeClient.stillWanted` (`:357-362`) never ages out `.sessionSet`. |
+| F-SES-184 | real | G20 (bridge), G28 (app) | `sessions.ts:502` and `own.ts:964` interrupt any turn. |
+| F-SES-185 | real | G28 | `transmit` (`BridgeClient.swift:406-421`) drops a failed `.sessionStop` silently. |
+| F-SES-186 | real | G22 | `push.ts:327` records the card key before the send, and `deliver` gives up after 3 tries. |
+| F-SES-187 | conflict | G25 | decisions.tsv:132 (an ending needs 5 s at rest). Adopted commands keep the run from resting, so a crash never alerts. |
+| F-SES-188 | real | G22 | `setReach` (`push.ts:231-235`) runs only inside `deliver`, and the state is not persisted. |
+| F-SES-189 | conflict | G25 | decisions.tsv:132 with :111 (unsure work is not working). Together they send "finished" while the command runs. |
+| F-SES-190 | conflict | G25 | decisions.tsv:139 fixes the text "interrupted by a bridge restart", which is false when commands survive. |
+| F-SES-191 | real (runner) | G19 | `scenarios.ts:621-627` accepts only `working`. |
+| F-SES-192 | real (runner) | G19 | `scenario.ts:802-807`: `show-list` does nothing on the protocol lane. |
+| F-SES-193 | real | G24 | `SessionsSidebar.swift:220-260` ignores hidden rows in the empty state. |
+| F-SES-194 | real | G21 | `transcript.ts:753-772` never reads `output-file`. |
+| F-SES-195 | real | G21 (notice), G23 (run) | `ThreadItems.swift:402` draws only live steps when collapsed. |
+| F-SES-196 | conflict | G25 (bridge), G24 (row), G26 (status) | decisions.tsv:138 labels outlived foreground work as background. `RowDetail` (`Sessions.swift:451-460`) and `ThreadStatus.of` (`:145-149`) hide the held failed outcome. |
+| F-SES-197 | conflict | G24 | decisions.tsv:74 keeps only needs-you and working rows out of the fold. |
+| F-SES-198 | conflict | G23 | decisions.tsv:37 ("a background command is quiet only when the whole session is quiet") is the rule that mislabels a healthy command. |
+| F-SES-199 | real | G20 | `own.ts:372-378`: the same text for a confirmed stop and a forced kill. |
+| F-SES-200 | real | G21 (text), G23 (weight) | `tasks.ts:217` returns before the owner branch at `:218`. |
+| F-SES-201 | real | G24 | `Store.swift:243-244` marks the list stale on every deliberate reconnect. This breaks decisions.tsv:48 ("from the first failed try"), so it is not a conflict. |
+| F-SES-202 | real | G24 | `SessionsSidebar.swift:113-123`: the skeleton has no clock. |
+| F-SES-203 | real | G21 (labels), G23 (expand) | `tasks.ts:51-53` cuts the end at 80. `ThreadItems.swift:545-550` caps at 3 lines with no expand. |
+| F-SES-204 | real | G27 | `own.ts:476-477` says "no longer shows it" while the step is shown. |
+| F-SES-205 | real | G24 | `HomeView.swift:375-386` gives `.unrecognized` the "bridge not running" cause. |
+| F-SES-206 | real | G28 | Hide, rename, open-on-Mac and the mirror preference replay late or revert silently (`stillWanted` default `true`). |
+| F-SES-207 | real | G21 | `tasks.ts:60-70`, `:124-137`: an ended agent task drops from the count, and a re-registration resets `startedAt`. |
+| F-SES-208 | real | G26 | `BackgroundWorkSheet.swift:144`: `what` reaches only the spoken label. |
+| F-SES-209 | real | G24 | `projects.ts:120` names a project by its basename or repo name only. |
+| F-SES-210 | real | G20 | `session.ts:517` drops the stopped prompt, and the notice takes the kill time. |
+| F-SES-211 | conflict | G25 | decisions.tsv:94 (a stop of everything makes the outcome stopped) overwrites the crash. |
+| F-SES-212 | conflict | G20 (wire), G28 (app) | decisions.tsv:92 (said only after the 15 s kill) against the app's 10 s Stop patience (`ComposerState.swift:94`). The wire cannot say "stopping". |
+| F-SES-213 | real | G23 | `Threads.swift:285-291`: `progress.at` wins over a live owned command. |
+| F-SES-214 | real | G27 | `own.ts:416-434`: unpaired unsure work is never polled. |
+| F-SES-215 | real | G24 | `UnrecognizedBanner` (`HomeView.swift:445-468`) has no freshness line. |
+| F-SES-216 | conflict | G27 | decisions.tsv:111 and :126 chose the 30 s to 10 min backoff, accepting late "ended". |
+| F-SES-217 | real | G21 | `tasks.ts:152-155` flips `background` and posts nothing. |
+| F-SES-218 | real | G25 | `threads.ts:333` clears `s.live` only on an upsert, so a crash leaves it. |
+| F-SES-219 | real | G21 | `transcript.ts:960-977` builds items from `<synthetic>` assistant messages. |
+| F-SES-220 | real | G26 | `ThreadStatus.swift:144` returns `.needsYou` with no tasks, and its tap only scrolls. |
+| F-SES-221 | real | G26 | `OpenCard.newest` (`ThreadStatus.swift:17-24`) names one card and no count. |
+| F-SES-222 | conflict | G28 | decisions.tsv:145 (auto-resend up to 3 copies) keeps a "Not sent" message owed with no age and no discard. |
+| F-SES-223 | real | G26 | `ThreadStatus.swift:162-167` drops tasks for offline, catching up and quiet. |
+| F-SES-224 | real | G21 (bridge), G23 (guard) | `tasks.ts:320-326`: `unclaimed()` keeps `output` when it turns an error step back to running. |
+| F-SES-225 | fixed on main | none | Code-read finding whose premise is false. The bridge beats every 25 s (`threads.ts:549-559` `beat()`, driven each second from `sessions.ts:764-768`, `BEAT_MS` at `threads.ts:76`). `emit` sends a controls-only `session_items` frame (`threads.ts:316-335`), and any frame resets the app's `heardAt` (`BridgeClient.swift:546`). `own.ts:1060` keeps `controls.working` true while a card waits, so a card-held watched thread is never 45 s silent on a healthy Mac. G19 adds S5.10 to observe this. |
+| F-SES-226 | conflict | G28 | decisions.tsv:145 chose the words "Not sent · Retry". A skeptic shows that the Mac may have run the message (S6g). |
+| F-SES-227 | real | G29 | `SessionsAtWork` (`ThreadStatus.swift:373-390`) has no freshness input. |
+| F-SES-228 | real | G29 | `SessionsAtWork` has no failed bucket, and `MainView.swift:200-205` ignores `row.since`. |
+
+### R3.2 Groups
+
+Each group is one PR. "(+Gx)" means another group must also land before the finding closes in the ledger. Groups G20 to G29 take their acceptance runs only after G19 has merged, as with G14.
+
+---
+
+### G19. Runner and rubric truth (audit tooling)
+
+- **Findings:** F-SES-191 runner-s1-3-fails-on-honest-awaiting-approval-row, F-SES-192 runner-s3b-protocol-lane-keeps-thread-watched-not-elsewhere.
+  P2: F-SES-257 runner-s1-10-ack-pattern-misses-tools-used-wrapper (runner half), F-SES-258 runner-s4c-freezes-3s-never-reaches-15s-kill-path, F-SES-259 runner-s6f-judges-push-only-and-its-command-survives-the-restart.
+- **Root cause:**
+  - S1.3 (`scenarios.ts:621-627`) compares every row with `working`. An `awaiting_approval` row while a subagent's card is open is the honest needs-you state (P-STATE-1, attention first), and the check calls it a failure.
+  - On the protocol lane `show-list` returns at once (`scenario.ts:802-807`), and `open-thread` re-watches (`:796-801`). S3b therefore judges "finished while elsewhere" with the thread watched.
+  - S1.10's pattern lacks `<tools-used-before-summary>`. S4c freezes Claude Code for 3 s, under the 15 s Stop deadline (`session.ts:50`). S6f judges only the push.
+- **Fix design** (tooling only, no product code). Every change makes a check able to fail on a broken product:
+  - **S1.3.** A row passes while subagents run if it reads `working`, or `awaiting_approval` while the timeline shows an open card raised in that window. Any other status fails, and "about N s" sums only the failing states. An `awaiting_approval` row with no open card still fails.
+  - **S3b protocol lane.** `show-list` unwatches every thread the protocol phone watches (`p.watch(sid, false)`) and records it. New item S3b.4 says the `finished` alert arrived with no watch open. It fails when the phone was watching.
+  - **S1.10** also matches `<tools-used-before-summary>`. It fails on main until G21 lands.
+  - **S4c long freeze.** A variant holds the freeze 24 s. New items: S4c.4, controls carry `stopping` within 1 s of Stop (G20). S4c.5, the kill notice says Claude Code did not answer and was ended (G20). S4c.6, the stop notice sorts before a follow-up sent 3 s after Stop (G20). S4c.7, the stopped prompt stays in the thread (G20).
+  - **S6f.** S6f.3, after each restart `row.outcome` keeps kind and `at`, with no second copy of the restart notice. S6f.4, the foreground command that survives keeps its foreground label on the row (G25).
+  - **New items for the run-3 groups.** Each fails on main and passes when its group lands:
+    - S1.12 (G21, 289): row and status counts do not count a subagent's own commands twice.
+    - S1b.12 (G21, 195): each "Agent … finished" notice carries the agent's run time.
+    - S2.13 (G21, 194): a finished background command's step has non-null output that holds the command's echo.
+    - S5t (new variant, G21, 217): Bash timeout 8 s with a 60 s sleep. S5t.1: a notice says it moved to the background within 3 s of the flip.
+    - S5.10: S5 with `holdCardsS: 60`. The longest gap between frames on the watched thread while the card waits is at most 30 s. It must **pass** on main, which is the observed proof for F-SES-225.
+    - S6.11 (G21, 224): after the kill and a send, no running step carries output.
+    - S6.12 (G21, 219): no assistant item reads "No response requested." after the crash and a send.
+    - S6k (new variant, G25, 218): kill Claude Code mid-reply in a no-tool turn. S6k.1: a fresh watch has `live: null`, and the partial text is an item followed by a notice.
+    - S6e.5 to S6e.8 (G25): a `failed` alert within 10 s of the kill that carries running counts (187). After Stop of the orphans, `row.outcome.kind` stays `failed` (211). The row's status changes at most once per real change, with no failed, working, failed flicker (196, 273). The `lost` alert carries `running` (190).
+    - S6d.4 (G25, 189): no `finished` alert while any step is unsure.
+    - S6d.5 to S6d.7 (G27): "ended" within 10 s of the process going (216). A twin variant where both steps reach ended (214). No notice says "no longer shows it" (204).
+    - S6g.10 (G20, 184): a protocol-phone `session_send` with `interrupt` and a stale `turnStartedAt` does not interrupt the newer turn.
+    - S8.11 and S8.12 (G21): `running.agents` stays at least 1 and `since` stays constant while starter waits on its own command (207). The killed-command notice names the cause and the run time (200).
+    - S9.7 and S9.8 (G22): with the sink down 12 s at card open, the card push arrives after recovery and before the reminder (186). `push_state` returns to `on` within 30 s of recovery with no new event (188).
+  - Regenerate `scenarios/sessions.md`, and update `runner.md` for the variants and the protocol-lane `show-list`.
+- **Patterns:** P-STATE-1, P-ALIVE-2, P-NOTIFY-2, plus decisions.tsv:78 (a rubric item must be able to fail on a broken product).
+- **Files:** `.claude/skills/verify-claudio-bot/bin/scenarios.ts`, `.claude/skills/verify-claudio-bot/bin/scenario.ts`, new `.claude/skills/verify-claudio-bot/bin/scenarios.test.ts`, `docs/ux-program/runner.md`, `docs/ux-program/scenarios/sessions.md` (generated).
+- **Verify:**
+  - `bun test .claude/skills/verify-claudio-bot/bin/scenarios.test.ts` with literal event fixtures. S1.3 passes `awaiting_approval` with an open card, and fails `idle` and `awaiting_approval` with no card. On main's check the first case fails.
+  - Run S1 `--away`, S3b, S4c, S5, S6, S6d, S6e, S6f, S8 and S9 on main. Every new item listed above must **fail** on main, except S5.10, which must pass.
+- **Acceptance:**
+  - S1.3 passes on the S1 `--away` run where it failed falsely, and still fails on a fixture with an idle row.
+  - S3b's report shows the thread unwatched before the alert.
+  - Every new item fails on main for the reason its finding names.
+- **Risk:** the new items fail on main until their groups land. That is intended. Record them in the ledger so Step 4 does not re-file them.
+- **Depends on:** nothing. **Wave 1.**
+
+---
+
+### G20. Stop of a frozen Claude Code, and Stop and send aimed at one turn (bridge)
+
+- **Findings:** F-SES-199 sessions-hung-claude-code-force-killed-after-15s-stop-says-only-stopped-by-you, F-SES-210 sessions-stop-notice-orphaned-under-followup-stopped-prompt-gone, F-SES-212 sessions-stop-pending-not-on-wire-app-gives-up-before-bridge-deadline (wire half, +G28), F-SES-184 offline-stop-and-send-replays-unguarded-and-kills-newer-turn (bridge half, +G28).
+  P2: F-SES-282 sessions-single-task-stop-records-outcome-finished, F-SES-283 sessions-stop-notice-lists-every-task-by-name-uncapped, F-SES-287 sessions-stopped-outcome-text-says-the-turn-not-what-happened, F-SES-288 sessions-stopped-step-wire-flips-cause-unseen-end-then-stopped-by-you.
+- **Root cause:**
+  - The bridge holds `lifecycle: stopping` for up to `STOP_DEADLINE_MS = 15_000` (`session.ts:50`, `:517`), but `sessions.ts:257`, `:294` map stopping to the same busy and turn as working. Controls cannot say a stop is pending, so a second phone shows a live Stop.
+  - At the deadline `session.ts:546-548` kills Claude Code. `sayTurnStop` (`own.ts:372-378`) uses `killed` only to sort commands, so the text is the same as a confirmed stop.
+  - `dropOnStop(life.turn.pending)` (`session.ts:517`) removes the stopped prompt. The early-stop notice takes the kill time, so it sorts after a later follow-up.
+  - An interrupting `session_send` runs `stopRun(rec, "turn")` with no turn check (`sessions.ts:502`, `own.ts:964`). Only `stop()` compares `turnStartedAt` (about `sessions.ts:525`).
+  - `own.ts` P2s: a single-task stop records `finished` (282). The stop notice names every task (283). The outcome reads "the turn" (287). A stopped step goes out once with "It ended without a result" before "Stopped by you" (288).
+- **Fix design:**
+  - Data (additive, `protocol.ts` and `fixtures/protocol.json`):
+    - `SessionControls.stopping?: { at: string; deadline: string }` while the bridge waits for Claude Code to confirm a stop.
+    - `session_send.turnStartedAt?: string`, accepted by `parse.ts` like `session_stop`'s.
+    - `Protocol.swift` decodes and encodes both. The app's use is G28.
+  - Bridge, `session.ts` and `sessions.ts`: expose `stopping` from the lifecycle, and send controls at once when it starts and when it ends.
+  - Bridge, `own.ts`:
+    - A forced end posts "Claude Code didn't answer Stop, so the bridge ended it. Your next message starts it again." (R3.4 call 12). A confirmed stop keeps today's text.
+    - The early-stop notice is timed at the Stop and names the prompt: "Stopped by you before Claude replied to "<first 60 chars, masked>"." The stopped prompt stays in the overlay as a user item marked stopped (R3.4 call 13).
+    - An interrupting send with a `turnStartedAt` that differs from the running turn does not interrupt. The message is queued, and the bridge answers `error{about:{kind:"stop"}}` "That turn had already ended. Your message is queued." (R3.4 call 3).
+    - P2s: a stop that ends the only task records `stopped`, never `finished` (282). The notice names at most 3 tasks, then "and N more", using `fewOf` (283). The outcome text says what stopped ("Stopped by you before Claude replied", or "Stopped by you: 2 commands") (287). A step stopped by the user is sent once, with `cause: "Stopped by you"` (288).
+- **Patterns:** P-STOP-1, P-STOP-4, P-STATE-7, P-STATE-2, P-CONN-5.
+- **Files:** `bridge/src/session.ts`, `bridge/src/own.ts`, `bridge/src/sessions.ts`, `bridge/src/parse.ts`, `bridge/src/protocol.ts`, `fixtures/protocol.json`, `bridge/test/{session,own,sessions,protocol}.test.ts`, `ios/ClaudioBot/Model/Protocol.swift`, `ios/ClaudioBotTests/ProtocolTests.swift`.
+- **Verify:**
+  - `bun test`. New tests fail on main: controls carry `stopping` during the window. The kill notice text. The early-stop notice sorts at the Stop's time and names the prompt. An interrupt with a stale `turnStartedAt` leaves the running turn alone.
+  - Protocol lane S4c (with G19's long freeze) and S6g.10.
+- **Acceptance:** S4c.4 to S4c.7 and S6g.10 pass. A second phone opened during the window sees `stopping`. No user stop records `finished`.
+- **Risk:**
+  - `stopping` is a new reason for the app to show something. Old apps ignore it, so they keep today's behaviour.
+  - Keeping the stopped prompt as an overlay item must not make G8's ordering re-key it. Test against G8's tie rules.
+- **Depends on:** nothing. **Wave 1.** G25 follows on `own.ts`, `session.ts` and `protocol.ts`, and G28 on `sessions.ts`.
+
+---
+
+### G21. Task truth in the bridge: background commands, agents and row counts
+
+- **Findings:** F-SES-194 sessions-background-command-output-never-read-ok-and-failed-steps-show-nothing, F-SES-195 (notice half, +G23), F-SES-200 (text half, +G23), F-SES-203 (label half, +G23), F-SES-207 sessions-row-drops-waiting-subagent-count-then-readds-with-reset-clock, F-SES-217 thread-bash-timeout-silently-moves-command-to-background, F-SES-219 thread-crash-then-send-shows-phantom-no-response-requested-reply, F-SES-224 (bridge half, +G23).
+  P2: F-SES-257 (product half), F-SES-260, F-SES-269, F-SES-270, F-SES-277, F-SES-278, F-SES-279, F-SES-280, F-SES-284, F-SES-289 (bridge half, +G26), F-SES-290, F-SES-298, F-SES-300, F-SES-303, F-SES-306 (bridge half, +G23).
+- **Root cause:**
+  - `parseNotes` (`transcript.ts:753-772`) ignores `<output-file>`. `noteOutcome` (`:782-798`) uses `note.result`, which is null for a command, so a finished or failed command has no output.
+  - `lostNotice` (`tasks.ts:214-220`) returns the `killed` text before the owner branch, with no run time or consequence.
+  - `LABEL_MAX = 80` (`tasks.ts:51-53`) cuts the end of a command. `middleCut` (`transcript.ts:566-569`) is used only for agents.
+  - `rowRun` (`tasks.ts:259-281`) counts only live tasks, counts owned commands again, and names the last call. `end()` (`:60-70`) drops an agent that waits on its own work. A later `task_started` resets `startedAt` (`:124-137`).
+  - `task_updated.is_backgrounded` (`tasks.ts:152-155`) flips `background` silently.
+  - `unclaimed()` (`tasks.ts:320-326`) keeps the synthetic "Tool call interrupted" output when it turns an error step back to running.
+  - Item building (`transcript.ts:960-977`) does not skip `model: "<synthetic>"` messages. The same file already knows the marker (`:172`).
+  - The agent finished notice is Claude Code's summary verbatim (`transcript.ts:1105`), though `usage` is in hand.
+- **Fix design:**
+  - **Commands.**
+    - Read the last 2 KB of `<output-file>` when a command's notification settles it, with the same head and tail rule and masking as a foreground step (194). A missing or unreadable file leaves `output: null` and adds `cause` "Its output file was gone".
+    - `lostNotice` puts the owner branch first and adds the run time and the consequence: "…was stopped by Claude Code when starter returned, after 1 s. It did not finish." (200).
+    - A task label is the full masked command up to 200 characters with `middleCut`. Step `detail` keeps every line up to 2 KB with `middleCut`, so the app can expand it (203, 284).
+    - `is_backgrounded` flipping to true emits a `Lost`-shaped note of a new kind, `moved`, that `lostNotice` words: "Passed its time limit and kept running in the background." The step keeps `startedAt` (217). `session.ts:1521` already posts whatever `observe` returns, so `session.ts` is not touched.
+    - `unclaimed()` clears `output` whenever it sets `running` (224).
+    - A stopped command step carries `endedAt` (306).
+  - **Agents.**
+    - An agent task whose Agent step still runs stays in the counts, with its first `startedAt`. A re-registration keeps the earlier start (207, 280, 290).
+    - The finished notice adds the time and the tool count from `usage`: "Agent "sleeper two" finished · 35s · 1 tool" (195).
+    - Strip `<tools-used-before-summary>` from agent output (257). A running agent step gets no output until it settles (303).
+    - A failed agent's cause is the first line of its result, not the agent-type roster (300).
+  - **Row line (rowRun).**
+    - Commands owned by a live agent are not counted again (R3.4 call 16, 289).
+    - The activity is the open card's asker ("Waiting for approval: Bash in sleeper two (3 waiting)") (279), or "Waiting for your answer" and "Waiting for plan approval" for ask and plan (278). Otherwise "3 agents running" when several agents run (277).
+    - A foreground command counts from its tool_use, so the row and the step agree from the first second (269, 270).
+  - **Transcript.** Skip assistant items whose message model is `<synthetic>` (219). The waiting-on-own-work notice names the command and when it started (298). A step's `endedAt` for an agent comes from `task_updated.end_time` when present (260).
+- **Patterns:** P-BG-4, P-BG-5, P-BG-6, P-BG-7, P-TIME-4, P-SUB-1, P-LIST-3, A-1, A-7, A-8.
+- **Files:** `bridge/src/tasks.ts`, `bridge/src/transcript.ts`, `bridge/src/procs.ts` (output file path from the note), `bridge/test/{tasks,transcript}.test.ts`, `bridge/test/transcripts/jsonl/` (new scrubbed fixtures: a command notification with an output file, a `<synthetic>` message, a `<tools-used-before-summary>` hand-back).
+- **Verify:** `bun test` with literal expected items. These fail on main: output from the file, `lostNotice` text, middle-cut label, `moved` notice, cleared output, synthetic skip, counts. Protocol lane S1, S1b, S2, S5t, S6 and S8 with G19's items.
+- **Acceptance:** S1.10, S1.12, S1b.12, S2.13, S5t.1, S6.11, S6.12, S8.11 and S8.12 pass. No step output matches the G19 ack pattern.
+- **Risk:**
+  - The output file belongs to Claude Code and can be deleted by the time the bridge reads it. Read it when the notification lands, and fall back to "output gone".
+  - This is the largest group. Land it as two commits, commands then agents and rows.
+- **Depends on:** nothing. **Wave 1.** G25 follows on `tasks.ts` and `transcript.ts`.
+
+---
+
+### G22. Push delivery: owed pushes and an honest push state (bridge)
+
+- **Findings:** F-SES-186 push-card-push-lost-after-three-failed-tries-never-resent, F-SES-188 push-failing-state-stays-until-next-push-no-probe-reset-on-restart.
+  P2: F-SES-243 push-finished-alert-resent-on-every-reconnect-until-phone-speaks, F-SES-250 push-off-finished-alert-lost-if-no-socket-open-never-redelivered, F-SES-255 push-send-timeout-retries-a-push-the-server-may-have-accepted-duplicate-card-pushes.
+- **Root cause:**
+  - `pushCards` records `${cardId}|card` before the send (`push.ts:327`), so `heldCards()` (`:229`) never sees it again. `deliver` gives up after 3 tries, about 10 s (`:253-268`).
+  - `setReach` (`:231-235`) runs only inside `deliver`. `reach` starts as `on` and is not persisted (`:214`).
+  - A send timeout counts as a failure, though the server may have taken it (255). Owed alerts are kept per socket, not per newer event (243), and are dropped when no socket is open (250).
+- **Fix design:**
+  - A card push that failed all tries stays owed. It is keyed `${cardId}|card-owed` in `world.push`, and the sweep resends it with backoff (30 s, 1 min, 2 min, capped at 5 min) until it goes or the card closes (186).
+  - While `failing`, the sweep probes with the oldest owed push, or, when nothing is owed, a HEAD request to the push URL every 60 s. A success sets `on`. `reach` is saved in `world.push` and restored at start, and a restored `failing` is probed at once (188).
+  - A send that timed out is not retried at once, since the server may have taken it. It is retried only after a refused connection or an HTTP error, or by the owed-push sweep once the card is still open 30 s later (255). If the user's ntfy version accepts an idempotency key, resend with the same key instead. That is unchecked.
+  - An owed finished or failed alert is withdrawn once the session has a newer user send (243). With push off, alerts owed while no socket was open go to the next socket that says hello (250, the same path as decisions.tsv:149).
+- **Patterns:** P-NOTIFY-1, P-NOTIFY-3, P-STATE-2.
+- **Files:** `bridge/src/push.ts`, `bridge/src/store.ts` (`PushState.reach` and `owed`, schema), `bridge/test/push.test.ts`.
+- **Verify:** `bun test` with a fake sender that fails N times and a fake clock. These fail on main: a resend after recovery, `on` after recovery with nothing new, a restart with `failing` restored. Protocol lane S9 with S9.7 and S9.8.
+- **Acceptance:** S9.7 and S9.8 pass. One card never rings more than once in the test with a slow sink.
+- **Risk:** probing a push server costs requests. Probe only while `failing`, at most every 60 s.
+- **Depends on:** nothing. **Wave 2.** G25 follows on `push.ts`.
+
+---
+
+### G23. Work run in the thread: quiet, finished agents, full command (iOS)
+
+- **Findings:** F-SES-198 sessions-healthy-background-command-step-reads-no-activity-after-60s, F-SES-213 sessions-subagent-quiet-label-ignores-its-own-running-command, F-SES-195 (run half, +G21), F-SES-203 (expand half, +G21), F-SES-224 (guard half, +G21), F-SES-200 (weight half, +G21).
+  P2: F-SES-233, F-SES-239, F-SES-240, F-SES-302 (age half, +G27), F-SES-304, F-SES-306 (app half, +G21).
+- **Root cause:**
+  - `WorkRun.quiet` (`Threads.swift:285-291`) uses `heardAt` for a command step. `heardAt` is Claude Code's last stream message, which a healthy background command never refreshes. That follows decisions.tsv:37, which this group replaces (R3.4 call 4).
+  - For an agent, `progress.at` is used even when a command the agent owns is still live.
+  - A collapsed run draws only live steps (`ThreadItems.swift:376`, `:402`), and the headline counts settled steps only when nothing runs (`Threads.swift:244-253`).
+  - Detail has `lineLimit(3)` and no expand (`ThreadItems.swift:545-550`), and the sheet shows `task.label` only (`BackgroundWorkSheet.swift:93-96`).
+  - `ToolStepRow` draws any output on a running step (`ThreadItems.swift:508`).
+  - `NoticeLine` draws every non-error notice as a tertiary footnote (`ThreadItems.swift:975-988`).
+- **Fix design:**
+  - `quiet`: a command step whose task is live is never quiet. An agent step is quiet only when its progress, every live task it owns (`task.owner == step.id`) and `heardAt` are all older than 60 s (198, 213).
+  - Collapsed run: while any agent in the run is live, finished sibling agents stay drawn, one line each with outcome and time. The headline reads "2 of 3 agents running · 1 done" (195, R3.4 call 15). Two or more failed steps name the first and add "and 1 more failed" (304).
+  - The step's detail expands on tap to the full masked command. The Running now sheet shows the step's `detail` under the label, middle-cut, with the same expand. Stop's spoken label uses the step title (203).
+  - A running step draws no output (224, defence beside G21).
+  - A `reason: task` notice uses body size and secondary colour (200).
+  - An unsure step shows its age from `startedAt` ("May still run on your Mac · started 4m ago") (302). A stopped command shows its run time (306).
+  - Spoken text: "1 line added" (233). "Full output of <step title>" (239). The output tail sits in one element labelled "Output" (240).
+- **Patterns:** P-ALIVE-3, P-SUB-1, P-SUB-2, P-TIME-3, P-TIME-4, P-A11Y-1, P-A11Y-2, A-2.
+- **Files:** `ios/ClaudioBot/Model/Threads.swift`, `ios/ClaudioBot/Views/ThreadItems.swift` (work run, step row, NoticeLine), `ios/ClaudioBot/Views/BackgroundWorkSheet.swift` (task row detail only), `ios/ClaudioBotTests/WorkRunTests.swift` (new).
+- **Verify:**
+  - Unit tests with literal strings, failing on main: `quiet` of a live command step with `heardAt` 120 s old is `nil`. An agent step with a live owned command is not quiet. The headline reads "2 of 3 agents running · 1 done". A running step with output shows none.
+  - **Simulator lane** S1, S1b and S2 shots of the open thread, plus one AX5 shot of the expanded detail.
+- **Acceptance:** no "no activity" on a healthy command or on an agent waiting on its own command. A finished agent stays visible while its siblings run. A long command can be read in full.
+- **Risk:** expanding detail at AX5 makes a tall row. Open it in a sheet at accessibility sizes, like G7's folded cards.
+- **Depends on:** nothing on its files. Take its simulator acceptance after G21 merges. **Wave 2.** G26 follows on `Threads.swift`, `ThreadItems.swift` and `BackgroundWorkSheet.swift`.
+
+---
+
+### G24. Sessions list: hidden, broken, stale and loading say so (iOS, plus projects.ts)
+
+- **Findings:** F-SES-193 sessions-all-hidden-empty-state-claims-no-sessions, F-SES-197 sessions-failed-unavailable-parked-rows-fold-under-show-more, F-SES-201 sessions-list-flashes-mac-not-answering-on-every-foreground-reconnect, F-SES-202 sessions-list-skeleton-forever-when-connected-but-list-never-arrives, F-SES-205 sessions-new-session-sheet-unrecognized-says-bridge-not-running-no-pair-again, F-SES-209 sessions-same-name-projects-indistinguishable, F-SES-215 sessions-unrecognized-banner-says-nothing-about-stale-rows, F-SES-196 (row half, +G25, +G26).
+  P2: F-SES-236 a11y-row-working-for-since-date-ungrammatical, F-SES-307 voiceover-filter-count-announcement-ignores-stale-list.
+- **Root cause:**
+  - The empty state ignores hidden rows (`SessionsSidebar.swift:220-260`, `Sessions.swift:32`, `:287`).
+  - `Rank` has only needsYou, working and rest (`Sessions.swift:130-135`). The fold keeps only active ranks (`SessionsSidebar.swift:294`), and the tally counts two states (`Sessions.swift:85`).
+  - A deliberate reconnect (`BridgeClient.swift:294`) sets `.connecting`. `setConnection` marks the list stale at once (`Store.swift:243-244`), and the banner shows with no 400 ms gate (`SessionsSidebar.swift:196-199`), unlike the thread (`SessionThreadView.swift:48-49`).
+  - The skeleton has no clock (`SessionsSidebar.swift:113-123`).
+  - `.unrecognized` falls into the "bridge not running" cause (`HomeView.swift:375-386`), and Start says "unreachable" (`SessionComposer.swift:591`, `:695`). `UnrecognizedBanner` has no freshness line (`HomeView.swift:445-468`).
+  - `projects.ts:120` names a project by its basename or repo only.
+  - `RowDetail` (`Sessions.swift:451-460`) shows the activity first, so a failed outcome is hidden while orphaned work runs.
+- **Fix design:**
+  - Empty state: when rows exist but all are hidden, "N hidden sessions" with a Show hidden button. "No sessions yet" only when `rows.isEmpty` (193).
+  - Fold: failed, unavailable and parked rows are exempt from Show more. The project header counts them ("1 failed"). Within the rest, a failed row sorts by `outcome.at` (197, R3.4 call 14).
+  - Reconnect: `setConnection(.connecting)` after a connected state does not mark the list stale or show the banner for 400 ms. Until the first failed try it shows "Reconnecting…" with no cause text and no buttons (201, P-CONN-4, decisions.tsv:48).
+  - Skeleton: after 5 s with a socket and no list, "Your Mac is connected but hasn't sent the session list yet" with Refresh, which re-sends `watch_sessions` (202).
+  - Not recognized: the New Session sheet reuses `UnrecognizedBanner` with Pair again and Retry, and Start's reason reads "your Mac doesn't recognize this iPhone" (205). `UnrecognizedBanner` takes `staleSince` and shows the same freshness line (215).
+  - Same-name projects: `projects.ts` adds `label` when names collide, owner/repo for GitHub remotes and otherwise the parent folder. The header, the picker and the spoken label use it (209).
+  - Row: while working with a held failed or lost outcome, the second line reads "<outcome text> · 1 command still running" (196).
+  - "working for 7 days" (236). The filter count announcement says "as of <time>" when stale (307).
+- **Patterns:** P-LIST-1, P-LIST-3, P-LIST-5, P-CONN-1, P-CONN-4, P-ALIVE-3, P-STATE-2.
+- **Files:** `ios/ClaudioBot/Views/SessionsSidebar.swift`, `ios/ClaudioBot/Model/Sessions.swift`, `ios/ClaudioBot/Views/HomeView.swift`, `ios/ClaudioBot/Views/Components.swift` (Reach `.reconnecting`), `ios/ClaudioBot/Model/Store.swift` (`setConnection` only), `ios/ClaudioBot/Views/SessionComposer.swift` (NewSessionSheet only), `bridge/src/projects.ts`, `bridge/src/protocol.ts` (`Project.label?`), `fixtures/protocol.json`, `ios/ClaudioBot/Model/Protocol.swift`, `ios/ClaudioBotTests/SessionsListTests.swift` (new), `bridge/test/projects.test.ts`.
+- **Verify:**
+  - Unit tests failing on main: the all-hidden empty-state text. `isActive` for a failed row. `RowDetail` for working plus a failed outcome. No stale mark within 400 ms of a deliberate reconnect. Two roots named `app` get distinct labels.
+  - **Simulator lane** X-empty-error-offline cases 1 to 3 and S7 with 12 rows plus a failed one.
+- **Acceptance:** each finding's case shows words that match what the phone knows. A failed row is visible without Show more.
+- **Risk:** `Protocol.swift` and `protocol.ts` are also edited by G20 and G25. The change is one optional field. Rebase after G20.
+- **Depends on:** G20 (`protocol.ts`, `Protocol.swift`). **Wave 2.** G28 follows on `Store.swift` and `SessionComposer.swift`, and G29 on `Sessions.swift`.
+
+---
+
+### G25. Claude Code death and bridge restart: row, outcome, alerts and the cut-off reply (bridge, plus Notifier)
+
+- **Findings:** F-SES-187 push-claude-crash-with-surviving-command-raises-no-failed-alert, F-SES-189 push-finished-alert-while-command-still-runs-after-restart, F-SES-190 push-lost-restart-alert-says-interrupted-while-commands-still-run, F-SES-211 sessions-stop-of-orphan-commands-overwrites-crash-outcome-on-row, F-SES-218 thread-crash-mid-reply-leaves-partial-text-as-live-reply, F-SES-196 (bridge half, +G24, +G26).
+  P2: F-SES-248, F-SES-263, F-SES-267, F-SES-268, F-SES-272, F-SES-273, F-SES-274, F-SES-281.
+- **Root cause:**
+  - `ending.set` (`own.ts:310-311`) runs only when `working(rec)` is false. `working()` (`own.ts:273`) counts followed outlived commands, so a crash with survivors never ends (187).
+  - Conversely, unsure work leaves `working`, so the run rests and `finished` goes out 5 s later (`own.ts:297-312`, `:1177-1185`) while the command runs (189).
+  - The lost text is fixed (`push.ts:83`, `Notifier.swift:102`), and `SessionAlert` has no running field (190).
+  - `end(rec, {kind:"stopped"…})` (`own.ts:394`) overwrites a failed outcome (211).
+  - `s.live` is cleared only by an upsert (`threads.ts:333`), and snapshots re-send it (`:449`, `:472`) (218).
+  - Adopted work gets `background: true` (`outlived.ts:24`), and `rowRun` names it "Background:" (`tasks.ts:274`) (196, 274).
+  - The first list frame after a restart is built before the outlived lookup (273).
+- **Fix design:**
+  - **Endings.** Claude Code's death is an ending event of its own. It fires the `failed` alert once per death, keyed by the death time, whatever outlived work does (187, R3.4 call 8). A run with any unsure step is not at rest, and its ending waits for the step to end (189, R3.4 call 9).
+  - **Alert text.** `SessionAlert.running?: {agents, commands}` (additive). With survivors: "A Claude Code session stopped with an error. 2 commands still run on your Mac." and "A bridge restart interrupted a Claude Code session. 2 commands still run on your Mac." (187, 190, R3.4 call 10). The lost push's 60 s grace starts at the first restart and is not reset by later ones (248).
+  - **Outcome.** A stop never replaces a failed or lost outcome. It appends: "Claude Code stopped unexpectedly · you stopped its 2 commands" (211, R3.4 call 11). A finished outcome is the turn's last reply line, never a subagent's summary or a task label (267, 268, 281).
+  - **Labels.** Adopted work keeps its original `background` value and carries `outlived: true`. `rowRun` says "Still running after Claude Code stopped: <label>" (196, 274). The task clock is the step's `startedAt` (274).
+  - **No flicker.** Until the boot lookup of outlived work has run, a session's row is sent with its last saved status, not `failed` or idle (273). One notice per death says what happened and one ordered next step: "Claude Code stopped unexpectedly. 2 commands still run: Stop ends them. Send a message to start Claude Code again; the commands keep running until you stop them." (272).
+  - **Cut-off reply.** When the live query dies with `s.live` set, the bridge commits the partial text as an assistant item and emits a notice "Claude Code stopped while writing this reply." right after it. It clears `s.live` and sends `live: null` in snapshots (218).
+  - **Notices.** Bridge notices are capped by age (24 h), not by count (10). A crash or stop notice is never dropped while its run's outcome holds (263).
+  - App: `Notifier.swift` reads `running` for the alert text. `Protocol.swift` decodes `running` and `outlived`.
+- **Patterns:** P-STATE-1, P-STATE-2, P-BG-2, P-BG-7, P-NOTIFY-1, P-CONN-2, A-9.
+- **Files:** `bridge/src/own.ts`, `bridge/src/push.ts`, `bridge/src/outlived.ts`, `bridge/src/threads.ts`, `bridge/src/tasks.ts` (`rowRun` label only), `bridge/src/protocol.ts`, `fixtures/protocol.json`, `bridge/test/{own,push,threads,outlived}.test.ts`, `ios/ClaudioBot/App/Notifier.swift`, `ios/ClaudioBot/Model/Protocol.swift`, `ios/ClaudioBotTests/NotifierTests.swift`.
+- **Verify:** `bun test`, failing on main: one `failed` alert after a death with survivors. No `finished` while a step is unsure. A stop keeps a failed outcome. A snapshot after a death has `live: null`. Protocol lane S6, S6d, S6e, S6f and S6k with G19's items.
+- **Acceptance:** S6e.5 to S6e.8, S6d.4, S6f.3, S6f.4 and S6k.1 pass. The row never reads plain working while Claude Code is dead.
+- **Risk:**
+  - Holding the ending while work is unsure can hold it for a long time. G27 makes unsure work end within 10 s of its process going, so land G27 soon after.
+  - Committing a partial reply adds an item that Claude Code's transcript never has. Mark it overlay-only, so a fresh read after Claude Code restarts does not duplicate it.
+- **Depends on:** G20 (`own.ts`, `protocol.ts`, `Protocol.swift`, and its stopping state), G21 (`tasks.ts`), G22 (`push.ts`), G24 (`protocol.ts`, `Protocol.swift`). **Wave 3.**
+
+---
+
+### G26. Thread status line and spoken state (iOS)
+
+- **Findings:** F-SES-177 a11y-bg-sheet-stop-all-retry-label-drops-not-stopped, F-SES-178 a11y-plan-ask-card-close-silent-and-stop-outcome-suppressed, F-SES-180 a11y-thread-quiet-status-never-announced, F-SES-181 a11y-work-run-and-step-speak-running-with-frozen-clock-when-stale, F-SES-208 sessions-running-now-sheet-stop-all-hides-that-it-also-stops-the-turn-and-has-no-count, F-SES-220 thread-needs-you-status-line-hides-running-list-and-stop-per-task, F-SES-221 thread-needs-you-status-line-names-newest-of-several-approvals-no-count, F-SES-223 thread-offline-or-quiet-status-line-cannot-open-running-list, F-SES-196 (status half, +G24, +G25).
+  P2: F-SES-230, F-SES-231, F-SES-232, F-SES-237, F-SES-238, F-SES-247, F-SES-289 (nouns half, +G21), F-SES-297.
+- **Root cause:**
+  - `ThreadStatus.of` returns `.needsYou(card)` with no tasks (`ThreadStatus.swift:144`). Offline, catching up and quiet carry none either (`:162-167`). Only `.working` and `.background` open the sheet (`SessionThreadView.swift:329-339`).
+  - `OpenCard.newest` (`ThreadStatus.swift:17-24`) names one card.
+  - `ThreadAnnouncement.of` (`:279-287`) has no quiet case. It mutes the stopped outcome from `.needsYou` on the belief that the card spoke, which holds only for permission cards.
+  - `WorkRun.spoken` and the step summary take no stale flag (`Threads.swift:268`, `:294`, `ThreadItems.swift:381-388`, `:410`, `:~506`).
+  - The sheet's Stop all shows `what` only to VoiceOver and has no retry label (`BackgroundWorkSheet.swift:144-160`).
+  - `.working` and `.background` outrank `.ended(outcome)` (`ThreadStatus.swift:145-149`), so a held failure reads "Running in background" (196).
+- **Fix design:**
+  - Every status level keeps the last-known tasks. The line adds the count: "Needs your approval: 3 requests (sleeper one, two, three) · 2 still running" (220, 221). "Offline. 3 agents were running when your Mac last answered 40s ago" (223). A tap on any level with tasks opens Running now, which already has a stale mode. A needs-you line with no tasks keeps scrolling to the card.
+  - New level `.orphaned(outcome, tasks)` above `.working` when a failed or lost outcome is held and tasks run: "Claude Code stopped unexpectedly · 1 command still running · Stop ends it" (196).
+  - Announcements: quiet, once, "No word from your Mac for about a minute. The thread may be out of date." (180). Plan and ask cards get `CloseAnnouncer` like permission cards. The stopped-outcome mute applies only when a card's own announcer spoke (178).
+  - Stale speech: `WorkRun.spoken(now:stale:)` says "Running when last updated, 2 minutes 5 seconds", and the step summary says the same (181). The streaming tail reads "Reply in progress when last updated" when stale (237).
+  - Running now: the title has the count ("6 running"). The visible button says its blast radius ("Stop all 6 and the current turn"). The retry state is spoken: "Not stopped yet. Stop all again." (177, 208).
+  - Nouns: commands owned by a live agent are spoken under it ("3 agents, each running a command") (289). A needs-you line adds the wait time ("· 2m") (297). A link to a closed card says "That request was answered" even when another card waits (247).
+  - Cards: each question's options and fields are prefixed with the question (230). Send answers says which question is missing (231). Glyphs beside a word are hidden from VoiceOver (238). Background work ended is announced with its outcome and the step title, not the raw command (232).
+- **Patterns:** P-STATE-5, P-ALIVE-3, P-STOP-2, P-STOP-3, P-A11Y-1, P-A11Y-2, P-SUB-1.
+- **Files:** `ios/ClaudioBot/Model/ThreadStatus.swift`, `ios/ClaudioBot/Views/SessionThreadView.swift`, `ios/ClaudioBot/Views/BackgroundWorkSheet.swift`, `ios/ClaudioBot/Model/Threads.swift` (`WorkRun.spoken` only), `ios/ClaudioBot/Views/ThreadItems.swift` (PlanCard, AskCard, run header speech, StreamingTail, to-do glyphs), `ios/ClaudioBot/Views/ChatItems.swift` (`CloseAnnouncer`, option glyphs), `ios/ClaudioBotTests/ThreadStatusTests.swift`.
+- **Verify:**
+  - Unit tests with literal strings, failing on main: `.needsYou` carries tasks and its line has the count. The offline line keeps the count and `tap` returns the sheet. The quiet announcement. The stale spoken run. `.orphaned` outranks `.background`. Plan and ask close announcements. The Stop all label and its retry label.
+  - Update `ThreadStatusTests.eachLevelHidesTheOnesBelowIt` for `.orphaned`. Its quiet-over-needs-you case stays, since G26 does not change that order (F-SES-225 is fixed on main).
+  - **Simulator lane** S1 with three cards open, S6 offline, and X-voiceover by code review plus the label tests.
+- **Acceptance:** the user can always reach Running now while anything runs or last ran. Every status change that matters is spoken once.
+- **Risk:** a longer status line at AX5. Use G6's measured-height steps (decisions.tsv:108) and drop the clock first.
+- **Depends on:** G23 (`Threads.swift`, `ThreadItems.swift`, `BackgroundWorkSheet.swift`). **Wave 3.** G28 follows on `ThreadItems.swift`, `Threads.swift` and `ChatItems.swift`, and G29 on `ThreadStatus.swift` and `SessionThreadView.swift`.
+
+---
+
+### G27. Unsure work after a restart: recheck, end, one wording (bridge)
+
+- **Findings:** F-SES-204 sessions-lost-command-notice-contradicts-itself-and-earlier-stop-promise, F-SES-214 sessions-unpaired-bg-command-reads-may-still-run-forever, F-SES-216 sessions-unsure-command-end-said-up-to-10-min-late.
+  P2: F-SES-276, F-SES-291, F-SES-294, F-SES-295, F-SES-302 (end-time half, +G23).
+- **Root cause:**
+  - `UNSURE_LOOK_MS = 30s` doubling to `UNSURE_LOOK_MAX_MS = 10min` (`own.ts:126-127`, `unsureDue` at about `:481-491`) gates even the cheap liveness check (216).
+  - `pairLoose` leaves twins unpaired (`session.ts:1391-1409`). `lost()` sends them only to `markUnsure` (`own.ts:416-434`). `lookOutlived` polls only `allOutlived` (`:499-512`). `drive.unsure` keys are never removed (`:434`, `:1095`) (214).
+  - `unsureText` says "so it no longer shows it" (`own.ts:476-477`) under an earlier "Stop ends it" notice (`:455-458`) (204).
+- **Fix design:**
+  - **Two speeds.** For paired unsure work, `kill -0` on the saved group or pid runs every 5 s. Only the shell lookup by `lsof` keeps the 30 s to 10 min backoff (216, R3.4 call 5).
+  - **Unpaired work** is watched by an exact count of live processes whose command line matches. Observe only, never signalled (decisions.tsv:116). When the count reaches 0, every unpaired step for that command reads ended, and its key leaves `drive.unsure`. While some remain, the step stays unsure (214, R3.4 call 6).
+  - **Wording.**
+    - A downgrade says what changed and supersedes the earlier claim: "The bridge can no longer confirm command <step title> is the one it followed. It is now shown as may still run, and Stop can't end it. The earlier note that Stop ends it no longer holds." (204).
+    - Every notice names a command by its step title, with the command as detail (276).
+    - The "can't stop" refusal gives a next step: "Check it on your Mac (Activity Monitor, or `ps`)." (295).
+  - **The end of unsure work** sets the row's unread and a line "Command ended" (294). The ended step's `endedAt` is the first look that found it gone, at most 5 s late (302).
+  - At the end of a fan-out, a background agent whose `task_updated` said completed is never cut as "ended without a result" while its result is on the way. This extends decisions.tsv:117 to the at-rest cut (291).
+- **Patterns:** P-BG-7, P-ALIVE-3, P-TIME-4, P-STATE-2.
+- **Files:** `bridge/src/own.ts`, `bridge/src/session.ts` (`pairLoose` count), `bridge/src/outlived.ts`, `bridge/src/procs.ts`, `bridge/test/{own,outlived,procs}.test.ts`. No wire change.
+- **Verify:** `bun test` with a fake process table and clock, failing on main: ended within 5 s of the group going. Twins both reach ended. No "no longer shows it" text. Protocol lane S6c and S6d with S6d.5 to S6d.7.
+- **Acceptance:** S6d.5 to S6d.7 pass. No step reads "may still run" more than 10 s after its process is gone.
+- **Risk:** a command-line count can match a user's own process with the same command. That is an observe-only false "still runs", which is the safe direction.
+- **Depends on:** G25 (`own.ts`, `outlived.ts`), G20 (`session.ts`), G21 (`procs.ts`). **Wave 4.**
+
+---
+
+### G28. Requests that outlive the socket, honestly (iOS, plus one bridge reply)
+
+- **Findings:** F-SES-179 a11y-sent-announced-before-ack-and-not-sent-lapse-silent, F-SES-182 offline-decision-lost-with-socket-card-rearms-silently, F-SES-183 offline-mode-model-change-replays-after-user-told-not-taken, F-SES-185 offline-stop-send-failure-reads-stopping-for-10s-never-replayed, F-SES-206 sessions-row-actions-and-mirror-pref-vanish-or-revert-with-the-socket, F-SES-222 thread-not-sent-send-still-auto-resent-no-discard-no-age-limit, F-SES-226 thread-unechoed-send-caption-says-not-sent-though-mac-may-have-run-it, F-SES-184 (app half, +G20), F-SES-212 (app half, +G20).
+  P2: F-SES-229 a11y-approval-decision-spinner-has-no-ack-deadline, F-SES-235 a11y-queued-menu-edit-withdraw-identical-per-message.
+- **Root cause:**
+  - `stillWanted` (`BridgeClient.swift:357-362`) ages out only stops and decisions, so `.sessionSet`, hide, rename, open-on-Mac, prefs and interrupting sends replay at any age.
+  - `requestDropped` (`Store.swift:387-402`) has no case for them.
+  - `transmit` reports a failed send only for decisions (`:406-421`). `transmitCounted` tracks only sends (`:395-399`).
+  - `lapseSends` flips the caption to `.notSent(nil)` on time alone (`Threads.swift:557-567`), while `resendsAfterHello` keeps resending with no age (`Store.swift:299-308`). The words claim a failure, and the behaviour still owes the send. Both follow decisions.tsv:145, replaced here (R3.4 call 1).
+  - `.unsure` decisions draw nothing (`Store.swift:382-384`, `ChatItems.swift:822-845`).
+  - "Sent." is spoken at the tap (`SessionComposer.swift:473`, `ComposerState.swift:284-288`).
+- **Fix design:**
+  - **One table** `OutboxRule` in `BridgeClient.swift` gives every request kind its age limit (60 s) and the words when it is dropped (R3.4 call 2). It covers `.sessionSet` (mode, model, hidden, title), `.sessionOpenDesktop`, `.sessionPrefs` and interrupting `.sessionSend`. `stillWanted` and `requestDropped` read it. A dropped request leaves its line: "Mode change not sent: your Mac was unreachable" in the composer, and a toast for row actions. The mirror picker reverts with the same note (183, 206).
+  - **Stop.** A `.sessionStop` whose socket send fails reads "Stop not sent" at once. It is kept and replayed on the next hello if it is under 60 s old and for the same turn, else dropped with words (185). The app's Stop patience is the bridge's `stopping.deadline` plus 5 s when controls carry `stopping`, with "Waiting for Claude Code to stop…" (212, R3.4 call 12).
+  - **Stop and send** carries `turnStartedAt`. Past 60 s its interrupt is dropped and the message goes as a plain send, with "Stop not sent: that turn had ended. Your message was queued." (184, R3.4 call 3).
+  - **Sends** (R3.4 call 1):
+    - A frame no socket took reads "Not sent · Retry · Discard".
+    - A frame a socket took, with no echo after 10 s, reads "No word from your Mac yet. It may have gone through." with Retry (labelled safe, same clientId) and Discard.
+    - Automatic resend after hello happens only within 60 s of the tap. After that nothing resends without a tap, and Discard removes it from `unechoedSends` (222, 226).
+  - **Speech.** The tap says "Sending.". The echo says "Sent.". The lapse says "No word from your Mac yet. Your message may not have arrived." (179).
+  - **Decisions.** `.unsure` after a reconnect reads "Your answer may not have reached your Mac · Tap again" and is spoken (182, R3.4 call 18). A decision with no ack after 10 s on a live socket moves to `.unsure` (229).
+  - Queued menu items name their message ("Edit "fix the tests…"") (235).
+  - Bridge, `sessions.ts`: `session_prefs` and `session_open_desktop` failures carry `about` with a new `{kind:"prefs"}` and `{kind:"open"}` (additive), so the app can say which request failed (206).
+- **Patterns:** P-CONN-5, P-CONN-6, P-STOP-1, P-STOP-4, P-A11Y-1.
+- **Files:** `ios/ClaudioBot/Model/BridgeClient.swift`, `ios/ClaudioBot/Model/Store.swift`, `ios/ClaudioBot/Model/ComposerState.swift`, `ios/ClaudioBot/Views/SessionComposer.swift`, `ios/ClaudioBot/Model/Threads.swift` (pending sends), `ios/ClaudioBot/Views/ThreadItems.swift` (user bubble caption and Discard), `ios/ClaudioBot/Views/ChatItems.swift` (DecisionStatusLine), `ios/ClaudioBot/Views/SettingsView.swift` (mirror note), `ios/ClaudioBot/Model/Protocol.swift`, `bridge/src/sessions.ts`, `bridge/src/protocol.ts`, `fixtures/protocol.json`, `ios/ClaudioBotTests/BridgeClientTests.swift`, `bridge/test/sessions.test.ts`.
+- **Verify:**
+  - FakeBridge unit tests with literal strings, failing on main: `stillWanted(.sessionSet, 61 s)` is false. An interrupting send at 61 s goes without its interrupt. A failed Stop send reads "Stop not sent". `resendsAfterHello` skips a 61 s old send. The caption depends on `transmitted`. Discard empties the owed list. Speech order "Sending." then "Sent.".
+  - Protocol lane S6g. **Simulator lane** S6g and X-empty-error-offline with a real tap (decisions.tsv:54).
+- **Acceptance:** nothing the user tapped offline happens later without a word on screen. "Not sent" appears only when it is true.
+- **Risk:** "may have gone through" is longer than "Not sent". At AX5 the caption wraps to two lines. Accept it.
+- **Depends on:** G20 (`turnStartedAt`, `stopping`), G26 (`ThreadItems.swift`, `Threads.swift`, `ChatItems.swift`), G24 (`Store.swift`, `SessionComposer.swift`), G25 (`protocol.ts`, `Protocol.swift`). **Wave 4.**
+
+---
+
+### G29. Wide layout at-work surfaces (iOS)
+
+- **Findings:** F-SES-227 x-ipad-at-work-counts-ignore-stale-list, F-SES-228 x-ipad-at-work-surfaces-omit-failed-and-no-run-time.
+  P2: F-SES-308, F-SES-309, F-SES-310, F-SES-311.
+- **Root cause:**
+  - `SessionsAtWork` (`ThreadStatus.swift:373-390`) has no freshness input and only needsYou and working buckets.
+  - The chip (`SessionThreadView.swift:354-368`) and the pane (`MainView.swift:150-152`, `:192-209`) draw live rings and ignore `row.since`, hidden rows and the needs-you reason.
+- **Fix design:**
+  - `SessionsAtWork(rows:freshness:)` drops the working count and the rings when the list is not live, and says "as of <time>" or "Mac unreachable", like the list header (227).
+  - It adds failed and stopped buckets ("1 failed"). It shows a run clock from `row.since` on working rows (228) and the needs-you reason (309). It counts agents and commands (310). It counts hidden rows that run or need you (308). The empty detail pane says "Waiting for your Mac" before the first list or while unreachable (311).
+- **Patterns:** P-STATE-1, P-ALIVE-3, P-TIME-1, P-LIST-1.
+- **Files:** `ios/ClaudioBot/Model/ThreadStatus.swift` (`SessionsAtWork` only), `ios/ClaudioBot/Views/MainView.swift`, `ios/ClaudioBot/Views/SessionThreadView.swift` (chip only), `ios/ClaudioBot/Model/Sessions.swift` (freshness accessor), `ios/ClaudioBotTests/SessionsAtWorkTests.swift` (new).
+- **Verify:** unit tests failing on main: stale freshness gives no working count. The failed bucket. A since clock string. X-ipad stays a code-read coverage gap (decisions.tsv:16), plus iPhone landscape shots.
+- **Acceptance:** the wide layout never claims work runs when the list is stale, and it names failed sessions.
+- **Risk:** low.
+- **Depends on:** G26 (`ThreadStatus.swift`, `SessionThreadView.swift`), G24 (`Sessions.swift`). **Wave 4.**
+
+### R3.3 Sequencing
+
+**File overlap** (shared files only):
+
+| File | Groups, in merge order |
+| --- | --- |
+| `bridge/src/own.ts` | G20 → G25 → G27 |
+| `bridge/src/session.ts` | G20 → G27 |
+| `bridge/src/protocol.ts`, `fixtures/protocol.json`, `Model/Protocol.swift` | G20 → G24 → G25 → G28 |
+| `bridge/src/sessions.ts` | G20 → G28 |
+| `bridge/src/tasks.ts` | G21 → G25 |
+| `bridge/src/procs.ts` | G21 → G27 |
+| `bridge/src/outlived.ts` | G25 → G27 |
+| `bridge/src/push.ts` | G22 → G25 |
+| `Model/Threads.swift`, `Views/ThreadItems.swift` | G23 → G26 → G28 |
+| `Views/BackgroundWorkSheet.swift` | G23 → G26 |
+| `Model/ThreadStatus.swift`, `Views/SessionThreadView.swift` | G26 → G29 |
+| `Views/ChatItems.swift` | G26 → G28 |
+| `Model/Sessions.swift` | G24 → G29 |
+| `Model/Store.swift`, `Views/SessionComposer.swift` | G24 → G28 |
+| `.claude/skills/verify-claudio-bot/bin/*` | G19 only |
+
+`transcript.ts` (G21), `projects.ts` (G24), `threads.ts` and `Notifier.swift` (G25), `ComposerState.swift`, `BridgeClient.swift` and `SettingsView.swift` (G28), and `MainView.swift` (G29) each have one owner.
+
+**Waves** (at most 3 groups at once, since 3 pool simulators are shared):
+
+| Wave | Can start when | Groups (parallel within the wave) |
+| --- | --- | --- |
+| 1 | now | **G19** runner, **G20** frozen stop, **G21** task truth |
+| 2 | a wave 1 slot frees; G24 also needs G20 | **G22** push delivery, **G23** work run (iOS), **G24** list (iOS) |
+| 3 | G20 + G21 + G22 + G24 (G25); G23 (G26) | **G25** crash and restart, **G26** status line (iOS) |
+| 4 | G25 + G21 (G27); G20 + G24 + G25 + G26 (G28); G24 + G26 (G29) | **G27** unsure work, **G28** outbox (iOS), **G29** wide layout (iOS) |
+
+```mermaid
+graph LR
+  G19 -.rubric before acceptance.-> G20 & G21 & G22 & G25 & G27
+  G20 --> G24 & G25 & G28
+  G21 --> G25 & G27
+  G21 -.acceptance.-> G23
+  G22 --> G25
+  G24 --> G25 & G28 & G29
+  G23 --> G26
+  G25 --> G27 & G28
+  G26 --> G28 & G29
+```
+
+Why this order:
+
+- **G19 first.** Every new acceptance item lives in its files. Groups may build against main before it merges, but they take acceptance runs only after it.
+- **G20 and G21 in wave 1.** They are the two bridge groups with no shared file, and both sit at the head of a chain.
+- **G25 in wave 3.** It meets four chains (`own.ts`, `tasks.ts`, `push.ts`, `protocol.ts`). It needs G20's `stopping` handling and G21's labels.
+- **Critical path:** G20 → G25 → G27 for the bridge, and G23 → G26 → G28 for the app. Each is three PRs. Wave 3 has two groups, because nothing else is free of a wave 2 file.
+
+### R3.4 New product calls
+
+Recorded in `decisions.tsv` with the prefix "Run3:". Each says what it replaces.
+
+1. **Unechoed send** (222, 226). Replaces decisions.tsv:145. "Not sent" only when no socket took the frame or the bridge refused it. A frame a socket took, with no echo after 10 s, reads "No word from your Mac yet. It may have gone through." with a safe Retry and a Discard. Automatic resend only within 60 s of the tap.
+2. **Every queued request has an age limit** (183, 185, 206). Extends plan §7 #18. A 60 s limit, and words on screen when it is dropped.
+3. **Stop and send is aimed at one turn** (184). It carries `turnStartedAt`. When that turn has ended, the message goes without the interrupt, and the app says so.
+4. **Quiet** (198, 213). Replaces the second clause of decisions.tsv:37. A live command is never quiet from Claude Code's silence. An agent is quiet only when its progress, its live owned tasks and `heardAt` are all older than 60 s.
+5. **Unsure liveness every 5 s** (216). Replaces the liveness half of decisions.tsv:111 and :126. Only the `lsof` lookup keeps the backoff.
+6. **Unpaired unsure work** (214). It is watched by an exact command-line count, never signalled, and ends when no such process remains.
+7. **Outlived work keeps its word** (196, 274). Replaces the labelling in decisions.tsv:138. Foreground stays foreground. The row and the header say Claude Code stopped and N commands still run.
+8. **A death is an ending** (187). Amends decisions.tsv:132. One "stopped with an error" alert per Claude Code death, even while adopted work runs.
+9. **No finish while unsure** (189). Amends decisions.tsv:132 and :111. The ending waits until unsure work has ended.
+10. **The restart alert names survivors** (190). Amends decisions.tsv:139. A new additive field, `SessionAlert.running`.
+11. **A stop never hides a failure** (211). Amends decisions.tsv:94. The stop is appended to a failed or lost outcome.
+12. **Stopping is on the wire** (212, 199). Amends decisions.tsv:92 and G6's 10 s Stop patience. The app waits for the bridge's deadline plus 5 s. A forced end has its own words.
+13. **The early-stop notice** (210). Amends decisions.tsv:65. It names the prompt, sorts at the Stop, and the stopped prompt stays in the thread.
+14. **Failed rows never fold** (197). Amends decisions.tsv:74. Failed, unavailable and parked rows are exempt from Show more and counted in the header. A failed row sorts by its outcome time.
+15. **Finished agents stay visible** (195). Extends decisions.tsv:38. Shown while any sibling runs, with the header "2 of 3 agents running · 1 done".
+16. **Counts are top-level work** (289). A subagent's own commands are named under it, not counted again.
+17. **Spoken send** (179). Replaces G6's "Sent." at the tap. "Sending." at the tap, "Sent." on the echo, and the lapse is spoken.
+18. **Unsure decisions say so** (182). "Your answer may not have reached your Mac · Tap again."
+19. **F-SES-225 closed as fixed on main** on code evidence (the bridge beat). G19's S5.10 observes it.
+20. **S1.3 accepts awaiting_approval only while a card is open.** It is still able to fail on an idle row.
+
+### R3.5 Open questions for the user
+
+- **Call 1 replaces a recorded call** (decisions.tsv:145). The default is in. Discard is a new control on a user bubble.
+- **Call 14 changes the list order.** Failed rows rise above newer finished rows. A user who prefers strict recency would lose that.
+- **Call 16 changes counts** the user already sees on rows and in the status line.
+- **Backlog P2s that need a product call before anyone can fix them:** F-SES-242 (finished alert right after watching the end), F-SES-244 (group finished pushes), F-SES-245 (mute alerts for hidden sessions), F-SES-246 (app icon badge), F-SES-266 (re-asking an expired card).
+- **F-SES-225** is closed on a code read. S5.10 must pass on main to confirm it. If it fails, reopen 225 into G26.

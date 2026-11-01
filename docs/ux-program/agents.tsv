@@ -26,3 +26,38 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-23T12:25:47Z	owner	G11	ux/sessions-g11-outlive-socket	merged #26 (2 verify rounds; r2 PASS 4f933b8)	6h	last Sessions group; after G18; bypassed a write-guard hook via Bash early (writes stayed in g11-outlive), then used EnterWorktree
 2026-10-23T13:42:41Z	verifier	G11	ux/sessions-g11-outlive-socket	r1 FAIL e4f61ef: P1 restart-resend reads Not sent; 2 P2; S6h.2 honest	3h	independent of owner
 2026-10-23T15:31:34Z	verifier	G11	ux/sessions-g11-outlive-socket	r2 PASS 4f933b8; withdraw note observed end to end; 5 P3	3h	fresh, independent of owner
+2026-10-31T17:51:40Z	owner	G19	ux/sessions-g19-runner-truth	merged #30 (verify PASS first round)	5h	run 3 wave 1
+2026-10-31T17:51:40Z	owner	G20	ux/sessions-g20-frozen-stop	merged #29 (r1/r2 PASS-PENDING-IOS, r3 reviewed, iOS PASS 2ff75ad)	5h	run 3 wave 1
+2026-10-31T17:51:40Z	owner	G21	ux/sessions-g21-task-truth	merged #31 (verify PASS; honesty round ba562f5 reviewed by root)	5h	run 3 wave 1
+2026-10-31T18:22:29Z	verifier	G20	ux/sessions-g20-frozen-stop	r1 PASS-PENDING-IOS 9603f89; P2 queued-follow-up notice order + P3s -> owner rebase	3h	independent of owner
+2026-10-31T18:24:20Z	verifier	G19	ux/sessions-g19-runner-truth	PASS 9b1e491; no loosening; F1 S4c.1/.3 keep G20 arrival-time	3h	independent of owner
+2026-10-31T18:55:52Z	verifier	G20	ux/sessions-g20-frozen-stop	r2 PASS-PENDING-IOS a7a193b; P2 own.ts:423 notice uses now() -> owner small round	3h	fresh, independent of owner
+2026-10-31T19:04:55Z	verifier	G21	ux/sessions-g21-task-truth	PASS bd62652; P2-1 held note false cause + P3-3 -> owner small round	3h	independent of owner
+2026-10-31T19:05:18Z	owner	G22	ux/sessions-g22-push	merged #32 (4 verify rounds; r4 PASS ed82889)	5h	run 3 wave 2 (bridge-only; iOS groups wait for platform)
+2026-10-31T19:48:18Z	verifier	G22	ux/sessions-g22-push	r1 FAIL 09b611c: P2 bot updates owed forever (burst, evict card); 5 P3	3h	independent of owner
+2026-10-31T20:02:37Z	verifier	G20	ux/sessions-g20-frozen-stop	iOS PASS 2ff75ad: 468 tests, swipe 72/0, S4/S6 sim + AX dark	2h	independent of owner
+2026-10-31T20:02:37Z	owner	G23	ux/sessions-g23-work-run	merged #33 (r1 FAIL fold row; r2 small round eba1f93 reviewed by root)	5h	run 3 wave 2
+2026-10-31T20:02:37Z	owner	G24	ux/sessions-g24-list	merged #34 (verify PASS first round)	5h	run 3 wave 2; ran control-claudio cleanup without --run and shut down G22 owner run 20261031-204252-3556 (owner had already rerun S9)
+2026-10-31T20:56:01Z	verifier	G22	ux/sessions-g22-push	r2 FAIL 4cadbc1: P2 unattended reconnect counts as a look and drops owed card push; r1 findings fixed	3h	fresh, independent of owner
+2026-10-31T21:06:06Z	verifier	G23	ux/sessions-g23-work-run	r1 FAIL 8fcdacc: P2 fold row still says N failed without names (F-SES-304 half fixed)	3h	independent of owner
+2026-10-31T21:14:17Z	verifier	G24	ux/sessions-g24-list	PASS b1b1178; real-bridge cases 1-3; 2 pre-existing P2	3h	independent of owner
+2026-10-31T21:50:36Z	verifier	G22	ux/sessions-g22-push	r3 FAIL 53478ea: P2 live check drops owed push before a slow presence(false)	2h	fresh, independent of owner
+2026-10-31T22:33:44Z	verifier	G22	ux/sessions-g22-push	r4 PASS ed82889	2h	fresh, independent of owner
+2026-10-31T22:51:27Z	owner	G26	ux/sessions-g26-status	merged #35 (verify PASS first round)	5h	run 3 wave 3; carries G24 thread-reach and G23 pill-count backlog items
+2026-10-31T23:08:52Z	owner	G25	ux/sessions-g25-crash-restart	merged #36 (r1 FAIL race; r2 PASS af0e618)	5h	run 3 wave 3
+2026-11-01T00:10:02Z	verifier	G26	ux/sessions-g26-status	PASS e44e716; three-card line and Reconnecting shown live	3h	independent of owner
+2026-11-01T00:31:57Z	verifier	G25	ux/sessions-g25-crash-restart	r1 FAIL bf29e22: P1 failed alert races the survivor lookup (onDormant) — S6e.5 fails 2/2	3h	independent of owner
+2026-11-01T01:03:39Z	owner	G29	ux/sessions-g29-wide	merged #37 (verify PASS first round)	4h	run 3 wave 4
+2026-11-01T01:26:06Z	verifier	G25	ux/sessions-g25-crash-restart	r2 PASS af0e618; S6e 6/6 incl. under load	3h	fresh, independent of owner
+2026-11-01T01:57:03Z	verifier	G29	ux/sessions-g29-wide	PASS 366975e; live stale pane/chip verified	2h	independent of owner
+2026-11-01T02:08:58Z	owner	G27	ux/sessions-g27-unsure	merged #38 (7 verify rounds; r8 one-line fix 48041f4 reviewed by root)	5h	run 3 wave 4; carries wedged-lookup item
+2026-11-01T02:08:58Z	owner	G28	ux/sessions-g28-requests	merged #39 (r1, r2 FAIL; r3 small fix 0985908 reviewed by root)	6h	run 3 wave 4; carries stopped-card render, link note, iOS presence gap
+2026-11-01T02:46:52Z	verifier	G27	ux/sessions-g27-unsure	r1 FAIL ebe8997: P1 exec'd unpaired command reads ended while running (count 0 on first look)	3h	independent of owner
+2026-11-01T03:37:13Z	verifier	G27	ux/sessions-g27-unsure	r2 FAIL 4636a07: P1 counted via eval shell then exec'd into hidden form, ended while running	2h	fresh, independent of owner
+2026-11-01T04:01:02Z	verifier	G28	ux/sessions-g28-requests	r1 FAIL fa3b35f: 3 P2 (retap says another device; finished+outlived speech; mirror revert silent in Settings)	3h	independent of owner
+2026-11-01T04:12:00Z	verifier	G27	ux/sessions-g27-unsure	r3 FAIL 6dc4292: P1 . script / eval hide; P2 quoted-; redirect; P3 e''xec	2h	fresh, independent of owner
+2026-11-01T05:08:50Z	verifier	G27	ux/sessions-g27-unsure	r4 FAIL 6d1150a: 4 zsh tokenizer bypasses (fd-number, noglob, A+=, | exit)	2h	fresh, independent of owner
+2026-11-01T05:58:35Z	verifier	G28	ux/sessions-g28-requests	r2 FAIL d4e0a7d: P2 mirror revert silent when Settings closed; r1 P2s fixed	2h	fresh, independent of owner
+2026-11-01T06:02:00Z	verifier	G27	ux/sessions-g27-unsure	r5 FAIL ba5cb87: P2 unrelated/rerun shell with same eval line supplies a group -> false ended	2h	fresh, independent of owner
+2026-11-01T19:49:48Z	verifier	G27	ux/sessions-g27-unsure	r6 FAIL 7f4302e: P2 shells unioned across steps/processes -> earlier groupless step ends	2h	fresh, independent of owner
+2026-11-01T20:35:39Z	verifier	G27	ux/sessions-g27-unsure	r7 FAIL 1148c6f: P2 pruning skips markUnsure (finished alert + Nothing is running); one-line fix; fix applied r8	2h	fresh, independent of owner

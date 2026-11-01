@@ -122,3 +122,4 @@
 - HARNESS ISOLATION GAP (G28 verifier): a plan-mode session in an isolated run wrote ~/.claude/plans/plan-how-to-add-compressed-anchor.md into the user's REAL home; cleanup does not remove it. The runner must point Claude Code's plans dir (or HOME/CLAUDE_CONFIG_DIR) at the run's home (P1 harness). The stray file was left for the user to delete.
 - Bridge (G28 verifier): Stop of "the turn and 1 command" on a frozen Claude Code left the perl command running after the forced end while the notice said "Stopped by you: the turn." (P2, G20/G25 area).
 - "Couldn't stop." before the bridge's stale-turn text reads like a failure when the message did go (P3, from main).
+- Settings says "Reconnecting" rather than unreachable after more than 60 s offline (P3, not G28).

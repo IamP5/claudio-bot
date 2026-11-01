@@ -123,3 +123,4 @@
 - Bridge (G28 verifier): Stop of "the turn and 1 command" on a frozen Claude Code left the perl command running after the forced end while the notice said "Stopped by you: the turn." (P2, G20/G25 area).
 - "Couldn't stop." before the bridge's stale-turn text reads like a failure when the message did go (P3, from main).
 - Settings says "Reconnecting" rather than unreachable after more than 60 s offline (P3, not G28).
+- G27 r5 gaps: a heredoc command can read ended late when its process group stays occupied (slow, not false; P3); an unrelated shell running the identical eval line gets its group recorded (errs alive; contrived three-part case could end twins early; P3).

@@ -50,7 +50,7 @@ ts	role	group	branch	state	stuck_after	note
 2026-11-01T01:03:39Z	owner	G29	ux/sessions-g29-wide	merged #37 (verify PASS first round)	4h	run 3 wave 4
 2026-11-01T01:26:06Z	verifier	G25	ux/sessions-g25-crash-restart	r2 PASS af0e618; S6e 6/6 incl. under load	3h	fresh, independent of owner
 2026-11-01T01:57:03Z	verifier	G29	ux/sessions-g29-wide	PASS 366975e; live stale pane/chip verified	2h	independent of owner
-2026-11-01T02:08:58Z	owner	G27	ux/sessions-g27-unsure	PR #38 round 5 (process-group tracking)	5h	run 3 wave 4; carries wedged-lookup item
+2026-11-01T02:08:58Z	owner	G27	ux/sessions-g27-unsure	PR #38 round 5 at ba5cb87; verifying	5h	run 3 wave 4; carries wedged-lookup item
 2026-11-01T02:08:58Z	owner	G28	ux/sessions-g28-requests	PR #39 round 2 at d4e0a7d; verifying	6h	run 3 wave 4; carries stopped-card render, link note, iOS presence gap
 2026-11-01T02:46:52Z	verifier	G27	ux/sessions-g27-unsure	r1 FAIL ebe8997: P1 exec'd unpaired command reads ended while running (count 0 on first look)	3h	independent of owner
 2026-11-01T03:37:13Z	verifier	G27	ux/sessions-g27-unsure	r2 FAIL 4636a07: P1 counted via eval shell then exec'd into hidden form, ended while running	2h	fresh, independent of owner
@@ -58,3 +58,4 @@ ts	role	group	branch	state	stuck_after	note
 2026-11-01T04:12:00Z	verifier	G27	ux/sessions-g27-unsure	r3 FAIL 6dc4292: P1 . script / eval hide; P2 quoted-; redirect; P3 e''xec	2h	fresh, independent of owner
 2026-11-01T05:08:50Z	verifier	G27	ux/sessions-g27-unsure	r4 FAIL 6d1150a: 4 zsh tokenizer bypasses (fd-number, noglob, A+=, | exit)	2h	fresh, independent of owner
 2026-11-01T05:58:35Z	verifier	G28	ux/sessions-g28-requests	r2 verifying d4e0a7d	2h	fresh, independent of owner
+2026-11-01T06:02:00Z	verifier	G27	ux/sessions-g27-unsure	r5 verifying ba5cb87	2h	fresh, independent of owner

@@ -276,3 +276,4 @@ ts	decision	why
 2026-11-01T22:32:05Z	LEAN MODE: Remaining areas (Chat, Home, Pairing, Settings) are audited together in one run and fixed in parallel worktrees, sequenced only where files are shared	user asked to parallelize
 2026-11-01T22:32:05Z	LEAN MODE: Pool raised to 6 devices: ClaudioBot-UX-4..6 cloned from the iPhone 17 Pro on iOS 26.2 (3AE408D1, 69D0FF69, 62FE9B64); runner POOL list to be updated	user chose 6 simulators
 2026-11-01T22:32:05Z	LEAN MODE: The full Sessions rerun audit (wf_56de62f5-fb6) was stopped in round 2 and replaced by a targeted re-check of the 52 run-3 P1s	lean mode
+2026-11-01T23:07:41Z	Runner #42 merged: pool ClaudioBot-UX-1..6; 14 scenarios for Chat (C1-C4), Home (H1-H3), Pairing (P1-P3), Settings (T1-T4); early failures on main T1.1, T2.3, T3.2, T3.3, H1.5, C4.3	root review: tooling and docs only, no Sessions rubric changed

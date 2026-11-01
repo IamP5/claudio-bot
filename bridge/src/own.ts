@@ -530,17 +530,10 @@ export function createOwn(deps: OwnDeps): Own {
       const dropped = pending.slice(0, Math.max(0, pending.length - STOPPED_STEPS_KEPT));
       const drop = new Set([...ended.slice(0, Math.max(0, ended.length - STOPPED_STEPS_KEPT)), ...dropped]);
       driveOf(rec).unpaired = all.filter((u) => !drop.has(u));
-      keepUnsure(rec, dropped);
+      markUnsure(rec, dropped);
     }
     markUnsure(rec, fate.unknown.filter((t) => !looked(t) && t.command === undefined));
     adopt(rec, fate.running, fate.unknown, cause);
-  }
-
-  /** Steps that keep reading that the bridge cannot tell, though nothing looks at them any more. */
-  function keepUnsure(rec: SessionRecord, tasks: readonly BackgroundTask[]) {
-    if (tasks.length === 0) return;
-    const drive = driveOf(rec);
-    drive.unsure = [...(drive.unsure ?? []), ...tasks.map((t) => t.stepId ?? `task:${t.id}`)].slice(-UNSURE_KEPT);
   }
 
   /** Background work the bridge cannot check and cannot look at again: its steps say the bridge cannot tell. */
@@ -549,7 +542,7 @@ export function createOwn(deps: OwnDeps): Own {
     const drive = driveOf(rec);
     unsureRun.add(rec.id);
     drive.unchecked = true;
-    keepUnsure(rec, tasks);
+    drive.unsure = [...(drive.unsure ?? []), ...tasks.map((t) => t.stepId ?? `task:${t.id}`)].slice(-UNSURE_KEPT);
     deps.persist("now");
   }
 

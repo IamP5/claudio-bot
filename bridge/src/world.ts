@@ -527,10 +527,11 @@ export type OwnDrive = {
   outlived?: (BackgroundTask & { group: number; over?: "ended" | "stopped" | "unsure"; endedAt?: string })[];
   /**
    * Commands the bridge found no shell of their own for (two alike, or none exact), watched by how many processes run
-   * exactly that command: they may still run while any does, and are never signalled. endedAt: the first look that
-   * found none.
+   * exactly that command: they may still run while any does, and are never signalled. counted: some look found one
+   * running, so a count of none is the command gone rather than a form the count cannot see. endedAt: the first look
+   * after that found none.
    */
-  unpaired?: (BackgroundTask & { command: string; endedAt?: string })[];
+  unpaired?: (BackgroundTask & { command: string; counted?: true; endedAt?: string })[];
   /**
    * Steps of background work whose fate the bridge could not check, and has no process group to look at again: they
    * read that it cannot tell. A step is named by its tool_use id, or as task:<id> when only its task is known.

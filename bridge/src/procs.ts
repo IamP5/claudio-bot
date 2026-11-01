@@ -100,18 +100,30 @@ export function psText(command: string): string {
 }
 
 /**
- * How many processes run each command as Claude Code's shells run one (evalArg of their command line), whoever started
- * them; null when the process table could not be read. A count can only say a command may still run, never which
- * process is it.
+ * What a command's shell becomes when the command ends by exec-ing a plain program (`…; exec sleep 170`): the program
+ * and its words, as ps shows them. null when the last exec redirects, quotes, expands or chains anything, since what
+ * runs then cannot be told from the text.
+ */
+export function execTail(command: string): string | null {
+  const m = /(?:^|;|&&|\|\||\n)\s*exec\s+([^;&|<>$`'"()\\\n#*?[\]{}~]+)$/.exec(command.trim());
+  const words = m?.[1]!.trim().split(/\s+/) ?? [];
+  return words.length === 0 || /^-|^\d*$/.test(words[0]!) ? null : words.join(" ");
+}
+
+/**
+ * How many processes run each command as Claude Code's shells run one (evalArg of their command line), or as the program
+ * the shell exec'd into (execTail), whoever started them; null when the process table could not be read. A count can
+ * only say a command may still run, never which process is it, and a form it cannot see counts nothing.
  */
 export async function commandCounts(commands: readonly string[]): Promise<Map<string, number> | null> {
   const out = await read(["ps", "-axww", "-o", "command="], READ_TIMEOUT_MS, { ...process.env, LC_ALL: "C" });
   // ps lists itself at least, so an empty table was not read.
   if (out === null || out.trim() === "") return null;
   const counts = new Map(commands.map((c) => [c, 0]));
-  const wanted = new Map(commands.map((c) => [psText(c), c]));
+  const shells = new Map(commands.map((c) => [psText(c), c]));
+  const execs = new Map(commands.flatMap((c) => (execTail(c) === null ? [] : [[psText(execTail(c)!), c] as const])));
   for (const line of out.split("\n")) {
-    const command = wanted.get(evalArg(line) ?? "");
+    const command = shells.get(evalArg(line) ?? "") ?? execs.get(line.trim());
     if (command !== undefined) counts.set(command, counts.get(command)! + 1);
   }
   return counts;

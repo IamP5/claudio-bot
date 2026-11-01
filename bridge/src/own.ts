@@ -568,7 +568,8 @@ export function createOwn(deps: OwnDeps): Own {
       deps.persist("now");
       return changed(rec.id);
     }
-    if (maybe.length > 0) notice(rec.id, goneNote("Claude Code", cause, "unknown", maybe, names(maybe)), "info", cause === "restart" ? "restart" : undefined);
+    if (maybe.length > 0)
+      notice(rec.id, `${goneNote("Claude Code", cause, "unknown", maybe, names(maybe))} ${pick(maybe.length, CHECK_IT, CHECK_THEM)}`, "info", cause === "restart" ? "restart" : undefined);
     if (add.length === 0) return;
     const runs = runsSaid(add.length);
     notice(
@@ -642,11 +643,17 @@ export function createOwn(deps: OwnDeps): Own {
       const seen = now();
       const back = recheck.filter((o, i) => again[i] === "runs" && doubtedNow().some((x) => x.id === o.id));
       const doubtedGone = doubtedNow().filter((o) => !back.includes(o) && !groupAlive(o.group));
-      const unpairedGone = counts === null ? [] : unpaired(rec).filter((u) => counts.get(u.command) === 0);
+      // A count of none means gone only once some look counted the command: before that it may run in a form ps hides.
+      const unpairedSeen = counts === null ? [] : unpaired(rec).filter((u) => u.counted === undefined && (counts.get(u.command) ?? 0) > 0);
+      const unpairedGone = counts === null ? [] : unpaired(rec).filter((u) => u.counted === true && counts.get(u.command) === 0);
       for (const o of [...back, ...doubtedGone]) unsureLooks.delete(`${rec.id}:${o.id}`);
       const ended = [...found("gone"), ...doubtedGone];
       const unsure = found("unsure");
       Object.assign(before, { outlived: drive.outlived, unpaired: drive.unpaired, notices: drive.notices });
+      if (unpairedSeen.length > 0) {
+        drive.unpaired = (drive.unpaired ?? []).map((u) => (unpairedSeen.includes(u) ? { ...u, counted: true as const } : u));
+        deps.persist("now");
+      }
       if (ended.length + unsure.length + back.length + unpairedGone.length === 0) return;
       letGo(rec, ended.map((o) => o.id), "ended", seen);
       letGo(rec, unsure.map((o) => o.id), "unsure");

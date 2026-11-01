@@ -226,3 +226,10 @@ ts	decision	why
 2026-10-31T22:15:59Z	G24: outlived row puts the count first and drops "Stop ends them" (departs from decision 161 wording "still running ... Stop ends them")	verifier ruling: count survives the one-line cut at AX XXXL; the row has no Stop
 2026-10-31T22:33:44Z	G22: an owed push is dropped only on a real look; a live app only delays it; a socket that has not spoken counts as live for at most 45 s after connect	r3 verifier P2: liveness dropped owed pushes on slow links
 2026-10-31T22:51:05Z	G23: a folded turn names its first failure with the run header's exact text	same words folded or open
+2026-11-01T00:10:02Z	G26: Status line shows "3 agents"; VoiceOver adds "(each running a command)"	a cut inside the brackets lost words at AX XXXL
+2026-11-01T00:10:02Z	G26: Needs-you wait shows from 1 minute, in whole minutes	seconds ticking beside a new card distract
+2026-11-01T00:10:02Z	G26: Quiet speaks the real silence ("No word from your Mac for 45 seconds")	quiet starts at 45 s
+2026-11-01T00:10:02Z	G26: Running now counts rows ("4 running", "Stop all 4") while the line counts top-level work	the sheet lists every row it can stop
+2026-11-01T00:10:02Z	G26: Closed plan/question cards speak "closed without an answer", never "expired"	Stop closes them as expired on the wire
+2026-11-01T00:10:02Z	G26: A turn ending with work left waits 1.5 s before speaking	a crash is never first spoken as a finished turn
+2026-11-01T00:10:02Z	G26: "Stopped" is muted only when every open card was a permission card	only permission cards speak their own stop

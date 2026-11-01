@@ -310,9 +310,13 @@ final class BridgeClient {
     }
 
     /// The app is on screen again. After a short absence the socket is probed and the threads are watched again from
-    /// where the app stands; after a longer one the app connects again, since a socket that slept is often dead.
+    /// where the app stands; after a longer one the app connects again, since a socket that slept is often dead. An app
+    /// launched in the background starts unattended without having left, so its first time on screen says so too.
     func comeBack() {
-        guard let since = awaySince else { return retryNow() }
+        guard let since = awaySince else {
+            if attended == false { attended = true }
+            return retryNow()
+        }
         awaySince = nil
         attended = true
         if store.machine != nil, Date.now.timeIntervalSince(since) >= timing.awayBeforeReconnect { return reconnect() }

@@ -403,6 +403,20 @@ private func scratchVault() -> PairingVault {
         client.stop()
     }
 
+    @Test func anAppLaunchedInTheBackgroundSaysItIsAwayAtHelloAndAttendedOnItsFirstTimeOnScreen() async throws {
+        let bridge = try FakeBridge(onOpen: { $0.send(threadsHello) })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        let client = BridgeClient(store: AppStore(), vault: scratchVault(), timing: quick)
+        client.attended = false
+        client.send(.answer(botId: BotID("b1"), messageId: MessageID("m1"), option: 0))
+        client.start(pairing)
+        try await eventually("the answer") { bridge.texts.contains { $0.contains(#""type":"answer""#) } }
+        #expect(bridge.texts.first == #"{"attended":false,"type":"presence"}"#, "said before anything else")
+        client.comeBack()
+        try await eventually("presence on screen") { bridge.texts.contains(#"{"attended":true,"type":"presence"}"#) }
+        client.stop()
+    }
+
     @Test func anAppThatNeverSetsAttentionNeverSendsPresence() async throws {
         let presenceHello = #"{"type":"hello","protocol":3,"features":["presence"],"machine":"Mac","userName":"Alex","epoch":"","seq":0,"resumed":false,"bots":[]}"#
         let bridge = try FakeBridge(onOpen: { $0.send(presenceHello) })

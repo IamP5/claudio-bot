@@ -40,15 +40,16 @@ Needs the simulator: no (simulator items run with `--sim`).
 | --- | --- | --- | --- | --- | --- |
 | S1.1 | what | protocol | Each subagent appears as its own step that names its job. | At least 3 Agent/Task steps, with distinct labels that carry the description. | Fewer than 3 subagent steps, or labels that do not tell them apart. |
 | S1.2 | how-many | protocol | The phone can tell that three subagents run at the same time. | At one moment, 3 subagent steps are in state running. | The most running at once is under 3 (they look sequential, or their state is not live). |
-| S1.3 | state | protocol | While the subagents run, the Sessions list shows the session as working. | row.status is working in every state between agents-from and agents-to (the subagents' own transcripts). | The row reads idle (or another rest state) while subagents still run. |
+| S1.3 | state | protocol | While the subagents run, the Sessions list shows the session as working, or as needing the user while a subagent's card waits. | row.status is working in every state between agents-from and agents-to (the subagents' own transcripts), or awaiting_approval while a card raised in that window is open (up to 1 s after its answer, the list's coalescing). | The row reads idle, failed, parked or another rest state while subagents still run, or awaiting_approval with no open card. |
 | S1.4 | state | protocol | Each subagent's step reads done when that subagent finishes, not before, and none stays running after. | Each Agent step first reads ok no earlier than 2 s before its subagent's final result (the last line of its transcript when that is plain text), and reads ok at the end. | A step reads ok while its subagent still runs (or stays running after it ended). |
 | S1.5 | how-long | protocol | While a subagent runs, the phone can show how long it has been running, also after reopening the thread. | Every running step carries a start time (a step field), or is the first step of its work item, whose `at` is its start. | A running step has no start time on the wire, so elapsed time can only be counted from when the phone happened to see it. |
 | S1.6 | what | protocol | The user can see what a running subagent is doing inside, not only that it runs. | A child row (parentId = the session) is listed, a running subagent step carries progress output, or controls.tasks has an agent task with progress. | A running subagent is an opaque line: no child row, no output and no task progress until it returns. |
 | S1.7 | stop | protocol | While the subagents runs, the thread offers Stop. | controls.working is true in every thread state between marks agents-from and agents-to. | Some state in that window has controls.working false, so the app shows no Stop for work that is still running. |
 | S1.8 | how-many | simulator (running) | Mid-run, the thread shows three labeled subagent rows, each visibly running, and a Stop button. | All three rows, a running indicator on each, Stop visible. | Rows missing or merged, no running indicator, or no Stop. |
 | S1.9 | state | simulator (done) | After the turn, the thread shows all three done and the session at rest. | Three done rows, no spinner, composer ready. | A spinner or running state remains. |
-| S1.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S1.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed|<\/?tools-used-before-summary>. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
 | S1.11 | how-many | protocol | With the phone away, approvals that open together arrive as one push that counts them, not one buzz each. | With --away, each burst of cards (each within 2 s of the one before, the burst under 6 s) gets exactly one card push, in order, counting the burst's cards; no push names a command. | A burst sends a push per card, a count that does not match, or no push at all. |
+| S1.12 | how-many | protocol | The row's count of running work counts each subagent once, not again for the command it runs itself. | The main thread runs no command, so every state between agents-from and agents-to whose row carries running has running.commands 0: each subagent's own command belongs under it. | row.running counts the commands the subagents started, so three subagents each running a command read as six things. |
 
 ## S1b Three parallel subagents in the background (Claude Code's default)
 
@@ -86,15 +87,16 @@ Needs the simulator: no (simulator items run with `--sim`).
 | --- | --- | --- | --- | --- | --- |
 | S1b.1 | what | protocol | Each subagent appears as its own step that names its job. | At least 3 Agent/Task steps, with distinct labels that carry the description. | Fewer than 3 subagent steps, or labels that do not tell them apart. |
 | S1b.2 | how-many | protocol | The phone can tell that three subagents run at the same time. | At one moment, 3 subagent steps are in state running. | The most running at once is under 3 (they look sequential, or their state is not live). |
-| S1b.3 | state | protocol | While the subagents run, the Sessions list shows the session as working. | row.status is working in every state between agents-from and agents-to (the subagents' own transcripts). | The row reads idle (or another rest state) while subagents still run. |
+| S1b.3 | state | protocol | While the subagents run, the Sessions list shows the session as working, or as needing the user while a subagent's card waits. | row.status is working in every state between agents-from and agents-to (the subagents' own transcripts), or awaiting_approval while a card raised in that window is open (up to 1 s after its answer, the list's coalescing). | The row reads idle, failed, parked or another rest state while subagents still run, or awaiting_approval with no open card. |
 | S1b.4 | state | protocol | Each subagent's step reads done when that subagent finishes, not before, and none stays running after. | Each Agent step first reads ok no earlier than 2 s before its subagent's final result (the last line of its transcript when that is plain text), and reads ok at the end. | A step reads ok while its subagent still runs (or stays running after it ended). |
 | S1b.5 | how-long | protocol | While a subagent runs, the phone can show how long it has been running, also after reopening the thread. | Every running step carries a start time (a step field), or is the first step of its work item, whose `at` is its start. | A running step has no start time on the wire, so elapsed time can only be counted from when the phone happened to see it. |
 | S1b.6 | what | protocol | The user can see what a running subagent is doing inside, not only that it runs. | A child row (parentId = the session) is listed, a running subagent step carries progress output, or controls.tasks has an agent task with progress. | A running subagent is an opaque line: no child row, no output and no task progress until it returns. |
 | S1b.7 | stop | protocol | While the subagents runs, the thread offers Stop. | controls.working is true in every thread state between marks agents-from and agents-to. | Some state in that window has controls.working false, so the app shows no Stop for work that is still running. |
 | S1b.8 | how-many | simulator (running) | Mid-run, the thread shows three labeled subagent rows, each visibly running, and a Stop button. | All three rows, a running indicator on each, Stop visible. | Rows missing or merged, no running indicator, or no Stop. |
 | S1b.9 | state | simulator (done) | After the turn, the thread shows all three done and the session at rest. | Three done rows, no spinner, composer ready. | A spinner or running state remains. |
-| S1b.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S1b.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed|<\/?tools-used-before-summary>. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
 | S1b.11 | how-many | protocol | With the phone away, approvals that open together arrive as one push that counts them, not one buzz each. | With --away, each burst of cards (each within 2 s of the one before, the burst under 6 s) gets exactly one card push, in order, counting the burst's cards; no push names a command. | A burst sends a push per card, a count that does not match, or no push at all. |
+| S1b.12 | how-long | protocol | When a background subagent finishes, the thread's notice says how long it ran. | Each of the 3 sleepers has a task notice (reason task) that names it, and every such notice carries a run time such as "35s" outside the quoted name. | A sleeper has no finished notice, or its notice says nothing of how long it ran. |
 
 ## S2 A long background Bash command
 
@@ -108,7 +110,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 **Setup.**
 
-- New session `s2` in demo (haiku, mode default): "Use the Bash tool with run_in_background set to true to run exactly this command: sleep 75 && echo bg-done > bg.txt Do not wait for it, do not check on it, do not run anything else. Reply with one line: started."
+- New session `s2` in demo (haiku, mode default): "Use the Bash tool with run_in_background set to true to run exactly this command: sleep 75 && echo bg-done | tee bg.txt Do not wait for it, do not check on it, do not run anything else. Reply with one line: started."
 - Wait up to 90 s for s2's turn to start; mark `s2-started`.
 - Wait up to 180 s for the turn that starts the command to end; mark `s2-ended`.
 - Leave `s2`'s thread for the list (unwatch_session; the bridge counts it as a visit, and a watched thread is never unread).
@@ -119,7 +121,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Wait 3 s.
 - Mark `mid-background`.
 - Screenshot `background-running` (simulator lane).
-- The app goes back to the Sessions list (simulator lane: relaunched on the list).
+- The app goes back to the Sessions list (simulator lane: relaunched on the list; protocol lane: the phone unwatches every thread it watches).
 - Leave `s2`'s thread for the list (unwatch_session; the bridge counts it as a visit, and a watched thread is never unread).
 - Wait up to 150 s for bg.txt to appear; mark `bg-done`.
 - Wait 20 s.
@@ -158,9 +160,10 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S2.7 | state | simulator (background-running) | Mid-background, the thread shows the command still running, with elapsed time and a Stop. | Running indicator, elapsed time, Stop. | The thread looks finished. |
 | S2.8 | state | simulator (after) | After it finished, the thread shows the result. | A done state or the wake turn's reply. | Still shows running, or nothing changed. |
 | S2.9 | stop | protocol | "Stop and send" stops the turn, not the background command the session started earlier. | A second background command (sleep 45, then bg2.txt) seen running before a send with interrupt still writes bg2.txt. | bg2.txt never appears: Stop and send killed the background command with the turn. |
-| S2.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S2.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed|<\/?tools-used-before-summary>. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
 | S2.11 | state | protocol | Once its work is over (the background command and the turn it woke), the session comes to rest. | Within 60 s of mark bg-done, a state reads not working: the row not busy and controls.working false. | The session still reads working 60 s after its work ended, so the busy row and Stop never go away. |
 | S2.12 | state | protocol | After a turn's final reply, the session does not read working while nothing runs. | After each final reply in the main transcript, until its next line, no stretch longer than 5 s reads controls.working true with no task listed. | The session reads working, with Stop, for more than 5 s while no task runs and Claude Code writes nothing. |
+| S2.13 | state | protocol | Once the background command has finished, its step shows what it printed. | At mark returned (the thread reopened after the command ended), the sleep 75 step reads ok and its output holds "bg-done", the line the command printed. | The step reads ok with no output, or output without the command's own line, so done carries no result. |
 
 ## S3 Background work finishes while the app is in the background
 
@@ -212,7 +215,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S3.5 | state | simulator (thread-before) | Before leaving, the thread shows the command running in the background. | Running indicator with what runs. | Looks finished. |
 | S3.6 | state | simulator (while-away) | While the app is away (Settings in front), a notification says the work finished. | Notification banner or badge. | Nothing. |
 | S3.7 | state | simulator (thread-after) | Back in the app, the thread shows the result, with no stale running indicator. | Done state and the reply. | Still running, or stale. |
-| S3.8 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S3.8 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed|<\/?tools-used-before-summary>. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
 | S3.9 | state | protocol | Once its work is over (the background command and the turn it woke), the session comes to rest. | Within 60 s of mark bg-done, a state reads not working: the row not busy and controls.working false. | The session still reads working 60 s after its work ended, so the busy row and Stop never go away. |
 
 ## S3b Background work finishes while the user is elsewhere in the app
@@ -233,7 +236,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Leave `s3b`'s thread for the list (unwatch_session; the bridge counts it as a visit, and a watched thread is never unread).
 - Open `s3b`'s thread: in the app by claudiobot://session/<id> (simulator lane), or watch it again if the phone had left it (protocol lane).
 - Wait 3 s.
-- The app goes back to the Sessions list (simulator lane: relaunched on the list).
+- The app goes back to the Sessions list (simulator lane: relaunched on the list; protocol lane: the phone unwatches every thread it watches).
 - Wait up to 90 s for bg3b.txt to appear; mark `bg-done`.
 - Wait up to 60 s for a session_alert that s3b finished; mark `alerted`.
 - Wait 1.5 s.
@@ -254,6 +257,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S3b.1 | state | protocol | While the app is open on another screen, it is told the session finished, so it can show a notification. | After bg-done, the phone gets a session_alert for s3b with reason finished and the session's title. | No session_alert, so an open app on another screen gives no sign that the work finished. |
 | S3b.2 | state | protocol | While the app is open, nothing is pushed from outside on top of it. | pushes.jsonl has no push about s3b, through 50 s after the alert (past the 45 s a phone counts as live without being heard). | A remote push also went out, so the user gets the news twice. |
 | S3b.3 | state | simulator (alert) | With the Sessions list on screen, a notification says the session finished. | A banner that names the session and says it finished. | No banner. |
+| S3b.4 | state | protocol | The finished alert reaches a phone that is elsewhere in the app, not one watching the thread. | The phone's last watch or unwatch of s3b before the finished alert is an unwatch (the user went back to the list), so no watch was open when it arrived. | The phone was watching s3b when the alert arrived, so S3b.1 and S3b.2 judged a thread on screen, not the list. |
 
 ## S4 A subagent fails, and the user stops one from the phone
 
@@ -301,7 +305,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S4.7 | state | simulator (running) | Mid-run, the failed subagent reads failed and the other running. | Two distinct states. | Same look for both. |
 | S4.8 | stop | simulator (stopped) | After Stop, the thread reads stopped, no spinner. | Stopped state. | Spinner left. |
 | S4.9 | state | protocol | The failed subagent reads failed as soon as Claude Code records the failure. | Its step first reads error within 2 s of the failed tool_result line in the transcript. | The step reads error later than 2 s after the transcript has the failure, or never. |
-| S4.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S4.10 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed|<\/?tools-used-before-summary>. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
 | S4.11 | state | protocol | After the user stops the session, no push claims it finished or failed. | With --away, no push after mark stopped says the session finished or stopped with an error. | A finished or failed push follows the user's own Stop. |
 
 ## S4b Stop one background task while nothing else runs
@@ -353,6 +357,8 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 1. Claude Code is frozen (a hung or busy Mac) when the user sends a prompt and presses Stop the turn only.
 2. Nothing may say the turn stopped while it is frozen. Once it resumes, the prompt must not run, and only then does the thread say the user stopped it.
+3. In a second session Claude Code stays frozen for 24 s, past the bridge's 15 s Stop deadline, and the user sends a follow-up 3 s after Stop.
+4. The thread must say a stop is pending at once, then that Claude Code did not answer and was ended; the stop sorts above the follow-up, and the stopped prompt stays in the thread.
 
 **Setup.**
 
@@ -365,23 +371,45 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Wait 1.5 s.
 - Press Stop the turn only on `s4c` (session_stop, target turn); mark `stopped`.
 - Wait 3 s.
-- Send SIGCONT to the Claude Code process of `s4c` (it resumes); mark `resumed`.
+- Send SIGCONT to the Claude Code process of `s4c` (the process it froze resumes, if it still lives); mark `resumed`.
 - Wait up to 60 s for the session to rest after it resumes; mark `s4c-rest` (optional).
 - Wait 8 s.
 - Mark `after`.
+- New session `s4k` in demo (haiku, mode default): "Reply with the single word ready."
+- Wait up to 90 s for s4k's turn to start; mark `s4k-started`.
+- Wait up to 120 s for s4k's first turn to end; mark `s4k-ready`.
+- Send SIGSTOP to the Claude Code process of `s4k` (it freezes); mark `k-frozen`.
+- Send in `s4k`: "Run these two Bash commands one at a time, each in its own tool call: echo s4kone ; echo s4ktwo . Then reply with the single word done."; mark `k-sent`.
+- Wait up to 30 s for the prompt's turn to show; mark `k-turn-shown`.
+- Wait 1.5 s.
+- Press Stop the turn only on `s4k` (session_stop, target turn); mark `k-stopped`.
+- Wait 3 s.
+- Send in `s4k`: "Reply with the single word s4kafter."; mark `k-followup`.
+- Wait 21 s.
+- Send SIGCONT to the Claude Code process of `s4k` (the process it froze resumes, if it still lives); mark `k-resumed`.
+- Wait up to 90 s for s4k to rest after the follow-up; mark `k-rest` (optional).
+- Wait 5 s.
+- Mark `k-after`.
+- A second phone opens `s4k`'s thread from scratch (watch_session with no position) and keeps its snapshot; mark `k-fresh`.
 
 **Preconditions** (any failure fails the scenario):
 
 - session s4c was created
 - Claude Code was frozen and resumed
+- session s4k was created
+- s4k's Claude Code stayed frozen past the 15 s Stop deadline (24 s from Stop to the resume)
 
 **Rubric.**
 
 | id | tells | lane | the user can tell | pass | fail |
 | --- | --- | --- | --- | --- | --- |
-| S4c.1 | stop | protocol | While Claude Code is frozen, nothing says the turn stopped. | No notice with reason stop appears between Stop and the resume. | A stop notice appears while Claude Code is still frozen. |
+| S4c.1 | stop | protocol | While Claude Code is frozen, nothing says the turn stopped. | No notice with reason stop reaches the phone between Stop and the resume. | A stop notice reaches the phone while Claude Code is still frozen. |
 | S4c.2 | stop | protocol | The stopped prompt does not run once Claude Code resumes, and Claude does not answer it. | The transcript has no Bash call for echo s4cone, s4ctwo or s4cthree, and no assistant text after the prompt. | Claude Code ran any of the prompt's commands, or Claude replied to it. |
-| S4c.3 | stop | protocol | Once the turn ended, the thread says the user stopped it, in the bridge's own words. | After the resume, a notice with reason "stop" starts "Stopped by you". | No such notice. |
+| S4c.3 | stop | protocol | Once the turn ended, the thread says the user stopped it, in the bridge's own words. | After the resume, a notice with reason "stop" that starts "Stopped by you" reaches the phone. | No such notice. |
+| S4c.4 | stop | protocol | While the bridge waits for a frozen Claude Code to confirm Stop, the thread says a stop is pending, so no phone offers a live Stop. | Within 1 s of k-stopped, s4k's controls carry stopping with at and a deadline after it. | No stopping in the controls within 1 s of Stop: the wire reads the turn as plain working. |
+| S4c.5 | stop | protocol | When Claude Code never answers Stop and the bridge ends it, the thread says so, not only that the user stopped it. | After k-stopped, a notice in s4k says Claude Code did not answer Stop and that the bridge ended it. | No notice says Claude Code did not answer and was ended: a forced end reads like a confirmed stop. |
+| S4c.6 | stop | protocol | The stop sits where the user pressed it: timed at the Stop, above a follow-up sent after it. | In s4k's thread at k-after, a stop notice (reason stop, starting "Stopped by you") is timed no later than the follow-up's send (3 s after Stop) and comes before the follow-up, and in no state from k-stopped to k-after does it sit under the follow-up. | No such notice, or it is timed later (at the kill) or sorts under the follow-up at any point, so where it lands against the follow-up is a race. |
+| S4c.7 | what | protocol | The prompt the user stopped stays in the thread, also when it is opened again, and the stop says which prompt it stopped, so they can see what did not run. | At k-after, s4k's thread holds a user item with the stopped prompt (s4kone), and so does a fresh open of it (k-fresh); a stop notice names the prompt by its first words. | The stopped prompt is gone from the thread, only the phone that saw it sent still holds it, or no stop notice names it. |
 
 ## S5 A silent two-minute tool call
 
@@ -422,8 +450,40 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S5.5 | stop | protocol | While the command runs, the thread offers Stop. | controls.working is true in every thread state between marks call-running and call-done. | Some state in that window has controls.working false, so the app shows no Stop for work that is still running. |
 | S5.6 | state | protocol | When it ends, the step reads done and the reply follows. | The Bash step ends ok and an assistant item follows. | The step or the reply is missing. |
 | S5.7 | how-long | simulator (at-30s, at-90s) | At 30 s and 90 s the thread looks alive: a running indicator and an elapsed time that moves. | Elapsed time differs between the two shots. | Identical frozen screens. |
-| S5.8 | state | protocol | While the command waits on its approval card, the thread says it waits, not that it runs. | In every state with the Bash card open (the user takes 10 s to allow), the Bash step is on the wire in state waiting. | A state with the card open shows the step running, or shows no step. |
-| S5.9 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S5.8 | state | protocol | While the command waits on its approval card, the thread says it waits, not that it runs. | In every state with the Bash card open (the user takes 60 s to allow), the Bash step is on the wire in state waiting. | A state with the card open shows the step running, or shows no step. |
+| S5.9 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed|<\/?tools-used-before-summary>. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S5.10 | state | protocol | While the thread waits on the user's card, the bridge still says it is alive, so the phone never reads it as gone quiet. | From the card's opening to its answer (the user takes 60 s), the longest gap between thread frames (session, session_items) about s5 is at most 30 s. | A gap over 30 s while the card waits: a phone that counts 45 s of silence as quiet says no word from the Mac over an open card. |
+
+## S5t A foreground command passes its time limit and moves to the background
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. The user's session runs a command in the foreground with an 8 s time limit; the command sleeps 60 s.
+2. Claude Code does not stop it at the limit: it moves it to the background and the turn goes on. The thread must say so when it happens.
+
+**Setup.**
+
+- New session `s5t` in demo (haiku, mode default): "Run exactly this Bash command in the foreground (not in the background), with timeout 8000: perl -e 'sleep 60' && echo fin > fin.txt Then reply with one line: done."
+- Wait up to 90 s for s5t's turn to start; mark `s5t-started`.
+- Open `s5t`'s thread: in the app by claudiobot://session/<id> (simulator lane), or watch it again if the phone had left it (protocol lane).
+- Wait up to 150 s for the command's task to turn background; mark `moved`.
+- Wait 5 s.
+- Mark `after-moved`.
+- Wait up to 90 s for fin.txt to appear; mark `fin` (optional).
+- Wait up to 60 s for the session to rest; mark `s5t-rest` (optional).
+
+**Preconditions** (any failure fails the scenario):
+
+- session s5t was created
+- Claude Code moved the foreground command to the background at its time limit (its tool result says so)
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S5t.1 | state | protocol | When Claude Code moves a running command to the background at its time limit, the thread says so at once. | A notice that says the command moved to (or kept running in) the background reaches the phone no later than 3 s after the state in which its task first reads background. | The command silently turns into background work: no such notice, or one more than 3 s late. |
 
 ## S6 Reconnect in the middle of a run, then a crash and a bridge restart
 
@@ -436,6 +496,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 3. Each time, the thread must show the truth at once: still running, then done, with no duplicates, in the same order as a fresh open.
 4. Offline once more, the user sends a message; it goes out when the phone is back, and its command runs.
 5. Claude Code crashes mid-command, then the Mac's bridge restarts. The thread and the row must say the run failed, and keep saying it.
+6. The user then sends a message, as the crash notice tells them to: the command that still runs shows no result, and no reply appears that Claude never gave.
 
 **Setup.**
 
@@ -463,6 +524,10 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Wait 8 s.
 - Mark `after-restart`.
 - Screenshot `after-restart` (simulator lane).
+- Send in `s6`: "Reply with exactly one word: back."; mark `sent-after-crash`.
+- Wait up to 90 s for the reply to the message sent after the crash; mark `back-replied` (optional).
+- Wait 3 s.
+- Mark `after-send`.
 
 **Preconditions** (any failure fails the scenario):
 
@@ -485,8 +550,10 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S6.6 | state | simulator (after-resume-1, after-resume-2) | Right after each reconnect, the thread on screen matches the truth. | Running after resume-1, done after resume-2. | Stale state. |
 | S6.7 | state | protocol | When Claude Code dies mid-command, the row says the run failed and why, and a step reads running only while its command still runs on the Mac, as a task Stop can end. | At mark after-kill, row.outcome is failed with its cause; every Bash step that reads running names the perl sleep 90, which still runs (sample after-kill), and controls.tasks offers it; no other step reads running; the row reads failed, or working only while that task runs. | A step reads running whose command is gone or that no task offers, the command runs but its step reads failed or stopped, or the row gives no failure and cause. |
 | S6.8 | state | protocol | The failure outlives a bridge restart: the row and the thread still say the run failed. | At mark after-restart, the row reads failed (or its outcome is failed or lost) and the thread still holds a notice that says the run failed or that the bridge restarted. | After the restart the row reads idle, or the thread lost the notice. |
-| S6.9 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S6.9 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed|<\/?tools-used-before-summary>. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
 | S6.10 | what | protocol | The message sent offline runs exactly once, and a frame shows it back so the app stops resending it. | The perl sleep 90 prompt is in the transcript once, and a frame named the send's clientId after resume-3. | It ran twice, never, or no frame named it, so the app would call it not sent. |
+| S6.11 | state | protocol | After the crash and a new message, a step that still runs shows no result: Claude Code never saw its command end. | In every state from sent-after-crash to after-send, no step that reads running carries output. | A running step carries output, such as Claude Code's "Tool call interrupted" text, so a live command reads as if it had a result. |
+| S6.12 | what | protocol | After the crash and a new message, the thread shows no reply Claude never gave. | From sent-after-crash on, no assistant item reads "No response requested." (Claude Code's synthetic recovery line). | An assistant item reads "No response requested.", a reply nobody asked for. |
 
 ## S6b A thread frame lost on its way to the app
 
@@ -576,6 +643,8 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 1. Two long commands run in the background. One sends its output elsewhere at once, the other a little later, so after the bridge restarts it cannot prove either is still the command.
 2. Both end on their own. The thread must never show them running forever: once the bridge cannot tell, the steps say so and stop spinning, and the session rests.
+3. A third session runs the same command twice at once, so the bridge cannot pair either with a process. Both must still read ended once no such process remains.
+4. No finished alert may go out while the bridge cannot tell whether a command still runs, and each end is said within 10 s of the process going.
 
 **Setup.**
 
@@ -585,13 +654,18 @@ Needs the simulator: no (simulator items run with `--sim`).
 - New session `vu2` in demo (haiku, mode default): "Use the Bash tool with run_in_background set to true to run exactly this command: sleep 25; exec >/dev/null 2>&1; sleep 52 Do not wait for it, do not check on it, do not run anything else. Reply with one line: started."
 - Wait up to 90 s for vu2's turn to start; mark `vu2-started`.
 - Wait up to 180 s for vu2's turn to end; mark `vu2-ended`.
-- Wait up to 60 s for both commands to run on the Mac; mark `bg-running`.
+- New session `vu3` in demo (haiku, mode default): "Use the Bash tool twice, in two separate tool calls, each with run_in_background set to true, to run exactly this same command each time: exec >/dev/null 2>&1; sleep 53 Do not wait for them, do not check on them, do not run anything else. Reply with one line: started."
+- Wait up to 90 s for vu3's turn to start; mark `vu3-started`.
+- Wait up to 180 s for vu3's turn to end; mark `vu3-ended`.
+- Wait up to 60 s for all commands to run on the Mac; mark `bg-running`.
+- Sample the Mac's processes matching `sleep 53` in the seed project as `twins`.
 - Restart the bridge on the same port and home; the phone reconnects. Mark `restarted`.
 - Wait 8 s.
 - Mark `after-restart`.
 - Wait up to 150 s for vu1's command to end; mark `vu1-gone`.
 - Wait up to 150 s for vu2's command to end; mark `vu2-gone`.
-- Wait up to 150 s for both commands to end; mark `all-gone`.
+- Wait up to 150 s for vu3's twin commands to end; mark `vu3-gone`.
+- Wait up to 150 s for every command to end; mark `all-gone`.
 - Wait 10 s.
 - Mark `after-ended`.
 - Wait 30 s.
@@ -604,7 +678,9 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 - session vu1 was created
 - session vu2 was created
+- session vu3 was created
 - the bridge restarted
+- vu3 ran its command twice, as twin background steps
 
 **Rubric.**
 
@@ -613,6 +689,10 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S6d.1 | state | protocol | Once the bridge cannot tell whether a command still runs, its step stops spinning and says so, and the session rests; one it still follows reads running. | At mark after-restart, vu1's Bash step is in state "unsure" with a cause that says the bridge cannot tell, and vu1 is not working; vu2's step is running with a task that names it, or already unsure; neither reads stopped. | vu1's step reads anything but unsure, or vu1 reads working; or vu2's step reads stopped, or running with no task. |
 | S6d.2 | state | protocol | After both commands ended, neither thread shows a step running and neither session works, 10 s and 40 s later. | At marks after-ended and after-ended-40s, no Bash step of vu1 or vu2 reads running, and neither reads working. | A step still reads running, or a session reads working. |
 | S6d.3 | state | protocol | Each command's end is said once, whether the bridge knew its process group or found it only by its command line. | By mark after-said, vu1 and vu2 each hold exactly one notice that the command "ended", said no earlier than 1 s before the run saw that command's process gone, and each Bash step is in state "ended", neither stopped nor unsure. | A thread never says its command ended, says it twice, says it while the process still ran, or its step reads anything but ended. |
+| S6d.4 | state | protocol | No session says it finished while the bridge cannot tell whether its command still runs. | No finished alert for vu1, vu2 or vu3 arrives while a step of that session reads unsure. | A finished alert arrives while a step reads unsure, so the user hears finished while the command may still run. |
+| S6d.5 | how-long | protocol | Once a command the bridge could not check has ended, its step says ended within seconds. | For vu1 and vu2, the Bash step first reads ended no later than 10 s after the run saw its process gone (vu1-gone, vu2-gone). | A step still reads may still run more than 10 s after its process is gone. |
+| S6d.6 | state | protocol | Two identical commands the bridge could not pair with a process both read ended once neither runs. | At mark after-said (or the end of the run), both of vu3's sleep 53 steps read ended. | A twin step still reads unsure (may still run) after every such process is gone. |
+| S6d.7 | state | protocol | No notice claims the bridge no longer shows a command it still shows. | No notice in vu1, vu2 or vu3 says "no longer shows it". | A notice says the bridge no longer shows the command, while its step is on screen and an earlier notice said Stop ends it. |
 
 ## S6e Foreground commands that outlive a bridge restart and a Claude Code crash
 
@@ -623,6 +703,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 1. A turn runs a long command in the background, then one in the foreground. The Mac's bridge restarts mid-turn: Claude Code goes with it, but both commands keep running.
 2. In a second session the same, but Claude Code itself crashes mid-turn.
 3. Each time the turn is over, but the thread must say the commands still run, keep their steps running (never stopped or failed, not even for a moment), and offer Stop, which must end them on the Mac.
+4. The crash and the restart are each told once, saying what still runs; the row never flickers, and stopping the leftovers does not hide the crash.
 
 **Setup.**
 
@@ -641,6 +722,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 - SIGKILL the Claude Code process of `e2`; mark `killed`.
 - Wait 8 s.
 - Sample the Mac's processes matching `sleep 3656` in the seed project as `e2-after-crash`.
+- Sample the Mac's processes matching `sleep 3655` in the seed project as `e2-bg-after-crash`.
 - Mark `e2-after-crash`.
 - Stop only the task `sleep 3654` of `e1` (session_stop with target task); mark `e1-stop`.
 - Press Stop on `e2` (session_stop); mark `e2-stop`.
@@ -664,6 +746,10 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S6e.2 | stop | protocol | After the restart the session reads working with the foreground command as a task, so Stop is offered. | At mark e1-after-restart, controls.working is true and controls.tasks has one task whose step is the perl sleep 3654's. | The session rests, or no task offers the foreground command. |
 | S6e.3 | state | protocol | After Claude Code crashes, the run reads failed, yet neither command's step ever reads failed or stopped while it runs, and the thread says they still run. | Every e2 snapshot from the kill to the Stop has the Bash steps of sleep 3655 and sleep 3656 running; a notice says they still run on this Mac with "Stop ends"; at e2-after-crash row.outcome is failed with a cause and controls.tasks offers the perl sleep 3656. | A snapshot shows either step error or stopped while it ran, no notice says they run, the outcome is not failed, or no task offers the command. |
 | S6e.4 | stop | protocol | Stop ends the foreground commands on the Mac, and the thread says the user stopped them. | The perl sleeps 3654 and 3656 are gone 6 s after their Stops (sample after-stop), and each session holds a notice that starts "Stopped by you" and names its perl sleep, after its Stop. | A perl sleep still runs after its Stop, or a session has no such notice. |
+| S6e.5 | state | protocol | When Claude Code crashes while its commands keep running, the user is told at once that it stopped with an error, and how many commands still run. | Within 10 s of the kill, a session_alert for e2 with reason failed arrives whose running.commands is the number of e2's commands still alive 8 s after the kill (samples e2-bg-after-crash and e2-after-crash). | No failed alert within 10 s, or one without running counts or with the wrong count. |
+| S6e.6 | state | protocol | Stopping the commands that outlived the crash does not erase the crash from the row. | From e2-stop to the end of the run, every e2 row outcome is kind failed. | After the Stop the row's outcome reads stopped (or anything but failed), so the crash is gone from the list. |
+| S6e.7 | state | protocol | The row's status changes once per real change: no failed, working, failed flicker across the restart or the crash. | From restarted to e1-stop for e1, and from killed to e2-stop for e2 (the state carried in included), no row status comes back after the row left it. | A status returns after another one in between, such as working, failed, working. |
+| S6e.8 | how-many | protocol | The alert for the restart says that the commands still run, not only that the session was interrupted. | e1's session_alert with reason lost carries running with at least 1 command. | No lost alert, or one without running counts, so an away user hears the work died while it runs on. |
 
 ## S6f The bridge restarts in the middle of a run while the user is away
 
@@ -674,6 +760,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 1. The user starts a long command and puts the phone away. The Mac's bridge restarts mid-turn, so the turn is cut off.
 2. Once the bridge is back and no phone came back to look, the user must get one push that says the run was interrupted, with nothing of the session's content in it.
 3. A second restart must not push it again.
+4. After each restart the row keeps the one interruption it already holds, and the command that outlived it keeps its foreground word.
 
 **Setup.**
 
@@ -701,6 +788,8 @@ Needs the simulator: no (simulator items run with `--sim`).
 | --- | --- | --- | --- | --- | --- |
 | S6f.1 | state | protocol | The user away from the phone hears once that the run was interrupted by the restart, in words that hold nothing of the session. | Between the first and second restart, exactly one push links to f1; it says the session "was interrupted by a bridge restart", names no command, and went out within 90 s of the restart. | No push, more than one, a push that names the command, or one that says the run finished or failed. |
 | S6f.2 | state | protocol | Another restart does not push the same interruption again. | From the second restart to mark after-second (75 s, past the start grace), no push links to f1. | A push about f1 goes out after the second restart. |
+| S6f.3 | state | protocol | Each restart leaves the row's interruption as it was, and says it in the thread once. | The row outcome first seen after the first restart has the same kind and at in the last state before f1-stop, and no restart notice first appears after the second restart or repeats an earlier one's text. | The second restart rewrites the outcome (another kind or time), or adds a second copy of the restart notice. |
+| S6f.4 | what | protocol | The foreground command that outlives the restart keeps its foreground word on the row and in the task list. | From restarted to f1-stop, no f1 row activity starts with Background, and every task for the perl sleep 3657 reads background false. | The row says Background: perl … or the task reads background, for a command the user ran in the foreground. |
 
 ## S6g Requests that outlive the socket
 
@@ -711,7 +800,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 1. The user sends while the connection dies without a word (half-open), and again just as it drops. Each message must run exactly once once the phone is back, as the app resends what no frame showed back.
 2. The Mac's bridge restarts and the phone sends one of those messages again (its echo lost): it must not run twice.
 3. A message the Mac ran whose echo was lost, sent again after the bridge restarted, must come back tied to the transcript's copy, never read as not sent.
-4. A Stop meant for an earlier turn must never stop the turn that runs now.
+4. A Stop meant for an earlier turn must never stop the turn that runs now, and neither may a Stop and send aimed at an earlier turn.
 5. Requests the Mac cannot meet must each end with words tied to the request: a tool output it does not have, a decision on a closed card, a refused Start. Every decision it took is acknowledged, and a retried Start makes no second session.
 
 **Setup.**
@@ -738,6 +827,12 @@ Needs the simulator: no (simulator items run with `--sim`).
 - The phone sends a frame the app can send, built from what it saw: a Stop aimed at g1's first turn (turnStartedAt as the thread showed it then). Mark `stale-stop`.
 - Wait 4 s.
 - Sample the Mac's processes matching `sleep 3661` in the seed project as `after-stale-stop`.
+- Wait 2 s.
+- Mark `before-stale-interrupt`.
+- The phone sends a frame the app can send, built from what it saw: a Stop and send aimed at g1's first turn: session_send with interrupt and that turn's turnStartedAt. Mark `stale-interrupt`.
+- Wait 4 s.
+- Sample the Mac's processes matching `sleep 3661` in the seed project as `after-stale-interrupt`.
+- Mark `after-stale-interrupt`.
 - Press Stop on `g1` (session_stop); mark `real-stop`.
 - Wait 6 s.
 - Sample the Mac's processes matching `sleep 3661` in the seed project as `after-real-stop`.
@@ -766,7 +861,9 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S6g.2 | what | protocol | A message sent just as the connection drops runs exactly once after the phone is back. | Before the restart, race.txt has one line, the transcript holds its prompt once, and a frame showed the send back by its clientId. | It runs twice or never, or nothing shows it back. |
 | S6g.3 | what | protocol | A message sent again after the Mac's bridge restarted runs nothing a second time. | At after-resend, once.txt still has one line, the transcript holds the prompt once, and no turn ran after the resend. | The bridge forgot the clientIds it took when it restarted and ran the message again. |
 | S6g.10 | what | protocol | A message the Mac ran but whose echo was lost is shown back after a bridge restart, tied to the transcript's copy, and runs once. | After the restart, a frame shows the lost-echo send back by a user item whose clientId is the send's; lost.txt has one line; the transcript holds its prompt once. | No frame names the clientId after the restart, so the app would read Not sent for a message that ran; or it ran twice. |
-| S6g.4 | stop | protocol | A Stop meant for an earlier turn never stops the turn that runs now; the user's own Stop still does. | Within 5 s of stale-stop the bridge answers an error about this session's stop, the perl sleep 3661 still runs 4 s later (sample after-stale-stop), and it is gone after the real Stop (sample after-real-stop). | The stale Stop stopped the command, was not answered, or the real Stop did not end it. |
+| S6g.4 | stop | protocol | A Stop meant for an earlier turn never stops the turn that runs now; the user's own Stop still does. | Within 5 s of stale-stop the bridge answers an error about this session's stop, the perl sleep 3661 still runs 4 s later (sample after-stale-stop) and just before the real Stop (sample after-stale-interrupt), and it is gone after the real Stop (sample after-real-stop). | The stale Stop stopped the command, was not answered, nothing was left for the real Stop to end, or the real Stop did not end it. |
+| S6g.11 | stop | protocol | A Stop and send aimed at an earlier turn never stops the turn that runs now; the message is kept and the phone is told the stop did not go. | The perl sleep 3661 still runs 4 s after a session_send with interrupt and the first turn's turnStartedAt (sample after-stale-interrupt), the turn that ran before it is still the one running, an error about this session's stop arrives within 5 s and before real-stop, no stop notice reaches the phone before real-stop, and the message shows as a user item. | The stale Stop and send interrupted the newer turn (its command is gone, or another turn took its place), the phone was not told, or the message was lost. |
+| S6g.12 | stop | protocol | A stop notice sits where the user pressed Stop, above the message that waited behind the stopped turn and starts as it ends. | In every state of g1 from before-stale-interrupt on, each stop notice that arrived after it sits above the stale-interrupt message, and at least one such notice and the message are shown. | A stop notice sorts under the message that ran after the stop, so it reads as if that message was stopped. |
 | S6g.5 | state | protocol | Asking for a tool call's output the Mac does not have ends with the reason, on the request itself, so the sheet never spins. | Within 5 s of tool-asked a session_tool_output for toolu_g11_missing arrives with output null and an error in words. | No answer, or an error frame the sheet cannot tie to its request. |
 | S6g.6 | state | protocol | A decision on a card that is already closed is refused about that card, so the card can say Already answered. | Within 5 s of decide-again an error arrives whose about is {kind: decide} with this session and that card id. | No refusal, or one with no card to tie it to. |
 | S6g.7 | state | protocol | Every decision the Mac took from this phone is acknowledged, so the phone never calls another device's answer its own. | For every permission card of g1 the phone answered, a decided frame with its card id arrived. | A card the phone answered closed with no decided frame. |
@@ -813,6 +910,35 @@ Needs the simulator: yes.
 | S6h.3 | state | simulator (list probe) | The thread is never left catching up once the Mac answered. | No label sample from 3 s after mark app-back to mark back holds "Catching up". | "Catching up" stays after the reply came. |
 | S6h.4 | state | simulator (card-online, card-offline, card-back) | The card offline and back, as the user sees it. | card-offline shows the disabled choices with the offline line; card-back shows them live again. | Live choices offline, or a stale line after. |
 
+## S6k Claude Code dies in the middle of a reply
+
+Needs the simulator: no (simulator items run with `--sim`).
+
+**User journey.**
+
+1. The user's session writes a long reply with no tools. Claude Code crashes while the text streams in.
+2. The half-written reply must not stay on screen as if it were still arriving: it is kept as cut off, and the thread says what happened.
+
+**Setup.**
+
+- New session `k1` in demo (haiku, mode default): "Do not use any tools. Write a 1500-word essay about the history of lighthouses, in plain paragraphs with no headings."
+- Wait up to 90 s for k1's turn to start; mark `k1-started`.
+- Wait up to 120 s for 300 characters of the reply to stream in; mark `streaming`.
+- SIGKILL the Claude Code process of `k1`; mark `killed`.
+- Wait 6 s.
+- A second phone opens `k1`'s thread from scratch (watch_session with no position) and keeps its snapshot; mark `fresh`.
+
+**Preconditions** (any failure fails the scenario):
+
+- session k1 was created
+- Claude Code was killed while the reply streamed
+
+**Rubric.**
+
+| id | tells | lane | the user can tell | pass | fail |
+| --- | --- | --- | --- | --- | --- |
+| S6k.1 | state | protocol | After Claude Code dies mid-reply, the partial reply is an item followed by a notice, and nothing streams on. | A fresh watch after the kill has live null, an assistant item that starts with the streamed text, and a notice after that item. | A fresh watch still seeds the dead partial text as live, or the partial text is not kept as an item with a notice after it. |
+
 ## S7 Twelve sessions at once
 
 Needs the simulator: no (simulator items run with `--sim`).
@@ -857,7 +983,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S7.5 | how-many | simulator (mixed) | The Sessions list shows at a glance which 4 run and how many. | Working rows stand out; a count is visible or obvious. | Running rows look like the rest. |
 | S7.6 | state | protocol | A row stops reading Working as soon as its thread is at rest. | Each time a thread's controls.working turns false, its row leaves working within 1.5 s. | A row keeps reading working for more than 1.5 s after its thread came to rest. |
 | S7.7 | how-many | simulator (list probe) | The list keeps its order while the user reads it: rows move only when their status changes. | In the app's own list, read by the list probe from creation to rest, a row whose spoken status (needs you, working, or neither) held between two samples never changes its place among the other rows whose status held. Not judged unless the probe saw at least two of the run's rows at once and at least one status change among them. | A row moves past another while neither changed status (a title rewrite, a transcript write, a ticking age reordered the list). |
-| S7.8 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S7.8 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed|<\/?tools-used-before-summary>. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
 | S7.9 | how-many | simulator (list probe) | No fold hides a running session: Show more never holds a row that works or needs the user. | Between marks mixed and s7-ended, whenever the app draws the project's Show more, every sleeper the bridge reports working (now and 1.5 s before) is among the rows above it. | A sleeper that works is folded under Show more. |
 
 ## S8 A subagent starts a background task and returns
@@ -883,7 +1009,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Wait 3 s.
 - Mark `mid-background`.
 - Screenshot `background-running` (simulator lane).
-- The app goes back to the Sessions list (simulator lane: relaunched on the list).
+- The app goes back to the Sessions list (simulator lane: relaunched on the list; protocol lane: the phone unwatches every thread it watches).
 - Leave `s8`'s thread for the list (unwatch_session; the bridge counts it as a visit, and a watched thread is never unread).
 - Wait up to 150 s for nested.txt to appear; mark `bg-done` (optional).
 - Wait 20 s.
@@ -913,9 +1039,10 @@ Needs the simulator: no (simulator items run with `--sim`).
 | S8.5 | stop | protocol | While the subagent's background command runs, the thread offers Stop. | controls.working is true in every thread state between marks mid-background and mid-background. | Some state in that window has controls.working false, so the app shows no Stop for work that is still running. |
 | S8.6 | state | simulator (background-running) | Mid-background, the thread shows that something still runs and what. | A running indicator with the command or the subagent. | Looks finished. |
 | S8.7 | what | protocol | When Claude Code kills the subagent's background command, the thread names the command and the subagent that started it. | If nested.txt never appeared, a notice after the parent turn names the command ("sleep 60" or "nested") and its owner ("starter"). | The command was killed and no notice names both it and its owner. |
-| S8.8 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S8.8 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed|<\/?tools-used-before-summary>. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
 | S8.9 | state | protocol | Once its work is over (the background command and the turn it woke), the session comes to rest. | Within 60 s of mark bg-done, a state reads not working: the row not busy and controls.working false. | The session still reads working 60 s after its work ended, so the busy row and Stop never go away. |
 | S8.10 | state | protocol | After a turn's final reply, the session does not read working while nothing runs. | After each final reply in the main transcript, until its next line, no stretch longer than 5 s reads controls.working true with no task listed. | The session reads working, with Stop, for more than 5 s while no task runs and Claude Code writes nothing. |
+| S8.11 | how-many | protocol | While starter waits on its own background command, the row keeps counting it and keeps one clock. | From starter's first final reply (its transcript), when it starts to wait on its command, until its Agent step ends (the step's endedAt, else bg-done), every row state counts running.agents of at least 1 and keeps the since it had when the window opened. | The row drops the agent (0 agents while its step still runs), or since jumps, so the clock restarts. |
 
 ## S8fg A subagent the session waits for starts a background task and returns
 
@@ -946,7 +1073,8 @@ Needs the simulator: no (simulator items run with `--sim`).
 | --- | --- | --- | --- | --- | --- |
 | S8fg.1 | what | protocol | When Claude Code stops the subagent's background command, the thread names the command and the subagent that started it. | A notice names the command ("sleep 60" or "nested") and its owner ("starter"). | No notice names both, so the command vanished without a word. Assistant prose does not count. |
 | S8fg.2 | stop | protocol | Once the turn's final reply is written, nothing runs, so the session rests at once and Stop goes away. | A state reads not working within 5 s of the main transcript's final reply. | The session reads working, with Stop, for more than 5 s after the reply while nothing runs. |
-| S8fg.3 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S8fg.3 | state | protocol | A step's output is what the work produced, never Claude Code's launch acknowledgement, hand-back wrapper or rejection boilerplate. | No step output in any state matches Async agent launched|Command running in background|Subagent hand-back|doesn't want to proceed|<\/?tools-used-before-summary>. | A step shows one of those texts as its output, so a launch or a refusal reads like a result. |
+| S8fg.4 | how-long | protocol | The notice for the command Claude Code stopped says why and how long it ran. | The notice that names the command and starter says it was stopped when starter returned, and carries a run time ("after 1 s") outside the quoted command. | The notice gives no cause beyond Claude Code stopping it, or no run time. |
 
 ## S9 A card waits while the user is away: push, failing push server, reminder, expiry
 
@@ -955,8 +1083,9 @@ Needs the simulator: no (simulator items run with `--sim`).
 **User journey.**
 
 1. The user is away from the phone when a session asks for approval; the push server is down at that moment.
-2. The push server comes back. Half the card's time later the user is reminded.
-3. Nobody answers, so the card expires, and the thread says what was refused.
+2. The push server comes back after about 12 s. The card's push, owed since it failed, goes out then, and the push state reads on again without waiting for a new event.
+3. Half the card's time later the user is reminded.
+4. Nobody answers, so the card expires, and the thread says what was refused.
 
 **Setup.**
 
@@ -966,9 +1095,10 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Wait up to 40 s for the card push to fail three times; mark `card-failed`.
 - Wait 1 s.
 - The push sink answers 200 again.
-- Wait up to 60 s for a reminder push; mark `reminded`.
+- Mark `sink-back`.
+- Wait up to 120 s for a reminder push; mark `reminded`.
 - Wait up to 15 s for the push state to read on again; mark `recovered`.
-- Wait up to 60 s for the card to expire; mark `expired`.
+- Wait up to 120 s for the card to expire; mark `expired`.
 - Wait 3 s.
 
 **Preconditions** (any failure fails the scenario):
@@ -982,10 +1112,12 @@ Needs the simulator: no (simulator items run with `--sim`).
 | --- | --- | --- | --- | --- | --- |
 | S9.1 | state | protocol | When the push server fails, the phone is told that alerts are failing, and why. | The card push is tried three times, 2 s then 8 s apart; within 2 s of its third 500, a push_state frame reads failing with "The push server answered 500". | No failing state after the card's tries, the wrong cause, or other than three tries. |
 | S9.2 | what | protocol | The card's push says what waits, at high priority, and opens the session at that card. | The card push reads "A Claude Code session needs your approval", priority high, link claudiobot://session/<id>?card=<the card id>. | Another text, priority or link. |
-| S9.3 | state | protocol | A card nobody answers reminds the user once, at half its time. | One reminder push, 30 s (half the 60 s card time) after the card opened, give or take 3 s, linking to the card. | No reminder, more than one, or one at another time. |
+| S9.3 | state | protocol | A card nobody answers reminds the user once, at half its time. | One reminder push, 60 s (half the 120 s card time) after the card opened, give or take 3 s, linking to the card. | No reminder, more than one, or one at another time. |
 | S9.4 | state | protocol | Once a push gets through again, the phone hears that alerts work. | After the failing state, a push_state frame reads on within 2 s of the first push the sink answered 200, and not before it. | The state stays failing after a push got through, or reads on before any did. |
 | S9.5 | state | protocol | When the card expires, the thread says what was refused, and that the user did not say no. | The card reads expired and a notice (reason approval) names the command and says "You did not say no." | No notice, or one that does not say what was refused. |
 | S9.6 | what | protocol | No push carries the command or anything else from the session. | No push title, body or link contains the command. | A push carries content. |
+| S9.7 | state | protocol | A card push the server refused while it was down still reaches the user once it is back, before any reminder. | After sink-back, the sink answers 200 to a card push ("needs your approval") before the first reminder it answers 200. | The card push is never sent again after its three failed tries, so the first the user hears of the card is the reminder, or nothing. |
+| S9.8 | state | protocol | Once the push server is back, the phone hears that alerts work again without waiting for something new to push. | A push_state frame reads on within 30 s of sink-back, and before the sink answered 200 to the first reminder (a new event). | The state stays failing until the reminder happens to get through, or more than 30 s. |
 
 ## S9b Push is off: the phone can tell, and the app still hears what finished
 

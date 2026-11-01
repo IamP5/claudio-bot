@@ -124,3 +124,4 @@
 - "Couldn't stop." before the bridge's stale-turn text reads like a failure when the message did go (P3, from main).
 - Settings says "Reconnecting" rather than unreachable after more than 60 s offline (P3, not G28).
 - G27 r5 gaps: a heredoc command can read ended late when its process group stays occupied (slow, not false; P3); an unrelated shell running the identical eval line gets its group recorded (errs alive; contrived three-part case could end twins early; P3).
+- S6d.3 runner flake: haiku sometimes runs a command twice ("2 ended notices") (P3); session end wiped the shared scratchpad — evidence paths under scratchpad from earlier sessions may be gone; groupAlive treats EPERM as gone (pre-existing, P3).

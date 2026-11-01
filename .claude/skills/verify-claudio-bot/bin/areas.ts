@@ -258,29 +258,30 @@ const C2: Scenario = {
       tell: "state",
       lane: "protocol",
       text: "While the card is open, the bot says it waits on the user, not that it is working.",
-      pass: "within 5 s of the card, the bot's question is set and its status is not working",
-      fail: "no question on the bot, or it still says working while it waits",
+      pass: "just before the user answers (3 s after the card), the bot's question is the card's and its status is not working",
+      fail: "another question on the bot, or it still says working while it waits",
       check: (ev) => {
-        const at = mark(ev, "c2-card");
-        if (at === undefined) return notJudged("no card");
-        const b = botAt(ev, "c2", at + 5000);
-        return b?.question && resting(b) ? ok(`${b.status}, question "${b.question}"`) : no(`status ${b?.status}, question ${JSON.stringify(b?.question)}`);
+        const at = mark(ev, "c2-answer");
+        const c = cards(ev, "c2", mark(ev, "c2-send") ?? Infinity)[0];
+        if (at === undefined || !c) return notJudged("no card or answer");
+        const b = botAt(ev, "c2", at - 1);
+        return b?.question === c.m.question && resting(b) ? ok(`${b.status}, question "${b.question}"`) : no(`status ${b?.status}, question ${JSON.stringify(b?.question)}`);
       },
     },
     {
       id: "C2.3",
       tell: "responsive",
       lane: "protocol",
-      text: "The answer takes at once: the card shows the choice and the bot's question clears.",
-      pass: "within 2 s of the answer, the card carries it and the bot's question is null",
-      fail: "the card stays open, or the bot keeps its question",
+      text: "The answer takes at once: the card shows the choice and the bot no longer shows that question.",
+      pass: "within 2 s of the answer, the card carries it and the bot's question is no longer the card's (an older open card may take its place)",
+      fail: "the card stays open, or the bot keeps the answered question",
       check: (ev) => {
         const at = mark(ev, "c2-answer");
         if (at === undefined) return notJudged("no answer");
         const done = cards(ev, "c2", at).find((x) => x.m.answer !== null);
         const b = botAt(ev, "c2", at + 2000);
         const cardOk = done && done.at - at <= 2000;
-        return cardOk && b && b.question === null ? ok(`card answered in ${s(done!.at - at)}; question cleared`) : no(`card ${done ? `answered after ${s(done.at - at)}` : "never answered"}, question ${JSON.stringify(b?.question)}`);
+        return cardOk && b && b.question !== done.m.question ? ok(`card answered in ${s(done!.at - at)}; question cleared`) : no(`card ${done ? `answered after ${s(done.at - at)}` : "never answered"}, question ${JSON.stringify(b?.question)}`);
       },
     },
     {
@@ -312,7 +313,7 @@ const C3: Scenario = {
   setup: [
     ...newBot("c3"),
     { do: "open-bot", ref: "c3", mark: "c3-open" },
-    say("c3", "Use the Bash tool to run `sleep 60`, then tell me it finished.", "c3-send"),
+    say("c3", "Use the Bash tool to run `perl -e 'sleep 60'` in the foreground, then tell me it finished.", "c3-send"),
     { do: "until", mark: "c3-working", what: "c3 working", timeoutS: 30, test: (ev) => botStates(ev, "c3").some((x) => x.at >= (mark(ev, "c3-send") ?? Infinity) && x.bot.status === "working") },
     { do: "sleep", s: 10 },
     { do: "screenshot", shot: "c3-working" },
@@ -504,7 +505,7 @@ const H2: Scenario = {
   journey: ["The user sends a bot a task and stays on the list.", "The row shows what it does.", "The bot asks a question; the row says it waits on them.", "They answer."],
   setup: [
     ...newBot("h2"),
-    say("h2", "Run `ls -la` with the Bash tool and `sleep 8`, then use your ask tool to ask me: Ship it today? with the options Yes and No. Then end your turn.", "h2-send"),
+    say("h2", "Run `ls -la` and then `perl -e 'sleep 8'` with the Bash tool, then use your ask tool to ask me: Ship it today? with the options Yes and No. Then end your turn.", "h2-send"),
     { do: "sleep", s: 4 },
     { do: "screenshot", shot: "h2-working" },
     cardOpen("h2", "h2-send", "h2-card"),
@@ -534,13 +535,14 @@ const H2: Scenario = {
       tell: "state",
       lane: "protocol",
       text: "When the bot waits on a question, the row says so and shows the question.",
-      pass: "within 2 s of the card, the bot's question is set and it is not working",
-      fail: "no question on the row, or it still says working",
+      pass: "just before the user answers (3 s after the card), the bot's question is the card's and it is not working",
+      fail: "another question on the row, or it still says working",
       check: (ev) => {
-        const at = mark(ev, "h2-card");
-        if (at === undefined) return notJudged("no card");
-        const b = botAt(ev, "h2", at + 2000);
-        return b?.question && resting(b) ? ok(`${b.status}, "${b.question}"`) : no(`status ${b?.status}, question ${JSON.stringify(b?.question)}`);
+        const at = mark(ev, "h2-answer");
+        const q = cards(ev, "h2", mark(ev, "h2-send") ?? Infinity)[0]?.m.question;
+        if (at === undefined || !q) return notJudged("no card or answer");
+        const b = botAt(ev, "h2", at - 1);
+        return b?.question === q && resting(b) ? ok(`${b.status}, "${b.question}"`) : no(`status ${b?.status}, question ${JSON.stringify(b?.question)}`);
       },
     },
     {
@@ -563,13 +565,14 @@ const H2: Scenario = {
       id: "H2.4",
       tell: "responsive",
       lane: "protocol",
-      text: "Answering clears the waiting mark on the row.",
-      pass: "the bot's question is null within 2 s of the answer",
-      fail: "the row still shows the question",
+      text: "Answering takes the question off the row.",
+      pass: "within 2 s of the answer, the bot's question is no longer the answered one (an older open card may take its place)",
+      fail: "the row still shows the answered question",
       check: (ev) => {
         const at = mark(ev, "h2-answer");
-        if (at === undefined) return notJudged("no answer");
-        const c = botStates(ev, "h2").find((x) => x.at >= at && x.bot.question === null);
+        const q = cards(ev, "h2", mark(ev, "h2-send") ?? Infinity)[0]?.m.question;
+        if (at === undefined || !q) return notJudged("no answer");
+        const c = botStates(ev, "h2").find((x) => x.at >= at && x.bot.question !== q);
         return c && c.at - at <= 2000 ? ok(`cleared after ${s(c.at - at)}`) : no(c ? `cleared after ${s(c.at - at)}` : "never cleared");
       },
     },
@@ -708,7 +711,7 @@ const P1: Scenario = {
         return p.status === 401 && NEXT_STEP.test(p.error ?? "") ? ok(`"${p.error}"`) : no(`${p.status} "${p.error}"`);
       },
     },
-    shot("P1.5", "state", "The app pairs from the link and lands on the bot list, connected.", "the pairing step, then the list with no error", "an error, a blank screen, or a pairing screen left up", ["pair-link", "paired"]),
+    shot("P1.5", "state", "The app pairs from the link and lands on the bot list, connected.", "the pairing step, then the list with no error", "an error, a blank screen, or a pairing screen left up", ["pair-link", "after-pairing"]),
   ],
 };
 
@@ -946,7 +949,7 @@ const T2: Scenario = {
       pass: "unconfirmed, with the bot as proposer and its name in by",
       fail: "shown as confirmed, or no proposer",
       check: (ev) => {
-        const f = (latestFacts(ev, mark(ev, "t2-memory") ?? Infinity) ?? []).find((x) => !x.confirmed);
+        const f = framesOf(ev, "memory", mark(ev, "t2-memory") ?? Infinity).flatMap((x) => x.frame.facts as Fact[]).find((x) => !x.confirmed);
         if (!f) return notJudged("no proposal");
         return f.proposerBotId === idOf(ev, "t2") && f.by ? ok(`"${f.text}" by ${f.by}`) : no(JSON.stringify(f));
       },
@@ -996,8 +999,9 @@ const T3: Scenario = {
       pass: "the hello after the drop resumed the stream",
       fail: "a fresh start: whatever happened while away is replaced, not replayed",
       check: (ev) => {
-        const r = ev.resumes.find((x) => x.mark === "t3-back");
-        return r ? (r.resumed ? ok(`resumed, ${r.replayed} frames replayed`) : no(`not resumed (${r.reply})`)) : notJudged("no reconnect");
+        const at = mark(ev, "t3-back-dropped");
+        const h = at === undefined ? undefined : framesOf(ev, "hello", at)[0];
+        return h ? (h.frame.resumed === true ? ok("resumed") : no("not resumed: the bridge started the phone over")) : notJudged("no hello after the drop");
       },
     },
     {

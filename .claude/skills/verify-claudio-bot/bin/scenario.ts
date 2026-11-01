@@ -730,7 +730,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, flags:
       }
       log(ev.paired ? "the app paired with the run's bridge" : "the app did not pair; simulator items will show the unpaired app");
       await Bun.sleep(2000);
-      shots.paired = pool.screenshot(lease, join(out, "screenshots", "after-pairing.png"));
+      shots["after-pairing"] = pool.screenshot(lease, join(out, "screenshots", "after-pairing.png"));
     }
 
     for (const a of sc.setup) await perform(a);

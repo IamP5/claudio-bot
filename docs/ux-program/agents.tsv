@@ -44,9 +44,11 @@ ts	role	group	branch	state	stuck_after	note
 2026-10-31T21:50:36Z	verifier	G22	ux/sessions-g22-push	r3 FAIL 53478ea: P2 live check drops owed push before a slow presence(false)	2h	fresh, independent of owner
 2026-10-31T22:33:44Z	verifier	G22	ux/sessions-g22-push	r4 PASS ed82889	2h	fresh, independent of owner
 2026-10-31T22:51:27Z	owner	G26	ux/sessions-g26-status	merged #35 (verify PASS first round)	5h	run 3 wave 3; carries G24 thread-reach and G23 pill-count backlog items
-2026-10-31T23:08:52Z	owner	G25	ux/sessions-g25-crash-restart	PR #36 round 2 at af0e618; verifying	5h	run 3 wave 3
+2026-10-31T23:08:52Z	owner	G25	ux/sessions-g25-crash-restart	merged #36 (r1 FAIL race; r2 PASS af0e618)	5h	run 3 wave 3
 2026-11-01T00:10:02Z	verifier	G26	ux/sessions-g26-status	PASS e44e716; three-card line and Reconnecting shown live	3h	independent of owner
 2026-11-01T00:31:57Z	verifier	G25	ux/sessions-g25-crash-restart	r1 FAIL bf29e22: P1 failed alert races the survivor lookup (onDormant) — S6e.5 fails 2/2	3h	independent of owner
 2026-11-01T01:03:39Z	owner	G29	ux/sessions-g29-wide	PR #37 at 366975e; verifying	4h	run 3 wave 4
-2026-11-01T01:26:06Z	verifier	G25	ux/sessions-g25-crash-restart	r2 verifying af0e618	3h	fresh, independent of owner
+2026-11-01T01:26:06Z	verifier	G25	ux/sessions-g25-crash-restart	r2 PASS af0e618; S6e 6/6 incl. under load	3h	fresh, independent of owner
 2026-11-01T01:57:03Z	verifier	G29	ux/sessions-g29-wide	verifying 366975e	2h	independent of owner
+2026-11-01T02:08:58Z	owner	G27	ux/sessions-g27-unsure	starting off main f42a8d8	5h	run 3 wave 4; carries wedged-lookup item
+2026-11-01T02:08:58Z	owner	G28	ux/sessions-g28-requests	starting off main f42a8d8	6h	run 3 wave 4; carries stopped-card render, link note, iOS presence gap

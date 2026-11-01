@@ -253,3 +253,4 @@ ts	decision	why
 2026-11-01T02:46:52Z	G27: ps polled every 5 s only while unpaired commands may still run	bounded cost
 2026-11-01T02:46:52Z	G27: pairLoose never pairs a shell when two tasks share a command line	never signal what is not provably the command
 2026-11-01T03:37:13Z	G27: an unpaired command ends only on a 0 count after some look counted it running; a shell that exec'd a plain program is counted by that program's command line; complex execs stay unsure	verifier r1 P1: a first-look 0 falsely ended a running command
+2026-11-01T03:56:27Z	G27 r3 rule: an unpaired command may end on a 0 count only if its text has no exec (except redirect-only), no &/nohup/setsid/disown/backgrounded subshell, and an earlier look counted it; everything else stays "can't tell"	root call after two false-ended rounds; never claim ended falsely, unsure longer is acceptable

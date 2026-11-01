@@ -50,7 +50,7 @@ ts	role	group	branch	state	stuck_after	note
 2026-11-01T01:03:39Z	owner	G29	ux/sessions-g29-wide	merged #37 (verify PASS first round)	4h	run 3 wave 4
 2026-11-01T01:26:06Z	verifier	G25	ux/sessions-g25-crash-restart	r2 PASS af0e618; S6e 6/6 incl. under load	3h	fresh, independent of owner
 2026-11-01T01:57:03Z	verifier	G29	ux/sessions-g29-wide	PASS 366975e; live stale pane/chip verified	2h	independent of owner
-2026-11-01T02:08:58Z	owner	G27	ux/sessions-g27-unsure	PR #38 small round 8 (markUnsure on prune)	5h	run 3 wave 4; carries wedged-lookup item
+2026-11-01T02:08:58Z	owner	G27	ux/sessions-g27-unsure	merged #38 (7 verify rounds; r8 one-line fix 48041f4 reviewed by root)	5h	run 3 wave 4; carries wedged-lookup item
 2026-11-01T02:08:58Z	owner	G28	ux/sessions-g28-requests	merged #39 (r1, r2 FAIL; r3 small fix 0985908 reviewed by root)	6h	run 3 wave 4; carries stopped-card render, link note, iOS presence gap
 2026-11-01T02:46:52Z	verifier	G27	ux/sessions-g27-unsure	r1 FAIL ebe8997: P1 exec'd unpaired command reads ended while running (count 0 on first look)	3h	independent of owner
 2026-11-01T03:37:13Z	verifier	G27	ux/sessions-g27-unsure	r2 FAIL 4636a07: P1 counted via eval shell then exec'd into hidden form, ended while running	2h	fresh, independent of owner
@@ -60,4 +60,4 @@ ts	role	group	branch	state	stuck_after	note
 2026-11-01T05:58:35Z	verifier	G28	ux/sessions-g28-requests	r2 FAIL d4e0a7d: P2 mirror revert silent when Settings closed; r1 P2s fixed	2h	fresh, independent of owner
 2026-11-01T06:02:00Z	verifier	G27	ux/sessions-g27-unsure	r5 FAIL ba5cb87: P2 unrelated/rerun shell with same eval line supplies a group -> false ended	2h	fresh, independent of owner
 2026-11-01T19:49:48Z	verifier	G27	ux/sessions-g27-unsure	r6 FAIL 7f4302e: P2 shells unioned across steps/processes -> earlier groupless step ends	2h	fresh, independent of owner
-2026-11-01T20:35:39Z	verifier	G27	ux/sessions-g27-unsure	r7 FAIL 1148c6f: P2 pruning skips markUnsure (finished alert + Nothing is running); one-line fix	2h	fresh, independent of owner
+2026-11-01T20:35:39Z	verifier	G27	ux/sessions-g27-unsure	r7 FAIL 1148c6f: P2 pruning skips markUnsure (finished alert + Nothing is running); one-line fix; fix applied r8	2h	fresh, independent of owner

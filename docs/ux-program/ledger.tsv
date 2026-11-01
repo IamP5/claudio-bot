@@ -4,7 +4,8 @@ step	area	status	ts	note
 2	sessions	done	2026-10-21T11:32:18Z	run 1: 137 survived (P0 1, P1 80, P2 56); run 2 reached 2 dry rounds, 41 new candidates -> 32 survived (P1 10, P2 22)
 3	sessions	done	2026-10-23T16:45:15Z	all 20 groups merged (G0-G18, R1); last G11 #26 at main 411e482
 4	sessions	failed	2026-10-31T17:34:20Z	rerun on main b0925fc: 6 rounds, never 2 dry; 135 survivors (52 P1, 83 P2, 0 P0) filed F-SES-177..311; raw .claude/ux-evidence/sessions-s4-audit.json. Sessions goes back to step 3 (run 3 fix groups)
-3b	sessions	in_progress	2026-10-31T17:34:20Z	run-3 fix plan for F-SES-177..311
+3b	sessions	done	2026-11-01T21:10:56Z	run 3: G19-G29 all merged (#29-#39); main 35009a7
+4b	sessions	in_progress	2026-11-01T21:10:56Z	rerun ux-audit on main 35009a7
 2	chat	todo		
 3	chat	todo		
 4	chat	todo		

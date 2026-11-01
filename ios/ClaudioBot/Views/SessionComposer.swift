@@ -116,7 +116,7 @@ struct SessionComposer: View {
         }
         .onChange(of: model.pendingSends) { old, new in
             for id in Set(old.keys).union(new.keys).sorted(by: { $0.rawValue < $1.rawValue }) {
-                let echoed = new[id] == nil ? model.shownQueued(id) : nil
+                let echoed = new[id] == nil ? model.shownBehindTurn(id) : nil
                 if let text = PendingSend.announcement(old: old[id]?.state, new: new[id]?.state, echoedQueued: echoed) { announce(text) }
             }
         }
@@ -589,10 +589,13 @@ private extension ComposerNote {
 }
 
 extension ThreadModel {
-    /// Whether the thread shows the phone's message queued, under its clientId or as the transcript's copy; nil when it
-    /// does not show it.
-    func shownQueued(_ clientId: ItemID) -> Bool? {
-        for case let .user(id, _, _, _, queued, copyOf) in items where id == clientId || copyOf == clientId.rawValue { return queued }
+    /// Whether the thread shows the phone's message waiting behind a turn, under its clientId or as the transcript's copy;
+    /// nil when it does not show it. The bridge shows a message queued until Claude Code takes it, even with no turn
+    /// to wait behind.
+    func shownBehindTurn(_ clientId: ItemID) -> Bool? {
+        for case let .user(id, _, _, _, queued, copyOf) in items where id == clientId || copyOf == clientId.rawValue {
+            return queued && ComposerState.queues(controls)
+        }
         return nil
     }
 

@@ -369,7 +369,8 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
 
     @Test func aCardClosedElsewhereSaysNothingWaits() {
         #expect(note([permission("p1", answer: .chose(.once))]) == "Already answered. Nothing here waits on you now.")
-        #expect(note([permission("p1", answer: .stopped)]) == "That request is no longer open. Nothing here waits on you now.")
+        #expect(note([permission("p1", answer: .closed)]) == "That request is no longer open. Nothing here waits on you now.")
+        #expect(note([permission("p1", answer: .stopped)]) == "That request closed when the turn was stopped.")
     }
 
     @Test func anExpiredCardSaysItExpired() {
@@ -384,7 +385,8 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
     @Test func aClosedCardIsNamedEvenWhenAnotherOneWaits() {
         #expect(note([permission("p1", answer: .chose(.deny)), ask("a2", ["Which branch?"])]) == "That request was answered. Another one waits on you.")
         #expect(note([permission("p1", answer: .expired), permission("p2")]) == "That request expired. Another one waits on you.")
-        #expect(note([permission("p1", answer: .stopped), permission("p2")]) == "That request is no longer open. Another one waits on you.")
+        #expect(note([permission("p1", answer: .closed), permission("p2")]) == "That request is no longer open. Another one waits on you.")
+        #expect(note([permission("p1", answer: .stopped), permission("p2")]) == "That request closed when the turn was stopped. Another one waits on you.")
     }
 
     @Test func nothingIsSaidForACardNotLoadedOrAnsweredOnThisPhone() {

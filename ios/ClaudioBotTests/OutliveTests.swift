@@ -140,8 +140,10 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         let model = try #require(store.threads[sid])
         model.echo(clientId: "c1", text: "Run the tests", at: at)
         items(store, rev: 2, [user("t-9", queued: true, clientId: "c1")], removed: ["c1"])
-        #expect(model.shownQueued(ItemID("c1")) == true)
-        #expect(model.shownQueued(ItemID("c2")) == nil)
+        #expect(model.shownBehindTurn(ItemID("c1")) == false, "queued until Claude Code takes it, with no turn to wait behind")
+        #expect(model.shownBehindTurn(ItemID("c2")) == nil)
+        store.apply(.thread(sessionId: sid, .items(rev: 3, items: [], removed: [], controls: controls(working: true, turn: "2026-10-16T12:00:00.000Z"))))
+        #expect(model.shownBehindTurn(ItemID("c1")) == true)
     }
 
     @Test func aSendOfflineIsNeverCalledSent() {

@@ -4,7 +4,7 @@ import type { Tickable } from "./clock";
 import { failClosed, resolveReal, toCall, toHookOutput } from "./gate";
 import type { Ledger } from "./ledger";
 import { detailOf, floors, type Scope } from "./policy";
-import { commandGroups, groupAlive } from "./procs";
+import { groupAlive } from "./procs";
 import { doubted, endOutlived, followed, OUTLIVED_LOOK_MS, outlivedSteps, runOf, settled, withOutlived, type Outlived } from "./outlived";
 import {
   PHONE_MODES,
@@ -518,7 +518,13 @@ export function createOwn(deps: OwnDeps): Own {
       .map((t): Outlived => ({ ...t, group: (t.group ?? t.loose)! }));
     if (grouped.length > 0) driveOf(rec).outlived = settled([...allOutlived(rec), ...grouped], grouped.map((t) => t.id), "unsure");
     const counted = fate.unknown.filter((t): t is BackgroundTask & { command: string } => !looked(t) && t.command !== undefined && !(rec.own?.unpaired ?? []).some((u) => u.id === t.id));
-    if (counted.length > 0) driveOf(rec).unpaired = [...(rec.own?.unpaired ?? []), ...counted].slice(-STOPPED_STEPS_KEPT);
+    if (counted.length > 0) {
+      // Every step still pending stays; of those that ended, the newest few.
+      const all: NonNullable<OwnDrive["unpaired"]> = [...(rec.own?.unpaired ?? []), ...counted];
+      const ended = all.filter((u) => u.endedAt !== undefined);
+      const drop = new Set(ended.slice(0, Math.max(0, ended.length - STOPPED_STEPS_KEPT)));
+      driveOf(rec).unpaired = all.filter((u) => !drop.has(u));
+    }
     markUnsure(rec, fate.unknown.filter((t) => !looked(t) && t.command === undefined));
     adopt(rec, fate.running, fate.unknown, cause);
   }
@@ -633,34 +639,22 @@ export function createOwn(deps: OwnDeps): Own {
       const doubtedNow = () => allOutlived(rec).filter((o) => o.over === "unsure");
       // Only a group the process table showed as the command's can be shown so again; a loose one never writes its output.
       const recheck = doubtedNow().filter((o) => o.loose === undefined && unsureDue(rec, o, deps.now().getTime()));
-      const pending = unpaired(rec);
-      const [runs, again, shells] = await Promise.all([
-        Promise.all(watched.map(runOf)),
-        Promise.all(recheck.map(runOf)),
-        pending.length > 0 ? commandGroups([...new Set(pending.map((u) => u.command))]) : null,
-      ]);
+      const [runs, again] = await Promise.all([Promise.all(watched.map(runOf)), Promise.all(recheck.map(runOf))]);
       const found = (kind: string) => watched.filter((o, i) => runs[i] === kind && free(o) && outlivedOf(rec).some((x) => x.id === o.id));
       const seen = now();
       const back = recheck.filter((o, i) => again[i] === "runs" && doubtedNow().some((x) => x.id === o.id));
       const doubtedGone = doubtedNow().filter((o) => !back.includes(o) && !groupAlive(o.group));
-      // Each look records the process groups of the shells that run an unpaired command: whatever the shell exec's or
-      // leaves behind stays in its group. The command ended once every group recorded for it is empty, and only when one
-      // was recorded for each of its steps, since a step whose shell no look saw may run in a form ps does not show.
-      const groupsOf = new Map<string, number[]>();
-      for (const u of unpaired(rec)) groupsOf.set(u.command, [...new Set([...(groupsOf.get(u.command) ?? []), ...(u.groups ?? []), ...(shells?.get(u.command) ?? [])])]);
-      const unpairedSeen = unpaired(rec).filter((u) => (u.groups?.length ?? 0) < groupsOf.get(u.command)!.length);
+      // Steps given the same command end together, once their shells hold a group for each step (so each step's own is
+      // among them, whatever its shell exec'd or left behind) and every one is empty.
       const unpairedGone = unpaired(rec).filter((u) => {
-        const groups = groupsOf.get(u.command)!;
-        return groups.length >= unpaired(rec).filter((x) => x.command === u.command).length && groups.every((g) => !groupAlive(g));
+        const alike = unpaired(rec).filter((x) => x.command === u.command);
+        const groups = [...new Set(alike.flatMap((x) => x.shells ?? []))];
+        return groups.length >= alike.length && groups.every((g) => !groupAlive(g));
       });
       for (const o of [...back, ...doubtedGone]) unsureLooks.delete(`${rec.id}:${o.id}`);
       const ended = [...found("gone"), ...doubtedGone];
       const unsure = found("unsure");
       Object.assign(before, { outlived: drive.outlived, unpaired: drive.unpaired, notices: drive.notices });
-      if (unpairedSeen.length > 0) {
-        drive.unpaired = (drive.unpaired ?? []).map((u) => (unpairedSeen.some((x) => x.id === u.id) ? { ...u, groups: groupsOf.get(u.command)! } : u));
-        deps.persist("now");
-      }
       if (ended.length + unsure.length + back.length + unpairedGone.length === 0) return;
       letGo(rec, ended.map((o) => o.id), "ended", seen);
       letGo(rec, unsure.map((o) => o.id), "unsure");

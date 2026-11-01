@@ -58,14 +58,15 @@ const taskOf = (path: string) => /\/([^/]+)\.output$/.exec(path)?.[1];
 
 /**
  * The processes Claude Code (process `pid`) started that lead a process group of their own, with their command lines
- * as ps writes them in the C locale (see psText).
+ * as ps writes them in the C locale (see psText) and when each started (ps lstart, to the second).
  */
-export async function shellLeaders(pid: number): Promise<{ group: number; command: string }[]> {
-  return ((await read(["ps", "-axww", "-o", "pid=,ppid=,pgid=,command="], READ_TIMEOUT_MS, { ...process.env, LC_ALL: "C" })) ?? "")
+export async function shellLeaders(pid: number): Promise<{ group: number; command: string; started: number }[]> {
+  // In UTC, so the start reads the same whatever time zone the bridge runs in.
+  return ((await read(["ps", "-axww", "-o", "pid=,ppid=,pgid=,lstart=,command="], READ_TIMEOUT_MS, { ...process.env, LC_ALL: "C", TZ: "UTC" })) ?? "")
     .split("\n")
-    .map((l) => /^\s*(\d+)\s+(\d+)\s+(\d+)\s(.*)$/.exec(l))
+    .map((l) => /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s+(.*)$/.exec(l))
     .filter((m): m is RegExpExecArray => m !== null && Number(m[2]) === pid && m[1] === m[3])
-    .map((m) => ({ group: Number(m[1]), command: m[4]! }));
+    .map((m) => ({ group: Number(m[1]), command: m[5]!, started: Date.parse(`${m[4]!} UTC`) }));
 }
 
 /**
@@ -97,25 +98,6 @@ export function psText(command: string): string {
     }
   }
   return out;
-}
-
-/**
- * The process groups of the processes that run each command as Claude Code's shells run one (evalArg of their command
- * line), whoever started them; null when the process table could not be read. A group only says where the command may
- * still run: a shell that exec's, or leaves its pipeline's last stage behind, keeps its work in its group.
- */
-export async function commandGroups(commands: readonly string[]): Promise<Map<string, number[]> | null> {
-  const out = await read(["ps", "-axww", "-o", "pgid=,command="], READ_TIMEOUT_MS, { ...process.env, LC_ALL: "C" });
-  // ps lists itself at least, so an empty table was not read.
-  if (out === null || out.trim() === "") return null;
-  const groups = new Map(commands.map((c) => [c, [] as number[]]));
-  const wanted = new Map(commands.map((c) => [psText(c), c]));
-  for (const line of out.split("\n")) {
-    const m = /^\s*(\d+)\s(.*)$/.exec(line);
-    const command = m ? wanted.get(evalArg(m[2]!) ?? "") : undefined;
-    if (command !== undefined) groups.get(command)!.push(Number(m![1]));
-  }
-  return groups;
 }
 
 /** By task id, the process group of each background shell Claude Code (process `pid`) runs. Empty when none is found. */

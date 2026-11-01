@@ -229,6 +229,11 @@ export type BackgroundTask = {
    * then sees it end by no process running exactly it.
    */
   command?: string;
+  /**
+   * For such a command, the process groups of Claude Code's own shells that ran exactly it while there was one for
+   * each live task given it (session pairLoose): its work, whatever the shell exec'd or left behind, is in one of them.
+   */
+  shells?: readonly number[];
   /** A command the turn ran in the foreground: it outlives Claude Code as a background one does. */
   foreground?: true;
 };
@@ -526,12 +531,12 @@ export type OwnDrive = {
    */
   outlived?: (BackgroundTask & { group: number; over?: "ended" | "stopped" | "unsure"; endedAt?: string })[];
   /**
-   * Commands the bridge found no shell of their own for (two alike, or none exact), watched through the processes that
-   * run exactly that command: never signalled. groups: the process groups of those shells as looks found them; what a
-   * shell exec's or leaves behind stays in its group. The command ended once a group was found for each of its steps and
-   * every one is empty; until then the bridge cannot tell. endedAt: the first look that found it so.
+   * Commands the bridge found no shell of their own for (two alike, or none exact), watched through the groups of
+   * Claude Code's own shells that ran them (BackgroundTask shells), never signalled. Steps given the same command end
+   * together, once their shells hold at least one group per step and every one is empty; until then the bridge cannot
+   * tell. endedAt: the first look that found it so.
    */
-  unpaired?: (BackgroundTask & { command: string; groups?: number[]; endedAt?: string })[];
+  unpaired?: (BackgroundTask & { command: string; endedAt?: string })[];
   /**
    * Steps of background work whose fate the bridge could not check, and has no process group to look at again: they
    * read that it cannot tell. A step is named by its tool_use id, or as task:<id> when only its task is known.

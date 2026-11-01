@@ -167,6 +167,8 @@ export const GONE_LOOK_MAX_MS = 60_000;
 /** How many times the bridge looks up the shells of a query's background commands before it gives up on one. */
 const SHELL_SEARCHES = 3;
 const SHELL_SEARCH_AGAIN_MS = 1_000;
+/** How long after a command's call its shell may start, a permission card's wait aside, and still be taken as its own. */
+const SHELL_START_SLACK_MS = 30_000;
 const compactedNote = (name: string) => `${name}'s conversation was compacted to make room; older details are summarized now.`;
 const restartedNotice = (envelopeText: string) =>
   `[The bridge restarted during your turn on: ${envelopeText.split("\n")[0]} It may be partly done; check before redoing it.]`;
@@ -810,7 +812,7 @@ export type SessionSpec = {
   /** By task id, the process group of each background shell of Claude Code's process `pid` (null: none spawned). Default shellGroups. */
   shells?: (pid: number | null) => Promise<Map<string, number>>;
   /** The group-leading processes Claude Code's process `pid` started, with their command lines. Default shellLeaders. */
-  leaders?: (pid: number | null) => Promise<{ group: number; command: string }[]>;
+  leaders?: (pid: number | null) => Promise<{ group: number; command: string; started?: number }[]>;
   /** Whether a saved process group still runs the background command with this task id. Default taskRun. */
   taskRun?: (group: number, id: string) => Promise<TaskRun>;
   /**
@@ -859,6 +861,8 @@ type Live = {
   groups: Map<string, number>;
   /** The group of the one shell whose command line holds a command whose output file could not be found, by task id. */
   loose: Map<string, number>;
+  /** For a command left unpaired, the groups of Claude Code's shells that may run it, by task id (see pairLoose). */
+  shells: Map<string, number[]>;
   /** Searches of the process table for each task's group so far, and whether one is under way. */
   searches: Map<string, number>;
   searching: boolean;
@@ -1290,6 +1294,7 @@ export function createSession(spec: SessionSpec): Session {
       background: [],
       groups: new Map(),
       loose: new Map(),
+      shells: new Map(),
       searches: new Map(),
       searching: false,
       pid: () => pid,
@@ -1346,12 +1351,14 @@ export function createSession(spec: SessionSpec): Session {
       const group = l.groups.get(b.id);
       const loose = group === undefined ? l.loose.get(b.id) : undefined;
       const command = group === undefined && loose === undefined && t?.kind === "command" && t.stepId !== null ? l.tasks.raw.get(t.stepId) : undefined;
+      const shells = command === undefined ? undefined : l.shells.get(b.id);
       return {
         ...b,
         ...(t && { kind: t.kind, label: t.label, startedAt: t.startedAt, ...(t.stepId !== null && { stepId: t.stepId }) }),
         ...(group !== undefined && { group }),
         ...(loose !== undefined && { loose }),
         ...(command !== undefined && { command }),
+        ...(shells !== undefined && { shells }),
         ...(t?.kind === "agent" && pid !== null && { claude: pid }),
       };
     });
@@ -1415,7 +1422,7 @@ export function createSession(spec: SessionSpec): Session {
    * task has it, that shell is taken as the command's, loosely: to see it end, never to signal it. Two shells alike, two
    * tasks given the same command (the second's shell may not have started yet), or no shell exact, stay unpaired.
    */
-  function pairLoose(l: Live, shellsOf: readonly { group: number; command: string }[]) {
+  function pairLoose(l: Live, shellsOf: readonly { group: number; command: string; started?: number }[]) {
     const taken = new Set([...l.groups.values(), ...l.loose.values()]);
     const runs = shellsOf.map((s) => ({ group: s.group, command: evalArg(s.command) }));
     const work = outliving(l, foreground).map((b) => {
@@ -1429,6 +1436,19 @@ export function createSession(spec: SessionSpec): Session {
       if (hits.length !== 1 || taken.has(hits[0]!.group)) continue;
       l.loose.set(b.id, hits[0]!.group);
       taken.add(hits[0]!.group);
+    }
+    // A command left unpaired is watched through Claude Code's own shells that run exactly its text, recorded only
+    // while there is one such shell for each live task given that text, so each task's own shell is among them. A task
+    // takes only shells that started by its call plus SHELL_START_SLACK_MS: a later run of the same text is not its own.
+    const unpaired = work.filter((w) => w.given !== undefined && !l.groups.has(w.b.id) && !l.loose.has(w.b.id));
+    for (const given of new Set(unpaired.map((w) => w.given!))) {
+      const hits = shellsOf.filter((s) => evalArg(s.command) === psText(given));
+      if (hits.length !== work.filter((w) => w.given === given).length) continue;
+      for (const { b } of unpaired.filter((w) => w.given === given)) {
+        const call = Date.parse(l.tasks.all.get(b.id as TaskId)?.startedAt ?? "");
+        const own = hits.filter((h) => h.started === undefined || h.started <= call + SHELL_START_SLACK_MS).map((h) => h.group);
+        if (own.length > 0) l.shells.set(b.id, [...new Set([...(l.shells.get(b.id) ?? []), ...own])]);
+      }
     }
   }
 

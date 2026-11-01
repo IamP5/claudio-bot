@@ -81,6 +81,9 @@ struct MainView: View {
         }
         .onChange(of: inspectorBot != nil, initial: true) { makeRoomForChat() }
         #endif
+        #if DEBUG && os(iOS)
+        .environment(\.horizontalSizeClass, Demo.forcesWide ? .regular : sizeClass)
+        #endif
         .sheet(isPresented: $router.showingNewChat) { NewChatView() }
         .sheet(item: $router.newSession) { NewSessionSheet(projectId: $0.projectId) }
         #if os(iOS)
@@ -145,14 +148,35 @@ struct DetailStack: View {
         }
     }
 
+    /// The Sessions side with nothing chosen: what runs or waits elsewhere, or, before the first list or with the Mac out
+    /// of reach, that the app is waiting for the Mac rather than that nothing runs (F-SES-311).
     @ViewBuilder
     private var nothingSelected: some View {
-        let atWork = SessionsAtWork(store.sessions.rows.values)
-        if router.sidebar == .sessions, !atWork.isEmpty {
-            SessionsAtWorkView(atWork: atWork)
-        } else {
+        let freshness = store.sessions.freshness(online: store.showsOnline)
+        let atWork = SessionsAtWork(store.sessions.rows.values, freshness: freshness)
+        if router.sidebar != .sessions {
             nothingToShow
+        } else if !atWork.isEmpty {
+            SessionsAtWorkView(atWork: atWork)
+        } else if store.sessions.loaded, freshness == .live {
+            nothingToShow
+        } else {
+            waitingForMac(since: store.sessions.updatedAt)
         }
+    }
+
+    private func waitingForMac(since: Date?) -> some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            ContentUnavailableView(
+                "Waiting for your Mac",
+                systemImage: "desktopcomputer",
+                description: Text(since.map { SessionText.updated($0, now: context.date) + ". Nothing ran or waited on you then." }
+                    ?? "Your sessions show once your Mac answers.")
+            )
+        }
+        .foregroundStyle(Theme.secondary)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.background)
     }
 
     private var nothingToShow: some View {
@@ -176,47 +200,60 @@ struct DetailStack: View {
     }
 }
 
-/// A wide layout's detail pane with no session chosen: the sessions that run or wait on the user, one button each.
+/// A wide layout's detail pane with no session chosen: the sessions that run, wait on the user, broke or were stopped,
+/// one button each. A list the Mac no longer answers for says how old it is, and its working rows wear no ring.
 struct SessionsAtWorkView: View {
     let atWork: SessionsAtWork
     @Environment(Router.self) private var router
 
     var body: some View {
-        let rows = atWork.needsYou + atWork.working
+        // Live clocks tick each second; a kept list's only moving part is its age.
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(atWork.summary ?? "")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .accessibilityAddTraits(.isHeader)
-                VStack(spacing: 0) {
-                    ForEach(rows) { row in
-                        button(row, needsYou: row.status != .working)
-                        if row.id != rows.last?.id { Rectangle().fill(Theme.hairline).frame(height: 1) }
+            TimelineView(.periodic(from: .now, by: atWork.freshness == .live ? 1 : 30)) { context in
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(atWork.summary(now: context.date) ?? "")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.white)
+                        if case .asOf(let since) = atWork.freshness {
+                            Text(SessionText.updated(since, now: context.date) + ". Rows show what your Mac said then.")
+                                .font(.footnote)
+                                .foregroundStyle(Theme.secondary)
+                        } else if let running = atWork.runningTotal {
+                            Text(running + " running")
+                                .font(.footnote)
+                                .foregroundStyle(Theme.secondary)
+                        }
                     }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(atWork.spoken(now: context.date) ?? "")
+                    .accessibilityAddTraits(.isHeader)
+                    VStack(spacing: 0) {
+                        ForEach(atWork.entries) { entry in
+                            button(entry, now: context.date)
+                            if entry.id != atWork.entries.last?.id { Rectangle().fill(Theme.hairline).frame(height: 1) }
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
-                .padding(.horizontal, 14)
-                .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .padding(24)
+                .frame(maxWidth: 560)
+                .frame(maxWidth: .infinity)
             }
-            .padding(24)
-            .frame(maxWidth: 560)
-            .frame(maxWidth: .infinity)
         }
         .background(Theme.background)
     }
 
-    private func button(_ row: SessionRow, needsYou: Bool) -> some View {
-        Button { router.open(.session(row.id)) } label: {
+    private func button(_ entry: SessionsAtWork.Entry, now: Date) -> some View {
+        Button { router.open(.session(entry.id)) } label: {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Group {
-                    if needsYou { Image(systemName: "hand.raised").foregroundStyle(Theme.attention) } else { WorkingRing(size: 12) }
-                }
-                .accessibilityHidden(true)
+                mark(entry.kind).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(row.title).font(.body).foregroundStyle(.white)
-                    Text(needsYou ? "Needs you" : row.activity ?? "Working")
+                    Text(entry.row.title).font(.body).foregroundStyle(.white)
+                    Text(atWork.line(entry, now: now))
                         .font(.footnote)
-                        .foregroundStyle(needsYou ? Theme.attention : Theme.secondary)
+                        .foregroundStyle(tone(entry.kind))
                 }
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -227,7 +264,38 @@ struct SessionsAtWorkView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(entry.row.title + ", " + Self.word(entry.kind) + ", " + atWork.line(entry, now: now, spoken: true))
         .accessibilityHint("Opens the session")
+    }
+
+    /// Each kind has its own symbol, so none is color alone. Only a live working row spins.
+    @ViewBuilder
+    private func mark(_ kind: SessionsAtWork.Kind) -> some View {
+        switch kind {
+        case .needsYou: Image(systemName: "hand.raised").foregroundStyle(Theme.attention)
+        case .working: WorkingRing(size: 12)
+        case .lastKnownWorking: Image(systemName: "clock").foregroundStyle(Theme.secondary)
+        case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.danger)
+        case .stopped: Image(systemName: "stop.circle").foregroundStyle(Theme.secondary)
+        }
+    }
+
+    private func tone(_ kind: SessionsAtWork.Kind) -> Color {
+        switch kind {
+        case .needsYou: Theme.attention
+        case .failed: Theme.danger
+        case .working, .lastKnownWorking, .stopped: Theme.secondary
+        }
+    }
+
+    private static func word(_ kind: SessionsAtWork.Kind) -> String {
+        switch kind {
+        case .needsYou: "needs you"
+        case .working: "working"
+        case .lastKnownWorking: "last known"
+        case .failed: "failed"
+        case .stopped: "stopped"
+        }
     }
 }

@@ -340,6 +340,21 @@ struct SessionThreadView: View {
         }
     }
 
+    /// The chip wears what most needs the user: a card, then a failure, then a list that is out of date.
+    private static func chipSymbol(_ atWork: SessionsAtWork) -> String {
+        let kinds = Set(atWork.entries.map(\.kind))
+        if kinds.contains(.needsYou) { return "hand.raised" }
+        if kinds.contains(.failed) { return "exclamationmark.triangle.fill" }
+        return atWork.freshness == .live ? "circle.dotted" : "clock"
+    }
+
+    private static func chipTone(_ atWork: SessionsAtWork) -> Color {
+        let kinds = Set(atWork.entries.map(\.kind))
+        if kinds.contains(.needsYou) { return Theme.attention }
+        if kinds.contains(.failed) { return Theme.danger }
+        return Theme.secondary
+    }
+
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .principal) {
@@ -352,16 +367,19 @@ struct SessionThreadView: View {
         #if os(iOS)
         // iPad with the list out of sight: what else runs, and the way back to it.
         if sizeClass == .regular, router.hasSidebar, router.columns == .detailOnly || (router.columns == .automatic && tall) {
-            let elsewhere = SessionsAtWork(store.sessions.rows.values, excluding: sessionId)
-            if let summary = elsewhere.summary {
+            let elsewhere = SessionsAtWork(store.sessions.rows.values, freshness: store.sessions.freshness(online: store.showsOnline), excluding: sessionId)
+            if !elsewhere.isEmpty {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { router.columns = .all } label: {
-                        Label(summary, systemImage: elsewhere.needsYou.isEmpty ? "circle.dotted" : "hand.raised")
-                            .labelStyle(.titleAndIcon)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(elsewhere.needsYou.isEmpty ? Theme.secondary : Theme.attention)
+                        // A kept list's age moves; nothing else here does without a frame.
+                        TimelineView(.periodic(from: .now, by: 30)) { context in
+                            Label(elsewhere.summary(now: context.date) ?? "", systemImage: Self.chipSymbol(elsewhere))
+                                .labelStyle(.titleAndIcon)
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(Self.chipTone(elsewhere))
+                                .accessibilityLabel("Other sessions: " + (elsewhere.spoken(now: context.date) ?? ""))
+                        }
                     }
-                    .accessibilityLabel("Other sessions: \(summary)")
                     .accessibilityHint("Shows the sessions list")
                 }
             }

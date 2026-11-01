@@ -523,24 +523,96 @@ final class StatusAnnouncer {
     }
 }
 
-/// Sessions other than the one on screen that run or wait on the user, for a layout that hides the list.
+/// Sessions other than the one on screen that the user should know about while a wide layout hides the list: what
+/// waits on them, what runs, what broke, and a stop they have not seen. It reads the list with its freshness, so a list
+/// the Mac no longer answers for never claims anything runs (P-ALIVE-3): a working row becomes last known, with no
+/// count and no ring.
 struct SessionsAtWork: Equatable {
-    let needsYou: [SessionRow]
-    let working: [SessionRow]
-
-    init(_ rows: some Sequence<SessionRow>, excluding: SessionID? = nil) {
-        let shown = rows.filter { $0.id != excluding && !$0.hidden }.sorted { $0.lastAt > $1.lastAt }
-        needsYou = shown.filter { $0.status == .awaitingApproval || $0.status == .awaitingInput }
-        working = shown.filter { $0.status == .working }
+    enum Kind: Hashable {
+        case needsYou, working, lastKnownWorking, failed, stopped
     }
 
-    var isEmpty: Bool { needsYou.isEmpty && working.isEmpty }
+    struct Entry: Equatable, Identifiable {
+        let row: SessionRow
+        let kind: Kind
+        var id: SessionID { row.id }
+    }
 
-    /// "2 working · 1 needs you".
-    var summary: String? {
-        let parts = [working.isEmpty ? nil : "\(working.count) working", needsYou.isEmpty ? nil : "\(needsYou.count) need\(needsYou.count == 1 ? "s" : "") you"]
-        let text = parts.compactMap { $0 }.joined(separator: " · ")
-        return text.isEmpty ? nil : text
+    let freshness: ListFreshness
+    /// Needs you, then working, then failed, then stopped.
+    let entries: [Entry]
+
+    /// A hidden row still counts while it runs or waits on the user: attention beats the user's tidy-up (F-SES-308).
+    /// A stop counts only until the user has seen it, so their own stops do not pile up here.
+    init(_ rows: some Sequence<SessionRow>, freshness: ListFreshness, excluding: SessionID? = nil) {
+        self.freshness = freshness
+        var needsYou: [SessionRow] = [], working: [SessionRow] = [], failed: [SessionRow] = [], stopped: [SessionRow] = []
+        for row in rows where row.id != excluding {
+            if row.needsYou { needsYou.append(row) }
+            else if row.status == .working { working.append(row) }
+            else if row.hidden { continue }
+            else if row.status == .failed { failed.append(row) }
+            else if row.outcome?.kind == .stopped, row.unread { stopped.append(row) }
+        }
+        let live = freshness == .live
+        entries = needsYou.sorted { $0.lastAt > $1.lastAt }.map { Entry(row: $0, kind: .needsYou) }
+            + working.sorted { ($0.since ?? $0.lastAt) > ($1.since ?? $1.lastAt) }.map { Entry(row: $0, kind: live ? .working : .lastKnownWorking) }
+            + failed.sorted { ($0.outcome?.at ?? $0.lastAt) > ($1.outcome?.at ?? $1.lastAt) }.map { Entry(row: $0, kind: .failed) }
+            + stopped.sorted { ($0.outcome?.at ?? $0.lastAt) > ($1.outcome?.at ?? $1.lastAt) }.map { Entry(row: $0, kind: .stopped) }
+    }
+
+    var isEmpty: Bool { entries.isEmpty }
+
+    private func count(_ kind: Kind) -> Int { entries.count { $0.kind == kind } }
+
+    /// "2 working · 1 needs you · 1 failed". A list kept from before the Mac went out of reach has no working count and
+    /// says how old it is: "1 needs you · as of 5m ago".
+    func summary(now: Date) -> String? { summary(now: now, spoken: false) }
+
+    /// "2 working, running 3 agents and 1 command, 1 needs you, 1 failed".
+    func spoken(now: Date) -> String? { summary(now: now, spoken: true) }
+
+    private func summary(now: Date, spoken: Bool) -> String? {
+        guard !isEmpty else { return nil }
+        let working = count(.working), needs = count(.needsYou), failed = count(.failed), stopped = count(.stopped)
+        let running = spoken ? runningTotal.map { "running " + $0 } : nil
+        let parts = [
+            working > 0 ? "\(working) working" : nil, running,
+            needs > 0 ? "\(needs) \(needs == 1 ? "needs" : "need") you" : nil,
+            failed > 0 ? "\(failed) failed" : nil,
+            stopped > 0 ? "\(stopped) stopped" : nil,
+        ].compactMap { $0 }
+        guard let asOf = freshness.asOf(now: now, spoken: spoken) else { return parts.joined(separator: spoken ? ", " : " · ") }
+        return parts.isEmpty ? "Sessions " + asOf : (parts + [asOf]).joined(separator: spoken ? ", " : " · ")
+    }
+
+    /// What the working sessions run, as the list rows count it: "3 agents and 1 command". Nil when the list is not live.
+    var runningTotal: String? {
+        let rows = entries.filter { $0.kind == .working }.compactMap(\.row.running)
+        let agents = rows.map(\.agents).reduce(0, +), commands = rows.map(\.commands).reduce(0, +)
+        let parts = [agents > 0 ? WorkSummary.plural(agents, "agent") : nil, commands > 0 ? WorkSummary.plural(commands, "command") : nil].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " and ")
+    }
+
+    /// An entry's second line: "Working 4m 05s · 3 agents, 1 command · Run npm test", "Waiting for approval: Bash",
+    /// "Working for 4m 05s when last updated", "Claude Code stopped unexpectedly · 5m ago".
+    func line(_ entry: Entry, now: Date, spoken: Bool = false) -> String {
+        let row = entry.row
+        let clock = spoken ? RunClock.spoken : RunClock.short
+        let ago = { (date: Date) in SessionAge(date, now: now).ago(spoken: spoken) }
+        let parts: [String?] = switch entry.kind {
+        case .needsYou:
+            [row.activity ?? "Needs you"]
+        case .working:
+            ["Working" + (row.since.map { " " + clock(now.timeIntervalSince($0)) } ?? ""), row.running.flatMap(SessionText.running), row.activity]
+        case .lastKnownWorking:
+            ["Working" + (row.since.map { " for " + clock(freshness.ageReference(now: now).timeIntervalSince($0)) } ?? "") + " when last updated"]
+        case .failed:
+            [row.outcome?.text ?? "Failed", ago(row.outcome?.at ?? row.lastAt)]
+        case .stopped:
+            [row.outcome?.text ?? "Stopped", ago(row.outcome?.at ?? row.lastAt)]
+        }
+        return (parts.compactMap { $0 } + (row.hidden ? ["hidden"] : [])).joined(separator: spoken ? ", " : " · ")
     }
 }
 

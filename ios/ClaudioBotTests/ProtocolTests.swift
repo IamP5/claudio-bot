@@ -323,16 +323,14 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(controls.working && controls.turn == SessionTurn(startedAt: "2026-10-16T12:00:00.000Z", wake: false))
         #expect(controls.heardAt == at.addingTimeInterval(7200))
         let tasks = try #require(controls.tasks)
-        #expect(tasks.map(\.kind) == [.agent, .command, .command])
+        #expect(tasks.map(\.kind) == [.agent, .command])
         #expect(tasks[0].waiting == MessageID("m23") && tasks[0].progress?.tools == 3 && tasks[0].progress?.last == "Bash")
         #expect(tasks[1].owner == "toolu_01Ac1" && tasks[1].progress == nil && tasks[1].background)
-        #expect(tasks.map(\.outlived) == [false, false, true])
-        #expect(tasks[2].label == "perl -e 'sleep 90'" && !tasks[2].background)
-        #expect(try jsonObject(Wire.encoder().encode(tasks[2]))["outlived"] as? Bool == true)
+        #expect(tasks.map(\.outlived) == [false, false])
         #expect(try jsonObject(Wire.encoder().encode(tasks[0]))["outlived"] == nil)
 
         guard case let .work(_, _, steps) = items.first else { Issue.record("no work item first"); return }
-        #expect(steps.map(\.state) == [.running, .waiting, .running, .error, .stopped, .unsure, .ended, .running])
+        #expect(steps.map(\.state) == [.running, .waiting, .running, .error, .stopped, .unsure, .ended])
         #expect(tasks.compactMap(\.stepId).allSatisfy { id in steps.contains { $0.id == id } }, "every task names a step in the thread")
         #expect(steps[0].background && steps[0].detail == "general-purpose" && steps[0].startedAt == at)
         #expect(!steps[1].background && steps[1].owner == "toolu_01Ac1" && steps[1].startedAt == nil)
@@ -349,7 +347,12 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(reasons == [.task, .stop])
 
         let wake = frames[1].controls
-        #expect(wake.working && wake.turn?.wake == true && wake.tasks == [])
+        #expect(wake.working && wake.turn?.wake == true)
+        let outlived = try #require(wake.tasks?.first)
+        #expect(wake.tasks?.count == 1 && outlived.outlived && !outlived.background && outlived.label == "perl -e 'sleep 90'")
+        #expect(try jsonObject(Wire.encoder().encode(outlived))["outlived"] as? Bool == true)
+        guard case let .work(_, _, wakeSteps) = frames[1].items.first else { Issue.record("no work item in the wake frame"); return }
+        #expect(wakeSteps.map(\.id) == [outlived.stepId], "the outlived task names a step in the thread")
     }
 
     @Test func pushStateAndErrorsAboutARequestDecodeToTypedValues() throws {

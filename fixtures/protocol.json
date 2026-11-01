@@ -1894,16 +1894,6 @@
               "startedAt": "2026-10-16T12:00:00.000Z",
               "background": true,
               "cause": "It ended without a result"
-            },
-            {
-              "id": "toolu_01Ac9",
-              "tool": "Bash",
-              "label": "Sleep for 90 seconds",
-              "state": "running",
-              "diff": null,
-              "output": null,
-              "detail": "perl -e 'sleep 90'",
-              "startedAt": "2026-10-16T12:00:00.000Z"
             }
           ]
         },
@@ -2036,18 +2026,6 @@
             "owner": "toolu_01Ac1",
             "progress": null,
             "waiting": null
-          },
-          {
-            "id": "toolu_01Ac9",
-            "stepId": "toolu_01Ac9",
-            "kind": "command",
-            "label": "perl -e 'sleep 90'",
-            "background": false,
-            "startedAt": "2026-10-16T12:00:00.000Z",
-            "owner": null,
-            "progress": null,
-            "waiting": null,
-            "outlived": true
           }
         ],
         "heardAt": "2026-10-16T14:00:00.000Z"
@@ -2058,7 +2036,25 @@
       "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
       "rev": 4,
       "removed": [],
-      "items": [],
+      "items": [
+        {
+          "kind": "work",
+          "id": "toolu_01Ac9",
+          "at": "2026-10-16T12:00:00.000Z",
+          "steps": [
+            {
+              "id": "toolu_01Ac9",
+              "tool": "Bash",
+              "label": "Sleep for 90 seconds",
+              "state": "running",
+              "diff": null,
+              "output": null,
+              "detail": "perl -e 'sleep 90'",
+              "startedAt": "2026-10-16T12:00:00.000Z"
+            }
+          ]
+        }
+      ],
       "controls": {
         "canSend": true,
         "reason": null,
@@ -2089,7 +2085,20 @@
           "startedAt": "2026-10-16T14:00:00.000Z",
           "wake": true
         },
-        "tasks": [],
+        "tasks": [
+          {
+            "id": "bf90",
+            "stepId": "toolu_01Ac9",
+            "kind": "command",
+            "label": "perl -e 'sleep 90'",
+            "background": false,
+            "startedAt": "2026-10-16T12:00:00.000Z",
+            "owner": null,
+            "progress": null,
+            "waiting": null,
+            "outlived": true
+          }
+        ],
         "heardAt": "2026-10-16T14:00:00.000Z"
       }
     },

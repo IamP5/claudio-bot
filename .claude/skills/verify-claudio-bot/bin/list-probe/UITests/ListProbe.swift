@@ -1,6 +1,6 @@
 import XCTest
 
-/// Reads the Sessions list as the running app draws it, without touching it: about once a second, the spoken labels
+/// Reads the Sessions list as the running app draws it, without touching it (testTap is the one test that touches it): about once a second, the spoken labels
 /// of the buttons that start with "<PREFIX>, " (rows and the project header) and "Show " (the fold), top to bottom.
 /// Appends one JSON line per sample to OUT: {"t": epoch ms, "rows": [...], "more": [...]}. Runs until killed or for
 /// SECONDS.
@@ -60,5 +60,15 @@ final class ListProbe: XCTestCase {
             usleep(1_000_000)
         }
         try handle.close()
+    }
+
+    /// Taps the app's first element labeled LABEL, as the user would; fails when none shows up within 15 s.
+    func testTap() throws {
+        let label = try XCTUnwrap(ProcessInfo.processInfo.environment["LABEL"])
+        let app = XCUIApplication(bundleIdentifier: "dev.claudiobot.app")
+        app.activate()
+        let element = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label)).firstMatch
+        XCTAssertTrue(element.waitForExistence(timeout: 15), "nothing labeled \(label)")
+        element.tap()
     }
 }

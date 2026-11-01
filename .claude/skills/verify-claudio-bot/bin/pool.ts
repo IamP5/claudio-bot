@@ -411,9 +411,9 @@ function bundleDigest(app: string) {
  * Installs and launches the app on a leased, booted device, and throws unless the bundle the device then holds is the
  * build of the expected stamp. Debug launch arguments: -pairingVault keeps a throwaway pairing per device,
  * -pairingAutoConfirm confirms a pairing link without the tap simctl cannot make, and -sidebarMode opens on the
- * Sessions list.
+ * Sessions list, or on the bots for a scenario that says so.
  */
-export function installAndLaunch(lease: Lease, build: Build, extra: string[] = []) {
+export function installAndLaunch(lease: Lease, build: Build, sidebar: "sessions" | "bots" = "sessions") {
   const found = builtStamp(build);
   if (found !== build.stamp) throw new Error(`refusing to install: ${build.dir} holds ${found ? `stamp ${found}` : "no finished build"}, not ${build.stamp}`);
   const want = bundleDigest(build.app);
@@ -424,7 +424,7 @@ export function installAndLaunch(lease: Lease, build: Build, extra: string[] = [
   const got = bundleDigest(container.out);
   if (got !== want) throw new Error(`the app on ${lease.device} is not the build of stamp ${build.stamp}: bundle ${got.slice(0, 12)}, built ${want.slice(0, 12)}`);
   simctl(lease, "terminate", BUNDLE);
-  const l = simctl(lease, "launch", BUNDLE, "-pairingVault", `claudiobot-ux-${lease.device}`, "-pairingAutoConfirm", "YES", "-sidebarMode", "sessions", ...extra);
+  const l = simctl(lease, "launch", BUNDLE, "-pairingVault", `claudiobot-ux-${lease.device}`, "-pairingAutoConfirm", "YES", "-sidebarMode", sidebar);
   if (!l.ok) throw new Error(`launch on ${lease.device}: ${l.err}`);
   log(`installed stamp ${build.stamp} (bundle ${got.slice(0, 12)}) and launched ${BUNDLE} on ${lease.device}`);
   return got;

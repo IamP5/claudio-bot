@@ -269,6 +269,7 @@ class Phone {
       return;
     }
     if (name) this.record("out", name, m);
+    else if (!m.type.includes("session")) this.record("out", "bots", m);
     if (name && (m.type === "watch_session" || m.type === "unwatch_session")) this.ev.watches.push({ at: this.ev.now(), name, on: m.type === "watch_session" });
     this.c.send(m);
   }
@@ -310,8 +311,21 @@ class Phone {
     this.ev.history.push({ at: this.ev.now(), frame: this.frameNo, name: this.names.get(sid)!, row: this.rows.get(sid) ?? null, controls: t.controls, items: [...t.items.values()] });
   }
 
+  /** Every frame that is not about sessions goes to ev.inbox; the user taps Allow once on each bot permission card, after holdS. */
+  private botFrame(f: Frame) {
+    this.ev.inbox.push({ at: this.ev.now(), frame: f });
+    if (f.type !== "activity" && f.type !== "hello") this.record("in", "bots", f);
+    const m = f.type === "message" ? (f.message as { kind: string; id: string; answer: unknown }) : null;
+    if (m?.kind !== "permission" || m.answer !== null || this.decided.has(m.id)) return;
+    this.decided.add(m.id);
+    const tap = () => this.c && this.send({ type: "decide", botId: f.botId, messageId: m.id, choice: "once" });
+    if (this.holdS > 0) setTimeout(tap, this.holdS * 1000);
+    else tap();
+  }
+
   private apply(f: Frame) {
     this.frameNo++;
+    if (!f.type.startsWith("session")) this.botFrame(f);
     if (["decided", "error", "session_tool_output", "session_created"].includes(f.type as string)) this.ev.replies.push({ at: this.ev.now(), frame: f });
     if (f.type === "hello") {
       if (!(f.resumed === true && f.epoch === this.cursor?.epoch)) this.cursor = { epoch: f.epoch as string, seq: f.seq as number };
@@ -479,6 +493,32 @@ class Phone {
   }
 }
 
+/** A bot's id from the created frame that answered the scenario's create_bot ref. */
+function botOf(ev: Ev, ref: string): string {
+  const f = ev.inbox.find((x) => x.frame.type === "created" && x.frame.ref === ref);
+  if (!f) throw new PreconditionFailed(`no bot was created for ${ref}`);
+  return f.frame.botId as string;
+}
+
+/**
+ * Another phone with its own pairing: it opens a socket with its token and waits for the hello. When the socket closes,
+ * the close code, reason and time (ms since the scenario started) go into the entry, and the phone tries its token once more (rejoined: whether it opened).
+ */
+async function secondPhone(port: number, token: string, entry: Ev["pairs"][number], now: () => number) {
+  const open = () => new WebSocket(`ws://127.0.0.1:${port}/ws?protocol=3`, { headers: { Authorization: `Bearer ${token}` } } as never);
+  const ws = open();
+  ws.onmessage = (e) => {
+    if ((JSON.parse(String(e.data)) as Frame).type === "hello") entry.hello = true;
+  };
+  ws.onclose = (e) => {
+    entry.closed = { at: now(), code: e.code, reason: e.reason };
+    const again = open();
+    again.onopen = () => ((entry.rejoined = true), again.close());
+    again.onerror = () => (entry.rejoined = false);
+  };
+  await until(() => entry.hello, "the second phone's hello", 10);
+}
+
 const die = (s: string): never => {
   throw new Error(s);
 };
@@ -529,7 +569,8 @@ type Outcome = "judged" | "precondition-failed" | "error";
 /** simctl ui settings for a leased device during a run: Dynamic Type and appearance. Reset to large and light at the end. */
 type Ui = { contentSize?: string; appearance?: string };
 
-async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui, awayFlag = false): Promise<Outcome> {
+async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, flags: Ui, awayFlag = false): Promise<Outcome> {
+  const ui: Ui = sim ? { ...sc.ui, ...Object.fromEntries(Object.entries(flags).filter(([, v]) => v !== undefined)) } : {};
   const away = awayFlag || sc.away === true;
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
   const out = resolve(flag("out") ?? join(BASE, "scenarios", sc.id, `${stamp}${sim ? "-sim" : ""}`));
@@ -596,6 +637,8 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
     watches: [],
     streamed: {},
     opens: [],
+    inbox: [],
+    pairs: [],
   };
   const probe: { run: { proc: ReturnType<typeof Bun.spawn>; file: string } | null } = { run: null };
   const labels: { run: { proc: ReturnType<typeof Bun.spawn>; file: string } | null; poll: ReturnType<typeof setInterval> | null } = { run: null, poll: null };
@@ -671,7 +714,7 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
     await phone.open(false);
 
     if (sim && lease && app) {
-      report.app = { stamp: app.stamp, bundle: pool.installAndLaunch(lease, app) };
+      report.app = { stamp: app.stamp, bundle: pool.installAndLaunch(lease, app, sc.sidebar) };
       await Bun.sleep(3000);
       const before = ((await phone.request({ type: "devices" }, "devices")).devices as unknown[]).length;
       const offer = await phone.request({ type: "pair_code" }, "pair_code");
@@ -833,8 +876,8 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
           return;
         }
         if (!app) return;
-        // The app has no link to the list; relaunched with -sidebarMode sessions it opens there and unwatches the thread.
-        pool.installAndLaunch(lease, app);
+        // The app has no link to the list; relaunched with -sidebarMode it opens there and unwatches the thread.
+        pool.installAndLaunch(lease, app, sc.sidebar);
         return Bun.sleep(4000);
       case "app":
         if (lease) pool.simctl(lease, "launch", a.to === "background" ? "com.apple.Preferences" : pool.BUNDLE);
@@ -950,6 +993,38 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, ui: Ui
         labels.poll = setInterval(() => (ev.labels = readLabels(file)), 1000);
         log("label probe reading the app's labels");
         return;
+      }
+      case "open-bot": {
+        const botId = botOf(ev, a.ref);
+        if (lease) {
+          pool.simctl(lease, "openurl", `claudiobot://bot/${botId}`);
+          await Bun.sleep(3000);
+        } else p.send({ type: "open", botId });
+        return markNow(a.mark);
+      }
+      case "tap": {
+        if (!lease) return void skipped.push(`tap ${a.label}`);
+        const dir = await buildListProbe();
+        const r = Bun.spawnSync(
+          ["xcodebuild", "-project", join(dir, "ListProbe.xcodeproj"), "-scheme", "UITests", "-destination", `platform=iOS Simulator,id=${lease.udid}`, "-derivedDataPath", join(dir, "dd"), "test-without-building", "-only-testing:UITests/ListProbe/testTap"],
+          { env: { ...process.env, TEST_RUNNER_LABEL: a.label }, stdout: "pipe", stderr: "pipe" },
+        );
+        appendFileSync(join(out, "tap.log"), r.stdout.toString() + r.stderr.toString());
+        if (r.exitCode !== 0) throw new PreconditionFailed(`could not tap "${a.label}" in the app; see tap.log`);
+        await Bun.sleep(1500);
+        if (a.mark) markNow(a.mark);
+        return;
+      }
+      case "pair": {
+        const code = a.code(ev);
+        const sent = ev.now();
+        const res = await fetch(`http://127.0.0.1:${relay!.port}/pair`, { method: "POST", body: JSON.stringify({ code, name: a.name }) });
+        const body = (await res.json().catch(() => ({}))) as { token?: string; deviceId?: string; error?: string };
+        const entry: Ev["pairs"][number] = { at: ev.now(), ms: ev.now() - sent, mark: a.mark, name: a.name, status: res.status, error: body.error ?? null, deviceId: body.deviceId ?? null, hello: false, closed: null, rejoined: null };
+        ev.pairs.push(entry);
+        log(`pair ${a.name} with ${code}: ${res.status}${body.error ? ` ${body.error}` : ""}`);
+        if (res.status === 200 && a.connect && body.token) await secondPhone(relay!.port, body.token, entry, ev.now);
+        return markNow(a.mark);
       }
       case "fresh-open": {
         const sid = ev.ids[a.name]!;
@@ -1068,7 +1143,7 @@ function doc(area: string) {
   const lines = [
     `# ${area[0]!.toUpperCase()}${area.slice(1)} scenarios`,
     "",
-    `Generated by \`.claude/skills/verify-claudio-bot/bin/scenario.ts doc ${area}\` from \`bin/scenarios.ts\`; edit the registry, then regenerate. Each scenario answers, for one situation, whether the user can tell **what** is running, **how many**, **how long**, its **state** (done, failed, stuck) and how to **stop** it.`,
+    `Generated by \`.claude/skills/verify-claudio-bot/bin/scenario.ts doc ${area}\` from \`bin/scenarios.ts\`; edit the registry, then regenerate. ${area === "sessions" ? "Each scenario answers, for one situation, whether the user can tell **what** is running, **how many**, **how long**, its **state** (done, failed, stuck) and how to **stop** it." : "Each scenario answers, for one normal flow, whether the user is told the **state** honestly, can read it **clearly**, gets a **responsive** answer, and knows how to **recover** when something goes wrong."}`,
     "",
     "Lanes: a `protocol` item is judged mechanically from the frames the phone receives (and the run's transcripts, files and pushes as independent views); a `simulator` item is judged by a person or agent from the named screenshots, taken with `--sim`. Every session turn runs on haiku; each permission card the scenario raises is answered Allow once, as the user would, and the timeline records the tap. A scenario whose preconditions fail is reported failed and its rubric is not judged; it never falls back to an easier path.",
     "",
@@ -1133,6 +1208,12 @@ function describe(a: Action): string {
       return `Read \`${a.rel}\` in the seed project into the report as \`${a.as}\`.`;
     case "raw":
       return `The phone sends a frame the app can send, built from what it saw: ${a.what}. Mark \`${a.mark}\`.`;
+    case "open-bot":
+      return `Open the chat with \`${a.ref}\`: in the app by claudiobot://bot/<id> (simulator lane), or send \`open\` as the app does (protocol lane). Mark \`${a.mark}\`.`;
+    case "tap":
+      return `Tap "${a.label}" in the app (simulator lane; an XCUITest finds the element by its label and taps it)${a.mark ? `; mark \`${a.mark}\`` : ""}.`;
+    case "pair":
+      return `Another phone, "${a.name}", sends POST /pair with ${a.what}${a.connect ? "; when it pairs it opens a socket with its token and keeps it open" : ""}. Mark \`${a.mark}\`.`;
     case "watch-labels":
       return `The label probe (the same read-only XCUITest) records, about once a second until the setup ends, every element of the app whose label holds ${a.phrases.map((x) => `"${x}"`).join(", ")}, and whether each button among them is enabled (simulator lane).`;
   }

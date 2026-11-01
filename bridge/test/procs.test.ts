@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { commandCounts, endGroup, evalArg, groupAlive, psText, read, shellGroups, shellLeaders, taskRun } from "../src/procs";
+import { commandCounts, endGroup, evalArg, execTail, groupAlive, psText, read, shellGroups, shellLeaders, taskRun } from "../src/procs";
 import { backgroundCommand, evalShell } from "./shells";
 
 const started: number[] = [];
@@ -130,4 +130,15 @@ test("commandCounts counts the shells that run exactly a command, whoever starte
   await shells[0]!.end();
   await shells[1]!.end();
   expect((await commandCounts([command]))!.get(command)).toBe(0);
+});
+
+test("a command whose shell exec'd a plain program is counted by that program, and one whose last exec cannot be read is not", async () => {
+  const n = 40_000 + (process.pid % 9_000);
+  const p = Bun.spawn(["sleep", String(n)]);
+  ends.push(async () => void p.kill("SIGKILL"));
+  await Bun.sleep(100);
+  const plain = `exec >/dev/null 2>&1; exec sleep ${n}`;
+  const quoted = `exec >/dev/null 2>&1; exec perl -e "sleep ${n}"`;
+  expect([execTail(plain), execTail(quoted), execTail("exec >/dev/null 2>&1; sleep 53")]).toEqual([`sleep ${n}`, null, null]);
+  expect(await commandCounts([plain, quoted])).toEqual(new Map([[plain, 1], [quoted, 0]]));
 });

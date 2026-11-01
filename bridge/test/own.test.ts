@@ -1661,7 +1661,7 @@ describe("the thread says what stopped only once it did", () => {
       await startedInBackground({ bk: other.pid });
       await restart();
       await until(async () => (await restartLines()).length === 1);
-      expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: command \"Run in background: sleep bk\"."]);
+      expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: command \"Run in background: sleep bk\". Check it on your Mac (Activity Monitor, or ps)."]);
       expect([(await controlsNow()).tasks, (await controlsNow()).working, alive(other.pid), (await rowOf(ASK)).status]).toEqual([[], false, true, "idle"]);
       expect(await stepOf("toolu_bk")).toMatchObject({ state: "unsure", cause: "Can't tell whether this still runs on your Mac" });
       clock += 10_000;
@@ -1689,7 +1689,7 @@ describe("the thread says what stopped only once it did", () => {
     await flush();
     await restart();
     await until(async () => (await restartLines()).length === 1);
-    expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: command \"Run in background: sleep 600\"."]);
+    expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: command \"Run in background: sleep 600\". Check it on your Mac (Activity Monitor, or ps)."]);
     expect((await rowOf(ASK)).outcome?.kind).not.toBe("lost");
     expect([(await stepOf("toolu_k")), (await controlsNow()).working]).toMatchObject([{ state: "unsure", cause: "Can't tell whether this still runs on your Mac" }, false]);
   });
@@ -1705,7 +1705,7 @@ describe("the thread says what stopped only once it did", () => {
     queries.length = 0;
     await start();
     await until(async () => (await restartLines()).length === 1);
-    expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: sleep 600."]);
+    expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: sleep 600. Check it on your Mac (Activity Monitor, or ps)."]);
     expect(await stepOf("toolu_k")).toMatchObject({ state: "unsure", cause: "Can't tell whether this still runs on your Mac" });
   });
 
@@ -2004,35 +2004,98 @@ describe("the thread says what stopped only once it did", () => {
   });
 
   test("a command no shell was found for is watched by its command line across another restart: Stop says it cannot tell, and how to check, until no process runs it", async () => {
+    const command = `exec >/dev/null 2>&1; sleep 30 # café ${process.pid}-${clock}`;
+    const shell = evalShell(command);
+    const look = async () => {
+      clock += OUTLIVED_LOOK_MS;
+      sessions.tick(new Date(clock));
+      await Bun.sleep(300);
+    };
+    try {
+      await start();
+      await send("Start it");
+      const q = queries[0]!;
+      const listed = [shellTask("bu", "toolu_bu", "Sleep")];
+      await transcribe(calledEntry("toolu_bu", "Bash", { command, description: "Sleep", run_in_background: true }), resultEntry("toolu_bu", "Command running in background with ID: bu."));
+      q.emit(toolCall("toolu_bu", "Bash", { command }), taskStarted(listed[0]!), level(...listed), result());
+      await flush();
+      await flush();
+      const stopAll = async () => handle({ type: "session_stop", sessionId: ASK, target: "all" });
+      const cantTell: ServerMessage[] = [
+        {
+          type: "error",
+          message: `The bridge can't tell whether command "Run in background: Sleep" (${command}) still runs on your Mac, so it has nothing it can stop. Check it on your Mac (Activity Monitor, or ps).`,
+          about: { kind: "stop", sessionId: ASK },
+        },
+      ];
+      await restart();
+      await until(async () => (await restartLines()).length === 1);
+      expect(await stopAll()).toEqual(cantTell);
+      await look();
+      await restart();
+      await look();
+      expect([await stopAll(), (await stepOf("toolu_bu")).state]).toEqual([cantTell, "unsure"]);
+      await shell.end();
+      await look();
+      await until(async () => (await stepOf("toolu_bu")).state === "ended");
+      expect(await stepOf("toolu_bu")).toMatchObject({ state: "ended", endedAt: new Date(clock).toISOString() });
+      expect(await stopAll()).toEqual([{ type: "error", message: "Nothing is running.", about: { kind: "stop", sessionId: ASK } }]);
+    } finally {
+      await shell.end();
+    }
+  }, 15_000);
+
+  /** Claude Code ran `command` twice in the background, and the bridge restarted before it found a shell for either. */
+  const twinsRestarted = async (command: string) => {
     await start();
-    await send("Start it");
+    await send("Start them");
     const q = queries[0]!;
-    const listed = [shellTask("bu", "toolu_bu", "Sleep")];
-    const command = "exec >/dev/null 2>&1; sleep 3641 # café";
-    await transcribe(calledEntry("toolu_bu", "Bash", { command, description: "Sleep", run_in_background: true }), resultEntry("toolu_bu", "Command running in background with ID: bu."));
-    q.emit(toolCall("toolu_bu", "Bash", { command }), taskStarted(listed[0]!), level(...listed), result());
+    const ids = ["ea", "eb"];
+    await transcribe(...ids.flatMap((id) => [calledEntry(`toolu_${id}`, "Bash", { command, description: "Sleep", run_in_background: true }), resultEntry(`toolu_${id}`, `Command running in background with ID: ${id}.`)]));
+    const listed = ids.map((id) => shellTask(id, `toolu_${id}`, "Sleep"));
+    q.emit(...ids.map((id) => toolCall(`toolu_${id}`, "Bash", { command })), ...listed.map(taskStarted), level(...listed), result());
     await flush();
     await flush();
-    const stopAll = async () => handle({ type: "session_stop", sessionId: ASK, target: "all" });
-    const cantTell: ServerMessage[] = [
-      {
-        type: "error",
-        message:
-          'The bridge can\'t tell whether command "Run in background: Sleep" (exec >/dev/null 2>&1; sleep 3641 # café) still runs on your Mac, so it has nothing it can stop. Check it on your Mac (Activity Monitor, or ps).',
-        about: { kind: "stop", sessionId: ASK },
-      },
-    ];
     await restart();
     await until(async () => (await restartLines()).length === 1);
-    expect(await stopAll()).toEqual(cantTell);
-    await restart();
-    expect([await stopAll(), (await stepOf("toolu_bu")).state]).toEqual([cantTell, "unsure"]);
+    return async () => [(await stepOf("toolu_ea")).state, (await stepOf("toolu_eb")).state];
+  };
+  const lookNow = async () => {
     clock += OUTLIVED_LOOK_MS;
     sessions.tick(new Date(clock));
-    await until(async () => (await stepOf("toolu_bu")).state === "ended");
-    expect(await stepOf("toolu_bu")).toMatchObject({ state: "ended", endedAt: new Date(clock).toISOString() });
-    expect(await stopAll()).toEqual([{ type: "error", message: "Nothing is running.", about: { kind: "stop", sessionId: ASK } }]);
+    await Bun.sleep(300);
+  };
+
+  test("an unpaired command no look has ever counted never reads ended: none counted may be a form ps does not show", async () => {
+    const states = await twinsRestarted(`exec >/dev/null 2>&1; exec perl -e "sleep 30" # ${process.pid}`);
+    for (let i = 0; i < 4; i++) await lookNow();
+    expect(await states()).toEqual(["unsure", "unsure"]);
+    expect((await noticesNow()).some((n) => n.text.includes("ended."))).toBe(false);
+    expect((await handle({ type: "session_stop", sessionId: ASK, target: "all" }))[0]).toMatchObject({ type: "error", message: expect.stringContaining("can't tell") });
   });
+
+  test("twin commands whose shells exec'd away are counted by the program they became, and read ended once neither runs", async () => {
+    const n = 30_000 + (process.pid % 9_000);
+    const a = Bun.spawn(["sleep", String(n)]);
+    const b = Bun.spawn(["sleep", String(n)]);
+    try {
+      const states = await twinsRestarted(`exec >/dev/null 2>&1; exec sleep ${n}`);
+      await lookNow();
+      expect(await states()).toEqual(["unsure", "unsure"]);
+      a.kill("SIGKILL");
+      await a.exited;
+      await lookNow();
+      expect(await states()).toEqual(["unsure", "unsure"]);
+      b.kill("SIGKILL");
+      await b.exited;
+      await lookNow();
+      await until(async () => (await states()).every((st) => st === "ended"));
+      expect(await states()).toEqual(["ended", "ended"]);
+    } finally {
+      a.kill("SIGKILL");
+      b.kill("SIGKILL");
+    }
+  }, 15_000);
 
   test("a look at what became of a crashed Claude Code's work that never answers is given up on: the work may still run", async () => {
     const running = backgroundCommand("bk");
@@ -2079,7 +2142,7 @@ describe("the thread says what stopped only once it did", () => {
       await a.end();
       await restart();
       await until(async () => (await restartLines()).length === 1);
-      expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: command \"Run in background: Sleep\" (sleep twin) and command \"Run in background: Sleep\" (sleep twin)."]);
+      expect(await restartLines()).toEqual(["The bridge restarted, and Claude Code's background work may still run on this Mac: command \"Run in background: Sleep\" (sleep twin) and command \"Run in background: Sleep\" (sleep twin). Check them on your Mac (Activity Monitor, or ps)."]);
     } finally {
       await a.end();
       await b.end();

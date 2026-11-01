@@ -120,16 +120,17 @@ const tasksOf = (tasks: readonly Background[]) =>
 export type GoneCause = "restart" | "exit";
 /** What became of a gone query's background work and foreground commands, by what the Mac still runs. */
 export type Fate = { stopped: Background[]; running: Background[]; unknown: Background[] };
-export const goneNote = (name: string, cause: GoneCause, kind: keyof Fate, tasks: readonly Background[]): string => {
+/** names: the tasks as the thread names them; by default their descriptions. */
+export const goneNote = (name: string, cause: GoneCause, kind: keyof Fate, tasks: readonly Background[], names = tasksOf(tasks)): string => {
   const restart = cause === "restart";
   const work = tasks.some((t) => t.foreground) ? "work" : "background work";
   switch (kind) {
     case "stopped":
-      return restart ? `The bridge restarted, so ${name}'s ${work} stopped: ${tasksOf(tasks)}.` : `${name}'s ${work} stopped: ${tasksOf(tasks)}.`;
+      return restart ? `The bridge restarted, so ${name}'s ${work} stopped: ${names}.` : `${name}'s ${work} stopped: ${names}.`;
     case "running":
-      return `${restart ? `The bridge restarted, and ${name}` : `${name} exited, and`} no longer follows its ${work}, which still runs on this Mac: ${tasksOf(tasks)}.`;
+      return `${restart ? `The bridge restarted, and ${name}` : `${name} exited, and`} no longer follows its ${work}, which still runs on this Mac: ${names}.`;
     case "unknown":
-      return `${restart ? `The bridge restarted, and ${name}'s` : `${name} exited, and its`} ${work} may still run on this Mac: ${tasksOf(tasks)}.`;
+      return `${restart ? `The bridge restarted, and ${name}'s` : `${name} exited, and its`} ${work} may still run on this Mac: ${names}.`;
   }
 };
 /**
@@ -138,11 +139,20 @@ export const goneNote = (name: string, cause: GoneCause, kind: keyof Fate, tasks
  * one of those facts the bridge cannot tell.
  */
 const FATE_OF_RUN = { runs: "running", gone: "stopped", unsure: "unknown", unread: "unknown" } as const;
-async function fateOf(tasks: readonly Background[], run: (group: number, id: string) => Promise<TaskRun>): Promise<Fate> {
+/** A process table that could not be read is read again this much later, while the bridge still looks. */
+const GONE_LOOK_AGAIN_MS = 1_000;
+async function fateOf(tasks: readonly Background[], run: (group: number, id: string) => Promise<TaskRun>, looking: () => boolean): Promise<Fate> {
   const fate: Fate = { stopped: [], running: [], unknown: [] };
+  const read = async (group: number, id: string): Promise<TaskRun> => {
+    for (;;) {
+      const r = await run(group, id);
+      if (r !== "unread" || !looking()) return r;
+      await new Promise((resolve) => setTimeout(resolve, GONE_LOOK_AGAIN_MS));
+    }
+  };
   const kinds = await Promise.all(
     tasks.map(async (t): Promise<keyof Fate> => {
-      if (typeof t.group === "number") return FATE_OF_RUN[await run(t.group, t.id)];
+      if (typeof t.group === "number") return FATE_OF_RUN[await read(t.group, t.id)];
       if (typeof t.loose === "number") return groupAlive(t.loose) ? "unknown" : "stopped";
       return t.kind === "agent" && t.claude !== undefined && !groupAlive(t.claude) ? "stopped" : "unknown";
     }),
@@ -1335,11 +1345,13 @@ export function createSession(spec: SessionSpec): Session {
       const t = l.tasks.all.get(b.id as TaskId);
       const group = l.groups.get(b.id);
       const loose = group === undefined ? l.loose.get(b.id) : undefined;
+      const command = group === undefined && loose === undefined && t?.kind === "command" && t.stepId !== null ? l.tasks.raw.get(t.stepId) : undefined;
       return {
         ...b,
         ...(t && { kind: t.kind, label: t.label, startedAt: t.startedAt, ...(t.stepId !== null && { stepId: t.stepId }) }),
         ...(group !== undefined && { group }),
         ...(loose !== undefined && { loose }),
+        ...(command !== undefined && { command }),
         ...(t?.kind === "agent" && pid !== null && { claude: pid }),
       };
     });
@@ -1348,13 +1360,18 @@ export function createSession(spec: SessionSpec): Session {
   /** Says what became of a gone query's background work, from the process table: the owner does, or notes do. */
   async function reportGone(tasks: Background[], cause: GoneCause) {
     // A look that never answers (a wedged lsof) is given up on: the work may still run, and is looked at again later.
+    // A process table that could not be read is read again until then, so a moment's failure still tells what runs.
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let looking = true;
     const cantTell = new Promise<Fate>((resolve) => {
-      timer = setTimeout(() => resolve({ stopped: [], running: [], unknown: [...tasks] }), GONE_LOOK_MAX_MS);
+      timer = setTimeout(() => {
+        looking = false;
+        resolve({ stopped: [], running: [], unknown: [...tasks] });
+      }, GONE_LOOK_MAX_MS);
     });
     reporting++;
     try {
-      const fate = await Promise.race([fateOf(tasks, spec.taskRun ?? taskRun), cantTell]);
+      const fate = await Promise.race([fateOf(tasks, spec.taskRun ?? taskRun, () => looking), cantTell]);
       if (spec.gone) return guard("gone", () => spec.gone!(fate, cause));
       for (const kind of ["stopped", "running", "unknown"] as const)
         if (fate[kind].length > 0) guard("note", () => spec.note(goneNote(spec.name?.() ?? "Claude Code", cause, kind, fate[kind]), cause === "restart" ? "restart" : undefined));
@@ -1395,17 +1412,20 @@ export function createSession(spec: SessionSpec): Session {
   /**
    * A command whose shell sent its output elsewhere before the bridge looked has no output file to find it by. When
    * exactly one of Claude Code's shells runs exactly the command Claude Code was given, as ps writes it, and no other
-   * task has it, that shell is taken as the command's, loosely: to see it end, never to signal it. Two alike, or none
-   * exact, stay unpaired.
+   * task has it, that shell is taken as the command's, loosely: to see it end, never to signal it. Two shells alike, two
+   * tasks given the same command (the second's shell may not have started yet), or no shell exact, stay unpaired.
    */
   function pairLoose(l: Live, shellsOf: readonly { group: number; command: string }[]) {
     const taken = new Set([...l.groups.values(), ...l.loose.values()]);
     const runs = shellsOf.map((s) => ({ group: s.group, command: evalArg(s.command) }));
-    for (const b of outliving(l, foreground)) {
+    const work = outliving(l, foreground).map((b) => {
       const t = l.tasks.all.get(b.id as TaskId);
-      if (l.groups.has(b.id) || l.loose.has(b.id) || t?.kind !== "command" || t.stepId === null) continue;
-      const given = l.tasks.raw.get(t.stepId);
-      const hits = given === undefined ? [] : runs.filter((r) => r.command === psText(given));
+      return { b, given: t?.kind === "command" && t.stepId !== null ? l.tasks.raw.get(t.stepId) : undefined };
+    });
+    for (const { b, given } of work) {
+      if (l.groups.has(b.id) || l.loose.has(b.id) || given === undefined) continue;
+      if (work.filter((w) => w.given === given).length > 1) continue;
+      const hits = runs.filter((r) => r.command === psText(given));
       if (hits.length !== 1 || taken.has(hits[0]!.group)) continue;
       l.loose.set(b.id, hits[0]!.group);
       taken.add(hits[0]!.group);

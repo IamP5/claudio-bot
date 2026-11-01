@@ -99,6 +99,24 @@ export function psText(command: string): string {
   return out;
 }
 
+/**
+ * How many processes run each command as Claude Code's shells run one (evalArg of their command line), whoever started
+ * them; null when the process table could not be read. A count can only say a command may still run, never which
+ * process is it.
+ */
+export async function commandCounts(commands: readonly string[]): Promise<Map<string, number> | null> {
+  const out = await read(["ps", "-axww", "-o", "command="], READ_TIMEOUT_MS, { ...process.env, LC_ALL: "C" });
+  // ps lists itself at least, so an empty table was not read.
+  if (out === null || out.trim() === "") return null;
+  const counts = new Map(commands.map((c) => [c, 0]));
+  const wanted = new Map(commands.map((c) => [psText(c), c]));
+  for (const line of out.split("\n")) {
+    const command = wanted.get(evalArg(line) ?? "");
+    if (command !== undefined) counts.set(command, counts.get(command)! + 1);
+  }
+  return counts;
+}
+
 /** By task id, the process group of each background shell Claude Code (process `pid`) runs. Empty when none is found. */
 export async function shellGroups(pid: number): Promise<Map<string, number>> {
   const leaders = (await shellLeaders(pid)).map((l) => l.group);

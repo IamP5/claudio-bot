@@ -268,3 +268,11 @@ ts	decision	why
 2026-11-01T19:26:29Z	G27 r6: a group is recorded only from a shell pairing would accept (this session's Claude Code), started no later than the step's startedAt plus slack, and kept per step; setpgrp/setsid/double-fork ruled honest (session-leader shells cannot change group)	verifier r5 P2 and rulings
 2026-11-01T20:21:52Z	G27 r7: a step ends only on its own recorded shells (non-empty, all empty); no union across steps; groupless steps stay "can't tell", are not polled, and the pending list is capped per session	verifier r6 P2/P3s
 2026-11-01T20:23:09Z	G28: a dropped offline mirror change raises a toast when Settings is closed and shows the note beside the picker when open	verifier r2 P2
+2026-11-01T22:32:05Z	LEAN MODE: Audits run at most 2 rounds (no dry-round rule) with 1 Opus skeptic per finding	user asked to cut tokens and time; open-ended hunts never converged
+2026-11-01T22:32:05Z	LEAN MODE: P1 bar: only normal flows a typical user hits; rare, contrived or adversarial setups are P2 and go to backlog	user call; rubrics stay strict
+2026-11-01T22:32:05Z	LEAN MODE: After fixes, a targeted re-check of the fixed findings plus the area scenarios replaces a fresh open-ended audit; one strict final cross-area audit remains	user call
+2026-11-01T22:32:05Z	LEAN MODE: One independent verifier per PR at medium effort on the changed behavior; full regression lanes once per area; small follow-up rounds reviewed by root	user call
+2026-11-01T22:32:05Z	LEAN MODE: Two-strike rule: a fix that fails verification twice ships its safe, claims-less version and the rest goes to backlog	user call; G27 took 8 rounds
+2026-11-01T22:32:05Z	LEAN MODE: Remaining areas (Chat, Home, Pairing, Settings) are audited together in one run and fixed in parallel worktrees, sequenced only where files are shared	user asked to parallelize
+2026-11-01T22:32:05Z	LEAN MODE: Pool raised to 6 devices: ClaudioBot-UX-4..6 cloned from the iPhone 17 Pro on iOS 26.2 (3AE408D1, 69D0FF69, 62FE9B64); runner POOL list to be updated	user chose 6 simulators
+2026-11-01T22:32:05Z	LEAN MODE: The full Sessions rerun audit (wf_56de62f5-fb6) was stopped in round 2 and replaced by a targeted re-check of the 52 run-3 P1s	lean mode

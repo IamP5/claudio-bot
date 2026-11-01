@@ -1,27 +1,27 @@
 export const meta = {
   name: 'ux-audit',
-  description: 'Audit one ClaudioBot area (or all) with protocol and simulator auditors until two dry rounds, then 3 skeptics per finding',
+  description: 'Audit one ClaudioBot area (or all) with protocol and simulator auditors for at most 2 rounds (lean mode), then 1 skeptic per finding',
   whenToUse: 'Each audit round of the ClaudioBot UX program. args: {area: "sessions"|"chat"|"home"|"pairing"|"settings"|"all", stamp: "<utc stamp>", repo: "<worktree path>"}',
   phases: [
     { title: 'Load', detail: 'read the scenario registry, rubric docs, patterns and known findings' },
-    { title: 'Audit', detail: 'protocol lane runs freely, simulator lane at most 3 at once on leased pool devices', model: 'sonnet' },
+    { title: 'Audit', detail: 'protocol lane runs freely, simulator lane at most 6 at once on leased pool devices', model: 'sonnet' },
     { title: 'Dedupe', detail: 'drop findings already in the ledger or seen in an earlier round' },
-    { title: 'Skeptics', detail: '3 Opus skeptics try to refute each finding', model: 'opus' },
+    { title: 'Skeptics', detail: '1 Opus skeptic tries to refute each finding', model: 'opus' },
   ],
 }
 
 const AREA = (args && args.area) || 'sessions'
 const STAMP = (args && args.stamp) || 'nostamp'
 const REPO = (args && args.repo) || '.'
-const MAX_ROUNDS = (args && args.maxRounds) || 6
-const SIM_SLOTS = 3
+const MAX_ROUNDS = (args && args.maxRounds) || 2
+const SIM_SLOTS = 6
 const EVID = `$CLAUDIOBOT_VERIFY_DIR/ux-audit/${AREA}/${STAMP}`
 
 const COMMON = `You are auditing the ClaudioBot iPhone app (repo: ${REPO}; run every command from there).
 Program goal: every screen is clear, responsive, and honest about state. In Sessions especially the user can always tell what is running (subagents, background processes), how many, for how long, done, failed or stuck, and how to stop it.
 Rules:
 - export CLAUDIOBOT_VERIFY_BUDGET_USD=100000 before any helper command. Use the scenario runner .claude/skills/verify-claudio-bot/bin/scenario.ts (read docs/ux-program/runner.md first). Its runs own their bridge; for any direct control-claudio.ts command always pass --run <id>, never rely on "current".
-- Never touch the user's bridge on port 7878 or ~/.claudiobot. Never boot, clone or shut down any simulator except a pool device you leased through the runner (ClaudioBot-UX-1..3). Never touch the booted iPhone 17 Pro 81E949D3.
+- Never touch the user's bridge on port 7878 or ~/.claudiobot. Never boot, clone or shut down any simulator except a pool device you leased through the runner (ClaudioBot-UX-1..6). Never touch the booted iPhone 17 Pro 81E949D3.
 - Screenshots may show the user's real session titles: keep them under $CLAUDIOBOT_VERIFY_DIR, never copy them into the repo, never quote a real title in a finding.
 - Do not edit repo files. Write scratch output only under ${EVID}/<your label>/.
 - A finding is a concrete thing the user sees (or cannot see) that breaks the goal, with evidence (report/timeline/screenshot paths, and the app or bridge file:line that causes it). Opinions with no evidence are not findings.
@@ -87,7 +87,7 @@ const LENSES = [
 function auditPrompt(job, lane, round) {
   const seenList = seen.map(s => `- ${s.key}: ${s.title}`).join('\n') || '(none)'
   const sim = lane === 'simulator'
-    ? `\nSimulator lane: lease a pool device through the runner (\`run <id> --sim\` leases for you; for X- checks use \`lease acquire --label "ux-audit ${AREA} r${round} ${job.id}" --boot --wait 3600\`, heartbeat at least every 5 minutes, and ALWAYS \`lease release\` when done, even on failure). Wait when all 3 are taken. Install/pair the app the way runner.md describes. Judge screenshots in place.`
+    ? `\nSimulator lane: lease a pool device through the runner (\`run <id> --sim\` leases for you; for X- checks use \`lease acquire --label "ux-audit ${AREA} r${round} ${job.id}" --boot --wait 3600\`, heartbeat at least every 5 minutes, and ALWAYS \`lease release\` when done, even on failure). Wait when all 6 are taken. Install/pair the app the way runner.md describes. Judge screenshots in place.`
     : `\nProtocol lane: bridge and socket only, no simulator.`
   return `${COMMON}${sim}
 
@@ -156,11 +156,11 @@ const VERDICT = {
   properties: {
     refuted: { type: 'boolean' },
     reason: { type: 'string' },
-    severity: { type: 'string', enum: ['P0', 'P1', 'P2'], description: 'if not refuted. P0: user is misled about state or cannot stop/recover; P1: state is unclear, slow or needs guesswork; P2: polish' },
+    severity: { type: 'string', enum: ['P0', 'P1', 'P2'], description: 'if not refuted. P0: in a normal flow the user is misled about state or cannot stop/recover; P1: in a normal flow a typical user hits, state is unclear, slow or needs guesswork; P2: polish, or anything that needs a rare, contrived or adversarial setup to reach' },
   },
   required: ['refuted', 'reason', 'severity'],
 }
-const LENS = ['does the evidence actually show it (reread the files cited)', 'is it really wrong for the user, or intended and fine', 'does the cause in code match, or is it a harness artifact']
+const LENS = ['check all three: does the evidence actually show it (reread the files cited); is it really wrong for a normal user in a normal flow, or intended, rare or contrived; does the cause in code match, or is it a harness artifact']
 const judged = await parallel(fresh.map(f => () =>
   parallel(LENS.map((lens, i) => () => agent(`You are a skeptic. Try to REFUTE this ClaudioBot UX finding. Read the evidence files it cites and the code; you need no simulator and must not run scenarios or boot devices. Do not edit files. Lens: ${lens}. Default to refuted=true if the evidence does not hold up.
 
@@ -174,7 +174,7 @@ Files: ${f.files.join(', ')}`, { label: `skeptic${i + 1}:${f.key}`, phase: 'Skep
       const upheld = v.filter(x => !x.refuted)
       const order = ['P0', 'P1', 'P2']
       const sev = upheld.map(x => order.indexOf(x.severity)).sort()[Math.floor(upheld.length / 2)]
-      return { ...f, survives: upheld.length >= 2, severity: upheld.length ? order[sev] : null, votes: v.map(x => ({ refuted: x.refuted, severity: x.severity, reason: x.reason })) }
+      return { ...f, survives: upheld.length >= 1, severity: upheld.length ? order[sev] : null, votes: v.map(x => ({ refuted: x.refuted, severity: x.severity, reason: x.reason })) }
     })))
 
 const all = judged.filter(Boolean)

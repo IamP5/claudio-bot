@@ -97,7 +97,7 @@ struct LinkedCard: Equatable, Sendable {
     let sessionId: SessionID
     let cardId: MessageID
 
-    enum Closing { case answered, expired, closed }
+    enum Closing { case answered, expired, stopped, closed }
 
     /// The note once the card is in `items`, closed and not decided on this phone. nil says nothing: the card is not
     /// loaded, still waits, or the user just answered it here. Another card that waits is named, not hidden behind the
@@ -108,6 +108,8 @@ struct LinkedCard: Equatable, Sendable {
         return switch closing {
         case .answered: waits ? "That request was answered. Another one waits on you." : "Already answered. Nothing here waits on you now."
         case .expired: waits ? "That request expired. Another one waits on you." : "That request expired."
+        case .stopped:
+            waits ? "That request closed when the turn was stopped. Another one waits on you." : "That request closed when the turn was stopped."
         case .closed: waits ? "That request is no longer open. Another one waits on you." : "That request is no longer open. Nothing here waits on you now."
         }
     }
@@ -121,19 +123,22 @@ struct LinkedCard: Equatable, Sendable {
                 switch permission.card.answer(at: now) {
                 case nil: return nil
                 case .expired: return .expired
-                case .stopped, .closed: return .closed
+                case .stopped: return .stopped
+                case .closed: return .closed
                 case .chose, .unknown: return .answered
                 }
             case let .ask(_, _, _, answers, id?) where id == cardId:
                 switch answers {
                 case nil: return nil
                 case .expired: return .expired
+                case .stopped: return .stopped
                 case .answered, .dismissed, .closed: return .answered
                 }
             case let .plan(_, _, _, state, id?) where id == cardId:
                 switch state {
                 case .proposed: return nil
                 case .expired: return .expired
+                case .stopped: return .stopped
                 case .approved, .rejected, .unknown: return .answered
                 }
             default:

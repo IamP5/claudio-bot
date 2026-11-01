@@ -400,6 +400,35 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
     }
 }
 
+/// A card the user's stop closed says so, never that it was answered (G25's wire value "stopped").
+@MainActor
+@Suite struct StoppedCardTests {
+    @Test func aStoppedQuestionOrPlanDecodesAsStopped() throws {
+        #expect(try Wire.decoder().decode(AskAnswers.self, from: Data(#""stopped""#.utf8)) == .stopped)
+        #expect(String(decoding: try Wire.encoder().encode(AskAnswers.stopped), as: UTF8.self) == #""stopped""#)
+        #expect(try Wire.decoder().decode(PlanState.self, from: Data(#""stopped""#.utf8)) == .stopped)
+        #expect(PlanState.stopped.rawValue == "stopped")
+    }
+
+    @Test func aStoppedCardSaysItClosedWithTheTurn() {
+        #expect(PlanCard.stoppedLine == "Closed when the turn was stopped.")
+        #expect(PlanCard.closing(.stopped) == "The plan closed when the turn was stopped.")
+        #expect(AskCard.closing(.stopped, count: 1) == "The question closed when the turn was stopped.")
+        #expect(PlanCard.closing(.expired) == "The plan closed without an answer.")
+    }
+
+    @Test func aLinkToAStoppedCardSaysItClosedWithTheTurnNeverAnswered() {
+        let link = LinkedCard(sessionId: sid, cardId: MessageID("c1"))
+        let card = PermissionCard(from: nil, tool: "Bash", label: "Run a command", detail: "ls", always: "", answer: .stopped, expiresAt: at + 600)
+        let permission = SessionItem.permission(id: ItemID("p1"), at: at, permission: SessionPermission(cardId: MessageID("c1"), at: at, card: card))
+        let open = ask("a2", cardId: "other")
+        for item in [permission, ask("a1", answers: .stopped, cardId: "c1"), plan("p1", .stopped, cardId: "c1")] {
+            #expect(link.note(in: [item], decidedHere: [], at: at) == "That request closed when the turn was stopped.")
+            #expect(link.note(in: [item, open], decidedHere: [], at: at) == "That request closed when the turn was stopped. Another one waits on you.")
+        }
+    }
+}
+
 /// F-SES-073, F-SES-127, F-SES-128: replies that may never come.
 @MainActor
 @Suite struct UnansweredRequestTests {

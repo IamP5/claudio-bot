@@ -863,6 +863,8 @@ struct PlanCard: View {
                 Label("Kept planning", systemImage: "arrow.uturn.backward.circle").font(.subheadline).foregroundStyle(Theme.secondary)
             case .expired, .unknown:
                 Text("Expired. Nobody answered in time.").font(.subheadline).foregroundStyle(Theme.tertiary)
+            case .stopped:
+                Text(Self.stoppedLine).font(.subheadline).foregroundStyle(Theme.tertiary)
             }
         }
         .padding(16)
@@ -876,14 +878,16 @@ struct PlanCard: View {
         .announcesClose(Self.closing(state))
     }
 
-    /// What VoiceOver hears when the plan stops waiting. Stop closes a plan as expired on the wire, so expired says
-    /// only that nobody answered.
+    static let stoppedLine = "Closed when the turn was stopped."
+
+    /// What VoiceOver hears when the plan stops waiting.
     static func closing(_ state: PlanState) -> String? {
         switch state {
         case .proposed: nil
         case .approved: "Plan approved."
         case .rejected: "Plan not approved. Kept planning."
         case .expired: "The plan closed without an answer."
+        case .stopped: "The plan closed when the turn was stopped."
         case .unknown: "The plan closed."
         }
     }
@@ -973,14 +977,14 @@ struct AskCard: View {
         .announcesClose(Self.closing(answers, count: questions.count))
     }
 
-    /// What VoiceOver hears when the question stops waiting. Stop closes a question as expired on the wire, so expired
-    /// says only that nobody answered.
+    /// What VoiceOver hears when the question stops waiting.
     static func closing(_ answers: AskAnswers?, count: Int) -> String? {
         switch answers {
         case nil: nil
         case .answered: count == 1 ? "Question answered." : "Questions answered."
         case .dismissed: "Question dismissed."
         case .expired: "The question closed without an answer."
+        case .stopped: "The question closed when the turn was stopped."
         case .closed: "The question closed."
         }
     }
@@ -1086,6 +1090,8 @@ struct AskCard: View {
             Text("Dismissed").font(.subheadline).foregroundStyle(Theme.tertiary)
         case .expired:
             Text("Expired. Nobody answered in time.").font(.subheadline).foregroundStyle(Theme.tertiary)
+        case .stopped:
+            Text(PlanCard.stoppedLine).font(.subheadline).foregroundStyle(Theme.tertiary)
         case .closed:
             Text("Closed").font(.subheadline).foregroundStyle(Theme.tertiary)
         case .answered:

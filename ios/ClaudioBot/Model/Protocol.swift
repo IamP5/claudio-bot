@@ -1894,9 +1894,11 @@ struct SessionTodo: Codable, Hashable, Sendable {
 
 enum PlanState: OpenEnum {
     case proposed, approved, rejected, expired
+    /// The turn it was proposed in was stopped.
+    case stopped
     case unknown(String)
 
-    static let allCases: [PlanState] = [.proposed, .approved, .rejected, .expired]
+    static let allCases: [PlanState] = [.proposed, .approved, .rejected, .expired, .stopped]
     init?(rawValue: String) { self.init(wire: rawValue) }
 
     var rawValue: String {
@@ -1905,6 +1907,7 @@ enum PlanState: OpenEnum {
         case .approved: "approved"
         case .rejected: "rejected"
         case .expired: "expired"
+        case .stopped: "stopped"
         case .unknown(let raw): raw
         }
     }
@@ -1983,6 +1986,8 @@ enum AskAnswers: Codable, Hashable, Sendable {
     case answered([String: String])
     case dismissed
     case expired
+    /// The turn it was asked in was stopped.
+    case stopped
     /// A closing state a newer bridge invented.
     case closed(String)
 
@@ -1995,6 +2000,7 @@ enum AskAnswers: Codable, Hashable, Sendable {
         switch try c.decode(String.self) {
         case "dismissed": self = .dismissed
         case "expired": self = .expired
+        case "stopped": self = .stopped
         case let other: self = .closed(other)
         }
     }
@@ -2005,6 +2011,7 @@ enum AskAnswers: Codable, Hashable, Sendable {
         case .answered(let answers): try c.encode(answers)
         case .dismissed: try c.encode("dismissed")
         case .expired: try c.encode("expired")
+        case .stopped: try c.encode("stopped")
         case .closed(let raw): try c.encode(raw)
         }
     }

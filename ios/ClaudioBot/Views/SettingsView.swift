@@ -57,10 +57,21 @@ struct SettingsView: View {
                         ForEach(MirrorPref.allCases, id: \.self) { Text(Copy.mirror($0)).tag($0) }
                     }
                     .pickerStyle(.navigationLink)
+                    // Beside the picker it names, so a change that never went is not only a toast under this sheet.
+                    if let note = store.mirrorNote {
+                        Label(note, systemImage: "wifi.slash")
+                            .font(.footnote)
+                            .foregroundStyle(Theme.attention)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityLabel("Show agent sessions in the Claude app: " + note)
+                    }
                 } header: {
                     Text("Sessions")
                 } footer: {
                     Text(Copy.sessionsFooter)
+                }
+                .onChange(of: store.mirrorNote) { _, note in
+                    if let note { AccessibilityNotification.Announcement("Show agent sessions in the Claude app: " + note).post() }
                 }
             }
 

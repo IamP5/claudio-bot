@@ -418,13 +418,13 @@ struct SessionComposer: View {
         let waiting = model.queuedMessages
         if store.has(.sessionUnqueue), !waiting.isEmpty {
             Menu {
-                ForEach(waiting, id: \.id) { message in
+                ForEach(Array(waiting.enumerated()), id: \.element.id) { position, message in
                     Section(OpenCard.firstLine(message.text, limit: 40) ?? "Message") {
                         Button { client.withdraw(message.id, text: message.text, from: model, edit: true) } label: {
-                            Label(Self.queuedAction("Edit", message.text), systemImage: "pencil")
+                            Label(Self.queuedAction("Edit", message.text, position: position, of: waiting.count), systemImage: "pencil")
                         }
                         Button(role: .destructive) { client.withdraw(message.id, text: message.text, from: model, edit: false) } label: {
-                            Label(Self.queuedAction("Withdraw", message.text), systemImage: "arrow.uturn.backward")
+                            Label(Self.queuedAction("Withdraw", message.text, position: position, of: waiting.count), systemImage: "arrow.uturn.backward")
                         }
                     }
                 }
@@ -441,9 +441,11 @@ struct SessionComposer: View {
         }
     }
 
-    /// "Edit “Fix the tests”": each message's buttons name it, so a list of them never reads the same twice (F-SES-235).
-    static func queuedAction(_ verb: String, _ text: String) -> String {
-        "\(verb) “\(OpenCard.firstLine(text, limit: 24) ?? "message")”"
+    /// "Edit “Fix the tests”", or "Edit message 2: “Fix the tests”" when several wait: each message's buttons name it,
+    /// and its place tells apart two that start alike (F-SES-235). position counts from 0.
+    static func queuedAction(_ verb: String, _ text: String, position: Int = 0, of count: Int = 1) -> String {
+        let quoted = "“\(OpenCard.firstLine(text, limit: 40) ?? "message")”"
+        return count > 1 ? "\(verb) message \(position + 1): \(quoted)" : "\(verb) \(quoted)"
     }
 
     /// short: the words kept in a crowded bar; none by default, so the chip shows its icon. Its spoken label stays whole.

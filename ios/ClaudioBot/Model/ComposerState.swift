@@ -334,7 +334,7 @@ struct ComposerState: Equatable, Sendable {
     /// Spoken at the tap (F-SES-146, F-SES-179). Nothing is sent until the Mac shows it back, which
     /// PendingSend.announcement speaks. Offline the message only waits on this phone.
     static func sentAnnouncement(offline: Bool) -> String {
-        offline ? "Not sent yet. It goes when your Mac is back." : "Sending."
+        offline ? "Not sent yet. It goes if your Mac is back within a minute." : "Sending."
     }
 
     static let stopWaitsLine = "Stop waits for your Mac. It goes if the connection is back within a minute."

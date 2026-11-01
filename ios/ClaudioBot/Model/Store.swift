@@ -100,6 +100,9 @@ struct CardDecision: Equatable, Sendable {
     var holds: Bool
     /// When it was tapped.
     let at: Date
+    /// An earlier tap on this card went out and nobody can say whether it landed. A refusal of this one as already
+    /// answered may be that earlier tap's doing, so the card is never said to be answered elsewhere.
+    var earlierMayHaveLanded = false
 
     mutating func fail(_ note: DecisionNote) {
         phase = .failed(note)
@@ -220,6 +223,8 @@ final class AppStore {
     /// The Claude app setting before this phone changed it, while the change is not confirmed, so a change that never
     /// went can put it back.
     @ObservationIgnored private var mirrorAsked: MirrorChange?
+    /// Why the Claude app setting went back, shown beside it until the next change.
+    private(set) var mirrorNote: String?
 
     private struct MirrorChange {
         let before: MirrorPref?
@@ -312,6 +317,7 @@ final class AppStore {
             pushState = nil
             unechoedSends = []
             mirrorAsked = nil
+            mirrorNote = nil
             stops = [:]
             sets = [:]
             sessionErrors = [:]
@@ -393,7 +399,8 @@ final class AppStore {
     /// on one that does not, the socket taking it does, as before.
     func decisionSent(_ choice: PermissionChoice?, for card: MessageID, at now: Date = .now) {
         let acks = has(.decideAck)
-        decisions[card] = CardDecision(choice: choice, phase: acks ? .sending : .taken, holds: true, at: now)
+        let earlier = decisions[card].map { $0.phase == .unsure || $0.earlierMayHaveLanded } ?? false
+        decisions[card] = CardDecision(choice: choice, phase: acks ? .sending : .taken, holds: true, at: now, earlierMayHaveLanded: earlier)
         decided.removeAll { $0 == card }
         decided.append(card)
         // The newest are enough: a card's close is announced within seconds, and a push link names a recent card.
@@ -446,10 +453,11 @@ final class AppStore {
     /// Who closed the card, as far as this phone knows: true here, false elsewhere, nil when it cannot tell (its
     /// decision went on a socket that dropped, or the Mac's ack has not come yet).
     func decidedHere(_ card: MessageID) -> Bool? {
-        switch decisions[card]?.phase {
-        case .taken: true
-        case .sending, .unsure: nil
-        case .failed, nil: false
+        guard let decision = decisions[card] else { return false }
+        switch decision.phase {
+        case .taken: return true
+        case .sending, .unsure: return nil
+        case .failed: return decision.earlierMayHaveLanded ? nil : false
         }
     }
 
@@ -488,7 +496,7 @@ final class AppStore {
         case .sessionPrefs:
             if let before = mirrorAsked?.before { sessions.setMirror(before) }
             mirrorAsked = nil
-            lastError = ErrorNotice(message: "The Claude app setting was not changed: your Mac was unreachable.")
+            mirrorNote = "Not changed: your Mac was unreachable."
         case let .sessionSend(sessionId, _, clientId, _, _):
             unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId }
             // A Retry of one a socket took before may have arrived the first time: it keeps saying so.
@@ -536,6 +544,7 @@ final class AppStore {
         case let .sessionPrefs(pref):
             // Shown at once. A change made again while one is unconfirmed keeps the value from before the first.
             if mirrorAsked == nil { mirrorAsked = MirrorChange(before: sessions.mirror) }
+            mirrorNote = nil
             sessions.setMirror(pref)
         default:
             break

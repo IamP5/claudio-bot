@@ -151,7 +151,7 @@ struct SessionUserBubble: View {
     /// The caption's words for a message not yet shown back. Offline it is never called sent.
     static func words(_ delivery: PendingSend.State) -> String {
         switch delivery {
-        case .waiting: "Not sent yet · Goes when your Mac is back"
+        case .waiting: "Not sent yet · Goes if your Mac is back within a minute"
         case .sending: "Sending…"
         case .unechoed: "No word from your Mac yet. It may have gone through."
         case .notSent(let why?): "Not sent: " + why
@@ -276,6 +276,7 @@ struct SessionUserBubble: View {
             .accessibilityHint(unechoed ? "Safe to retry: your Mac runs it only once." : "")
         Button(action: discard) { captionLabel("Discard", symbol: "xmark") }
             .buttonStyle(.plain)
+            .accessibilityHint(unechoed ? "Removes it from this \(ThisDevice.noun). Your Mac may still run it." : "")
     }
 
     private func captionLabel(_ title: String, symbol: String) -> some View {

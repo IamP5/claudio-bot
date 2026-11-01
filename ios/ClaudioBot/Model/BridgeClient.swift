@@ -409,7 +409,10 @@ final class BridgeClient {
         switch msg {
         case .decide, .sessionDecide, .sessionAnswer: return
         case let .sessionStop(sessionId, target, _): store.stopNotSent(sessionId: sessionId, target: target ?? .all)
-        case let .sessionSend(sessionId, _, clientId, _, _): store.threads[sessionId]?.sendWaiting(clientId)
+        case let .sessionSend(sessionId, _, clientId, _, _):
+            // Discarded while its frame was on a dying socket: Discard wins, so it never goes back to the outbox.
+            guard store.threads[sessionId]?.pendingSends[ItemID(clientId)] != nil else { return }
+            store.threads[sessionId]?.sendWaiting(clientId)
         default: break
         }
         guard OutboxRule.of(msg) == .expires else { return }

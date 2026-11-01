@@ -69,7 +69,7 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
         #expect(after?.text(now: at) == "Still running after Claude Code stopped: perl -e 'sleep 3656' · 1m 12s")
         #expect(after?.word == "Still running")
         #expect(ThreadAnnouncement.of(from: .working(since: at - 30, tasks: [perl]), to: after)
-            == "Claude finished its turn. Still running after Claude Code stopped: perl -e 'sleep 3656'.")
+            == "Still running after Claude Code stopped: perl -e 'sleep 3656'.")
         let background = status(controls: controls(working: true, turn: false, tasks: [sleeper]), since: at - 30, outcome: later)
         #expect(background?.text(now: at) == "Running in background: sleep 3655 · 1m 12s", "a background command keeps its word")
         let crash = status(controls: controls(working: true, turn: false, tasks: [perl]), since: at - 80, outcome: failed)

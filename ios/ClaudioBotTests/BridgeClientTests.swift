@@ -491,7 +491,8 @@ private func scratchVault() -> PairingVault {
         client.send(.sessionPrefs(mirror: .never))
         #expect(client.store.sessions.mirror == .never)
         try await eventually("the setting put back", within: .seconds(1)) { client.store.sessions.mirror == .auto }
-        #expect(client.store.lastError?.message == "The Claude app setting was not changed: your Mac was unreachable.")
+        #expect(client.store.mirrorNote == "Not changed: your Mac was unreachable.")
+        #expect(client.store.lastError?.message == "Hide not sent: your Mac was unreachable.", "said beside the setting, not in a toast under the Settings sheet")
     }
 
     @Test func discardTakesASendOutOfTheOutboxSoTheNextHelloNeverSendsIt() async throws {

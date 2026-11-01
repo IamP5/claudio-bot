@@ -103,7 +103,7 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         #expect(state(resting, sent: (at, false, true), now: at + 5).slot == .send(.empty), "Sent fades once no work starts")
         #expect(state(controls(), sent: (at, true, true), now: at + 1).slot == .stop(StopScope(controls()), .ready), "work started: the same slot is Stop")
         #expect(ComposerState.sentAnnouncement(offline: false) == "Sending.")
-        #expect(ComposerState.sentAnnouncement(offline: true) == "Not sent yet. It goes when your Mac is back.")
+        #expect(ComposerState.sentAnnouncement(offline: true) == "Not sent yet. It goes if your Mac is back within a minute.")
     }
 
     @Test func stopAndSendNamesTheTurnItStops() {
@@ -371,7 +371,12 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         #expect(ComposerState.queuedLabel(1) == "1 message queued", "F-SES-083")
         #expect(ComposerState.queuedLabel(2) == "2 messages queued")
         #expect(SessionComposer.queuedAction("Edit", "Fix the tests\nand then lint") == "Edit “Fix the tests”")
-        #expect(SessionComposer.queuedAction("Withdraw", "Refactor the composer state machine") == "Withdraw “Refactor the composer s…”")
+        #expect(SessionComposer.queuedAction("Withdraw", "Refactor the composer state machine") == "Withdraw “Refactor the composer state machine”")
+        #expect(
+            SessionComposer.queuedAction("Edit", "Refactor the composer state machine, then the note", position: 1, of: 2)
+                == "Edit message 2: “Refactor the composer state machine, th…”",
+            "two messages that start alike read apart"
+        )
     }
 
     @Test func anUnqueueRefusalIsTheSessionsNotTheToasts() {

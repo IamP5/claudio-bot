@@ -125,7 +125,7 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
 
     @Test func aSendIsSpokenAsSendingThenSentOnlyOnceTheMacShowsItBack() {
         #expect(ComposerState.sentAnnouncement(offline: false) == "Sending.")
-        #expect(ComposerState.sentAnnouncement(offline: true) == "Not sent yet. It goes when your Mac is back.")
+        #expect(ComposerState.sentAnnouncement(offline: true) == "Not sent yet. It goes if your Mac is back within a minute.")
         #expect(PendingSend.announcement(old: .sending(since: at), new: nil, echoedQueued: false) == "Sent.")
         #expect(PendingSend.announcement(old: .sending(since: at), new: nil, echoedQueued: true) == "Queued behind the current turn.")
         #expect(PendingSend.announcement(old: .unechoed, new: nil, echoedQueued: nil) == nil, "discarded: nothing to say")
@@ -147,7 +147,7 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
     }
 
     @Test func aSendOfflineIsNeverCalledSent() {
-        #expect(SessionUserBubble.words(.waiting) == "Not sent yet · Goes when your Mac is back")
+        #expect(SessionUserBubble.words(.waiting) == "Not sent yet · Goes if your Mac is back within a minute")
     }
 
     @Test func aSnapshotThatDoesNotHaveThePendingMessageYetKeepsItsEcho() throws {
@@ -286,7 +286,9 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(store.sessions.mirror == .never, "shown at once")
         store.requestDropped(.sessionPrefs(mirror: .tap))
         #expect(store.sessions.mirror == .auto, "back to the value before the first change")
-        #expect(store.lastError?.message == "The Claude app setting was not changed: your Mac was unreachable.")
+        #expect(store.mirrorNote == "Not changed: your Mac was unreachable.")
+        store.sessionRequestSent(.sessionPrefs(mirror: .never))
+        #expect(store.mirrorNote == nil, "the next change clears it")
     }
 
     @Test func aDroppedStopSaysSoUnderTheComposer() {
@@ -398,6 +400,21 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         store.apply(.decided(cardId: MessageID("m2")))
         store.lapseDecisions(at: at + 60)
         #expect(store.decisionNote(MessageID("m2")) == nil, "acked in time")
+    }
+
+    @Test func aRetapRefusedAsAlreadyAnsweredAfterAnUnsureAnswerNeverClaimsAnotherDevice() {
+        let store = store([.sessions, .decideAck])
+        store.decisionSent(.once, for: MessageID("m1"))
+        store.apply(.hello(Hello(features: [.sessions, .decideAck], machine: "Mac", userName: "Alex", bots: [])))
+        store.decisionSent(.once, for: MessageID("m1"))
+        store.apply(.error(message: "That card was already answered", about: .decide(sessionId: sid, cardId: MessageID("m1"))))
+        #expect(store.decidedHere(MessageID("m1")) == nil, "the first tap may be the answer")
+        let card = PermissionCard(from: nil, tool: "Bash", label: "Run a command", detail: "ls", always: "", answer: nil, expiresAt: at + 600)
+        #expect(PermissionAnswer.chose(.once).announcement(card: card, here: store.decidedHere(MessageID("m1"))) == "Allowed once. Bash: ls")
+
+        store.decisionSent(.once, for: MessageID("m2"))
+        store.apply(.error(message: "That card was already answered", about: .decide(sessionId: sid, cardId: MessageID("m2"))))
+        #expect(store.decidedHere(MessageID("m2")) == false, "with no earlier tap in doubt, another device answered")
     }
 
     @Test func onABridgeWithoutAcksTheSocketTakingItIsEnough() {

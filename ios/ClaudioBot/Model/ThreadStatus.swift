@@ -425,7 +425,11 @@ enum ThreadAnnouncement {
             case .orphaned:
                 return new?.spoken(now: now)
             case .background(_, let live):
-                if case .working = old { return "Claude finished its turn. " + (ThreadStatus.outlives(live) ? "Still running after Claude Code stopped: " : "Still running in background: ") + live.map(\.label).joined(separator: ", ") + "." }
+                if case .working = old {
+                    // Work that outlived Claude Code means the turn did not finish: never say it did (G26).
+                    let what = live.map(\.label).joined(separator: ", ") + "."
+                    return ThreadStatus.outlives(live) ? "Still running after Claude Code stopped: " + what : "Claude finished its turn. Still running in background: " + what
+                }
                 return ended("Ended in background.", was.filter(\.background), live, name)
             case .working(_, let live):
                 return ended("Ended in background.", was.filter(\.background), live, name)

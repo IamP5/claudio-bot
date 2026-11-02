@@ -61,10 +61,10 @@ ts	role	group	branch	state	stuck_after	note
 2026-11-01T06:02:00Z	verifier	G27	ux/sessions-g27-unsure	r5 FAIL ba5cb87: P2 unrelated/rerun shell with same eval line supplies a group -> false ended	2h	fresh, independent of owner
 2026-11-01T19:49:48Z	verifier	G27	ux/sessions-g27-unsure	r6 FAIL 7f4302e: P2 shells unioned across steps/processes -> earlier groupless step ends	2h	fresh, independent of owner
 2026-11-01T20:35:39Z	verifier	G27	ux/sessions-g27-unsure	r7 FAIL 1148c6f: P2 pruning skips markUnsure (finished alert + Nothing is running); one-line fix; fix applied r8	2h	fresh, independent of owner
-2026-11-02T00:12:29Z	owner	G30	ux/areas-g30-offline	PR #46 rebased at e1833bb; verifying	3h	areas lean wave
+2026-11-02T00:12:29Z	owner	G30	ux/areas-g30-offline	merged #46 (verify PASS first round)	3h	areas lean wave
 2026-11-02T00:12:29Z	owner	G31	ux/areas-g31-cards	merged #45 (r1 FAIL; r2 exact-match 62df980 reviewed by root)	3h	areas lean wave
 2026-11-02T00:12:29Z	owner	G32	ux/areas-g32-contrast	merged #44 (verify r1 P1 Mac test fix 39ebe1d reviewed by root)	3h	areas lean wave
 2026-11-02T00:12:29Z	owner	G33	ux/areas-g33-runner	merged #43 (root review, lean)	3h	areas lean wave
 2026-11-02T00:51:54Z	verifier	G32	ux/areas-g32-contrast	FAIL 829d115: P1 Mac test target fails (UIKit import in new test); rest PASS	1h	independent, lean
 2026-11-02T01:01:09Z	verifier	G31	ux/areas-g31-cards	r1 FAIL 66e05f4: P1 any message closing a question breaks onboarding (C2 re-ask loop)	1h	independent, lean
-2026-11-02T01:22:29Z	verifier	G30	ux/areas-g30-offline	verifying e1833bb	1h	independent, lean
+2026-11-02T01:22:29Z	verifier	G30	ux/areas-g30-offline	PASS e1833bb; live offline checks	1h	independent, lean

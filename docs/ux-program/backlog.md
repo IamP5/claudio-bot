@@ -204,3 +204,4 @@
 - G31 gaps: C2 cannot be judged as written (typed instruction closes the greeting question; bot re-asks); composer placeholder still says "or talk about something else" though any message closes the card (G30 file); older apps show a replied card as "Dismissed".
 - H1.2 failed twice ("read after 1.2 s") on the G32 verifier run even after G33; check whether the 1 s window is too tight on a busy host (runner, P2).
 - G30 gaps: Stop in a bot chat stays enabled offline (waits 60 s then says not sent) (P2); bridges without the mute feature keep the old no-local-bubble behaviour (P3).
+- G30 verifier P3s: Attach and Dictate stay live when unrecognized; misplaced doc comment on ChatView.undelivered/openExchange; Retry on a "may have gone through" send hides its bubble up to 10 s.

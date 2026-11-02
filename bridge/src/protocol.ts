@@ -149,8 +149,9 @@ export type Message =
       at: string;
       question: string;
       options: string[];
-      // Index into options, "dismissed", "expired" (nobody answered in time), or null while open.
-      answer: number | "dismissed" | "expired" | null;
+      // Index into options, "dismissed", "expired" (nobody answered in time), "replied" (the user wrote in the chat
+      // while it was open, and the bot was told that closed it), or null while open.
+      answer: number | "dismissed" | "expired" | "replied" | null;
       // null for cards from before protocol 3, which never expire.
       expiresAt: string | null;
     }

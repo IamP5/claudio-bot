@@ -4,7 +4,8 @@ import type { Initiator, Notice, Origin, Pending, RunRef } from "./world";
 // Everything that reaches a bot or an agent is one envelope. Its initiator is a pure function of the envelope.
 export type Envelope =
   // mentions: resolved by the hub (world.resolveMentions), without the receiving bot itself.
-  | { from: "user"; text: string; attachments: Attachment[]; mentions?: Mention[] }
+  // closes: the open questions this message closed (gate.replied).
+  | { from: "user"; text: string; attachments: Attachment[]; mentions?: Mention[]; closes?: string[] }
   // The user's /command or skill, as typed and trimmed: Claude Code runs it only from the bare text.
   | { from: "command"; line: string }
   // An answer carries the initiator of the turn that asked: a tap on a routine's question does not make it the user's work.
@@ -135,7 +136,13 @@ function relayed(text: string, pointer: string): string {
 export function envelope(e: Envelope, userName: string): string {
   switch (e.from) {
     case "user":
-      return lines(`[${userName}]`, e.text, ...(e.mentions ?? []).map((m) => mentionLine(m, userName)), ...e.attachments.map((a) => `Attached: ${a.path}`));
+      return lines(
+        `[${userName}]`,
+        e.text,
+        ...(e.mentions ?? []).map((m) => mentionLine(m, userName)),
+        ...e.attachments.map((a) => `Attached: ${a.path}`),
+        ...(e.closes ?? []).map((q) => `[This message closed your question "${q}" in the chat. If it does not answer it, ask again.]`),
+      );
     case "command":
       return e.line;
     case "answer":

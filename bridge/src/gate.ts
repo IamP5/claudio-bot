@@ -108,6 +108,11 @@ export type Gate = Tickable & {
    * deny; never → deny rule. Only a card tap reaches this; chat text never approves.
    */
   answer(botId: BotId, messageId: MessageId, reply: CardReply): { ok: true } | { ok: false; error: string };
+  /**
+   * The user wrote in the bot's chat while its questions were open: each closes as "replied", with no envelope of its
+   * own, and its question is returned so the message that closed it can say so. A card past its deadline expires.
+   */
+  replied(botId: BotId): string[];
   /** delete_bot: drops the bot's open cards, its and its agents' grants and trust answers, its rules and its daily counts. */
   forgetBot(botId: BotId): void;
   /**
@@ -650,6 +655,27 @@ export function createGate(deps: GateDeps): Gate {
         typeof q.answer === "number" ? { from: "answer", question: q.question, option: q.options[q.answer]!, initiator } : { from: "dismiss", question: q.question, initiator },
       );
       return { ok: true };
+    },
+
+    replied(botId) {
+      const bot = world.bots.get(botId);
+      if (!bot) return [];
+      const now = deps.now().toISOString();
+      const closed: string[] = [];
+      for (const m of bot.messages.filter((x) => x.kind === "question" && x.answer === null)) {
+        const held = state.open.find((c) => c.cardId === m.id);
+        if (held && held.expiresAt <= now) {
+          expire(held);
+          continue;
+        }
+        const settled = settleCard(m, { kind: "question", answer: "replied" });
+        if (!settled.ok) continue;
+        deps.say(bot, settled.card);
+        dropCard(m.id);
+        closed.push(settled.card.question);
+      }
+      if (closed.length > 0) deps.persist("now");
+      return closed;
     },
 
     forgetBot(botId) {

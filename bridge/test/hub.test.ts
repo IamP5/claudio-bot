@@ -1631,3 +1631,36 @@ test("boot carries on when USER.md cannot be created, and says why in the log", 
   expect(() => hub.boot(false)).not.toThrow();
   expect(logs).toEqual([expect.stringContaining("EACCES: permission denied")]);
 });
+
+test("a message typed while a question is open closes the card, tells the bot, and refuses a later tap", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  const card: Message = { kind: "question", id: "m_fruit" as MessageId, at, question: "Which fruit?", options: ["Apple", "Pear"], answer: null, expiresAt: inAnHour() };
+  b.messages.push(card);
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+
+  await h.hub.handle({ type: "send", botId: b.id, text: "Pear", uploads: [] });
+  await flush();
+
+  expect(b.messages.find((m) => m.id === card.id)).toMatchObject({ answer: "replied" });
+  expect(h.q().received[0]).toContain('Pear\n[This message closed your question "Which fruit?" in the chat. If it does not answer it, ask again.]');
+  expect(await h.hub.handle({ type: "answer", botId: b.id, messageId: card.id, option: 0 })).toEqual([{ type: "error", message: "That question was already answered" }]);
+  expect(h.q().received).toHaveLength(1);
+});
+
+test("a /command typed while a question is open leaves the card open", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  const card: Message = { kind: "question", id: "m_fruit" as MessageId, at, question: "Which fruit?", options: ["Apple", "Pear"], answer: null, expiresAt: inAnHour() };
+  b.messages.push(card);
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+
+  await h.hub.handle({ type: "send", botId: b.id, text: "/compact", uploads: [] });
+  await flush();
+
+  expect(b.messages.find((m) => m.id === card.id)).toMatchObject({ answer: null });
+});

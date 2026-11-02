@@ -9,9 +9,9 @@ struct OfflineBar: View {
     var body: some View {
         Group {
             if store.connection == .unrecognized {
-                UnrecognizedBanner(staleSince: store.heardAt)
+                UnrecognizedBanner(staleSince: store.heardAt, staleWhat: "Messages")
             } else {
-                ConnectionBanner(state: store.connection, staleSince: store.heardAt, lastRetryFailed: $lastRetryFailed)
+                ConnectionBanner(state: store.connection, staleSince: store.heardAt, staleWhat: "Messages", lastRetryFailed: $lastRetryFailed)
             }
         }
         .padding(.horizontal, 16)

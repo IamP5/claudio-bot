@@ -73,6 +73,7 @@ Build the audit plan for area "${AREA}" (if "all", every area). Do not run scena
 4. "simulator": one job per scenario with simulator items (run with --sim), plus one job per cross-cutting check for the area, each id prefixed X-: X-empty-error-offline (empty lists, bridge down, socket dropped), X-voiceover (accessibility labels/traits/grouping read from the SwiftUI code of the area's screens, plus large-text screenshots; VoiceOver itself cannot run under simctl), X-dark-mode (xcrun simctl ui <udid> appearance dark), X-ipad (see docs/ux-program/decisions.tsv for how iPad is judged).
 Keep briefs concrete: commands, screens, what the user must be able to tell.`, { label: `plan:${AREA}`, phase: 'Load', schema: PLAN, model: 'sonnet', effort: 'medium' })
 
+if (!plan || plan.protocol.length + plan.simulator.length === 0 || plan.known.length === 0) throw new Error(`empty audit plan (${plan ? plan.protocol.length + '/' + plan.simulator.length + ' jobs, ' + plan.known.length + ' known' : 'no plan'}): refusing to report a clean audit`)
 const seen = plan.known.map(k => ({ key: k.key, title: k.title }))
 const fresh = []
 log(`plan: ${plan.protocol.length} protocol jobs, ${plan.simulator.length} simulator jobs, ${seen.length} known findings`)

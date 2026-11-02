@@ -43,7 +43,7 @@ const CLOSED_KEPT = 256;
 /**
  * limited: the protocol 2 shared token, or an app that did not announce protocol 3 (see `refusal`). threads: the
  * sessions this socket watches, so its close unwatches them. turns: the socket's requests run one at a time in the
- * order sent, so an answer never overtakes the one asked before it. attended: the app's last presence, true until it
+ * order sent, so an answer never overtakes the one asked before it (a usage refresh runs beside them). attended: the app's last presence, true until it
  * sends one.
  */
 type SocketData = {
@@ -185,16 +185,18 @@ export function serve(deps: ServeDeps): Transport {
   };
   /** When someone last looked at an app: a presence(true), or any other message while it said it is looked at. */
   let lookedAt = 0;
-  function look(ws: Socket, raw: string) {
+  /** Notes a look, and returns the message's type. */
+  function look(ws: Socket, raw: string): unknown {
     let m: { type?: unknown; attended?: unknown };
     try {
       m = (JSON.parse(raw) ?? {}) as typeof m;
     } catch {
-      return;
+      return undefined;
     }
     if (m.type === "presence" && typeof m.attended === "boolean") ws.data.looking = m.attended;
     // The connect is no look: an app reconnecting in the background says so first, in its presence(false).
     if (ws.data.looking && (m.type !== "presence" || m.attended === true)) lookedAt = ws.data.heardAt;
+    return m.type;
   }
   const open = () => [...sockets.values()].flatMap((set) => [...set]);
   // A socket that never says a word, not even its presence, is not someone watching past the window after it connected.
@@ -332,7 +334,9 @@ export function serve(deps: ServeDeps): Transport {
       message(ws, raw) {
         heard(ws);
         ws.data.spoke = true;
-        look(ws, String(raw));
+        // A usage refresh answers when the Mac's read ends, up to 15 s later; it runs beside the queue, so it holds back
+        // nothing the phone sends after it.
+        if (look(ws, String(raw)) === "refresh_usage") return void handle(ws, String(raw)).catch((e) => log(`serve: ${errorText(e)}`));
         ws.data.turns = ws.data.turns.then(() => handle(ws, String(raw))).catch((e) => log(`serve: ${errorText(e)}`));
       },
     },

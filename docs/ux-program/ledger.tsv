@@ -18,4 +18,4 @@ step	area	status	ts	note
 2	settings	done	2026-11-02T00:12:29Z	combined lean audit: 13 P1 (F-AR-001..013), 69 P2 to backlog, 0 P0; pairing had no P1
 3	settings	done	2026-11-02T02:02:06Z	G30-G33 merged (#43-#46); main f0c87db
 4	settings	done	2026-11-02T02:14:01Z	PASS (lean): re-check wf_5e69554b-411 on main f0c87db confirmed F-AR-001..013 fixed
-exit	all	failed	2026-11-02T03:50:06Z	final audit: 12 new P1 (F-FN-001..012), 41 P2 to backlog; fix wave G34-G37
+exit	all	done	2026-11-02T04:54:35Z	user exit rule: final fix wave G34-G37 merged (#47-#50, main cf6bc53); re-check wf_176c4b97-55d: 9/12 confirmed fixed, F-FN-004 and F-FN-010 confirmed live by PR verifiers, F-FN-006 unit-tested only; no further open-ended audit

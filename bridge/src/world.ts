@@ -11,6 +11,8 @@ import {
   type Avatar,
   type Bot,
   type BotId,
+  type BotBackground,
+  type BotOutcome,
   type BotSpend,
   type BotStatus,
   type DeviceId,
@@ -402,6 +404,8 @@ export type ChatRecord = {
 export type BotRecord = ChatRecord & {
   /** null: the bridge default. Writer: hub (update_bot). */
   dailyCapUsd: number | null;
+  /** How its last turn ended when it did not finish; absent once one finishes or the user sends. Writer: hub. */
+  outcome?: BotOutcome;
   /** MCP servers the user turned off for this bot and its agents, by name. Writer: connectors.ts. */
   readonly connectorsOff: Owned<string[]>;
   readonly session: Owned<SessionState>;
@@ -819,9 +823,10 @@ function chatFrame(chat: ChatRecord, status: BotStatus) {
   };
 }
 
-/** The bot frame without its spend, which the ledger adds. */
-export function toBot(bot: BotRecord, status: BotStatus): Omit<Bot, keyof BotSpend> {
+/** The bot frame without its spend, which the ledger adds. background: what the hub reads off the bot's session. */
+export function toBot(bot: BotRecord, status: BotStatus, background: BotBackground | null = null): Omit<Bot, keyof BotSpend> {
   const card = openCard(bot.messages);
+  const cards = bot.messages.filter(isOpenCard).length;
   return {
     ...chatFrame(bot, status),
     kind: "bot",
@@ -829,6 +834,9 @@ export function toBot(bot: BotRecord, status: BotStatus): Omit<Bot, keyof BotSpe
     question: card === null ? null : card.kind === "question" ? card.question : `${card.label}: ${card.detail}`,
     routines: bot.routines.map((r) => routineView(r, RUNS_ON_BOT)),
     dailyCapUsd: bot.dailyCapUsd,
+    ...(bot.outcome && { outcome: { ...bot.outcome } }),
+    ...(background && { background }),
+    ...(cards > 1 && { cards }),
   };
 }
 

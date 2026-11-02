@@ -162,6 +162,15 @@ export const server = [
   },
   { type: "message", seq: 44, botId: "b1", message: question(1) },
   { type: "message", botId: "b1", message: { kind: "question", id: "m7", at, question: "Add the secret?", options: ["Yes", "Not yet"], answer: "dismissed", expiresAt: null } },
+  { type: "message", botId: "b1", message: { ...permission, id: "m26", detail: "eval \"$(echo hostname)\"", answer: "superseded" } },
+  {
+    type: "bot", seq: 45, bot: {
+      ...bot, unread: 1, question: null, preview: "Started the 30 second build in the background.",
+      outcome: { kind: "failed", text: "Didn't finish: Claude Code quit unexpectedly", at: later },
+      background: { since: later, count: 2, text: "Background: npm run build and 1 more" },
+    },
+  },
+  { type: "bot", seq: 46, bot: { ...bot, status: "awaiting_approval", outcome: { kind: "stopped", text: "Stopped by Alex", at }, cards: 3 } },
   {
     type: "details", botId: "b1",
     library: [{ path: "merge-plan.md", size: 2048, modifiedAt: at }],

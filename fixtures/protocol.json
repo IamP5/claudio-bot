@@ -307,6 +307,186 @@
       }
     },
     {
+      "type": "message",
+      "botId": "b1",
+      "message": {
+        "kind": "permission",
+        "id": "m26",
+        "at": "2026-10-16T14:00:00.000Z",
+        "from": null,
+        "tool": "Bash",
+        "label": "Push to the default branch",
+        "detail": "eval \"$(echo hostname)\"",
+        "always": "git push to main or master from engineer",
+        "answer": "superseded",
+        "expiresAt": "2026-10-16T16:00:00.000Z"
+      }
+    },
+    {
+      "type": "bot",
+      "seq": 45,
+      "bot": {
+        "id": "b1",
+        "kind": "bot",
+        "members": [],
+        "name": "engineer",
+        "title": null,
+        "avatar": {
+          "shape": "hexagon",
+          "color": "orange"
+        },
+        "pinned": false,
+        "hidden": false,
+        "status": "idle",
+        "unread": 1,
+        "question": null,
+        "preview": "Started the 30 second build in the background.",
+        "lastAt": "2026-10-16T12:00:00.000Z",
+        "createdAt": "2026-10-16T12:00:00.000Z",
+        "routines": [
+          {
+            "id": "r1",
+            "name": "morning-digest",
+            "schedule": "57 7 * * 1-5",
+            "describe": "Weekdays at 7:57 AM",
+            "prompt": "Post today's tech digest.",
+            "enabled": true,
+            "lastRunAt": "2026-10-16T12:00:00.000Z",
+            "trigger": "cron",
+            "nextRunAt": "2026-10-17T11:57:00.000Z",
+            "runs": [
+              {
+                "id": "run4",
+                "at": "2026-10-16T12:00:00.000Z",
+                "status": "ok",
+                "late": false,
+                "manual": true,
+                "note": null
+              },
+              {
+                "id": "run3",
+                "at": "2026-10-15T11:57:00.000Z",
+                "status": "quiet",
+                "late": true,
+                "manual": false,
+                "note": null
+              },
+              {
+                "id": "run2",
+                "at": "2026-10-14T11:57:00.000Z",
+                "status": "failed",
+                "late": false,
+                "manual": false,
+                "note": "Overloaded"
+              },
+              {
+                "id": "run1",
+                "at": "2026-10-13T11:57:00.000Z",
+                "status": "skipped",
+                "late": false,
+                "manual": false,
+                "note": "Missed while the Mac was asleep"
+              }
+            ]
+          }
+        ],
+        "dailyCapUsd": null,
+        "muted": false,
+        "spentTodayUsd": 8.4,
+        "capUsd": 10,
+        "outcome": {
+          "kind": "failed",
+          "text": "Didn't finish: Claude Code quit unexpectedly",
+          "at": "2026-10-16T14:00:00.000Z"
+        },
+        "background": {
+          "since": "2026-10-16T14:00:00.000Z",
+          "count": 2,
+          "text": "Background: npm run build and 1 more"
+        }
+      }
+    },
+    {
+      "type": "bot",
+      "seq": 46,
+      "bot": {
+        "id": "b1",
+        "kind": "bot",
+        "members": [],
+        "name": "engineer",
+        "title": null,
+        "avatar": {
+          "shape": "hexagon",
+          "color": "orange"
+        },
+        "pinned": false,
+        "hidden": false,
+        "status": "awaiting_approval",
+        "unread": 2,
+        "question": "Want me to merge any of these now?",
+        "preview": "Want me to merge any of these now?",
+        "lastAt": "2026-10-16T12:00:00.000Z",
+        "createdAt": "2026-10-16T12:00:00.000Z",
+        "routines": [
+          {
+            "id": "r1",
+            "name": "morning-digest",
+            "schedule": "57 7 * * 1-5",
+            "describe": "Weekdays at 7:57 AM",
+            "prompt": "Post today's tech digest.",
+            "enabled": true,
+            "lastRunAt": "2026-10-16T12:00:00.000Z",
+            "trigger": "cron",
+            "nextRunAt": "2026-10-17T11:57:00.000Z",
+            "runs": [
+              {
+                "id": "run4",
+                "at": "2026-10-16T12:00:00.000Z",
+                "status": "ok",
+                "late": false,
+                "manual": true,
+                "note": null
+              },
+              {
+                "id": "run3",
+                "at": "2026-10-15T11:57:00.000Z",
+                "status": "quiet",
+                "late": true,
+                "manual": false,
+                "note": null
+              },
+              {
+                "id": "run2",
+                "at": "2026-10-14T11:57:00.000Z",
+                "status": "failed",
+                "late": false,
+                "manual": false,
+                "note": "Overloaded"
+              },
+              {
+                "id": "run1",
+                "at": "2026-10-13T11:57:00.000Z",
+                "status": "skipped",
+                "late": false,
+                "manual": false,
+                "note": "Missed while the Mac was asleep"
+              }
+            ]
+          }
+        ],
+        "dailyCapUsd": null,
+        "muted": false,
+        "spentTodayUsd": 8.4,
+        "capUsd": 10,
+        "outcome": {
+          "kind": "stopped",
+          "text": "Stopped by Alex",
+          "at": "2026-10-16T12:00:00.000Z"
+        },
+        "cards": 3
+      }
+    },
+    {
       "type": "details",
       "botId": "b1",
       "library": [

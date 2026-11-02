@@ -112,11 +112,14 @@ export type Gate = Tickable & {
    */
   answer(botId: BotId, messageId: MessageId, reply: CardReply): { ok: true } | { ok: false; error: string };
   /**
-   * The user typed `text` in the bot's chat while its questions were open. A question with an option that `text` is,
+   * The user typed `text` in the bot's chat while its cards were open. A question with an option that `text` is,
    * ignoring case, outer spaces and trailing punctuation, closes as that option, with no envelope of its own: the typed
-   * message is the answer. Every other open question stays open. A card past its deadline expires.
+   * message is the answer. Every other open question stays open. A permission card the bot opened for one of the
+   * user's own messages closes as superseded: the user moved on instead of tapping, so a later Allow cannot run a call
+   * the conversation left behind. The bot asks again if it still needs it. Cards a routine, another bot or an agent
+   * opened stay open. A card past its deadline expires.
    */
-  typed(botId: BotId, text: string): { answered: { question: string; option: string }[]; open: string[] };
+  typed(botId: BotId, text: string): { answered: { question: string; option: string }[]; open: string[]; closed: string[] };
   /** delete_bot: drops the bot's open cards, its and its agents' grants and trust answers, its rules and its daily counts. */
   forgetBot(botId: BotId): void;
   /**
@@ -662,10 +665,22 @@ export function createGate(deps: GateDeps): Gate {
     },
 
     typed(botId, text) {
-      const out = { answered: [] as { question: string; option: string }[], open: [] as string[] };
+      const out = { answered: [] as { question: string; option: string }[], open: [] as string[], closed: [] as string[] };
       const bot = world.bots.get(botId);
       if (!bot) return out;
       const now = deps.now().toISOString();
+      for (const card of [...state.open]) {
+        if (card.kind !== "permission" || card.actor.kind !== "bot" || card.actor.botId !== botId || card.call.initiator.kind !== "user") continue;
+        if (card.expiresAt <= now) {
+          expire(card);
+          continue;
+        }
+        const settled = settleCard(messageOf(card), { kind: "permission", answer: "superseded" });
+        dropCard(card.cardId);
+        if (!settled.ok) continue;
+        deps.say(bot, settled.card);
+        out.closed.push(`${card.call.tool} \`${card.call.detail}\``);
+      }
       const said = plainAnswer(text);
       for (const m of bot.messages) {
         if (m.kind !== "question" || m.answer !== null) continue;
@@ -684,7 +699,7 @@ export function createGate(deps: GateDeps): Gate {
         dropCard(m.id);
         out.answered.push({ question: m.question, option: m.options[index]! });
       }
-      if (out.answered.length > 0) deps.persist("now");
+      if (out.answered.length > 0 || out.closed.length > 0) deps.persist("now");
       return out;
     },
 

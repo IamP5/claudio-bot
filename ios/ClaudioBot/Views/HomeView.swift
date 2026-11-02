@@ -130,6 +130,11 @@ struct HomeView: View {
                 }
             }
         }
+        .overlay(alignment: .bottom) {
+            if router.creating != nil, deleting == nil {
+                CreatingNotice(online: store.showsOnline) { router.creating = nil }
+            }
+        }
         .confirmationDialog(
             "Delete \(deleting?.name ?? "Bot")?",
             isPresented: Binding(get: { deletion != nil }, set: { if !$0 { deleting = nil } }),
@@ -271,6 +276,31 @@ struct HomeView: View {
     }
 }
 
+/// A create the Mac has not answered yet. Offline it says the minute it waits; a tap stops waiting for it.
+struct CreatingNotice: View {
+    let online: Bool
+    let stop: () -> Void
+
+    var body: some View {
+        Label {
+            Text(online ? "Creating the new chat…" : "Waiting for your Mac. If it is not back within a minute, nothing is created.")
+        } icon: {
+            ProgressView()
+        }
+        .font(.footnote.weight(.medium))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Theme.raised, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
+        .onTapGesture(perform: stop)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Stops waiting. The new chat may still appear in the list.")
+    }
+}
+
 struct BotRow: View {
     let bot: Bot
 
@@ -292,7 +322,7 @@ struct BotRow: View {
 
     var body: some View {
         let display = RowDisplay(bot)
-        let activity = bot.status == .working ? ActivityLine.text(in: store, botId: bot.id) ?? (store.showsOnline ? nil : LastKnown.working) : nil
+        let activity = self.activity
         HStack(spacing: Self.gap) {
             BotAvatar(bot: bot, size: Self.avatar, needsAttention: display.needsAttention, motion: store.motion(of: bot))
             VStack(alignment: .leading, spacing: Self.lineGap) {
@@ -336,11 +366,26 @@ struct BotRow: View {
         .accessibilityValue(display.unreadDot ? "Unread" : "")
     }
 
-    private func preview(_ display: RowDisplay, activity: String?) -> Text {
+    /// What the bot is doing now: its turn's activity line, or the work it left running, with how long it has run.
+    private var activity: Text? {
+        if bot.status == .working {
+            return (ActivityLine.text(in: store, botId: bot.id) ?? (store.showsOnline ? nil : LastKnown.working)).map { Text($0).italic() }
+        }
+        guard let background = bot.background, bot.question == nil else { return nil }
+        // Offline the work may have ended since, so the row says what it last knew and no clock runs.
+        guard store.showsOnline else { return Text(LastKnown.background).italic() }
+        return Text(background.text).italic() + Text(" · ") + Text(background.since, style: .timer).monospacedDigit()
+    }
+
+    private func preview(_ display: RowDisplay, activity: Text?) -> Text {
         let text = if let activity {
-            Text(activity).italic()
+            activity
         } else if display.previewIsQuestion {
             Text(Image(systemName: "list.bullet.rectangle")) + Text(" ") + Text(display.preview)
+        } else if let outcome = display.outcome {
+            Text(Image(systemName: outcome == .failed ? "exclamationmark.circle" : "stop.circle"))
+                .foregroundStyle(outcome == .failed ? AvatarColor.red.color : Theme.secondary)
+                + Text(" ") + Text(display.preview)
         } else {
             Text(display.preview)
         }

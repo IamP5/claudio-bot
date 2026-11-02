@@ -83,17 +83,21 @@ struct NewChatView: View {
     private var choices: some View {
         VStack(spacing: 2) {
             if query.isEmpty {
+                // One create at a time: while one waits on the Mac, another tap would make a second bot.
                 row {
-                    Image(systemName: "plus")
-                        .font(.ui(size: 15, weight: .medium))
-                        .foregroundStyle(Theme.secondary)
-                        .frame(width: 30, height: 30)
-                        .background(Theme.raised, in: Circle())
-                    Text("Create new Bot")
+                    Group {
+                        if router.creating != nil { ProgressView() } else { Image(systemName: "plus") }
+                    }
+                    .font(.ui(size: 15, weight: .medium))
+                    .foregroundStyle(Theme.secondary)
+                    .frame(width: 30, height: 30)
+                    .background(Theme.raised, in: Circle())
+                    Text(router.creating != nil ? "Creating a bot…" : "Create new Bot")
                 } action: {
                     dismiss()
                     app.createBot()
                 }
+                .disabled(router.creating != nil)
                 if store.has(.groups) {
                     row {
                         Image(systemName: "person.2")

@@ -70,6 +70,8 @@ struct ChatView: View {
                             .padding(.top, 14)
                     case .working where !bot.isGroup:
                         ActivityLine(botId: botId)
+                    case .idle where bot.background != nil:
+                        BackgroundLine(background: bot.background!, online: store.showsOnline)
                     case .unavailable:
                         Text("Claude Code could not start on your Mac. Your messages wait, and the bridge keeps trying.")
                             .font(.ui(size: 13))
@@ -476,5 +478,27 @@ final class ChatSpeech {
             guard let self, !Task.isCancelled else { return }
             if let line = ChatAnnouncement.turnEnded(from: old, to: new, bot: bot, told: told) { announcer.post(line) }
         }
+    }
+}
+
+/// Under the chat while work the bot started runs on after its turn: what runs, for how long, and that Stop ends it.
+private struct BackgroundLine: View {
+    let background: BotBackground
+    let online: Bool
+
+    var body: some View {
+        Group {
+            if online {
+                Text(background.text) + Text(" · ") + Text(background.since, style: .timer).monospacedDigit() + Text(". Stop ends it.")
+            } else {
+                Text(LastKnown.background)
+            }
+        }
+        .font(.ui(size: 13))
+        .foregroundStyle(Theme.tertiary)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24)
+        .padding(.top, 14)
     }
 }

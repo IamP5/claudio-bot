@@ -1677,3 +1677,149 @@ test("a /command typed while a question is open leaves the card open", async () 
 
   expect(b.messages.find((m) => m.id === card.id)).toMatchObject({ answer: null });
 });
+
+/** The newest frame the phone got for this bot. */
+const lastFrame = (frames: ServerMessage[], id: BotId) => frames.findLast((f): f is Extract<ServerMessage, { type: "bot" }> => f.type === "bot" && f.bot.id === id)!.bot;
+
+test("a turn Claude Code crashes on leaves the row failed and unread until the user sends again", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  await h.hub.handle({ type: "send", botId: b.id, text: "hi", uploads: [] });
+  await flush();
+  h.q().emit(assistant(text("ok")), result());
+  await flush();
+  await h.hub.handle({ type: "open", botId: b.id });
+  await h.hub.handle({ type: "send", botId: b.id, text: "run the build", uploads: [] });
+  await flush();
+
+  h.q().emit(assistant(text("Running the build.")));
+  await flush();
+  h.q().crash("Claude Code process terminated by signal SIGKILL");
+  await Bun.sleep(50);
+
+  expect(lastFrame(h.frames, b.id)).toMatchObject({ status: "idle", unread: 2, outcome: { kind: "failed", text: "Didn't finish: Claude Code quit unexpectedly" } });
+  await h.hub.handle({ type: "send", botId: b.id, text: "try again", uploads: [] });
+  expect(lastFrame(h.frames, b.id).outcome).toBeUndefined();
+});
+
+test("a stopped turn leaves the row saying who stopped it, and output between turns keeps it", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  await h.hub.handle({ type: "send", botId: b.id, text: "long job", uploads: [] });
+  await flush();
+  await h.hub.handle({ type: "stop", botId: b.id });
+  h.q().emit(result(0.1, { subtype: "error_during_execution", is_error: true, errors: ["interrupted"] }));
+  await flush();
+
+  expect(lastFrame(h.frames, b.id)).toMatchObject({ unread: 0, outcome: { kind: "stopped", text: "Stopped by Alex" } });
+  h.q().emit(assistant(text("The build finished.")));
+  await flush();
+  expect(lastFrame(h.frames, b.id).outcome).toMatchObject({ kind: "stopped" });
+});
+
+test("a turn Claude Code ends with an error marks the row failed", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  await h.hub.handle({ type: "send", botId: b.id, text: "go", uploads: [] });
+  await flush();
+  h.q().emit(result(0.1, { subtype: "error_max_turns", is_error: true, errors: [] }));
+  await flush();
+
+  expect(lastFrame(h.frames, b.id)).toMatchObject({ unread: 1, outcome: { kind: "failed", text: "Didn't finish: Claude Code ended it with an error" } });
+  await h.hub.handle({ type: "send", botId: b.id, text: "again", uploads: [] });
+  await flush();
+  h.q().emit(assistant(text("Done.")), result());
+  await flush();
+  expect(lastFrame(h.frames, b.id).outcome).toBeUndefined();
+});
+
+const backgroundTasks = (...ts: { task_id: string; description: string }[]) =>
+  ({ type: "system", subtype: "background_tasks_changed", tasks: ts.map((t) => ({ task_type: "local_bash", ...t })), uuid: "bg", session_id: "s_1" }) as unknown as SDKMessage;
+
+test("a background command the bot started shows on its row after the turn ends, until it finishes", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  await h.hub.handle({ type: "send", botId: b.id, text: "run it in the background", uploads: [] });
+  await flush();
+  h.q().emit(backgroundTasks({ task_id: "t1", description: "sleep 30 && echo done" }), assistant(text("Started it; I'll tell you when it finishes.")), result());
+  await flush();
+
+  expect(lastFrame(h.frames, b.id)).toMatchObject({ status: "idle", background: { count: 1, text: "Background: sleep 30 && echo done" } });
+
+  h.q().emit(backgroundTasks());
+  await flush();
+  expect(lastFrame(h.frames, b.id).background).toBeUndefined();
+});
+
+test("Stop on a bot whose turn ended stops the background command it left running", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  await h.hub.handle({ type: "send", botId: b.id, text: "run it in the background", uploads: [] });
+  await flush();
+  h.q().emit(backgroundTasks({ task_id: "t1", description: "sleep 30" }), assistant(text("Started.")), result());
+  await flush();
+
+  expect(await h.hub.handle({ type: "stop", botId: b.id })).toEqual([]);
+  expect(h.q().stoppedTasks).toEqual(["t1"]);
+});
+
+test("a new message closes the permission card the user's last message raised, so a later Allow runs nothing", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "push it", uploads: [] });
+  await flush();
+  await runBash(h.q(), "git push origin main");
+  h.q().emit(result());
+  await flush();
+  const card = b.messages.find((m) => m.kind === "permission")!;
+  expect(lastFrame(h.frames, b.id).status).toBe("awaiting_approval");
+
+  await h.hub.handle({ type: "send", botId: b.id, text: "Never mind, just say hi.", uploads: [] });
+  await flush();
+
+  expect(b.messages.find((m) => m.id === card.id)).toMatchObject({ answer: "superseded" });
+  expect(lastFrame(h.frames, b.id)).toMatchObject({ question: null });
+  expect(h.q().received.at(-1)).toContain("[Your request to run Bash `git push origin main` was closed unanswered because the user sent this message instead.");
+  expect(await h.hub.handle({ type: "decide", botId: b.id, messageId: card.id, choice: "once" })).toEqual([{ type: "error", message: "That request was already answered" }]);
+  expect(world.gate.grants).toEqual([]);
+});
+
+test("a permission card a routine run raised stays open when the user sends a message", async () => {
+  const f = await fired();
+  await runBash(f.q(), "git push origin main");
+  f.q().emit(result());
+  await flush();
+  const card = f.bot.messages.find((m) => m.kind === "permission")!;
+
+  await f.hub.handle({ type: "send", botId: f.bot.id, text: "hello", uploads: [] });
+  await flush();
+
+  expect(f.bot.messages.find((m) => m.id === card.id)).toMatchObject({ answer: null });
+});
+
+test("the row counts open cards when more than one waits", async () => {
+  const world = emptyWorld();
+  const b = bot("eng");
+  world.bots.set(b.id, b);
+  const h = hubOver(world);
+  h.homes.create(b.id, "# eng\n");
+  await h.hub.handle({ type: "send", botId: b.id, text: "ask me twice", uploads: [] });
+  await flush();
+  await runBash(h.q(), "git push origin main");
+  await callTool(h.q(), "ask", { question: "Which remote?", options: ["origin", "fork"] });
+
+  expect(lastFrame(h.frames, b.id)).toMatchObject({ question: "Which remote?", cards: 2 });
+});

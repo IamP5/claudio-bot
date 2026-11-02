@@ -15,7 +15,7 @@ type Permission = Extract<Message, { kind: "permission" }>;
 type Question = Extract<Message, { kind: "question" }>;
 
 const ANSWERS: Record<NonNullable<Permission["answer"]>, Question["answer"]> = {
-  once: 0, always: 0, deny: 1, never: 1, expired: "expired", stopped: "dismissed", closed: "expired",
+  once: 0, always: 0, deny: 1, never: 1, expired: "expired", stopped: "dismissed", closed: "expired", superseded: "dismissed",
 };
 
 function asQuestion(p: Permission): Question {

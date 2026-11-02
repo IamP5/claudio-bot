@@ -124,7 +124,7 @@ struct LinkedCard: Equatable, Sendable {
                 case nil: return nil
                 case .expired: return .expired
                 case .stopped: return .stopped
-                case .closed: return .closed
+                case .closed, .superseded: return .closed
                 case .chose, .unknown: return .answered
                 }
             case let .ask(_, _, _, answers, id?) where id == cardId:

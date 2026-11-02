@@ -107,7 +107,20 @@ export type Bot = {
   dailyCapUsd: number | null;
   // No message or result pushes for this bot. Cards still push: a held call waits on the user.
   muted: boolean;
+  // How the bot's last turn ended when it did not finish. Absent once a later turn finishes or the user sends again.
+  outcome?: BotOutcome;
+  // Work the bot started that still runs after its turn ended, such as a background command. Absent when none runs.
+  // Stop on the bot ends it.
+  background?: BotBackground;
+  // How many cards wait on the user, when more than one does; question names the newest.
+  cards?: number;
 } & BotSpend;
+
+/** failed: Claude Code crashed or ended the turn with an error. stopped: Stop, the denial breaker or the daily cap. */
+export type BotOutcome = { kind: "failed" | "stopped"; text: string; at: string };
+
+/** since: when the oldest of it started. count: commands and agents running. text: "Background: sleep 30". */
+export type BotBackground = { since: string; count: number; text: string };
 
 /**
  * Spend as the ledger counts it: Claude Code's own cost estimates, summed per turn. Refreshed on every bot frame; the
@@ -170,8 +183,10 @@ export type Message =
       // What "Always" would allow from now on, in words, so that button never surprises.
       always: string;
       // stopped: the user stopped the session while the card was open, so the call never ran. closed: Claude Code
-      // exited while it waited, so the call never ran. The app shows an answer it does not know as closed.
-      answer: PermissionChoice | "expired" | "stopped" | "closed" | null;
+      // exited while it waited, so the call never ran. superseded: the user sent the bot a new message instead of
+      // answering, so the call never ran and the bot asks again if it still needs it. The app shows an answer it does
+      // not know as closed.
+      answer: PermissionChoice | "expired" | "stopped" | "closed" | "superseded" | null;
       expiresAt: string;
     }
   // A run of messages between this bot and one peer, grouped while nothing else is said.

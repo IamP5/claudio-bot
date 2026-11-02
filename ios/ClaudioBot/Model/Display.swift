@@ -5,17 +5,26 @@ struct RowDisplay: Equatable {
     let preview: String
     /// The preview is the open question, drawn with a list icon.
     let previewIsQuestion: Bool
+    /// The preview says the last turn did not finish, and how: failed or stopped.
+    let outcome: SessionOutcomeKind?
     /// The orange badge on the avatar: the bot is waiting on the user.
     let needsAttention: Bool
     let unreadDot: Bool
 
     init(_ bot: Bot) {
         if let question = bot.question {
-            preview = question
+            let waiting = bot.cards ?? 1
+            preview = waiting > 1 ? "\(waiting) waiting · \(question)" : question
             previewIsQuestion = true
+            outcome = nil
+        } else if let last = bot.outcome {
+            preview = last.text
+            previewIsQuestion = false
+            outcome = last.kind
         } else {
             preview = bot.preview
             previewIsQuestion = false
+            outcome = nil
         }
         needsAttention = bot.question != nil
         unreadDot = bot.unread > 0
@@ -331,6 +340,8 @@ extension PermissionAnswer {
             PermissionOutcome(short: "Stopped by you", text: "Stopped by you. It did not run.", tone: .ended)
         case .closed:
             PermissionOutcome(short: "Closed", text: "Closed when Claude Code stopped. It did not run.", tone: .ended)
+        case .superseded:
+            PermissionOutcome(short: "Closed by your next message", text: "Closed when you sent a new message. It did not run.", tone: .ended)
         case .unknown:
             PermissionOutcome(short: "Closed", text: "Closed. It did not run.", tone: .ended)
         }

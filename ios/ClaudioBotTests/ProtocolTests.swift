@@ -477,7 +477,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
             default: ""
             }
         }.filter { !$0.isEmpty }
-        #expect(seqs == ["bot:42", "bot_removed:-", "bot:48", "bot:49", "bot:51", "bot:54", "bot:57"])
+        #expect(seqs == ["bot:42", "bot_removed:-", "bot:45", "bot:46", "bot:48", "bot:49", "bot:51", "bot:54", "bot:57"])
     }
 
     @Test func routinesCarryTheirTriggerNextRunAndRuns() throws {
@@ -510,12 +510,21 @@ private func unknowns(in message: ServerMessage) -> [String] {
     }
 
     @Test func botsAndAgentsCarryTheNewStatusesAndTheDailyCap() throws {
-        #expect(try Fixture.bots().map(\.status) == [.idle, .working, .awaitingApproval, .parked, .unavailable, .idle, .idle])
-        #expect(try Fixture.bots().map(\.dailyCapUsd) == [nil, 5, nil, nil, nil, nil, nil])
+        #expect(try Fixture.bots().map(\.status) == [.idle, .working, .idle, .awaitingApproval, .awaitingApproval, .parked, .unavailable, .idle, .idle])
+        #expect(try Fixture.bots().map(\.dailyCapUsd) == [nil, 5, nil, nil, nil, nil, nil, nil, nil])
         let agentStatuses = try Fixture.server().compactMap { frame -> AgentStatus? in
             if case .agent(let agent, _) = frame.message { agent.status } else { nil }
         }
         #expect(agentStatuses == [.waiting, .awaitingApproval, .unavailable, .capped])
+    }
+
+    @Test func aBotCarriesHowItsLastTurnEndedWhatRunsOnAndHowManyCardsWait() throws {
+        let bots = try Fixture.bots()
+        #expect(bots[2].outcome == SessionOutcome(kind: .failed, text: "Didn't finish: Claude Code quit unexpectedly", at: at.addingTimeInterval(7200)))
+        #expect(bots[2].background == BotBackground(since: at.addingTimeInterval(7200), count: 2, text: "Background: npm run build and 1 more"))
+        #expect(bots[3].outcome?.kind == .stopped)
+        #expect(bots[3].cards == 3)
+        #expect(bots[0].outcome == nil && bots[0].background == nil && bots[0].cards == nil)
     }
 
     @Test func permissionCardsDecodeOpenOrDecidedWithTheExactCall() throws {
@@ -523,6 +532,11 @@ private func unknowns(in message: ServerMessage) -> [String] {
             if case .permission(_, _, let card) = message { card } else { nil }
         }
         #expect(cards == [
+            PermissionCard(
+                from: nil, tool: "Bash", label: "Push to the default branch", detail: #"eval "$(echo hostname)""#,
+                always: "git push to main or master from engineer", answer: .superseded,
+                expiresAt: Date(timeIntervalSince1970: 1_792_166_400)
+            ),
             PermissionCard(
                 from: nil, tool: "Bash", label: "Push to the default branch", detail: "git push origin main",
                 always: "git push to main or master from engineer", answer: nil,
@@ -668,7 +682,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(capped?.worktree == Worktree(path: "/Users/alex/.claudiobot-worktrees/web/a1", branch: "claudio/verify-skill"))
         let echoed = try Fixture.messages().compactMap { if case let .user(_, _, _, _, clientId, _) = $0 { clientId } else { nil } }
         #expect(echoed == ["c_9b1e"])
-        #expect(try Fixture.bots().map(\.muted) == [false, false, false, false, false, true, false])
+        #expect(try Fixture.bots().map(\.muted) == [false, false, false, false, false, false, false, true, false])
     }
 
     @Test func theMentionsCommandsExchangesAndGroupsFramesDecodeToTypedValues() throws {

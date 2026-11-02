@@ -65,11 +65,11 @@ enum OutboxRule: Equatable, Sendable {
     static func of(_ msg: ClientMessage) -> OutboxRule {
         switch msg {
         case .sessionSend, .sessionStop, .sessionUnqueue, .sessionDecide, .sessionAnswer, .sessionCreate, .sessionSet, .sessionOpenDesktop,
-             .sessionPrefs, .stop, .stopAgent, .decide, .send:
+             .sessionPrefs, .stop, .stopAgent, .decide, .send, .createBot, .createGroup:
             .expires
-        case .createBot, .open, .answer, .dismiss, .updateBot, .markUnread, .deleteBot, .setRoutine, .runRoutine, .details, .agent,
+        case .open, .answer, .dismiss, .updateBot, .markUnread, .deleteBot, .setRoutine, .runRoutine, .details, .agent,
              .file, .memory, .setFact, .forgetFact, .confirmFact, .connectors, .setConnector, .skills, .deleteSkill, .webhookToken,
-             .removeWorktree, .commands, .exchange, .createGroup, .devices, .revokeDevice, .pairCode, .presence, .refreshUsage,
+             .removeWorktree, .commands, .exchange, .devices, .revokeDevice, .pairCode, .presence, .refreshUsage,
              .watchSessions, .unwatchSessions, .watchSession, .unwatchSession, .sessionPage, .sessionTool:
             .waits
         }

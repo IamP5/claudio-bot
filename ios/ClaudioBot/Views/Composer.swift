@@ -64,7 +64,7 @@ struct Composer: View {
 
     /// While the bot works an empty field offers Stop. Typing turns it back into Send, which queues the message.
     private var showsStop: Bool {
-        !unrecognized && bot.status == .working && !canSend
+        !unrecognized && (bot.status == .working || bot.background != nil) && !canSend
     }
 
     /// An empty field offers the mic and nothing to send. Once there is something to send, Send takes the mic's place.

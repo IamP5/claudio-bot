@@ -1058,3 +1058,56 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(!BridgeClient.stillWanted(send, queuedAt: at, now: at + 61, maxAge: 60), "a bot message keeps the session send's minute")
     }
 }
+
+/// What Home says about a bot's last turn, its waiting cards and the create the user is waiting on.
+@MainActor
+@Suite struct BotStatusTruthTests {
+    private func bot(outcome: SessionOutcome? = nil, question: String? = nil, cards: Int? = nil) -> Bot {
+        Bot(
+            id: BotID("b1"), name: "eng", title: nil, avatar: .standard, pinned: false, hidden: false, status: .idle,
+            unread: 1, question: question, preview: "ok", lastAt: at, createdAt: at, routines: [], outcome: outcome, cards: cards
+        )
+    }
+
+    @Test func aTurnThatDidNotFinishReplacesTheOldReplyOnTheRow() {
+        let display = RowDisplay(bot(outcome: SessionOutcome(kind: .failed, text: "Didn't finish: Claude Code quit unexpectedly", at: at)))
+        #expect(display.preview == "Didn't finish: Claude Code quit unexpectedly")
+        #expect(display.outcome == .failed)
+        #expect(display.unreadDot)
+    }
+
+    @Test func anOpenCardOutranksTheOutcomeAndSaysHowManyWait() {
+        let display = RowDisplay(bot(outcome: SessionOutcome(kind: .stopped, text: "Stopped by Alex", at: at), question: "Which remote?", cards: 3))
+        #expect(display.preview == "3 waiting · Which remote?")
+        #expect(display.outcome == nil)
+        #expect(RowDisplay(bot(question: "Which remote?")).preview == "Which remote?")
+    }
+
+    @Test func aCardClosedByTheNextMessageSaysItDidNotRun() {
+        #expect(PermissionAnswer.superseded.outcome().text == "Closed when you sent a new message. It did not run.")
+    }
+
+    @Test func aNewBotOpensOnlyIfTheUserStayedWhereTheyAsked() {
+        let router = Router()
+        router.pendingCreate = "c1"
+        let create = router.creating!
+        #expect(create.from == nil)
+        #expect(router.stillWaits(for: create))
+        router.selection = .bot(BotID("b9"))
+        #expect(!router.stillWaits(for: create))
+        router.selection = nil
+        router.showingSettings = true
+        #expect(!router.stillWaits(for: create))
+    }
+
+    @Test func aCreateHeldPastAMinuteIsDroppedWithWords() {
+        let create = ClientMessage.createBot(ref: "c1")
+        #expect(OutboxRule.of(create) == .expires)
+        #expect(!BridgeClient.stillWanted(create, queuedAt: at, now: at + 61, maxAge: OutboxRule.maxAge))
+        #expect(OutboxRule.of(.createGroup(ref: "g1", name: "team", members: [])) == .expires)
+        let store = AppStore()
+        store.requestDropped(create)
+        #expect(store.droppedCreate == "c1")
+        #expect(store.lastError?.message == "New bot not created: your Mac was unreachable for a minute. Try again once it's back.")
+    }
+}

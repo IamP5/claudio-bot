@@ -24,7 +24,9 @@ import {
   type AgentView,
   type Avatar,
   type Bot,
+  type BotBackground,
   type BotId,
+  type BotOutcome,
   type BotPatch,
   type ClientMessage,
   type Feature,
@@ -45,8 +47,9 @@ import { gitDirsOf, sandboxFor } from "./sandbox";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { createSessions, type Sessions, type SessionsEnv } from "./sessions";
 import { transcriptExists } from "./transcript";
-import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
+import { BREAKER_NOTE, createSession, RESTARTED_ERROR, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { createSkills } from "./skills";
+import { rowRun, runs } from "./tasks";
 import { createUsageMonitor } from "./usage";
 import { appendArchive, type Persist } from "./store";
 import { BOT_NAME_MAX, errorText, hasHiddenCharacters } from "./text";
@@ -265,8 +268,21 @@ export function createHub(deps: HubDeps): Hub {
       held: session ? session.parkedFor !== null : holdOf(bot.session) !== null,
       awaitingApproval: world.gate.open.some((c) => c.kind !== "question" && c.actor.botId === bot.id),
     });
-    return { ...toBot(bot, status), ...ledger.botSpend(bot.id) };
+    return { ...toBot(bot, status, backgroundOf(session)), ...ledger.botSpend(bot.id) };
   }
+
+  /** What the bot started that runs on after its turn. null while a turn runs or waits: that shows as working. */
+  function backgroundOf(session: Session | undefined): BotBackground | null {
+    if (!session || session.working) return null;
+    const a = session.activity();
+    if (!runs(a)) return null;
+    const row = rowRun(a, [], (c) => (c.tool === "Bash" ? "Running a command" : `Using ${c.tool}`));
+    const count = (row.running?.agents ?? 0) + (row.running?.commands ?? 0);
+    return { since: row.since!, count, text: row.activity ?? "Finishing its background work" };
+  }
+
+  /** The background each bot's frame last carried, so only a change to it sends the frame again. */
+  const shownBackground = new Map<BotId, string>();
 
   const membersOf = (group: GroupRecord): BotRecord[] => group.members.flatMap((id) => world.bots.get(id) ?? []);
   /** The members running a turn for this group right now. A member busy in its own chat is not one. */
@@ -490,10 +506,35 @@ export function createHub(deps: HubDeps): Hub {
   const pausedNote = (until: string, why: "usage_limit" | "daily_cap") =>
     `Paused until ${new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} (${why === "usage_limit" ? "usage limit" : "daily cap"})`;
 
+  /** What the bot's row says about a turn that did not finish; null when it finished, or only waits. */
+  function rowOutcome(end: TurnEnd): Omit<BotOutcome, "at"> | null {
+    if (usedBudget(end)) return { kind: "stopped", text: "Stopped: today's budget is used" };
+    switch (end.kind) {
+      case "done":
+        return end.result.subtype === "success" ? null : { kind: "failed", text: "Didn't finish: Claude Code ended it with an error" };
+      case "failed":
+        return { kind: "failed", text: end.error === RESTARTED_ERROR ? "Didn't finish: the bridge restarted" : "Didn't finish: Claude Code quit unexpectedly" };
+      case "stopped":
+        return { kind: "stopped", text: end.by === "breaker" ? "Stopped after 3 held or denied tool calls" : `Stopped by ${userName}` };
+      case "deferred":
+      case "dropped":
+        return null;
+    }
+  }
+
   function endTurn(bot: BotRecord, turn: Pending, end: TurnEnd, quiet: boolean) {
     // A group turn's end is told where its reply would have been.
     const group = groupFor(turn.group, bot);
     const tell = (text: string) => (group ? noteInGroup(group, text) : note(bot, text));
+    // A deferred turn runs later, and a dropped one was never the user's to see end. Only the bot's own chat has a row
+    // for this turn.
+    if (!group && end.kind !== "deferred" && end.kind !== "dropped") {
+      const outcome = rowOutcome(end);
+      if (outcome === null) delete bot.outcome;
+      else bot.outcome = { ...outcome, at: now() };
+      // A failure the user did not cause marks the chat unread, so Home shows it even after the user looked away.
+      if (outcome?.kind === "failed") bot.unread += 1;
+    }
     switch (end.kind) {
       case "done":
         if (usedBudget(end)) tell(`${bot.name} used today's budget; routines and other background work wait until tomorrow.`);
@@ -730,6 +771,13 @@ export function createHub(deps: HubDeps): Hub {
         if (!world.bots.has(bot.id)) return;
         changed(bot);
         retypeFor(bot.id);
+      },
+      onActivity() {
+        if (!world.bots.has(bot.id)) return;
+        const key = JSON.stringify(backgroundOf(brains.get(bot.id)));
+        if (shownBackground.get(bot.id) === key) return;
+        shownBackground.set(bot.id, key);
+        deps.broadcast({ type: "bot", bot: view(bot) });
       },
       note(text) {
         if (!world.bots.has(bot.id)) return;
@@ -1023,6 +1071,7 @@ export function createHub(deps: HubDeps): Hub {
     const mentions = resolveMentions(world, m.mentions ?? [], on);
     const attachments = homes.saveUploads(bot.id, m.uploads);
     if ("error" in attachments) return error(attachments.error);
+    delete bot.outcome;
     say(bot, {
       kind: "user",
       id: newMessageId(),
@@ -1035,9 +1084,11 @@ export function createHub(deps: HubDeps): Hub {
     const others = mentions.filter((x) => x.kind !== "bot" || x.id !== bot.id);
     if (command !== null) deliver(botActor(bot.id), { from: "command", line: m.text.trim() });
     else {
-      // Typing one of an open card's options is tapping it; anything else leaves the card open, and the bot is told so.
+      // Typing one of an open question's options is tapping it; any other text leaves the question open, and the bot is
+      // told so. It closes the permission cards the user's own requests left open: the user moved on instead of tapping.
       const cards = gate.typed(bot.id, m.text);
-      deliver(botActor(bot.id), { from: "user", text: m.text, attachments, mentions: others, ...((cards.answered.length > 0 || cards.open.length > 0) && { cards }) });
+      const told = cards.answered.length > 0 || cards.open.length > 0 || cards.closed.length > 0;
+      deliver(botActor(bot.id), { from: "user", text: m.text, attachments, mentions: others, ...(told && { cards }) });
     }
     return [];
   }

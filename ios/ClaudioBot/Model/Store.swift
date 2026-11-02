@@ -191,6 +191,8 @@ final class AppStore {
     private(set) var files: [FileKey: BotFile] = [:]
     /// The bot each `create_bot` ref became, so the screen that asked can open it.
     private(set) var created: [String: BotID] = [:]
+    /// The ref of the last create_bot or create_group the outbox dropped unsent.
+    private(set) var droppedCreate: String?
     private(set) var lastError: ErrorNotice?
     private(set) var protocolMismatch: ProtocolMismatch?
     /// From the last hello. Nil until this pairing has connected once.
@@ -547,6 +549,10 @@ final class AppStore {
             sessionErrors[sessionId] = SessionError(kind: .stop, text: "Stop" + unreachable)
         case .stop, .stopAgent:
             lastError = ErrorNotice(message: "Stop" + unreachable)
+        case let .createBot(ref), let .createGroup(ref, _, _):
+            droppedCreate = ref
+            let what = if case .createBot = msg { "bot" } else { "group" }
+            lastError = ErrorNotice(message: "New \(what) not created: your Mac was unreachable for a minute. Try again once it's back.")
         case .decide(_, let card, _), .sessionDecide(_, let card, _), .sessionAnswer(_, let card, _):
             decisions[card]?.fail(.tooLate)
         case let .sessionSet(sessionId, patch):

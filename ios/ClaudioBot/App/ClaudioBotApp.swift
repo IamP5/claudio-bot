@@ -79,8 +79,13 @@ final class Router {
     var newSession: NewSessionRequest?
     /// The profile beside the chat, on iPad.
     var showingInspector = false
-    /// The ref of a create_bot in flight; the bot it becomes is opened.
-    var pendingCreate: String?
+    /// A create_bot or create_group in flight. The chat it becomes opens only if the user is still where they asked.
+    var creating: PendingCreate?
+    /// The ref of the create in flight.
+    var pendingCreate: String? {
+        get { creating?.ref }
+        set { creating = newValue.map { PendingCreate(ref: $0, from: selection) } }
+    }
     var pendingSessionCreate: String?
     /// The New Session sheet's prompt. It outlives the sheet, so closing it never loses what was typed (F-SES-154).
     var newSessionDraft = ComposerDraft()
@@ -112,6 +117,11 @@ final class Router {
         open(.bot(bot))
     }
 
+    /// The user still waits for the chat they asked for: nothing they opened since covers where they asked.
+    func stillWaits(for create: PendingCreate) -> Bool {
+        selection == create.from && path.isEmpty && !showingSettings && !showingUsage && newSession == nil
+    }
+
     func open(_ target: Selection, card: MessageID? = nil) {
         showingNewChat = false
         showingSettings = false
@@ -122,6 +132,12 @@ final class Router {
         selection = target
         linkedCard = target.session.flatMap { session in card.map { LinkedCard(sessionId: session, cardId: $0) } }
     }
+}
+
+struct PendingCreate: Equatable, Sendable {
+    let ref: String
+    /// What the window showed when the user asked.
+    let from: Selection?
 }
 
 struct NewSessionRequest: Identifiable, Hashable, Sendable {
@@ -235,7 +251,9 @@ final class AppModel {
         }
     }
 
+    /// One create at a time: a second tap while the first waits would make a second bot.
     func createBot() {
+        guard router.creating == nil else { return }
         let ref = UUID().uuidString
         router.pendingCreate = ref
         client.send(.createBot(ref: ref))
@@ -300,10 +318,13 @@ struct RootView: View {
         #endif
         .viewing(router)
         .onChange(of: store.created) { _, created in
-            if let ref = router.pendingCreate, let bot = created[ref] {
-                router.pendingCreate = nil
-                router.open(bot)
+            if let create = router.creating, let bot = created[create.ref] {
+                router.creating = nil
+                if router.stillWaits(for: create) { router.open(bot) }
             }
+        }
+        .onChange(of: store.droppedCreate) { _, ref in
+            if let ref, router.creating?.ref == ref { router.creating = nil }
         }
         .onChange(of: store.sessions.created) { _, created in
             if let ref = router.pendingSessionCreate, let session = created[ref] {

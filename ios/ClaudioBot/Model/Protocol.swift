@@ -349,17 +349,23 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
     /// What the bot and its agents spent today, and the cap in force. Nil from a bridge without the spend feature.
     var spentTodayUsd: Double?
     var capUsd: Double?
+    /// How the last turn ended when it did not finish (failed or stopped). Nil once one finishes or the user sends.
+    var outcome: SessionOutcome?
+    /// Work the bot started that still runs after its turn ended. Stop on the bot ends it.
+    var background: BotBackground?
+    /// How many cards wait, when more than one does; question names the newest.
+    var cards: Int?
 
     private enum CodingKeys: String, CodingKey {
         case id, name, title, avatar, pinned, hidden, status, unread, question, preview, lastAt, createdAt, routines, dailyCapUsd, muted
-        case spentTodayUsd, capUsd, kind, members
+        case spentTodayUsd, capUsd, kind, members, outcome, background, cards
     }
 
     init(
         id: BotID, name: String, title: String?, avatar: Avatar, pinned: Bool, hidden: Bool, status: BotStatus,
         unread: Int, question: String?, preview: String, lastAt: Date, createdAt: Date, routines: [Routine],
         dailyCapUsd: Double? = nil, muted: Bool = false, spentTodayUsd: Double? = nil, capUsd: Double? = nil,
-        kind: BotKind = .bot, members: [BotID] = []
+        kind: BotKind = .bot, members: [BotID] = [], outcome: SessionOutcome? = nil, background: BotBackground? = nil, cards: Int? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -380,6 +386,9 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
         self.muted = muted
         self.spentTodayUsd = spentTodayUsd
         self.capUsd = capUsd
+        self.outcome = outcome
+        self.background = background
+        self.cards = cards
     }
 
     init(from decoder: Decoder) throws {
@@ -403,6 +412,9 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
         muted = try c.decodeIfPresent(Bool.self, forKey: .muted) ?? false
         spentTodayUsd = try c.decodeIfPresent(Double.self, forKey: .spentTodayUsd)
         capUsd = try c.decodeIfPresent(Double.self, forKey: .capUsd)
+        outcome = try c.decodeIfPresent(SessionOutcome.self, forKey: .outcome)
+        background = try c.decodeIfPresent(BotBackground.self, forKey: .background)
+        cards = try c.decodeIfPresent(Int.self, forKey: .cards)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -429,7 +441,17 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
             try c.encode(spentTodayUsd, forKey: .spentTodayUsd)
             try c.encode(capUsd, forKey: .capUsd)
         }
+        try c.encodeIfPresent(outcome, forKey: .outcome)
+        try c.encodeIfPresent(background, forKey: .background)
+        try c.encodeIfPresent(cards, forKey: .cards)
     }
+}
+
+/// What a bot started that runs on after its turn. count: commands and agents. text: "Background: sleep 30".
+struct BotBackground: Codable, Hashable, Sendable {
+    var since: Date
+    var count: Int
+    var text: String
 }
 
 enum Peer: Codable, Hashable, Sendable {
@@ -582,6 +604,8 @@ enum PermissionAnswer: Codable, Hashable, Sendable {
     case stopped
     /// Claude Code went away while the card was open, so the call never ran.
     case closed
+    /// The user sent the bot a new message instead of answering, so the call never ran. Only a bot's card closes so.
+    case superseded
     /// A closing state a newer bridge invented.
     case unknown(String)
 
@@ -594,6 +618,7 @@ enum PermissionAnswer: Codable, Hashable, Sendable {
             case "expired": self = .expired
             case "stopped": self = .stopped
             case "closed": self = .closed
+            case "superseded": self = .superseded
             default: self = .unknown(raw)
             }
         }
@@ -606,6 +631,7 @@ enum PermissionAnswer: Codable, Hashable, Sendable {
         case .expired: try c.encode("expired")
         case .stopped: try c.encode("stopped")
         case .closed: try c.encode("closed")
+        case .superseded: try c.encode("superseded")
         case .unknown(let raw): try c.encode(raw)
         }
     }

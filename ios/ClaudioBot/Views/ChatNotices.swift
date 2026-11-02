@@ -23,6 +23,7 @@ struct OfflineBar: View {
 /// Offline, what a bot was doing is only last known (P-ALIVE-3, F-AR-005, F-AR-009).
 enum LastKnown {
     static let working = "Working when last updated"
+    static let background = "Running in the background when last updated"
 }
 
 extension AppStore {

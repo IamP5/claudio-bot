@@ -556,6 +556,11 @@ describe("step outcomes", () => {
     expect(settled("Permission to use Bash has been denied.", true)).toMatchObject({ state: "denied", cause: "Permission to use Bash has been denied.", output: null });
   });
 
+  test("a call Claude Code cut off for a stop of its task reads stopped by you, not a failure with Claude Code's raw line", () => {
+    const { items } = project([prompt("go"), call("t1", "Agent", { description: "long sleeper", prompt: "sleep" }), answer("t1", "[Request interrupted by user for tool use]", true)], ctx);
+    expect(stepsOf(items)[0]).toMatchObject({ state: "stopped", cause: "Stopped by you", output: null });
+  });
+
   test("parallel calls rejected one result at a time are all stopped by the interrupt after them; a reject alone stays denied", () => {
     const reject = "The user doesn't want to proceed with this tool use. The tool use was rejected.";
     const calls = [prompt("go"), call("t1", "Bash", { command: "a" }, "m1"), call("t2", "Bash", { command: "b" }, "m1"), answer("t1", reject, true), answer("t2", reject, true)];

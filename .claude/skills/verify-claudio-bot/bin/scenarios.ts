@@ -1006,6 +1006,9 @@ const S3: Scenario = {
   ],
 };
 
+const S4_PROMPT =
+  'In one message, launch 2 subagents in parallel with the Agent tool, both with run_in_background false. The first: subagent_type "no-such-agent-type", description "broken helper", prompt "Say hi." The second: subagent_type general-purpose, model haiku, description "long sleeper", prompt "Run exactly this Bash command in the foreground: perl -e \'sleep 45\' && echo late > late.txt . Then reply done." Use exactly these values even if one looks wrong. Then reply with one line saying what happened.';
+
 const S4: Scenario = {
   id: "S4",
   area: "sessions",
@@ -1017,12 +1020,7 @@ const S4: Scenario = {
     "They press Stop while the other still runs, and see it stop: no step left spinning, the session at rest.",
   ],
   setup: [
-    {
-      do: "create",
-      name: "s4",
-      prompt:
-        'In one message, launch 2 subagents in parallel with the Agent tool, both with run_in_background false. The first: subagent_type "no-such-agent-type", description "broken helper", prompt "Say hi." The second: subagent_type general-purpose, model haiku, description "long sleeper", prompt "Run exactly this Bash command in the foreground: perl -e \'sleep 45\' && echo late > late.txt . Then reply done." Use exactly these values even if one looks wrong. Then reply with one line saying what happened.',
-    },
+    { do: "create", name: "s4", prompt: S4_PROMPT },
     started("s4"),
     { do: "open-thread", name: "s4" },
     // The tool call alone is not enough: it can sit behind its approval card. The command must run on the Mac.
@@ -2795,6 +2793,66 @@ const S4b: Scenario = {
   ],
 };
 
+const S4s: Scenario = {
+  id: "S4s",
+  area: "sessions",
+  title: "Stop one subagent while another has failed",
+  needsSimulator: false,
+  journey: [
+    "The user's session starts two subagents: one fails at once, one runs a long command.",
+    "The user stops only the sleeping subagent from Running now. Its step must read Stopped by you from then on, never a failure like the broken one.",
+  ],
+  setup: [
+    { do: "create", name: "s4s", prompt: S4_PROMPT },
+    started("s4s"),
+    { do: "open-thread", name: "s4s" },
+    { do: "until", mark: "sleeper-running", what: "the sleeper's perl sleep 45 to run on the Mac", timeoutS: 150, test: (ev) => ev.procs("sleep 45").length > 0 },
+    { do: "sleep", s: 5 },
+    { do: "stop", name: "s4s", task: "long sleeper", mark: "stopped" },
+    { do: "until", mark: "s4s-rest", what: "the session to rest after the stop", timeoutS: 120, optional: true, test: atRest("s4s") },
+    { do: "sleep", s: 5 },
+    { do: "mark", mark: "after" },
+  ],
+  pre: [created("s4s")],
+  rubric: [
+    {
+      id: "S4s.1",
+      tell: "stop",
+      lane: "protocol",
+      text: "The stopped subagent reads Stopped by you in every frame after the stop, never failed.",
+      pass: 'From the first frame where the long sleeper step reads stopped to mark after, every frame has it stopped with cause "Stopped by you"; it reads so within 10 s of the stop.',
+      fail: "The step reads error (or anything else) in any later frame, or never reads stopped.",
+      check: (ev) => {
+        const at = mark(ev, "stopped");
+        const end = mark(ev, "after");
+        if (at === undefined || end === undefined) return needMarks(ev, "stopped", "after")!;
+        const seen = snaps(ev, "s4s", at, end).flatMap((s) => stepsOf(s).filter((x) => AGENT_TOOLS.has(x.tool) && /sleeper/i.test(x.label)).map((x) => ({ s, x })));
+        const first = seen.findIndex(({ x }) => x.state === "stopped");
+        if (first === -1) return no(`never stopped: ${[...new Set(seen.map(({ x }) => x.state))].join(", ") || "no step"}`);
+        if (seen[first]!.s.at - at > 10_000) return no(`stopped only ${Math.round((seen[first]!.s.at - at) / 1000)} s after the stop`);
+        const bad = seen.slice(first).filter(({ x }) => x.state !== "stopped" || x.cause !== "Stopped by you");
+        return bad.length
+          ? no(`${bad.length} later frames: ${bad[0]!.x.state} "${String(bad[0]!.x.cause ?? "").slice(0, 60)}" ${Math.round((bad[0]!.s.at - at) / 100) / 10} s after the stop`)
+          : ok(`${seen.length - first} frames stopped by you, from ${Math.round((seen[first]!.s.at - at) / 100) / 10} s`);
+      },
+    },
+    {
+      id: "S4s.2",
+      tell: "what",
+      lane: "protocol",
+      text: "Claude Code's raw interrupt line is never shown as a step's cause or output, and the broken helper still reads failed.",
+      pass: 'No frame has a step whose cause or output is "[Request interrupted by user for tool use]"; the broken helper step ends in error.',
+      fail: "A step shows the raw line, or the broken helper does not read error.",
+      check: (ev) => {
+        const raw = snaps(ev, "s4s").flatMap(stepsOf).find((x) => /\[Request interrupted/.test(`${x.cause ?? ""} ${x.output ?? ""}`));
+        if (raw) return no(`${raw.label.slice(0, 30)} shows ${raw.state} "${String(raw.cause ?? raw.output).slice(0, 60)}"`);
+        const broken = snaps(ev, "s4s").flatMap(stepsOf).filter((x) => AGENT_TOOLS.has(x.tool) && /broken/i.test(x.label)).at(-1);
+        return broken?.state === "error" ? ok("no raw interrupt line; broken helper reads error") : no(`broken helper: ${broken?.state ?? "no step"}`);
+      },
+    },
+  ],
+};
+
 const S4K_PROMPT = "Run these two Bash commands one at a time, each in its own tool call: echo s4kone ; echo s4ktwo . Then reply with the single word done.";
 const S4K_FOLLOWUP = "Reply with the single word s4kafter.";
 
@@ -3641,4 +3699,4 @@ const S9b: Scenario = {
   ],
 };
 
-export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S3b, S4, S4b, S4c, S5, S5t, S6, S6b, S6c, S6d, S6e, S6f, S6g, S6h, S6k, S7, S8, S8fg, S9, S9b, ...AREAS];
+export const SCENARIOS: Scenario[] = [fanOut("S1", false), fanOut("S1b", true), S2, S3, S3b, S4, S4b, S4c, S4s, S5, S5t, S6, S6b, S6c, S6d, S6e, S6f, S6g, S6h, S6k, S7, S8, S8fg, S9, S9b, ...AREAS];

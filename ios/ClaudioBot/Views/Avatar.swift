@@ -23,12 +23,9 @@ extension AvatarColor {
         self == .white ? Color(hex: 0xE8E8E8) : color
     }
 
-    /// Text drawn on top of `accent`.
+    /// Text drawn on top of `accent`: whichever of black and white reaches 4.5:1. Only brown is dark enough for white.
     var onAccent: Color {
-        switch self {
-        case .white, .amber: .black
-        default: .white
-        }
+        self == .brown ? .white : .black
     }
 }
 

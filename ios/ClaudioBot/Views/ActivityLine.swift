@@ -6,6 +6,7 @@ struct ActivityLine: View {
     var agentId: AgentID? = nil
 
     @Environment(AppStore.self) private var store
+    @ScaledMetric(relativeTo: .footnote) private var size: CGFloat = 13
 
     /// The line this key shows, or nil when the bridge does not back activity or nothing is going on.
     static func text(in store: AppStore, botId: BotID, agentId: AgentID? = nil) -> String? {
@@ -24,7 +25,7 @@ struct ActivityLine: View {
             } icon: {
                 Image(systemName: "ellipsis").symbolEffect(.variableColor.iterative)
             }
-            .font(.ui(size: 13))
+            .font(.ui(size: size))
             .foregroundStyle(Theme.tertiary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 6)

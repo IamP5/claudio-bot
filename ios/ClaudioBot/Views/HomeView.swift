@@ -276,6 +276,10 @@ struct BotRow: View {
 
     @Environment(AppStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .callout) private var nameSize: CGFloat = 16
+    @ScaledMetric(relativeTo: .subheadline) private var previewSize: CGFloat = 14
+    @ScaledMetric(relativeTo: .footnote) private var timeSize: CGFloat = 13
+    @ScaledMetric(relativeTo: .caption2) private var pinSize: CGFloat = 10
 
     #if os(macOS)
     /// Grok's sidebar row: a 36 avatar and a 54 tall row, with the name in regular weight.
@@ -294,7 +298,7 @@ struct BotRow: View {
             VStack(alignment: .leading, spacing: Self.lineGap) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(bot.name)
-                        .font(.ui(size: 16, weight: Self.nameWeight))
+                        .font(.ui(size: nameSize, weight: Self.nameWeight))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .layoutPriority(1)
@@ -303,17 +307,17 @@ struct BotRow: View {
                     #endif
                     Spacer(minLength: 8)
                     if bot.pinned {
-                        Image(systemName: "pin.fill").font(.ui(size: 10)).foregroundStyle(Theme.tertiary)
+                        Image(systemName: "pin.fill").font(.ui(size: pinSize)).foregroundStyle(Theme.tertiary)
                     }
                     Text(TimeLabel.home(bot.lastAt))
-                        .font(.ui(size: 13))
+                        .font(.ui(size: timeSize))
                         .foregroundStyle(Theme.tertiary)
                         .lineLimit(1)
                         .fixedSize()
                 }
                 HStack(spacing: 6) {
                     preview(display, activity: activity)
-                    .font(.ui(size: 14))
+                    .font(.ui(size: previewSize))
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
                     Spacer(minLength: 4)

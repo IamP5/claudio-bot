@@ -200,3 +200,4 @@
   - F-AR-080 Dark mode: the card expiry line, the memory footnote and the A/B/C/D option letters fall under 4.5:1 (3.2:1 and 2.9:1)
   - F-AR-081 At the largest text size the bot state chip is cut to a prefix, so awaiting-approval, parked and unavailable are indistinguishable
   - F-AR-082 At the largest text size the Pairing screen opens on the title and one paragraph; Scan and the fields are off screen
+- G32 gaps: at AX XXXL Home rows stay one line and long bot names cut hard (time could wrap under the name) (P2); chat bubble text barely grows at AX XXXL (P2, chat).

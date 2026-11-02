@@ -205,3 +205,4 @@
 - H1.2 failed twice ("read after 1.2 s") on the G32 verifier run even after G33; check whether the 1 s window is too tight on a busy host (runner, P2).
 - G30 gaps: Stop in a bot chat stays enabled offline (waits 60 s then says not sent) (P2); bridges without the mute feature keep the old no-local-bubble behaviour (P3).
 - G30 verifier P3s: Attach and Dictate stay live when unrecognized; misplaced doc comment on ChatView.undelivered/openExchange; Retry on a "may have gone through" send hides its bubble up to 10 s.
+- Re-check notes: H1.6 screenshot cannot show the mark-unread change because the row is already unread (scenario design); runner startup race "demo project is not listed" seen again; composer placeholder truncates at default size.

@@ -8,14 +8,14 @@ step	area	status	ts	note
 4b	sessions	done	2026-11-01T22:57:30Z	PASS (lean): targeted re-check wf_04dc6a3a-6be on main 758c59a confirmed all 52 run-3 P1s fixed, 0 still open; 1.7M subagent tokens
 2	chat	done	2026-11-02T00:12:29Z	combined lean audit: 13 P1 (F-AR-001..013), 69 P2 to backlog, 0 P0; pairing had no P1
 3	chat	done	2026-11-02T02:02:06Z	G30-G33 merged (#43-#46); main f0c87db
-4	chat	in_progress	2026-11-02T02:02:06Z	lean targeted re-check of F-AR-001..013
+4	chat	done	2026-11-02T02:14:01Z	PASS (lean): re-check wf_5e69554b-411 on main f0c87db confirmed F-AR-001..013 fixed
 2	home	done	2026-11-02T00:12:29Z	combined lean audit: 13 P1 (F-AR-001..013), 69 P2 to backlog, 0 P0; pairing had no P1
 3	home	done	2026-11-02T02:02:06Z	G30-G33 merged (#43-#46); main f0c87db
-4	home	in_progress	2026-11-02T02:02:06Z	lean targeted re-check of F-AR-001..013
+4	home	done	2026-11-02T02:14:01Z	PASS (lean): re-check wf_5e69554b-411 on main f0c87db confirmed F-AR-001..013 fixed
 2	pairing	done	2026-11-02T00:12:29Z	combined lean audit: 13 P1 (F-AR-001..013), 69 P2 to backlog, 0 P0; pairing had no P1
 3	pairing	done	2026-11-02T00:12:29Z	no P0/P1
 4	pairing	done	2026-11-02T02:02:06Z	no P0/P1 in the combined audit
 2	settings	done	2026-11-02T00:12:29Z	combined lean audit: 13 P1 (F-AR-001..013), 69 P2 to backlog, 0 P0; pairing had no P1
 3	settings	done	2026-11-02T02:02:06Z	G30-G33 merged (#43-#46); main f0c87db
-4	settings	in_progress	2026-11-02T02:02:06Z	lean targeted re-check of F-AR-001..013
-exit	all	todo		final cross-area audit
+4	settings	done	2026-11-02T02:14:01Z	PASS (lean): re-check wf_5e69554b-411 on main f0c87db confirmed F-AR-001..013 fixed
+exit	all	in_progress	2026-11-02T02:14:01Z	final cross-area lean audit on main f0c87db

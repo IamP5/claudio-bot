@@ -16,6 +16,7 @@ import Foundation
 /// `threadoffline` (the Mac lost after the thread loaded), `threadwaiting` (a thread opened with the Mac out of reach),
 /// `composerdraft`, `composerlong`, `composerlapse`, `composersix`, `composerrefused`, `composermode`, `composerqueued`, `composerwithdraw`, `stoppedearly` (DemoSessions.stageComposer;
 /// add "kb" for the same with the keyboard up, or "kbgone" for the keyboard up and then put away 8 s in),
+/// `markdown` and `markdownthread` end the claude chat and the thread with a reply holding a table, a quote, a rule and nested lists,
 /// `sessionsempty` and `sessionsoffline`. `pushoff` and `pushfailing` open the Sessions list with alerts when away off or
 /// failing, `settingspush` Settings with them failing, and `staleapproval` the approvals thread from a push link whose
 /// card was answered.
@@ -54,7 +55,8 @@ enum Demo {
         if !oldBridge { store.apply(.usage(usage(screen))) }
         if !oldBridge { store.apply(.devices(devices)) }
         for (bot, messages) in conversations {
-            store.apply(.conversation(botId: BotID(bot), messages: messages))
+            let sample: [Message] = bot == "claude" && screen == "markdown" ? [say("md", .now, markdownSample)] : []
+            store.apply(.conversation(botId: BotID(bot), messages: messages + sample))
         }
         store.apply(.details(botId: BotID("claude"), library: library, links: links, agents: [], routines: []))
         store.apply(.details(botId: BotID("engineer"), library: [], links: [], agents: agents, routines: []))
@@ -73,6 +75,8 @@ enum Demo {
         case "newchat": router.showingNewChat = true
         case "usage", "usagehot", "usageoff": router.showingUsage = true
         case "settings", "settingspush": router.showingSettings = true
+        case "markdown": router.selection = .bot(BotID("claude"))
+        case "markdownthread": router.open(.session(DemoSessions.fade))
         case "chat":
             router.selection = .bot(BotID("claude"))
             router.showingInspector = true
@@ -212,6 +216,25 @@ enum Demo {
 
     /// `-demoColumns` opens the iPad with the sidebar beside the detail. A simulator in portrait cannot be turned from
     /// inside the app, and this is the split view a landscape iPad shows.
+    static var showsMarkdownThread: Bool { screen == "markdownthread" }
+    static let markdownSample = """
+        Here's where the release stands:
+
+        | Step | Owner | Status |
+        |:-----|:------|-------:|
+        | Migration | Dana | Done |
+        | Payments stack | Claude | **Waiting** |
+
+        > Production changes need your OK first.
+
+        ---
+
+        - Payments
+          - #139 to #141 green
+            1. migration checked
+          - #143 needs a rebase
+        - Docs
+        """
     static let showsAllColumns = arguments.contains("-demoColumns")
     /// The `atwork` screens lay the window out as a wide one, so a phone shows the split view's at-work pane and chip:
     /// `atwork` (nothing chosen, the list hidden as on an iPad in portrait), `atworkoffline` (the same with the Mac lost), `atworkwaiting` (no list yet, Mac lost),

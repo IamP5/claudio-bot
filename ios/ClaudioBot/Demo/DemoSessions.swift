@@ -349,7 +349,8 @@ enum DemoSessions {
         let row = rows.first { $0.id == id }
         switch id {
         case fade:
-            return SessionSnapshot(epoch: "demo", rev: 1, items: fadeItems(), before: nil, controls: controls(working: true, mode: .acceptEdits), live: nil)
+            let sample = Demo.showsMarkdownThread ? [say("md", 0.2, Demo.markdownSample)] : []
+            return SessionSnapshot(epoch: "demo", rev: 1, items: fadeItems() + sample, before: nil, controls: controls(working: true, mode: .acceptEdits), live: nil)
         case sidebar:
             return SessionSnapshot(epoch: "demo", rev: 1, items: sidebarItems(), before: nil, controls: controls(), live: nil)
         case playlist:

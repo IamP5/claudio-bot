@@ -569,13 +569,43 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
 
     @Test func listLinesBecomeItemsWithTheirMarkers() {
         #expect(MarkdownBlock.parse("Today:\n1. **One** thing\n12. Twelve\n- dash") == [
-            .prose("Today:"), .item(marker: "1.", "**One** thing"), .item(marker: "12.", "Twelve"), .item(marker: "•", "dash"),
+            .prose("Today:"), .item(level: 0, marker: "1.", "**One** thing"), .item(level: 0, marker: "12.", "Twelve"),
+            .item(level: 0, marker: "•", "dash"),
         ])
         #expect(MarkdownBlock.parse("2026 was a year.") == [.prose("2026 was a year.")])
     }
 
     @Test func headingsAreTheirOwnBlock() {
         #expect(MarkdownBlock.parse("## Plan\nstep one") == [.heading("Plan"), .prose("step one")])
+    }
+
+    @Test func nestedListsKeepTheirLevels() {
+        #expect(MarkdownBlock.parse("- fruit\n  - apple\n    1. green\n  - pear\n- veg") == [
+            .item(level: 0, marker: "•", "fruit"), .item(level: 1, marker: "◦", "apple"), .item(level: 2, marker: "1.", "green"),
+            .item(level: 1, marker: "◦", "pear"), .item(level: 0, marker: "•", "veg"),
+        ])
+    }
+
+    @Test func tablesQuotesAndRulesAreBlocks() {
+        #expect(MarkdownBlock.parse("Sizes:\n| Name | Size |\n|:---|---:|\n| a \\| b | 2 |\n| c |\nAfter") == [
+            .prose("Sizes:"), .table(header: ["Name", "Size"], rows: [["a | b", "2"], ["c", ""]]), .prose("After"),
+        ])
+        #expect(MarkdownBlock.parse("> one\n> two\n\n---\nnext") == [.quote("one\ntwo"), .rule, .prose("next")])
+        #expect(MarkdownBlock.parse("a | b with no divider") == [.prose("a | b with no divider")])
+    }
+
+    @Test func voiceOverReadsTablesWithoutPipes() {
+        #expect(RenderedMarkdown("Hi\n| Name | Age |\n|---|---|\n| **Ada** | 36 |\n\n> careful\n\n- one\n2. two\n***").spoken
+            == "Hi. Table, 2 columns: Name, Age. Name: Ada, Age: 36. Quote: careful. one. 2. two.")
+    }
+
+    @Test func bubblesSayWhoSpokeAndWhen() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_US")
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(BubbleSpeech.label("You", "Hi there", at: at, now: at, calendar: calendar) == "You: Hi there. Today 8:00\u{202F}AM")
+        #expect(BubbleSpeech.label("Grok", MarkdownText.spoken("Done!"), at: nil) == "Grok: Done!")
     }
 }
 

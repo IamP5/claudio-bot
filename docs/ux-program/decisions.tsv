@@ -292,3 +292,4 @@ ts	decision	why
 2026-11-02T04:21:32Z	G34: A failed turn marks the chat unread; a user stop does not; the row's failed/stopped text clears on the next send or finished turn	a failure needs attention, a stop was the user's own act
 2026-11-02T04:21:32Z	G34: Background work keeps the bot status idle and is shown through a separate background field; offline it reads "Running in the background when last updated"	older apps must not show Typing
 2026-11-02T04:21:32Z	G34: Create bot shows "Creating the new chat…", allows one create at a time, expires after 60 s offline with words, and opens the new chat only if the user is still where they asked	no double bots, no yanking
+2026-11-02T04:35:26Z	G36: a bubble with links keeps each link as its own VoiceOver element after a "Speaker, time" stop; a bubble without links is one "Speaker: words. Time" stop	verifier r1 P1 (links unreachable when combined)

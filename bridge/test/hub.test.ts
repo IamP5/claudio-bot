@@ -1632,22 +1632,35 @@ test("boot carries on when USER.md cannot be created, and says why in the log", 
   expect(logs).toEqual([expect.stringContaining("EACCES: permission denied")]);
 });
 
-test("a message typed while a question is open closes the card, tells the bot, and refuses a later tap", async () => {
+const colorCard = (): Message => ({ kind: "question", id: "m_color" as MessageId, at, question: "Which color?", options: ["Red", "Blue"], answer: null, expiresAt: inAnHour() });
+
+async function typedWithCardOpen(text: string) {
   const world = emptyWorld();
   const b = bot("eng");
-  const card: Message = { kind: "question", id: "m_fruit" as MessageId, at, question: "Which fruit?", options: ["Apple", "Pear"], answer: null, expiresAt: inAnHour() };
+  const card = colorCard();
   b.messages.push(card);
   world.bots.set(b.id, b);
   const h = hubOver(world);
   h.homes.create(b.id, "# eng\n");
-
-  await h.hub.handle({ type: "send", botId: b.id, text: "Pear", uploads: [] });
+  await h.hub.handle({ type: "send", botId: b.id, text, uploads: [] });
   await flush();
+  return { h, b, card };
+}
 
-  expect(b.messages.find((m) => m.id === card.id)).toMatchObject({ answer: "replied" });
-  expect(h.q().received[0]).toContain('Pear\n[This message closed your open question "Which fruit?". Take it as the answer if it is one.]');
+test("typing an option of an open question answers the card as that option, and a later tap is refused", async () => {
+  const { h, b, card } = await typedWithCardOpen("  blue. ");
+
+  expect(b.messages.find((m) => m.id === card.id)).toMatchObject({ answer: 1 });
+  expect(h.q().received[0]).toContain('[This answered your question "Which color?": Blue]');
   expect(await h.hub.handle({ type: "answer", botId: b.id, messageId: card.id, option: 0 })).toEqual([{ type: "error", message: "That question was already answered" }]);
   expect(h.q().received).toHaveLength(1);
+});
+
+test("typing anything else leaves the question open and tells the bot it is", async () => {
+  const { h, b, card } = await typedWithCardOpen("What is the capital of Portugal?");
+
+  expect(b.messages.find((m) => m.id === card.id)).toMatchObject({ answer: null });
+  expect(h.q().received[0]).toContain('[The question "Which color?" is still open; the user can still tap an answer.]');
 });
 
 test("a /command typed while a question is open leaves the card open", async () => {

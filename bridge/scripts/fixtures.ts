@@ -162,7 +162,6 @@ export const server = [
   },
   { type: "message", seq: 44, botId: "b1", message: question(1) },
   { type: "message", botId: "b1", message: { kind: "question", id: "m7", at, question: "Add the secret?", options: ["Yes", "Not yet"], answer: "dismissed", expiresAt: null } },
-  { type: "message", botId: "b1", message: { kind: "question", id: "m7r", at, question: "Which fruit?", options: ["Apple", "Pear"], answer: "replied", expiresAt: null } },
   {
     type: "details", botId: "b1",
     library: [{ path: "merge-plan.md", size: 2048, modifiedAt: at }],

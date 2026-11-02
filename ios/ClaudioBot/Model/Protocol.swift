@@ -533,8 +533,6 @@ enum Answer: Codable, Hashable, Sendable {
     case dismissed
     /// Nobody answered before `expiresAt`.
     case expired
-    /// The user wrote in the chat while it was open, and the bot was told that closed it.
-    case replied
 
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
@@ -542,11 +540,7 @@ enum Answer: Codable, Hashable, Sendable {
             self = .option(index)
         } else {
             // A closing state a newer bridge invented still closes the card, with no choice.
-            switch try c.decode(String.self) {
-            case "expired": self = .expired
-            case "replied": self = .replied
-            default: self = .dismissed
-            }
+            self = try c.decode(String.self) == "expired" ? .expired : .dismissed
         }
     }
 
@@ -556,7 +550,6 @@ enum Answer: Codable, Hashable, Sendable {
         case .option(let index): try c.encode(index)
         case .dismissed: try c.encode("dismissed")
         case .expired: try c.encode("expired")
-        case .replied: try c.encode("replied")
         }
     }
 }

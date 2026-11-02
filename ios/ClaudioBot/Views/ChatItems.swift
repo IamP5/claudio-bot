@@ -212,7 +212,6 @@ struct QuestionCardView: View {
         case .option: "Question answered."
         case .dismissed: "Question dismissed."
         case .expired: "The question closed without an answer."
-        case .replied: "The question closed when you replied in the chat."
         }
     }
 }
@@ -328,9 +327,6 @@ private struct QuestionCardBody: View {
                         .accessibilityFocused($focus, equals: .outcome)
                 case .expired:
                     ClosedLine(text: "Expired. Nobody answered in time.")
-                        .accessibilityFocused($focus, equals: .outcome)
-                case .replied:
-                    ClosedLine(text: "Closed when you replied in the chat.")
                         .accessibilityFocused($focus, equals: .outcome)
                 default:
                     ClosedLine(text: "Dismissed")

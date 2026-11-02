@@ -307,22 +307,6 @@
       }
     },
     {
-      "type": "message",
-      "botId": "b1",
-      "message": {
-        "kind": "question",
-        "id": "m7r",
-        "at": "2026-10-16T12:00:00.000Z",
-        "question": "Which fruit?",
-        "options": [
-          "Apple",
-          "Pear"
-        ],
-        "answer": "replied",
-        "expiresAt": null
-      }
-    },
-    {
       "type": "details",
       "botId": "b1",
       "library": [

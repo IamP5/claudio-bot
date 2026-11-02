@@ -671,11 +671,9 @@ private let sleeperCommands = (1...3).map { owned("c\($0)", by: "a\($0)") }
         #expect(ChatAnnouncement.turnEnded(from: .working, to: .awaitingApproval, bot: "Pip", told: false) == nil)
     }
 
-    @Test func aQuestionClosedByATypedReplySaysSo() throws {
-        let answer = try Wire.decoder().decode(Answer.self, from: Data(#""replied""#.utf8))
-        #expect(answer == .replied)
-        #expect(QuestionCardView.closing(answer, options: ["Apple"]) == "The question closed when you replied in the chat.")
-        #expect(QuestionCardView.closing(.option(0), options: ["Apple"]) == "Answered: Apple.")
+    @Test func aClosingQuestionSaysHowItClosed() {
+        #expect(QuestionCardView.closing(.option(1), options: ["Red", "Blue"]) == "Answered: Blue.")
+        #expect(QuestionCardView.closing(.dismissed, options: []) == "Question dismissed.")
         #expect(QuestionCardView.closing(.expired, options: []) == "The question closed without an answer.")
     }
 }

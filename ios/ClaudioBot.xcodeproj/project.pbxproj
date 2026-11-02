@@ -58,6 +58,7 @@
 		493AFBE5086E056A3A4DCAD5 /* ClaudioBotMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B12810083B7E8254D9262B1B /* ClaudioBotMacApp.swift */; };
 		4AF17121A1803593B4710B8B /* ThreadStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7BEBD2D91B9ECEC63556D0 /* ThreadStatus.swift */; };
 		4B7F98F899427E8DA95DCBAE /* Spend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A61D6DA58D7DE2CDA74F96F /* Spend.swift */; };
+		4D642C945071BCCECEB56567 /* AccentContrastTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90F011B8C4DCD922A3D43847 /* AccentContrastTests.swift */; };
 		4D88AC6EF8AA1D5A5573D417 /* Threads.swift in Sources */ = {isa = PBXBuildFile; fileRef = F227964E023D95F10449A929 /* Threads.swift */; };
 		50F15E24DCBA56CA8C72B8DF /* FileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A929F97F49B2C78A33813AAA /* FileView.swift */; };
 		51E6B4B6CF1753A9EB55B989 /* GroupViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7820C0044FEE201808CA15BD /* GroupViews.swift */; };
@@ -145,6 +146,7 @@
 		D631BDBD466602251C688DED /* MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 215D70BAB1D260A81C952891 /* MemoryView.swift */; };
 		D63CBBBA113E2E462A8B275A /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AEC678D2C98543C38666D7C /* SettingsView.swift */; };
 		D71C8C4D37722592EF686761 /* FakeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 097EB76BEE0A213D3217C7AC /* FakeBridge.swift */; };
+		D974D499E49BF56220DD1374 /* AccentContrastTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90F011B8C4DCD922A3D43847 /* AccentContrastTests.swift */; };
 		DAA60BC9103E79B45E88B35B /* ConnectorsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8852760CD0E7465CD1204064 /* ConnectorsView.swift */; };
 		DB6AB2521CED8BD33FCE18A8 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA34950BCDD0C39C5EBE5C3D /* Components.swift */; };
 		DB9E1F10424D7DDA27F74E9C /* Splash.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF08C71B354F1D1EA6946487 /* Splash.swift */; };
@@ -252,6 +254,7 @@
 		88F8332127C9916FFC1D3090 /* AgentEvidenceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentEvidenceView.swift; sourceTree = "<group>"; };
 		8AEC678D2C98543C38666D7C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		9075DD4B11D99F8110DFA1ED /* ThreadWorkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadWorkTests.swift; sourceTree = "<group>"; };
+		90F011B8C4DCD922A3D43847 /* AccentContrastTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccentContrastTests.swift; sourceTree = "<group>"; };
 		93B75478FAA9FF20AD9CB456 /* ComposerMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerMenuView.swift; sourceTree = "<group>"; };
 		968DA57BA93F923DB93997B3 /* ProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTests.swift; sourceTree = "<group>"; };
 		982F1219C87F1A4346344127 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
@@ -360,6 +363,7 @@
 		8F63FA456E3B018B3C798894 /* ClaudioBotTests */ = {
 			isa = PBXGroup;
 			children = (
+				90F011B8C4DCD922A3D43847 /* AccentContrastTests.swift */,
 				D0B62E0514191256711E3296 /* ApprovalCardTests.swift */,
 				715B528E1F333F5EFF0F6EF6 /* ApprovalCopyTests.swift */,
 				A043FD6FEC842D94A260F35E /* BridgeClientTests.swift */,
@@ -772,6 +776,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D974D499E49BF56220DD1374 /* AccentContrastTests.swift in Sources */,
 				C3AC6D6A5E7C8459DA94A750 /* ApprovalCardTests.swift in Sources */,
 				C24B7A960C83949C3BD236FA /* ApprovalCopyTests.swift in Sources */,
 				00856B227ECFDFD264CF6F1E /* BridgeClientTests.swift in Sources */,
@@ -801,6 +806,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4D642C945071BCCECEB56567 /* AccentContrastTests.swift in Sources */,
 				5377102E92CCFF82C76D55D7 /* ApprovalCardTests.swift in Sources */,
 				EB7D915605AA316218F31F16 /* ApprovalCopyTests.swift in Sources */,
 				C4D1C6705A84AF3D5E134452 /* BridgeClientTests.swift in Sources */,

@@ -69,6 +69,23 @@ struct ActivityKey: Hashable, Sendable {
     let agentId: AgentID?
 }
 
+/// A bot chat message this phone sent that the Mac has not shown back (F-AR-001), under the same words and minute as a
+/// session send. `held`: it waited for a socket, so the chat shows it until its echo. One that went straight out shows
+/// only once it may have gone astray.
+struct BotSend: Equatable, Sendable {
+    let message: ClientMessage
+    var pending: PendingSend
+    var held = false
+
+    var shows: Bool {
+        if held { return true }
+        switch pending.state {
+        case .unechoed, .notSent: return true
+        case .waiting, .sending: return false
+        }
+    }
+}
+
 /// The messages between a bot and another bot, behind the exchange lines in the bot's chat.
 struct ExchangeKey: Hashable, Sendable {
     let botId: BotID
@@ -220,6 +237,8 @@ final class AppStore {
     /// Sends the bridge has not echoed back yet, oldest first, each with how many times a socket took it and when it was
     /// tapped. In memory only: quitting the app forgets them.
     private(set) var unechoedSends: [(message: ClientMessage, transmitted: Int, at: Date)] = []
+    /// Bot chat sends not shown back yet, by clientId.
+    private(set) var botSends: [String: BotSend] = [:]
     /// The Claude app setting before this phone changed it, while the change is not confirmed, so a change that never
     /// went can put it back.
     @ObservationIgnored private var mirrorAsked: MirrorChange?
@@ -318,6 +337,7 @@ final class AppStore {
             usage = nil
             pushState = nil
             unechoedSends = []
+            botSends = [:]
             mirrorAsked = nil
             mirrorNote = nil
             stops = [:]
@@ -339,10 +359,47 @@ final class AppStore {
     /// session send. A Retry of one still held starts its age again.
     func sendStarted(_ msg: ClientMessage, at now: Date = .now) {
         if case let .sessionSend(sessionId, _, clientId, _, _) = msg { threads[sessionId]?.sendWaiting(clientId) }
-        guard Self.clientId(of: msg) != nil else { return }
+        guard let clientId = Self.clientId(of: msg) else { return }
+        if case let .send(_, text, uploads, _, _) = msg, has(.mute) {
+            switch botSends[clientId]?.pending.state {
+            case nil:
+                let words = text.isEmpty ? uploads.map(\.name).joined(separator: ", ") : text
+                botSends[clientId] = BotSend(message: msg, pending: PendingSend(text: words, at: now, interrupt: false, turnStartedAt: nil))
+            case .waiting?, .notSent?: botSends[clientId]?.pending.state = .waiting
+            case .sending?, .unechoed?: break
+            }
+        }
         if let i = unechoedSends.firstIndex(where: { $0.message == msg }) { return unechoedSends[i].at = now }
         if case .send = msg, !has(.mute) { return }
         unechoedSends.append((msg, 0, now))
+    }
+
+    /// No socket took a bot send, so it waits on this phone, on screen.
+    func sendHeld(_ msg: ClientMessage) {
+        if case .send = msg, let clientId = Self.clientId(of: msg) { botSends[clientId]?.held = true }
+    }
+
+    /// The bot's sends the Mac has not shown back that its chat shows, oldest first.
+    func botSends(in botId: BotID) -> [(clientId: String, send: BotSend)] {
+        botSends.filter { entry in
+            if case .send(botId, _, _, _, _) = entry.value.message { entry.value.shows } else { false }
+        }
+        .sorted { $0.value.pending.at < $1.value.pending.at }
+        .map { ($0.key, $0.value) }
+    }
+
+    /// The user gave up on a bot send the Mac never showed back. An echo the Mac sends later shows it all the same.
+    func discardBotSend(clientId: String) {
+        unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId }
+        botSends[clientId] = nil
+    }
+
+    func lapseBotSends(at now: Date) {
+        for (id, send) in botSends {
+            if case .sending(let since) = send.pending.state, now.timeIntervalSince(since) >= PendingSend.patience {
+                botSends[id]?.pending.state = .unechoed
+            }
+        }
     }
 
     /// The user gave up on a session send the Mac never showed back.
@@ -357,16 +414,24 @@ final class AppStore {
         guard let i = unechoedSends.firstIndex(where: { $0.message == msg }) else { return }
         unechoedSends[i].transmitted += 1
         if case let .sessionSend(sessionId, _, clientId, _, _) = msg { threads[sessionId]?.sendTransmitted(clientId, at: now) }
+        if case .send(_, _, _, let clientId?, _) = msg, botSends[clientId] != nil {
+            botSends[clientId]?.pending.state = .sending(since: now)
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(PendingSend.patience))
+                self?.lapseBotSends(at: .now)
+            }
+        }
     }
 
     /// What to send again on the socket that just said hello, with the same clientIds. A send three sockets took
-    /// without an echo is given up, so one the bridge refuses is not repeated forever. A session send goes again only
-    /// within OutboxRule.maxAge of the tap; after that only the user's Retry sends it.
+    /// without an echo is given up, so one the bridge refuses is not repeated forever. A send goes again only within
+    /// OutboxRule.maxAge of the tap; after that only the user's Retry sends it.
     func resendsAfterHello(now: Date = .now) -> [ClientMessage] {
         unechoedSends.removeAll { pending in
             switch pending.message {
             // The bridge drops a repeated clientId from the same release that added mute; an older one would post it twice.
-            case .send(let botId, _, _, _, _): !has(.mute) || bots[botId] == nil || pending.transmitted >= 3
+            case .send(let botId, _, _, _, _):
+                !has(.mute) || bots[botId] == nil || pending.transmitted >= 3 || now.timeIntervalSince(pending.at) > OutboxRule.maxAge
             case .sessionSend:
                 !has(.sessions) || pending.transmitted >= 3 || now.timeIntervalSince(pending.at) > OutboxRule.maxAge
             default: true
@@ -504,6 +569,9 @@ final class AppStore {
             unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId }
             // A Retry of one a socket took before may have arrived the first time: it keeps saying so.
             if threads[sessionId]?.pendingSends[ItemID(clientId)]?.state == .waiting { threads[sessionId]?.sendRefused(clientId, nil) }
+        case .send(_, _, _, let clientId?, _):
+            unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId }
+            if botSends[clientId]?.pending.state == .waiting { botSends[clientId]?.pending.state = .notSent(nil) }
         default:
             break
         }
@@ -797,7 +865,10 @@ final class AppStore {
 
     private func settlePending(_ message: Message) {
         if case .permission(let id, _, let card) = message, card.answer != nil { decisions[id]?.holds = false }
-        if case .user(_, _, _, _, let clientId?, _) = message { unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId } }
+        if case .user(_, _, _, _, let clientId?, _) = message {
+            unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId }
+            botSends[clientId] = nil
+        }
     }
 
     /// The home list: visible bots, pinned first, then newest activity.

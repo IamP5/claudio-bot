@@ -49,16 +49,22 @@ struct Composer: View {
     static let field = control + 2 * inset
 
     private var placeholder: String {
-        openQuestion ? "Type your answer, or talk about something else" : "Message \(bot.name)"
+        if unrecognized { return "Pair again to send messages" }
+        return openQuestion ? "Type your answer, or talk about something else" : "Message \(bot.name)"
+    }
+
+    /// The Mac does not know this phone, so nothing typed here could ever go (F-AR-006).
+    private var unrecognized: Bool {
+        store.connection == .unrecognized
     }
 
     private var canSend: Bool {
-        !draft.isBlank || !uploads.isEmpty
+        !unrecognized && (!draft.isBlank || !uploads.isEmpty)
     }
 
     /// While the bot works an empty field offers Stop. Typing turns it back into Send, which queues the message.
     private var showsStop: Bool {
-        bot.status == .working && !canSend
+        !unrecognized && bot.status == .working && !canSend
     }
 
     /// An empty field offers the mic and nothing to send. Once there is something to send, Send takes the mic's place.
@@ -113,6 +119,7 @@ struct Composer: View {
                         .padding(.vertical, 8)
                         .frame(minHeight: Self.field)
                         .padding(.leading, fieldLeading)
+                        .disabled(unrecognized)
                     if showsMic { micButton.transition(swap) }
                     if canSend || showsStop { sendButton.transition(swap) }
                 }
@@ -148,6 +155,14 @@ struct Composer: View {
         .padding(.bottom, 8)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.2), value: menu?.trigger.kind)
         #endif
+        .onChange(of: sendStates) { old, new in
+            for id in Set(old.keys).union(new.keys).sorted() {
+                let echoed = new[id] == nil && shownBack(id) ? false : nil
+                if let text = PendingSend.announcement(old: old[id], new: new[id], echoedQueued: echoed) {
+                    AccessibilityNotification.Announcement(text).post()
+                }
+            }
+        }
         .onChange(of: draft.trigger(caret: caret)?.range.location) { _, location in
             if location != closedMenuAt { closedMenuAt = nil }
         }
@@ -337,11 +352,25 @@ struct Composer: View {
         stops += 1
     }
 
+    /// Where each of this bot's sends stands until the Mac shows it back.
+    private var sendStates: [String: PendingSend.State] {
+        store.botSends.compactMapValues { send in
+            if case .send(bot.id, _, _, _, _) = send.message { send.pending.state } else { nil }
+        }
+    }
+
+    /// Gone because the chat shows it now, not because the user discarded it.
+    private func shownBack(_ clientId: String) -> Bool {
+        store.conversations[bot.id]?.messages.contains { message in
+            if case .user(_, _, _, _, clientId?, _) = message { true } else { false }
+        } ?? false
+    }
+
     private func send() {
         guard canSend else { return }
         dictation.stop()
         let send = draft.send(to: bot.id, uploads: uploads, clientId: UUID().uuidString)
-        store.sendStarted(send)
+        AccessibilityNotification.Announcement(ComposerState.sentAnnouncement(offline: store.machine == nil)).post()
         client.send(send)
         draft = ComposerDraft()
         caret = 0

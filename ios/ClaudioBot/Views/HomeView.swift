@@ -37,11 +37,11 @@ struct HomeView: View {
         @Bindable var router = router
         List(selection: $router.selection) {
             if store.connection == .unrecognized {
-                UnrecognizedBanner()
+                UnrecognizedBanner(staleSince: store.heardAt)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             } else if !store.showsOnline {
-                ConnectionBanner(state: store.connection, lastRetryFailed: $lastRetryFailed)
+                ConnectionBanner(state: store.connection, staleSince: store.heardAt, lastRetryFailed: $lastRetryFailed)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
@@ -292,9 +292,9 @@ struct BotRow: View {
 
     var body: some View {
         let display = RowDisplay(bot)
-        let activity = bot.status == .working ? ActivityLine.text(in: store, botId: bot.id) : nil
+        let activity = bot.status == .working ? ActivityLine.text(in: store, botId: bot.id) ?? (store.showsOnline ? nil : LastKnown.working) : nil
         HStack(spacing: Self.gap) {
-            BotAvatar(bot: bot, size: Self.avatar, needsAttention: display.needsAttention, motion: bot.motion)
+            BotAvatar(bot: bot, size: Self.avatar, needsAttention: display.needsAttention, motion: store.motion(of: bot))
             VStack(alignment: .leading, spacing: Self.lineGap) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(bot.name)

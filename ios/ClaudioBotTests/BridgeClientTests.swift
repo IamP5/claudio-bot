@@ -512,6 +512,26 @@ private func scratchVault() -> PairingVault {
         client.stop()
     }
 
+    @Test func aBotMessageTappedOfflineLongAgoReadsNotSentAndNeverGoes() async throws {
+        let muteHello = #"{"type":"hello","protocol":3,"features":["mute"],"machine":"Mac","userName":"Alex","epoch":"","seq":0,"resumed":false,"bots":[{"id":"b1","name":"engineer","title":null,"avatar":{"shape":"hexagon","color":"orange"},"pinned":false,"hidden":false,"status":"idle","unread":0,"question":null,"preview":"","lastAt":"2026-10-16T12:00:00.000Z","createdAt":"2026-10-16T12:00:00.000Z","routines":[]}]}"#
+        let bridge = try FakeBridge(onOpen: { $0.send(muteHello) })
+        let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))
+        var timing = quick
+        timing.outboxAge = 0.05
+        let store = AppStore()
+        store.apply(.hello(Hello(features: [.mute], machine: "Mac", userName: "Alex", bots: [])))
+        store.setConnection(.disconnected(retryAt: .now + 60))
+        let client = BridgeClient(store: store, vault: scratchVault(), timing: timing)
+        client.send(.send(botId: BotID("b1"), text: "status?", uploads: [], clientId: "c1"))
+        #expect(store.botSends["c1"]?.held == true)
+        try await eventually("Not sent", within: .seconds(1)) { store.botSends["c1"]?.pending.state == .notSent(nil) }
+        client.send(.markUnread(botId: BotID("b1")))
+        client.start(pairing)
+        try await eventually("the queued message") { bridge.texts.contains { $0.contains("mark_unread") } }
+        #expect(!bridge.texts.contains { $0.contains(#""clientId":"c1""#) })
+        client.stop()
+    }
+
     @Test func aStopTappedOfflineLongAgoIsNotSentWhileAMessageStillIs() async throws {
         let bridge = try FakeBridge(onOpen: { $0.send(hello()) })
         let pairing = Pairing(url: try await bridge.start(), credential: .device(DeviceID("d1"), token: "t1"))

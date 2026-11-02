@@ -20,8 +20,9 @@ struct ChatView: View {
             let timeline = Timeline.rows(store.conversations[botId]?.messages ?? [])
             let paced = paced(timeline)
             let rows = paced.visible(timeline)
-            // Typing stays up until the last held bubble lands, even if the turn already ended.
-            let typing = bot.status == .working || !paced.isCaughtUp
+            // Typing stays up until the last held bubble lands, even if the turn already ended. Offline the Mac may
+            // have stopped long ago, so the turn shows as last known instead.
+            let typing = (bot.status == .working && store.showsOnline) || !paced.isCaughtUp
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
@@ -29,6 +30,12 @@ struct ChatView: View {
                         ChatRowView(row: row, bot: bot, onPeer: open, onExchange: openExchange, opensRun: opensRun)
                             .padding(.top, index == 0 ? 8 : opensRun ? Self.senderGap : Self.gap(between: rows[index - 1], and: row))
                             .transition(arrival)
+                    }
+                    ForEach(store.botSends(in: botId), id: \.clientId) { clientId, send in
+                        SessionUserBubble(
+                            text: send.pending.text, from: .user, queued: true, actions: undelivered(clientId, send), delivery: send.pending.state
+                        )
+                        .padding(.top, Self.senderGap)
                     }
                     ForEach(store.proposedFacts(by: bot)) { fact in
                         ProposedFactCard(bot: bot, fact: fact)
@@ -54,6 +61,12 @@ struct ChatView: View {
                             .transition(typingTransition)
                     }
                     switch bot.status {
+                    case .working where !store.showsOnline:
+                        Text(LastKnown.working)
+                            .font(.ui(size: 13))
+                            .foregroundStyle(Theme.tertiary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 14)
                     case .working where !bot.isGroup:
                         ActivityLine(botId: botId)
                     case .unavailable:
@@ -134,8 +147,8 @@ struct ChatView: View {
             #endif
             .background(Theme.background)
             .topBar {
-                if OfflineBar.shows(store.connection) {
-                    OfflineBar(state: store.connection)
+                if !store.showsOnline {
+                    OfflineBar()
                         .frame(maxWidth: Self.readableWidth)
                 }
             }
@@ -268,6 +281,14 @@ struct ChatView: View {
     }
 
     /// An exchange with another bot opens what they said, on a bridge that serves it. Otherwise it opens that bot.
+    /// Until the Mac shows a send back it is this phone's alone: send the same frame again, so it runs once, or give it up.
+    private func undelivered(_ clientId: String, _ send: BotSend) -> SessionUserBubble.Actions? {
+        switch send.pending.state {
+        case .unechoed, .notSent: .undelivered(retry: { client.send(send.message) }, discard: { client.discard(botSend: clientId) })
+        case .waiting, .sending: nil
+        }
+    }
+
     private func openExchange(_ peer: Peer) {
         if case .bot(let id, _, _) = peer, store.has(.exchanges), store.bots[id] != nil {
             router.path.append(.botExchange(botId, peer: id))
@@ -293,6 +314,7 @@ struct ChatView: View {
 
 struct HeaderPill: View {
     let bot: Bot
+    @Environment(AppStore.self) private var store
 
     #if os(macOS)
     private static let avatar: CGFloat = 22
@@ -309,7 +331,7 @@ struct HeaderPill: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            BotAvatar(bot: bot, size: Self.avatar, motion: bot.motion)
+            BotAvatar(bot: bot, size: Self.avatar, motion: store.motion(of: bot))
             Text(bot.name)
                 .font(.ui(size: 17, weight: Self.weight))
                 .foregroundStyle(.white)

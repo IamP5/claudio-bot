@@ -65,9 +65,9 @@ enum OutboxRule: Equatable, Sendable {
     static func of(_ msg: ClientMessage) -> OutboxRule {
         switch msg {
         case .sessionSend, .sessionStop, .sessionUnqueue, .sessionDecide, .sessionAnswer, .sessionCreate, .sessionSet, .sessionOpenDesktop,
-             .sessionPrefs, .stop, .stopAgent, .decide:
+             .sessionPrefs, .stop, .stopAgent, .decide, .send:
             .expires
-        case .createBot, .open, .send, .answer, .dismiss, .updateBot, .markUnread, .deleteBot, .setRoutine, .runRoutine, .details, .agent,
+        case .createBot, .open, .answer, .dismiss, .updateBot, .markUnread, .deleteBot, .setRoutine, .runRoutine, .details, .agent,
              .file, .memory, .setFact, .forgetFact, .confirmFact, .connectors, .setConnector, .skills, .deleteSkill, .webhookToken,
              .removeWorktree, .commands, .exchange, .createGroup, .devices, .revokeDevice, .pairCode, .presence, .refreshUsage,
              .watchSessions, .unwatchSessions, .watchSession, .unwatchSession, .sessionPage, .sessionTool:
@@ -362,7 +362,7 @@ final class BridgeClient {
         switch msg {
         case let .decide(_, card, choice), let .sessionDecide(_, card, choice): store.decisionSent(choice, for: card)
         case let .sessionAnswer(_, card, _): store.decisionSent(nil, for: card)
-        case .sessionSend: store.sendStarted(msg, at: tappedAt)
+        case .sessionSend, .send: store.sendStarted(msg, at: tappedAt)
         default: break
         }
         store.sessionRequestSent(msg)
@@ -384,11 +384,20 @@ final class BridgeClient {
         store.discardSend(sessionId: sessionId, clientId: clientId)
     }
 
+    /// Discard on a bot message the Mac never showed back.
+    func discard(botSend clientId: String) {
+        outbox.removeAll { held in
+            if case .send(_, _, _, clientId?, _) = held.message { true } else { false }
+        }
+        store.discardBotSend(clientId: clientId)
+    }
+
     /// The same request again replaces the held one and keeps the newest tap, so Retry or Stop again never holds two.
     /// One that expires is dropped, with its words, when its age runs out, not at the next hello.
     private func hold(_ msg: ClientMessage, tappedAt: Date) {
         outbox.removeAll { $0.message == msg }
         outbox.append((msg, tappedAt))
+        store.sendHeld(msg)
         guard OutboxRule.of(msg) == .expires else { return }
         Task { [weak self, age = timing.outboxAge] in
             try? await Task.sleep(for: .seconds(max(0, age - Date.now.timeIntervalSince(tappedAt))) + .milliseconds(5))
@@ -413,6 +422,8 @@ final class BridgeClient {
             // Discarded while its frame was on a dying socket: Discard wins, so it never goes back to the outbox.
             guard store.threads[sessionId]?.pendingSends[ItemID(clientId)] != nil else { return }
             store.threads[sessionId]?.sendWaiting(clientId)
+        case .send(_, _, _, let clientId?, _):
+            guard store.botSends[clientId] != nil else { return }
         default: break
         }
         guard OutboxRule.of(msg) == .expires else { return }

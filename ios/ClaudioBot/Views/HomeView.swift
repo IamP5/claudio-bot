@@ -37,11 +37,11 @@ struct HomeView: View {
         @Bindable var router = router
         List(selection: $router.selection) {
             if store.connection == .unrecognized {
-                UnrecognizedBanner()
+                UnrecognizedBanner(staleSince: store.heardAt)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             } else if !store.showsOnline {
-                ConnectionBanner(state: store.connection, lastRetryFailed: $lastRetryFailed)
+                ConnectionBanner(state: store.connection, staleSince: store.heardAt, lastRetryFailed: $lastRetryFailed)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
@@ -292,9 +292,9 @@ struct BotRow: View {
 
     var body: some View {
         let display = RowDisplay(bot)
-        let activity = bot.status == .working ? ActivityLine.text(in: store, botId: bot.id) : nil
+        let activity = bot.status == .working ? ActivityLine.text(in: store, botId: bot.id) ?? (store.showsOnline ? nil : LastKnown.working) : nil
         HStack(spacing: Self.gap) {
-            BotAvatar(bot: bot, size: Self.avatar, needsAttention: display.needsAttention, motion: bot.motion)
+            BotAvatar(bot: bot, size: Self.avatar, needsAttention: display.needsAttention, motion: store.motion(of: bot))
             VStack(alignment: .leading, spacing: Self.lineGap) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(bot.name)
@@ -368,6 +368,8 @@ struct BotRow: View {
 struct ConnectionBanner: View {
     let state: ConnectionState
     var staleSince: Date?
+    /// What on screen is from before the drop: "Rows" in a list, "Messages" in a chat.
+    var staleWhat = "Rows"
     @Binding var lastRetryFailed: Bool
     @Environment(AppModel.self) private var app
     @Environment(AppStore.self) private var store
@@ -422,7 +424,7 @@ struct ConnectionBanner: View {
                     .foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let staleSince { StaleListLine(since: staleSince) }
+            if let staleSince { StaleListLine(since: staleSince, what: staleWhat) }
             if reach.lost {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 8) { actions(trying: reach == .retrying) }
@@ -456,11 +458,12 @@ struct ConnectionBanner: View {
 /// said then."
 struct StaleListLine: View {
     let since: Date
+    var what = "Rows"
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            Text(SessionText.updated(since, now: context.date) + (typeSize.isAccessibilitySize ? "." : ". Rows show what your Mac said then."))
+            Text(SessionText.updated(since, now: context.date) + (typeSize.isAccessibilitySize ? "." : ". \(what) show what your Mac said then."))
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -472,12 +475,13 @@ struct StaleListLine: View {
 struct UnrecognizedBanner: View {
     /// When the list on screen last heard from the Mac; nil where no list shows.
     var staleSince: Date?
+    var staleWhat = "Rows"
     /// Set by a screen that is itself a sheet: it must close before pairing can open.
     var pairAgain: (() -> Void)?
     @Environment(AppModel.self) private var app
     @Environment(BridgeClient.self) private var client
 
-    static let cause = "This bridge doesn't recognize this \(ThisDevice.noun). Pair again, or retry once you are back on your Mac's network."
+    static let cause = "This bridge doesn't recognize this \(ThisDevice.noun). Your Mac may have removed it, or this is another server. Pair again, or retry once you are back on your Mac's network."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -486,7 +490,7 @@ struct UnrecognizedBanner: View {
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if let staleSince { StaleListLine(since: staleSince) }
+            if let staleSince { StaleListLine(since: staleSince, what: staleWhat) }
             HStack(spacing: 8) {
                 Button("Pair again") { (pairAgain ?? app.beginPairing)() }
                     .bannerProminent()

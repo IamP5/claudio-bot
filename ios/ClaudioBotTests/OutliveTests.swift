@@ -240,7 +240,7 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(!BridgeClient.stillWanted(.sessionAnswer(sessionId: sid, cardId: MessageID("m1"), answers: nil), queuedAt: at, now: at + 61, maxAge: 60))
     }
 
-    @Test func everySessionRequestHeldPastAMinuteIsNotWantedWhileABotMessageStillIs() {
+    @Test func everySessionRequestAndBotMessageHeldPastAMinuteIsNotWanted() {
         let requests: [ClientMessage] = [
             .sessionSet(sessionId: sid, patch: SessionPatch(mode: .plan)), .sessionSet(sessionId: sid, patch: SessionPatch(hidden: true)),
             .sessionOpenDesktop(sessionId: sid), .sessionPrefs(mirror: .never), send("c1"),
@@ -252,8 +252,8 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
             #expect(!BridgeClient.stillWanted(msg, queuedAt: at, now: at + 61, maxAge: OutboxRule.maxAge))
         }
         let botSend = ClientMessage.send(botId: BotID("b1"), text: "hi", uploads: [])
-        #expect(OutboxRule.of(botSend) == .waits)
-        #expect(BridgeClient.stillWanted(botSend, queuedAt: at, now: at + 3600, maxAge: OutboxRule.maxAge))
+        #expect(OutboxRule.of(botSend) == .expires)
+        #expect(!BridgeClient.stillWanted(botSend, queuedAt: at, now: at + 61, maxAge: OutboxRule.maxAge))
         #expect(OutboxRule.maxAge == 60)
     }
 

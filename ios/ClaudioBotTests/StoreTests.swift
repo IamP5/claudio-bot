@@ -788,6 +788,48 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         for _ in 0..<10 { #expect(store.resendsAfterHello() == [send("offline", id: "c1")]) }
     }
 
+    @Test func aBotSendHeldOfflineShowsInItsChatUntilItsEchoAndReadsNotSentAfterAMinute() {
+        let store = store()
+        store.sendStarted(send("offline", id: "c1"), at: at)
+        store.sendHeld(send("offline", id: "c1"))
+        #expect(store.botSends(in: BotID("b1")).map(\.clientId) == ["c1"])
+        #expect(store.botSends(in: BotID("b1")).first?.send.pending.state == .waiting)
+        #expect(store.botSends(in: BotID("b1")).first?.send.pending.text == "offline")
+        #expect(SessionUserBubble.words(.waiting) == "Not sent yet · Goes if your Mac is back within a minute")
+
+        store.requestDropped(send("offline", id: "c1"))
+        #expect(store.botSends(in: BotID("b1")).first?.send.pending.state == .notSent(nil))
+        #expect(store.resendsAfterHello(now: at + 61).isEmpty)
+
+        store.sendStarted(send("offline", id: "c1"), at: at + 90)
+        #expect(store.botSends(in: BotID("b1")).first?.send.pending.state == .waiting, "Retry")
+        store.apply(echo("c1"))
+        #expect(store.botSends(in: BotID("b1")).isEmpty)
+        #expect(store.botSends.isEmpty)
+    }
+
+    @Test func aBotSendThatWentStraightOutShowsOnlyOnceItMayHaveGoneAstray() {
+        let store = store()
+        store.sendStarted(send("online", id: "c1"), at: at)
+        #expect(store.botSends(in: BotID("b1")).isEmpty, "no flash of Not sent before the socket takes it")
+        store.sendTransmitted(send("online", id: "c1"), at: at)
+        #expect(store.botSends(in: BotID("b1")).isEmpty)
+        store.lapseBotSends(at: at + 10)
+        #expect(store.botSends(in: BotID("b1")).first?.send.pending.state == .unechoed)
+        store.requestDropped(send("online", id: "c1"))
+        #expect(store.botSends(in: BotID("b1")).first?.send.pending.state == .unechoed, "a socket took it, so never Not sent")
+        store.discardBotSend(clientId: "c1")
+        #expect(store.botSends.isEmpty)
+        #expect(store.unechoedSends.isEmpty)
+    }
+
+    @Test func aBotSendIsResentAfterHelloOnlyWithinAMinuteOfTheTap() {
+        let store = store()
+        store.sendStarted(send("offline", id: "c1"), at: at)
+        #expect(store.resendsAfterHello(now: at + 59) == [send("offline", id: "c1")])
+        #expect(store.resendsAfterHello(now: at + 61).isEmpty)
+    }
+
     @Test func aBridgeThatCannotDropRepeatsGetsNoResend() {
         let store = store(features: [])
         store.sendStarted(send("first", id: "c1"))
@@ -943,11 +985,20 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(late?.message == HomeView.deleteMessage(b, worktrees: []))
     }
 
-    @Test func theOfflineBarShowsWhileTheMacIsOutOfReach() {
-        #expect(!OfflineBar.shows(.connected(machine: "Mac")))
-        #expect(!OfflineBar.shows(.unpaired))
-        #expect(OfflineBar.shows(.disconnected(retryAt: at)))
-        #expect(OfflineBar.shows(.connecting))
+    @Test func offlineAWorkingBotIsOnlyLastKnown() {
+        var working = bot("b1")
+        working.status = .working
+        let store = AppStore()
+        store.apply(.hello(Hello(features: [.activity], machine: "Mac", userName: "Alex", bots: [working])))
+        store.apply(.activity(botId: BotID("b1"), agentId: nil, text: "Reading hub.ts", at: at))
+        #expect(ActivityLine.text(in: store, botId: BotID("b1")) == "Reading hub.ts")
+        #expect(store.motion(of: working) == .working)
+
+        store.setConnection(.disconnected(retryAt: at))
+        #expect(ActivityLine.text(in: store, botId: BotID("b1")) == nil, "the line could be long over")
+        #expect(store.motion(of: working) == .idle)
+        #expect(LastKnown.working == "Working when last updated")
+        #expect(store.heardAt != nil, "the banner says how old the chat is")
     }
 
     @Test func theWebhookCurlCommandCarriesTheTokenAndTheAddress() {
@@ -961,6 +1012,6 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(BridgeClient.stillWanted(stop, queuedAt: at, now: at + 30, maxAge: 60))
         #expect(!BridgeClient.stillWanted(stop, queuedAt: at, now: at + 61, maxAge: 60))
         #expect(!BridgeClient.stillWanted(.stopAgent(agentId: AgentID("a1")), queuedAt: at, now: at + 61, maxAge: 60))
-        #expect(BridgeClient.stillWanted(send, queuedAt: at, now: at + 3600, maxAge: 60))
+        #expect(!BridgeClient.stillWanted(send, queuedAt: at, now: at + 61, maxAge: 60), "a bot message keeps the session send's minute")
     }
 }

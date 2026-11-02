@@ -249,3 +249,4 @@
   - F-FN-052 A command the user just allowed reads "no activity for 1m" for about 4 s, because the last sign of life dates from before the approval wait
   - F-FN-053 The @ and / suggestion menu opens silently and the Return-picks row is only visually highlighted
 - G35 new issue: the app auto-upgrade off the old shared token asks for a code over that same socket and the bridge refuses it, so those phones never upgrade on their own (needs a finding). G36 gaps: column alignment ignored; list/table inside a quote shows plain; ExchangeView group bubbles have no time. G37 gaps: S8 subagent waiting on its own command left out.
+- G34 gaps: group chats show no failed/stopped status on their row; a create the Mac received but never answered waits until the notice is tapped; "Finishing its background work" shows a 0 count and restarts the clock; background commands not shown after a bridge restart.

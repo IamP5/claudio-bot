@@ -114,6 +114,8 @@ private struct ProposedFactRow: View {
             HStack {
                 Button("Confirm", action: onConfirm)
                     .buttonStyle(.borderedProminent)
+                    .tint(.white)
+                    .foregroundStyle(.black)
                 Button("Forget", role: .destructive, action: onForget)
                     .buttonStyle(.bordered)
             }

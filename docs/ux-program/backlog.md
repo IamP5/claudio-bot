@@ -206,3 +206,45 @@
 - G30 gaps: Stop in a bot chat stays enabled offline (waits 60 s then says not sent) (P2); bridges without the mute feature keep the old no-local-bubble behaviour (P3).
 - G30 verifier P3s: Attach and Dictate stay live when unrecognized; misplaced doc comment on ChatView.undelivered/openExchange; Retry on a "may have gone through" send hides its bubble up to 10 s.
 - Re-check notes: H1.6 screenshot cannot show the mark-unread change because the row is already unread (scenario design); runner startup race "demo project is not listed" seen again; composer placeholder truncates at default size.
+- Final cross-area audit (lean, 2026-11-02) P2s:
+  - F-FN-013 Bot activity line ("Sleep for 20 seconds") disappears on every reconnect and does not come back while the turn runs
+  - F-FN-014 Attaching photos or files fails silently, shows no progress, and repeated picks get the same name
+  - F-FN-015 Dictation gives no pending or spoken state, and a recognition error ends it with no message
+  - F-FN-016 File, Exchange, Connectors and Skills screens show a bare spinner forever when the Mac refuses or is away
+  - F-FN-017 Stop tapped as the reply lands raises a global 'Nothing is running.' error toast
+  - F-FN-018 Stop in a bot chat has no Stopping state: a frozen bot reads Working with a stale activity line for 15 s, then a bare note
+  - F-FN-019 Stop on a hung bot says "Stopped by Alex" while its foreground command keeps running; Chat has no way to see it
+  - F-FN-020 Answering two open questions back to back gives two separate bot turns, and the first reply is already out of date when it lands
+  - F-FN-021 Deleting a bot shows a 'Checking agents…' toast for up to 3 s that VoiceOver never hears
+  - F-FN-022 Group row shows a member's reply as the preview with no speaker, and two members can share a name
+  - F-FN-023 After the Mac returns, the phone replays the gap and posts a notification for a question or approval that was already answered
+  - F-FN-024 For about 1 to 4 s after a card opens, the row shows an italic activity line instead of the question or approval
+  - F-FN-025 A bot that waits on a question gets no word on its row, only a small orange badge and a glyph, and the same badge sits on a busy row
+  - F-FN-026 A Mac that stops answering (frozen bridge, half-open socket) still reads Connected with live controls for up to 25 s
+  - F-FN-027 After 10 wrong tries from one address, even a fresh valid code is refused for up to ten minutes, with no time left and nothing on the Mac
+  - F-FN-028 Scan QR code with camera access denied says 'This device cannot scan codes' and gives no way to fix it
+  - F-FN-029 Remove-phone tap is queued behind the remover's own earlier slow request, so the removed phone stays connected and keeps receiving frames meanwhile
+  - F-FN-030 Pair-another sheet keeps showing a code the bridge has already retired
+  - F-FN-031 Two phones paired as "iPhone" show as identical rows, and the row has no paired date
+  - F-FN-032 C2 simulator shots are covered by the system notification prompt, so C2.5/C2.6 cannot be fully judged
+  - F-FN-033 S3 simulator shots show the Sessions list with an offline banner and a Settings screen, so S3.6 and S3.7 cannot be judged
+  - F-FN-034 Approval card goes offline and dead for the whole reconnect, although the app's own grace says the Mac still answers
+  - F-FN-035 When one of several background commands finishes and Claude reports it, an away user gets no push or alert, only a dot on a row that still reads Working
+  - F-FN-036 Offline thread status line cuts the sentence that says what was running when the Mac last answered
+  - F-FN-037 A question or plan card cut off by a bridge restart reads "Expired. Nobody answered in time."
+  - F-FN-038 A session whose approval nobody answered ends as Finished, with a Finished push
+  - F-FN-039 The 'waiting on its own background command' notice states a start time 5 s short of the Running-now clock, and never updates
+  - F-FN-040 Subagent waiting on its own command drops out of Running now (only the raw command is listed); Stopping it makes the agent reappear as a new task
+  - F-FN-041 Change address, Connect with the unchanged address, closes the sheet and tries nothing
+  - F-FN-042 Change address: Connect swaps to a bare spinner, Cancel and swipe-down are disabled for up to about 20 s, and a failure is silent to VoiceOver
+  - F-FN-043 At 50 facts the Add a fact button disappears with no explanation; pending bot proposals count toward the 50
+  - F-FN-044 Memory Confirm, Forget and Save change the list without a word, a pending state or focus, and the edit sheet closes before the Mac answers
+  - F-FN-045 A deleted bot's pending proposal stays forever and still says 'Only that bot uses it'
+  - F-FN-046 Settings, Memory names the proposing bot by its old name after a rename; the chat card uses the new name
+  - F-FN-047 Memory Add, Confirm and Forget taken offline show nothing and replay at any later time
+  - F-FN-048 Pull to refresh in Settings refreshes plan usage only; the Paired devices list has no manual refresh and no refetch on return
+  - F-FN-049 Home usage button shows only the 5-hour window; with none active it is a bare gauge, and a critical weekly limit never shows there
+  - F-FN-050 Refresh plan usage keeps spinning for 16 s after the Mac already answered that the read failed
+  - F-FN-051 Usage 'Resets' time flips between 3:00 AM and 2:59 AM across refreshes
+  - F-FN-052 A command the user just allowed reads "no activity for 1m" for about 4 s, because the last sign of life dates from before the approval wait
+  - F-FN-053 The @ and / suggestion menu opens silently and the Return-picks row is only visually highlighted

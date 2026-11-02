@@ -68,3 +68,7 @@ ts	role	group	branch	state	stuck_after	note
 2026-11-02T00:51:54Z	verifier	G32	ux/areas-g32-contrast	FAIL 829d115: P1 Mac test target fails (UIKit import in new test); rest PASS	1h	independent, lean
 2026-11-02T01:01:09Z	verifier	G31	ux/areas-g31-cards	r1 FAIL 66e05f4: P1 any message closing a question breaks onboarding (C2 re-ask loop)	1h	independent, lean
 2026-11-02T01:22:29Z	verifier	G30	ux/areas-g30-offline	PASS e1833bb; live offline checks	1h	independent, lean
+2026-11-02T03:50:06Z	owner	G34	ux/final-g34-bot-status	starting off main f0c87db	3h	final fix wave
+2026-11-02T03:50:06Z	owner	G35	ux/final-g35-pairing-settings	starting off main f0c87db	3h	final fix wave
+2026-11-02T03:50:06Z	owner	G36	ux/final-g36-chat-render	starting off main f0c87db	3h	final fix wave
+2026-11-02T03:50:06Z	owner	G37	ux/final-g37-sessions-edges	starting off main f0c87db	3h	final fix wave

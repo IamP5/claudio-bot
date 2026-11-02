@@ -605,7 +605,20 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         calendar.timeZone = TimeZone(identifier: "UTC")!
         let at = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(BubbleSpeech.label("You", "Hi there", at: at, now: at, calendar: calendar) == "You: Hi there. Today 8:00\u{202F}AM")
-        #expect(BubbleSpeech.label("Grok", MarkdownText.spoken("Done!"), at: nil) == "Grok: Done!")
+        #expect(BubbleSpeech.label("Grok", RenderedMarkdown("Done!").spoken, at: nil) == "Grok: Done!")
+        #expect(BubbleSpeech.speaker("Grok", at: at, now: at, calendar: calendar) == "Grok, Today 8:00\u{202F}AM")
+    }
+
+    @Test func linksAreFoundInEveryBlockKind() {
+        #expect(RenderedMarkdown("Merge [#141](https://x/141) now.\n- see [docs](https://x/d)\n| PR |\n|---|\n| [#142](https://x/142) |").links
+            == ["#141", "docs", "#142"])
+        #expect(RenderedMarkdown("No links, `[x](y)` in code.").links == [])
+    }
+
+    @Test func aSentenceWithAPipeUnderATableIsProse() {
+        #expect(MarkdownBlock.parse("| a | b |\n|---|---|\n| 1 | 2 |\nUse a | b to pipe.") == [
+            .table(header: ["a", "b"], rows: [["1", "2"]]), .prose("Use a | b to pipe."),
+        ])
     }
 }
 

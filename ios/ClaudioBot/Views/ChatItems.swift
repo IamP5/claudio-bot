@@ -110,6 +110,30 @@ enum BubbleSpeech {
         let said = words.isEmpty || words.last.map({ ".!?:".contains($0) }) == true ? words : words + "."
         return ["\(speaker): \(said)", at.map { TimeLabel.separator($0, now: now, calendar: calendar) }].compactMap { $0 }.joined(separator: " ")
     }
+
+    /// The stop before a bubble whose links stay their own elements.
+    static func speaker(_ speaker: String, at: Date?, now: Date = .now, calendar: Calendar = .current) -> String {
+        [speaker, at.map { TimeLabel.separator($0, now: now, calendar: calendar) }].compactMap { $0 }.joined(separator: ", ")
+    }
+}
+
+extension View {
+    /// One VoiceOver stop saying who spoke, what and when. Combining would hide links, so a bubble with links keeps its
+    /// elements and gains a first stop naming the speaker and time.
+    @ViewBuilder func bubbleSpeech(_ speaker: String, _ words: String, at: Date?, hasLinks: Bool) -> some View {
+        if hasLinks {
+            overlay(alignment: .topLeading) {
+                Color.clear.frame(width: 1, height: 1)
+                    .accessibilityElement()
+                    .accessibilityLabel(BubbleSpeech.speaker(speaker, at: at))
+                    .accessibilitySortPriority(1)
+            }
+            .accessibilityElement(children: .contain)
+        } else {
+            accessibilityElement(children: .combine)
+                .accessibilityLabel(BubbleSpeech.label(speaker, words, at: at))
+        }
+    }
 }
 
 struct BotBubble: View {
@@ -121,6 +145,7 @@ struct BotBubble: View {
     var at: Date?
 
     var body: some View {
+        let rendered = RenderedMarkdown(text)
         HStack(spacing: 0) {
             MarkdownText(text: text, members: members, fillsWidth: Bubble.fillsWidth)
                 .font(.ui(size: 17))
@@ -129,8 +154,7 @@ struct BotBubble: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(Bubble.padding)
                 .background(Theme.bubble, in: Bubble.shape)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(BubbleSpeech.label(speaker, MarkdownText.spoken(text), at: at))
+                .bubbleSpeech(speaker, rendered.spoken, at: at, hasLinks: !rendered.links.isEmpty)
             Spacer(minLength: Bubble.botInset)
         }
         .bubbleRow(.leading)
@@ -185,10 +209,10 @@ struct UserBubble: View {
             .foregroundStyle(color.onAccent)
             .padding(Bubble.padding)
             .background(color.accent, in: Bubble.shape)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(BubbleSpeech.label(
-                "You", (attachments.map(\.name) + [String(attributed.characters)]).filter { !$0.isEmpty }.joined(separator: ". "), at: at
-            ))
+            .bubbleSpeech(
+                "You", (attachments.map(\.name) + [String(attributed.characters)]).filter { !$0.isEmpty }.joined(separator: ". "), at: at,
+                hasLinks: attributed.runs.contains { $0.link != nil }
+            )
         }
         .bubbleRow(.trailing)
         .environment(\.openURL, OpenURLAction { url in

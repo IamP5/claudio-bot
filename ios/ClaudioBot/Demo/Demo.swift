@@ -214,8 +214,6 @@ enum Demo {
         }
     }
 
-    /// `-demoColumns` opens the iPad with the sidebar beside the detail. A simulator in portrait cannot be turned from
-    /// inside the app, and this is the split view a landscape iPad shows.
     static var showsMarkdownThread: Bool { screen == "markdownthread" }
     static let markdownSample = """
         Here's where the release stands:
@@ -235,6 +233,8 @@ enum Demo {
           - #143 needs a rebase
         - Docs
         """
+    /// `-demoColumns` opens the iPad with the sidebar beside the detail. A simulator in portrait cannot be turned from
+    /// inside the app, and this is the split view a landscape iPad shows.
     static let showsAllColumns = arguments.contains("-demoColumns")
     /// The `atwork` screens lay the window out as a wide one, so a phone shows the split view's at-work pane and chip:
     /// `atwork` (nothing chosen, the list hidden as on an iPad in portrait), `atworkoffline` (the same with the Mac lost), `atworkwaiting` (no list yet, Mac lost),

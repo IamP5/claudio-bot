@@ -96,7 +96,7 @@ extension MarkdownBlocks.Block where Inline == String {
                 indents.removeAll()
                 i += 1
                 var rows: [[String]] = []
-                while i < lines.count, lines[i].contains("|"), !lines[i].trimmingCharacters(in: .whitespaces).isEmpty {
+                while i < lines.count, case let row = lines[i].trimmingCharacters(in: .whitespaces), row.hasPrefix("|") || row.hasSuffix("|") {
                     let row = cells(lines[i].trimmingCharacters(in: .whitespaces))
                     rows.append(Array((row + Array(repeating: "", count: header.count)).prefix(header.count)))
                     i += 1
@@ -196,11 +196,6 @@ struct MarkdownText: View {
         MarkdownBlocksView(blocks: MarkdownBlock.parse(text).map { $0.map(inline) }, fillsWidth: fillsWidth)
     }
 
-    /// The words VoiceOver reads for the text, as drawn.
-    nonisolated static func spoken(_ text: String) -> String {
-        RenderedMarkdown(text).spoken
-    }
-
     private func inline(_ s: String) -> AttributedString {
         var text = Self.inline(s)
         guard !members.isEmpty else { return text }
@@ -237,6 +232,18 @@ struct RenderedMarkdown: Equatable, Sendable {
     }
 
     var spoken: String { Block.spoken(blocks) }
+
+    /// The text of each link, in order.
+    var links: [String] {
+        func links(_ s: AttributedString) -> [String] { s.runs.filter { $0.link != nil }.map { String(s[$0.range].characters) } }
+        return blocks.flatMap { block -> [String] in
+            switch block {
+            case .prose(let s), .heading(let s), .item(_, _, let s), .quote(let s): links(s)
+            case let .table(header, rows): (header + rows.joined()).flatMap(links)
+            case .rule, .code: []
+            }
+        }
+    }
 }
 
 extension MarkdownBlocks.Block: Sendable where Inline: Sendable {}

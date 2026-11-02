@@ -283,3 +283,4 @@ ts	decision	why
 2026-11-02T01:17:54Z	G30: Bot sends expire after 60 s like session sends (replaces G28's no-age-limit call for bot sends)	one offline rule across the app
 2026-11-02T01:17:54Z	G30: A send that goes straight out shows no local bubble unless it gets into trouble	avoid a "Not sent yet" flash on every send
 2026-11-02T01:17:54Z	G30: The unrecognized banner says "Your Mac may have removed it, or this is another server." on chat, Home and Sessions	names the likely causes
+2026-11-02T01:28:28Z	G31: when a typed message matches options on several open cards, every matching card closes	owner call, no model judgment

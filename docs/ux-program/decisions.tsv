@@ -284,3 +284,7 @@ ts	decision	why
 2026-11-02T01:17:54Z	G30: A send that goes straight out shows no local bubble unless it gets into trouble	avoid a "Not sent yet" flash on every send
 2026-11-02T01:17:54Z	G30: The unrecognized banner says "Your Mac may have removed it, or this is another server." on chat, Home and Sessions	names the likely causes
 2026-11-02T01:28:28Z	G31: when a typed message matches options on several open cards, every matching card closes	owner call, no model judgment
+2026-11-02T04:16:10Z	EXIT (user call): after the final fix wave G34-G37, run a targeted re-check of F-FN-001..012, merge, write a closing report and stop; no further open-ended audit	every fresh audit kept finding new P1s; user chose recheck-then-stop
+2026-11-02T04:16:10Z	G37: Claude Code's "[Request interrupted by user for tool use]" result reads as the user's stop everywhere; a finished unread session stays in the at-work pane until read	Claude Code's own wording says by user
+2026-11-02T04:16:10Z	G35: old shared-token phones get a disabled "Pair another device" with words; the pairing sheet stays open with "Paired <name>" until Done; the code wait times out at 10 s	bridge refuses codes to the shared token on purpose
+2026-11-02T04:16:10Z	G36: system Markdown for inline styling, a short line parser for tables/quotes/rules/lists; chat and threads share one view; VoiceOver reads "Speaker: words. Time"	SwiftUI Text does not lay out blocks

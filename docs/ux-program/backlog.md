@@ -130,3 +130,73 @@
 - G27 r7 verifier P3s: the 200-key `unsure` cap can turn a still-running step into "stopped: It ended without a result" after 220+ pending steps (same as before at 20); a groupless pending step holds the session so no later run gets a finished alert until pruning; psText writes tab as 	, so a literal 	 in one command matches a tab in another (pairing ambiguity, code read).
 - Sessions re-check notes (lean pass): the 7 X-empty-error-offline P1s were confirmed by code read plus S6h only, not driven on the simulator for list screens (coverage gap); S6e once errored at setup when the foreground perl task was missing from controls.tasks after restart (intermittent race, P2); S9.1 measured tries 2 s then 10.2 s apart vs 8 s expected (sink response time, P2); S1.11 fails with --sim --away because the attached app counts as attended (runner artifact); X-ipad has no registered scenario (code read + SessionsAtWorkTests only).
 - Runner #42 gaps: no expired-code scenario (10-min lifetime fixed), no bot permission card scenario, no offline bot send; lease proof not rerun on 6 devices; T1 countdown may tick only because the probe samples the screen.
+- Areas audit (Chat/Home/Pairing/Settings, lean, 2026-11-01) P2s:
+  - F-AR-014 Bot row spoken label never says the bot is waiting for an answer
+  - F-AR-015 The chat's activity line keeps naming a tool that finished seconds ago, while the bot writes its reply
+  - F-AR-016 At the largest text size the composer placeholder for an open question is cut to "Type your…"
+  - F-AR-017 Composer placeholder, which holds the open-question instruction, is 2.5:1
+  - F-AR-018 Every reply, question or approval card arriving in an open chat makes the phone re-download the entire conversation, twice
+  - F-AR-019 A bot chat silently starts mid-conversation once it passes 1100 messages; the older part is moved to a file nothing reads
+  - F-AR-020 The 'wants to remember' card in a chat keeps tiny fixed text and tiny Confirm/Forget buttons at the largest text size
+  - F-AR-021 At the largest text size the question card's 'Expires in 23 hrs, 59 min' is far bigger than the question and options
+  - F-AR-022 Bot question card gives no sign an answer was taken, and an offline tap is queued with no age limit
+  - F-AR-023 Question card's Dismiss X is a 28 pt target that closes the question at once with no confirmation or stated effect
+  - F-AR-024 Question card option buttons are about 42 pt tall, under the 44 pt minimum used elsewhere in the app
+  - F-AR-025 The chat's stop note says 'Stopped by <name>' and nothing about what stopped; the partial reply promising a result stays as the last bot message
+  - F-AR-026 A bot working on a text-only turn shows only 'Typing…', with no words and no time
+  - F-AR-027 Home row activity line reads 'claudio: ask' (a raw tool name) just before the question card
+  - F-AR-028 Every cold launch, even into an already-loaded list or a notification deep link, sits under a fixed 1.3 s splash that ignores touches for about 1 s
+  - F-AR-029 Deleting, renaming, pinning or hiding a bot offline does nothing visible and is replayed whenever the Mac returns
+  - F-AR-030 A cold launch with no bots known and the Mac unreachable shows a banner and a blank list, with no empty-state line
+  - F-AR-031 A hidden bot that asks a question or needs approval has no row, while its push and the Mac badge still say it needs you
+  - F-AR-032 A muted bot's row looks the same as any other, so the user cannot tell which bots will not push
+  - F-AR-033 A reply that lands in the open bot chat after the user leaves the app is marked read at once
+  - F-AR-034 Home row long-press menu has no Mark as Read, offers Mark as Unread on an already unread row, and has no Stop for a working bot; there are no swipe actions
+  - F-AR-035 Row time is the newest message of any kind while the preview is the newest bot text, so they disagree
+  - F-AR-036 Row preview is the raw first line of the reply, so markdown markers and code fences show as text
+  - F-AR-037 A working bot's only mark on the row is the avatar's 30 fps wobble, with no static glyph or word, and Reduce Motion turns it into the idle blink
+  - F-AR-038 A working bot's row says nothing about working until a tool call produces an activity line; it shows the old preview and old question instead
+  - F-AR-039 Chat offline bar and Home banner read the same at 10 s, 30 s and 62 s; 'Still no answer' appears only after a manual Retry
+  - F-AR-040 The Home offline banner blames the Mac and the bridge even when the phone itself has no network
+  - F-AR-041 After a code is used up, the right code is told 'No pairing code is active', and the phone's own Settings code still looks live
+  - F-AR-042 Devices list says 'Last seen <old time>' for a phone that is connected right now
+  - F-AR-043 Paired devices list is fetched only when Settings appears, so after a drop and reconnect it shows old data
+  - F-AR-044 A pairing that fails after the bridge accepted the code leaves a paired phone that never worked, with a spent code and no next step
+  - F-AR-045 The 'removed from your Mac' message is a small orange footnote under the first-run intro, and is not kept
+  - F-AR-046 A retired pairing code is refused as 'wrong' with no pointer to the new code
+  - F-AR-047 Revoking a phone does not update the device list on the other paired phones
+  - F-AR-048 If saving a revoke fails, the bridge still disconnects the phone with 'revoked' and the phone unpairs itself
+  - F-AR-049 Any device on the network can kill the owner's displayed pairing code with five wrong guesses
+  - F-AR-050 Pairing to an unreachable Mac waits up to 10 s per address with a disabled form and reports only the last address's system error
+  - F-AR-051 Wrong-code messages never say how many tries are left or that the code will die
+  - F-AR-052 The bridge never tells the phone it is going away, so the app cannot say why the list went offline
+  - F-AR-053 After a resumed reconnect the list briefly goes back in time: hello carries the newest state, then older bot frames replay over it
+  - F-AR-054 H1.4 'Mark as Unread takes at once' passes without the chat ever having been read
+  - F-AR-055 H3 never changes anything during the 30 s drop, so H3.1 passes without testing replay, loss or doubling
+  - F-AR-056 P1.5 screenshots cannot judge 'the pairing step, then the list'
+  - F-AR-057 P1 never exercises first-run pairing: the app launches already paired to the previous run's dead relay port, and P1.5 shots only show the end state
+  - F-AR-058 T4.4 screenshot stops at the Sessions footer, so the device list and Notifications footer are never shown
+  - F-AR-059 At the largest text size the paired-devices row breaks 'Revoke' and the device name mid-word
+  - F-AR-060 Settings Machine row turns to 'Unknown' the moment the Mac stops answering
+  - F-AR-061 A fact listed as confirmed can be one the bots never see
+  - F-AR-062 If USER.md cannot be read, Memory says 'No facts yet' and the proposals vanish
+  - F-AR-063 Forget removes a fact every bot knows with a swipe and no confirmation or undo
+  - F-AR-064 A fact changed by hand in USER.md on the Mac never reaches the phone, so the chat card and Memory rows go stale
+  - F-AR-065 A Confirm or Forget on a fact that is already gone shows a file-name error and leaves the row in place
+  - F-AR-066 Settings has no Retry now, no next-try time, and still says Reconnecting 12 s after the network is back
+  - F-AR-067 Offline, a device's Revoke stays tappable, shows no pending state, and is replayed whenever the Mac returns
+  - F-AR-068 Settings 'Paired devices' shows a bare spinner for over 90 s while Status reads Connected, with no words, timeout or retry
+  - F-AR-069 Revoke in Paired devices is red text at 3.6:1 on the row
+  - F-AR-070 Sessions-in-Claude-app footer is garbled
+  - F-AR-071 Settings Status row reads Reconnecting or Connecting for the whole time the Mac is away and never says it is not answering
+  - F-AR-072 A failed usage read never says why; an expired login or a rate limit reads as 'pull down to try again'
+  - F-AR-073 A usage window whose reset time has passed still shows its old percentage and 'Resets in under a minute'
+  - F-AR-074 Refreshing plan usage on a socket that has died stops the spinner after 16 s with no message
+  - F-AR-075 Send in a bot chat gives a haptic only; VoiceOver hears nothing and the button vanishes under focus
+  - F-AR-076 Chat header is spoken as 'Name, view profile' and never says Awaiting approval, Parked or Unavailable
+  - F-AR-077 Pair-another sheet swaps live code to 'That code expired.' silently, and the code is read as one string
+  - F-AR-078 Pairing fields are spoken by their example text, and a failed pairing is not announced
+  - F-AR-079 Revoke, Confirm and Forget buttons do not say which device or fact they act on
+  - F-AR-080 Dark mode: the card expiry line, the memory footnote and the A/B/C/D option letters fall under 4.5:1 (3.2:1 and 2.9:1)
+  - F-AR-081 At the largest text size the bot state chip is cut to a prefix, so awaiting-approval, parked and unavailable are indistinguishable
+  - F-AR-082 At the largest text size the Pairing screen opens on the title and one paragraph; Scan and the fields are off screen

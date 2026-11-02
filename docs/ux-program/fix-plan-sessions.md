@@ -1434,3 +1434,12 @@ Recorded in `decisions.tsv` with the prefix "Run3:". Each says what it replaces.
 - **Call 16 changes counts** the user already sees on rows and in the status line.
 - **Backlog P2s that need a product call before anyone can fix them:** F-SES-242 (finished alert right after watching the end), F-SES-244 (group finished pushes), F-SES-245 (mute alerts for hidden sessions), F-SES-246 (app icon badge), F-SES-266 (re-asking an expired card).
 - **F-SES-225** is closed on a code read. S5.10 must pass on main to confirm it. If it fails, reopen 225 into G26.
+
+## Areas 2-5 (lean, combined audit 2026-11-01)
+
+Audit wf_fe856d73-403 on main 13a1583: 82 survivors (0 P0, 13 P1, 69 P2 to backlog), 43 refuted. Groups run in parallel worktrees; overlaps are small and resolved by rebase in merge order G33, G31, G32, G30.
+
+- **G30. Bot chat and Home offline honesty (iOS).** F-AR-001, 002, 005, 006, 009. Files: ChatView.swift, ChatNotices.swift, Composer.swift, Store.swift, BridgeClient.swift, HomeView.swift, ActivityLine.swift. Acceptance: offline, the chat's typing row and activity line and Home's bot rows read as last known, never live; the offline bar names the cause and offers Retry (and Pair again when unrecognized, with the composer disabled); a bot send while offline shows its own bubble as not yet sent with the same 60 s rule and words as G28 sessions.
+- **G31. Bot cards, typed answers and speech (bridge + iOS).** F-AR-003, 004, 013. Files: bridge hub.ts, gate.ts, world.ts; ios ChatItems.swift, ChatView.swift (announcements only). Acceptance: a typed answer closes or settles the open question card; reply, typing end, stopped note and card arrive/close are spoken.
+- **G32. Contrast and Dynamic Type (iOS).** F-AR-007, 008, 012. Files: Avatar.swift, ChatItems.swift (user bubble colours only), Composer.swift (send glyph only), HomeView.swift (row fonts only), ActivityLine.swift, Theme.swift, MemoryView.swift. Acceptance: text on accent colours meets 4.5:1 for every accent; Home bot rows scale with Dynamic Type; the Memory Confirm pill is readable in dark mode.
+- **G33. Runner truth for the new scenarios.** F-AR-010, 011. Files: .claude/skills/verify-claudio-bot/bin/scenario.ts, areas.ts. Acceptance: C1.5 on --sim judges the app, not the protocol phone; H1.2 waits for the read to draw.

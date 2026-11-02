@@ -864,6 +864,12 @@ const P3: Scenario = {
 
 // ---- Settings and account
 
+const QR = "Pairing QR code";
+const sheetShown = (ev: Ev) => {
+  const at = mark(ev, "t1-sheet");
+  return at !== undefined && ev.labels.some((l) => l.at >= at && l.hits.some((h) => h.label === QR));
+};
+
 const T1: Scenario = {
   id: "T1",
   area: "settings",
@@ -875,15 +881,22 @@ const T1: Scenario = {
     { do: "tap", label: "Settings", mark: "t1-settings" },
     { do: "screenshot", shot: "t1-settings" },
     { do: "tap", label: "Pair another device", mark: "t1-sheet" },
+    { do: "watch-labels", phrases: ["Expires", "expires", "expired", QR] },
+    { do: "until", mark: "t1-open", what: "the sheet's QR code", timeoutS: 15, optional: true, test: (ev) => sheetShown(ev) },
     { do: "screenshot", shot: "t1-code" },
-    { do: "watch-labels", phrases: ["Expires", "expires", "expired"] },
     { do: "sleep", s: 70 },
     { do: "screenshot", shot: "t1-later" },
     ...getCode("t1-first"),
     ...getCode("t1-second"),
     { do: "pair", mark: "t1-old", name: "UX old-code phone", what: "the first code", code: codeAt("t1-first") },
   ],
-  pre: [{ what: "two codes were given", check: (ev) => (offers(ev).length >= 2 ? ok(`${offers(ev).length}`) : no(`${offers(ev).length}`)) }],
+  pre: [
+    { what: "two codes were given", check: (ev) => (offers(ev).length >= 2 ? ok(`${offers(ev).length}`) : no(`${offers(ev).length}`)) },
+    {
+      what: "with --sim, the Pair another device sheet opened and showed a code",
+      check: (ev) => (mark(ev, "t1-sheet") === undefined ? ok("no simulator") : sheetShown(ev) ? ok("its QR code was read") : no("the sheet never showed a QR code")),
+    },
+  ],
   rubric: [
     {
       id: "T1.1",
@@ -908,7 +921,7 @@ const T1: Scenario = {
       check: (ev) => {
         const at = mark(ev, "t1-sheet");
         if (at === undefined) return notJudged("no sheet");
-        const texts = new Set(ev.labels.filter((l) => l.at >= at).flatMap((l) => l.hits.map((h) => h.label)));
+        const texts = new Set(ev.labels.filter((l) => l.at >= at).flatMap((l) => l.hits.map((h) => h.label).filter((label) => /expire/i.test(label))));
         if (!texts.size) return notJudged("no label holding Expires was read");
         return texts.size >= 2 ? ok([...texts].slice(0, 3).join(" | ")) : no(`only "${[...texts][0]}"`);
       },

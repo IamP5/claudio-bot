@@ -242,6 +242,18 @@ describe("bot areas", () => {
       { ok: false, why: '1006 "" after 0.1 s' },
     ]);
   });
+  test("T1: with --sim, a tap that left Settings on screen fails the precondition, and the QR label is no countdown text", () => {
+    const pre = SCENARIOS.find((s) => s.id === "T1")!.pre.find((p) => p.what.includes("sheet"))!;
+    const label = (at: number, ...hits: string[]) => ({ at, hits: hits.map((h) => ({ label: h, button: false, enabled: true })) });
+    const settingsOnly = evidence({ sim: true, marks: { "t1-sheet": 1_000 }, labels: [label(2_000), label(70_000)] });
+    const sheet = evidence({ sim: true, marks: { "t1-sheet": 1_000 }, labels: [label(2_000, "Pairing QR code", "Expires in 9 minutes"), label(70_000, "Pairing QR code", "Expires in 9 minutes")] });
+    expect([pre.check(settingsOnly), pre.check(sheet), pre.check(evidence({}))]).toEqual([
+      { ok: false, why: "the sheet never showed a QR code" },
+      { ok: true, why: "its QR code was read" },
+      { ok: true, why: "no simulator" },
+    ]);
+    expect(judge("T1.2", sheet)).toEqual({ ok: false, why: 'only "Expires in 9 minutes"' });
+  });
   test("T3.2: Reconnecting read more than 62 s into the drop fails", () => {
     const marks = { "t3-back-dropped": 0, "t3-back": 80_000 };
     const labels = [{ at: 70_000, hits: [{ label: "Status, Reconnecting", button: false, enabled: true }] }];

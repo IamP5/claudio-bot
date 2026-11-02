@@ -21,14 +21,14 @@ struct ChatRowView: View {
             TimeSeparator(date: date)
         case .message(let message):
             switch message {
-            case let .user(_, _, text, attachments, _, mentions):
-                UserBubble(text: text, attachments: attachments, color: bot.avatar.color, mentions: mentions)
-            case let .bot(_, _, text, from?):
+            case let .user(_, at, text, attachments, _, mentions):
+                UserBubble(text: text, attachments: attachments, color: bot.avatar.color, mentions: mentions, at: at)
+            case let .bot(_, at, text, from?):
                 MemberBubble(
-                    sender: store.bots[from], text: text, members: bot.members.compactMap { store.bots[$0] }, opensRun: opensRun
+                    sender: store.bots[from], text: text, members: bot.members.compactMap { store.bots[$0] }, opensRun: opensRun, at: at
                 ) { router.open($0) }
-            case let .bot(_, _, text, nil):
-                BotBubble(text: text)
+            case let .bot(_, at, text, nil):
+                BotBubble(text: text, speaker: bot.name, at: at)
             case let .question(id, _, card):
                 QuestionCardView(botId: bot.id, messageId: id, card: card, color: bot.avatar.color)
             case let .permission(id, _, card):
@@ -103,12 +103,49 @@ extension View {
     }
 }
 
+/// What VoiceOver reads for a chat bubble: who said it, what, and when, as a session thread names its speakers.
+enum BubbleSpeech {
+    static func label(_ speaker: String, _ words: String, at: Date?, now: Date = .now, calendar: Calendar = .current) -> String {
+        let words = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        let said = words.isEmpty || words.last.map({ ".!?:".contains($0) }) == true ? words : words + "."
+        return ["\(speaker): \(said)", at.map { TimeLabel.separator($0, now: now, calendar: calendar) }].compactMap { $0 }.joined(separator: " ")
+    }
+
+    /// The stop before a bubble whose links stay their own elements.
+    static func speaker(_ speaker: String, at: Date?, now: Date = .now, calendar: Calendar = .current) -> String {
+        [speaker, at.map { TimeLabel.separator($0, now: now, calendar: calendar) }].compactMap { $0 }.joined(separator: ", ")
+    }
+}
+
+extension View {
+    /// One VoiceOver stop saying who spoke, what and when. Combining would hide links, so a bubble with links keeps its
+    /// elements and gains a first stop naming the speaker and time.
+    @ViewBuilder func bubbleSpeech(_ speaker: String, _ words: String, at: Date?, hasLinks: Bool) -> some View {
+        if hasLinks {
+            ZStack(alignment: .topLeading) {
+                Color.clear.frame(width: 1, height: 1)
+                    .accessibilityElement()
+                    .accessibilityLabel(BubbleSpeech.speaker(speaker, at: at))
+                self
+            }
+            .accessibilityElement(children: .contain)
+        } else {
+            accessibilityElement(children: .combine)
+                .accessibilityLabel(BubbleSpeech.label(speaker, words, at: at))
+        }
+    }
+}
+
 struct BotBubble: View {
     let text: String
     /// The group's members, whose "@name" in the text reads bold in their color.
     var members: [Bot] = []
+    /// The bot that said it, which VoiceOver reads first.
+    let speaker: String
+    var at: Date?
 
     var body: some View {
+        let rendered = RenderedMarkdown(text)
         HStack(spacing: 0) {
             MarkdownText(text: text, members: members, fillsWidth: Bubble.fillsWidth)
                 .font(.ui(size: 17))
@@ -117,6 +154,7 @@ struct BotBubble: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(Bubble.padding)
                 .background(Theme.bubble, in: Bubble.shape)
+                .bubbleSpeech(speaker, rendered.spoken, at: at, hasLinks: !rendered.links.isEmpty)
             Spacer(minLength: Bubble.botInset)
         }
         .bubbleRow(.leading)
@@ -128,6 +166,7 @@ struct UserBubble: View {
     let attachments: [Attachment]
     let color: AvatarColor
     var mentions: [Mention] = []
+    var at: Date?
 
     @Environment(AppStore.self) private var store
     @Environment(Router.self) private var router
@@ -170,6 +209,10 @@ struct UserBubble: View {
             .foregroundStyle(color.onAccent)
             .padding(Bubble.padding)
             .background(color.accent, in: Bubble.shape)
+            .bubbleSpeech(
+                "You", (attachments.map(\.name) + [String(attributed.characters)]).filter { !$0.isEmpty }.joined(separator: ". "), at: at,
+                hasLinks: attributed.runs.contains { $0.link != nil }
+            )
         }
         .bubbleRow(.trailing)
         .environment(\.openURL, OpenURLAction { url in

@@ -210,6 +210,30 @@ describe("bot areas", () => {
       { ok: true, why: "working until the reply" },
     ]);
   });
+  test("C1.5: on the simulator lane only the app's own conversation counts, not the runner's phone", () => {
+    const marks = { "c1-send": 1_000, "c1-reopen": 20_000 };
+    const userMsg = { kind: "user", id: "u1", at: iso(1_000), clientId: "c1-send-1", text: "hi" };
+    const conversation = { type: "conversation", botId: "b1", messages: [userMsg, { kind: "bot", id: "m6000", at: iso(6_000), text: "pong" }] };
+    const base = { marks, sim: true, inbox: [created, reply(6_000), { at: 20_100, frame: conversation }] };
+    const phoneOnly = evidence(base);
+    const appGot = evidence({ ...base, app: [{ at: 20_200, dir: "in", frame: conversation }] });
+    const appLost = evidence({ ...base, app: [{ at: 20_200, dir: "in", frame: { ...conversation, messages: [userMsg] } }] });
+    expect([judge("C1.5", phoneOnly), judge("C1.5", appGot), judge("C1.5", appLost)]).toEqual([
+      { ok: false, why: "the app received no conversation after the reopen" },
+      { ok: true, why: "2 messages, both present" },
+      { ok: false, why: "user message present, reply missing" },
+    ]);
+  });
+  test("H1.2: counts from the moment of the open; a late unrelated frame cannot stand in for the clear", () => {
+    const unread = (at: number, n: number) => ({ at, frame: { type: "bot", bot: { id: "b1", status: "idle", unread: n, question: null, preview: "", lastAt: iso(at) } } });
+    const h1 = { at: 100, frame: { type: "created", ref: "h1", botId: "b1" } };
+    const quick = evidence({ marks: { "h1-open": 34_600 }, inbox: [h1, unread(32_000, 2), unread(34_800, 0), unread(41_100, 0)] });
+    const slow = evidence({ marks: { "h1-open": 34_600 }, inbox: [h1, unread(32_000, 2), unread(41_100, 0)] });
+    expect([judge("H1.2", quick), judge("H1.2", slow)]).toEqual([
+      { ok: true, why: "read after 0.2 s" },
+      { ok: false, why: "read after 6.5 s" },
+    ]);
+  });
   const paired = (closed: { at: number; code: number; reason: string } | null) => ({ at: 500, ms: 40, mark: "p3-paired", name: "UX second phone", status: 200, error: null, deviceId: "d2", hello: true, closed, rejoined: false });
   test("P3.1: a 4001 close within 2 s of the revoke passes; a plain close fails", () => {
     const marks = { "p3-revoke": 1_000 };

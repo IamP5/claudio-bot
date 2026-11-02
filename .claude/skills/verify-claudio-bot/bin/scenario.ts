@@ -700,7 +700,9 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, flags:
         lose: (f) => losing?.(f) ?? false,
         seen(dir, f) {
           const sid = f.sessionId as string | undefined;
-          if (!sid || f.type === "session_delta" || !Object.values(ev.ids).includes(sid)) return;
+          const bot = f.botId as string | undefined;
+          const mine = sid ? Object.values(ev.ids).includes(sid) : !!bot && ev.inbox.some((x) => x.frame.type === "created" && x.frame.botId === bot);
+          if (f.type === "session_delta" || !mine) return;
           const at = ev.now();
           ev.app.push({ at, dir, frame: f });
           appendFileSync(join(out, "timeline.jsonl"), JSON.stringify({ at, dir: `app-${dir}`, name: "app", frame: f }) + "\n");
@@ -998,8 +1000,10 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, flags:
         const botId = botOf(ev, a.ref);
         if (lease) {
           pool.simctl(lease, "openurl", `claudiobot://bot/${botId}`);
-          await Bun.sleep(3000);
-        } else p.send({ type: "open", botId });
+          markNow(a.mark);
+          return Bun.sleep(3000);
+        }
+        p.send({ type: "open", botId });
         return markNow(a.mark);
       }
       case "tap": {

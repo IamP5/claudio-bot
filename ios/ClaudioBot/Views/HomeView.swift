@@ -477,7 +477,7 @@ struct UnrecognizedBanner: View {
     @Environment(AppModel.self) private var app
     @Environment(BridgeClient.self) private var client
 
-    static let cause = "This bridge doesn't recognize this \(ThisDevice.noun). Pair again, or retry once you are back on your Mac's network."
+    static let cause = "This bridge doesn't recognize this \(ThisDevice.noun). Your Mac may have removed it, or this is another server. Pair again, or retry once you are back on your Mac's network."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

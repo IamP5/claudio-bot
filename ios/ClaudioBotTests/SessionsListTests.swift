@@ -149,7 +149,7 @@ private let crash = SessionOutcome(kind: .failed, text: "Claude Code stopped une
 
     @Test func aMacThatDoesNotRecognizeThisPhoneIsNeverCalledNotRunning() {
         let cause = ConnectionBanner.cause(.unrecognized, address: "10.0.0.20:7878", lastRetryFailed: false)
-        #expect(cause == "This bridge doesn't recognize this \(ThisDevice.noun). Pair again, or retry once you are back on your Mac's network.")
+        #expect(cause == "This bridge doesn't recognize this \(ThisDevice.noun). Your Mac may have removed it, or this is another server. Pair again, or retry once you are back on your Mac's network.")
         #expect(StartPhase.unrecognizedLabel == "Start (your Mac doesn't recognize this \(ThisDevice.noun))")
     }
 

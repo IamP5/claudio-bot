@@ -200,8 +200,8 @@ struct DetailStack: View {
     }
 }
 
-/// A wide layout's detail pane with no session chosen: the sessions that run, wait on the user, broke or were stopped,
-/// one button each. A list the Mac no longer answers for says how old it is, and its working rows wear no ring.
+/// A wide layout's detail pane with no session chosen: the sessions that run, wait on the user, broke, or finished or
+/// stopped unseen, one button each. A list the Mac no longer answers for says how old it is, and its working rows wear no ring.
 struct SessionsAtWorkView: View {
     let atWork: SessionsAtWork
     @Environment(Router.self) private var router
@@ -277,6 +277,7 @@ struct SessionsAtWorkView: View {
         case .working: WorkingRing(size: 12)
         case .lastKnownWorking: Image(systemName: "clock").foregroundStyle(Theme.secondary)
         case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.danger)
+        case .finished: Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.unread)
         case .stopped: Image(systemName: "stop.circle").foregroundStyle(Theme.secondary)
         }
     }
@@ -285,7 +286,7 @@ struct SessionsAtWorkView: View {
         switch kind {
         case .needsYou: Theme.attention
         case .failed: Theme.danger
-        case .working, .lastKnownWorking, .stopped: Theme.secondary
+        case .working, .lastKnownWorking, .finished, .stopped: Theme.secondary
         }
     }
 
@@ -295,6 +296,7 @@ struct SessionsAtWorkView: View {
         case .working: "working"
         case .lastKnownWorking: "last known"
         case .failed: "failed"
+        case .finished: "finished, unread"
         case .stopped: "stopped"
         }
     }

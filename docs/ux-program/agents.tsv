@@ -63,7 +63,7 @@ ts	role	group	branch	state	stuck_after	note
 2026-11-01T20:35:39Z	verifier	G27	ux/sessions-g27-unsure	r7 FAIL 1148c6f: P2 pruning skips markUnsure (finished alert + Nothing is running); one-line fix; fix applied r8	2h	fresh, independent of owner
 2026-11-02T00:12:29Z	owner	G30	ux/areas-g30-offline	starting off main 13a1583	3h	areas lean wave
 2026-11-02T00:12:29Z	owner	G31	ux/areas-g31-cards	PR #45 at 66e05f4; verifying	3h	areas lean wave
-2026-11-02T00:12:29Z	owner	G32	ux/areas-g32-contrast	PR #44 at 829d115; verifying	3h	areas lean wave
+2026-11-02T00:12:29Z	owner	G32	ux/areas-g32-contrast	PR #44 one-line fix round	3h	areas lean wave
 2026-11-02T00:12:29Z	owner	G33	ux/areas-g33-runner	merged #43 (root review, lean)	3h	areas lean wave
-2026-11-02T00:51:54Z	verifier	G32	ux/areas-g32-contrast	verifying 829d115	1h	independent, lean
+2026-11-02T00:51:54Z	verifier	G32	ux/areas-g32-contrast	FAIL 829d115: P1 Mac test target fails (UIKit import in new test); rest PASS	1h	independent, lean
 2026-11-02T01:01:09Z	verifier	G31	ux/areas-g31-cards	verifying 66e05f4	1h	independent, lean

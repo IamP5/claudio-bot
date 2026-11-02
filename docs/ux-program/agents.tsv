@@ -61,7 +61,7 @@ ts	role	group	branch	state	stuck_after	note
 2026-11-01T06:02:00Z	verifier	G27	ux/sessions-g27-unsure	r5 FAIL ba5cb87: P2 unrelated/rerun shell with same eval line supplies a group -> false ended	2h	fresh, independent of owner
 2026-11-01T19:49:48Z	verifier	G27	ux/sessions-g27-unsure	r6 FAIL 7f4302e: P2 shells unioned across steps/processes -> earlier groupless step ends	2h	fresh, independent of owner
 2026-11-01T20:35:39Z	verifier	G27	ux/sessions-g27-unsure	r7 FAIL 1148c6f: P2 pruning skips markUnsure (finished alert + Nothing is running); one-line fix; fix applied r8	2h	fresh, independent of owner
-2026-11-02T00:12:29Z	owner	G30	ux/areas-g30-offline	starting off main 13a1583	3h	areas lean wave
+2026-11-02T00:12:29Z	owner	G30	ux/areas-g30-offline	PR #46 at 477deff; rebasing onto e256e1d before verify	3h	areas lean wave
 2026-11-02T00:12:29Z	owner	G31	ux/areas-g31-cards	PR #45 round 2 (exact option match only)	3h	areas lean wave
 2026-11-02T00:12:29Z	owner	G32	ux/areas-g32-contrast	merged #44 (verify r1 P1 Mac test fix 39ebe1d reviewed by root)	3h	areas lean wave
 2026-11-02T00:12:29Z	owner	G33	ux/areas-g33-runner	merged #43 (root review, lean)	3h	areas lean wave

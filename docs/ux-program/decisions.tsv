@@ -280,3 +280,6 @@ ts	decision	why
 2026-11-02T00:51:54Z	G32: text on a bot accent colour is black (white only on brown); each bot keeps one colour everywhere	darker bubbles would need a second colour per accent
 2026-11-02T00:59:22Z	SCOPE: no time on accessibility text sizes (AX XXXL); the X-dynamic-type check is dropped from audits and verification runs at the default size; layout at AX sizes goes to backlog only	user call 2026-11-02 (screenshot of AX XXXL thread)
 2026-11-02T01:16:52Z	G31: a typed message closes an open bot question only when it exactly matches an option (closed as that option); any other message leaves the card open and the bot is told it is still open; no new bot tool	verifier ruling (b), lean form; "close on any message" broke first-run onboarding
+2026-11-02T01:17:54Z	G30: Bot sends expire after 60 s like session sends (replaces G28's no-age-limit call for bot sends)	one offline rule across the app
+2026-11-02T01:17:54Z	G30: A send that goes straight out shows no local bubble unless it gets into trouble	avoid a "Not sent yet" flash on every send
+2026-11-02T01:17:54Z	G30: The unrecognized banner says "Your Mac may have removed it, or this is another server." on chat, Home and Sessions	names the likely causes

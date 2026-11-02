@@ -203,3 +203,4 @@
 - G32 gaps: at AX XXXL Home rows stay one line and long bot names cut hard (time could wrap under the name) (P2); chat bubble text barely grows at AX XXXL (P2, chat).
 - G31 gaps: C2 cannot be judged as written (typed instruction closes the greeting question; bot re-asks); composer placeholder still says "or talk about something else" though any message closes the card (G30 file); older apps show a replied card as "Dismissed".
 - H1.2 failed twice ("read after 1.2 s") on the G32 verifier run even after G33; check whether the 1 s window is too tight on a busy host (runner, P2).
+- G30 gaps: Stop in a bot chat stays enabled offline (waits 60 s then says not sent) (P2); bridges without the mute feature keep the old no-local-bubble behaviour (P3).

@@ -537,19 +537,19 @@ private func unknowns(in message: ServerMessage) -> [String] {
         ])
     }
 
-    @Test func questionAnswersDecodeAsOpenChosenDismissedOrExpired() throws {
+    @Test func questionAnswersDecodeAsOpenChosenDismissedRepliedOrExpired() throws {
         let answers = try Fixture.messages().compactMap { message -> String? in
             guard case .question(let id, _, let card) = message else { return nil }
             return "\(id):\(card.answer.map { "\($0)" } ?? "open")"
         }
-        #expect(answers == ["m6:open", "m6:option(1)", "m7:dismissed", "m10:expired"])
+        #expect(answers == ["m6:open", "m6:option(1)", "m7:dismissed", "m7r:replied", "m10:expired"])
     }
 
     @Test func questionsFromBeforeProtocol3NeverExpire() throws {
         let expiries = try Fixture.messages().compactMap { message -> Date?? in
             if case .question(_, _, let card) = message { .some(card.expiresAt) } else { nil }
         }
-        #expect(expiries == [Date(timeIntervalSince1970: 1_792_238_400), Date(timeIntervalSince1970: 1_792_238_400), nil, Date(timeIntervalSince1970: 1_792_238_400)])
+        #expect(expiries == [Date(timeIntervalSince1970: 1_792_238_400), Date(timeIntervalSince1970: 1_792_238_400), nil, nil, Date(timeIntervalSince1970: 1_792_238_400)])
     }
 
     @Test func devicesAndPairCodeDecode() throws {

@@ -14,6 +14,7 @@ struct ChatView: View {
     @State private var showsJump = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var reveal = Reveal()
+    @State private var speech = ChatSpeech()
 
     var body: some View {
         if let bot = store.bots[botId] {
@@ -195,6 +196,13 @@ struct ChatView: View {
             .task(id: store.has(.mentions) && store.has(.connectors)) {
                 if store.has(.mentions), store.has(.connectors), !bot.isGroup { client.send(.connectors(botId: botId)) }
             }
+            .onChange(of: store.conversations[botId]?.messages.map(\.id)) { old, new in
+                guard let messages = store.conversations[botId]?.messages, new != nil else { return }
+                speech.arrived(ChatAnnouncement.arrivals(from: old, to: messages, bot: bot.name) { store.bots[$0]?.name })
+            }
+            .onChange(of: bot.status) { old, new in
+                speech.status(from: old, to: new, bot: bot.name)
+            }
         }
     }
 
@@ -364,5 +372,87 @@ struct JumpToLatestButton: View {
         .help("Jump to Latest")
         .accessibilityLabel("Jump to latest message")
         .accessibilityIdentifier("jumpToLatest")
+    }
+}
+
+/// What VoiceOver hears as a bot's chat changes, as the Sessions thread speaks its own (F-AR-003, F-AR-013).
+enum ChatAnnouncement {
+    /// More new messages than this at once (a reconnect catching up) are counted rather than read.
+    static let readable = 3
+
+    /// What the messages `new` has that `old` did not say. old nil: the chat just loaded, so nothing in it is news.
+    /// The user's own messages, exchanges and cards that arrive already closed say nothing. told: a note or an open
+    /// card among them already says how the turn stands.
+    static func arrivals(from old: [MessageID]?, to new: [Message], bot: String, member: (BotID) -> String?) -> (lines: [String], told: Bool) {
+        guard let old else { return ([], false) }
+        let seen = Set(old)
+        let fresh = new.filter { !seen.contains($0.id) }
+        let lines = fresh.compactMap { line($0, bot: bot, member: member) }
+        let tells = fresh.filter {
+            switch $0 {
+            case .note: true
+            case .question, .permission: line($0, bot: bot, member: member) != nil
+            default: false
+            }
+        }
+        guard lines.count > readable else { return (lines, !tells.isEmpty) }
+        let cards = tells.compactMap { m -> String? in
+            if case .note = m { return nil }
+            return line(m, bot: bot, member: member)
+        }
+        return (["\(lines.count) new messages."] + cards, !tells.isEmpty)
+    }
+
+    static func line(_ message: Message, bot: String, member: (BotID) -> String?) -> String? {
+        switch message {
+        case let .bot(_, _, text, from):
+            let name = from.flatMap(member) ?? bot
+            return "\(name): \(cut(text))"
+        case let .question(_, _, card) where card.answer == nil:
+            return "Question from \(bot): \(card.question)"
+        case let .permission(_, _, card) where card.answer == nil:
+            let asker = card.from?.label ?? bot
+            return "Approval needed. \(asker) wants to run \(card.tool)" + (OpenCard.firstLine(card.detail).map { ": " + $0 } ?? ".")
+        case let .note(_, _, text, _):
+            return text
+        default:
+            return nil
+        }
+    }
+
+    /// The turn came to rest. A note or card since it began already said how it ended, so only a quiet end is spoken.
+    static func turnEnded(from old: BotStatus, to new: BotStatus, bot: String, told: Bool) -> String? {
+        guard old == .working, new == .idle, !told else { return nil }
+        return "\(bot) finished."
+    }
+
+    private static func cut(_ text: String, limit: Int = 300) -> String {
+        text.count <= limit ? text : String(text.prefix(limit)) + "…"
+    }
+}
+
+/// Speaks a bot chat's ChatAnnouncement lines, at the Sessions thread's pace.
+@MainActor
+final class ChatSpeech {
+    private let announcer = Announcer()
+    /// A note or card was spoken since the turn began.
+    private var told = false
+    private var resting: Task<Void, Never>?
+
+    func arrived(_ news: (lines: [String], told: Bool)) {
+        if news.told { told = true }
+        guard !news.lines.isEmpty else { return }
+        announcer.post(news.lines.joined(separator: " "))
+    }
+
+    func status(from old: BotStatus, to new: BotStatus, bot: String) {
+        if new == .working { told = false }
+        resting?.cancel()
+        // The note that says how a turn ended can land just after the status does.
+        resting = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let self, !Task.isCancelled else { return }
+            if let line = ChatAnnouncement.turnEnded(from: old, to: new, bot: bot, told: told) { announcer.post(line) }
+        }
     }
 }

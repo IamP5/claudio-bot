@@ -74,6 +74,15 @@ private let crash = SessionOutcome(kind: .failed, text: "Claude Code stopped une
         #expect(atWork.line(atWork.entries[0], now: at) == "Stopped · 2m ago")
     }
 
+    @Test func aFinishedReplyStaysUntilTheUserHasReadIt() {
+        let done = SessionOutcome(kind: .finished, text: "Added the tests and they pass.", at: at - 60)
+        let rows = [row("w", .working), row("f", .idle, unread: true, outcome: done), row("r", .idle, outcome: done), row("h", .idle, hidden: true, unread: true, outcome: done)]
+        let atWork = SessionsAtWork(rows, freshness: .live)
+        #expect(atWork.summary(now: at) == "1 working · 1 finished")
+        #expect(atWork.entries.map(\.id.rawValue) == ["w", "f"])
+        #expect(atWork.line(atWork.entries[1], now: at) == "Added the tests and they pass. · 1m ago")
+    }
+
     @Test func aHiddenSessionCountsWhileItRunsOrWaits() {
         let rows = [row("a", .working, hidden: true), row("b", .awaitingApproval, hidden: true), row("c", .failed, hidden: true, outcome: crash), row("d", .idle, hidden: true)]
         let atWork = SessionsAtWork(rows, freshness: .live)

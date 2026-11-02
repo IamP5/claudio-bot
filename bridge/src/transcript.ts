@@ -673,6 +673,8 @@ const STOPPED_BY_YOU = "Stopped by you";
 const REJECTED = /^The user doesn't want to proceed with this tool use\b/;
 /** The bridge's own denials when the user pressed Stop. */
 const STOPPED = /^[^\n]+ (pressed Stop\. This call did not run|stopped the session\. It did not run\.)/;
+/** Claude Code's word for a call a stop cut off, as a result or as the prompt after a stopped turn. */
+const INTERRUPTED = /^\[Request interrupted by user[^\]]*\]$/;
 const DENIED = /^(Permission to use|<tool_use_error>Blocked|.*\bIt did not run\b)/s;
 const ASYNC_AGENT = /^Async agent launched successfully\./;
 const AGENT_ID = /^agentId: ([\w-]+)/m;
@@ -731,7 +733,7 @@ function failureCause(text: string): string {
 function classifyResult(tool: string, text: string, toolResult: unknown, isError: boolean): Outcome {
   if (isError) {
     if (REJECTED.test(text) || toolResult === "User rejected tool use") return { kind: "denied", cause: "Denied by you", reject: true };
-    if (STOPPED.test(text.replace(ERROR_TAGS, ""))) return { kind: "stopped", cause: STOPPED_BY_YOU };
+    if (STOPPED.test(text.replace(ERROR_TAGS, "")) || INTERRUPTED.test(text)) return { kind: "stopped", cause: STOPPED_BY_YOU };
     if (DENIED.test(text)) return { kind: "denied", cause: firstLine(maskSecrets(text.replace(ERROR_TAGS, "")), CAUSE_MAX), reject: false };
     const cause = failureCause(text);
     return { kind: "error", output: text === "" ? null : text, cause: maskSecrets(AGENT_TOOLS.has(tool) ? firstSentence(cause) : cause) };
@@ -925,7 +927,6 @@ const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;
 const BASH_INPUT = /^<bash-input>([\s\S]*)<\/bash-input>$/;
 /** Prompts Claude Code writes itself: command output, caveats, task and system notices. */
 const MACHINE = /^(<local-command-(stdout|stderr|caveat)>|<bash-(stdout|stderr)>|<task-notification>|<system-reminder>|Caveat: )/;
-const INTERRUPTED = /^\[Request interrupted by user[^\]]*\]$/;
 
 function promptText(content: unknown): string {
   if (typeof content === "string") return content;

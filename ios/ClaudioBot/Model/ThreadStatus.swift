@@ -543,12 +543,12 @@ final class StatusAnnouncer {
 }
 
 /// Sessions other than the one on screen that the user should know about while a wide layout hides the list: what
-/// waits on them, what runs, what broke, and a stop they have not seen. It reads the list with its freshness, so a list
+/// waits on them, what runs, what broke, and a reply or a stop they have not seen. It reads the list with its freshness, so a list
 /// the Mac no longer answers for never claims anything runs (P-ALIVE-3): a working row becomes last known, with no
 /// count and no ring.
 struct SessionsAtWork: Equatable {
     enum Kind: Hashable {
-        case needsYou, working, lastKnownWorking, failed, stopped
+        case needsYou, working, lastKnownWorking, failed, finished, stopped
     }
 
     struct Entry: Equatable, Identifiable {
@@ -558,25 +558,27 @@ struct SessionsAtWork: Equatable {
     }
 
     let freshness: ListFreshness
-    /// Needs you, then working, then failed, then stopped.
+    /// Needs you, then working, then failed, then finished, then stopped.
     let entries: [Entry]
 
     /// A hidden row still counts while it runs or waits on the user: attention beats the user's tidy-up (F-SES-308).
-    /// A stop counts only until the user has seen it, so their own stops do not pile up here.
+    /// A finished reply or a stop counts only until the user has seen it, so read sessions do not pile up here.
     init(_ rows: some Sequence<SessionRow>, freshness: ListFreshness, excluding: SessionID? = nil) {
         self.freshness = freshness
-        var needsYou: [SessionRow] = [], working: [SessionRow] = [], failed: [SessionRow] = [], stopped: [SessionRow] = []
+        var needsYou: [SessionRow] = [], working: [SessionRow] = [], failed: [SessionRow] = [], finished: [SessionRow] = [], stopped: [SessionRow] = []
         for row in rows where row.id != excluding {
             if row.needsYou { needsYou.append(row) }
             else if row.status == .working { working.append(row) }
             else if row.hidden { continue }
             else if row.status == .failed { failed.append(row) }
+            else if row.outcome?.kind == .finished, row.unread { finished.append(row) }
             else if row.outcome?.kind == .stopped, row.unread { stopped.append(row) }
         }
         let live = freshness == .live
         entries = needsYou.sorted { $0.lastAt > $1.lastAt }.map { Entry(row: $0, kind: .needsYou) }
             + working.sorted { ($0.since ?? $0.lastAt) > ($1.since ?? $1.lastAt) }.map { Entry(row: $0, kind: live ? .working : .lastKnownWorking) }
             + failed.sorted { ($0.outcome?.at ?? $0.lastAt) > ($1.outcome?.at ?? $1.lastAt) }.map { Entry(row: $0, kind: .failed) }
+            + finished.sorted { ($0.outcome?.at ?? $0.lastAt) > ($1.outcome?.at ?? $1.lastAt) }.map { Entry(row: $0, kind: .finished) }
             + stopped.sorted { ($0.outcome?.at ?? $0.lastAt) > ($1.outcome?.at ?? $1.lastAt) }.map { Entry(row: $0, kind: .stopped) }
     }
 
@@ -593,12 +595,13 @@ struct SessionsAtWork: Equatable {
 
     private func summary(now: Date, spoken: Bool) -> String? {
         guard !isEmpty else { return nil }
-        let working = count(.working), needs = count(.needsYou), failed = count(.failed), stopped = count(.stopped)
+        let working = count(.working), needs = count(.needsYou), failed = count(.failed), finished = count(.finished), stopped = count(.stopped)
         let running = spoken ? runningTotal.map { "running " + $0 } : nil
         let parts = [
             working > 0 ? "\(working) working" : nil, running,
             needs > 0 ? "\(needs) \(needs == 1 ? "needs" : "need") you" : nil,
             failed > 0 ? "\(failed) failed" : nil,
+            finished > 0 ? "\(finished) finished" : nil,
             stopped > 0 ? "\(stopped) stopped" : nil,
         ].compactMap { $0 }
         guard let asOf = freshness.asOf(now: now, spoken: spoken) else { return parts.joined(separator: spoken ? ", " : " · ") }
@@ -628,6 +631,8 @@ struct SessionsAtWork: Equatable {
             ["Working" + (row.since.map { " for " + clock(freshness.ageReference(now: now).timeIntervalSince($0)) } ?? "") + " when last updated"]
         case .failed:
             [row.outcome?.text ?? "Failed", ago(row.outcome?.at ?? row.lastAt)]
+        case .finished:
+            [row.outcome?.text ?? "Finished", ago(row.outcome?.at ?? row.lastAt)]
         case .stopped:
             [row.outcome?.text ?? "Stopped", ago(row.outcome?.at ?? row.lastAt)]
         }

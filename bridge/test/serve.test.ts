@@ -515,6 +515,32 @@ test("a socket's requests are handled and answered in the order it sent them, ev
   expect(b.transport.watchers("s1" as SessionId)).toBe(0);
 });
 
+test("a plan usage refresh that hangs holds back none of the socket's other requests, and answers when its read ends", async () => {
+  let readEnds!: () => void;
+  const reading = new Promise<void>((resolve) => (readEnds = resolve));
+  const usage: ServerMessage = { type: "usage", usage: { state: "unavailable", reason: "failed", fetchedAt: "2026-10-17T09:00:00.000Z" } };
+  const b = boot(tempHome(), {
+    replies: async (m) => {
+      if (m.type !== "refresh_usage") return [{ type: "error", message: m.type }];
+      await reading;
+      return [usage];
+    },
+  });
+  const { token } = await pairPhone(b);
+  const app = connect(b, { bearer: token, query: "?protocol=3" });
+  await app.next("hello");
+  app.send({ type: "refresh_usage" });
+  app.send({ type: "send", botId: "b1", text: "hi", uploads: [] });
+  app.send({ type: "devices" });
+
+  expect(await app.next("error")).toEqual({ type: "error", message: "send" });
+  expect((await app.next("devices")).devices).toHaveLength(1);
+  expect(app.inbox).toEqual([]);
+
+  readEnds();
+  expect(await app.next("usage")).toEqual(usage);
+});
+
 test("uploads up to the frame limit reach the hub; a frame over it closes the socket", async () => {
   expect(MAX_FRAME_BYTES).toBeGreaterThan(Math.ceil((10 * 1024 * 1024 * 4) / 3) + 1024);
   const b = boot(tempHome());

@@ -1645,7 +1645,7 @@ test("a message typed while a question is open closes the card, tells the bot, a
   await flush();
 
   expect(b.messages.find((m) => m.id === card.id)).toMatchObject({ answer: "replied" });
-  expect(h.q().received[0]).toContain('Pear\n[This message closed your question "Which fruit?" in the chat. If it does not answer it, ask again.]');
+  expect(h.q().received[0]).toContain('Pear\n[This message closed your open question "Which fruit?". Take it as the answer if it is one.]');
   expect(await h.hub.handle({ type: "answer", botId: b.id, messageId: card.id, option: 0 })).toEqual([{ type: "error", message: "That question was already answered" }]);
   expect(h.q().received).toHaveLength(1);
 });

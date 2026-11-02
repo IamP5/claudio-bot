@@ -141,7 +141,7 @@ export function envelope(e: Envelope, userName: string): string {
         e.text,
         ...(e.mentions ?? []).map((m) => mentionLine(m, userName)),
         ...e.attachments.map((a) => `Attached: ${a.path}`),
-        ...(e.closes ?? []).map((q) => `[This message closed your question "${q}" in the chat. If it does not answer it, ask again.]`),
+        ...(e.closes ?? []).map((q) => `[This message closed your open question "${q}". Take it as the answer if it is one.]`),
       );
     case "command":
       return e.line;

@@ -122,11 +122,11 @@ extension View {
     /// elements and gains a first stop naming the speaker and time.
     @ViewBuilder func bubbleSpeech(_ speaker: String, _ words: String, at: Date?, hasLinks: Bool) -> some View {
         if hasLinks {
-            overlay(alignment: .topLeading) {
+            ZStack(alignment: .topLeading) {
                 Color.clear.frame(width: 1, height: 1)
                     .accessibilityElement()
                     .accessibilityLabel(BubbleSpeech.speaker(speaker, at: at))
-                    .accessibilitySortPriority(1)
+                self
             }
             .accessibilityElement(children: .contain)
         } else {

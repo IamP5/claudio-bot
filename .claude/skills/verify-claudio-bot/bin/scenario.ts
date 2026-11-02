@@ -1014,7 +1014,10 @@ async function runScenario(sc: Scenario, sim: boolean, pairWaitS: number, flags:
           { env: { ...process.env, TEST_RUNNER_LABEL: a.label }, stdout: "pipe", stderr: "pipe" },
         );
         appendFileSync(join(out, "tap.log"), r.stdout.toString() + r.stderr.toString());
-        if (r.exitCode !== 0) throw new PreconditionFailed(`could not tap "${a.label}" in the app; see tap.log`);
+        if (r.exitCode !== 0) {
+          const disabled = r.stdout.toString().includes(`${a.label} is disabled`);
+          throw new PreconditionFailed(disabled ? `"${a.label}" is disabled in the app, so a tap does nothing` : `could not tap "${a.label}" in the app; see tap.log`);
+        }
         await Bun.sleep(1500);
         if (a.mark) markNow(a.mark);
         return;
@@ -1215,7 +1218,7 @@ function describe(a: Action): string {
     case "open-bot":
       return `Open the chat with \`${a.ref}\`: in the app by claudiobot://bot/<id> (simulator lane), or send \`open\` as the app does (protocol lane). Mark \`${a.mark}\`.`;
     case "tap":
-      return `Tap "${a.label}" in the app (simulator lane; an XCUITest finds the element by its label and taps it)${a.mark ? `; mark \`${a.mark}\`` : ""}.`;
+      return `Tap "${a.label}" in the app (simulator lane; an XCUITest finds the element by its label, waits up to 10 s for it to be enabled and taps it; a disabled one fails the precondition)${a.mark ? `; mark \`${a.mark}\`` : ""}.`;
     case "pair":
       return `Another phone, "${a.name}", sends POST /pair with ${a.what}${a.connect ? "; when it pairs it opens a socket with its token and keeps it open" : ""}. Mark \`${a.mark}\`.`;
     case "watch-labels":

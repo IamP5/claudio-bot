@@ -154,8 +154,14 @@ struct SettingsView: View {
                 ProgressView().frame(maxWidth: .infinity)
             }
             if store.bridgeManagesDevices {
+                let blocked = PairAnother.blocked(online: store.machine != nil, credential: client.pairing?.credential, devices: store.devices)
                 Button("Pair another device") { pairingAnother = true }
-                    .disabled(store.machine == nil)
+                    .disabled(blocked != nil)
+                if let blocked {
+                    Text(blocked)
+                        .font(.footnote)
+                        .foregroundStyle(Theme.secondary)
+                }
             }
         } header: {
             Text("Paired devices")
@@ -269,13 +275,21 @@ private struct DeviceRow: View {
 }
 
 /// Shows a one-time code, as text and as the QR code another phone scans, with every address the bridge listed.
-/// Closes by itself once a device pairs, which it learns by asking for the device list while it is up.
+/// Says which device paired once one does, which it learns by asking for the device list while it is up.
 struct PairAnotherView: View {
     static let devicePoll: Duration = .seconds(2)
+    /// The Mac answers a code request at once; past this the sheet stops waiting and says so.
+    static let codeWait: Duration = .seconds(10)
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
     @Environment(\.dismiss) private var dismiss
     @State private var watch = NewDeviceWatch()
+    @State private var paired: Device?
+    @State private var asked = 0
+    @State private var unanswered = false
+    @AccessibilityFocusState private var focus: Focus?
+
+    private enum Focus: Hashable { case code, unanswered, paired }
 
     var body: some View {
         #if os(macOS)
@@ -299,7 +313,9 @@ struct PairAnotherView: View {
 
     private var page: some View {
         VStack(spacing: 24) {
-            if let code = store.pairCode {
+            if let paired {
+                done(paired)
+            } else if let code = store.pairCode {
                 TimelineView(.deadline(code.expiresAt)) { _ in
                     if Date.now >= code.expiresAt {
                         expired
@@ -309,13 +325,21 @@ struct PairAnotherView: View {
                         unreachable
                     }
                 }
+            } else if unanswered {
+                noAnswer
             } else {
-                ProgressView().frame(maxHeight: .infinity)
+                ProgressView("Getting a code from your Mac…").frame(maxHeight: .infinity)
             }
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear(perform: request)
+        .task(id: asked) {
+            try? await Task.sleep(for: Self.codeWait)
+            if !Task.isCancelled, store.pairCode == nil { unanswered = true }
+        }
+        .onChange(of: store.pairCode) { if store.pairCode != nil { focus = .code } }
+        .onChange(of: unanswered) { if unanswered { focus = .unanswered } }
         .task {
             guard store.bridgeManagesDevices else { return }
             while !Task.isCancelled {
@@ -325,13 +349,52 @@ struct PairAnotherView: View {
             }
         }
         .onChange(of: store.devicesHeard) {
-            if let devices = store.devices, watch.heard(devices) { dismiss() }
+            guard paired == nil, let devices = store.devices, let device = watch.heard(devices) else { return }
+            paired = device
+            focus = .paired
         }
     }
 
     private func request() {
         store.discardPairCode()
+        unanswered = false
+        asked += 1
         client.send(.pairCode)
+    }
+
+    private func done(_ device: Device) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.ui(size: 44))
+                .foregroundStyle(Theme.link)
+                .accessibilityHidden(true)
+            Text("Paired \(device.name)")
+                .font(.title3.weight(.semibold))
+                .multilineTextAlignment(.center)
+            Text("It can reach your bots now.")
+                .font(.footnote)
+                .foregroundStyle(Theme.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityFocused($focus, equals: .paired)
+        .frame(maxHeight: .infinity)
+    }
+
+    private var noAnswer: some View {
+        VStack(spacing: 16) {
+            Text(store.machine == nil
+                 ? "Your Mac went offline before it sent a code."
+                 : "Your Mac didn't send a code within \(Int(Self.codeWait.components.seconds)) seconds.")
+                .foregroundStyle(Theme.secondary)
+                .multilineTextAlignment(.center)
+                .accessibilityFocused($focus, equals: .unanswered)
+            Button("Try again", action: request)
+                .buttonStyle(.borderedProminent)
+                .tint(.white)
+                .foregroundStyle(.black)
+        }
+        .frame(maxHeight: .infinity)
     }
 
     private func live(_ code: PairCode, invite: PairInvite) -> some View {
@@ -343,6 +406,7 @@ struct PairAnotherView: View {
             Text(code.code)
                 .font(.ui(size: 34, weight: .semibold, design: .monospaced))
                 .textSelection(.enabled)
+                .accessibilityFocused($focus, equals: .code)
             Text("Expires in \(Text(code.expiresAt, style: .relative))")
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)

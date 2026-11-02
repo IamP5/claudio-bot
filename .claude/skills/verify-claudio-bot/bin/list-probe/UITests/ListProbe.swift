@@ -63,7 +63,8 @@ final class ListProbe: XCTestCase {
     }
 
     /// Taps the app's first element labeled LABEL, as the user would. A list loads rows lazily, so it scrolls down up to
-    /// eight times to find one below the fold; fails when none shows up.
+    /// eight times to find one below the fold; fails when none shows up, or when it stays disabled for 10 s, since a
+    /// tap on it does nothing.
     func testTap() throws {
         let label = try XCTUnwrap(ProcessInfo.processInfo.environment["LABEL"])
         let app = XCUIApplication(bundleIdentifier: "dev.claudiobot.app")
@@ -74,7 +75,9 @@ final class ListProbe: XCTestCase {
             app.swipeUp()
             found = element.waitForExistence(timeout: 2)
         }
-        XCTAssertTrue(found, "nothing labeled \(label)")
+        guard found else { return XCTFail("nothing labeled \(label)") }
+        let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: element)
+        guard XCTWaiter.wait(for: [enabled], timeout: 10) == .completed else { return XCTFail("\(label) is disabled") }
         element.tap()
     }
 }

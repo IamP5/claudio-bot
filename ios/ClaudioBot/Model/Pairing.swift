@@ -482,13 +482,24 @@ extension Data {
 struct NewDeviceWatch: Sendable {
     private var baseline: Set<DeviceID>?
 
-    /// Whether `devices` holds a device the first list did not.
-    mutating func heard(_ devices: [Device]) -> Bool {
-        let ids = Set(devices.map(\.id))
+    /// A device in `devices` the first list did not hold.
+    mutating func heard(_ devices: [Device]) -> Device? {
         guard let baseline else {
-            baseline = ids
-            return false
+            baseline = Set(devices.map(\.id))
+            return nil
         }
-        return !ids.isSubset(of: baseline)
+        return devices.first { !baseline.contains($0.id) }
+    }
+}
+
+enum PairAnother {
+    /// Why this device cannot get a code for another device now, in the words Settings shows; nil when it can. The Mac
+    /// refuses a code to a device on the shared token from before protocol 3, so that case is said even offline.
+    static func blocked(online: Bool, credential: Pairing.Credential?, devices: [Device]?) -> String? {
+        let shared = if case .legacy? = credential { true } else { false }
+        if shared || devices?.first(where: \.current)?.legacy == true {
+            return "This \(ThisDevice.noun) still uses the old shared token, so your Mac won't give it a code for another device. Unpair it, then pair it again with a code from your Mac."
+        }
+        return online ? nil : "Connect to your Mac to pair another device."
     }
 }

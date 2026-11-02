@@ -16,11 +16,12 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 **Setup.**
 
-- Tap "Settings" in the app (simulator lane; an XCUITest finds the element by its label and taps it); mark `t1-settings`.
+- Tap "Settings" in the app (simulator lane; an XCUITest finds the element by its label, waits up to 10 s for it to be enabled and taps it; a disabled one fails the precondition); mark `t1-settings`.
 - Screenshot `t1-settings` (simulator lane).
-- Tap "Pair another device" in the app (simulator lane; an XCUITest finds the element by its label and taps it); mark `t1-sheet`.
+- Tap "Pair another device" in the app (simulator lane; an XCUITest finds the element by its label, waits up to 10 s for it to be enabled and taps it; a disabled one fails the precondition); mark `t1-sheet`.
+- The label probe (the same read-only XCUITest) records, about once a second until the setup ends, every element of the app whose label holds "Expires", "expires", "expired", "Pairing QR code", and whether each button among them is enabled (simulator lane).
+- Wait up to 15 s for the sheet's QR code; mark `t1-open` (optional).
 - Screenshot `t1-code` (simulator lane).
-- The label probe (the same read-only XCUITest) records, about once a second until the setup ends, every element of the app whose label holds "Expires", "expires", "expired", and whether each button among them is enabled (simulator lane).
 - Wait 70 s.
 - Screenshot `t1-later` (simulator lane).
 - The phone sends a frame the app can send, built from what it saw: pair_code (Settings, Pair another device). Mark `t1-first`.
@@ -32,6 +33,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 **Preconditions** (any failure fails the scenario):
 
 - two codes were given
+- with --sim, the Pair another device sheet opened and showed a code
 
 **Rubric.**
 
@@ -64,8 +66,8 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Open the chat with `t2`: in the app by claudiobot://bot/<id> (simulator lane), or send `open` as the app does (protocol lane). Mark `t2-open`.
 - Screenshot `t2-chat` (simulator lane).
 - The app goes back to the Sessions list (simulator lane: relaunched on the list; protocol lane: the phone unwatches every thread it watches).
-- Tap "Settings" in the app (simulator lane; an XCUITest finds the element by its label and taps it).
-- Tap "Memory" in the app (simulator lane; an XCUITest finds the element by its label and taps it).
+- Tap "Settings" in the app (simulator lane; an XCUITest finds the element by its label, waits up to 10 s for it to be enabled and taps it; a disabled one fails the precondition).
+- Tap "Memory" in the app (simulator lane; an XCUITest finds the element by its label, waits up to 10 s for it to be enabled and taps it; a disabled one fails the precondition).
 - Screenshot `t2-memory` (simulator lane).
 - The phone sends a frame the app can send, built from what it saw: confirm_fact for the proposal. Mark `t2-confirm`.
 - Wait 3 s.
@@ -96,7 +98,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 **Setup.**
 
-- Tap "Settings" in the app (simulator lane; an XCUITest finds the element by its label and taps it); mark `t3-settings`.
+- Tap "Settings" in the app (simulator lane; an XCUITest finds the element by its label, waits up to 10 s for it to be enabled and taps it; a disabled one fails the precondition); mark `t3-settings`.
 - The label probe (the same read-only XCUITest) records, about once a second until the setup ends, every element of the app whose label holds "Reconnecting", "Connected", "Connecting", "answering", "reach", "Offline", "offline", and whether each button among them is enabled (simulator lane).
 - The network drops the phone (the socket closes); screenshot `t3-away` 70 s into the drop (simulator lane); wait 80 s, reconnect with the stream position (epoch, after) and resume each thread from its last position. Mark `t3-back`.
 - Wait 10 s.
@@ -126,7 +128,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 
 **Setup.**
 
-- Tap "Settings" in the app (simulator lane; an XCUITest finds the element by its label and taps it); mark `t4-settings`.
+- Tap "Settings" in the app (simulator lane; an XCUITest finds the element by its label, waits up to 10 s for it to be enabled and taps it; a disabled one fails the precondition); mark `t4-settings`.
 - Wait 3 s.
 - Screenshot `t4-settings` (simulator lane).
 - The phone sends a frame the app can send, built from what it saw: refresh_usage. Mark `t4-usage`.

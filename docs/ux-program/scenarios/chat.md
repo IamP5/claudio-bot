@@ -25,6 +25,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 - Wait up to 150 s for `c1`'s reply and the bot at rest; mark `c1-done`.
 - Wait 2 s.
 - Screenshot `c1-done` (simulator lane).
+- The app goes back to the Sessions list (simulator lane: relaunched on the list; protocol lane: the phone unwatches every thread it watches).
 - Open the chat with `c1`: in the app by claudiobot://bot/<id> (simulator lane), or send `open` as the app does (protocol lane). Mark `c1-reopen`.
 - Wait 2 s.
 
@@ -41,7 +42,7 @@ Needs the simulator: no (simulator items run with `--sim`).
 | C1.2 | state | protocol | The bot says it is working soon after the send. | a bot frame with status working within 2 s of the send | no working status, or it comes late, so the chat looks ignored |
 | C1.3 | state | protocol | The bot never says it is done before its reply is in. | from the first working status to the last reply, every bot frame says working | an idle status between the send and the reply: the typing row vanishes while the bot still writes |
 | C1.4 | state | protocol | When the reply is in, the bot stops saying it is working. | a bot frame with a status other than working arrives within 5 s of the last reply | the bot stays working (Typing…) after its reply, or never says it is done |
-| C1.5 | recover | protocol | Opening the chat again shows the same messages. | the conversation that answers the second open holds the user message and the reply | either is missing from the reopened chat |
+| C1.5 | recover | protocol | Opening the chat again shows the same messages. | the conversation that answers the second open holds the user message and the reply (with --sim, the one the app itself receives) | either is missing from the reopened chat |
 | C1.6 | clarity | simulator (c1-done) | After the reply, the chat is at rest and the reply reads whole. | the reply in full, no typing row, Send back | a typing row left over, the reply cut, or the composer stuck on Stop |
 
 ## C2 The bot asks the user a question

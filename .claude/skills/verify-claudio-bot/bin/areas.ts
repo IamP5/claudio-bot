@@ -133,6 +133,7 @@ const C1: Scenario = {
   area: "chat",
   title: "A plain message and its reply",
   needsSimulator: false,
+  tapApp: true,
   sidebar: "bots",
   journey: ["The user creates a bot and waits for its greeting.", "They open the chat and send a short message.", "They read its reply (C3 judges the working state on screen; haiku answers this one too fast to catch).", "They leave and open the chat again."],
   setup: [
@@ -142,6 +143,7 @@ const C1: Scenario = {
     answered("c1", "c1-send", "c1-done"),
     { do: "sleep", s: 2 },
     { do: "screenshot", shot: "c1-done" },
+    { do: "show-list" },
     { do: "open-bot", ref: "c1", mark: "c1-reopen" },
     { do: "sleep", s: 2 },
   ],
@@ -198,13 +200,16 @@ const C1: Scenario = {
       tell: "recover",
       lane: "protocol",
       text: "Opening the chat again shows the same messages.",
-      pass: "the conversation that answers the second open holds the user message and the reply",
+      pass: "the conversation that answers the second open holds the user message and the reply (with --sim, the one the app itself receives)",
       fail: "either is missing from the reopened chat",
       check: (ev) => {
         const at = mark(ev, "c1-reopen");
         if (at === undefined) return notJudged("no reopen");
-        const conv = framesOf(ev, "conversation", at).find((x) => x.frame.botId === idOf(ev, "c1"));
-        if (!conv) return no("no conversation after the reopen");
+        const bot = idOf(ev, "c1");
+        const conv = ev.sim
+          ? ev.app.find((x) => x.dir === "in" && x.at >= at && x.frame.type === "conversation" && x.frame.botId === bot)
+          : framesOf(ev, "conversation", at).find((x) => x.frame.botId === bot);
+        if (!conv) return no(ev.sim ? "the app received no conversation after the reopen" : "no conversation after the reopen");
         const ms = conv.frame.messages as Msg[];
         const reply = replies(ev, "c1", mark(ev, "c1-send")!).at(-1)!.m.id;
         const mine = ms.some((m) => m.kind === "user" && m.clientId?.startsWith("c1-send"));

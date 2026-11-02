@@ -1033,7 +1033,12 @@ export function createHub(deps: HubDeps): Hub {
       ...(mentions.length > 0 && { mentions }),
     });
     const others = mentions.filter((x) => x.kind !== "bot" || x.id !== bot.id);
-    deliver(botActor(bot.id), command !== null ? { from: "command", line: m.text.trim() } : { from: "user", text: m.text, attachments, mentions: others });
+    if (command !== null) deliver(botActor(bot.id), { from: "command", line: m.text.trim() });
+    else {
+      // Typing one of an open card's options is tapping it; anything else leaves the card open, and the bot is told so.
+      const cards = gate.typed(bot.id, m.text);
+      deliver(botActor(bot.id), { from: "user", text: m.text, attachments, mentions: others, ...((cards.answered.length > 0 || cards.open.length > 0) && { cards }) });
+    }
     return [];
   }
 

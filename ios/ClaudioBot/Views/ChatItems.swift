@@ -203,6 +203,17 @@ struct QuestionCardView: View {
             }
         }
     }
+
+    /// What VoiceOver says when the card closes, whatever closed it. nil while it is open.
+    static func closing(_ answer: Answer?, options: [String]) -> String? {
+        switch answer {
+        case nil: nil
+        case .option(let index) where options.indices.contains(index): "Answered: \(options[index])."
+        case .option: "Question answered."
+        case .dismissed: "Question dismissed."
+        case .expired: "The question closed without an answer."
+        }
+    }
 }
 
 /// Takes a card's new answer inside an animation, so the transcript around the card resizes with it instead of
@@ -272,6 +283,13 @@ private struct QuestionCardBody: View {
 
     @Environment(BridgeClient.self) private var client
     @State private var taps = 0
+    @AccessibilityFocusState private var focus: QuestionFocus?
+    /// VoiceOver sat on an option or the X while the card was open, so it follows the card to its outcome.
+    @State private var onChoice = false
+
+    private enum QuestionFocus: Hashable {
+        case option(Int), dismiss, outcome
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -295,6 +313,7 @@ private struct QuestionCardBody: View {
                     .buttonStyle(.plain)
                     .help("Dismiss Question")
                     .accessibilityLabel("Dismiss question")
+                    .accessibilityFocused($focus, equals: .dismiss)
                     .transition(Card.swap)
                 }
             }
@@ -305,10 +324,13 @@ private struct QuestionCardBody: View {
                 case .option(let index) where card.options.indices.contains(index):
                     OptionRow(index: index, text: card.options[index], chosen: color)
                         .background(Theme.inset, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .accessibilityFocused($focus, equals: .outcome)
                 case .expired:
                     ClosedLine(text: "Expired. Nobody answered in time.")
+                        .accessibilityFocused($focus, equals: .outcome)
                 default:
                     ClosedLine(text: "Dismissed")
+                        .accessibilityFocused($focus, equals: .outcome)
                 }
             }
             .transition(Card.swap)
@@ -316,6 +338,18 @@ private struct QuestionCardBody: View {
         .padding(16)
         .transcriptCard()
         .sensoryFeedback(.selection, trigger: taps)
+        .announcesClose(QuestionCardView.closing(answer, options: card.options))
+        .onChange(of: focus) { _, now in
+            if answer == nil { onChoice = now != nil && now != .outcome }
+        }
+        .onChange(of: answer) { old, new in
+            guard old == nil, new != nil, onChoice else { return }
+            Task {
+                // The outcome fades in after the options fade out (Card.swap); focus set before it exists is lost.
+                try? await Task.sleep(for: .milliseconds(400))
+                focus = .outcome
+            }
+        }
     }
 
     private var options: some View {
@@ -330,6 +364,7 @@ private struct QuestionCardBody: View {
                         OptionRow(index: index, text: option)
                     }
                     .buttonStyle(.pressable)
+                    .accessibilityFocused($focus, equals: .option(index))
                 }
             }
             .background(Theme.inset, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -972,23 +1007,27 @@ struct EventLineView: View {
     }
 
     var body: some View {
-        Button {
-            if let target { onPeer(target) }
-        } label: {
-            segments.reduce(Text(verbatim: "")) { line, segment in
-                switch segment {
-                case .text(let s): Text("\(line)\(Text(s))")
-                case .chip(let peer): Text("\(line)\(Self.chip(peer))")
-                }
-            }
-            .font(.ui(size: 13))
-            .foregroundStyle(Theme.tertiary)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 24)
+        // A line with nothing to open is plain text, so VoiceOver never reads it as a dimmed button.
+        if let target {
+            Button { onPeer(target) } label: { line }
+                .buttonStyle(.plain)
+        } else {
+            line
         }
-        .buttonStyle(.plain)
-        .disabled(target == nil)
+    }
+
+    private var line: some View {
+        segments.reduce(Text(verbatim: "")) { line, segment in
+            switch segment {
+            case .text(let s): Text("\(line)\(Text(s))")
+            case .chip(let peer): Text("\(line)\(Self.chip(peer))")
+            }
+        }
+        .font(.ui(size: 13))
+        .foregroundStyle(Theme.tertiary)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24)
     }
 
     private static func chip(_ peer: Peer) -> Text {

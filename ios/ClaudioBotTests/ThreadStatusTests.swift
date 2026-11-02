@@ -628,3 +628,52 @@ private let sleeperCommands = (1...3).map { owned("c\($0)", by: "a\($0)") }
         #expect(spoken == ["Stopped by you"])
     }
 }
+
+@Suite struct ChatAnnouncementTests {
+    private let at = Date(timeIntervalSince1970: 1_800_000_000)
+    private func id(_ s: String) -> MessageID { MessageID(s) }
+    private func arrivals(_ old: [Message]?, _ new: [Message]) -> (lines: [String], told: Bool) {
+        ChatAnnouncement.arrivals(from: old?.map(\.id), to: new, bot: "Pip") { $0 == BotID("b2") ? "Bo" : nil }
+    }
+
+    @Test func aReplyIsSpokenWithItsSender() {
+        let hi: Message = .user(id: id("u"), at: at, text: "hi", attachments: [])
+        let reply: Message = .bot(id: id("r"), at: at, text: "Pear it is.")
+        let member: Message = .bot(id: id("g"), at: at, text: "Me too.", from: BotID("b2"))
+        let news = arrivals([hi], [hi, reply, member])
+        #expect(news.lines == ["Pip: Pear it is.", "Bo: Me too."])
+        #expect(news.told == false)
+    }
+
+    @Test func openCardsAndNotesAreSpokenAndTellTheTurn() {
+        let question: Message = .question(id: id("q"), at: at, card: QuestionCard(question: "Which fruit?", options: ["Apple", "Pear"], answer: nil))
+        let held = PermissionCard(from: nil, tool: "Bash", label: "Push", detail: "git push origin main", always: "git push", answer: nil, expiresAt: at + 600)
+        let permission: Message = .permission(id: id("p"), at: at, card: held)
+        let note: Message = .note(id: id("n"), at: at, text: "Stopped by Alex", refs: [])
+        let news = arrivals([], [question, permission, note])
+        #expect(news.lines == ["Question from Pip: Which fruit?", "Approval needed. Pip wants to run Bash: git push origin main", "Stopped by Alex"])
+        #expect(news.told)
+    }
+
+    @Test func aChatThatJustLoadedSaysNothing() {
+        #expect(arrivals(nil, [.bot(id: id("r"), at: at, text: "Old reply")]).lines.isEmpty)
+    }
+
+    @Test func aCatchUpIsCountedButItsCardsAreRead() {
+        let replies: [Message] = (0..<4).map { .bot(id: id("r\($0)"), at: at, text: "Reply \($0)") }
+        let question: Message = .question(id: id("q"), at: at, card: QuestionCard(question: "Which fruit?", options: ["Apple"], answer: nil))
+        #expect(arrivals([], replies + [question]).lines == ["5 new messages.", "Question from Pip: Which fruit?"])
+    }
+
+    @Test func onlyAQuietEndIsSpoken() {
+        #expect(ChatAnnouncement.turnEnded(from: .working, to: .idle, bot: "Pip", told: false) == "Pip finished.")
+        #expect(ChatAnnouncement.turnEnded(from: .working, to: .idle, bot: "Pip", told: true) == nil)
+        #expect(ChatAnnouncement.turnEnded(from: .working, to: .awaitingApproval, bot: "Pip", told: false) == nil)
+    }
+
+    @Test func aClosingQuestionSaysHowItClosed() {
+        #expect(QuestionCardView.closing(.option(1), options: ["Red", "Blue"]) == "Answered: Blue.")
+        #expect(QuestionCardView.closing(.dismissed, options: []) == "Question dismissed.")
+        #expect(QuestionCardView.closing(.expired, options: []) == "The question closed without an answer.")
+    }
+}

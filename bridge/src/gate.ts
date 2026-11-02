@@ -88,6 +88,9 @@ export type AuditRow = {
   cardId: MessageId | null;
 };
 
+/** How a typed reply is compared with a card's options: case, outer spaces and trailing punctuation do not count. */
+export const plainAnswer = (s: string) => s.trim().replace(/[\s.!?,;:]+$/u, "").toLowerCase();
+
 export type Gate = Tickable & {
   /** At start: open cards get back the time since the bridge last ran with them open, as after a sleep. */
   resume(now: Date): void;
@@ -108,6 +111,12 @@ export type Gate = Tickable & {
    * deny; never → deny rule. Only a card tap reaches this; chat text never approves.
    */
   answer(botId: BotId, messageId: MessageId, reply: CardReply): { ok: true } | { ok: false; error: string };
+  /**
+   * The user typed `text` in the bot's chat while its questions were open. A question with an option that `text` is,
+   * ignoring case, outer spaces and trailing punctuation, closes as that option, with no envelope of its own: the typed
+   * message is the answer. Every other open question stays open. A card past its deadline expires.
+   */
+  typed(botId: BotId, text: string): { answered: { question: string; option: string }[]; open: string[] };
   /** delete_bot: drops the bot's open cards, its and its agents' grants and trust answers, its rules and its daily counts. */
   forgetBot(botId: BotId): void;
   /**
@@ -650,6 +659,33 @@ export function createGate(deps: GateDeps): Gate {
         typeof q.answer === "number" ? { from: "answer", question: q.question, option: q.options[q.answer]!, initiator } : { from: "dismiss", question: q.question, initiator },
       );
       return { ok: true };
+    },
+
+    typed(botId, text) {
+      const out = { answered: [] as { question: string; option: string }[], open: [] as string[] };
+      const bot = world.bots.get(botId);
+      if (!bot) return out;
+      const now = deps.now().toISOString();
+      const said = plainAnswer(text);
+      for (const m of bot.messages) {
+        if (m.kind !== "question" || m.answer !== null) continue;
+        const held = state.open.find((c) => c.cardId === m.id);
+        if (held && held.expiresAt <= now) {
+          expire(held);
+          continue;
+        }
+        const index = m.options.findIndex((o) => plainAnswer(o) === said);
+        const settled = index === -1 ? null : settleCard(m, { kind: "question", answer: index });
+        if (!settled?.ok) {
+          out.open.push(m.question);
+          continue;
+        }
+        deps.say(bot, settled.card);
+        dropCard(m.id);
+        out.answered.push({ question: m.question, option: m.options[index]! });
+      }
+      if (out.answered.length > 0) deps.persist("now");
+      return out;
     },
 
     forgetBot(botId) {

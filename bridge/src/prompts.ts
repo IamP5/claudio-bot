@@ -4,7 +4,8 @@ import type { Initiator, Notice, Origin, Pending, RunRef } from "./world";
 // Everything that reaches a bot or an agent is one envelope. Its initiator is a pure function of the envelope.
 export type Envelope =
   // mentions: resolved by the hub (world.resolveMentions), without the receiving bot itself.
-  | { from: "user"; text: string; attachments: Attachment[]; mentions?: Mention[] }
+  // cards: the bot's questions this message answered by naming an option, and those still open (gate.typed).
+  | { from: "user"; text: string; attachments: Attachment[]; mentions?: Mention[]; cards?: { answered: { question: string; option: string }[]; open: string[] } }
   // The user's /command or skill, as typed and trimmed: Claude Code runs it only from the bare text.
   | { from: "command"; line: string }
   // An answer carries the initiator of the turn that asked: a tap on a routine's question does not make it the user's work.
@@ -135,7 +136,14 @@ function relayed(text: string, pointer: string): string {
 export function envelope(e: Envelope, userName: string): string {
   switch (e.from) {
     case "user":
-      return lines(`[${userName}]`, e.text, ...(e.mentions ?? []).map((m) => mentionLine(m, userName)), ...e.attachments.map((a) => `Attached: ${a.path}`));
+      return lines(
+        `[${userName}]`,
+        e.text,
+        ...(e.mentions ?? []).map((m) => mentionLine(m, userName)),
+        ...e.attachments.map((a) => `Attached: ${a.path}`),
+        ...(e.cards?.answered ?? []).map((a) => `[This answered your question "${a.question}": ${a.option}]`),
+        ...(e.cards?.open ?? []).map((q) => `[The question "${q}" is still open; the user can still tap an answer.]`),
+      );
     case "command":
       return e.line;
     case "answer":

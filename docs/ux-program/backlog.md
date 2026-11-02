@@ -201,3 +201,4 @@
   - F-AR-081 At the largest text size the bot state chip is cut to a prefix, so awaiting-approval, parked and unavailable are indistinguishable
   - F-AR-082 At the largest text size the Pairing screen opens on the title and one paragraph; Scan and the fields are off screen
 - G32 gaps: at AX XXXL Home rows stay one line and long bot names cut hard (time could wrap under the name) (P2); chat bubble text barely grows at AX XXXL (P2, chat).
+- G31 gaps: C2 cannot be judged as written (typed instruction closes the greeting question; bot re-asks); composer placeholder still says "or talk about something else" though any message closes the card (G30 file); older apps show a replied card as "Dismissed".

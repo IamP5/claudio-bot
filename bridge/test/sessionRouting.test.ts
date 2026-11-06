@@ -10,7 +10,7 @@ import { profileView, type EventBody, type Intent, type MachineId, type SessionR
 import type { AgentId, BotId, MessageId, ProjectId, ServerMessage, SessionClientMessage, SessionId, SessionProject, SessionRow, SessionsChannelFrame } from "../src/protocol";
 import { newDrive } from "../src/own";
 import type { ThreadSignal } from "../src/sessions";
-import { emptyWorld, type World } from "../src/world";
+import { emptyWorld, type SessionEnd, type World } from "../src/world";
 import { bot, cleanup, flush, hubOver, placedOn, roots } from "./hub-kit";
 
 afterEach(cleanup);
@@ -126,12 +126,19 @@ function setup(world: World = emptyWorld(), seed?: (root: string) => void) {
   const thread: { id: SessionId; frame: ThreadSignal }[] = [];
   const watchers = new Map<SessionId, number>();
   const notified: [SessionId, MessageId][] = [];
+  const ended: [SessionId, SessionEnd, string][] = [];
   const apps = { holders: () => new Map(), desktop: () => new Map(), desktopState: async () => "absent" as const, idleSeconds: async () => null, importToDesktop: async () => false, openInDesktop: async () => false, refresh() {}, onChange() {}, close() {} };
   const h = hubOver(world, {
     links,
     ...(seed && { seed }),
     sessions: { epoch: "e1", projectsDir: join(dir, "projects"), apps, cacheDir: join(dir, "cache"), signal: { list: (f) => list.push(f), thread: (id, frame) => thread.push({ id, frame }) }, watchers: (id) => watchers.get(id) ?? 0, watch: false },
-    push: { notify: () => true, notifySession: (id, cardId) => (notified.push([id, cardId]), true), tick() {}, nextDeadline: () => null },
+    push: {
+      notify: () => true,
+      notifySession: (id, cardId) => (notified.push([id, cardId]), true),
+      sessionEnded: (id, end, endedAt) => void ended.push([id, end, endedAt]),
+      tick() {},
+      nextDeadline: () => null,
+    },
   });
   let seq = 0;
   return {
@@ -142,6 +149,7 @@ function setup(world: World = emptyWorld(), seed?: (root: string) => void) {
     thread,
     watchers,
     notified,
+    ended,
     answers: (f: typeof answer) => (answer = f),
     async flip(to: boolean) {
       online = to;
@@ -300,4 +308,12 @@ test("a card in a session the phone drives on a machine pushes from the home; on
   m.event({ kind: "sessionCard", sessionId: S1, cardId: "c_own" as MessageId });
   m.event({ kind: "sessionCard", sessionId: S2, cardId: "c_other" as MessageId });
   expect(m.notified).toEqual([[S1, "c_own" as MessageId]]);
+});
+
+test("the end of a run of a session the phone drives on a machine pushes from the home; one for a session the machine does not list does not", async () => {
+  const m = setup();
+  await m.flip(true);
+  m.event({ kind: "sessionEnded", sessionId: S1, end: "finished", endedAt: at });
+  m.event({ kind: "sessionEnded", sessionId: S2, end: "failed", endedAt: at });
+  expect(m.ended).toEqual([[S1, "finished", at]]);
 });

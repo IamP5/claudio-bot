@@ -89,6 +89,7 @@ export function bootMachine(deps: {
     claude: deps.claude,
     scope: (cwd) => sessionScope(profile, cwd),
     notify: (sessionId, cardId) => node.runtime.emit({ kind: "sessionCard", sessionId, cardId }),
+    ended: (sessionId, end, endedAt) => node.runtime.emit({ kind: "sessionEnded", sessionId, end, endedAt }),
     folders: () => projectFolders().map((f) => f.path),
     persist: saver.schedule,
     now,

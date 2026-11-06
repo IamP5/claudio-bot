@@ -439,6 +439,7 @@ export const link = [
   { t: "event", event: { seq: 17, at, kind: "snapshot", agents: [], openCards: [{ botId: "b1", message: agentCard }] } },
   { t: "event", event: { seq: 18, at, kind: "reminder", botId: "b1", cardId: "m30" } },
   { t: "event", event: { seq: 19, at, kind: "sessionCard", sessionId: "6f1c2b9e-0d2a-4c1e-9b7a-3e5d4c2b1a00", cardId: "m31" } },
+  { t: "event", event: { seq: 20, at, kind: "sessionEnded", sessionId: "6f1c2b9e-0d2a-4c1e-9b7a-3e5d4c2b1a00", end: "finished", endedAt: later } },
   { t: "ask", id: "i_9", frame: { type: "session_send", sessionId: "6f1c2b9e-0d2a-4c1e-9b7a-3e5d4c2b1a00", text: "Run the tests.", clientId: "c10", interrupt: false } },
   { t: "reply", id: "i_9", frames: [] },
   { t: "reply", id: "i_10", frames: [{ type: "error", message: "Unknown card" }] },

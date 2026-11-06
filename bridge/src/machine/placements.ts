@@ -88,6 +88,9 @@ const RULES: { [K in Event["kind"]]: Rule<K> } = {
   sessionCard(_, machine, e, ctx) {
     return ctx.sessionOwner(e.sessionId) === machine ? keep(e) : drop(`session ${e.sessionId} is not this machine's`);
   },
+  sessionEnded(_, machine, e, ctx) {
+    return ctx.sessionOwner(e.sessionId) === machine ? keep(e) : drop(`session ${e.sessionId} is not this machine's`);
+  },
   usage(state, machine, e, ctx) {
     const { row } = e;
     const agentId = row.actor.startsWith("agent:") ? (row.actor.slice("agent:".length) as AgentId) : null;

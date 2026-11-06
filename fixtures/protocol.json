@@ -3417,6 +3417,17 @@
       }
     },
     {
+      "t": "event",
+      "event": {
+        "seq": 20,
+        "at": "2026-10-16T12:00:00.000Z",
+        "kind": "sessionEnded",
+        "sessionId": "6f1c2b9e-0d2a-4c1e-9b7a-3e5d4c2b1a00",
+        "end": "finished",
+        "endedAt": "2026-10-16T14:00:00.000Z"
+      }
+    },
+    {
       "t": "ask",
       "id": "i_9",
       "frame": {

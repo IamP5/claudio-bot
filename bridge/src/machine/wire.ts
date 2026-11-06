@@ -27,7 +27,7 @@ import {
 } from "../protocol";
 import type { ThreadSignal } from "../sessions";
 import type { Isolate } from "../tools";
-import type { Initiator } from "../world";
+import type { Initiator, SessionEnd } from "../world";
 import type { MachineProfile } from "./profile";
 
 // The one list of what crosses between the home and a machine. Plain JSON, each union discriminated by `kind` (and a
@@ -116,6 +116,8 @@ export type EventBody =
   | { kind: "reminder"; botId: BotId; cardId: MessageId }
   /** A card opened in a session the phone drives on this machine: the home pushes that a session needs the user. */
   | { kind: "sessionCard"; sessionId: SessionId; cardId: MessageId }
+  /** A run of a session the phone drives on this machine came to rest at endedAt: the home pushes the ending. */
+  | { kind: "sessionEnded"; sessionId: SessionId; end: SessionEnd; endedAt: string }
   | { kind: "usage"; row: UsageRow }
   | { kind: "profile"; profile: ProfileView }
   | { kind: "refused"; intentId: IntentId; reason: string }
@@ -339,6 +341,7 @@ export const eventSchema: z.ZodType<Event> = z.discriminatedUnion("kind", [
   z.object({ ...stamp, kind: z.literal("card"), botId: id<BotId>(), message: messageSchema }),
   z.object({ ...stamp, kind: z.literal("reminder"), botId: id<BotId>(), cardId: messageId }),
   z.object({ ...stamp, kind: z.literal("sessionCard"), sessionId: id<SessionId>(), cardId: messageId }),
+  z.object({ ...stamp, kind: z.literal("sessionEnded"), sessionId: id<SessionId>(), end: z.enum(["finished", "failed", "lost"]), endedAt: text }),
   z.object({ ...stamp, kind: z.literal("usage"), row: usageRow }),
   z.object({ ...stamp, kind: z.literal("profile"), profile: profileViewSchema }),
   z.object({ ...stamp, kind: z.literal("refused"), intentId, reason: text }),

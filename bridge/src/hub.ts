@@ -987,6 +987,9 @@ export function createHub(deps: HubDeps): Hub {
       case "sessionCard":
         deps.push.notifySession?.(e.sessionId, e.cardId);
         return;
+      case "sessionEnded":
+        deps.push.sessionEnded?.(e.sessionId, e.end, e.endedAt);
+        return;
       case "reminder": {
         const bot = world.bots.get(e.botId);
         const card = bot?.messages.find((m) => m.id === e.cardId);

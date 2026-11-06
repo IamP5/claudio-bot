@@ -52,7 +52,10 @@ export type Push = Tickable & {
   sessionEnded?(id: SessionId, end: SessionEnd, at: string): void;
   /** Whether pushes reach the user, for hello. */
   state?(): Reach;
-  /** A card opened in a session the phone drives on another machine. */
+  /**
+   * A card opened in a session the phone drives on another machine. The home cannot see that session's cards, so it is
+   * one try, made only while no phone is live, and dropped rather than retried.
+   */
   notifySession?(sessionId: SessionId, cardId: MessageId): boolean;
 };
 
@@ -774,6 +777,15 @@ export function createPush(deps: {
 
   return {
     notify: (bot, reason, messageId) => notify(bot, reason, messageId),
+    notifySession(id, cardId) {
+      const now = deps.now().getTime();
+      const key = `${cardId}|card`;
+      if (sender === null || live(now) || pushed(key)) return false;
+      const what = `card for session ${id} on another machine`;
+      if (!record([key], what, now)) return false;
+      void deliver({ keys: [key], botId: null, text: `${SESSION} needs you`, link: sessionLink(id, cardId), high: true, for: { kind: "cards", session: id, cards: [cardId] } }, what);
+      return true;
+    },
     sessionEnded(id, end, at) {
       const now = deps.now().getTime();
       const key = `${id}|${at}|done`;

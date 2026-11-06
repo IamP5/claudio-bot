@@ -62,7 +62,7 @@ const ASK_MS = 30_000;
 /** Events in a burst share one registry save and one ack. */
 const FLUSH_MS = 50;
 /** Events whose effect on the home is not the same when heard twice: a turn for a bot, a charge, a line, a push. */
-const ONCE: ReadonlySet<Event["kind"]> = new Set(["report", "note", "usage", "reminder", "sessionCard"]);
+const ONCE: ReadonlySet<Event["kind"]> = new Set(["report", "note", "usage", "reminder", "sessionCard", "sessionEnded"]);
 
 export function createLinks(deps: { identity: Identity; registry: Registry; log: (line: string) => void; now: () => Date; applyMs?: number; askMs?: number }): Links {
   const { registry, log } = deps;

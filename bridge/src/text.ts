@@ -27,6 +27,21 @@ export function displayName(name: string, max: number): string {
   return chars.length <= max ? chars.join("") : `${chars.slice(0, max - 1).join("")}\u2026`;
 }
 
+/** Cut from the middle, so two long labels that differ at the end still differ. */
+export function middleCut(s: string, max: number): string {
+  const chars = Array.from(s);
+  if (chars.length <= max) return s;
+  return `${chars.slice(0, Math.ceil((max - 1) / 2)).join("")}…${chars.slice(chars.length - Math.floor((max - 1) / 2)).join("")}`;
+}
+
+/** How long something ran, as the app shows a step's: "0s", "35s", "1m 5s", "2h 3m". */
+export function runTime(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return s % 60 === 0 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
 const SECRET_PATTERNS: readonly RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
   /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}/g,
@@ -39,7 +54,10 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
 ];
 /** A keyword (any `[\w-]*` prefix allowed, so AWS_SECRET_ACCESS_KEY= and MY_TOKEN= match) then its value after = or :. */
-const KEYED_SECRET = /(\b(?:Bearer|Basic|token)\s+|\b[\w-]*(?:password|passwd|pwd|secret|token|access[_-]?key|api[_-]?key|client[_-]?secret)["']?\s*[=:]\s*["']?)([^\s"'&,;]{3,})/gi;
+const ASSIGNED = String.raw`\b[\w-]*(?:password|passwd|pwd|secret|token|access[_-]?key|api[_-]?key|client[_-]?secret)["']?\s*[=:]\s*["']?`;
+/** A credential spoken in a header or a command line: "Bearer <value>". In prose the word after "token" is a word. */
+const SPOKEN = String.raw`(?:\b(?:Bearer|Basic|token)\s+)+`;
+const keyed = (lead: string) => new RegExp(`(${lead})([^\\s"'&,;]{3,})`, "gi");
 /** A URL's user:password, curl's -u user:pass, and mysql's -p<password>. The value is masked; the user is kept. */
 const URL_CREDENTIAL = /(:\/\/[^\s:/@]+:)([^\s@/]+)(@)/g;
 const CURL_USER = /((?:-u|--user)\s+[^\s:]+:)(\S+)/g;
@@ -49,16 +67,37 @@ const LONG_RUN = /[A-Za-z0-9+_=-]{32,}/g;
 
 const masked = (n: number) => `«redacted:${n} chars»`;
 
-/** Secret-shaped substrings become «redacted:N chars». Keyed rules run first so a keyed value is masked once, not twice. */
-export function maskSecrets(text: string): string {
-  let out = text;
-  out = out.replace(KEYED_SECRET, (_, lead: string, value: string) => lead + masked(value.length));
-  out = out.replace(URL_CREDENTIAL, (_, lead: string, value: string, tail: string) => lead + masked(value.length) + tail);
-  out = out.replace(CURL_USER, (_, lead: string, value: string) => lead + masked(value.length));
-  out = out.replace(MYSQL_PASSWORD, (_, pre: string, flag: string, value: string) => pre + flag + masked(value.length));
-  for (const p of SECRET_PATTERNS) out = out.replace(p, (m) => masked(m.length));
-  return out.replace(LONG_RUN, (m) => (/[a-z]/.test(m) && /[A-Z]/.test(m) && /[0-9]/.test(m) ? masked(m.length) : m));
-}
+type Rule = readonly [RegExp, (match: string, ...groups: string[]) => string];
+const maskValue = (_: string, lead: string, value: string) => lead + masked(value.length);
+const URL_RULE: Rule = [URL_CREDENTIAL, (_, lead, value, tail) => lead + masked(value.length) + tail];
+const SHAPES: readonly Rule[] = [
+  ...SECRET_PATTERNS.map((p): Rule => [p, (m) => masked(m.length)]),
+  [LONG_RUN, (m) => (/[a-z]/.test(m) && /[A-Z]/.test(m) && /[0-9]/.test(m) ? masked(m.length) : m)],
+];
+// Keyed rules run first so a keyed value is masked once, not twice.
+const COMMAND_LINE: readonly Rule[] = [URL_RULE, [CURL_USER, maskValue], [MYSQL_PASSWORD, (_, pre, flag, value) => pre + flag + masked(value.length)]];
+const SECRET_RULES: readonly Rule[] = [[keyed(`${SPOKEN}|${ASSIGNED}`), maskValue], ...COMMAND_LINE, ...SHAPES];
+/** In prose the word after "token" is masked only when it does not read as a word: 12 or more characters, a digit, = + /, or a capital inside it. */
+const spokenInProse: Rule = [keyed(SPOKEN), (m, lead, value) => (value.length >= 12 || /\d|[=+/]|.[A-Z]/.test(value) ? lead + masked(value.length) : m)];
+const PROSE_RULES: readonly Rule[] = [[keyed(ASSIGNED), maskValue], spokenInProse, ...COMMAND_LINE, ...SHAPES];
+
+const applying = (rules: readonly Rule[]) => (text: string) => rules.reduce((out, [re, to]) => out.replace(re, to), text);
+
+/** Secret-shaped substrings of a command, an output or a log become «redacted:N chars». */
+export const maskSecrets = applying(SECRET_RULES);
+
+/**
+ * maskSecrets for words a model wrote about a call (a description, a summary): the word after "token", "Basic" or
+ * "Bearer" is masked only when it looks like a value, since in prose it is usually an ordinary word.
+ */
+export const maskProse = applying(PROSE_RULES);
+
+/**
+ * Names for a sentence: a few are all said, by `all`; more are the first few but one and how many more, joined by `sep`
+ * ("a, b and 3 more").
+ */
+export const fewNames = (names: readonly string[], all: (names: readonly string[]) => string, sep = ", ", few = 3): string =>
+  names.length <= few ? all(names) : `${names.slice(0, few - 1).join(sep)} and ${names.length - few + 1} more`;
 
 export const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}… (${s.length - n} more chars)`);
 const CLIP = 4096;

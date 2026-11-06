@@ -2,43 +2,69 @@ import SwiftUI
 
 struct SessionComposer: View {
     let sessionId: SessionID
-    let controls: SessionControls?
+    @Bindable var model: ThreadModel
+    /// How much the crowded bar shows (BarDensity): the chips' words and the note's lines.
+    var density = BarDensity.full
+    /// The thread's announcer, so what the composer says keeps the thread's spacing and never talks over the status line.
+    let announce: (String) -> Void
     var onSend: () -> Void = {}
 
     @Environment(BridgeClient.self) private var client
     @Environment(AppStore.self) private var store
     @Environment(Router.self) private var router
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var draft = ComposerDraft()
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .body) private var scaled = Composer.control
+    /// Send and Stop grow with the text, up to a size that leaves the field its room (F-SES-134).
+    private var control: CGFloat { min(scaled, Composer.control * 1.5) }
+    @AccessibilityFocusState private var lockFocused: Bool
     @State private var caret = 0
     @State private var sends = 0
     @State private var stops = 0
+    @State private var sentAt: Date?
+    @State private var sentQueued = false
+    /// The last message sent from this field, so Sent waits for the Mac to show it back.
+    @State private var sentClientId: ItemID?
+    /// Redraws the composer when Sent or a pending stop runs out of time.
+    @State private var clock = Date.now
+    @State private var confirming: StopScope?
+    /// The change whose lapse was spoken, so a redraw of the same lapse is not spoken again.
+    @State private var lapseSpoken: Date?
+    /// The note's height as shown and as it would be whole, so More shows only when lines are cut.
+    @State private var noteShownHeight: CGFloat = 0
+    @State private var noteFullHeight: CGFloat = 0
+    /// The whole note in a sheet, after More. It shows the note as it is now, and closes when the note goes.
+    @State private var showsFullNote = false
 
-    private var working: Bool { controls?.working ?? false }
+    private var controls: SessionControls? { model.controls }
     private var canSend: Bool { controls?.canSend ?? false }
-    private var hasText: Bool { !draft.isBlank }
-    /// A cloud session runs on claude.ai: the bridge can follow up on it but not stop it.
-    private var canStop: Bool { store.sessions.rows[sessionId]?.origin != .cloud }
-    private var showsStop: Bool { working && !hasText && canStop }
+    /// A cloud session runs on claude.ai: the bridge can follow up on it but not stop it. A thread catching up shows
+    /// what ran when the app last heard, so its Stop would aim at a run that may be over (F-SES-128).
+    private var canStop: Bool { store.sessions.rows[sessionId]?.origin != .cloud && !model.catchingUp }
+    private var stopRequest: StopRequest? { store.latestStop(in: sessionId, [.all, .turn]) }
+
+    private func state(at now: Date) -> ComposerState {
+        ComposerState(
+            controls: controls, hasText: !model.draft.isBlank, canStop: canStop,
+            lastSend: sentAt.map { ($0, sentQueued, sentClientId.map { model.pendingSends[$0] == nil } ?? true) }, stop: stopRequest, now: now
+        )
+    }
 
     var body: some View {
+        let now = max(clock, .now)
+        let state = state(at: now)
+        let note = ComposerNote.of(
+            error: store.sessionErrors[sessionId], stop: state.stop, set: store.sets[sessionId], controls: controls, now: now, offline: store.machine == nil
+        )
         glassGroup {
             VStack(alignment: .leading, spacing: 8) {
                 if let controls { controlsRow(controls) }
                 if canSend || controls == nil {
-                    field
+                    field(state)
                 } else {
-                    Label(controls?.reason ?? "This session can't take a message now.", systemImage: "lock")
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.secondary)
-                        .frame(maxWidth: .infinity, minHeight: Composer.field, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .glass(
-                            in: RoundedRectangle(
-                                cornerRadius: Composer.control / 2 + Composer.inset, style: .continuous)
-                        )
-                        .accessibilityElement(children: .combine)
+                    lockLine
                 }
+                if let note { noteLine(note) }
             }
         }
         #if os(macOS)
@@ -52,6 +78,69 @@ struct SessionComposer: View {
         #endif
         .sensoryFeedback(.impact(weight: .light), trigger: sends)
         .sensoryFeedback(.impact(weight: .medium), trigger: stops)
+        .onChange(of: note == nil) { _, gone in if gone { showsFullNote = false } }
+        #if DEBUG && os(iOS)
+        .task {
+            guard let after = Demo.dropsComposerFocus else { return }
+            try? await Task.sleep(for: after)
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
+        #endif
+        .confirmationDialog(
+            confirming?.confirmTitle ?? "", isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
+            titleVisibility: .visible, presenting: confirming
+        ) { scope in
+            Button(scope.confirmAll, role: .destructive) { stop(.all) }
+            if scope.turn { Button("Stop the turn only") { stop(.turn) } }
+            Button("Cancel", role: .cancel) {}
+        } message: { scope in
+            Text(scope.confirmMessage(queued: model.queuedCount))
+        }
+        .task(id: sentAt) {
+            guard let sentAt else { return }
+            try? await Task.sleep(for: .seconds(max(0, ComposerState.sentShown - Date.now.timeIntervalSince(sentAt))))
+            if !Task.isCancelled { clock = .now }
+        }
+        .task(id: store.sets[sessionId]) {
+            guard let set = store.sets[sessionId] else { return }
+            try? await Task.sleep(for: .seconds(max(0, SetRequest.patience - Date.now.timeIntervalSince(set.at))))
+            if !Task.isCancelled { clock = .now }
+        }
+        .task(id: StopWake(request: stopRequest, stopping: controls?.stopping)) {
+            guard let request = stopRequest, request.state == .pending else { return }
+            for wake in [request.at + StopRequest.patience, request.unconfirmedAt(controls)] where wake > .now {
+                try? await Task.sleep(for: .seconds(wake.timeIntervalSinceNow))
+                if Task.isCancelled { return }
+                clock = .now
+            }
+        }
+        .onChange(of: model.pendingSends) { old, new in
+            for id in Set(old.keys).union(new.keys).sorted(by: { $0.rawValue < $1.rawValue }) {
+                let echoed = new[id] == nil ? model.shownBehindTurn(id) : nil
+                if let text = PendingSend.announcement(old: old[id]?.state, new: new[id]?.state, echoedQueued: echoed) { announce(text) }
+            }
+        }
+        .onChange(of: state.stop?.phase) { _, phase in
+            guard let phase, let scope = state.stop?.scope, let text = ComposerState.announcement(phase, scope) else { return }
+            announce(phase == .stopping && store.machine == nil ? ComposerState.stopWaitsLine : text)
+        }
+        .onChange(of: note) { _, note in
+            guard case let .changeUnconfirmed(set, text)? = note, lapseSpoken != set.at else { return }
+            lapseSpoken = set.at
+            announce(text)
+        }
+        .onChange(of: store.sets[sessionId]) { old, new in
+            if let old, new == nil, let controls, old.landed(in: controls) { announce(old.landedLine) }
+        }
+        .onChange(of: store.sessionErrors[sessionId]) { _, error in
+            // A refused stop is spoken with the stop's own progress.
+            if let error, error.kind != .stop { announce("Error: " + error.text) }
+        }
+        .onChange(of: canSend) { was, now in
+            guard was, !now, let controls else { return }
+            announce(controls.reason ?? "This session can't take a message now.")
+            lockFocused = true
+        }
     }
 
     /// On the Mac the chips and the field sample the backdrop together, so they read as one control group.
@@ -64,148 +153,315 @@ struct SessionComposer: View {
         #endif
     }
 
-    private var field: some View {
-        HStack(alignment: .bottom, spacing: 6) {
-            PromptTextView(
-                draft: $draft, caret: $caret, placeholder: working ? "Queue a message" : "Message Claude",
-                maxLines: 6, onSubmit: { send(interrupt: false) }
-            )
-            .padding(.vertical, 8)
-            .frame(minHeight: Composer.field)
-            .padding(.leading, 16)
-            .disabled(controls == nil)
-            if hasText || showsStop {
-                sendButton
-                    .padding(.bottom, Composer.inset)
-                    .transition(reduceMotion ? .opacity : .scale(scale: 0.5).combined(with: .opacity))
-            }
-        }
-        .padding(.trailing, Composer.inset)
-        .animation(
-            reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.25, extraBounce: 0.12),
-            value: hasText || showsStop
-        )
-        .glass(
-            in: RoundedRectangle(cornerRadius: Composer.control / 2 + Composer.inset, style: .continuous))
+    private var lockLine: some View {
+        Label(controls?.reason ?? "This session can't take a message now.", systemImage: "lock")
+            .font(.subheadline)
+            .foregroundStyle(Theme.secondary)
+            .frame(maxWidth: .infinity, minHeight: Composer.field, alignment: .leading)
+            .padding(.horizontal, 16)
+            .glass(in: RoundedRectangle(cornerRadius: Composer.control / 2 + Composer.inset, style: .continuous))
+            .accessibilityElement(children: .combine)
+            .accessibilityFocused($lockFocused)
     }
 
+    /// At accessibility sizes the controls go under the text, so the field keeps the row's width.
     @ViewBuilder
-    private var sendButton: some View {
-        let label = Image(systemName: showsStop ? "stop.fill" : "arrow.up")
-            .font(.ui(size: showsStop ? 14 : 16, weight: .bold))
-            .contentTransition(.symbolEffect(.replace))
-            .foregroundStyle(.black)
-            .frame(width: Composer.sendWidth, height: Composer.control)
-            .background(Color.white, in: Capsule())
-        if working && hasText && canStop {
-            Menu {
-                Button {
-                    send(interrupt: true)
-                } label: {
-                    Label("Stop and send", systemImage: "stop.circle")
-                }
-                Button {
-                    send(interrupt: false)
-                } label: {
-                    Label("Send after this turn", systemImage: "clock")
-                }
-            } label: {
-                label
-            } primaryAction: {
-                send(interrupt: false)
+    private func field(_ state: ComposerState) -> some View {
+        let text = PromptTextView(
+            draft: $model.draft, caret: $caret, placeholder: ComposerState.placeholder(controls), label: ComposerState.fieldLabel(controls),
+            maxLines: density.fieldLines(accessibility: typeSize.isAccessibilitySize), autofocus: Self.autofocus, onSubmit: { send(interrupt: false) }
+        )
+        .padding(.vertical, 8)
+        .frame(minHeight: Composer.field)
+        .padding(.leading, 16)
+        .disabled(controls == nil)
+        let buttons = HStack(spacing: 6) {
+            if let beside = state.stopBeside {
+                stopButton(beside.scope, beside.phase)
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.5).combined(with: .opacity))
             }
-            .accessibilityLabel("Queue message")
-            .accessibilityHint("Sends when the current turn ends. Hold for Stop and send.")
-            .help("Send After This Turn. Click and hold for Stop and Send.")
-            .accessibilityAction(named: "Stop and send") { send(interrupt: true) }
-        } else {
-            Button {
-                if showsStop { stop() } else { send(interrupt: false) }
-            } label: {
-                label
+            slot(state.slot)
+        }
+        .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.25, extraBounce: 0.12), value: state.stopBeside != nil)
+        // One layout that changes shape, so the field keeps its identity, and with it focus and the keyboard, when the
+        // text size crosses into or out of the accessibility sizes.
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .trailing, spacing: 0))
+            : AnyLayout(HStackLayout(alignment: .bottom, spacing: 6))
+        layout {
+            text
+            buttons.padding(.bottom, buttonsInset)
+        }
+        .padding(.trailing, Composer.inset)
+        .glass(in: RoundedRectangle(cornerRadius: Composer.control / 2 + Composer.inset, style: .continuous))
+    }
+
+    /// Always drawn, so the control under VoiceOver's focus stays put as it turns from Send to Sent to Stop.
+    private func slot(_ slot: ComposerState.Slot) -> some View {
+        Button {
+            switch slot {
+            case .send: send(interrupt: false)
+            case let .stop(scope, phase): tapStop(scope, phase)
             }
-            .buttonStyle(.pressable)
-            .accessibilityLabel(showsStop ? "Stop" : "Send")
-            .help(showsStop ? "Stop" : "Send")
+        } label: {
+            capsule(slot.symbol, spinning: slot.spins, dimmed: !slot.acts)
+        }
+        .buttonStyle(.pressable)
+        .disabled(!slot.acts)
+        .contextMenu {
+            if case .send(.queue) = slot {
+                Button { send(interrupt: true) } label: { Label("Stop turn and send", systemImage: "stop.circle") }
+                Button { send(interrupt: false) } label: { Label("Send after this turn", systemImage: "clock") }
+            }
+        }
+        .accessibilityLabel(slot.label)
+        .accessibilityHint(slot.hint ?? "")
+        .accessibilityActions {
+            if case .send(.queue) = slot { Button("Stop turn and send") { send(interrupt: true) } }
+        }
+        .help(slot == .send(.queue) ? "Send After This Turn. Right-click for Stop Turn and Send." : slot.label)
+    }
+
+    private func stopButton(_ scope: StopScope, _ phase: StopPhase) -> some View {
+        let slot = ComposerState.Slot.stop(scope, phase)
+        return Button { tapStop(scope, phase) } label: {
+            capsule(slot.symbol, spinning: slot.spins, dimmed: false, filled: false)
+        }
+        .buttonStyle(.pressable)
+        .disabled(!slot.acts)
+        .accessibilityLabel(slot.label)
+        .accessibilityHint(slot.hint ?? "")
+        .help(slot.label)
+    }
+
+    private func capsule(_ symbol: String, spinning: Bool, dimmed: Bool, filled: Bool = true) -> some View {
+        Group {
+            if spinning {
+                ProgressView().controlSize(.small).tint(filled ? .black : .white)
+            } else {
+                Image(systemName: symbol)
+                    .font(.system(size: control * (symbol == "stop.fill" ? 0.4 : 0.45), weight: .bold))
+                    .contentTransition(.symbolEffect(.replace))
+            }
+        }
+        .foregroundStyle(filled ? .black : .white)
+        .frame(width: control + (Composer.sendWidth - Composer.control), height: control)
+        .background(filled ? Color.white.opacity(dimmed ? 0.35 : 1) : Theme.raised, in: Capsule())
+        .frame(minWidth: HitTarget.minHeight, minHeight: HitTarget.minHeight)
+        .contentShape(Rectangle())
+    }
+
+    /// The buttons' hit area reaches past the capsule, so the capsule keeps its place by giving that back here.
+    private var buttonsInset: CGFloat {
+        max(0, Composer.inset - max(0, (HitTarget.minHeight - control) / 2))
+    }
+
+    /// The note keeps to a few lines (BarDensity.noteLines) with More for the rest. At accessibility sizes its buttons go
+    /// under the words, so they keep the row's width; in a crowded bar the buttons are glyphs beside them.
+    private func noteLine(_ note: ComposerNote) -> some View {
+        let dense = !density.chipWords
+        let stacked = typeSize.isAccessibilitySize && !dense
+        let layout = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0)) : AnyLayout(HStackLayout(alignment: .center, spacing: 4))
+        let lines = density.noteLines(accessibility: typeSize.isAccessibilitySize)
+        return layout {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                switch note {
+                case .error:
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.danger)
+                case .stopping, .claudeStopping, .changing:
+                    ProgressView().controlSize(.mini)
+                case .stopWaits, .stopNotSent, .changeWaits:
+                    Image(systemName: "wifi.slash").foregroundStyle(Theme.attention)
+                case .unconfirmed, .changeUnconfirmed:
+                    Image(systemName: "questionmark.circle").foregroundStyle(Theme.attention)
+                }
+                Text(note.text)
+                    .foregroundStyle(note.isError ? Theme.danger : Theme.secondary)
+                    .lineLimit(lines)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(alignment: .topLeading) {
+                        Text(note.text)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .hidden()
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { noteFullHeight = $0 }
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { noteShownHeight = $0 }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(note.spoken)
+            HStack(spacing: 4) {
+                if noteFullHeight > noteShownHeight + 1 {
+                    noteButton("More", symbol: "ellipsis.circle", dense: dense) { showsFullNote = true }
+                        // Apart from the navigation bar's More, and with the word on screen in it for Voice Control.
+                        .accessibilityLabel("More of the message")
+                        .accessibilityHint("Shows the whole message")
+                }
+                if let dismiss = dismiss(note) {
+                    noteButton("Dismiss", symbol: "xmark.circle.fill", dense: dense, action: dismiss)
+                        .accessibilityLabel("Dismiss")
+                }
+            }
+        }
+        .font(.footnote)
+        // Past this size the line alone would take the screen and push the field out of it.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+        .padding(.horizontal, 16)
+        .accessibilityElement(children: .contain)
+        .sheet(isPresented: $showsFullNote) {
+            NoteSheet(text: note.text, tone: note.isError ? Theme.danger : .white, dismiss: dismiss(note))
+        }
+    }
+
+    /// At least a fingertip in both directions.
+    private func noteButton(_ title: String, symbol: String, dense: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Group {
+                if dense { Image(systemName: symbol).foregroundStyle(Theme.tertiary) } else { Text(title) }
+            }
+            .frame(minWidth: HitTarget.minHeight, minHeight: HitTarget.minHeight)
+            .contentShape(Rectangle())
+        }
+        .font(.footnote.weight(.semibold))
+        .buttonStyle(.borderless)
+    }
+
+    /// An error, or a change that never landed, stays until the user puts it away.
+    private func dismiss(_ note: ComposerNote) -> (() -> Void)? {
+        switch note {
+        case .error(let error): { store.dismissSessionError(error, in: sessionId) }
+        case .changeUnconfirmed: { store.dismissSet(in: sessionId) }
+        case .stopping, .stopWaits, .claudeStopping, .stopNotSent, .unconfirmed, .changing, .changeWaits: nil
         }
     }
 
     private func controlsRow(_ controls: SessionControls) -> some View {
-        HStack(spacing: 8) {
-            chipsScroller {
-                HStack(spacing: 8) {
-                    if !controls.models.isEmpty {
-                        Menu {
-                            Picker(
-                                "Model",
-                                selection: Binding(
-                                    get: { controls.model ?? controls.models.first?.id ?? "" },
-                                    set: {
-                                        client.send(
-                                            .sessionSet(sessionId: sessionId, patch: SessionPatch(model: .some($0))))
-                                    }
-                                )
-                            ) {
-                                ForEach(controls.models) { Text($0.label).tag($0.id) }
-                            }
-                        } label: {
-                            chip(Self.modelLabel(controls), symbol: "cpu")
+        let changing = store.sets[sessionId].flatMap { Date.now.timeIntervalSince($0.at) < SetRequest.patience ? $0.change : nil }
+        // Where chips can wrap, the usage ring joins them: the flow then has the row's whole width, and it measures its
+        // rows the same way when it is asked for its size as when it is laid out.
+        let stacked = typeSize >= .xxxLarge
+        return HStack(spacing: 8) {
+            ChipFlow(spacing: 8, lineSpacing: 0) {
+                if !controls.models.isEmpty {
+                    Menu {
+                        Picker(
+                            "Model",
+                            selection: Binding(
+                                get: { controls.model ?? controls.models.first?.id ?? "" },
+                                set: { client.send(.sessionSet(sessionId: sessionId, patch: SessionPatch(model: .some($0)))) }
+                            )
+                        ) {
+                            ForEach(controls.models) { Text($0.label).tag($0.id) }
                         }
-                        .chipMenu()
-                        .accessibilityLabel("Model, \(Self.modelLabel(controls))")
-                        .help("Model")
+                    } label: {
+                        chip(controls.modelLabel, short: controls.modelLabel, symbol: "cpu", busy: changing.map { if case .model = $0 { true } else { false } } ?? false)
                     }
-                    if !controls.modes.isEmpty {
-                        Menu {
-                            Picker(
-                                "Mode",
-                                selection: Binding(
-                                    get: { controls.mode },
-                                    set: {
-                                        client.send(.sessionSet(sessionId: sessionId, patch: SessionPatch(mode: $0)))
-                                    }
-                                )
-                            ) {
-                                ForEach(controls.modes.filter { $0 != .bypassPermissions }, id: \.self) { mode in
-                                    Label(SessionText.mode(mode), systemImage: SessionText.modeSymbol(mode)).tag(mode)
-                                }
-                            }
-                        } label: {
-                            chip(SessionText.mode(controls.mode), symbol: SessionText.modeSymbol(controls.mode))
-                        }
-                        .chipMenu()
-                        .accessibilityLabel("Mode, \(SessionText.mode(controls.mode))")
-                        .help("Permission Mode")
-                    }
-                    if controls.queued > 0 {
-                        chip("\(controls.queued) queued", symbol: "clock", tint: Theme.secondary)
-                            .accessibilityLabel("\(controls.queued) messages queued")
-                    }
+                    .chipMenu()
+                    .accessibilityLabel("Model, \(controls.modelLabel)" + Self.changingWords(changing, model: true))
+                    .help("Model")
                 }
-                .padding(.horizontal, 4)
+                if !controls.modes.isEmpty {
+                    Menu {
+                        Picker(
+                            "Mode",
+                            selection: Binding(
+                                get: { controls.mode },
+                                set: { client.send(.sessionSet(sessionId: sessionId, patch: SessionPatch(mode: $0))) }
+                            )
+                        ) {
+                            ForEach(controls.modes.filter { $0 != .bypassPermissions }, id: \.self) { mode in
+                                Label(SessionText.mode(mode), systemImage: SessionText.modeSymbol(mode)).tag(mode)
+                            }
+                        }
+                    } label: {
+                        chip(
+                            SessionText.mode(controls.mode), symbol: SessionText.modeSymbol(controls.mode),
+                            busy: changing.map { if case .mode = $0 { true } else { false } } ?? false
+                        )
+                    }
+                    .chipMenu()
+                    .accessibilityLabel("Mode, \(SessionText.mode(controls.mode))" + Self.changingWords(changing, model: false))
+                    .help("Permission Mode")
+                }
+                if model.queuedCount > 0 { queuedChip(model.queuedCount) }
+                if stacked { usage }
             }
-            if store.has(.usage) {
-                SessionUsageButton(usage: store.usage) { router.showingUsage = true }
-            }
+            .padding(.horizontal, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if !stacked { usage }
+        }
+        // The chips are settings, not the conversation. Past this size they would push the field off the screen.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+    }
+
+    @ViewBuilder
+    private var usage: some View {
+        if store.has(.usage) {
+            SessionUsageButton(usage: store.usage) { router.showingUsage = true }
         }
     }
 
-    /// A phone scrolls the chips sideways. A Mac window has the room, so the row lays out flat.
-    @ViewBuilder
-    private func chipsScroller(@ViewBuilder _ content: () -> some View) -> some View {
-        #if os(macOS)
-        content().frame(maxWidth: .infinity, alignment: .leading)
-        #else
-        ScrollView(.horizontal, showsIndicators: false, content: content)
-        #endif
+    /// ". Changing to Accept edits" while that change is in flight, so the label never claims the new value early.
+    private static func changingWords(_ change: SetRequest.Change?, model: Bool) -> String {
+        switch change {
+        case .model(_, let label)? where model: ". Changing to \(label)"
+        case .mode(let mode)? where !model: ". Changing to \(SessionText.mode(mode))"
+        default: ""
+        }
     }
 
-    private func chip(_ title: String, symbol: String, tint: Color = .white) -> some View {
+    /// The messages waiting for the turn, each with Edit and Withdraw on a bridge that takes them back (F-SES-040).
+    @ViewBuilder
+    private func queuedChip(_ count: Int) -> some View {
+        let label = ComposerState.queuedLabel(count)
+        let waiting = model.queuedMessages
+        if store.has(.sessionUnqueue), !waiting.isEmpty {
+            Menu {
+                ForEach(Array(waiting.enumerated()), id: \.element.id) { position, message in
+                    Section(OpenCard.firstLine(message.text, limit: 40) ?? "Message") {
+                        Button { client.withdraw(message.id, text: message.text, from: model, edit: true) } label: {
+                            Label(Self.queuedAction("Edit", message.text, position: position, of: waiting.count), systemImage: "pencil")
+                        }
+                        Button(role: .destructive) { client.withdraw(message.id, text: message.text, from: model, edit: false) } label: {
+                            Label(Self.queuedAction("Withdraw", message.text, position: position, of: waiting.count), systemImage: "arrow.uturn.backward")
+                        }
+                    }
+                }
+            } label: {
+                chip(label, short: "\(count)", symbol: "clock", tint: Theme.secondary)
+            }
+            .chipMenu()
+            .accessibilityLabel(label)
+            .accessibilityHint("Edit or withdraw before it runs")
+        } else {
+            chip(label, short: "\(count)", symbol: "clock", tint: Theme.secondary, menu: false)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(label)
+        }
+    }
+
+    /// "Edit “Fix the tests”", or "Edit message 2: “Fix the tests”" when several wait: each message's buttons name it,
+    /// and its place tells apart two that start alike (F-SES-235). position counts from 0.
+    static func queuedAction(_ verb: String, _ text: String, position: Int = 0, of count: Int = 1) -> String {
+        let quoted = "“\(OpenCard.firstLine(text, limit: 40) ?? "message")”"
+        return count > 1 ? "\(verb) message \(position + 1): \(quoted)" : "\(verb) \(quoted)"
+    }
+
+    /// short: the words kept in a crowded bar; none by default, so the chip shows its icon. Its spoken label stays whole.
+    private func chip(_ title: String, short: String? = nil, symbol: String, tint: Color = .white, busy: Bool = false, menu: Bool = true) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: symbol).font(.caption)
-            Text(title).font(.footnote.weight(.medium)).lineLimit(1)
-            Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(
-                Theme.tertiary)
+            if busy {
+                ProgressView().controlSize(.mini)
+            } else {
+                Image(systemName: symbol).font(.caption)
+            }
+            if let words = density.chipWords ? title : short {
+                Text(words).font(.footnote.weight(.medium)).lineLimit(2).truncationMode(.tail).fixedSize(horizontal: false, vertical: true)
+            }
+            if menu {
+                Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(Theme.tertiary)
+            }
         }
         .foregroundStyle(tint)
         .padding(.horizontal, 11)
@@ -214,35 +470,170 @@ struct SessionComposer: View {
         #else
         .frame(minHeight: 32)
         #endif
-        .glass(in: Capsule(), interactive: true)
+        .glass(in: Capsule(), interactive: menu)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
     }
 
-    /// The chip's short name: "Default (Opus 5.5)" reads "Default"; the menu keeps the whole label.
-    static func modelLabel(_ controls: SessionControls) -> String {
-        let id = controls.model ?? controls.models.first?.id
-        let label = controls.models.first { $0.id == id }?.label ?? controls.model ?? "Model"
-        return label.replacing(/\s*\(.*\)$/, with: "")
-    }
-
     private func send(interrupt: Bool) {
-        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = model.draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, canSend else { return }
+        let queued = !interrupt && ComposerState.queues(controls)
+        let offline = store.machine == nil
         let clientId = UUID().uuidString
-        store.threads[sessionId]?.echo(clientId: clientId, text: text)
-        client.send(
-            .sessionSend(sessionId: sessionId, text: text, clientId: clientId, interrupt: interrupt))
-        draft = ComposerDraft()
+        let message = Self.message(sessionId: sessionId, text: text, clientId: clientId, interrupt: interrupt, controls: controls)
+        if case let .sessionSend(_, _, _, interrupt, turnStartedAt) = message {
+            model.echo(clientId: clientId, text: text, interrupt: interrupt, turnStartedAt: turnStartedAt)
+        }
+        client.send(message)
+        model.draft = ComposerDraft()
         caret = 0
         sends += 1
+        sentAt = offline ? nil : .now
+        sentQueued = queued
+        sentClientId = ItemID(clientId)
+        announce(ComposerState.sentAnnouncement(offline: offline))
         onSend()
     }
 
-    private func stop() {
-        client.send(.sessionStop(sessionId: sessionId))
+    /// Stop and send names the turn it stops, so a frame that arrives after that turn ended never stops a newer one.
+    static func message(sessionId: SessionID, text: String, clientId: String, interrupt: Bool, controls: SessionControls?) -> ClientMessage {
+        .sessionSend(sessionId: sessionId, text: text, clientId: clientId, interrupt: interrupt, turnStartedAt: interrupt ? controls?.turn?.startedAt : nil)
+    }
+
+    /// Only a stop that would end background work asks first (P-STOP-3). Trying again after a refusal does not ask twice: it
+    /// asks again for exactly what was refused, aimed at the same turn.
+    private func tapStop(_ scope: StopScope, _ phase: StopPhase) {
+        if phase.retries, let request = stopRequest {
+            stop(request.target, turn: request.turnStartedAt)
+        } else if scope.asks {
+            confirming = scope
+        } else {
+            stop(.all)
+        }
+    }
+
+    /// A bridge without tasks stops everything and knows no turn identity, so the frame stays as it always was there.
+    private func stop(_ target: StopTarget, turn: String?? = .none) {
+        let aimed = store.has(.sessionTasks)
+        let turnStartedAt = turn ?? controls?.turn?.startedAt
+        client.send(.sessionStop(sessionId: sessionId, target: aimed ? target : nil, turnStartedAt: aimed ? turnStartedAt : nil))
         stops += 1
     }
+
+    #if DEBUG
+    private static let autofocus = Demo.focusesComposer
+    #else
+    private static let autofocus = false
+    #endif
+}
+
+/// Chips in rows: one that does not fit goes to the next row, so none is cut or scrolled out of sight (F-SES-134).
+private struct ChipFlow: Layout {
+    var spacing: CGFloat
+    /// The chips carry their own vertical padding.
+    var lineSpacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = rows(subviews, width: proposal.width ?? .infinity)
+        let width = rows.map(\.width).max() ?? 0
+        let height = rows.map(\.height).reduce(0, +) + lineSpacing * CGFloat(max(0, rows.count - 1))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(subviews, width: bounds.width) {
+            var x = bounds.minX
+            for index in row.items {
+                let size = size(of: subviews[index], width: bounds.width)
+                subviews[index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + lineSpacing
+        }
+    }
+
+    private func rows(_ subviews: Subviews, width: CGFloat) -> [(items: [Int], width: CGFloat, height: CGFloat)] {
+        var rows: [(items: [Int], width: CGFloat, height: CGFloat)] = []
+        for (index, subview) in subviews.enumerated() {
+            let size = size(of: subview, width: width)
+            if let last = rows.indices.last, rows[last].width + spacing + size.width <= width {
+                rows[last].items.append(index)
+                rows[last].width += spacing + size.width
+                rows[last].height = max(rows[last].height, size.height)
+            } else {
+                rows.append(([index], size.width, size.height))
+            }
+        }
+        return rows
+    }
+
+    /// A chip keeps its one-line width, and wraps its words only when even a row of its own is too narrow. It is at least
+    /// a fingertip tall, whatever its words measure.
+    private func size(of subview: LayoutSubview, width: CGFloat) -> CGSize {
+        let ideal = subview.sizeThatFits(.unspecified)
+        let size = ideal.width <= width ? ideal : subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+        return CGSize(width: size.width, height: max(size.height, HitTarget.minHeight))
+    }
+}
+
+/// What the composer's stop clock wakes for: a new stop, or a change to the bridge's deadline.
+private struct StopWake: Equatable {
+    let request: StopRequest?
+    let stopping: SessionStopping?
+}
+
+private extension ComposerNote {
+    var isError: Bool {
+        if case .error = self { true } else { false }
+    }
+}
+
+extension ThreadModel {
+    /// Whether the thread shows the phone's message waiting behind a turn, under its clientId or as the transcript's copy;
+    /// nil when it does not show it. The bridge shows a message queued until Claude Code takes it, even with no turn
+    /// to wait behind.
+    func shownBehindTurn(_ clientId: ItemID) -> Bool? {
+        for case let .user(id, _, _, _, queued, copyOf) in items where id == clientId || copyOf == clientId.rawValue {
+            return queued && ComposerState.queues(controls)
+        }
+        return nil
+    }
+
+    /// The user's messages that wait for the turn, oldest first.
+    var queuedMessages: [(id: ItemID, text: String)] {
+        items.compactMap { if case let .user(id, _, text, .user, true, _) = $0, !withdrawing.contains(id) { (id, text) } else { nil } }
+    }
+}
+
+extension BridgeClient {
+    /// Takes a queued message back before it runs. edit: its text goes back in the composer, once, however often the
+    /// withdrawal is tried.
+    func withdraw(_ id: ItemID, text: String, from model: ThreadModel, edit: Bool) {
+        if edit, model.withdrawals[id]?.edited != true { model.edit(text) }
+        model.withdraw(id, edited: edit)
+        send(.sessionUnqueue(sessionId: model.id, clientId: id.rawValue))
+    }
+}
+
+/// Where the New Session sheet's Start stands (F-SES-036).
+enum StartPhase: Equatable, Sendable {
+    case editing
+    case starting(ref: String, at: Date)
+    /// No word from the Mac within the patience, or the connection dropped meanwhile: the session may exist.
+    case unconfirmed(ref: String)
+    /// The Mac refused it, in its words.
+    case refused(String)
+
+    /// How long Start waits for the Mac before it says it could not confirm.
+    static let patience: TimeInterval = 20
+
+    static let startingLine = "Starting session…"
+    static let unconfirmedLine = "Couldn't confirm. Check the list or retry."
+    static let offlineLabel = "Start (your Mac is unreachable)"
+    static let reconnectingLabel = "Start (reconnecting to your Mac)"
+    static let unrecognizedLabel = "Start (your Mac doesn't recognize this \(ThisDevice.noun))"
 }
 
 struct NewSessionSheet: View {
@@ -252,20 +643,34 @@ struct NewSessionSheet: View {
     @Environment(BridgeClient.self) private var client
     @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppModel.self) private var app
     @State private var place: SessionPlace?
-    @State private var draft = ComposerDraft()
     @State private var caret = 0
     @State private var model: String?
     @State private var mode: PermissionMode?
     @State private var worktree = false
-    @State private var starting = false
+    @State private var phase = StartPhase.editing
+    @State private var lastRetryFailed = false
 
     private var models: [SessionModelOption] {
         store.threads.lastModels
     }
 
+    private var starting: Bool {
+        if case .starting = phase { true } else { false }
+    }
+
+    private var startLabel: String {
+        switch store.connection {
+        case .connected: Self.startTitle
+        case .unrecognized: StartPhase.unrecognizedLabel
+        case .connecting where store.rejoin != nil: StartPhase.reconnectingLabel
+        default: StartPhase.offlineLabel
+        }
+    }
+
     private var canStart: Bool {
-        place != nil && !draft.isBlank && !starting && store.machine != nil
+        place != nil && !router.newSessionDraft.isBlank && !starting && store.machine != nil
     }
 
     /// Grouped by machine only when the world has several; otherwise one flat list on the home.
@@ -292,8 +697,24 @@ struct NewSessionSheet: View {
     }
 
     var body: some View {
+        @Bindable var router = router
         NavigationStack {
             Form {
+                // Start needs the Mac, so the sheet says when it is out of reach and offers Retry (F-SES-154).
+                if store.connection == .unrecognized {
+                    Section {
+                        UnrecognizedBanner {
+                            dismiss()
+                            app.beginPairing()
+                        }
+                        .listRowInsets(EdgeInsets())
+                    }
+                } else if !store.showsOnline {
+                    Section {
+                        ConnectionBanner(state: store.connection, lastRetryFailed: $lastRetryFailed)
+                            .listRowInsets(EdgeInsets())
+                    }
+                }
                 Section {
                     // A navigation-link picker draws a section header as one more row, so the machine is its own
                     // picker and the projects follow it.
@@ -311,7 +732,7 @@ struct NewSessionSheet: View {
                     }
                     Picker("Project", selection: $place) {
                         ForEach(projectChoices, id: \.self) { choice in
-                            Text(store.sessions.projects[choice.project]?.name ?? choice.project.rawValue).tag(Optional(choice))
+                            Text(store.sessions.projects[choice.project]?.shownName ?? choice.project.rawValue).tag(Optional(choice))
                         }
                     }
                     .pickerStyle(.navigationLink)
@@ -323,7 +744,7 @@ struct NewSessionSheet: View {
                 }
                 Section {
                     PromptTextView(
-                        draft: $draft, caret: $caret, placeholder: "What should Claude do?", minLines: 4,
+                        draft: $router.newSessionDraft, caret: $caret, placeholder: "What should Claude do?", minLines: 4,
                         maxLines: 10, autofocus: true
                     )
                     .padding(.vertical, 4)
@@ -352,6 +773,7 @@ struct NewSessionSheet: View {
                             ? "Claude works on its own branch in a new worktree, so the project's checkout stays as it is."
                             : "Claude works in the project's folder, on the branch checked out there.")
                 }
+                if phase != .editing { Section { startLine } }
             }
             #if os(macOS)
             .formStyle(.grouped)
@@ -366,8 +788,12 @@ struct NewSessionSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     if starting {
                         ProgressView()
+                            .accessibilityLabel(StartPhase.startingLine)
                     } else {
-                        Button(Self.startTitle, action: start).disabled(!canStart)
+                        Button(Self.startTitle, action: start)
+                            .disabled(!canStart)
+                            .accessibilityLabel(startLabel)
+                            .help(startLabel)
                     }
                 }
             }
@@ -376,14 +802,65 @@ struct NewSessionSheet: View {
         .frame(minWidth: 480, idealWidth: 520, minHeight: 420, idealHeight: 460)
         #endif
         .onAppear { place = firstPlace }
-        // A refused create comes back as an error frame, so the sheet lets the user try again.
-        .onChange(of: store.lastError) {
-            if starting {
-                starting = false
-                router.pendingSessionCreate = nil
-            }
+        .task(id: phase) {
+            guard case let .starting(ref, at) = phase else { return }
+            try? await Task.sleep(for: .seconds(max(0, StartPhase.patience - Date.now.timeIntervalSince(at))))
+            if !Task.isCancelled, phase == .starting(ref: ref, at: at) { settle(.unconfirmed(ref: ref)) }
+        }
+        // A reply on a socket that dropped is lost with it, so the sheet cannot tell whether the session started.
+        .onChange(of: store.machine == nil) { _, lost in
+            if lost, case let .starting(ref, _) = phase { settle(.unconfirmed(ref: ref)) }
+        }
+        .onChange(of: refusal) { _, why in
+            guard let why else { return }
+            router.pendingSessionCreate = nil
+            settle(.refused(why))
         }
         .interactiveDismissDisabled(starting)
+    }
+
+    /// The Mac's refusal of the Start in flight or not confirmed.
+    private var refusal: String? {
+        switch phase {
+        case let .starting(ref, _), let .unconfirmed(ref): store.createRefusals[ref]
+        case .editing, .refused: nil
+        }
+    }
+
+    @ViewBuilder
+    private var startLine: some View {
+        switch phase {
+        case .editing:
+            EmptyView()
+        case .starting:
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text(StartPhase.startingLine).foregroundStyle(Theme.secondary)
+            }
+            .accessibilityElement(children: .combine)
+        case .unconfirmed(let ref):
+            VStack(alignment: .leading, spacing: 8) {
+                Label(StartPhase.unconfirmedLine, systemImage: "questionmark.circle")
+                    .foregroundStyle(Theme.attention)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Retry") { send(ref: ref) }
+                    .disabled(store.machine == nil)
+                    .accessibilityLabel("Retry starting the session")
+            }
+        case .refused(let why):
+            Label(why, systemImage: "exclamationmark.triangle")
+                .foregroundStyle(Theme.danger)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func settle(_ next: StartPhase) {
+        phase = next
+        switch next {
+        case .unconfirmed: AccessibilityNotification.Announcement(StartPhase.unconfirmedLine).post()
+        case .refused(let why): AccessibilityNotification.Announcement("Couldn't start. " + why).post()
+        case .editing, .starting: break
+        }
     }
 
     #if os(macOS)
@@ -392,15 +869,23 @@ struct NewSessionSheet: View {
     private static let startTitle = "Start"
     #endif
 
+    /// A Start the Mac never confirmed may have made the session, so Start sends its ref again, as Retry does.
     private func start() {
-        guard let place, canStart else { return }
-        let ref = UUID().uuidString
-        starting = true
+        guard canStart else { return }
+        if case .unconfirmed(let ref) = phase { return send(ref: ref) }
+        send(ref: UUID().uuidString)
+    }
+
+    /// A retry sends the same ref, which the Mac answers with the session it already made, so it never makes two.
+    private func send(ref: String) {
+        guard let place else { return }
+        phase = .starting(ref: ref, at: .now)
         router.pendingSessionCreate = ref
+        AccessibilityNotification.Announcement(StartPhase.startingLine).post()
         client.send(
             .sessionCreate(
                 ref: ref, projectId: place.project,
-                text: draft.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                text: router.newSessionDraft.text.trimmingCharacters(in: .whitespacesAndNewlines),
                 model: model, mode: mode, isolate: worktree ? .worktree : .inPlace, machine: place.machine
             ))
     }
@@ -415,5 +900,41 @@ private extension View {
         #else
         self
         #endif
+    }
+}
+
+/// A composer note too long for the bar, whole and scrollable.
+private struct NoteSheet: View {
+    let text: String
+    let tone: Color
+    let dismiss: (() -> Void)?
+
+    @Environment(\.dismiss) private var close
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(text)
+                    .foregroundStyle(tone)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+            }
+            .background(Theme.background)
+            .navigationTitle("Message")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { close() } }
+                if let dismiss {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Dismiss") {
+                            dismiss()
+                            close()
+                        }
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }

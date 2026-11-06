@@ -52,6 +52,36 @@ struct StreamCursor: Equatable, Sendable {
     }
 }
 
+/// How long a request the user made may wait for a socket (Run3 calls 1 and 2). Every case of ClientMessage is listed,
+/// so a new request has to choose.
+enum OutboxRule: Equatable, Sendable {
+    /// It waits for the next hello however long that takes.
+    case waits
+    /// It goes only within `maxAge` of the tap. After that it is dropped, and the screen says so.
+    case expires
+
+    static let maxAge: TimeInterval = 60
+
+    static func of(_ msg: ClientMessage) -> OutboxRule {
+        switch msg {
+        case .sessionSend, .sessionStop, .sessionUnqueue, .sessionDecide, .sessionAnswer, .sessionCreate, .sessionSet, .sessionOpenDesktop,
+             .sessionPrefs, .stop, .stopAgent, .decide, .send, .createBot, .createGroup:
+            .expires
+        case .open, .answer, .dismiss, .updateBot, .markUnread, .deleteBot, .setRoutine, .runRoutine, .details, .agent,
+             .file, .memory, .setFact, .forgetFact, .confirmFact, .connectors, .setConnector, .skills, .deleteSkill, .webhookToken,
+             .removeWorktree, .commands, .exchange, .devices, .revokeDevice, .pairCode, .presence, .refreshUsage,
+             .watchSessions, .unwatchSessions, .watchSession, .unwatchSession, .sessionPage, .sessionTool, .machineCode, .removeMachine:
+            .waits
+        }
+    }
+}
+
+/// What the phone's network looks like. A change can kill the socket without telling it, or bring the Mac back.
+struct NetworkPath: Equatable, Sendable {
+    var satisfied: Bool
+    var interfaces: [String]
+}
+
 /// Owns the one WebSocket to the Mac bridge and feeds every frame into the store's reducer.
 @Observable
 @MainActor
@@ -62,17 +92,30 @@ final class BridgeClient {
         var health: TimeInterval = 10
         var reply: Duration = .seconds(10)
         var legacyRetry: Duration = .seconds(600)
-        /// A Stop queued offline for longer than this is dropped: by the time it arrives it would stop a later turn.
-        var staleStop: TimeInterval = 60
+        /// A request that expires (OutboxRule) and waited longer than this is dropped: by the time it arrived it would
+        /// stop a later turn, or change what the user no longer has in mind.
+        var outboxAge: TimeInterval = OutboxRule.maxAge
+        /// How often the socket is pinged, and how long the pong may take before the socket counts as dead.
+        var ping: Duration = .seconds(20)
+        var pong: Duration = .seconds(5)
+        /// The pong deadline when the app has reason to doubt the socket: back on screen, or on another network.
+        var probe: Duration = .seconds(2)
+        /// Back on screen after this long away, the app connects again instead of probing the socket.
+        var awayBeforeReconnect: TimeInterval = 10
+        /// No frame for this long while a thread on screen is working makes the connection quiet.
+        var quiet: TimeInterval = 45
+        /// Network changes this close together count as one.
+        var settle: Duration = .milliseconds(500)
+        /// A watch sent for a lost thread frame with no snapshot back by then is sent once more.
+        var repairWait: Duration = .seconds(5)
     }
-
-    /// Failed connects in a row after which the app offers to edit the address or pair again.
-    static let failuresBeforeHelp = 3
 
     enum Ending: Equatable, Sendable { case greeted, failed, revoked, unrecognized }
 
     let store: AppStore
     @ObservationIgnored var onAlerts: ([Alert]) -> Void = { _ in }
+    /// Threads newly on screen, so their notifications can go.
+    @ObservationIgnored var onThreadsShown: ([SessionID]) -> Void = { _ in }
     /// The client dropped everything from a Mac: the user unpaired, the Mac revoked this iPhone, or another bridge replaced it.
     @ObservationIgnored var onForget: () -> Void = {}
 
@@ -93,21 +136,23 @@ final class BridgeClient {
         let change = onScreen.set(viewing, for: lease)
         guard !change.isEmpty else { return }
         store.threads.keep(onScreen.sessions)
+        if !change.watched.isEmpty { onThreadsShown(change.watched) }
         change.opened.forEach { transmitIfConnected(.open(botId: $0)) }
         guard store.has(.sessions) else {
             change.watched.forEach { store.threads.open($0) }
             return
         }
-        change.unwatched.forEach { transmitIfConnected(.unwatchSession(sessionId: $0)) }
+        if awaySince == nil { change.unwatched.forEach { transmitIfConnected(.unwatchSession(sessionId: $0)) } }
         if let list = change.sessionsList { transmitIfConnected(list ? .watchSessions : .unwatchSessions) }
         for id in change.watched {
             store.threads.open(id)
-            watchThreadIfConnected(id)
+            if awaySince == nil { watchThreadIfConnected(id) }
         }
     }
 
     /// Whether someone is looking at this app, sent after every hello and on every change to a bridge with presence.
-    /// nil never sends one, so the bridge counts the socket as attended: the iPhone leaves it nil.
+    /// nil never sends one, so the bridge counts the socket as attended. The Mac follows its active state; the iPhone
+    /// sets it when it leaves the screen and comes back.
     var attended: Bool? {
         didSet {
             guard let attended, attended != oldValue, store.has(.presence) else { return }
@@ -123,10 +168,18 @@ final class BridgeClient {
     @ObservationIgnored private var nap: Task<Void, Never>?
     @ObservationIgnored private var upgrade: Task<Void, Never>?
     @ObservationIgnored private var pairCodeReply: (@Sendable (PairCode?) -> Void)?
-    /// What the user did offline, with when, sent after the next hello.
+    /// What the user did offline, with when it was tapped, sent after the next hello.
     @ObservationIgnored private var outbox: [(message: ClientMessage, at: Date)] = []
     /// Kept across reconnects to one bridge, because the store still holds what came before.
     @ObservationIgnored private var cursor = StreamCursor()
+    /// Set by `reconnect()`: the attempt that ends next is followed by another at once, and is not counted as a failure.
+    @ObservationIgnored private var hurry = false
+    /// When the last frame arrived on the current socket.
+    @ObservationIgnored private var heardAt = Date.now
+    /// When the app left the screen, while it is away. Threads are not watched meanwhile.
+    @ObservationIgnored private var awaySince: Date?
+    @ObservationIgnored private var network: NetworkPath?
+    @ObservationIgnored private var settling: Task<Void, Never>?
     @ObservationIgnored private let log = Logger(subsystem: "dev.claudiobot.app", category: "bridge")
 
     init(store: AppStore, vault: PairingVault = .app, deviceName: String = "iPhone", timing: Timing = Timing()) {
@@ -204,29 +257,173 @@ final class BridgeClient {
         forget(reason: nil)
     }
 
-    /// Tries a bridge that did not recognize this iPhone again, for example back on the home network.
-    func retry() {
-        if store.connection == .unrecognized, let pairing { start(pairing) }
+    /// Connects now instead of waiting out the backoff, tries a bridge that did not recognize this iPhone again, or
+    /// checks that a connected socket still answers. An attempt already under way is left to finish, unless the user
+    /// asked to restart it: one that hangs waits out its greeting deadline otherwise.
+    func retryNow(restartingAttempt: Bool = false) {
+        guard let pairing else { return }
+        switch store.connection {
+        case .connected: if let socket { probe(socket, within: timing.probe) }
+        case .disconnected: reconnect()
+        case .unrecognized: start(pairing)
+        case .connecting: if restartingAttempt { reconnect() }
+        case .unpaired: break
+        }
     }
 
-    /// Skips the remaining backoff, for example when the app returns to the foreground.
-    func reconnectNow() {
+    /// True once the Mac said hello.
+    func retryNowAndWait(within limit: Duration = .seconds(15), restartingAttempt: Bool = false) async -> Bool {
+        let before = failures
+        retryNow(restartingAttempt: restartingAttempt)
+        let deadline = ContinuousClock.now + limit
+        while ContinuousClock.now < deadline, !Task.isCancelled, store.machine == nil {
+            if failures > before || store.connection == .unrecognized { break }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return store.machine != nil
+    }
+
+    /// A new network may have killed the socket without a word, or stalled an attempt on the old one.
+    func networkChanged(_ path: NetworkPath) {
+        settling?.cancel()
+        settling = Task { [weak self, settle = timing.settle] in
+            try? await Task.sleep(for: settle)
+            guard !Task.isCancelled, let self else { return }
+            let previous = network
+            network = path
+            guard let previous, previous != path, path.satisfied || store.machine != nil else { return }
+            if store.connection == .connecting { reconnect() } else { retryNow() }
+        }
+    }
+
+    /// The iPhone app left the screen. The bridge stops counting it as attended, so pushes are not held for it, and
+    /// stops counting its threads as read, so what arrives while it is away shows as unread.
+    func leave() {
+        guard awaySince == nil else { return }
+        awaySince = .now
+        attended = false
+        if store.has(.sessions) { onScreen.sessions.forEach { transmitIfConnected(.unwatchSession(sessionId: $0)) } }
+    }
+
+    /// The app is on screen again. After a short absence the socket is probed and the threads are watched again from
+    /// where the app stands; after a longer one the app connects again, since a socket that slept is often dead. An app
+    /// launched in the background starts unattended without having left, so its first time on screen says so too.
+    func comeBack() {
+        guard let since = awaySince else {
+            if attended == false { attended = true }
+            return retryNow()
+        }
+        awaySince = nil
+        attended = true
+        if store.machine != nil, Date.now.timeIntervalSince(since) >= timing.awayBeforeReconnect { return reconnect() }
+        if store.has(.sessions) { onScreen.sessions.sorted { $0.rawValue < $1.rawValue }.forEach(watchThreadIfConnected) }
+        retryNow()
+    }
+
+    /// Ends the socket, the attempt in flight or the wait, and connects again at once.
+    private func reconnect() {
+        hurry = true
         nap?.cancel()
-        retry()
+        socket?.cancel(with: .goingAway, reason: nil)
     }
 
-    /// Sends now when connected; otherwise holds the message until the next hello.
-    func send(_ msg: ClientMessage) {
-        if case let .decide(_, card, choice) = msg { store.decisionSent(choice, for: card) }
-        if case let .sessionDecide(_, card, choice) = msg { store.decisionSent(choice, for: card) }
+    /// Pings `ws`. With neither the pong nor any frame by `deadline`, the socket died without the phone being told.
+    /// A frame counts because a pong queued behind a busy stream arrives late on a live socket.
+    private func probe(_ ws: URLSessionWebSocketTask, within deadline: Duration) {
+        let answered = OSAllocatedUnfairLock(initialState: false)
+        let sentAt = Date.now
+        ws.sendPing { error in
+            if error == nil { answered.withLock { $0 = true } }
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: deadline)
+            guard let self, socket === ws, !answered.withLock({ $0 }), heardAt <= sentAt else { return }
+            log.info("no pong within \(deadline); connecting again")
+            reconnect()
+        }
+    }
+
+    /// A working thread that hears nothing for `timing.quiet` may be stuck, or the bridge may be.
+    private func checkQuiet() {
+        guard case .connected(let machine, .none) = store.connection, awaySince == nil,
+              Date.now.timeIntervalSince(heardAt) >= timing.quiet,
+              onScreen.sessions.contains(where: { store.threads[$0]?.controls?.working == true })
+        else { return }
+        store.setConnection(.connected(machine: machine, quietSince: heardAt))
+    }
+
+    /// Sends now when connected; otherwise holds the message until the next hello. tappedAt: when the user asked for it,
+    /// which a message replayed from the outbox keeps.
+    func send(_ msg: ClientMessage, tappedAt: Date = .now) {
+        switch msg {
+        case let .decide(_, card, choice), let .sessionDecide(_, card, choice): store.decisionSent(choice, for: card)
+        case let .sessionAnswer(_, card, _): store.decisionSent(nil, for: card)
+        case .sessionSend, .send: store.sendStarted(msg, at: tappedAt)
+        default: break
+        }
+        store.sessionRequestSent(msg)
         #if DEBUG
         if Demo.isEnabled { return Demo.respond(to: msg, store: store) }
         #endif
         if let socket, store.machine != nil {
-            transmitCounted(msg, on: socket)
+            transmitCounted(msg, on: socket, tappedAt: tappedAt)
         } else {
-            outbox.append((msg, .now))
+            hold(msg, tappedAt: tappedAt)
         }
+    }
+
+    /// Discard on a message the Mac never showed back: it is not sent again, and leaves the thread.
+    func discard(sessionId: SessionID, clientId: String) {
+        outbox.removeAll { held in
+            if case .sessionSend(sessionId, _, clientId, _, _) = held.message { true } else { false }
+        }
+        store.discardSend(sessionId: sessionId, clientId: clientId)
+    }
+
+    /// Discard on a bot message the Mac never showed back.
+    func discard(botSend clientId: String) {
+        outbox.removeAll { held in
+            if case .send(_, _, _, clientId?, _) = held.message { true } else { false }
+        }
+        store.discardBotSend(clientId: clientId)
+    }
+
+    /// The same request again replaces the held one and keeps the newest tap, so Retry or Stop again never holds two.
+    /// One that expires is dropped, with its words, when its age runs out, not at the next hello.
+    private func hold(_ msg: ClientMessage, tappedAt: Date) {
+        outbox.removeAll { $0.message == msg }
+        outbox.append((msg, tappedAt))
+        store.sendHeld(msg)
+        guard OutboxRule.of(msg) == .expires else { return }
+        Task { [weak self, age = timing.outboxAge] in
+            try? await Task.sleep(for: .seconds(max(0, age - Date.now.timeIntervalSince(tappedAt))) + .milliseconds(5))
+            self?.expireOutbox(now: .now)
+        }
+    }
+
+    private func expireOutbox(now: Date) {
+        let stale = outbox.filter { !Self.stillWanted($0.message, queuedAt: $0.at, now: now, maxAge: timing.outboxAge) }
+        guard !stale.isEmpty else { return }
+        outbox.removeAll { held in stale.contains { $0.message == held.message } }
+        stale.forEach { store.requestDropped($0.message) }
+    }
+
+    /// The socket refused the frame, so it goes back to the outbox, under the outbox's rules. A decision is not: its
+    /// card says Not sent and takes a tap again.
+    private func notTaken(_ msg: ClientMessage, tappedAt: Date) {
+        switch msg {
+        case .decide, .sessionDecide, .sessionAnswer: return
+        case let .sessionStop(sessionId, target, _): store.stopNotSent(sessionId: sessionId, target: target ?? .all)
+        case let .sessionSend(sessionId, _, clientId, _, _):
+            // Discarded while its frame was on a dying socket: Discard wins, so it never goes back to the outbox.
+            guard store.threads[sessionId]?.pendingSends[ItemID(clientId)] != nil else { return }
+            store.threads[sessionId]?.sendWaiting(clientId)
+        case .send(_, _, _, let clientId?, _):
+            guard store.botSends[clientId] != nil else { return }
+        default: break
+        }
+        guard OutboxRule.of(msg) == .expires else { return }
+        hold(msg, tappedAt: tappedAt)
     }
 
     /// Pull to refresh: the bridge answers a repeated watch with a fresh list.
@@ -235,12 +432,9 @@ final class BridgeClient {
     }
 
     /// Whether a message queued offline still means what the user meant. A Stop is for the turn on screen when it was
-    /// tapped; a minute later it would stop whatever turn runs by then.
-    nonisolated static func stillWanted(_ msg: ClientMessage, queuedAt: Date, now: Date, staleStop: TimeInterval) -> Bool {
-        switch msg {
-        case .stop, .stopAgent: now.timeIntervalSince(queuedAt) <= staleStop
-        default: true
-        }
+    /// tapped; a minute later it would stop whatever turn runs by then. A decision is for the card as the user saw it.
+    nonisolated static func stillWanted(_ msg: ClientMessage, queuedAt: Date, now: Date, maxAge: TimeInterval) -> Bool {
+        OutboxRule.of(msg) == .waits || now.timeIntervalSince(queuedAt) <= maxAge
     }
 
     private func forget(reason: String?) {
@@ -299,12 +493,13 @@ final class BridgeClient {
         transmit(.watchSession(sessionId: id, after: store.threads.willWatch(id)), on: socket)
     }
 
-    /// A send's frame counts toward giving up its resends only once a socket took it.
-    private func transmitCounted(_ msg: ClientMessage, on socket: URLSessionWebSocketTask) {
-        guard case .send = msg else { return transmit(msg, on: socket) }
-        let store = store
-        transmit(msg, on: socket) { ok in
-            if ok { Task { @MainActor in store.sendTransmitted(msg) } }
+    /// A send's frame counts toward giving up its resends only once a socket took it. A request the socket refused
+    /// goes back to the outbox.
+    private func transmitCounted(_ msg: ClientMessage, on socket: URLSessionWebSocketTask, tappedAt: Date) {
+        transmit(msg, on: socket) { [weak self] ok in
+            Task { @MainActor in
+                if ok { self?.store.sendTransmitted(msg) } else { self?.notTaken(msg, tappedAt: tappedAt) }
+            }
         }
     }
 
@@ -316,7 +511,8 @@ final class BridgeClient {
             if let error {
                 log.error("send failed: \(error.localizedDescription)")
                 switch msg {
-                case .decide(_, let card, _), .sessionDecide(_, let card, _): Task { @MainActor in store.decisionFailed(for: card) }
+                case .decide(_, let card, _), .sessionDecide(_, let card, _), .sessionAnswer(_, let card, _):
+                    Task { @MainActor in store.decisionFailed(for: card) }
                 default: break
                 }
             }
@@ -327,6 +523,7 @@ final class BridgeClient {
     private func run() async {
         failures = 0
         while !Task.isCancelled, let pairing {
+            hurry = false
             store.setConnection(.connecting)
             let ending = await session(pairing)
             if Task.isCancelled { return }
@@ -344,6 +541,7 @@ final class BridgeClient {
                     self.pairing = moved
                 }
             }
+            if hurry { continue }
             let delay = Backoff.delay(afterFailures: failures)
             if ending == .failed { failures += 1 }
             store.setConnection(.disconnected(retryAt: .now + delay))
@@ -367,22 +565,74 @@ final class BridgeClient {
         return (try? JSONDecoder().decode(Stamp.self, from: data))?.seq
     }
 
+    /// The type and session of a frame the decoder refused whole, read from its text: a lone surrogate anywhere in
+    /// it fails the JSON parser for the entire frame.
+    nonisolated static func stamp(in data: Data) -> (type: String, sessionId: SessionID?)? {
+        let text = String(decoding: data, as: UTF8.self)
+        func field(_ key: String) -> String? {
+            guard let start = text.range(of: "\"\(key)\":\"")?.upperBound, let end = text[start...].firstIndex(of: "\"") else { return nil }
+            return String(text[start..<end])
+        }
+        return field("type").map { ($0, field("sessionId").map { SessionID($0) }) }
+    }
+
+    /// What an unsequenced frame the app could not read carried is lost with it. A thread's loss makes that thread
+    /// watch again from a snapshot; a lost list diff makes the list watch again, which answers the whole list.
+    private func recover(from data: Data, on ws: URLSessionWebSocketTask) {
+        guard let stamp = Self.stamp(in: data) else { return }
+        switch stamp.type {
+        case "session", "session_items", "session_page":
+            if let id = stamp.sessionId { store.threads.lose(id) }
+            rewatchLost(on: ws)
+        case "session_rows":
+            if onScreen.sessionsList { transmit(.watchSessions, on: ws) }
+        default:
+            break
+        }
+    }
+
+    private func rewatchLost(on ws: URLSessionWebSocketTask) {
+        let ids = store.threads.takeLost().filter { awaySince == nil && onScreen.sessions.contains($0) }
+        guard !ids.isEmpty else { return }
+        for id in ids {
+            log.info("thread \(id.rawValue) lost a frame; watching it again")
+            watchThread(id, on: ws)
+        }
+        Task { [weak self, wait = timing.repairWait] in
+            try? await Task.sleep(for: wait)
+            guard let self, socket === ws, awaySince == nil else { return }
+            for id in ids where onScreen.sessions.contains(id) && store.threads[id]?.retryRepair() == true { watchThread(id, on: ws) }
+        }
+    }
+
     /// Runs one socket until it closes, or until the stream shows a gap.
     private func session(_ pairing: Pairing) async -> Ending {
         let ws = URLSession.shared.webSocketTask(with: pairing.socketRequest(resumingFrom: cursor))
         ws.maximumMessageSize = 32 << 20
         socket = ws
         ws.resume()
-        let pinger = Task {
+        heardAt = .now
+        let timing = timing
+        let greeting = Task {
+            try? await Task.sleep(for: timing.greeting)
+            if !Task.isCancelled { ws.cancel(with: .goingAway, reason: nil) }
+        }
+        let pinger = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(20))
-                ws.sendPing { error in
-                    if error != nil { ws.cancel(with: .goingAway, reason: nil) }
-                }
+                try? await Task.sleep(for: timing.ping)
+                if !Task.isCancelled { self?.probe(ws, within: timing.pong) }
+            }
+        }
+        let watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(timing.quiet / 9))
+                if !Task.isCancelled { self?.checkQuiet() }
             }
         }
         defer {
+            greeting.cancel()
             pinger.cancel()
+            watchdog.cancel()
             ws.cancel(with: .goingAway, reason: nil)
             if socket === ws { socket = nil }
         }
@@ -397,6 +647,8 @@ final class BridgeClient {
                 log.info("socket closed: \(error.localizedDescription)")
                 return Self.ending(greeted: greeted, closeCode: ws.closeCode.rawValue, upgradeStatus: (ws.response as? HTTPURLResponse)?.statusCode)
             }
+            heardAt = .now
+            if case .connected(let machine, .some) = store.connection { store.setConnection(.connected(machine: machine)) }
             let data: Data
             switch received {
             case .string(let text): data = Data(text.utf8)
@@ -409,6 +661,7 @@ final class BridgeClient {
             } catch {
                 log.error("undecodable frame: \(error)")
                 if cursor.skipped(seq: Self.seq(in: data)) == .broken { break }
+                recover(from: data, on: ws)
                 continue
             }
             guard cursor.observe(frame) == .inOrder else {
@@ -421,6 +674,7 @@ final class BridgeClient {
             switch msg {
             case .hello:
                 greeted = true
+                greeting.cancel()
                 if let attended, store.has(.presence) { transmit(.presence(attended: attended), on: ws) }
                 onScreen.bots.sorted { $0.rawValue < $1.rawValue }.forEach { transmit(.open(botId: $0), on: ws) }
                 // Facts bots propose show as a badge and in their chats, so the app keeps them live from the start.
@@ -428,22 +682,30 @@ final class BridgeClient {
                 // Before the outbox, so a send made offline lands after the thread's snapshot, not before it.
                 if store.has(.sessions) {
                     if onScreen.sessionsList { transmit(.watchSessions, on: ws) }
-                    onScreen.sessions.sorted { $0.rawValue < $1.rawValue }.forEach { watchThread($0, on: ws) }
+                    if awaySince == nil { onScreen.sessions.sorted { $0.rawValue < $1.rawValue }.forEach { watchThread($0, on: ws) } }
                 }
-                let resent = store.resendsAfterHello()
-                resent.forEach { transmitCounted($0, on: ws) }
+                let now = Date.now
+                let resent = store.resendsAfterHello(now: now)
+                for msg in resent {
+                    transmitCounted(msg, on: ws, tappedAt: store.unechoedSends.first { $0.message == msg }?.at ?? now)
+                }
                 let pending = outbox
                 outbox.removeAll()
-                let now = Date.now
-                pending
-                    .filter { !resent.contains($0.message) && Self.stillWanted($0.message, queuedAt: $0.at, now: now, staleStop: timing.staleStop) }
-                    .forEach { send($0.message) }
+                for held in pending where !resent.contains(held.message) {
+                    if Self.stillWanted(held.message, queuedAt: held.at, now: now, maxAge: timing.outboxAge) {
+                        send(held.message, tappedAt: held.at)
+                    } else {
+                        store.requestDropped(held.message)
+                    }
+                }
                 upgradeLegacyPairing()
             case .bot(let bot) where onScreen.bots.contains(bot.id) && bot.unread > 0:
                 // The bridge counts a message as unread until the next open, so re-open a bot on screen.
                 transmit(.open(botId: bot.id), on: ws)
             case .pairCode(let code):
                 answerPairCode(code)
+            case .thread:
+                rewatchLost(on: ws)
             default:
                 break
             }

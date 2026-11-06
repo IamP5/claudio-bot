@@ -5,17 +5,26 @@ struct RowDisplay: Equatable {
     let preview: String
     /// The preview is the open question, drawn with a list icon.
     let previewIsQuestion: Bool
+    /// The preview says the last turn did not finish, and how: failed or stopped.
+    let outcome: SessionOutcomeKind?
     /// The orange badge on the avatar: the bot is waiting on the user.
     let needsAttention: Bool
     let unreadDot: Bool
 
     init(_ bot: Bot) {
         if let question = bot.question {
-            preview = question
+            let waiting = bot.cards ?? 1
+            preview = waiting > 1 ? "\(waiting) waiting · \(question)" : question
             previewIsQuestion = true
+            outcome = nil
+        } else if let last = bot.outcome {
+            preview = last.text
+            previewIsQuestion = false
+            outcome = last.kind
         } else {
             preview = bot.preview
             previewIsQuestion = false
+            outcome = nil
         }
         needsAttention = bot.question != nil
         unreadDot = bot.unread > 0
@@ -279,6 +288,159 @@ extension PermissionChoice {
 
     /// Allow once and Always run the call; Deny and Never do not.
     var allows: Bool { self == .once || self == .always }
+}
+
+/// What a closed permission card says happened. A green check only when the call was allowed and nothing cut it short.
+/// short: the same in a few words, for the one line an answered card folds to.
+struct PermissionOutcome: Equatable {
+    /// ended: the call was cut short. unsure: it may still run. unseen: it ended, and how is not known.
+    enum Tone: Equatable { case allowed, refused, failed, ended, unsure, unseen }
+
+    let short: String
+    let text: String
+    let tone: Tone
+
+    var glyph: String {
+        switch tone {
+        case .allowed: "checkmark.circle.fill"
+        case .refused: "xmark.circle.fill"
+        case .failed: "exclamationmark.circle.fill"
+        case .ended: "stop.circle"
+        case .unsure: "questionmark.circle"
+        case .unseen: "circle.dashed"
+        }
+    }
+}
+
+extension PermissionAnswer {
+    /// step: the call the card held back, in a session's thread. Its end can undo what "Allowed" promised.
+    func outcome(step: ToolStep? = nil) -> PermissionOutcome {
+        switch self {
+        case .chose(let choice) where choice.allows:
+            switch step?.state {
+            case .stopped?:
+                PermissionOutcome(
+                    short: "\(choice.outcome), then stopped",
+                    text: "\(choice.outcome). \(step?.cause ?? "Stopped") before it finished.", tone: .ended
+                )
+            case .error?:
+                PermissionOutcome(short: "\(choice.outcome), then failed", text: "\(choice.outcome). It failed.", tone: .failed)
+            case .unsure?:
+                PermissionOutcome(short: "\(choice.outcome) · may still run", text: "\(choice.outcome). \(ToolStep.mayStillRun).", tone: .unsure)
+            case .ended?:
+                PermissionOutcome(short: "\(choice.outcome) · ended, result unknown", text: "\(choice.outcome). It ended; its result is unknown.", tone: .unseen)
+            default:
+                PermissionOutcome(short: choice.outcome, text: choice.outcome, tone: .allowed)
+            }
+        case .chose(let choice):
+            PermissionOutcome(short: choice.outcome, text: choice.outcome, tone: .refused)
+        case .expired:
+            PermissionOutcome(short: "Expired", text: "Expired. It did not run.", tone: .ended)
+        case .stopped:
+            PermissionOutcome(short: "Stopped by you", text: "Stopped by you. It did not run.", tone: .ended)
+        case .closed:
+            PermissionOutcome(short: "Closed", text: "Closed when Claude Code stopped. It did not run.", tone: .ended)
+        case .superseded:
+            PermissionOutcome(short: "Closed by your next message", text: "Closed when you sent a new message. It did not run.", tone: .ended)
+        case .unknown:
+            PermissionOutcome(short: "Closed", text: "Closed. It did not run.", tone: .ended)
+        }
+    }
+}
+
+/// Where a permission card was raised, which decides how far Always and Never reach.
+enum ApprovalScope: Equatable, Sendable {
+    /// A session's own Claude Code: Always lasts until the session ends, and Never also stops the turn.
+    case session
+    /// A bot's chat: Always and Never write a standing rule for the bot, and the one that asked, the bot or one of its
+    /// agents, is told about Deny.
+    case bot(name: String, asker: String)
+    /// A bot's chat card that asks to trust a repo's own Claude Code settings.
+    case trust
+
+    static func chat(_ card: PermissionCard, bot: String) -> ApprovalScope {
+        if card.isTrust { return .trust }
+        if case .agent(_, let title)? = card.from { return .bot(name: bot, asker: title) }
+        return .bot(name: bot, asker: bot)
+    }
+}
+
+extension PermissionCard {
+    /// The bridge's trust card is the only one with this tool name (gate.ts `trustCard`).
+    var isTrust: Bool { tool == "Claude Code settings" }
+
+    /// The choices the card offers. Without an Always text the bridge offers no Always: it would only allow once.
+    var choices: [PermissionChoice] {
+        always.isEmpty ? [.once, .deny, .never] : [.once, .always, .deny, .never]
+    }
+
+    /// The command's first line, at most 60 characters, for a spoken label.
+    var commandHead: String {
+        let line = detail.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? detail
+        return line.count > 60 ? "\(line.prefix(59))…" : line
+    }
+
+    /// What Always would cover and for how long, read before the buttons. nil when the card offers no Always.
+    func scopeLine(_ scope: ApprovalScope) -> String? {
+        guard !always.isEmpty else { return nil }
+        return switch scope {
+        case .session: "For the rest of this session, Always allow covers \(always)."
+        case .bot: "From now on, Always allow covers \(always)."
+        case .trust: "Always allow: \(always)."
+        }
+    }
+
+    /// What VoiceOver says for a choice: the choice, then the tool and the command it decides.
+    func spokenLabel(_ choice: PermissionChoice) -> String {
+        "\(choice.button), \(tool) \(commandHead)"
+    }
+}
+
+extension PermissionChoice {
+    /// One line on what the choice does, shown under its button and spoken as its hint.
+    func consequence(_ scope: ApprovalScope) -> String {
+        switch (self, scope) {
+        case (.once, .trust): "Trusts it for this agent only."
+        case (.once, _): "Runs this call only."
+        case (.always, .session): "Runs it, then stops asking about these this session."
+        case (.always, .bot): "Runs it, then stops asking about it."
+        case (.always, .trust): "Trusts it for every agent in this repo."
+        case (.deny, .session): "Skips it. Claude carries on and may ask again."
+        case (.deny, .bot(_, let asker)): "Skips it and tells \(asker) not to try it."
+        case (.deny, .trust): "Keeps this agent on empty settings."
+        case (.never, .session): "Skips it and stops the turn."
+        case (.never, .bot(let name, _)): "Skips it and refuses it for \(name) from now on."
+        case (.never, .trust): "Keeps every agent in this repo on empty settings."
+        }
+    }
+}
+
+extension PermissionAnswer {
+    /// What VoiceOver hears when an open card closes: who closed it when it was not this device, the outcome, whether
+    /// the tool ran, and the command: "Expired. Bash did not run: perl -e 'sleep 45'".
+    /// here: whether this phone's decision closed it; nil when the phone cannot tell, so it names nobody.
+    func announcement(card: PermissionCard, step: ToolStep? = nil, here: Bool?) -> String {
+        let outcome = outcome(step: step)
+        let allowed = if case .chose(let choice) = self { choice.allows } else { false }
+        let result = switch (allowed, card.isTrust) {
+        case (true, false): "\(outcome.text.trimmingCharacters(in: CharacterSet(charactersIn: "."))). \(card.tool)"
+        case (false, false): "\(outcome.short). \(card.tool) did not run"
+        case (true, true): "\(outcome.short). Trusted"
+        case (false, true): "\(outcome.short). Nothing was trusted"
+        }
+        let elsewhere = if case .chose = self, here == false { "Answered on another device. " } else { "" }
+        return "\(elsewhere)\(result): \(card.commandHead)"
+    }
+}
+
+extension SessionPermission {
+    /// "sleeper two wants to run Bash" when a subagent asked, else the card's own label.
+    var title: String {
+        subagent.map { "\($0) wants to run \(card.tool)" } ?? card.label
+    }
+
+    /// Who asked, in the one line a folded card keeps: the subagent, or the tool when the main thread asked.
+    var asker: String { subagent ?? card.tool }
 }
 
 extension RunStatus {

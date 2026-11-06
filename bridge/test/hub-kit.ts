@@ -52,6 +52,8 @@ export const COMMANDS: SlashCommand[] = [
 export class FakeQuery {
   /** Each message's content: a string, or the blocks of a /command sent after context. */
   readonly received: string[] = [];
+  /** Each message's uuid, which Claude Code echoes on the init frame of the turn that takes it. */
+  readonly uuids: string[] = [];
   readonly toggles: string[] = [];
   /** setPermissionMode and setModel calls, as "mode <m>" and "model <m>". */
   readonly controls: string[] = [];
@@ -65,7 +67,10 @@ export class FakeQuery {
     readonly options: Options,
   ) {
     void (async () => {
-      for await (const m of prompt) this.received.push(m.message.content as string);
+      for await (const m of prompt) {
+        this.received.push(m.message.content as string);
+        this.uuids.push(m.uuid ?? "");
+      }
     })();
   }
   emit(...ms: SDKMessage[]) {
@@ -74,6 +79,16 @@ export class FakeQuery {
   }
   async interrupt() {
     this.interrupts++;
+  }
+  readonly stoppedTasks: string[] = [];
+  /** Claude Code refuses to stop a task, as when it already ended. */
+  refuseStop = false;
+  /** Claude Code takes a stop only when the test lets it go, as a stopped process that resumes late. */
+  holdStop: Promise<void> | null = null;
+  async stopTask(id: string) {
+    if (this.refuseStop) throw new Error(`no task ${id}`);
+    if (this.holdStop) await this.holdStop;
+    this.stoppedTasks.push(id);
   }
   async mcpServerStatus() {
     return [
@@ -84,7 +99,10 @@ export class FakeQuery {
   async toggleMcpServer(name: string, enabled: boolean) {
     this.toggles.push(`${name} ${enabled}`);
   }
+  /** Claude Code refuses a mode change. */
+  refuseModes = false;
   async setPermissionMode(mode: string) {
+    if (this.refuseModes) throw new Error(`cannot switch to ${mode}`);
     this.controls.push(`mode ${mode}`);
   }
   async setModel(model?: string) {
@@ -104,6 +122,12 @@ export class FakeQuery {
     this.done = true;
     this.wake?.();
   }
+  private died: Error | null = null;
+  /** Claude Code's process dies under the query, so its stream throws once the queued messages are read. */
+  crash(message: string) {
+    this.died = new Error(message);
+    this.wake?.();
+  }
   async *[Symbol.asyncIterator]() {
     for (;;) {
       const next = this.queue.shift();
@@ -111,6 +135,7 @@ export class FakeQuery {
         yield next;
         continue;
       }
+      if (this.died) throw this.died;
       if (this.done) return;
       await new Promise<void>((resolve) => (this.wake = resolve));
       this.wake = null;
@@ -171,7 +196,7 @@ export function hubOver(
     model: undefined,
     scan: opts.scan ?? (async () => []),
     broadcast: (m) => frames.push(m),
-    signal: (s) => (s.type === "activity" ? signals.push(s) : usage.push(s.usage)),
+    signal: (s) => (s.type === "activity" ? signals.push(s) : s.type === "usage" ? usage.push(s.usage) : undefined),
     usage: opts.usage,
     ...(opts.sessions && { sessions: opts.sessions }),
     ...(opts.links && { links: opts.links }),

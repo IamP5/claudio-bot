@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SidebarRoot: View {
     @Environment(AppStore.self) private var store
+    @Environment(BridgeClient.self) private var client
     @Environment(Router.self) private var router
 
     /// Kept up while Sessions is picked, so a bridge without the feature can say to update it and the user can go back.
@@ -20,14 +21,19 @@ struct SidebarRoot: View {
         }
         .topBar {
             if showsSwitch {
-                Picker("Show", selection: $router.sidebar) {
-                    Text("Bots").tag(SidebarMode.bots)
-                    Text("Sessions").tag(SidebarMode.sessions)
+                VStack(alignment: .leading, spacing: 6) {
+                    Picker("Show", selection: $router.sidebar) {
+                        Text("Bots").tag(SidebarMode.bots)
+                        Text("Sessions").tag(SidebarMode.sessions)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    #if os(macOS)
+                    .controlSize(.small)
+                    #endif
+                    if router.sidebar == .bots { SessionsElsewhere() }
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
                 #if os(macOS)
-                .controlSize(.small)
                 .padding(.horizontal, 12)
                 #else
                 .padding(.horizontal, 16)
@@ -35,12 +41,43 @@ struct SidebarRoot: View {
                 .padding(.bottom, 8)
             }
         }
+        .onChange(of: Reach(store.connection, failures: client.failures, greeted: store.bridgeProtocol != nil, rejoining: store.rejoin != nil)) { old, new in
+            if let text = Reach.announcement(from: old, to: new) { AccessibilityNotification.Announcement(text).post() }
+        }
+    }
+}
+
+/// The Bots side still says what runs and what needs the user in Sessions, from the list the window keeps watching.
+/// A view of its own, so a list change redraws this line and never the bot list.
+struct SessionsElsewhere: View {
+    @Environment(AppStore.self) private var store
+    @Environment(Router.self) private var router
+
+    var body: some View {
+        let counts = store.sessions.freshness(online: store.showsOnline).visibleCounts(store.sessions.counts)
+        let parts = SessionText.elsewhere(counts)
+        if !parts.isEmpty {
+            Button { router.sidebar = .sessions } label: {
+                Text((["Sessions"] + parts).joined(separator: " · "))
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(counts[.needsYou, default: 0] > 0 ? Theme.attention : Theme.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            // A summary above the bot list: past AX2 it would push the bots off screen.
+            .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+            .accessibilityLabel((["Sessions"] + parts).joined(separator: ", "))
+            .accessibilityHint("Shows the Sessions list")
+        }
     }
 }
 
 struct SessionsSidebar: View {
     static let pageSize = 5
     static let moreStep = 10
+    /// How long a connected Mac may take to send the list before the skeleton gives way to words and Refresh.
+    static let listPatience: Duration = .seconds(5)
 
     @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
@@ -52,11 +89,20 @@ struct SessionsSidebar: View {
     @AppStorage("collapsedProjects") private var collapsed = CollapsedProjects()
     @State private var renaming: SessionRow?
     @State private var newTitle = ""
-    /// One clock for every row's age. Rows compare their age text, so only those that changed redraw.
+    /// One clock for every row's time. Rows compare their time text, so only those that changed redraw.
     @State private var now = Date.now
+    @State private var lastRetryFailed = false
+    /// The rows that needed the user when the list last looked, so only a new ask opens a folded project.
+    @State private var seenNeedingYou: Set<SessionID> = []
+    @State private var announcing: Task<Void, Never>?
+    /// The Mac answers but its list has not come within `listPatience`.
+    @State private var listLate = false
+    @State private var listAsks = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
 
     private var index: SessionIndex { store.sessions }
+    private var freshness: ListFreshness { index.freshness(online: store.showsOnline) }
 
     var body: some View {
         @Bindable var router = router
@@ -72,18 +118,24 @@ struct SessionsSidebar: View {
                 UpdateBridgeNote()
                     .plainRow()
             } else if !index.loaded {
-                if store.machine == nil {
-                    Text("Connect to \(store.computerName()) to see its Claude Code sessions.")
+                if !store.showsOnline {
+                    Text("Your sessions show here once \(store.computerName()) answers.")
                         .font(.subheadline)
-                        .foregroundStyle(Theme.tertiary)
+                        .foregroundStyle(Theme.secondary)
                         .frame(maxWidth: .infinity)
                         .padding(.top, 40)
                         .plainRow()
+                } else if listLate {
+                    ListLateNote {
+                        listAsks += 1
+                        client.refreshSessions()
+                    }
+                    .plainRow()
                 } else {
                     SessionsSkeleton()
                 }
             } else {
-                FilterChips(query: $query.animation(reduceMotion ? nil : .snappy(duration: 0.25)), counts: counts(for: query), hidden: index.hiddenCount)
+                FilterChips(query: $query.animation(reduceMotion ? nil : .snappy(duration: 0.25)), counts: freshness.visibleCounts(counts(for: query)), hidden: index.hiddenCount)
                     .plainRow(insets: EdgeInsets(top: 0, leading: 0, bottom: 2, trailing: 0))
                 if sections.isEmpty {
                     emptyState
@@ -113,9 +165,34 @@ struct SessionsSidebar: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
+        .onChange(of: store.machine) { lastRetryFailed = false }
+        .onScrollPhaseChange { _, phase in index.holdOrder(phase != .idle) }
+        .onAppear {
+            now = .now
+            index.resort()
+        }
+        // A list that leaves mid-fling never sees its scroll come to rest.
+        .onDisappear { index.holdOrder(false) }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            now = .now
+            index.resort()
+        }
+        .onChange(of: index.needingYou, initial: true) { _, needing in
+            let opening = Set(needing.subtracting(seenNeedingYou).compactMap { index.rows[$0]?.projectId }).intersection(collapsed.ids)
+            if !opening.isEmpty { collapsed.ids.subtract(opening) }
+            seenNeedingYou = needing
+        }
+        .onChange(of: query) { _, query in announce(query) }
+        .task(id: ListWait(asking: store.machine != nil && !index.loaded, asks: listAsks)) {
+            listLate = false
+            guard store.machine != nil, !index.loaded else { return }
+            try? await Task.sleep(for: Self.listPatience)
+            if !Task.isCancelled { listLate = true }
+        }
         .task {
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(30))
+                try? await Task.sleep(for: .seconds(10))
                 now = .now
             }
         }
@@ -134,34 +211,81 @@ struct SessionsSidebar: View {
     @ViewBuilder
     private var banners: some View {
         if store.connection == .unrecognized {
-            UnrecognizedBanner().plainRow()
-        } else if store.machine == nil {
-            if let updatedAt = index.updatedAt {
-                StaleListBanner(state: store.connection, updatedAt: updatedAt).plainRow()
-            } else {
-                ConnectionBanner(state: store.connection).plainRow()
-            }
+            UnrecognizedBanner(staleSince: index.updatedAt).plainRow()
+        } else if !store.showsOnline {
+            ConnectionBanner(state: store.connection, staleSince: index.updatedAt, lastRetryFailed: $lastRetryFailed).plainRow()
         }
         if let mismatch = store.protocolMismatch {
             UpdateBanner(mismatch: mismatch).plainRow()
         }
+        #if os(iOS)
+        if store.has(.pushState), let note = store.pushState?.listNote {
+            Button { router.showingSettings = true } label: {
+                Label(note, systemImage: "bell.slash")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(Theme.attention)
+                    .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            // A line above the list: past AX2 it would push the sessions off screen.
+            .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+            .accessibilityHint("Opens Settings")
+            .plainRow()
+        }
+        #endif
+    }
+
+    /// Where the empty list says sessions would be: the one computer, or every machine of the world.
+    private var sessionsPlace: String {
+        store.hasSeveralMachines ? "your machines" : store.computerName()
     }
 
     @ViewBuilder
     private var emptyState: some View {
-        if query.isNarrowed {
-            Text(query.filter == .all ? "No sessions match." : "No \(query.filter.title.lowercased()) sessions.")
+        let empty = EmptyList(hidden: index.hiddenCount, query: query)
+        switch empty {
+        case .noMatch:
+            Text(empty.title(on: sessionsPlace))
                 .font(.subheadline)
-                .foregroundStyle(Theme.tertiary)
+                .foregroundStyle(Theme.secondary)
                 .frame(maxWidth: .infinity)
                 .padding(.top, 40)
                 .plainRow()
-        } else {
+        case .allHidden:
+            VStack(spacing: 14) {
+                Image(systemName: "eye.slash")
+                    .font(.ui(size: 30, weight: .light))
+                    .foregroundStyle(Theme.tertiary)
+                    .accessibilityHidden(true)
+                Text(empty.title(on: sessionsPlace))
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+                Text("You hid every session in this list. They are still on your Mac.")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.secondary)
+                    .multilineTextAlignment(.center)
+                Button {
+                    query.showHidden = true
+                } label: {
+                    Label("Show hidden", systemImage: "eye")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Theme.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.pressable)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 48)
+            .padding(.horizontal, 8)
+            .plainRow()
+        case .noSessions:
             VStack(spacing: 14) {
                 Image(systemName: "chevron.left.forwardslash.chevron.right")
                     .font(.ui(size: 30, weight: .light))
                     .foregroundStyle(Theme.tertiary)
-                Text("No Claude Code sessions on \(store.hasSeveralMachines ? "your machines" : store.computerName()) yet")
+                Text(empty.title(on: sessionsPlace))
                     .font(.headline)
                     .multilineTextAlignment(.center)
                 Text("Sessions from the Claude app, a terminal or your bots' agents show up here, grouped by project.")
@@ -172,7 +296,7 @@ struct SessionsSidebar: View {
                     Button {
                         router.newSession = NewSessionRequest(projectId: project.id)
                     } label: {
-                        Label("New session in \(project.name)", systemImage: "plus")
+                        Label("New session in \(project.shownName)", systemImage: "plus")
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 10)
@@ -191,7 +315,9 @@ struct SessionsSidebar: View {
     /// A search or filter shows every match, so a narrowed list drops the fold.
     @ViewBuilder
     private func projectSection(_ section: ProjectSection) -> some View {
-        let header = ProjectHeader(project: section.project, count: section.trees.count, expanded: query.isNarrowed ? nil : expanded(section.id)) {
+        let header = ProjectHeader(
+            project: section.project, tally: SectionTally(section.rows), freshness: freshness, expanded: query.isNarrowed ? nil : expanded(section.id)
+        ) {
             router.newSession = NewSessionRequest(projectId: section.project.id)
         }
         Group {
@@ -217,34 +343,35 @@ struct SessionsSidebar: View {
     @ViewBuilder
     private func sectionRows(_ section: ProjectSection) -> some View {
         let limit = query.isNarrowed ? section.trees.count : limits[section.id, default: Self.pageSize]
-        let shown = section.trees.prefix(limit)
+        let shown = section.trees.enumerated().filter { $0.offset < limit || $0.element.isActive }.map(\.element)
         ForEach(shown) { tree in
             sessionRow(tree.row)
             ForEach(tree.descendants, id: \.row.id) { child in
-                sessionRow(child.row, depth: child.depth, isLast: child.isLast)
+                sessionRow(child.row, depth: child.depth, isLast: child.isLast, parent: child.row.parentId.flatMap { index.rows[$0]?.title })
             }
         }
-        if section.trees.count > limit {
+        let folded = section.trees.count - shown.count
+        if folded > 0 {
             Button {
                 withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) {
-                    limits[section.id] = limit + Self.moreStep
+                    limits[section.id] = max(limit, shown.count) + Self.moreStep
                 }
             } label: {
                 Text("Show more")
                     .font(.subheadline)
-                    .foregroundStyle(Theme.tertiary)
+                    .foregroundStyle(Theme.secondary)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Show \(min(Self.moreStep, section.trees.count - limit)) more in \(section.project.name)")
+            .accessibilityLabel("Show \(min(Self.moreStep, folded)) more in \(section.project.shownName)")
             .plainRow(insets: EdgeInsets(top: 0, leading: 20, bottom: 4, trailing: 16))
         }
     }
 
-    private func sessionRow(_ row: SessionRow, depth: Int = 0, isLast: Bool = false) -> some View {
+    private func sessionRow(_ row: SessionRow, depth: Int = 0, isLast: Bool = false, parent: String? = nil) -> some View {
         let bot = row.agent.flatMap { store.bots[$0.botId] }
-        return SessionRowView(row: row, avatar: bot?.avatar, machine: store.chipName(row.machine), depth: depth, isLast: isLast, now: now)
+        return SessionRowView(row: row, avatar: bot?.avatar, machine: store.chipName(row.machine), depth: depth, isLast: isLast, now: now, freshness: freshness)
             .equatable()
             .tag(Selection.session(row.id))
         .listRowSeparator(.hidden)
@@ -278,7 +405,7 @@ struct SessionsSidebar: View {
         }
         .contextMenu { menu(for: row) }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(SessionText.spoken(row, project: index.project(of: row)?.name, botName: bot?.name))
+        .accessibilityLabel(SessionText.spoken(row, project: index.project(of: row)?.shownName, botName: bot?.name, parent: parent, now: now, freshness: freshness))
         .accessibilityAddTraits(.isButton)
         // Ignoring the children drops the list's own press, so pressing the row selects it here.
         .accessibilityAction { router.selection = .session(row.id) }
@@ -372,6 +499,16 @@ struct SessionsSidebar: View {
         }
     }
 
+    /// Once the list has settled on the new filter or search, VoiceOver hears how many sessions it shows.
+    private func announce(_ query: SessionQuery) {
+        announcing?.cancel()
+        announcing = Task {
+            guard (try? await Task.sleep(for: .milliseconds(500))) != nil else { return }
+            let count = index.sections(query).reduce(0) { $0 + $1.rows.count }
+            AccessibilityNotification.Announcement(SessionText.matches(count, query: query, freshness: freshness)).post()
+        }
+    }
+
     /// What each filter would show for the current search, so the counts drop as the search narrows the list.
     private func counts(for query: SessionQuery) -> [SessionFilter: Int] {
         guard !query.needle.isEmpty else { return index.counts }
@@ -407,7 +544,12 @@ struct SessionsSidebar: View {
 
     private func refresh() async {
         let before = index.updatedAt
-        client.refreshSessions()
+        if store.machine == nil {
+            lastRetryFailed = !(await ConnectionBanner.retry(client))
+            if lastRetryFailed { return }
+        } else {
+            client.refreshSessions()
+        }
         for _ in 0..<25 {
             if index.updatedAt != before || Task.isCancelled { return }
             try? await Task.sleep(for: .milliseconds(200))
@@ -417,11 +559,13 @@ struct SessionsSidebar: View {
 
 struct ProjectHeader: View {
     let project: SessionProject
-    let count: Int
+    let tally: SectionTally
+    var freshness = ListFreshness.live
     /// Nil while the list is narrowed, when the section can't fold.
     var expanded: Binding<Bool>?
     let onNew: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var typeSize
     #if os(macOS)
     @State private var hovering = false
     #endif
@@ -441,13 +585,21 @@ struct ProjectHeader: View {
                             .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
                     }
                     #endif
-                    Text(project.name)
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(Theme.secondary)
-                        .lineLimit(1)
-                    Text("\(count)")
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(Theme.tertiary)
+                    // At accessibility sizes the name wraps whole and the counts go under it, so projects that share a
+                    // prefix stay apart.
+                    let accessible = typeSize.isAccessibilitySize
+                    let line = accessible ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout(spacing: 6))
+                    line {
+                        Text(project.shownName)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(Theme.secondary)
+                            .lineLimit(accessible ? nil : 1)
+                        Text(tally.shown(freshness))
+                            .font(.footnote.monospacedDigit())
+                            .foregroundStyle(tally.needsYou > 0 ? Theme.attention : Theme.secondary)
+                            .lineLimit(accessible ? nil : 1)
+                            .layoutPriority(1)
+                    }
                     Spacer(minLength: 8)
                 }
                 #if os(iOS)
@@ -457,7 +609,7 @@ struct ProjectHeader: View {
             }
             .buttonStyle(.plain)
             .disabled(expanded == nil)
-            .accessibilityLabel("\(project.name), \(count) \(count == 1 ? "session" : "sessions")")
+            .accessibilityLabel("\(project.shownName), \(tally.spoken(freshness))")
             .accessibilityValue(expanded.map { $0.wrappedValue ? "Expanded" : "Collapsed" } ?? "")
             #if os(macOS)
             // Shown under the pointer, as the Finder sidebar shows its section controls.
@@ -465,8 +617,8 @@ struct ProjectHeader: View {
                 Image(systemName: "plus")
             }
             .buttonStyle(.borderless)
-            .help("New Session in \(project.name)")
-            .accessibilityLabel("New session in \(project.name)")
+            .help("New Session in \(project.shownName)")
+            .accessibilityLabel("New session in \(project.shownName)")
             .opacity(hovering ? 1 : 0)
             #else
             Button(action: onNew) {
@@ -477,7 +629,7 @@ struct ProjectHeader: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("New session in \(project.name)")
+            .accessibilityLabel("New session in \(project.shownName)")
             #endif
         }
         #if os(macOS)
@@ -572,7 +724,7 @@ struct FilterChips: View {
             HStack(spacing: 5) {
                 Text(title)
                 if let count, count > 0 {
-                    Text("\(count)").monospacedDigit().foregroundStyle(on ? Color.black.opacity(0.6) : tint ?? Theme.tertiary)
+                    Text("\(count)").monospacedDigit().foregroundStyle(on ? Color.black.opacity(0.6) : tint ?? Theme.secondary)
                 }
             }
             .font(.subheadline.weight(on ? .semibold : .regular))
@@ -589,28 +741,6 @@ struct FilterChips: View {
     }
 }
 
-struct StaleListBanner: View {
-    let state: ConnectionState
-    let updatedAt: Date
-
-    var body: some View {
-        HStack(spacing: 10) {
-            ConnectionBadge(state: state)
-            TimelineView(.periodic(from: .now, by: 30)) { context in
-                Text(SessionText.updated(updatedAt, now: context.date))
-                    .font(.footnote)
-                    .foregroundStyle(Theme.secondary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .accessibilityElement(children: .combine)
-    }
-}
-
 struct UpdateBridgeNote: View {
     @Environment(AppStore.self) private var store
 
@@ -623,6 +753,33 @@ struct UpdateBridgeNote: View {
                 .font(.subheadline)
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.top, 8)
+    }
+}
+
+/// What the list's patience clock waits on: a Mac that answers with no list yet, and each time the user asked again.
+private struct ListWait: Hashable {
+    let asking: Bool
+    let asks: Int
+}
+
+/// A connected Mac whose list has not come: say so and let the user ask again, instead of a skeleton with no end.
+struct ListLateNote: View {
+    let refresh: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Your Mac is connected but hasn't sent the session list yet.")
+                .font(.subheadline)
+                .foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Refresh", action: refresh)
+                .buttonStyle(.bordered)
+                .font(.subheadline.weight(.semibold))
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)

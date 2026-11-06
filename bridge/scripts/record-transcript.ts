@@ -144,6 +144,20 @@ const SCENARIOS: Record<string, Scenario> = {
       return (await io.until(resultFor(second), 60_000)) ? [] : ["turn 2 on the resumed query never got a result"];
     },
   },
+  "background-folded-into-turn": {
+    options: { persistSession: true, maxBudgetUsd: 0.1 },
+    reply: allowAll,
+    async run(io) {
+      const first = io.send(
+        "Use the Bash tool with run_in_background set to true to run exactly this command: sleep 8; echo BG-DONE\n" +
+          "Then, without waiting for it, use the Bash tool in the foreground to run exactly: perl -e 'sleep 25'\nThen reply with one word: waited.",
+      );
+      if (!(await io.until(resultFor(first), 90_000))) return ["the turn never ended"];
+      // The background task ended inside the turn; listen 40 s for a wake turn that should not come.
+      await io.until(woke, 40_000);
+      return [];
+    },
+  },
   "ask-rule-prompt": {
     options: { settings: { permissions: { ask: ["Bash(echo ASKME:*)"] } } },
     reply: { behavior: "deny", message: "held for approval" },

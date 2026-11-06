@@ -75,6 +75,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         if case .unknown(let raw) = row.holder { found.append("holder \(raw)") }
         if case .unknown(let raw) = row.mirror { found.append("mirror \(raw)") }
         if case .unknown(let raw)? = row.pr?.state { found.append("pr state \(raw)") }
+        if case .unknown(let raw)? = row.outcome?.kind { found.append("outcome kind \(raw)") }
         return found
     }
     func inMachine(_ machine: Machine) -> [String] {
@@ -86,18 +87,24 @@ private func unknowns(in message: ServerMessage) -> [String] {
     }
     func inControls(_ controls: SessionControls?) -> [String] {
         guard let controls else { return [] }
-        return ([controls.mode] + controls.modes).compactMap { if case .unknown(let raw) = $0 { "mode \(raw)" } else { nil } }
+        let modes = ([controls.mode] + controls.modes).compactMap { if case .unknown(let raw) = $0 { "mode \(raw)" } else { nil } }
+        let kinds = (controls.tasks ?? []).compactMap { if case .unknown(let raw) = $0.kind { "task kind \(raw)" } else { nil } }
+        return modes + kinds
     }
     func inItem(_ item: SessionItem) -> [String] {
         switch item {
         case .unknown(_, _, let kind): return ["item kind \(kind)"]
-        case .user(_, _, _, let from, _): return if case .unknown(let raw) = from { ["author \(raw)"] } else { [] }
+        case .user(_, _, _, let from, _, _): return if case .unknown(let raw) = from { ["author \(raw)"] } else { [] }
         case .work(_, _, let steps): return steps.compactMap { if case .unknown(let raw) = $0.state { "step state \(raw)" } else { nil } }
         case .todo(_, _, let todos): return todos.compactMap { if case .unknown(let raw) = $0.state { "todo state \(raw)" } else { nil } }
         case .plan(_, _, _, let state, _): return if case .unknown(let raw) = state { ["plan state \(raw)"] } else { [] }
-        case .permission(_, _, let p): return if case .closed(let raw) = p.card.answer { ["permission answer \(raw)"] } else { [] }
+        case .permission(_, _, let p): return if case .unknown(let raw) = p.card.answer { ["permission answer \(raw)"] } else { [] }
         case .ask(_, _, _, let answers, _): return if case .closed(let raw) = answers { ["ask answers \(raw)"] } else { [] }
-        case .notice(_, _, _, let tone): return if case .unknown(let raw) = tone { ["tone \(raw)"] } else { [] }
+        case .notice(_, _, _, let tone, let reason):
+            var found: [String] = []
+            if case .unknown(let raw) = tone { found.append("tone \(raw)") }
+            if case .unknown(let raw)? = reason { found.append("notice reason \(raw)") }
+            return found
         default: return []
         }
     }
@@ -105,14 +112,21 @@ private func unknowns(in message: ServerMessage) -> [String] {
         switch message {
         case .unknown(_, _, let kind): ["message kind \(kind)"]
         case .user(_, _, _, _, _, let mentions): mentions.compactMap { if case .unknown(let kind) = $0 { "mention kind \(kind)" } else { nil } }
-        case .permission(_, _, let card): if case .closed(let raw) = card.answer { ["permission answer \(raw)"] } else { [] }
+        case .permission(_, _, let card): if case .unknown(let raw) = card.answer { ["permission answer \(raw)"] } else { [] }
         default: []
         }
     }
+    func inPush(_ push: PushState?) -> [String] {
+        if case .unknown(let raw)? = push { return ["push state \(raw)"] }
+        return []
+    }
     switch message {
     case .unknown(let type): return ["type \(type)"]
-    case .hello(let hello): return hello.bots.flatMap(inBot) + (hello.machines ?? []).flatMap(inMachine)
+    case .hello(let hello): return hello.bots.flatMap(inBot) + (hello.machines ?? []).flatMap(inMachine) + inPush(hello.push)
     case .machines(let machines): return machines.flatMap(inMachine)
+    case .pushState(let push): return inPush(push)
+    case .sessionAlert(let alert): return if case .unknown(let raw) = alert.reason { ["alert reason \(raw)"] } else { [] }
+    case .error(_, .unknown(let raw)?): return ["error about \(raw)"]
     case .bot(let b): return inBot(b)
     case .conversation(_, let messages): return messages.flatMap(inMessage)
     case .message(_, let m): return inMessage(m)
@@ -217,7 +231,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         let frames = try Fixture.server().compactMap { frame -> SessionsFrame? in
             if case .sessions(let f) = frame.message { #expect(frame.seq == nil, "session frames are never sequenced"); return f } else { return nil }
         }
-        guard frames.count == 2, case let .list(projects, rows, mirror) = frames[0], case let .changed(changed, removed, touched) = frames[1] else {
+        guard frames.count == 3, case let .list(projects, rows, mirror) = frames[0], case let .changed(changed, removed, touched) = frames[1] else {
             Issue.record("not a list then a diff: \(frames)"); return
         }
         #expect(projects.map(\.name) == ["solta-o-som", "claudio-bot"])
@@ -269,11 +283,11 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(permission?.cardId == MessageID("m20"))
         #expect(permission?.card.tool == "Bash" && permission?.card.answer == nil)
         let asks = all.compactMap { if case let .ask(_, _, questions, answers, cardId) = $0 { (questions, answers, cardId) } else { nil } }
-        #expect(asks.map { $0.2 } == [MessageID("m21"), nil])
+        #expect(asks.map { $0.2 } == [MessageID("m21"), nil, MessageID("m18")], "a closed question keeps its card id")
         #expect(asks[0].1 == nil && asks[0].0[0].options.map(\.label) == ["Web Audio API", "Howler.js"])
         #expect(asks[1].1 == .answered(["Which audio library should the fade use?": "Web Audio API"]))
         let plans = all.compactMap { if case let .plan(_, _, _, state, cardId) = $0 { "\(state.rawValue):\(cardId?.rawValue ?? "-")" } else { nil } }
-        #expect(plans == ["proposed:m22", "approved:-"])
+        #expect(plans == ["proposed:m22", "approved:-", "rejected:m19"], "a decided plan keeps its card id")
 
         let removals: [SessionID?] = thread.compactMap { frame -> SessionID?? in
             if case .removed(let movedTo) = frame { .some(movedTo) } else { nil }
@@ -291,8 +305,126 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(try decode(SessionMirror.self, #""none""#) == .notMirrored)
         #expect(try decode(PermissionMode.self, #""yolo""#) == .unknown("yolo"))
         #expect(try decode(AskAnswers.self, #""withdrawn""#) == .closed("withdrawn"))
+        // A card the user's Stop closed reads as stopped, never as expired or answered.
+        #expect(try decode(AskAnswers.self, #""stopped""#) == .stopped)
+        #expect(try decode(PlanState.self, #""stopped""#) == .stopped)
+        #expect(try decode(PlanState.self, #""withdrawn""#) == .unknown("withdrawn"))
         #expect(try decode(AskAnswers.self, #""expired""#) == .expired)
         #expect(try Wire.encoder().encode(SessionHolder.nobody) == Data(#""none""#.utf8))
+    }
+
+    @Test func rowsCarryTheirRunAndHowTheLastRunEnded() throws {
+        let rows = try Fixture.server().compactMap { frame -> [SessionRow]? in
+            if case .sessions(.changed(let rows, _, _)) = frame.message, rows.contains(where: { $0.since != nil || $0.outcome != nil }) { rows } else { nil }
+        }.first ?? []
+        #expect(rows.count == 3)
+        #expect(rows[0].since == at && rows[0].running == SessionRunning(agents: 1, commands: 1))
+        #expect(rows[0].activity == "Waiting for approval: Bash" && rows[0].outcome == nil)
+        #expect(rows[1].outcome?.kind == .failed && rows[1].outcome?.text == "Claude Code exited: out of memory")
+        #expect(rows[2].outcome?.kind == .stopped && rows[2].since == nil && rows[2].running == nil)
+    }
+
+    @Test func aRunningThreadJoinsItsTasksToTheStepsTheyStarted() throws {
+        let frames = try Fixture.server().compactMap { frame -> (items: [SessionItem], controls: SessionControls)? in
+            if case let .thread(_, .items(_, items, _, controls?)) = frame.message, controls.tasks != nil { (items, controls) } else { nil }
+        }
+        guard frames.count == 2 else { Issue.record("not a running frame then a wake turn: \(frames.count)"); return }
+        let (items, controls) = frames[0]
+        #expect(controls.working && controls.turn == SessionTurn(startedAt: "2026-10-16T12:00:00.000Z", wake: false))
+        #expect(controls.heardAt == at.addingTimeInterval(7200))
+        let tasks = try #require(controls.tasks)
+        #expect(tasks.map(\.kind) == [.agent, .command])
+        #expect(tasks[0].waiting == MessageID("m23") && tasks[0].progress?.tools == 3 && tasks[0].progress?.last == "Bash")
+        #expect(tasks[1].owner == "toolu_01Ac1" && tasks[1].progress == nil && tasks[1].background)
+        #expect(tasks.map(\.outlived) == [false, false])
+        #expect(try jsonObject(Wire.encoder().encode(tasks[0]))["outlived"] == nil)
+
+        guard case let .work(_, _, steps) = items.first else { Issue.record("no work item first"); return }
+        #expect(steps.map(\.state) == [.running, .waiting, .running, .error, .stopped, .unsure, .ended])
+        #expect(tasks.compactMap(\.stepId).allSatisfy { id in steps.contains { $0.id == id } }, "every task names a step in the thread")
+        #expect(steps[0].background && steps[0].detail == "general-purpose" && steps[0].startedAt == at)
+        #expect(!steps[1].background && steps[1].owner == "toolu_01Ac1" && steps[1].startedAt == nil)
+        #expect(steps[3].cause == "Exit code 1: ls: late.txt: No such file or directory" && steps[3].endedAt == at.addingTimeInterval(7200))
+        #expect(steps[4].usage == ToolUsage(tools: 4, ms: 31000) && steps[4].cause == "Stopped by you")
+        #expect(steps[5].cause == "Can't tell whether this still runs on your Mac" && steps[5].background)
+
+        let cards = items.compactMap { if case .permission(_, _, let p) = $0 { p } else { nil } }
+        #expect(cards.map(\.stepId) == ["toolu_01Ac2", "toolu_01Ac6", "toolu_01Ac7"])
+        #expect(cards.map(\.subagent) == ["sleeper two", "sleeper one", nil])
+        #expect(cards.map(\.card.answer) == [nil, .stopped, .closed])
+        #expect(cards[2].card.answer?.outcome().short == "Closed", "a card Claude Code abandoned reads closed, not expired")
+        let reasons = items.compactMap { if case let .notice(_, _, _, _, reason) = $0 { reason } else { nil } }
+        #expect(reasons == [.task, .stop])
+
+        let wake = frames[1].controls
+        #expect(wake.working && wake.turn?.wake == true)
+        let outlived = try #require(wake.tasks?.first)
+        #expect(wake.tasks?.count == 1 && outlived.outlived && !outlived.background && outlived.label == "perl -e 'sleep 90'")
+        #expect(try jsonObject(Wire.encoder().encode(outlived))["outlived"] as? Bool == true)
+        guard case let .work(_, _, wakeSteps) = frames[1].items.first else { Issue.record("no work item in the wake frame"); return }
+        #expect(wakeSteps.map(\.id) == [outlived.stepId], "the outlived task names a step in the thread")
+    }
+
+    @Test func pushStateAndErrorsAboutARequestDecodeToTypedValues() throws {
+        let frames = try Fixture.server().map(\.message)
+        guard case .hello(let hello) = frames[0] else { Issue.record("not hello"); return }
+        #expect(hello.push == .on)
+        let pushes = frames.compactMap { if case .pushState(let p) = $0 { p } else { nil } }
+        #expect(pushes == [.failing(error: "The push server answered 500", at: at.addingTimeInterval(7200)), .off])
+        let abouts = frames.compactMap { if case .error(_, let about?) = $0 { about } else { nil } }
+        let agent = SessionID("6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31")
+        #expect(abouts == [
+            .stop(sessionId: agent), .set(sessionId: agent), .send(sessionId: agent, clientId: "c_4d2a"), .tool(sessionId: agent, toolUseId: "toolu_01Ab5"), .create(ref: "s1"),
+            .decide(sessionId: agent, cardId: MessageID("m20")), .page(sessionId: agent),
+        ])
+        let plain = frames.compactMap { if case let .error(message, nil) = $0 { message } else { nil } }
+        #expect(plain == ["Unknown bot"])
+    }
+
+    @Test func framesWithoutTheRunStateKeysDecodeAsBeforeAndEncodeNone() throws {
+        let step = try decode(ToolStep.self, #"{"id":"t1","tool":"Bash","label":"Run ls","state":"ok","diff":null,"output":null}"#)
+        #expect(step.detail == nil && step.startedAt == nil && step.endedAt == nil && !step.background && step.owner == nil && step.cause == nil && step.usage == nil)
+        #expect(try jsonObject(Wire.encoder().encode(step)).allKeys.count == 6)
+        let controls = try decode(SessionControls.self, #"{"canSend":true,"reason":null,"working":true,"queued":0,"model":null,"models":[],"mode":"default","modes":[]}"#)
+        #expect(controls.turn == nil && controls.tasks == nil && controls.heardAt == nil && controls.stopping == nil)
+        #expect(try jsonObject(Wire.encoder().encode(controls))["tasks"] == nil)
+        #expect(try jsonObject(Wire.encoder().encode(controls))["stopping"] == nil)
+        let notice = try decode(SessionItem.self, #"{"kind":"notice","id":"n1","at":"2026-10-16T12:00:00.000Z","text":"Interrupted","tone":"info"}"#)
+        #expect(notice == .notice(id: ItemID("n1"), at: at, text: "Interrupted", tone: .info, reason: nil))
+        let hello = try decode(ServerMessage.self, #"{"type":"hello","protocol":3,"machine":"Mac","userName":"Alex","bots":[]}"#)
+        guard case .hello(let old) = hello else { Issue.record("not hello"); return }
+        #expect(old.push == nil)
+        let stop = try decode(ClientMessage.self, #"{"type":"session_stop","sessionId":"s1"}"#)
+        #expect(stop == .sessionStop(sessionId: SessionID("s1"), target: nil, turnStartedAt: nil))
+        let send = ClientMessage.sessionSend(sessionId: SessionID("s1"), text: "hi", clientId: "c1", interrupt: true)
+        #expect(try jsonObject(Wire.encoder().encode(send))["turnStartedAt"] == nil)
+    }
+
+    @Test func aStopClaudeCodeHasNotConfirmedSaysWhenTheBridgeGivesUpWaiting() throws {
+        let stopping = try Fixture.server().compactMap { frame -> SessionStopping? in
+            if case let .thread(_, .items(_, _, _, controls?)) = frame.message { controls.stopping } else { nil }
+        }
+        #expect(stopping == [SessionStopping(at: at.addingTimeInterval(7200), deadline: at.addingTimeInterval(7215))])
+    }
+
+    @Test(arguments: ["2026-10-21T07:21:24.608Z", "2026-10-21T07:21:24.6081Z", "2026-10-21T07:21:24Z"])
+    func aStopSendsBackTheTurnStartExactlyAsTheBridgeWroteIt(startedAt: String) throws {
+        let json = #"{"canSend":true,"reason":null,"working":true,"queued":0,"model":null,"models":[],"mode":"default","modes":[],"turn":{"startedAt":"\#(startedAt)","wake":false}}"#
+        let turn = try #require(try decode(SessionControls.self, json).turn)
+        let stop = ClientMessage.sessionStop(sessionId: SessionID("s1"), target: .turn, turnStartedAt: turn.startedAt)
+        #expect(try jsonObject(Wire.encoder().encode(stop))["turnStartedAt"] as? String == startedAt)
+    }
+
+    @Test func runStateValuesANewerBridgeInventsDecodeAndKeepTheirWireStrings() throws {
+        let step = try decode(ToolStep.self, #"{"id":"t1","tool":"Bash","label":"Run ls","state":"paused","diff":null,"output":null}"#)
+        #expect(step.state == .unknown("paused"))
+        #expect(try jsonObject(Wire.encoder().encode(step))["state"] as? String == "paused")
+        #expect(try decode(SessionTaskKind.self, #""monitor""#) == .unknown("monitor"))
+        #expect(try decode(SessionOutcomeKind.self, #""cancelled""#) == .unknown("cancelled"))
+        #expect(try decode(NoticeReason.self, #""compact""#) == .unknown("compact"))
+        #expect(try decode(PushState.self, #"{"state":"snoozed"}"#) == .unknown("snoozed"))
+        #expect(try decode(ErrorAbout.self, #"{"kind":"approve","sessionId":"s1"}"#) == .unknown("approve"))
+        #expect(try decode(PermissionAnswer.self, #""withdrawn""#) == .unknown("withdrawn"))
     }
 
     @Test func theSessionRequestsTheAppBuildsAreTheFixtureFrames() throws {
@@ -307,7 +439,14 @@ private func unknowns(in message: ServerMessage) -> [String] {
             .unwatchSession(sessionId: agent),
             .sessionPage(sessionId: agent, before: Cursor("8812331:2b7c9e41")),
             .sessionSend(sessionId: agent, text: "Also check it on Firefox", clientId: "c_4d2a", interrupt: false),
+            .sessionSend(
+                sessionId: SessionID("b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40"), text: "Stop, use the Web Audio API instead", clientId: "c_4d2c", interrupt: true,
+                turnStartedAt: "2026-10-16T12:00:00.000Z"
+            ),
             .sessionStop(sessionId: agent),
+            .sessionStop(sessionId: agent, target: .turn, turnStartedAt: "2026-10-16T12:00:00.000Z"),
+            .sessionStop(sessionId: agent, target: .task(TaskID("bk2x9q7")), turnStartedAt: "2026-10-16T12:00:00.000Z"),
+            .sessionUnqueue(sessionId: agent, clientId: "c_4d2a"),
             .sessionDecide(sessionId: agent, cardId: MessageID("m20"), choice: .once),
             .sessionAnswer(sessionId: agent, cardId: MessageID("m21"), answers: ["Which audio library should the fade use?": "Howler.js"]),
             .sessionAnswer(sessionId: agent, cardId: MessageID("m21"), answers: nil),
@@ -352,7 +491,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
             default: ""
             }
         }.filter { !$0.isEmpty }
-        #expect(seqs == ["bot:42", "bot_removed:-", "bot:48", "bot:49", "bot:51", "bot:54", "bot:57"])
+        #expect(seqs == ["bot:42", "bot_removed:-", "bot:45", "bot:46", "bot:48", "bot:49", "bot:51", "bot:54", "bot:57"])
     }
 
     @Test func routinesCarryTheirTriggerNextRunAndRuns() throws {
@@ -385,12 +524,21 @@ private func unknowns(in message: ServerMessage) -> [String] {
     }
 
     @Test func botsAndAgentsCarryTheNewStatusesAndTheDailyCap() throws {
-        #expect(try Fixture.bots().map(\.status) == [.idle, .working, .awaitingApproval, .parked, .unavailable, .idle, .idle])
-        #expect(try Fixture.bots().map(\.dailyCapUsd) == [nil, 5, nil, nil, nil, nil, nil])
+        #expect(try Fixture.bots().map(\.status) == [.idle, .working, .idle, .awaitingApproval, .awaitingApproval, .parked, .unavailable, .idle, .idle])
+        #expect(try Fixture.bots().map(\.dailyCapUsd) == [nil, 5, nil, nil, nil, nil, nil, nil, nil])
         let agentStatuses = try Fixture.server().compactMap { frame -> AgentStatus? in
             if case .agent(let agent, _) = frame.message { agent.status } else { nil }
         }
         #expect(agentStatuses == [.waiting, .awaitingApproval, .unavailable, .capped])
+    }
+
+    @Test func aBotCarriesHowItsLastTurnEndedWhatRunsOnAndHowManyCardsWait() throws {
+        let bots = try Fixture.bots()
+        #expect(bots[2].outcome == SessionOutcome(kind: .failed, text: "Didn't finish: Claude Code quit unexpectedly", at: at.addingTimeInterval(7200)))
+        #expect(bots[2].background == BotBackground(since: at.addingTimeInterval(7200), count: 2, text: "Background: npm run build and 1 more"))
+        #expect(bots[3].outcome?.kind == .stopped)
+        #expect(bots[3].cards == 3)
+        #expect(bots[0].outcome == nil && bots[0].background == nil && bots[0].cards == nil)
     }
 
     @Test func permissionCardsDecodeOpenOrDecidedWithTheExactCall() throws {
@@ -398,6 +546,11 @@ private func unknowns(in message: ServerMessage) -> [String] {
             if case .permission(_, _, let card) = message { card } else { nil }
         }
         #expect(cards == [
+            PermissionCard(
+                from: nil, tool: "Bash", label: "Push to the default branch", detail: #"eval "$(echo hostname)""#,
+                always: "git push to main or master from engineer", answer: .superseded,
+                expiresAt: Date(timeIntervalSince1970: 1_792_166_400)
+            ),
             PermissionCard(
                 from: nil, tool: "Bash", label: "Push to the default branch", detail: "git push origin main",
                 always: "git push to main or master from engineer", answer: nil,
@@ -444,7 +597,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
     @Test func anUnknownPermissionAnswerStillClosesTheCard() throws {
         let json = #"{"kind":"permission","id":"m1","at":"2026-10-16T12:00:00.000Z","from":null,"tool":"Bash","label":"l","detail":"d","always":"a","answer":"withdrawn","expiresAt":"2026-10-16T13:00:00.000Z"}"#
         guard case .permission(_, _, let card) = try decode(Message.self, json) else { Issue.record("not permission"); return }
-        #expect(card.answer == .closed("withdrawn"))
+        #expect(card.answer == .unknown("withdrawn"))
     }
 
     @Test func unknownMessageTypeDecodesInsteadOfThrowing() throws {
@@ -485,10 +638,15 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(Feature.allCases.map(\.rawValue) == [
             "memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend",
             "mentions", "commands", "exchanges", "groups", "usage", "sessions", "presence", "machines",
+            "session_tasks", "session_unqueue", "push_state", "decide_ack",
         ])
         #expect(MachineRole.allCases.map(\.rawValue) == ["home", "machine"])
         #expect(MachinePlatform.allCases.map(\.rawValue) == ["darwin", "linux"])
         #expect(ConnectorKind.allCases.map(\.rawValue) == ["chrome", "computer-use", "other"])
+        #expect(ToolStepState.allCases.map(\.rawValue) == ["running", "waiting", "ok", "error", "denied", "stopped", "unsure", "ended"])
+        #expect(SessionTaskKind.allCases.map(\.rawValue) == ["agent", "command", "other"])
+        #expect(SessionOutcomeKind.allCases.map(\.rawValue) == ["finished", "failed", "stopped", "lost"])
+        #expect(NoticeReason.allCases.map(\.rawValue) == ["stop", "task", "restart", "failure", "approval"])
         #expect(SessionOrigin.allCases.map(\.rawValue) == ["phone", "agent", "desktop", "terminal", "sdk", "cloud"])
         #expect(SessionStatus.allCases.map(\.rawValue) == ["idle", "working", "awaiting_approval", "awaiting_input", "failed", "parked", "unavailable"])
         #expect(SessionHolder.allCases.map(\.rawValue) == ["none", "claudio", "desktop", "terminal", "other"])
@@ -613,7 +771,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(capped?.worktree == Worktree(path: "/Users/alex/.claudiobot-worktrees/web/a1", branch: "claudio/verify-skill"))
         let echoed = try Fixture.messages().compactMap { if case let .user(_, _, _, _, clientId, _) = $0 { clientId } else { nil } }
         #expect(echoed == ["c_9b1e"])
-        #expect(try Fixture.bots().map(\.muted) == [false, false, false, false, false, true, false])
+        #expect(try Fixture.bots().map(\.muted) == [false, false, false, false, false, false, false, true, false])
     }
 
     @Test func theMentionsCommandsExchangesAndGroupsFramesDecodeToTypedValues() throws {
@@ -996,6 +1154,12 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(DeepLink(url: URL(string: "claudiobot://bot/b1")!) == .bot(BotID("b1"), message: nil))
     }
 
+    @Test func aSessionLinkCarriesTheCardItsPushWasAbout() {
+        #expect(DeepLink(url: URL(string: "claudiobot://session/s1?card=m30")!) == .session(SessionID("s1"), card: MessageID("m30")))
+        #expect(DeepLink(url: URL(string: "claudiobot://session/s1")!) == .session(SessionID("s1"), card: nil))
+        #expect(DeepLink(url: URL(string: "claudiobot://session/s1?card=")!) == .session(SessionID("s1"), card: nil))
+    }
+
     @Test func aPairLinkCarriesTheInvite() {
         let url = URL(string: "claudiobot://pair?url=ws%3A%2F%2F10.0.0.20%3A7878%2Fws&code=K7QD-M2XP")!
         #expect(DeepLink(url: url) == .pair(PairInvite(url: URL(string: "ws://10.0.0.20:7878/ws")!, code: "K7QD-M2XP")))
@@ -1067,13 +1231,81 @@ private func unknowns(in message: ServerMessage) -> [String] {
 
     @Test func eachCardKeepsItsOwnNotificationWhileMessagesShareOnePerBot() {
         let ids = [
-            Alert(bot: bot, reason: .message("one")),
-            Alert(bot: bot, reason: .message("two")),
-            Alert(bot: bot, reason: .permission(id: MessageID("p1"), label: "Push")),
-            Alert(bot: bot, reason: .permission(id: MessageID("p2"), label: "Push")),
-            Alert(bot: bot, reason: .question(id: MessageID("q1"), question: "Merge?", options: ["Yes"])),
+            Alert.bot(bot, .message("one")),
+            .bot(bot, .message("two")),
+            .bot(bot, .permission(id: MessageID("p1"), label: "Push")),
+            .bot(bot, .permission(id: MessageID("p2"), label: "Push")),
+            .bot(bot, .question(id: MessageID("q1"), question: "Merge?", options: ["Yes"])),
         ].map(Notifier.identifier(for:))
         #expect(ids[0] == ids[1])
         #expect(Set(ids[1...]).count == 4)
+    }
+
+    private func session(_ id: String, _ reason: SessionAlertReason, count: Int = 1, title: String = "Sleep in parallel", kind: SessionCardKind? = .permission) -> Alert {
+        let card = reason == .card || reason == .reminder
+        return .session(SessionAlert(
+            sessionId: SessionID(id), reason: reason, count: count, title: title, cardId: reason == .card ? MessageID("m30") : nil, cardKind: card ? kind : nil
+        ))
+    }
+
+    private func ending(_ reason: SessionAlertReason, agents: Int, commands: Int) -> Alert {
+        .session(SessionAlert(
+            sessionId: SessionID("s1"), reason: reason, count: 1, title: "Sleep in parallel", cardId: nil,
+            running: SessionRunning(agents: agents, commands: commands)
+        ))
+    }
+
+    @Test func endingAlertsFromTheBridgeNameWhatStillRuns() throws {
+        let endings = try Fixture.server().compactMap { frame -> SessionAlert? in
+            if case .sessionAlert(let alert) = frame.message, alert.reason == .failed || alert.reason == .lost { alert } else { nil }
+        }
+        #expect(endings.map(\.reason) == [.lost, .failed, .lost])
+        #expect(endings.map(\.running) == [nil, SessionRunning(agents: 0, commands: 2), SessionRunning(agents: 0, commands: 1)])
+        #expect(endings.compactMap { Notifier.text(of: $0)?.body } == [
+            "Interrupted by a bridge restart",
+            "Stopped with an error. 2 commands still run on your Mac.",
+            "Interrupted by a bridge restart. 1 command still runs on your Mac.",
+        ])
+    }
+
+    @Test func aSessionHasOneNotificationInItsOwnThread() {
+        let card = session("s1", .card, count: 3)
+        let done = session("s1", .finished)
+        #expect(Notifier.identifier(for: card) == "session-s1")
+        #expect(Notifier.identifier(for: done) == "session-s1")
+        #expect(Notifier.thread(of: done) == "s1")
+        #expect(Notifier.identifier(for: session("s2", .card)) == "session-s2")
+    }
+
+    @Test func aSessionAlertNamesTheSessionAndWhatItWants() {
+        func text(_ alert: Alert) -> [String]? {
+            guard case .session(let s) = alert, let t = Notifier.text(of: s) else { return nil }
+            return [t.title, t.body]
+        }
+        #expect(text(session("s1", .card)) == ["Sleep in parallel", "Needs your approval"])
+        #expect(text(session("s1", .card, count: 3)) == ["Sleep in parallel", "Needs 3 approvals"])
+        #expect(text(session("s1", .reminder, count: 2)) == ["Sleep in parallel", "Still waiting for 2 approvals"])
+        #expect(text(session("s1", .reminder)) == ["Sleep in parallel", "Still waiting for your approval"])
+        #expect(text(session("s1", .card, kind: .ask)) == ["Sleep in parallel", "Has a question for you"])
+        #expect(text(session("s1", .card, kind: nil)) == ["Sleep in parallel", "Needs you"], "mixed kinds, or a bridge that does not say")
+        #expect(text(session("s1", .finished, title: "  ")) == ["Claude Code session", "Finished"])
+        #expect(text(session("s1", .failed)) == ["Sleep in parallel", "Stopped with an error"])
+        #expect(text(session("s1", .lost)) == ["Sleep in parallel", "Interrupted by a bridge restart"])
+        #expect(text(ending(.failed, agents: 0, commands: 2)) == ["Sleep in parallel", "Stopped with an error. 2 commands still run on your Mac."])
+        #expect(text(ending(.lost, agents: 0, commands: 1)) == ["Sleep in parallel", "Interrupted by a bridge restart. 1 command still runs on your Mac."])
+        #expect(text(ending(.lost, agents: 1, commands: 0)) == ["Sleep in parallel", "Interrupted by a bridge restart. 1 agent still runs on your Mac."])
+        #expect(text(ending(.failed, agents: 1, commands: 1)) == ["Sleep in parallel", "Stopped with an error. 1 agent, 1 command still run on your Mac."])
+        #expect(text(ending(.failed, agents: 0, commands: 0)) == ["Sleep in parallel", "Stopped with an error"])
+        #expect(text(session("s1", .unknown("paused"))) == nil)
+    }
+
+    @Test func nothingBuzzesForWhatIsOnScreenWhileTheAppIsActive() {
+        var onScreen = OnScreen()
+        _ = onScreen.set(Viewing(bot: BotID("b1"), session: SessionID("s1")), for: ViewingLease())
+        let other = session("s2", .card)
+        #expect(Notifier.shows(session("s1", .card), active: true, onScreen: onScreen) == false)
+        #expect(Notifier.shows(other, active: true, onScreen: onScreen) == true)
+        #expect(Notifier.shows(.bot(bot, .message("hi")), active: true, onScreen: onScreen) == false)
+        #expect(Notifier.shows(session("s1", .finished), active: false, onScreen: onScreen) == true)
     }
 }

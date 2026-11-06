@@ -1,0 +1,21 @@
+step	area	status	ts	note
+0	all	done	2026-10-21T03:13:26Z	runner+registry (scenario.ts, scenarios.ts, pool.ts), pool UX-1..3, lease proof ok (max 3 booted), S1-S8+S1b run; S3 sim paired via -pairingAutoConfirm
+1	all	done	2026-10-21T03:27:22Z	patterns.md: 47 patterns, 15 anti-patterns; t3code @4741dc5 (24 citations checked, 1 fixed), CLI 2.1.305 observed S1-S8, desktop from docs+bundle+disk
+2	sessions	done	2026-10-21T11:32:18Z	run 1: 137 survived (P0 1, P1 80, P2 56); run 2 reached 2 dry rounds, 41 new candidates -> 32 survived (P1 10, P2 22)
+3	sessions	done	2026-10-23T16:45:15Z	all 20 groups merged (G0-G18, R1); last G11 #26 at main 411e482
+4	sessions	failed	2026-10-31T17:34:20Z	rerun on main b0925fc: 6 rounds, never 2 dry; 135 survivors (52 P1, 83 P2, 0 P0) filed F-SES-177..311; raw .claude/ux-evidence/sessions-s4-audit.json. Sessions goes back to step 3 (run 3 fix groups)
+3b	sessions	done	2026-11-01T21:10:56Z	run 3: G19-G29 all merged (#29-#39); main 35009a7
+4b	sessions	done	2026-11-01T22:57:30Z	PASS (lean): targeted re-check wf_04dc6a3a-6be on main 758c59a confirmed all 52 run-3 P1s fixed, 0 still open; 1.7M subagent tokens
+2	chat	done	2026-11-02T00:12:29Z	combined lean audit: 13 P1 (F-AR-001..013), 69 P2 to backlog, 0 P0; pairing had no P1
+3	chat	done	2026-11-02T02:02:06Z	G30-G33 merged (#43-#46); main f0c87db
+4	chat	done	2026-11-02T02:14:01Z	PASS (lean): re-check wf_5e69554b-411 on main f0c87db confirmed F-AR-001..013 fixed
+2	home	done	2026-11-02T00:12:29Z	combined lean audit: 13 P1 (F-AR-001..013), 69 P2 to backlog, 0 P0; pairing had no P1
+3	home	done	2026-11-02T02:02:06Z	G30-G33 merged (#43-#46); main f0c87db
+4	home	done	2026-11-02T02:14:01Z	PASS (lean): re-check wf_5e69554b-411 on main f0c87db confirmed F-AR-001..013 fixed
+2	pairing	done	2026-11-02T00:12:29Z	combined lean audit: 13 P1 (F-AR-001..013), 69 P2 to backlog, 0 P0; pairing had no P1
+3	pairing	done	2026-11-02T00:12:29Z	no P0/P1
+4	pairing	done	2026-11-02T02:02:06Z	no P0/P1 in the combined audit
+2	settings	done	2026-11-02T00:12:29Z	combined lean audit: 13 P1 (F-AR-001..013), 69 P2 to backlog, 0 P0; pairing had no P1
+3	settings	done	2026-11-02T02:02:06Z	G30-G33 merged (#43-#46); main f0c87db
+4	settings	done	2026-11-02T02:14:01Z	PASS (lean): re-check wf_5e69554b-411 on main f0c87db confirmed F-AR-001..013 fixed
+exit	all	done	2026-11-02T04:54:35Z	user exit rule: final fix wave G34-G37 merged (#47-#50, main cf6bc53); re-check wf_176c4b97-55d: 9/12 confirmed fixed, F-FN-004 and F-FN-010 confirmed live by PR verifiers, F-FN-006 unit-tested only; no further open-ended audit

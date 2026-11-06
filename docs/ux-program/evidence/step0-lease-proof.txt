@@ -1,0 +1,205 @@
+# Step 0 lease proof, 2026-10-21T02:52:53Z
+
+## 1. Five jobs, three devices
+
+ClaudioBot-UX-1 E35BFAAA-485D-43BA-9379-C39331A2ABFE Shutdown com.apple.CoreSimulator.SimRuntime.iOS-26-5
+ClaudioBot-UX-2 9AA7907C-E7CD-486A-89B9-72D803FDB934 Shutdown com.apple.CoreSimulator.SimRuntime.iOS-26-5
+ClaudioBot-UX-3 2CA512CB-6013-4E1A-A5F8-B3E9EB0DD709 Shutdown com.apple.CoreSimulator.SimRuntime.iOS-26-5
+ClaudioBot-UX-1 Shutdown free
+ClaudioBot-UX-2 Shutdown free
+ClaudioBot-UX-3 Shutdown free
+
+started 5 jobs: 88998 88999 89000 89001 89002
+
+### sample 02:52:53: 5 jobs alive, 0 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  lease ClaudioBot-UX-1 Shutdown leased by "job5" pid 89002 since 2026-10-21T02:52:53.461Z, heartbeat 0s ago
+  lease ClaudioBot-UX-2 Shutdown leased by "job2" pid 88999 since 2026-10-21T02:52:53.462Z, heartbeat 0s ago
+  lease ClaudioBot-UX-3 Shutdown leased by "job4" pid 89001 since 2026-10-21T02:52:53.462Z, heartbeat 0s ago
+
+### sample 02:53:04: 5 jobs alive, 3 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  ClaudioBot-UX-1 (E35BFAAA-485D-43BA-9379-C39331A2ABFE) (Booted) 
+  ClaudioBot-UX-2 (9AA7907C-E7CD-486A-89B9-72D803FDB934) (Booted) 
+  ClaudioBot-UX-3 (2CA512CB-6013-4E1A-A5F8-B3E9EB0DD709) (Booted) 
+  lease ClaudioBot-UX-1 Booted leased by "job5" pid 89002 since 2026-10-21T02:52:53.461Z, heartbeat 15s ago
+  lease ClaudioBot-UX-2 Booted leased by "job2" pid 88999 since 2026-10-21T02:52:53.462Z, heartbeat 15s ago
+  lease ClaudioBot-UX-3 Booted leased by "job4" pid 89001 since 2026-10-21T02:52:53.462Z, heartbeat 15s ago
+
+### sample 02:53:18: 5 jobs alive, 3 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  ClaudioBot-UX-1 (E35BFAAA-485D-43BA-9379-C39331A2ABFE) (Booted) 
+  ClaudioBot-UX-2 (9AA7907C-E7CD-486A-89B9-72D803FDB934) (Booted) 
+  ClaudioBot-UX-3 (2CA512CB-6013-4E1A-A5F8-B3E9EB0DD709) (Booted) 
+  lease ClaudioBot-UX-1 Booted leased by "job5" pid 89002 since 2026-10-21T02:52:53.461Z, heartbeat 25s ago
+  lease ClaudioBot-UX-2 Booted leased by "job2" pid 88999 since 2026-10-21T02:52:53.462Z, heartbeat 25s ago
+  lease ClaudioBot-UX-3 Booted leased by "job4" pid 89001 since 2026-10-21T02:52:53.462Z, heartbeat 25s ago
+
+### sample 02:53:28: 5 jobs alive, 3 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  ClaudioBot-UX-1 (E35BFAAA-485D-43BA-9379-C39331A2ABFE) (Booted) 
+  ClaudioBot-UX-2 (9AA7907C-E7CD-486A-89B9-72D803FDB934) (Booted) 
+  ClaudioBot-UX-3 (2CA512CB-6013-4E1A-A5F8-B3E9EB0DD709) (Booted) 
+  lease ClaudioBot-UX-1 Booted leased by "job5" pid 89002 since 2026-10-21T02:52:53.461Z, heartbeat 35s ago
+  lease ClaudioBot-UX-2 Booted leased by "job2" pid 88999 since 2026-10-21T02:52:53.462Z, heartbeat 35s ago
+  lease ClaudioBot-UX-3 Booted leased by "job4" pid 89001 since 2026-10-21T02:52:53.462Z, heartbeat 35s ago
+
+### sample 02:53:38: 5 jobs alive, 3 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  ClaudioBot-UX-1 (E35BFAAA-485D-43BA-9379-C39331A2ABFE) (Booted) 
+  ClaudioBot-UX-2 (9AA7907C-E7CD-486A-89B9-72D803FDB934) (Booted) 
+  ClaudioBot-UX-3 (2CA512CB-6013-4E1A-A5F8-B3E9EB0DD709) (Booted) 
+  lease ClaudioBot-UX-1 Booted leased by "job5" pid 89002 since 2026-10-21T02:52:53.461Z, heartbeat 46s ago
+  lease ClaudioBot-UX-2 Booted leased by "job2" pid 88999 since 2026-10-21T02:52:53.462Z, heartbeat 46s ago
+  lease ClaudioBot-UX-3 Booted leased by "job4" pid 89001 since 2026-10-21T02:52:53.462Z, heartbeat 46s ago
+
+### sample 02:53:49: 5 jobs alive, 3 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  ClaudioBot-UX-1 (E35BFAAA-485D-43BA-9379-C39331A2ABFE) (Booted) 
+  ClaudioBot-UX-2 (9AA7907C-E7CD-486A-89B9-72D803FDB934) (Booted) 
+  ClaudioBot-UX-3 (2CA512CB-6013-4E1A-A5F8-B3E9EB0DD709) (Booted) 
+  lease ClaudioBot-UX-1 Booted leased by "job5" pid 89002 since 2026-10-21T02:52:53.461Z, heartbeat 56s ago
+  lease ClaudioBot-UX-2 Booted leased by "job2" pid 88999 since 2026-10-21T02:52:53.462Z, heartbeat 56s ago
+  lease ClaudioBot-UX-3 Booted leased by "job4" pid 89001 since 2026-10-21T02:52:53.462Z, heartbeat 56s ago
+
+### sample 02:54:01: 5 jobs alive, 3 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  ClaudioBot-UX-1 (E35BFAAA-485D-43BA-9379-C39331A2ABFE) (Booted) 
+  ClaudioBot-UX-2 (9AA7907C-E7CD-486A-89B9-72D803FDB934) (Booted) 
+  ClaudioBot-UX-3 (2CA512CB-6013-4E1A-A5F8-B3E9EB0DD709) (Booted) 
+  lease ClaudioBot-UX-1 Booted leased by "job5" pid 89002 since 2026-10-21T02:52:53.461Z, heartbeat 10s ago
+  lease ClaudioBot-UX-2 Booted leased by "job2" pid 88999 since 2026-10-21T02:52:53.462Z, heartbeat 10s ago
+  lease ClaudioBot-UX-3 Booted leased by "job4" pid 89001 since 2026-10-21T02:52:53.462Z, heartbeat 10s ago
+
+### sample 02:54:13: 3 jobs alive, 0 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  lease ClaudioBot-UX-1 Booting leased by "job3" pid 89000 since 2026-10-21T02:54:13.462Z, heartbeat 1s ago
+  lease ClaudioBot-UX-2 Booting leased by "job1" pid 88998 since 2026-10-21T02:54:13.462Z, heartbeat 1s ago
+  lease ClaudioBot-UX-3 Shutting Down leased by "job4" pid 89001 since 2026-10-21T02:52:53.462Z, heartbeat 21s ago
+
+### sample 02:54:24: 2 jobs alive, 2 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  ClaudioBot-UX-1 (E35BFAAA-485D-43BA-9379-C39331A2ABFE) (Booted) 
+  ClaudioBot-UX-2 (9AA7907C-E7CD-486A-89B9-72D803FDB934) (Booted) 
+  lease ClaudioBot-UX-1 Booted leased by "job3" pid 89000 since 2026-10-21T02:54:13.462Z, heartbeat 18s ago
+  lease ClaudioBot-UX-2 Booted leased by "job1" pid 88998 since 2026-10-21T02:54:13.462Z, heartbeat 18s ago
+  lease ClaudioBot-UX-3 Shutdown free
+
+### sample 02:54:41: 2 jobs alive, 2 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  ClaudioBot-UX-1 (E35BFAAA-485D-43BA-9379-C39331A2ABFE) (Booted) 
+  ClaudioBot-UX-2 (9AA7907C-E7CD-486A-89B9-72D803FDB934) (Booted) 
+  lease ClaudioBot-UX-1 Booted leased by "job3" pid 89000 since 2026-10-21T02:54:13.462Z, heartbeat 28s ago
+  lease ClaudioBot-UX-2 Booted leased by "job1" pid 88998 since 2026-10-21T02:54:13.462Z, heartbeat 28s ago
+  lease ClaudioBot-UX-3 Shutdown free
+
+### sample 02:54:51: 2 jobs alive, 2 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  ClaudioBot-UX-1 (E35BFAAA-485D-43BA-9379-C39331A2ABFE) (Booted) 
+  ClaudioBot-UX-2 (9AA7907C-E7CD-486A-89B9-72D803FDB934) (Booted) 
+  lease ClaudioBot-UX-1 Booted leased by "job3" pid 89000 since 2026-10-21T02:54:13.462Z, heartbeat 38s ago
+  lease ClaudioBot-UX-2 Booted leased by "job1" pid 88998 since 2026-10-21T02:54:13.462Z, heartbeat 38s ago
+  lease ClaudioBot-UX-3 Shutdown free
+
+### sample 02:55:02: 2 jobs alive, 2 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  ClaudioBot-UX-1 (E35BFAAA-485D-43BA-9379-C39331A2ABFE) (Booted) 
+  ClaudioBot-UX-2 (9AA7907C-E7CD-486A-89B9-72D803FDB934) (Booted) 
+  lease ClaudioBot-UX-1 Booted leased by "job3" pid 89000 since 2026-10-21T02:54:13.462Z, heartbeat 49s ago
+  lease ClaudioBot-UX-2 Booted leased by "job1" pid 88998 since 2026-10-21T02:54:13.462Z, heartbeat 49s ago
+  lease ClaudioBot-UX-3 Shutdown free
+
+### sample 02:55:13: 2 jobs alive, 2 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  ClaudioBot-UX-1 (E35BFAAA-485D-43BA-9379-C39331A2ABFE) (Booted) 
+  ClaudioBot-UX-2 (9AA7907C-E7CD-486A-89B9-72D803FDB934) (Booted) 
+  lease ClaudioBot-UX-1 Booted leased by "job3" pid 89000 since 2026-10-21T02:54:13.462Z, heartbeat 0s ago
+  lease ClaudioBot-UX-2 Booted leased by "job1" pid 88998 since 2026-10-21T02:54:13.462Z, heartbeat 0s ago
+  lease ClaudioBot-UX-3 Shutdown free
+
+### sample 02:55:24: 2 jobs alive, 2 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  ClaudioBot-UX-1 (E35BFAAA-485D-43BA-9379-C39331A2ABFE) (Booted) 
+  ClaudioBot-UX-2 (9AA7907C-E7CD-486A-89B9-72D803FDB934) (Booted) 
+  lease ClaudioBot-UX-1 Booted leased by "job3" pid 89000 since 2026-10-21T02:54:13.462Z, heartbeat 10s ago
+  lease ClaudioBot-UX-2 Booted leased by "job1" pid 88998 since 2026-10-21T02:54:13.462Z, heartbeat 10s ago
+  lease ClaudioBot-UX-3 Shutdown free
+
+### sample 02:55:34: 2 jobs alive, 2 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  ClaudioBot-UX-1 (E35BFAAA-485D-43BA-9379-C39331A2ABFE) (Booted) 
+  ClaudioBot-UX-2 (9AA7907C-E7CD-486A-89B9-72D803FDB934) (Booted) 
+  lease ClaudioBot-UX-1 Booted leased by "job3" pid 89000 since 2026-10-21T02:54:13.462Z, heartbeat 21s ago
+  lease ClaudioBot-UX-2 Booted leased by "job1" pid 88998 since 2026-10-21T02:54:13.462Z, heartbeat 21s ago
+  lease ClaudioBot-UX-3 Shutdown free
+
+### sample 02:55:44: 0 jobs alive, 0 ClaudioBot-UX booted
+  iPhone 17 Pro (81E949D3-BF2D-4A68-8DAB-E3AC8C060A81) (Booted) 
+  lease ClaudioBot-UX-1 Shutdown free
+  lease ClaudioBot-UX-2 Shutdown free
+  lease ClaudioBot-UX-3 Shutdown free
+
+### job logs
+  job1 | [2026-10-21T02:52:53.464Z] all 3 pool devices are leased; "job1" waits
+  job1 | [2026-10-21T02:54:13.462Z] lease acquired ClaudioBot-UX-2 9AA7907C-E7CD-486A-89B9-72D803FDB934 by "job1" pid 88998
+  job1 | [2026-10-21T02:54:29.234Z] booted ClaudioBot-UX-2 9AA7907C-E7CD-486A-89B9-72D803FDB934
+  job1 | [2026-10-21T02:54:34.485Z] job1 screenshot /private/var/folders/nz/72kf27z91717knc54zkmqfwc0000gn/T/claudiobot-verify/sim-jobs/job1.png
+  job1 | [2026-10-21T02:55:37.721Z] shutdown 9AA7907C-E7CD-486A-89B9-72D803FDB934 (job1 done): ok
+  job1 | [2026-10-21T02:55:37.721Z] lease released ClaudioBot-UX-2 by "job1"
+  job2 | [2026-10-21T02:52:53.462Z] lease acquired ClaudioBot-UX-2 9AA7907C-E7CD-486A-89B9-72D803FDB934 by "job2" pid 88999
+  job2 | [2026-10-21T02:53:08.631Z] booted ClaudioBot-UX-2 9AA7907C-E7CD-486A-89B9-72D803FDB934
+  job2 | [2026-10-21T02:53:09.468Z] job2 screenshot /private/var/folders/nz/72kf27z91717knc54zkmqfwc0000gn/T/claudiobot-verify/sim-jobs/job2.png
+  job2 | [2026-10-21T02:54:12.821Z] shutdown 9AA7907C-E7CD-486A-89B9-72D803FDB934 (job2 done): ok
+  job2 | [2026-10-21T02:54:12.823Z] lease released ClaudioBot-UX-2 by "job2"
+  job3 | [2026-10-21T02:52:53.464Z] all 3 pool devices are leased; "job3" waits
+  job3 | [2026-10-21T02:54:13.462Z] lease acquired ClaudioBot-UX-1 E35BFAAA-485D-43BA-9379-C39331A2ABFE by "job3" pid 89000
+  job3 | [2026-10-21T02:54:30.261Z] booted ClaudioBot-UX-1 E35BFAAA-485D-43BA-9379-C39331A2ABFE
+  job3 | [2026-10-21T02:54:34.462Z] job3 screenshot /private/var/folders/nz/72kf27z91717knc54zkmqfwc0000gn/T/claudiobot-verify/sim-jobs/job3.png
+  job3 | [2026-10-21T02:55:37.712Z] shutdown E35BFAAA-485D-43BA-9379-C39331A2ABFE (job3 done): ok
+  job3 | [2026-10-21T02:55:37.712Z] lease released ClaudioBot-UX-1 by "job3"
+  job4 | [2026-10-21T02:52:53.462Z] lease acquired ClaudioBot-UX-3 2CA512CB-6013-4E1A-A5F8-B3E9EB0DD709 by "job4" pid 89001
+  job4 | [2026-10-21T02:53:09.225Z] booted ClaudioBot-UX-3 2CA512CB-6013-4E1A-A5F8-B3E9EB0DD709
+  job4 | [2026-10-21T02:53:10.036Z] job4 screenshot /private/var/folders/nz/72kf27z91717knc54zkmqfwc0000gn/T/claudiobot-verify/sim-jobs/job4.png
+  job4 | [2026-10-21T02:54:14.202Z] shutdown 2CA512CB-6013-4E1A-A5F8-B3E9EB0DD709 (job4 done): ok
+  job4 | [2026-10-21T02:54:14.203Z] lease released ClaudioBot-UX-3 by "job4"
+  job5 | [2026-10-21T02:52:53.462Z] lease acquired ClaudioBot-UX-1 E35BFAAA-485D-43BA-9379-C39331A2ABFE by "job5" pid 89002
+  job5 | [2026-10-21T02:53:08.631Z] booted ClaudioBot-UX-1 E35BFAAA-485D-43BA-9379-C39331A2ABFE
+  job5 | [2026-10-21T02:53:09.468Z] job5 screenshot /private/var/folders/nz/72kf27z91717knc54zkmqfwc0000gn/T/claudiobot-verify/sim-jobs/job5.png
+  job5 | [2026-10-21T02:54:13.063Z] shutdown E35BFAAA-485D-43BA-9379-C39331A2ABFE (job5 done): ok
+  job5 | [2026-10-21T02:54:13.064Z] lease released ClaudioBot-UX-1 by "job5"
+
+### after
+  ClaudioBot-UX-1 (E35BFAAA-485D-43BA-9379-C39331A2ABFE) (Shutdown) 
+  ClaudioBot-UX-2 (9AA7907C-E7CD-486A-89B9-72D803FDB934) (Shutdown) 
+  ClaudioBot-UX-3 (2CA512CB-6013-4E1A-A5F8-B3E9EB0DD709) (Shutdown) 
+ClaudioBot-UX-1 Shutdown free
+ClaudioBot-UX-2 Shutdown free
+ClaudioBot-UX-3 Shutdown free
+max ClaudioBot-UX booted at once: 3 (limit 3)
+RESULT ok: at most 3 booted, all pool devices shut down at the end
+
+## 2. Stale lease reclaim
+
+faked a lease on ClaudioBot-UX-1 with a heartbeat 11 minutes old:
+ClaudioBot-UX-1 Shutdown leased by "fake stale holder" pid 99999 since 2026-01-01T00:00:00.000Z, heartbeat 660s ago STALE
+ClaudioBot-UX-2 Shutdown free
+ClaudioBot-UX-3 Shutdown free
+[2026-10-21T02:55:45.223Z] reclaimed stale lease ClaudioBot-UX-1: heartbeat 11 min old, owner pid 99999 label "fake stale holder"
+[2026-10-21T02:55:45.299Z] shutdown E35BFAAA-485D-43BA-9379-C39331A2ABFE (reclaimed from a stale lease): was already shut down
+[2026-10-21T02:55:45.299Z] lease acquired ClaudioBot-UX-1 E35BFAAA-485D-43BA-9379-C39331A2ABFE by "reclaim-test" pid 95914
+LEASED device=ClaudioBot-UX-1 udid=E35BFAAA-485D-43BA-9379-C39331A2ABFE token=e79fb168-708f-4a81-a8e8-4d826cde3a5e
+keep it: scenario.ts lease heartbeat ClaudioBot-UX-1 --token e79fb168-708f-4a81-a8e8-4d826cde3a5e (at least every 10 min)
+RESULT ok: the stale lease was reclaimed
+[2026-10-21T02:55:45.548Z] shutdown E35BFAAA-485D-43BA-9379-C39331A2ABFE (released): was already shut down
+[2026-10-21T02:55:45.548Z] lease released ClaudioBot-UX-1 by "reclaim-test"
+
+a fresh lease is not reclaimed:
+[2026-10-21T02:55:45.648Z] lease acquired ClaudioBot-UX-2 9AA7907C-E7CD-486A-89B9-72D803FDB934 by "fresh-test" pid 95939
+LEASED device=ClaudioBot-UX-2 udid=9AA7907C-E7CD-486A-89B9-72D803FDB934 token=dc54be91-d69a-45a8-87c0-15382b191cce
+keep it: scenario.ts lease heartbeat ClaudioBot-UX-2 --token dc54be91-d69a-45a8-87c0-15382b191cce (at least every 10 min)
+RESULT ok: the fresh lease on ClaudioBot-UX-1 was left alone; got ClaudioBot-UX-2
+[2026-10-21T02:55:45.899Z] shutdown 9AA7907C-E7CD-486A-89B9-72D803FDB934 (released): was already shut down
+[2026-10-21T02:55:45.899Z] lease released ClaudioBot-UX-2 by "fresh-test"
+ClaudioBot-UX-1 Shutdown free
+ClaudioBot-UX-2 Shutdown free
+ClaudioBot-UX-3 Shutdown free

@@ -56,6 +56,7 @@ struct MemberBubble: View {
     let text: String
     var members: [Bot] = []
     let opensRun: Bool
+    var at: Date?
     var onSender: (BotID) -> Void = { _ in }
 
     private static let avatar: CGFloat = 28
@@ -77,8 +78,9 @@ struct MemberBubble: View {
                         .font(.ui(size: 13, weight: .semibold))
                         .foregroundStyle(sender?.avatar.color.accent ?? Theme.secondary)
                         .padding(.leading, 4)
+                        .accessibilityHidden(true)
                 }
-                BotBubble(text: text, members: members)
+                BotBubble(text: text, members: members, speaker: sender?.name ?? "A deleted bot", at: at)
             }
         }
     }

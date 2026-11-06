@@ -28,6 +28,7 @@ test.each([
   ["deny", 1],
   ["never", 1],
   ["expired", "expired"],
+  ["stopped", "dismissed"],
 ] as const)("a protocol 2 app sees a permission card answered %p as a question answered %p", (answer, shown) => {
   expect(forProtocol2({ type: "message", botId, message: permission(answer) })).toEqual({
     type: "message",
@@ -67,6 +68,6 @@ test.each([
   expect(cardReply(card, tap)).toEqual(reply);
 });
 
-test.each(fixtures.server.map((m) => [m.type, m as ServerMessage] as const))("a protocol 2 app gets fixture %s only if it is not a session frame", (type, frame) => {
-  expect(forProtocol2(frame) === null).toBe(type.startsWith("session"));
+test.each(fixtures.server.map((m) => [m.type, m as ServerMessage] as const))("a protocol 2 app gets fixture %s only if it is not a session frame or a decide ack", (type, frame) => {
+  expect(forProtocol2(frame) === null).toBe(type.startsWith("session") || type === "decided");
 });

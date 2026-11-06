@@ -19,7 +19,11 @@
         "usage",
         "sessions",
         "presence",
-        "machines"
+        "machines",
+        "session_tasks",
+        "session_unqueue",
+        "push_state",
+        "decide_ack"
       ],
       "epoch": "e_7f3a",
       "seq": 41,
@@ -143,6 +147,9 @@
       "world": {
         "id": "w_2c9d4e1f-7a3b-4c5d-8e6f-0a1b2c3d4e5f",
         "name": "Alex's bots"
+      },
+      "push": {
+        "state": "on"
       }
     },
     {
@@ -345,6 +352,188 @@
         ],
         "answer": "dismissed",
         "expiresAt": null
+      }
+    },
+    {
+      "type": "message",
+      "botId": "b1",
+      "message": {
+        "kind": "permission",
+        "id": "m26",
+        "at": "2026-10-16T14:00:00.000Z",
+        "from": null,
+        "tool": "Bash",
+        "label": "Push to the default branch",
+        "detail": "eval \"$(echo hostname)\"",
+        "always": "git push to main or master from engineer",
+        "answer": "superseded",
+        "expiresAt": "2026-10-16T16:00:00.000Z"
+      }
+    },
+    {
+      "type": "bot",
+      "seq": 45,
+      "bot": {
+        "id": "b1",
+        "kind": "bot",
+        "members": [],
+        "name": "engineer",
+        "title": null,
+        "avatar": {
+          "shape": "hexagon",
+          "color": "orange"
+        },
+        "pinned": false,
+        "hidden": false,
+        "status": "idle",
+        "unread": 1,
+        "question": null,
+        "preview": "Started the 30 second build in the background.",
+        "lastAt": "2026-10-16T12:00:00.000Z",
+        "createdAt": "2026-10-16T12:00:00.000Z",
+        "routines": [
+          {
+            "id": "r1",
+            "name": "morning-digest",
+            "schedule": "57 7 * * 1-5",
+            "describe": "Weekdays at 7:57 AM",
+            "prompt": "Post today's tech digest.",
+            "enabled": true,
+            "lastRunAt": "2026-10-16T12:00:00.000Z",
+            "trigger": "cron",
+            "nextRunAt": "2026-10-17T11:57:00.000Z",
+            "runs": [
+              {
+                "id": "run4",
+                "at": "2026-10-16T12:00:00.000Z",
+                "status": "ok",
+                "late": false,
+                "manual": true,
+                "note": null
+              },
+              {
+                "id": "run3",
+                "at": "2026-10-15T11:57:00.000Z",
+                "status": "quiet",
+                "late": true,
+                "manual": false,
+                "note": null
+              },
+              {
+                "id": "run2",
+                "at": "2026-10-14T11:57:00.000Z",
+                "status": "failed",
+                "late": false,
+                "manual": false,
+                "note": "Overloaded"
+              },
+              {
+                "id": "run1",
+                "at": "2026-10-13T11:57:00.000Z",
+                "status": "skipped",
+                "late": false,
+                "manual": false,
+                "note": "Missed while the Mac was asleep"
+              }
+            ]
+          }
+        ],
+        "dailyCapUsd": null,
+        "muted": false,
+        "agentsOn": null,
+        "spentTodayUsd": 8.4,
+        "capUsd": 10,
+        "outcome": {
+          "kind": "failed",
+          "text": "Didn't finish: Claude Code quit unexpectedly",
+          "at": "2026-10-16T14:00:00.000Z"
+        },
+        "background": {
+          "since": "2026-10-16T14:00:00.000Z",
+          "count": 2,
+          "text": "Background: npm run build and 1 more"
+        }
+      }
+    },
+    {
+      "type": "bot",
+      "seq": 46,
+      "bot": {
+        "id": "b1",
+        "kind": "bot",
+        "members": [],
+        "name": "engineer",
+        "title": null,
+        "avatar": {
+          "shape": "hexagon",
+          "color": "orange"
+        },
+        "pinned": false,
+        "hidden": false,
+        "status": "awaiting_approval",
+        "unread": 2,
+        "question": "Want me to merge any of these now?",
+        "preview": "Want me to merge any of these now?",
+        "lastAt": "2026-10-16T12:00:00.000Z",
+        "createdAt": "2026-10-16T12:00:00.000Z",
+        "routines": [
+          {
+            "id": "r1",
+            "name": "morning-digest",
+            "schedule": "57 7 * * 1-5",
+            "describe": "Weekdays at 7:57 AM",
+            "prompt": "Post today's tech digest.",
+            "enabled": true,
+            "lastRunAt": "2026-10-16T12:00:00.000Z",
+            "trigger": "cron",
+            "nextRunAt": "2026-10-17T11:57:00.000Z",
+            "runs": [
+              {
+                "id": "run4",
+                "at": "2026-10-16T12:00:00.000Z",
+                "status": "ok",
+                "late": false,
+                "manual": true,
+                "note": null
+              },
+              {
+                "id": "run3",
+                "at": "2026-10-15T11:57:00.000Z",
+                "status": "quiet",
+                "late": true,
+                "manual": false,
+                "note": null
+              },
+              {
+                "id": "run2",
+                "at": "2026-10-14T11:57:00.000Z",
+                "status": "failed",
+                "late": false,
+                "manual": false,
+                "note": "Overloaded"
+              },
+              {
+                "id": "run1",
+                "at": "2026-10-13T11:57:00.000Z",
+                "status": "skipped",
+                "late": false,
+                "manual": false,
+                "note": "Missed while the Mac was asleep"
+              }
+            ]
+          }
+        ],
+        "dailyCapUsd": null,
+        "muted": false,
+        "agentsOn": null,
+        "spentTodayUsd": 8.4,
+        "capUsd": 10,
+        "outcome": {
+          "kind": "stopped",
+          "text": "Stopped by Alex",
+          "at": "2026-10-16T12:00:00.000Z"
+        },
+        "cards": 3
       }
     },
     {
@@ -1648,7 +1837,7 @@
     {
       "type": "session_items",
       "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
-      "rev": 45,
+      "rev": 44,
       "removed": [
         "c_4d2a"
       ],
@@ -1738,6 +1927,47 @@
           "cardId": null,
           "state": "approved",
           "text": "## Plan\n1. Read the fade code"
+        },
+        {
+          "kind": "ask",
+          "id": "toolu_01Aa4",
+          "at": "2026-10-16T11:50:00.000Z",
+          "cardId": "m18",
+          "answers": "dismissed",
+          "questions": [
+            {
+              "question": "Which audio library should the fade use?",
+              "header": "Library",
+              "multiSelect": false,
+              "options": [
+                {
+                  "label": "Web Audio API",
+                  "description": "Native, no new dependency"
+                },
+                {
+                  "label": "Howler.js",
+                  "description": "Handles the Safari quirks for us"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "plan",
+          "id": "toolu_01Aa5",
+          "at": "2026-10-16T11:55:00.000Z",
+          "cardId": "m19",
+          "state": "rejected",
+          "text": "## Plan\n1. Rewrite the fade"
+        },
+        {
+          "kind": "user",
+          "id": "5b8f3d02-6c4e-4f90-b2d7-0e3c8f6a4b29",
+          "at": "2026-10-16T11:58:00.000Z",
+          "text": "Also check it on Firefox",
+          "from": "user",
+          "queued": false,
+          "clientId": "c_4d2a"
         }
       ]
     },
@@ -1753,6 +1983,13 @@
       "output": "bun test v1.3.0\n\nsrc/audio/fade.test.ts:\n(fail) fades to silence in 40 ms\n\n 13 pass\n 1 fail\n"
     },
     {
+      "type": "session_tool_output",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "toolUseId": "toolu_01Ab6",
+      "output": null,
+      "error": "That tool call's output is not in the transcript."
+    },
+    {
       "type": "session_removed",
       "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
       "movedTo": "f2c8b4a6-1e3d-4f9b-a7c5-6d2e8b1f4a37"
@@ -1761,6 +1998,607 @@
       "type": "session_removed",
       "sessionId": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
       "movedTo": null
+    },
+    {
+      "type": "session_rows",
+      "removed": [],
+      "projects": [
+        {
+          "id": "9c2e5b7a1d3f4e60",
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
+          "name": "claudio-bot",
+          "path": "/Users/alex/Dev/projects/claudio-bot",
+          "githubRepo": "alex/claudio-bot",
+          "lastAt": "2026-10-16T12:00:00.000Z",
+          "canCloud": false,
+          "label": "alex/claudio-bot"
+        },
+        {
+          "id": "4d1b8e6f0a2c9e73",
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
+          "name": "claudio-bot",
+          "path": "/Users/alex/forks/claudio-bot",
+          "githubRepo": "IamP5/claudio-bot",
+          "lastAt": "2026-10-16T12:00:00.000Z",
+          "canCloud": false,
+          "label": "IamP5/claudio-bot"
+        }
+      ],
+      "rows": [
+        {
+          "id": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+          "machine": "m_0b7e4c1a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
+          "projectId": "3f9a1c7e2b4d6a80",
+          "parentId": null,
+          "title": "Sleep in parallel",
+          "origin": "phone",
+          "agent": null,
+          "status": "awaiting_approval",
+          "holder": "claudio",
+          "unread": false,
+          "branch": "main",
+          "worktree": false,
+          "pr": null,
+          "mirror": "none",
+          "hidden": false,
+          "url": null,
+          "createdAt": "2026-10-16T12:00:00.000Z",
+          "lastAt": "2026-10-16T14:00:00.000Z",
+          "since": "2026-10-16T12:00:00.000Z",
+          "running": {
+            "agents": 1,
+            "commands": 1
+          },
+          "activity": "Waiting for approval: Bash"
+        },
+        {
+          "id": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
+          "machine": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+          "projectId": "3f9a1c7e2b4d6a80",
+          "parentId": null,
+          "title": "Add a volume slider to the player",
+          "origin": "desktop",
+          "agent": null,
+          "status": "failed",
+          "holder": "desktop",
+          "unread": true,
+          "branch": "feat/volume-slider",
+          "worktree": false,
+          "pr": {
+            "number": 87,
+            "url": "https://github.com/IamP5/solta-o-som/pull/87",
+            "state": "open"
+          },
+          "mirror": "imported",
+          "hidden": false,
+          "url": null,
+          "createdAt": "2026-10-15T09:30:00.000Z",
+          "lastAt": "2026-10-16T12:00:00.000Z",
+          "outcome": {
+            "kind": "failed",
+            "text": "Claude Code exited: out of memory",
+            "at": "2026-10-16T14:00:00.000Z"
+          }
+        },
+        {
+          "id": "d4e8a1b6-3c2f-4b9e-8a7d-1f6c5e3b2a90",
+          "machine": "m_6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+          "projectId": "3f9a1c7e2b4d6a80",
+          "parentId": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
+          "title": "Check the slider on iPad",
+          "origin": "terminal",
+          "agent": null,
+          "status": "idle",
+          "holder": "terminal",
+          "unread": false,
+          "branch": "feat/volume-slider",
+          "worktree": false,
+          "pr": null,
+          "mirror": "none",
+          "hidden": false,
+          "url": null,
+          "createdAt": "2026-10-16T12:00:00.000Z",
+          "lastAt": "2026-10-16T14:00:00.000Z",
+          "outcome": {
+            "kind": "stopped",
+            "text": "Stopped by you: the turn, 2 agents",
+            "at": "2026-10-16T14:00:00.000Z"
+          }
+        }
+      ]
+    },
+    {
+      "type": "session_items",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "rev": 3,
+      "removed": [],
+      "items": [
+        {
+          "kind": "work",
+          "id": "toolu_01Ac1",
+          "at": "2026-10-16T12:00:00.000Z",
+          "steps": [
+            {
+              "id": "toolu_01Ac1",
+              "tool": "Agent",
+              "label": "sleeper two",
+              "state": "running",
+              "diff": null,
+              "output": null,
+              "detail": "general-purpose",
+              "startedAt": "2026-10-16T12:00:00.000Z",
+              "background": true
+            },
+            {
+              "id": "toolu_01Ac2",
+              "tool": "Bash",
+              "label": "Remove the build folder",
+              "state": "waiting",
+              "diff": null,
+              "output": null,
+              "detail": "rm -rf build",
+              "owner": "toolu_01Ac1"
+            },
+            {
+              "id": "toolu_01Ac3",
+              "tool": "Bash",
+              "label": "Run in background: sleep 60",
+              "state": "running",
+              "diff": null,
+              "output": null,
+              "detail": "sleep 60",
+              "startedAt": "2026-10-16T12:00:00.000Z",
+              "background": true,
+              "owner": "toolu_01Ac1"
+            },
+            {
+              "id": "toolu_01Ac4",
+              "tool": "Bash",
+              "label": "List the late files",
+              "state": "error",
+              "diff": null,
+              "output": "ls: late.txt: No such file or directory\n",
+              "detail": "ls late.txt",
+              "startedAt": "2026-10-16T12:00:00.000Z",
+              "endedAt": "2026-10-16T14:00:00.000Z",
+              "cause": "Exit code 1: ls: late.txt: No such file or directory"
+            },
+            {
+              "id": "toolu_01Ac5",
+              "tool": "Agent",
+              "label": "sleeper one",
+              "state": "stopped",
+              "diff": null,
+              "output": null,
+              "detail": "general-purpose",
+              "startedAt": "2026-10-16T12:00:00.000Z",
+              "endedAt": "2026-10-16T14:00:00.000Z",
+              "cause": "Stopped by you",
+              "usage": {
+                "tools": 4,
+                "ms": 31000
+              }
+            },
+            {
+              "id": "toolu_01Ac7",
+              "tool": "Bash",
+              "label": "Run in background: sleep 600",
+              "state": "unsure",
+              "diff": null,
+              "output": null,
+              "detail": "sleep 600",
+              "startedAt": "2026-10-16T12:00:00.000Z",
+              "background": true,
+              "cause": "Can't tell whether this still runs on your Mac"
+            },
+            {
+              "id": "toolu_01Ac8",
+              "tool": "Bash",
+              "label": "Run in background: sleep 700",
+              "state": "ended",
+              "diff": null,
+              "output": null,
+              "detail": "sleep 700",
+              "startedAt": "2026-10-16T12:00:00.000Z",
+              "background": true,
+              "cause": "It ended without a result"
+            }
+          ]
+        },
+        {
+          "kind": "permission",
+          "id": "m23",
+          "at": "2026-10-16T14:00:00.000Z",
+          "card": {
+            "kind": "permission",
+            "id": "m23",
+            "at": "2026-10-16T14:00:00.000Z",
+            "from": null,
+            "tool": "Bash",
+            "label": "Bash",
+            "detail": "rm -rf build",
+            "always": "rm -rf build in solta-o-som, for this session",
+            "answer": null,
+            "expiresAt": "2026-10-16T16:00:00.000Z"
+          },
+          "stepId": "toolu_01Ac2",
+          "subagent": "sleeper two"
+        },
+        {
+          "kind": "permission",
+          "id": "m24",
+          "at": "2026-10-16T14:00:00.000Z",
+          "card": {
+            "kind": "permission",
+            "id": "m24",
+            "at": "2026-10-16T14:00:00.000Z",
+            "from": null,
+            "tool": "Bash",
+            "label": "Bash",
+            "detail": "sleep 30",
+            "always": "sleep in solta-o-som, for this session",
+            "answer": "stopped",
+            "expiresAt": "2026-10-16T16:00:00.000Z"
+          },
+          "stepId": "toolu_01Ac6",
+          "subagent": "sleeper one"
+        },
+        {
+          "kind": "permission",
+          "id": "m25",
+          "at": "2026-10-16T14:00:00.000Z",
+          "card": {
+            "kind": "permission",
+            "id": "m25",
+            "at": "2026-10-16T14:00:00.000Z",
+            "from": null,
+            "tool": "Bash",
+            "label": "Bash",
+            "detail": "sleep 45",
+            "always": "sleep in solta-o-som",
+            "answer": "closed",
+            "expiresAt": "2026-10-16T16:00:00.000Z"
+          },
+          "stepId": "toolu_01Ac7"
+        },
+        {
+          "kind": "notice",
+          "id": "n_2",
+          "at": "2026-10-16T14:00:00.000Z",
+          "text": "Background command \"sleep 75\" completed (exit code 0)",
+          "tone": "info",
+          "reason": "task"
+        },
+        {
+          "kind": "notice",
+          "id": "n_3",
+          "at": "2026-10-16T14:00:00.000Z",
+          "text": "Stopped by Alex: the turn and 1 agent",
+          "tone": "info",
+          "reason": "stop"
+        }
+      ],
+      "controls": {
+        "canSend": true,
+        "reason": null,
+        "working": true,
+        "queued": 0,
+        "model": null,
+        "models": [
+          {
+            "id": "default",
+            "label": "Default (recommended)"
+          },
+          {
+            "id": "opus",
+            "label": "Opus"
+          },
+          {
+            "id": "sonnet",
+            "label": "Sonnet"
+          }
+        ],
+        "mode": "acceptEdits",
+        "modes": [
+          "default",
+          "acceptEdits",
+          "plan"
+        ],
+        "turn": {
+          "startedAt": "2026-10-16T12:00:00.000Z",
+          "wake": false
+        },
+        "tasks": [
+          {
+            "id": "a7f3c2e9b1d40e58",
+            "stepId": "toolu_01Ac1",
+            "kind": "agent",
+            "label": "sleeper two",
+            "background": true,
+            "startedAt": "2026-10-16T12:00:00.000Z",
+            "owner": null,
+            "progress": {
+              "tools": 3,
+              "last": "Bash",
+              "at": "2026-10-16T14:00:00.000Z"
+            },
+            "waiting": "m23"
+          },
+          {
+            "id": "bk2x9q7",
+            "stepId": "toolu_01Ac3",
+            "kind": "command",
+            "label": "sleep 60",
+            "background": true,
+            "startedAt": "2026-10-16T12:00:00.000Z",
+            "owner": "toolu_01Ac1",
+            "progress": null,
+            "waiting": null
+          }
+        ],
+        "heardAt": "2026-10-16T14:00:00.000Z"
+      }
+    },
+    {
+      "type": "session_items",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "rev": 4,
+      "removed": [],
+      "items": [
+        {
+          "kind": "work",
+          "id": "toolu_01Ac9",
+          "at": "2026-10-16T12:00:00.000Z",
+          "steps": [
+            {
+              "id": "toolu_01Ac9",
+              "tool": "Bash",
+              "label": "Sleep for 90 seconds",
+              "state": "running",
+              "diff": null,
+              "output": null,
+              "detail": "perl -e 'sleep 90'",
+              "startedAt": "2026-10-16T12:00:00.000Z"
+            }
+          ]
+        }
+      ],
+      "controls": {
+        "canSend": true,
+        "reason": null,
+        "working": true,
+        "queued": 0,
+        "model": null,
+        "models": [
+          {
+            "id": "default",
+            "label": "Default (recommended)"
+          },
+          {
+            "id": "opus",
+            "label": "Opus"
+          },
+          {
+            "id": "sonnet",
+            "label": "Sonnet"
+          }
+        ],
+        "mode": "acceptEdits",
+        "modes": [
+          "default",
+          "acceptEdits",
+          "plan"
+        ],
+        "turn": {
+          "startedAt": "2026-10-16T14:00:00.000Z",
+          "wake": true
+        },
+        "tasks": [
+          {
+            "id": "bf90",
+            "stepId": "toolu_01Ac9",
+            "kind": "command",
+            "label": "perl -e 'sleep 90'",
+            "background": false,
+            "startedAt": "2026-10-16T12:00:00.000Z",
+            "owner": null,
+            "progress": null,
+            "waiting": null,
+            "outlived": true
+          }
+        ],
+        "heardAt": "2026-10-16T14:00:00.000Z"
+      }
+    },
+    {
+      "type": "session_items",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "rev": 5,
+      "removed": [],
+      "items": [],
+      "controls": {
+        "canSend": true,
+        "reason": null,
+        "working": true,
+        "queued": 0,
+        "model": null,
+        "models": [
+          {
+            "id": "default",
+            "label": "Default (recommended)"
+          },
+          {
+            "id": "opus",
+            "label": "Opus"
+          },
+          {
+            "id": "sonnet",
+            "label": "Sonnet"
+          }
+        ],
+        "mode": "acceptEdits",
+        "modes": [
+          "default",
+          "acceptEdits",
+          "plan"
+        ],
+        "turn": {
+          "startedAt": "2026-10-16T12:00:00.000Z",
+          "wake": false
+        },
+        "stopping": {
+          "at": "2026-10-16T14:00:00.000Z",
+          "deadline": "2026-10-16T14:00:15.000Z"
+        }
+      }
+    },
+    {
+      "type": "push_state",
+      "push": {
+        "state": "failing",
+        "error": "The push server answered 500",
+        "at": "2026-10-16T14:00:00.000Z"
+      }
+    },
+    {
+      "type": "push_state",
+      "push": {
+        "state": "off"
+      }
+    },
+    {
+      "type": "session_alert",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "reason": "card",
+      "count": 3,
+      "title": "Sleep in parallel",
+      "cardId": "m30",
+      "cardKind": "permission"
+    },
+    {
+      "type": "session_alert",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "reason": "reminder",
+      "count": 2,
+      "title": "Sleep in parallel",
+      "cardId": "m31",
+      "cardKind": null
+    },
+    {
+      "type": "session_alert",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "reason": "card",
+      "count": 1,
+      "title": "Sleep in parallel",
+      "cardId": "m32",
+      "cardKind": "ask"
+    },
+    {
+      "type": "session_alert",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "reason": "finished",
+      "count": 1,
+      "title": "Sleep in parallel",
+      "cardId": null,
+      "cardKind": null
+    },
+    {
+      "type": "session_alert",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "reason": "lost",
+      "count": 1,
+      "title": "Sleep in parallel",
+      "cardId": null,
+      "cardKind": null
+    },
+    {
+      "type": "session_alert",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "reason": "failed",
+      "count": 1,
+      "title": "Sleep in parallel",
+      "cardId": null,
+      "cardKind": null,
+      "running": {
+        "agents": 0,
+        "commands": 2
+      }
+    },
+    {
+      "type": "session_alert",
+      "sessionId": "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16",
+      "reason": "lost",
+      "count": 1,
+      "title": "Sleep in parallel",
+      "cardId": null,
+      "cardKind": null,
+      "running": {
+        "agents": 0,
+        "commands": 1
+      }
+    },
+    {
+      "type": "decided",
+      "cardId": "m20"
+    },
+    {
+      "type": "error",
+      "message": "Nothing is running.",
+      "about": {
+        "kind": "stop",
+        "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31"
+      }
+    },
+    {
+      "type": "error",
+      "message": "Claude Code kept the mode Ask before edits: the session is busy.",
+      "about": {
+        "kind": "set",
+        "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31"
+      }
+    },
+    {
+      "type": "error",
+      "message": "That session is gone.",
+      "about": {
+        "kind": "send",
+        "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+        "clientId": "c_4d2a"
+      }
+    },
+    {
+      "type": "error",
+      "message": "That output is no longer on the Mac.",
+      "about": {
+        "kind": "tool",
+        "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+        "toolUseId": "toolu_01Ab5"
+      }
+    },
+    {
+      "type": "error",
+      "message": "That project is gone.",
+      "about": {
+        "kind": "create",
+        "ref": "s1"
+      }
+    },
+    {
+      "type": "error",
+      "message": "That card was already answered",
+      "about": {
+        "kind": "decide",
+        "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+        "cardId": "m20"
+      }
+    },
+    {
+      "type": "error",
+      "message": "That part of the thread changed. Reopen the session to load it again.",
+      "about": {
+        "kind": "page",
+        "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31"
+      }
     }
   ],
   "client": [
@@ -2053,8 +2891,35 @@
       "interrupt": true
     },
     {
+      "type": "session_send",
+      "sessionId": "b109b727-4c1e-4a8b-9e2f-7d3c5a1b8e40",
+      "text": "Stop, use the Web Audio API instead",
+      "clientId": "c_4d2c",
+      "interrupt": true,
+      "turnStartedAt": "2026-10-16T12:00:00.000Z"
+    },
+    {
       "type": "session_stop",
       "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31"
+    },
+    {
+      "type": "session_stop",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "target": "turn",
+      "turnStartedAt": "2026-10-16T12:00:00.000Z"
+    },
+    {
+      "type": "session_stop",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "target": {
+        "task": "bk2x9q7"
+      },
+      "turnStartedAt": "2026-10-16T12:00:00.000Z"
+    },
+    {
+      "type": "session_unqueue",
+      "sessionId": "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31",
+      "clientId": "c_4d2a"
     },
     {
       "type": "session_decide",

@@ -11,10 +11,13 @@ import {
   type Avatar,
   type Bot,
   type BotId,
+  type BotBackground,
+  type BotOutcome,
   type BotSpend,
   type BotStatus,
   type DeviceId,
   type ExchangeMessage,
+  type ItemId,
   type Link,
   type MachineId,
   type Mention,
@@ -31,6 +34,8 @@ import {
   type RoutineRun,
   type RunId,
   type SessionId,
+  type SessionItem,
+  type SessionOutcome,
 } from "./protocol";
 
 // The records in state.json (version 3) and the pure rules over them. Every persisted shape is declared here, so the
@@ -197,10 +202,43 @@ export type SessionState = {
    */
   sent?: { context?: string; brief?: string };
   /**
-   * The live query's background tasks, absent when it has none. close() leaves them on disk, so the next start can say
-   * a restart stopped them.
+   * The live query's background tasks, absent when it has none. close() leaves them on disk, so the next start can
+   * check which a restart stopped.
    */
-  background?: { id: string; description?: string }[];
+  background?: BackgroundTask[];
+};
+
+/**
+ * A background task as a note names it (description) and as the thread shows it (kind, label, stepId, startedAt).
+ * group: the process group of the shell that runs a command, once found; a command can outlive Claude Code. claude:
+ * the process of the Claude Code that runs a subagent, which ends with it.
+ */
+export type BackgroundTask = {
+  id: string;
+  description?: string;
+  kind?: "agent" | "command" | "other";
+  label?: string;
+  stepId?: string;
+  startedAt?: string;
+  group?: number;
+  claude?: number;
+  /**
+   * The group of the one shell whose command line holds the command, found when its output file could not be: enough
+   * to see when it ends, never proof enough to signal it.
+   */
+  loose?: number;
+  /**
+   * What a command runs, as Claude Code was given it, kept while neither its group nor a loose one is found: the bridge
+   * then sees it end by no process running exactly it.
+   */
+  command?: string;
+  /**
+   * For such a command, the process groups of Claude Code's own shells that ran exactly it while there was one for
+   * each live task given it (session pairLoose): its work, whatever the shell exec'd or left behind, is in one of them.
+   */
+  shells?: readonly number[];
+  /** A command the turn ran in the foreground: it outlives Claude Code as a background one does. */
+  foreground?: true;
 };
 
 export const emptySession = (id: string | null = null): SessionState => ({ id, pending: [], lifecycle: { kind: "idle" }, notices: [] });
@@ -316,7 +354,36 @@ export type DeviceRecord = {
  * Pushes already sent, recorded before sending so a crash never double-pushes. key: `${messageId}|${reason}`, reason
  * card, reminder, message (a turn's first bubble) or result (a long turn's last bubble). Writer: push.ts.
  */
-export type PushState = { sent: { key: string; at: string }[] };
+/**
+ * sent: the keys of every push recorded, the newest week. held: session endings owed a push once no phone is live,
+ * kept across restarts; alerted: the open app was told at `at`, so a phone heard from since saw it. failing: the push
+ * server failed the last try; absent while it takes pushes. owed: pushes a try is out for or whose tries all failed,
+ * oldest first.
+ */
+export type PushState = { sent: { key: string; at: string }[]; held?: HeldEnding[]; failing?: PushFailing; owed?: OwedPush[] };
+/** The last failed try at `at`, and when the bridge tries again: the oldest owed push, or a probe when none is owed. */
+export type PushFailing = { error: string; at: string; retryAt: string; retries: number };
+/**
+ * A push not yet taken by the server: a try is out for it, or every try failed and it goes again while what it is for
+ * still waits on the user. unsure: when a try began that the server may have taken; the server is asked whether it holds
+ * the push before it goes again.
+ */
+export type OwedPush = {
+  keys: string[];
+  botId: BotId | null;
+  text: string;
+  link: string;
+  high: boolean;
+  for: { kind: "cards"; session: SessionId; cards: MessageId[] } | { kind: "ending"; session: SessionId } | { kind: "bot-card"; card: MessageId } | { kind: "bot" };
+  /** When it was first tried: a phone looked at the app after that saw what it was for. */
+  at?: string;
+  unsure?: string;
+  /** Sent again once with no word from the server on the try before (a write-only topic): never sent blind twice. */
+  blind?: boolean;
+};
+/** How a run of a session the phone drives came to an end worth a push. A user's stop never is; a restart's cut is. */
+export type SessionEnd = "finished" | "failed" | "lost";
+export type HeldEnding = { key: string; id: SessionId; end: SessionEnd; at: string; alerted: boolean };
 
 
 /** What a bot and a group share: one chat in the phone's list. Writer: hub. */
@@ -340,6 +407,8 @@ export type BotRecord = ChatRecord & {
   dailyCapUsd: number | null;
   /** Where its agents start by default; null: the bot picks. Writer: hub (update_bot). */
   agentsOn: MachineId | null;
+  /** How its last turn ended when it did not finish; absent once one finishes or the user sends. Writer: hub. */
+  outcome?: BotOutcome;
   /** MCP servers the user turned off for this bot and its agents, by name. Writer: connectors.ts. */
   readonly connectorsOff: Owned<string[]>;
   readonly session: Owned<SessionState>;
@@ -355,6 +424,9 @@ export type BotRecord = ChatRecord & {
  */
 export type GroupRecord = ChatRecord & { members: BotId[] };
 
+/** One line of an agent's thread. clientId: the phone's, when the user sent it from the agent's session. */
+export type AgentRecordMessage = AgentMessage & { clientId?: string };
+
 export type AgentRecord = {
   /** Writer: agents.ts. */
   agent: Agent;
@@ -366,7 +438,7 @@ export type AgentRecord = {
   repo?: string;
   /** The commit a worktree agent's branch started from; its evidence counts ahead against it. Writer: agents.ts. */
   base?: string | null;
-  messages: AgentMessage[];
+  messages: AgentRecordMessage[];
   /** Mac agents' SDK session. Writer: session.ts. */
   readonly session: Owned<SessionState>;
   /** Cloud agents' claude.ai session. Writer: agents.ts. */
@@ -411,6 +483,16 @@ export type SessionRecord = {
   mirror?: { dueAt: string; failed: boolean };
   /** Present once the phone has sent to it or made it; never on an id an agent owns. */
   own?: OwnDrive;
+  /**
+   * The clientIds of the phone's newest sends to this session, any kind, oldest first, so a resend after a reconnect or
+   * a bridge restart runs nothing twice. Writer: sessions.ts. Absent until the phone sends.
+   */
+  sent?: string[];
+  /**
+   * [transcript item id, clientId] for the newest of those sends the transcript shows under its own id, so a frame
+   * after a restart still names the clientId. Writer: sessions.ts (threads.ts finds them).
+   */
+  sentAs?: [string, string][];
 };
 
 /** A session the user drives from the phone. Writer: own.ts, its session slice session.ts. */
@@ -423,6 +505,8 @@ export type OwnDrive = {
   at: string;
   /** A session the phone started: its first prompt, the row's title until Claude Code names it. */
   prompt?: string;
+  /** A session the phone started: the session_create ref that made it, so a resend of that create makes nothing. */
+  ref?: string;
   /** null: the transcript's last model, else Claude Code's default. */
   model: string | null;
   /** null: the transcript's last mode, else the user's settings.permissions.defaultMode. */
@@ -430,7 +514,53 @@ export type OwnDrive = {
   readonly session: Owned<SessionState>;
   /** Open cards and the newest settled ones. Writer: own.ts. */
   cards: OwnCard[];
+  // How runs end, kept across bridge restarts. Writer: own.ts.
+  /** How the last run ended, until a new run starts: the next send, or a queued turn after the one that ended. */
+  outcome?: SessionOutcome;
+  /** The first line of the run's last reply, which a finished outcome reads, also once the bridge has restarted. */
+  reply?: string;
+  /** The envelope whose turn that ending ended; a turn of any other envelope starts a new run. */
+  endedTurn?: string;
+  /** The steps of tasks the user stopped: they read stopped once the task is gone, before the transcript says so. */
+  stoppedSteps?: string[];
+  /** The last time work was cut off, kept across sends: steps that started before it never end. */
+  cut?: Cut;
+  /** The bridge's own lines in the thread (stops, failures, restarts), the newest few. */
+  notices?: Extract<SessionItem, { kind: "notice" }>[];
+  /** Prompts a stop ended before Claude Code wrote them down, shown until the transcript has their words. */
+  kept?: { id: ItemId; at: string; text: string }[];
+  /** Replies Claude Code died while writing, as far as they streamed, by the id the streaming text had. It never writes them down. */
+  cutOff?: { id: ItemId; at: string; text: string }[];
+  /**
+   * Background commands that outlived the Claude Code that ran them, which only the bridge follows. over: since when it
+   * no longer does: the command ended unseen, the user stopped it, or the bridge can no longer tell it is the command.
+   * endedAt: the first look that found an unseen end.
+   */
+  outlived?: (BackgroundTask & { group: number; over?: "ended" | "stopped" | "unsure"; endedAt?: string })[];
+  /**
+   * Commands the bridge found no shell of their own for (two alike, or none exact), watched through the groups of
+   * Claude Code's own shells that ran them (BackgroundTask shells), never signalled. Steps given the same command end
+   * together, once their shells hold at least one group per step and every one is empty; until then the bridge cannot
+   * tell. endedAt: the first look that found it so.
+   */
+  unpaired?: (BackgroundTask & { command: string; endedAt?: string })[];
+  /**
+   * Steps of background work whose fate the bridge could not check, and has no process group to look at again: they
+   * read that it cannot tell. A step is named by its tool_use id, or as task:<id> when only its task is known.
+   */
+  unsure?: string[];
+  /**
+   * Since the last run began, some background work became such that the bridge cannot check: until the user starts a
+   * new run (a restart is not one), a Stop that finds nothing says it cannot tell rather than that nothing runs.
+   */
+  unchecked?: true;
 };
+
+/**
+ * When work on a session was cut off (a stop of everything, Claude Code exiting, a bridge restart) and how it reads:
+ * a step that started before then and still reads running will never get its result.
+ */
+export type Cut = { at: string; state: "stopped" | "error"; cause: string };
 
 /**
  * What Claude Code asked the phone. Live only on the SDK side: the query waiting on it dies with the bridge, so at
@@ -443,7 +573,16 @@ export const ownCardId = (c: OwnCard): MessageId => (c.kind === "permission" ? c
 export const ownCardOpen = (c: OwnCard): boolean => (c.kind === "permission" ? c.card.answer === null : c.kind === "ask" ? c.answers === null : c.state === "proposed");
 
 export type OwnCard =
-  | { kind: "permission"; card: PermissionMessage; toolUseId: string; suggestions: unknown[] }
+  | {
+      kind: "permission";
+      card: PermissionMessage;
+      toolUseId: string;
+      suggestions: unknown[];
+      /** The asking subagent: its task id, label and Agent call; absent when the main thread asked. */
+      agent?: { id: string; label: string | null; stepId: string | null };
+      /** When the user allowed it, so the call's run starts there. */
+      allowedAt?: string;
+    }
   | {
       kind: "ask";
       cardId: MessageId;
@@ -451,7 +590,7 @@ export type OwnCard =
       at: string;
       expiresAt: string;
       questions: AskQuestion[];
-      answers: Record<string, string> | "dismissed" | "expired" | null;
+      answers: Record<string, string> | "dismissed" | "expired" | "stopped" | null;
     }
   | {
       kind: "plan";
@@ -460,7 +599,7 @@ export type OwnCard =
       at: string;
       expiresAt: string;
       text: string;
-      state: "proposed" | "approved" | "rejected" | "expired";
+      state: "proposed" | "approved" | "rejected" | "expired" | "stopped";
       modeBefore: PermissionMode;
     };
 
@@ -704,9 +843,10 @@ function chatFrame(chat: ChatRecord, status: BotStatus) {
   };
 }
 
-/** The bot frame without its spend, which the ledger adds. */
-export function toBot(bot: BotRecord, status: BotStatus): Omit<Bot, keyof BotSpend> {
+/** The bot frame without its spend, which the ledger adds. background: what the hub reads off the bot's session. */
+export function toBot(bot: BotRecord, status: BotStatus, background: BotBackground | null = null): Omit<Bot, keyof BotSpend> {
   const card = openCard(bot.messages);
+  const cards = bot.messages.filter(isOpenCard).length;
   return {
     ...chatFrame(bot, status),
     kind: "bot",
@@ -715,6 +855,9 @@ export function toBot(bot: BotRecord, status: BotStatus): Omit<Bot, keyof BotSpe
     routines: bot.routines.map((r) => routineView(r, RUNS_ON_BOT)),
     dailyCapUsd: bot.dailyCapUsd,
     agentsOn: bot.agentsOn,
+    ...(bot.outcome && { outcome: { ...bot.outcome } }),
+    ...(background && { background }),
+    ...(cards > 1 && { cards }),
   };
 }
 

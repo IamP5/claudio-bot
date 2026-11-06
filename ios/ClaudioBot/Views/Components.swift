@@ -109,7 +109,7 @@ struct ConnectionBadge: View {
     var body: some View {
         HStack(spacing: 6) {
             switch state {
-            case .connected(let machine):
+            case .connected(let machine, _):
                 StatusDot(color: .green)
                 Text(machine)
             case .connecting:
@@ -133,6 +133,9 @@ struct ConnectionBadge: View {
         .font(.footnote.weight(.medium))
         .foregroundStyle(.primary)
         .lineLimit(1)
+        // VoiceOver would reread the per-second countdown, so it hears only the state.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(state.spoken)
     }
 }
 
@@ -146,11 +149,68 @@ extension ConnectionState {
         case .unrecognized: "Not recognized"
         }
     }
+
+    var spoken: String {
+        switch self {
+        case .unpaired: "Not paired"
+        case .connecting: "Connecting to your Mac"
+        case .connected(let machine, _): "Connected to \(machine)"
+        case .disconnected: "Mac unreachable, reconnecting"
+        case .unrecognized: "Not recognized by your Mac"
+        }
+    }
+}
+
+enum Reach: Equatable, Sendable {
+    case connected(machine: String)
+    case firstConnect
+    /// The app dropped a socket that worked to open a fresh one, as on coming back to the screen, and no try has
+    /// failed yet. Nothing says the Mac is gone.
+    case reconnecting
+    case unreachable(nextTry: Date)
+    case retrying
+    case unrecognized
+    case unpaired
+
+    /// rejoining: the store's `rejoin`, a reconnect the app chose while the Mac answered.
+    init(_ state: ConnectionState, failures: Int, greeted: Bool, rejoining: Bool = false) {
+        switch state {
+        case .connected(let machine, _): self = .connected(machine: machine)
+        case .connecting where rejoining: self = .reconnecting
+        case .connecting: self = failures > 0 || greeted ? .retrying : .firstConnect
+        case .disconnected(let at): self = .unreachable(nextTry: at)
+        case .unrecognized: self = .unrecognized
+        case .unpaired: self = .unpaired
+        }
+    }
+
+    var lost: Bool {
+        switch self {
+        case .unreachable, .retrying: true
+        case .connected, .firstConnect, .reconnecting, .unrecognized, .unpaired: false
+        }
+    }
+
+    static func announcement(from old: Reach, to new: Reach) -> String? {
+        switch new {
+        case .unreachable, .retrying:
+            old.lost ? nil : "Can't reach your Mac. Reconnecting."
+        case .connected(let machine):
+            old.lost || old == .unrecognized ? "Reconnected to \(machine)." : nil
+        case .unrecognized:
+            old == .unrecognized ? nil : "Your Mac doesn't recognize this \(ThisDevice.noun)."
+        case .firstConnect, .reconnecting, .unpaired:
+            nil
+        }
+    }
 }
 
 /// The latest error, shown over whatever is on screen until it times out or is tapped away.
+/// An error with no screen of its own. It is spoken as it appears, and under VoiceOver it stays until dismissed, since
+/// five seconds may pass before the user reaches it (F-SES-002).
 struct ErrorToast: View {
     @Environment(AppStore.self) private var store
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
 
     var body: some View {
         if let notice = store.lastError {
@@ -164,9 +224,13 @@ struct ErrorToast: View {
                 .padding(.top, 4)
                 .onTapGesture { store.dismissError(notice) }
                 .task(id: notice.id) {
+                    AccessibilityNotification.Announcement("Error: " + notice.message).post()
+                    guard !voiceOver else { return }
                     try? await Task.sleep(for: .seconds(5))
                     store.dismissError(notice)
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Error: " + notice.message)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityHint("Dismisses the error")
         }

@@ -151,17 +151,80 @@ private func invalidates(_ read: () -> Void, by change: () -> Void) -> Bool {
         #expect(index.sections(SessionQuery()).flatMap(\.trees).count == 2)
     }
 
-    @Test func aRowWearsItsMostUrgentMarkAndSaysItAll() {
+    @Test func aRowWearsItsStatusMarkAndSaysEveryStateIncludingUnread() {
         #expect(SessionMark(row("a", status: .awaitingApproval, unread: true)) == .needsYou)
         #expect(SessionMark(row("a", status: .working, unread: true)) == .working)
-        #expect(SessionMark(row("a", status: .unavailable)) == .failed)
-        #expect(SessionMark(row("a", unread: true)) == .unread)
+        #expect(SessionMark(row("a", status: .unavailable)) == .unavailable)
+        #expect(SessionMark(row("a", unread: true)) == nil, "unread is a dot beside the mark, not a mark")
         #expect(SessionMark(row("a")) == nil)
         var agent = row("a", title: "Update README", status: .working)
         agent.origin = .agent
         agent.pr = SessionPullRequest(number: 87, url: URL(string: "https://github.com/x/y/pull/87")!, state: .open)
         let spoken = SessionText.spoken(agent, project: "solta-o-som", botName: "Claudio", now: at + 300)
         #expect(spoken.hasPrefix("solta-o-som, Update README, working, by Claudio's agent, PR 87 open, "))
+
+        let failed = SessionText.spoken(row("f", status: .failed, unread: true), project: "demo", botName: nil, now: at + 120)
+        #expect(failed == "demo, Session f, failed, unread, from a terminal, 2 minutes ago")
+        #expect(SessionText.spoken(row("u", status: .unavailable), project: nil, botName: nil, now: at).contains("unavailable"))
+        #expect(!SessionText.spoken(row("u", status: .unavailable), project: nil, botName: nil, now: at).contains("failed"))
+    }
+
+    @Test func aWorkingRowSaysHowLongItHasRunWhatRunsAndHowMany() {
+        var busy = row("w", title: "Audit", minutesAgo: 0, status: .working, unread: true)
+        busy.since = at - 150
+        busy.running = SessionRunning(agents: 3, commands: 1)
+        busy.activity = "Agent: audit the bridge"
+        let spoken = SessionText.spoken(busy, project: "demo", botName: nil, now: at)
+        #expect(spoken == "demo, Audit, working for 2 minutes, 3 agents, 1 command, Agent: audit the bridge, unread, from a terminal")
+        #expect(!spoken.contains("ago"), "a working row speaks its run length, not the age of its last write")
+        #expect(RowTime(busy, now: at) == .running(.minutes(2)))
+        #expect(RowTime(busy, now: at).short == "2m")
+        #expect(RowDetail(busy)?.shown == "3 agents, 1 command · Agent: audit the bridge")
+
+        busy.since = at - 20
+        #expect(RowTime(busy, now: at).short == "<1m", "a run under a minute never reads as now")
+        #expect(SessionText.spoken(busy, project: nil, botName: nil, now: at).contains("working for under a minute"))
+
+        let offline = SessionText.spoken(busy, project: nil, botName: nil, now: at + 600, freshness: .asOf(at))
+        #expect(offline.contains("working for under a minute when last updated"), "offline the run length stops at the last update")
+    }
+
+    @Test func aRowAtRestSaysHowItsRunEnded() {
+        var failed = row("f", status: .failed)
+        failed.outcome = SessionOutcome(kind: .failed, text: "Exit code 1: npm test", at: at)
+        #expect(RowDetail(failed)?.shown == "Exit code 1: npm test" && RowDetail(failed)?.tone == .alarm)
+        var stopped = row("s")
+        stopped.outcome = SessionOutcome(kind: .stopped, text: "Stopped by you", at: at)
+        #expect(RowDetail(stopped)?.tone == .quiet)
+        var finished = row("d")
+        finished.outcome = SessionOutcome(kind: .finished, text: "Background command finished", at: at)
+        #expect(RowDetail(finished) == nil, "a finished run the user has seen says nothing more")
+        finished.unread = true
+        #expect(RowDetail(finished)?.shown == "Background command finished", "an unread dot says what finished")
+        #expect(SessionText.spoken(finished, project: nil, botName: nil, now: at).contains("Background command finished, unread"))
+        var parked = row("p", status: .parked)
+        parked.holder = .terminal
+        #expect(RowDetail(parked)?.shown == "Waiting for the terminal to finish")
+        #expect(RowDetail(row("i")) == nil)
+    }
+
+    @Test func spokenAgesUseTheBucketsTheRowShows() {
+        #expect(SessionText.spoken(row("a"), project: nil, botName: nil, now: at + 20).hasSuffix("just now"))
+        #expect(SessionText.spoken(row("a"), project: nil, botName: nil, now: at - 5).hasSuffix("just now"), "a Mac clock ahead never reads as in N seconds")
+        #expect(SessionText.spoken(row("a"), project: nil, botName: nil, now: at + 3 * 3600).hasSuffix("3 hours ago"))
+        #expect(SessionAge(at, now: at + 60).ago == "1 minute ago")
+        #expect(SessionAge(at, now: at + 10 * 86_400).ago.hasPrefix("on "))
+    }
+
+    @Test func aChildRowSaysWhereItStartedAndAHiddenOneSaysSo() {
+        let child = SessionText.spoken(row("c", parent: "p", hidden: true), project: "demo", botName: nil, parent: "Plan the import", now: at)
+        #expect(child.hasPrefix("demo, Session c, started from Plan the import, "))
+        #expect(child.contains("hidden"))
+    }
+
+    @Test func eachPullRequestStateHasItsOwnGlyph() {
+        let symbols = [PullRequestState.open, .merged, .closed].map { PullRequestChip.symbol($0) }
+        #expect(Set(symbols).count == 3)
     }
 
     @Test func anOfflineListSaysHowOldItIsAndNeverLooksAhead() {
@@ -185,6 +248,151 @@ private func invalidates(_ read: () -> Void, by change: () -> Void) -> Bool {
         #expect(store.sessions.created["r1"] == SessionID("new"))
         store.setConnection(.unpaired)
         #expect(!store.sessions.loaded && store.sessions.rows.isEmpty)
+    }
+}
+
+@MainActor
+private func order(_ index: SessionIndex, _ query: SessionQuery = SessionQuery()) -> [String] {
+    index.sections(query).flatMap(\.trees).map(\.row.id.rawValue)
+}
+
+private func working(_ id: String, since minutesAgo: Double, lastAt lastMinutesAgo: Double? = nil) -> SessionRow {
+    var r = row(id, minutesAgo: lastMinutesAgo ?? minutesAgo, status: .working)
+    r.since = at - minutesAgo * 60
+    return r
+}
+
+@MainActor
+@Suite struct SessionListOrderTests {
+    @Test func needsYouLeadsThenWorkingByStartThenTheRestByActivity() {
+        let index = SessionIndex()
+        index.apply(.list(projects: [project("p1", "demo")], rows: [
+            row("quick", minutesAgo: 0.1), row("older", minutesAgo: 30),
+            working("early", since: 9, lastAt: 9), working("late", since: 2, lastAt: 8),
+            row("ask", minutesAgo: 40, status: .awaitingApproval),
+        ], mirror: .auto), at: at)
+        #expect(order(index) == ["ask", "late", "early", "quick", "older"], "a working row is placed by when its run started, not its last write")
+    }
+
+    /// The S7 timeline: twelve sessions, title rewrites and transcript writes with no status change, then sleepers ending.
+    @Test func theOrderChangesOnlyWhenARowsStatusDoesAndOnlyThatRowMoves() {
+        let index = SessionIndex()
+        let sleepers = (1...4).map { working("s\($0)", since: 2) }
+        let quick = (1...8).map { row("q\($0)", minutesAgo: 1.5 - Double($0) * 0.1) }
+        index.apply(.list(projects: [project("p1", "demo")], rows: sleepers + quick, mirror: .auto), at: at)
+        let start = order(index)
+        #expect(Array(start.prefix(4)) == ["s1", "s2", "s3", "s4"], "the four running rows lead, above the fold")
+
+        var renamed = quick[0]
+        renamed.title = "Quick reply test q1"
+        renamed.lastAt = at
+        var written = sleepers[3]
+        written.lastAt = at
+        index.apply(.changed(rows: [renamed, written], removed: [], projects: []), at: at)
+        #expect(order(index) == start, "a title rewrite and a bare write move nothing")
+
+        var ended = sleepers[0]
+        ended.status = .idle
+        ended.since = nil
+        ended.lastAt = at + 1
+        index.apply(.changed(rows: [ended], removed: [], projects: []), at: at + 1)
+        let after = order(index)
+        #expect(after == ["s2", "s3", "s4", "s1"] + start.dropFirst(4), "the row that ended moves to the top of the rest, the others keep their order")
+    }
+
+    @Test func whileTheUserScrollsRowsHoldTheirPlacesAndMoveOnceItStops() {
+        let index = SessionIndex()
+        index.apply(.list(projects: [project("p1", "demo")], rows: [row("a", minutesAgo: 1), working("b", since: 3)], mirror: .auto), at: at)
+        #expect(order(index) == ["b", "a"])
+        index.holdOrder(true)
+        var asks = row("a", minutesAgo: 0, status: .awaitingInput)
+        asks.lastAt = at
+        index.apply(.changed(rows: [asks], removed: [], projects: []), at: at)
+        #expect(order(index) == ["b", "a"], "nothing moves under a scrolling finger")
+        #expect(index.rows[SessionID("a")]?.status == .awaitingInput, "the row still shows its new state")
+        index.holdOrder(false)
+        #expect(order(index) == ["a", "b"])
+    }
+
+    @Test func aHoldLeftBehindByAListThatLeftMidScrollEndsWhenItComesBack() {
+        let index = SessionIndex()
+        index.apply(.list(projects: [project("p1", "demo")], rows: [row("a", minutesAgo: 1), working("b", since: 3)], mirror: .auto), at: at)
+        index.holdOrder(true)
+        index.resort()
+        var asks = row("a", minutesAgo: 0, status: .awaitingInput)
+        asks.lastAt = at
+        index.apply(.changed(rows: [asks], removed: [], projects: []), at: at)
+        #expect(order(index) == ["a", "b"], "after a resort, a status change moves its row again")
+    }
+
+    @Test func aListComingOnScreenIsSortedAfresh() {
+        let index = SessionIndex()
+        index.apply(.list(projects: [project("p1", "demo")], rows: [row("a", minutesAgo: 5), row("b", minutesAgo: 1)], mirror: .auto), at: at)
+        var fresh = row("a", minutesAgo: 0)
+        fresh.lastAt = at
+        index.apply(.changed(rows: [fresh], removed: [], projects: []), at: at)
+        #expect(order(index) == ["b", "a"])
+        index.resort()
+        #expect(order(index) == ["a", "b"])
+    }
+
+    @Test func projectsKeepTheirPlacesUntilAStatusChanges() {
+        let index = SessionIndex()
+        index.apply(.list(projects: [project("p1", "a"), project("p2", "b")], rows: [row("x", in: "p1", minutesAgo: 1), row("y", in: "p2", minutesAgo: 5)], mirror: .auto), at: at)
+        #expect(index.sections(SessionQuery()).map(\.project.name) == ["a", "b"])
+        var written = row("y", in: "p2", minutesAgo: 0)
+        written.lastAt = at
+        index.apply(.changed(rows: [written], removed: [], projects: [project("p2", "b")]), at: at)
+        #expect(index.sections(SessionQuery()).map(\.project.name) == ["a", "b"], "a write in another project does not swap sections")
+        var started = working("y", since: 0)
+        started.projectId = ProjectID("p2")
+        index.apply(.changed(rows: [started], removed: [], projects: []), at: at)
+        #expect(index.sections(SessionQuery()).map(\.project.name) == ["b", "a"], "a project whose session starts work rises")
+    }
+
+    @Test func aTreeWithAnActiveRowIsNeverFolded() {
+        let tree = SessionTree(row: row("p"), descendants: [SessionTree.Descendant(row: row("c", status: .working), depth: 1, isLast: true)])
+        #expect(tree.isActive)
+        #expect(!SessionTree(row: row("p"), descendants: []).isActive)
+        #expect(SessionTree(row: row("q", status: .awaitingInput), descendants: []).isActive)
+    }
+
+    @Test func theProjectHeaderCountsEveryRowAndWhatRunsOrWaits() {
+        let rows = [row("a"), row("b", parent: "a"), row("c", status: .working), row("d", status: .working), row("e", status: .awaitingApproval)]
+        let tally = SectionTally(rows)
+        let nbsp = "\u{00A0}"
+        #expect(tally.shown(.live) == "5 · 2\(nbsp)working · 1\(nbsp)needs\(nbsp)you", "a wrapped header never splits a count from its words")
+        #expect(tally.spoken(.live) == "5 sessions, 2\(nbsp)working, 1\(nbsp)needs\(nbsp)you")
+        #expect(tally.shown(.asOf(at)) == "5 · 1\(nbsp)needs\(nbsp)you", "offline the working count is left out")
+        #expect(SectionTally([row("a")]).spoken(.live) == "1 session")
+    }
+
+    @Test func aFilterOrSearchSaysHowManySessionsItShows() {
+        #expect(SessionText.matches(2, query: SessionQuery(filter: .working)) == "2 working sessions")
+        #expect(SessionText.matches(0, query: SessionQuery(text: "zzz")) == "No sessions match")
+        #expect(SessionText.matches(1, query: SessionQuery(filter: .needsYou)) == "1 session needs you")
+        #expect(SessionText.matches(0, query: SessionQuery(filter: .unread)) == "No unread sessions")
+        #expect(SessionText.matches(12, query: SessionQuery()) == "12 sessions")
+    }
+
+    @Test func theBotsSideSaysWhatRunsAndWhatNeedsYou() {
+        #expect(SessionText.elsewhere([.working: 2, .needsYou: 1, .all: 9]) == ["2 working", "1 needs you"])
+        #expect(SessionText.elsewhere([.working: 0, .needsYou: 0, .all: 9]).isEmpty)
+        #expect(SessionText.elsewhere(ListFreshness.asOf(at).visibleCounts([.working: 2, .needsYou: 2])) == ["2 need you"])
+    }
+
+    @Test func rowsFromBeforeADropAreLastKnownUntilTheWholeListComesAgain() {
+        let store = AppStore()
+        store.setConnection(.connected(machine: "Mac"))
+        store.apply(.sessions(.list(projects: [project("p1", "a")], rows: [row("w", status: .working)], mirror: .auto)))
+        #expect(store.sessions.freshness(online: true) == .live)
+        store.setConnection(.disconnected(retryAt: at))
+        store.setConnection(.connected(machine: "Mac"))
+        #expect(store.sessions.freshness(online: true) != .live, "back online, the old rows are last known until the list arrives")
+        store.apply(.sessions(.changed(rows: [row("w", status: .working)], removed: [], projects: [])))
+        #expect(store.sessions.freshness(online: true) != .live)
+        store.apply(.sessions(.list(projects: [project("p1", "a")], rows: [row("w", status: .working)], mirror: .auto)))
+        #expect(store.sessions.freshness(online: true) == .live)
     }
 }
 
@@ -218,8 +426,8 @@ private func invalidates(_ read: () -> Void, by change: () -> Void) -> Bool {
         let model = ThreadModel(id: SessionID("s"))
         #expect(model.willWatch() == nil, "no position before the first snapshot")
         model.apply(snapshot([user("u1")], rev: 7, live: ThreadLive(itemId: ItemID("m:1"), text: "Hi")))
-        model.apply(.items(rev: 9, items: [], removed: [], controls: nil))
-        #expect(model.willWatch() == ThreadPosition(epoch: "e1", rev: 9))
+        model.apply(.items(rev: 8, items: [], removed: [], controls: nil))
+        #expect(model.willWatch() == ThreadPosition(epoch: "e1", rev: 8))
         #expect(model.live.text.isEmpty)
         model.apply(.delta(itemId: ItemID("m:1"), offset: 0, text: "Hi there"))
         #expect(model.live.text == "Hi there", "the replay reply resends streaming text from 0")
@@ -283,8 +491,8 @@ private func invalidates(_ read: () -> Void, by change: () -> Void) -> Bool {
         #expect(model.items.first?.id == ItemID("n_1"), "the page went above")
         #expect(model.items.contains { $0.id == ItemID("toolu_01Ab9") })
         #expect(!model.items.contains { $0.id == ItemID("c_4d2a") })
-        #expect(model.toolOutputs["toolu_01Ab5"]?.contains("1 fail") == true)
-        #expect(model.position == ThreadPosition(epoch: "e_7f3a", rev: 45))
+        if case .text(let output)? = model.toolOutputs["toolu_01Ab5"] { #expect(output.contains("1 fail")) } else { Issue.record("the fixture's tool output") }
+        #expect(model.position == ThreadPosition(epoch: "e_7f3a", rev: 44))
         store.apply(.thread(sessionId: id, frames.last!))
         #expect(model.phase == .removed(movedTo: SessionID("f2c8b4a6-1e3d-4f9b-a7c5-6d2e8b1f4a37")))
     }
@@ -435,43 +643,41 @@ private func invalidates(_ read: () -> Void, by change: () -> Void) -> Bool {
         var parked = row("p", title: "Fix the fade", status: .parked)
         parked.holder = .desktop
         #expect(SessionMark(parked) == .parked)
-        #expect(SessionText.spoken(parked, project: "demo", botName: nil, now: at).hasPrefix("demo, Fix the fade, waiting for the claude app to finish, "))
+        #expect(SessionText.spoken(parked, project: "demo", botName: nil, now: at).hasPrefix("demo, Fix the fade, Waiting for the Claude app to finish, "))
         parked.holder = .terminal
         #expect(SessionText.parked(parked.holder) == "Waiting for the terminal to finish")
-    }
-
-    @Test func theNewestCardThatWaitsOnTheUserIsTheOneAnnounced() {
-        let open = PermissionCard(from: nil, tool: "Bash", label: "Delete build", detail: "rm -rf build", always: "rm", answer: nil, expiresAt: at + 60)
-        var closed = open
-        closed.answer = .chose(.deny)
-        let ask = SessionItem.ask(id: ItemID("q"), at: at, questions: [AskQuestion(question: "Which?", header: "", options: [], multiSelect: false)], answers: nil, cardId: MessageID("m2"))
-        let answeredElsewhere = SessionItem.ask(id: ItemID("q2"), at: at, questions: [], answers: nil, cardId: nil)
-        let permission = { (id: String, card: PermissionCard) in
-            SessionItem.permission(id: ItemID(id), at: at, permission: SessionPermission(cardId: MessageID(id), at: at, card: card))
-        }
-        #expect(SessionThreadView.openCard([permission("p1", open), ask, permission("p2", closed)])?.id == ItemID("q"))
-        #expect(SessionThreadView.openCard([ask, permission("p1", open)])?.announcement == "Approval needed: Delete build")
-        #expect(SessionThreadView.openCard([answeredElsewhere, permission("p2", closed), say("a", "Done")]) == nil)
-        #expect(SessionThreadView.openCard([.plan(id: ItemID("pl"), at: at, text: "1. Do it", state: .proposed, cardId: MessageID("m3"))]) != nil)
     }
 }
 
 @MainActor
 @Suite struct SessionRoutingTests {
     @Test func aSessionLinkOpensItsThread() {
-        #expect(DeepLink(url: URL(string: "claudiobot://session/6b1f3c2a")!) == .session(SessionID("6b1f3c2a")))
+        #expect(DeepLink(url: URL(string: "claudiobot://session/6b1f3c2a")!) == .session(SessionID("6b1f3c2a"), card: nil))
         #expect(DeepLink(url: URL(string: "claudiobot://session/")!) == nil)
     }
 
-    @Test func openingASessionSwitchesTheSidebarAndWatchesTheList() {
+    @Test func openingASessionSwitchesTheSidebarAndTheListStaysWatchedOnTheBotsSide() {
         let router = Router()
         router.sidebar = .bots
-        #expect(!router.watchesSessions)
+        #expect(router.watchesSessions, "the Bots side keeps the list live to say what runs")
         router.open(.session(SessionID("s1")))
         #expect(router.sidebar == .sessions && router.selection == .session(SessionID("s1")))
         router.sidebar = .bots
-        #expect(router.watchesSessions, "an open thread keeps the list watched for its header")
         router.selection = nil
-        #expect(!router.watchesSessions)
+        #expect(router.watchesSessions)
+
+        let lone = Router(showing: .bot(BotID("b")))
+        #expect(!lone.watchesSessions, "a window for one chat has no list to keep live")
+        #expect(Router(showing: .session(SessionID("s1"))).watchesSessions, "a window for one thread reads its row")
+    }
+
+    @Test func pickingAnotherRowShowsItsThreadNotAScreenPushedOverTheLastOne() {
+        let router = Router()
+        router.selection = .bot(BotID("news"))
+        router.path = [.routine(BotID("news"), RoutineID("r1"))]
+        router.selection = .bot(BotID("news"))
+        #expect(router.path.count == 1, "picking the same row again keeps the pushed screen")
+        router.selection = .session(SessionID("s1"))
+        #expect(router.path.isEmpty, "a list selection pops the stack as open(_:) does")
     }
 }

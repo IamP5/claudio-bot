@@ -12,6 +12,7 @@ struct HomeView: View {
     /// The bot the user asked to delete. The dialog waits for its details, which say which worktrees stay behind.
     @State private var deleting: Bot?
     @State private var detailsLate = false
+    @State private var lastRetryFailed = false
 
     private var deletion: Deletion? {
         deleting.flatMap { Deletion($0, details: store.details[$0.id], detailsLate: detailsLate, store: store) }
@@ -36,11 +37,11 @@ struct HomeView: View {
         @Bindable var router = router
         List(selection: $router.selection) {
             if store.connection == .unrecognized {
-                UnrecognizedBanner()
+                UnrecognizedBanner(staleSince: store.heardAt)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-            } else if store.machine == nil {
-                ConnectionBanner(state: store.connection)
+            } else if !store.showsOnline {
+                ConnectionBanner(state: store.connection, staleSince: store.heardAt, lastRetryFailed: $lastRetryFailed)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
@@ -98,6 +99,7 @@ struct HomeView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
+        .onChange(of: store.machine) { lastRetryFailed = false }
         .alert("Rename Bot", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
             Button("Cancel", role: .cancel) {}
@@ -126,6 +128,11 @@ struct HomeView: View {
                     try? await Task.sleep(for: Deletion.patience)
                     if !Task.isCancelled { detailsLate = true }
                 }
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if router.creating != nil, deleting == nil {
+                CreatingNotice(online: store.showsOnline) { router.creating = nil }
             }
         }
         .confirmationDialog(
@@ -272,11 +279,40 @@ struct HomeView: View {
     }
 }
 
+/// A create the Mac has not answered yet. Offline it says the minute it waits; a tap stops waiting for it.
+struct CreatingNotice: View {
+    let online: Bool
+    let stop: () -> Void
+
+    var body: some View {
+        Label {
+            Text(online ? "Creating the new chat…" : "Waiting for your Mac. If it is not back within a minute, nothing is created.")
+        } icon: {
+            ProgressView()
+        }
+        .font(.footnote.weight(.medium))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Theme.raised, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
+        .onTapGesture(perform: stop)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Stops waiting. The new chat may still appear in the list.")
+    }
+}
+
 struct BotRow: View {
     let bot: Bot
 
     @Environment(AppStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .callout) private var nameSize: CGFloat = 16
+    @ScaledMetric(relativeTo: .subheadline) private var previewSize: CGFloat = 14
+    @ScaledMetric(relativeTo: .footnote) private var timeSize: CGFloat = 13
+    @ScaledMetric(relativeTo: .caption2) private var pinSize: CGFloat = 10
 
     #if os(macOS)
     /// Grok's sidebar row: a 36 avatar and a 54 tall row, with the name in regular weight.
@@ -289,13 +325,13 @@ struct BotRow: View {
 
     var body: some View {
         let display = RowDisplay(bot)
-        let activity = bot.status == .working ? ActivityLine.text(in: store, botId: bot.id) : nil
+        let activity = self.activity
         HStack(spacing: Self.gap) {
-            BotAvatar(bot: bot, size: Self.avatar, needsAttention: display.needsAttention, motion: bot.motion)
+            BotAvatar(bot: bot, size: Self.avatar, needsAttention: display.needsAttention, motion: store.motion(of: bot))
             VStack(alignment: .leading, spacing: Self.lineGap) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(bot.name)
-                        .font(.ui(size: 16, weight: Self.nameWeight))
+                        .font(.ui(size: nameSize, weight: Self.nameWeight))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .layoutPriority(1)
@@ -304,17 +340,17 @@ struct BotRow: View {
                     #endif
                     Spacer(minLength: 8)
                     if bot.pinned {
-                        Image(systemName: "pin.fill").font(.ui(size: 10)).foregroundStyle(Theme.tertiary)
+                        Image(systemName: "pin.fill").font(.ui(size: pinSize)).foregroundStyle(Theme.tertiary)
                     }
                     Text(TimeLabel.home(bot.lastAt))
-                        .font(.ui(size: 13))
+                        .font(.ui(size: timeSize))
                         .foregroundStyle(Theme.tertiary)
                         .lineLimit(1)
                         .fixedSize()
                 }
                 HStack(spacing: 6) {
                     preview(display, activity: activity)
-                    .font(.ui(size: 14))
+                    .font(.ui(size: previewSize))
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
                     Spacer(minLength: 4)
@@ -333,11 +369,26 @@ struct BotRow: View {
         .accessibilityValue(display.unreadDot ? "Unread" : "")
     }
 
-    private func preview(_ display: RowDisplay, activity: String?) -> Text {
+    /// What the bot is doing now: its turn's activity line, or the work it left running, with how long it has run.
+    private var activity: Text? {
+        if bot.status == .working {
+            return (ActivityLine.text(in: store, botId: bot.id) ?? (store.showsOnline ? nil : LastKnown.working)).map { Text($0).italic() }
+        }
+        guard let background = bot.background, bot.question == nil else { return nil }
+        // Offline the work may have ended since, so the row says what it last knew and no clock runs.
+        guard store.showsOnline else { return Text(LastKnown.background).italic() }
+        return Text(background.text).italic() + Text(" · ") + Text(background.since, style: .timer).monospacedDigit()
+    }
+
+    private func preview(_ display: RowDisplay, activity: Text?) -> Text {
         let text = if let activity {
-            Text(activity).italic()
+            activity
         } else if display.previewIsQuestion {
             Text(Image(systemName: "list.bullet.rectangle")) + Text(" ") + Text(display.preview)
+        } else if let outcome = display.outcome {
+            Text(Image(systemName: outcome == .failed ? "exclamationmark.circle" : "stop.circle"))
+                .foregroundStyle(outcome == .failed ? AvatarColor.red.color : Theme.secondary)
+                + Text(" ") + Text(display.preview)
         } else {
             Text(display.preview)
         }
@@ -364,37 +415,72 @@ struct BotRow: View {
 
 struct ConnectionBanner: View {
     let state: ConnectionState
-    @Environment(AppStore.self) private var store
+    var staleSince: Date?
+    /// What on screen is from before the drop: "Rows" in a list, "Messages" in a chat.
+    var staleWhat = "Rows"
+    @Binding var lastRetryFailed: Bool
     @Environment(AppModel.self) private var app
+    @Environment(AppStore.self) private var store
     @Environment(BridgeClient.self) private var client
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var editingAddress = false
 
-    /// After a few failed connects in a row the banner stops only counting down and says what to try.
-    static func help(failures: Int, address: String?, computer: String) -> String? {
-        guard failures >= BridgeClient.failuresBeforeHelp else { return nil }
+    /// `brief` drops the advice, which at accessibility sizes would push the buttons and the list off the screen.
+    /// `computer` names the bridge's computer (`AppStore.computerName`).
+    static func cause(_ reach: Reach, address: String?, lastRetryFailed: Bool, brief: Bool = false, computer: String = "your computer") -> String {
         let at = address.map { " at \($0)" } ?? ""
-        return "The bridge on \(computer) isn't answering\(at). Check it is running. Away from home, connect with \(computer)'s Tailscale name, or pair again."
+        switch reach {
+        case .firstConnect:
+            return "Connecting to \(computer)\(at)."
+        case .reconnecting:
+            return "Reconnecting…"
+        case .unreachable, .retrying:
+            let head = lastRetryFailed ? "Still no answer from the bridge on \(computer)\(at)." : "The bridge on \(computer) isn't answering\(at)."
+            return brief ? head : head + " Check it is running. Away from home, connect with \(computer)'s Tailscale name, or pair again."
+        case .unrecognized:
+            return UnrecognizedBanner.cause(computer)
+        case .connected, .unpaired:
+            return "ClaudioBot needs the bridge running on \(computer). Your bots keep working there while this \(ThisDevice.casualNoun) is away."
+        }
+    }
+
+    /// Retries still waiting for the Mac. Taps in a row are one retry to the user, so only the last one to give up speaks.
+    @MainActor private static var waiting = 0
+
+    static func retry(_ client: BridgeClient, restartingAttempt: Bool = false, computer: String = "your computer") async -> Bool {
+        waiting += 1
+        let answered = await client.retryNowAndWait(restartingAttempt: restartingAttempt)
+        waiting -= 1
+        if !answered, waiting == 0 { AccessibilityNotification.Announcement("Still no answer from \(computer).").post() }
+        return answered
     }
 
     var body: some View {
+        let reach = Reach(state, failures: client.failures, greeted: store.bridgeProtocol != nil, rejoining: store.rejoin != nil)
         VStack(alignment: .leading, spacing: 8) {
-            ConnectionBadge(state: state)
-            if let help = Self.help(failures: client.failures, address: client.pairing?.url.bridgeAddress, computer: store.computerName()) {
-                Text(help)
+            if reach == .reconnecting {
+                // A socket the app chose to replace: no cause to name and nothing to do yet.
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text(Self.cause(reach, address: nil, lastRetryFailed: false, computer: store.computerName()))
+                }
+                .font(.footnote.weight(.medium))
+                .accessibilityElement(children: .combine)
+            } else {
+                ConnectionBadge(state: state)
+                Text(Self.cause(reach, address: client.pairing?.url.bridgeAddress, lastRetryFailed: lastRetryFailed, brief: typeSize.isAccessibilitySize, computer: store.computerName()))
                     .font(.footnote)
                     .foregroundStyle(Theme.secondary)
-                HStack(spacing: 8) {
-                    Button("Edit address") { editingAddress = true }
-                        .bannerProminent()
-                    Button("Pair again") { app.beginPairing() }
-                        .buttonStyle(.bordered)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let staleSince { StaleListLine(since: staleSince, what: staleWhat) }
+            if reach.lost {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { actions(trying: reach == .retrying) }
+                    VStack(alignment: .leading, spacing: 8) { actions(trying: reach == .retrying) }
                 }
                 .font(.footnote.weight(.semibold))
                 .controlSize(.small)
-            } else {
-                Text("ClaudioBot needs the bridge running on \(store.computerName()). Your bots keep working there while this \(ThisDevice.casualNoun) is away.")
-                    .font(.footnote)
-                    .foregroundStyle(Theme.secondary)
             }
         }
         .sheet(isPresented: $editingAddress) { EditAddressView() }
@@ -402,24 +488,65 @@ struct ConnectionBanner: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
+
+    @ViewBuilder
+    private func actions(trying: Bool) -> some View {
+        Button("Retry now") {
+            Task { lastRetryFailed = !(await Self.retry(client, computer: store.computerName())) }
+        }
+        .bannerProminent()
+        .disabled(trying)
+        Button("Edit address") { editingAddress = true }
+            .buttonStyle(.bordered)
+        Button("Pair again") { app.beginPairing() }
+            .buttonStyle(.bordered)
+    }
+}
+
+/// How old a list kept from before the Mac went out of reach is: "Last updated 12 min. ago. Rows show what your Mac
+/// said then."
+struct StaleListLine: View {
+    let since: Date
+    var what = "Rows"
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            Text(SessionText.updated(since, now: context.date) + (typeSize.isAccessibilitySize ? "." : ". \(what) show what your Mac said then."))
+                .font(.footnote)
+                .foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 }
 
 /// The bridge answered with 401. The pairing is kept: this may be another network, or the bridge may need a new code.
 struct UnrecognizedBanner: View {
+    /// When the list on screen last heard from the Mac; nil where no list shows.
+    var staleSince: Date?
+    var staleWhat = "Rows"
+    /// Set by a screen that is itself a sheet: it must close before pairing can open.
+    var pairAgain: (() -> Void)?
     @Environment(AppStore.self) private var store
     @Environment(AppModel.self) private var app
     @Environment(BridgeClient.self) private var client
 
+    static func cause(_ computer: String = "your computer") -> String {
+        "This bridge doesn't recognize this \(ThisDevice.noun). The bridge on \(computer) may have removed it, or this is another server. Pair again, or retry once you are back on \(computer)'s network."
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ConnectionBadge(state: .unrecognized)
-            Text("This bridge doesn't recognize this \(ThisDevice.noun). Pair again, or retry once you are back on \(store.computerName())'s network.")
+            Text(Self.cause(store.computerName()))
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let staleSince { StaleListLine(since: staleSince, what: staleWhat) }
             HStack(spacing: 8) {
-                Button("Pair again") { app.beginPairing() }
+                Button("Pair again") { (pairAgain ?? app.beginPairing)() }
                     .bannerProminent()
-                Button("Retry") { client.retry() }
+                Button("Retry") { client.retryNow() }
                     .buttonStyle(.bordered)
             }
             .font(.footnote.weight(.semibold))

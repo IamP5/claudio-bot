@@ -7,10 +7,16 @@ struct ThreadRowView: View, Equatable {
     let sessionId: SessionID
     let model: ThreadModel
     var botName: String?
+    /// A prompt a stop ended before Claude answered: it offers Edit and resend.
+    var unanswered = false
+    /// The bridge takes queued messages back.
+    var withdraws = false
     let onFullOutput: (ToolStep) -> Void
 
+    @Environment(BridgeClient.self) private var client
+
     nonisolated static func == (a: Self, b: Self) -> Bool {
-        a.row == b.row && a.sessionId == b.sessionId && a.botName == b.botName
+        a.row == b.row && a.sessionId == b.sessionId && a.botName == b.botName && a.unanswered == b.unanswered && a.withdraws == b.withdraws
     }
 
     var body: some View {
@@ -19,8 +25,11 @@ struct ThreadRowView: View, Equatable {
             FoldRow(items: items, expanded: expanded) { model.toggle(fold: id) }
         case .item(let item):
             switch item {
-            case let .user(_, _, text, from, queued):
-                SessionUserBubble(text: text, from: from, queued: queued, botName: botName)
+            case let .user(id, _, text, from, queued, _):
+                SessionUserBubble(
+                    text: text, from: from, queued: queued, taken: taken(id), botName: botName, actions: actions(id, text, queued: queued),
+                    delivery: model.pendingSends[id]?.state
+                )
             case let .assistant(id, _, text):
                 RenderedMarkdownView(markdown: model.rendered(id, text))
                     .font(.ui(size: 16))
@@ -29,25 +38,66 @@ struct ThreadRowView: View, Equatable {
             case let .thinking(_, _, text, ms):
                 ThinkingRow(text: text, ms: ms)
             case let .work(_, _, steps):
-                WorkRunRow(steps: steps, onFullOutput: onFullOutput)
+                // Only a live run reads the controls, so a heartbeat redraws the work still running and nothing else.
+                WorkRunRow(run: WorkRun(steps: steps, controls: steps.contains { $0.state.isLive } ? model.controls : nil), onFullOutput: onFullOutput)
             case let .todo(_, _, todos):
                 TodoCard(todos: todos)
             case let .plan(id, _, text, state, cardId):
                 PlanCard(sessionId: sessionId, markdown: model.rendered(id, text), state: state, cardId: cardId)
             case let .permission(_, _, permission):
-                PermissionCardView(messageId: permission.cardId, card: permission.card, decision: {
-                    .sessionDecide(sessionId: sessionId, cardId: permission.cardId, choice: $0)
-                }, fillsColumn: true)
+                SessionPermissionCard(sessionId: sessionId, permission: permission, model: model)
             case let .ask(_, _, questions, answers, cardId):
                 AskCard(sessionId: sessionId, questions: questions, answers: answers, cardId: cardId)
-            case let .notice(_, _, text, tone):
-                NoticeLine(text: text, tone: tone)
+            case let .notice(_, _, text, tone, reason):
+                NoticeLine(text: text, tone: tone, reason: reason)
             case .compaction:
                 CompactionDivider()
             case .unknown:
                 EmptyView()
             }
         }
+    }
+}
+
+extension ThreadRowView {
+    private func taken(_ id: ItemID) -> SessionUserBubble.Taken? {
+        if let withdrawal = model.withdrawals[id] { return withdrawal.lapsed ? .unconfirmed : .withdrawing }
+        return model.sentAnyway[id].map { .sentAnyway(edited: $0) }
+    }
+
+    private func actions(_ id: ItemID, _ text: String, queued: Bool) -> SessionUserBubble.Actions? {
+        // Until the Mac shows it back the message is this phone's alone: send the same frame again, or give it up.
+        if let pending = model.pendingSends[id] {
+            switch pending.state {
+            case .unechoed, .notSent:
+                return .undelivered(
+                    retry: {
+                        client.send(
+                            .sessionSend(
+                                sessionId: model.id, text: pending.text, clientId: id.rawValue, interrupt: pending.interrupt,
+                                turnStartedAt: pending.turnStartedAt
+                            ))
+                    },
+                    discard: { client.discard(sessionId: model.id, clientId: id.rawValue) }
+                )
+            case .waiting, .sending:
+                return nil
+            }
+        }
+        if let withdrawal = model.withdrawals[id] {
+            guard withdrawal.lapsed else { return nil }
+            return .unconfirmed(
+                retry: { client.withdraw(id, text: text, from: model, edit: withdrawal.edited) },
+                edit: withdrawal.edited ? nil : { client.withdraw(id, text: text, from: model, edit: true) }
+            )
+        }
+        if queued, withdraws {
+            return .queued(
+                edit: { client.withdraw(id, text: text, from: model, edit: true) },
+                withdraw: { client.withdraw(id, text: text, from: model, edit: false) }
+            )
+        }
+        return unanswered && !queued ? .resend { model.resend(id, text: text) } : nil
     }
 }
 
@@ -61,15 +111,59 @@ enum HitTarget {
 }
 
 struct SessionUserBubble: View {
+    /// What the user can still do with the message: take a queued one back, or edit one a stop cut off and send it again.
+    enum Actions {
+        case queued(edit: () -> Void, withdraw: () -> Void)
+        case resend(() -> Void)
+        /// A withdrawal the Mac never confirmed: try it again, or, when the text is not in the composer yet, edit it.
+        case unconfirmed(retry: () -> Void, edit: (() -> Void)?)
+        /// The Mac never showed the message back, or refused it: send it again, with the same id so it runs once, or
+        /// give it up.
+        case undelivered(retry: () -> Void, discard: () -> Void)
+    }
+
+    /// Where a message the user took back stands.
+    enum Taken: Equatable {
+        case withdrawing
+        /// No word from the Mac within Withdrawal.patience: it may still be queued.
+        case unconfirmed
+        /// It reached Claude before the withdrawal reached the Mac.
+        case sentAnyway(edited: Bool)
+
+        var words: String {
+            switch self {
+            case .withdrawing: "Withdrawing…"
+            case .unconfirmed: "Couldn't confirm the withdraw"
+            case .sentAnyway(let edited): "Sent before it could be withdrawn" + (edited ? ". Its text is also in the composer." : "")
+            }
+        }
+    }
+
     let text: String
     let from: SessionAuthor
     let queued: Bool
+    var taken: Taken?
     var botName: String?
+    var actions: Actions?
+    /// Where a message this phone sent stands until the Mac shows it back (F-SES-070).
+    var delivery: PendingSend.State?
+
+    /// The caption's words for a message not yet shown back. Offline it is never called sent.
+    static func words(_ delivery: PendingSend.State) -> String {
+        switch delivery {
+        case .waiting: "Not sent yet · Goes if your Mac is back within a minute"
+        case .sending: "Sending…"
+        case .unechoed: "No word from your Mac yet. It may have gone through."
+        case .notSent(let why?): "Not sent: " + why
+        case .notSent(nil): "Not sent"
+        }
+    }
 
     var body: some View {
         if from == .system {
             NoticeLine(text: text, tone: .info)
         } else {
+            let rendered = MarkdownText.inline(text)
             VStack(alignment: .trailing, spacing: 5) {
                 if from == .bot {
                     Label(botName.map { "From \($0)" } ?? "From a bot", systemImage: "gearshape")
@@ -78,7 +172,7 @@ struct SessionUserBubble: View {
                 }
                 HStack(spacing: 0) {
                     Spacer(minLength: 48)
-                    Text(MarkdownText.inline(text))
+                    Text(rendered)
                         .font(.ui(size: 16))
                         .bubbleText()
                         .foregroundStyle(.white)
@@ -94,16 +188,110 @@ struct SessionUserBubble: View {
                         }
                         .opacity(queued ? 0.75 : 1)
                 }
-                if queued {
-                    Label("Queued", systemImage: "clock")
-                        .font(.caption)
-                        .foregroundStyle(Theme.tertiary)
-                }
+                caption
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel((from == .bot ? "From \(botName ?? "a bot"): " : "You: ") + text + (queued ? ". Queued" : ""))
+            .accessibilityLabel(
+                Self.spoken(rendered, from: from, botName: botName, queued: queued && delivery == nil)
+                    + (delivery.map { ". " + Self.words($0) } ?? taken.map { ". " + $0.words } ?? "")
+            )
+            .accessibilityActions {
+                switch actions {
+                case let .queued(edit, withdraw)?:
+                    Button("Edit", action: edit)
+                    Button("Withdraw", action: withdraw)
+                case .resend(let resend)?:
+                    Button("Edit and resend", action: resend)
+                case let .unconfirmed(retry, edit)?:
+                    Button("Try again", action: retry)
+                    if let edit { Button("Edit", action: edit) }
+                case let .undelivered(retry, discard)?:
+                    Button("Retry", action: retry)
+                    Button("Discard", action: discard)
+                case nil:
+                    EmptyView()
+                }
+            }
         }
+    }
+
+    @ViewBuilder
+    private var caption: some View {
+        switch actions {
+        case let .queued(edit, withdraw)?:
+            Menu {
+                Button(action: edit) { Label("Edit", systemImage: "pencil") }
+                Button(role: .destructive, action: withdraw) { Label("Withdraw", systemImage: "arrow.uturn.backward") }
+            } label: {
+                captionLabel("Queued · Edit or withdraw", symbol: "clock")
+            }
+        case .resend(let resend)?:
+            VStack(alignment: .trailing, spacing: 0) {
+                if let taken { Label(taken.words, systemImage: "info.circle").font(.caption).foregroundStyle(Theme.tertiary) }
+                Button(action: resend) { captionLabel("Edit and resend", symbol: "arrow.uturn.up") }
+                    .buttonStyle(.plain)
+            }
+        case let .unconfirmed(retry, edit)?:
+            Menu {
+                Button(action: retry) { Label("Try again", systemImage: "arrow.uturn.backward") }
+                if let edit { Button(action: edit) { Label("Edit", systemImage: "pencil") } }
+            } label: {
+                captionLabel("Couldn't confirm the withdraw · Try again", symbol: "exclamationmark.triangle")
+            }
+        case let .undelivered(retry, discard)?:
+            let unechoed = delivery == .unechoed
+            VStack(alignment: .trailing, spacing: 0) {
+                Label(delivery.map(Self.words) ?? "Not sent", systemImage: unechoed ? "questionmark.circle" : "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(unechoed ? Theme.attention : Theme.danger)
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 16) { undeliveredButtons(retry: retry, discard: discard, unechoed: unechoed) }
+                    VStack(alignment: .trailing, spacing: 0) { undeliveredButtons(retry: retry, discard: discard, unechoed: unechoed) }
+                }
+            }
+        case nil:
+            if let delivery {
+                Label(Self.words(delivery), systemImage: delivery == .waiting ? "wifi.slash" : "arrow.up.circle")
+                    .font(.caption)
+                    .foregroundStyle(Theme.tertiary)
+            } else if let taken {
+                Label(taken.words, systemImage: taken == .withdrawing ? "arrow.uturn.backward" : "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(Theme.tertiary)
+            } else if queued {
+                Label("Queued", systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(Theme.tertiary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func undeliveredButtons(retry: @escaping () -> Void, discard: @escaping () -> Void, unechoed: Bool) -> some View {
+        Button(action: retry) { captionLabel("Retry", symbol: "arrow.clockwise") }
+            .buttonStyle(.plain)
+            .accessibilityHint(unechoed ? "Safe to retry: your Mac runs it only once." : "")
+        Button(action: discard) { captionLabel("Discard", symbol: "xmark") }
+            .buttonStyle(.plain)
+            .accessibilityHint(unechoed ? "Removes it from this \(ThisDevice.noun). Your Mac may still run it." : "")
+    }
+
+    private func captionLabel(_ title: String, symbol: String) -> some View {
+        Label(title, systemImage: symbol)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(Theme.secondary)
+            .frame(minHeight: HitTarget.minHeight)
+            .contentShape(Rectangle())
+    }
+
+    /// The message as it reads on screen: link labels, not their addresses, and no markup characters (F-SES-168).
+    static func spoken(_ rendered: AttributedString, from: SessionAuthor, botName: String?, queued: Bool) -> String {
+        let text = String(rendered.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+        let ends = text.last.map { ".!?".contains($0) } ?? true
+        return (from == .bot ? "From \(botName ?? "a bot"): " : "You: ") + text + (queued ? (ends ? " Queued" : ". Queued") : "")
     }
 }
 
@@ -113,25 +301,35 @@ struct FoldRow: View {
     let toggle: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var steps: [ToolStep] {
-        items.flatMap { item -> [ToolStep] in if case .work(_, _, let steps) = item { steps } else { [] } }
-    }
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
+        let failure = WorkSummary.failure(items)
         // The folded rows are rows of the list, so the list's rows move and fade with this transaction.
         Button {
             withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) { toggle() }
         } label: {
+            let stacked = typeSize.isAccessibilitySize
+            let diff = WorkSummary.diff(WorkSummary.steps(items))
             HStack(spacing: 8) {
-                Image(systemName: "square.stack.3d.up")
-                    .font(.footnote)
-                    .foregroundStyle(Theme.tertiary)
-                Text(WorkSummary.fold(items))
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.secondary)
-                    .multilineTextAlignment(.leading)
-                if let diff = WorkSummary.diff(steps) { DiffStat(added: diff.added, removed: diff.removed) }
+                if !stacked {
+                    Image(systemName: "square.stack.3d.up")
+                        .font(.footnote)
+                        .foregroundStyle(Theme.tertiary)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(WorkSummary.fold(items))
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.secondary)
+                    if let failure {
+                        Label(failure, systemImage: "xmark.circle.fill")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Theme.danger)
+                    }
+                    if stacked, let diff { DiffStat(added: diff.added, removed: diff.removed) }
+                }
+                .multilineTextAlignment(.leading)
+                if !stacked, let diff { DiffStat(added: diff.added, removed: diff.removed) }
                 Spacer(minLength: 4)
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
@@ -143,7 +341,7 @@ struct FoldRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(WorkSummary.fold(items))
+        .accessibilityLabel(WorkSummary.fold(items) + (failure.map { ". " + $0 } ?? ""))
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
         .accessibilityHint(expanded ? "Hides these steps" : "Shows these steps")
     }
@@ -192,29 +390,71 @@ struct ThinkingRow: View {
     }
 }
 
+extension EnvironmentValues {
+    /// Set while the run state may be out of date, to when it was last known true. Timers stop there and live marks
+    /// dim, so a silent or unreachable Mac never shows a clock still ticking.
+    @Entry var runStateStale: Date? = nil
+}
+
+/// A work item: a header that says what runs, what failed and for how long, then its steps. While the run is live its
+/// running and waiting steps stay in view; the rest open on tap. One clock ticks per run, never one per step.
 struct WorkRunRow: View {
-    let steps: [ToolStep]
+    let run: WorkRun
     let onFullOutput: (ToolStep) -> Void
     @State private var open = false
+    /// The steps whose whole command is shown. Kept here, above the switch between a ticking and a still body, so a
+    /// command stays open when the run stops ticking, scrolls away or goes stale.
+    @State private var openCommands: Set<String> = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var running: ToolStep? { steps.last { $0.state == .running } }
+    @Environment(\.runStateStale) private var staleAt
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var onScreen = true
+    @ScaledMetric(relativeTo: .subheadline) private var slot: CGFloat = 20
+    @Environment(\.revealedStep) private var revealedStep
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        Group {
+            if onScreen, staleAt == nil, run.ticks || run.ages {
+                TimelineView(.periodic(from: run.since ?? .now, by: 1)) { context in
+                    content(now: context.date)
+                }
+            } else {
+                content(now: staleAt ?? .now)
+            }
+        }
+        // Any part on screen counts. At the default half, a run taller than twice the screen never counts as visible.
+        .onScrollVisibilityChange(threshold: 0.01) { onScreen = $0 }
+        .onChange(of: revealedStep, initial: true) { _, id in
+            if let id, run.steps.contains(where: { $0.id == id }) { open = true }
+        }
+    }
+
+    private func content(now: Date) -> some View {
+        let shown = open ? run.steps : run.collapsed
+        return VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { open.toggle() }
             } label: {
-                header
+                header(now: now)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(summary)
+            .accessibilityLabel(run.spoken(now: now, stale: staleAt != nil))
             .accessibilityValue(open ? "Expanded" : "Collapsed")
-            if open {
+            .accessibilityHint(open ? "Hides the finished steps" : "Shows every step")
+            if !shown.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(steps) { step in
-                        ToolStepRow(step: step, onFullOutput: onFullOutput)
-                        if step.id != steps.last?.id { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 34) }
+                    ForEach(shown) { step in
+                        ToolStepRow(
+                            step: step, run: run, now: now, brief: !open && !step.state.isLive,
+                            commandOpen: Binding(
+                                get: { openCommands.contains(step.id) },
+                                set: { if $0 { openCommands.insert(step.id) } else { openCommands.remove(step.id) } }
+                            ),
+                            onFullOutput: onFullOutput
+                        )
+                            .background { if step.id == revealedStep { Theme.attention.opacity(0.14) } }
+                            .id(step.id)
+                        if step.id != shown.last?.id { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 34) }
                     }
                 }
                 .padding(.vertical, 4)
@@ -224,48 +464,48 @@ struct WorkRunRow: View {
         }
     }
 
-    private var summary: String {
-        if let running { return running.label }
-        let errors = WorkSummary.errors(steps)
-        return WorkSummary.text(steps) + (errors > 0 ? ", \(errors) failed" : "")
-    }
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            if running != nil {
-                WorkingRing(size: 12)
-                    .frame(width: 16)
-            } else {
-                Image(systemName: "wrench.and.screwdriver")
-                    .font(.footnote)
-                    .foregroundStyle(Theme.tertiary)
-                    .frame(width: 16)
-            }
-            Group {
-                if let running {
-                    Text(running.label).shimmering()
-                } else {
-                    Text(WorkSummary.text(steps))
-                }
-            }
+    private func header(now: Date) -> some View {
+        let busy = run.isRunning && staleAt == nil
+        let line = Text(run.headline() + (run.since.map { " · " + RunClock.short(now.timeIntervalSince($0)) } ?? ""))
             .font(.subheadline)
+            .monospacedDigit()
             .foregroundStyle(Theme.secondary)
-            .lineLimit(2)
-            .multilineTextAlignment(.leading)
-            if let diff = WorkSummary.diff(steps) { DiffStat(added: diff.added, removed: diff.removed) }
-            let errors = WorkSummary.errors(steps)
-            if errors > 0 {
-                Label("\(errors) failed", systemImage: "xmark.circle.fill")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(Theme.danger)
-                    .labelStyle(.titleAndIcon)
-                    .fixedSize()
+        let diff = run.isLive ? nil : WorkSummary.diff(run.steps)
+        // At accessibility sizes the words get the row's width: beside the glyph and the diff they wrapped a word a line.
+        // The headline's state word and its clock still say whether it runs.
+        let stacked = typeSize.isAccessibilitySize
+        return HStack(alignment: .top, spacing: 8) {
+            if !stacked {
+                Group {
+                    if busy {
+                        WorkingRing(size: slot * 0.6)
+                    } else if run.isRunning {
+                        Image(systemName: "circle.dotted").font(.footnote).foregroundStyle(Theme.tertiary)
+                    } else if run.isLive {
+                        Image(systemName: "hand.raised").font(.footnote).foregroundStyle(Theme.attention)
+                    } else {
+                        Image(systemName: "wrench.and.screwdriver").font(.footnote).foregroundStyle(Theme.tertiary)
+                    }
+                }
+                .frame(width: slot, height: slot)
             }
-            Spacer(minLength: 4)
+            VStack(alignment: .leading, spacing: 3) {
+                if busy { line.shimmering() } else { line }
+                if let failure = run.failure {
+                    Label(failure, systemImage: "xmark.circle.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Theme.danger)
+                }
+                if stacked, let diff { DiffStat(added: diff.added, removed: diff.removed) }
+            }
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if !stacked, let diff { DiffStat(added: diff.added, removed: diff.removed) }
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Theme.tertiary)
                 .rotationEffect(.degrees(open ? 90 : 0))
+                .frame(height: slot)
         }
         .padding(.vertical, 8)
         .frame(minHeight: HitTarget.minHeight)
@@ -275,7 +515,18 @@ struct WorkRunRow: View {
 
 struct ToolStepRow: View {
     let step: ToolStep
+    let run: WorkRun
+    let now: Date
+    /// A finished step kept in a collapsed run: its name and how it ended, nothing more.
+    var brief = false
+    @Binding var commandOpen: Bool
     let onFullOutput: (ToolStep) -> Void
+    @Environment(\.runStateStale) private var staleAt
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .footnote) private var slot: CGFloat = 16
+
+    /// At accessibility sizes the tool glyph goes, so the step's words get the whole width.
+    private var indent: CGFloat { typeSize.isAccessibilitySize ? 0 : slot + 10 }
 
     static func symbol(_ tool: String) -> String {
         switch tool {
@@ -292,37 +543,79 @@ struct ToolStepRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: Self.symbol(step.tool))
-                    .font(.footnote)
-                    .foregroundStyle(Theme.tertiary)
-                    .frame(width: 16)
-                Text(step.label)
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundStyle(step.state == .denied ? Theme.tertiary : .white)
-                    .lineLimit(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if let diff = step.diff { DiffStat(added: diff.added, removed: diff.removed) }
-                StepState(state: step.state)
-            }
-            if let output = step.output, !output.isEmpty {
+            summary
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(spoken)
+            if !brief, let output = step.shownOutput {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(Self.tail(output))
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(step.state == .error ? Theme.danger.opacity(0.9) : Theme.secondary)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel("Output")
+                        .accessibilityValue(Self.tail(output))
                     Button("Full output") { onFullOutput(step) }
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.link)
                         .frame(minHeight: HitTarget.minHeight)
+                        .accessibilityLabel("Full output of \(step.label)")
                 }
-                .padding(.leading, 26)
+                .padding(.leading, indent)
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .accessibilityElement(children: .combine)
+    }
+
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                if !typeSize.isAccessibilitySize {
+                    Image(systemName: Self.symbol(step.tool))
+                        .font(.footnote)
+                        .foregroundStyle(Theme.tertiary)
+                        .frame(width: slot)
+                }
+                Text(step.label)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(step.state == .denied || step.state == .stopped ? Theme.tertiary : .white)
+                    .lineLimit(step.state.isLive ? nil : 3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let diff = step.diff { DiffStat(added: diff.added, removed: diff.removed) }
+                StepState(state: step.state, stale: staleAt != nil)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                if !brief, let detail = step.detail, !detail.isEmpty, detail != step.label {
+                    StepDetail(text: detail, title: step.label, open: $commandOpen)
+                }
+                Text(run.status(step, now: now).joined(separator: " · "))
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(step.state == .waiting || run.task(for: step)?.waiting != nil ? Theme.attention : Theme.tertiary)
+                if step.state == .error || step.state == .denied, let cause = step.cause {
+                    Text(cause)
+                        .font(.caption)
+                        .foregroundStyle(Theme.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.leading, indent)
+        }
+    }
+
+    private var spoken: String {
+        var parts = [step.label] + run.status(step, now: now, spoken: true, stale: staleAt != nil)
+        if let detail = step.detail, !detail.isEmpty, detail != step.label {
+            switch step.tool {
+            case "Bash": parts.append("command: " + detail)
+            case "Task", "Agent": parts.append("subagent type: " + detail)
+            default: parts.append(detail)
+            }
+        }
+        if step.state == .error || step.state == .denied, let cause = step.cause { parts.append(cause) }
+        if let diff = step.diff { parts.append(DiffStat.spoken(added: diff.added, removed: diff.removed)) }
+        return parts.joined(separator: ", ")
     }
 
     /// The last 6 lines: where a test run or a build says how it went.
@@ -332,18 +625,35 @@ struct ToolStepRow: View {
     }
 }
 
+/// A step's state as a glyph. The word goes in the step's status line, which VoiceOver reads.
 private struct StepState: View {
     let state: ToolStepState
+    let stale: Bool
 
     var body: some View {
         switch state {
         case .running:
-            ProgressView().controlSize(.mini).accessibilityLabel("Running")
+            if stale {
+                Image(systemName: "circle.dotted").font(.footnote).foregroundStyle(Theme.tertiary)
+            } else {
+                WorkingRing(size: 11)
+                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] }
+            }
+        case .waiting:
+            Image(systemName: "hand.raised").font(.footnote).foregroundStyle(Theme.attention)
+        case .ok:
+            Image(systemName: "checkmark.circle").font(.footnote).foregroundStyle(Theme.tertiary)
         case .error:
-            Image(systemName: "xmark.circle.fill").font(.footnote).foregroundStyle(Theme.danger).accessibilityLabel("Failed")
+            Image(systemName: "xmark.circle.fill").font(.footnote).foregroundStyle(Theme.danger)
         case .denied:
-            Image(systemName: "nosign").font(.footnote).foregroundStyle(Theme.attention).accessibilityLabel("Denied")
-        case .ok, .unknown:
+            Image(systemName: "nosign").font(.footnote).foregroundStyle(Theme.attention)
+        case .stopped:
+            Image(systemName: "stop.circle").font(.footnote).foregroundStyle(Theme.secondary)
+        case .unsure:
+            Image(systemName: "questionmark.circle").font(.footnote).foregroundStyle(Theme.tertiary)
+        case .ended:
+            Image(systemName: "circle.dashed").font(.footnote).foregroundStyle(Theme.tertiary)
+        case .unknown:
             EmptyView()
         }
     }
@@ -361,7 +671,97 @@ struct DiffStat: View {
         .font(.caption.monospacedDigit().weight(.medium))
         .fixedSize()
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(added) lines added, \(removed) removed")
+        .accessibilityLabel(Self.spoken(added: added, removed: removed))
+    }
+
+    /// "1 line added, 3 removed".
+    static func spoken(added: Int, removed: Int) -> String {
+        "\(WorkSummary.plural(added, "line")) added, \(removed) removed"
+    }
+}
+
+/// A step's command, three lines tall until the user asks for all of it (F-SES-203). At accessibility sizes all of it
+/// opens in a sheet, since inline it would take screens of its own. VoiceOver reads it whole in the step's label.
+struct StepDetail: View {
+    let text: String
+    /// The step's title, which names the sheet.
+    let title: String
+    @Binding var open: Bool
+
+    @State private var reading = false
+    @State private var shownHeight: CGFloat = 0
+    @State private var fullHeight: CGFloat = 0
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var cut: Bool { fullHeight > shownHeight + 1 }
+
+    var body: some View {
+        if cut || open {
+            Button {
+                if typeSize.isAccessibilitySize {
+                    reading = true
+                } else {
+                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { open.toggle() }
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    command
+                    Text(open ? "Show less" : "Show full command")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.link)
+                }
+                .frame(minHeight: HitTarget.minHeight)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .sheet(isPresented: $reading) { CommandSheet(title: title, text: text) }
+        } else {
+            command
+        }
+    }
+
+    private var command: some View {
+        Text(text)
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(Theme.secondary)
+            .lineLimit(open ? nil : 3)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self, of: \.size.height) { shownHeight = $0 }
+            .background(alignment: .topLeading) {
+                Text(text)
+                    .font(.system(.caption, design: .monospaced))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .hidden()
+                    .onGeometryChange(for: CGFloat.self, of: \.size.height) { fullHeight = $0 }
+            }
+    }
+}
+
+private struct CommandSheet: View {
+    let title: String
+    let text: String
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(text)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .textSelection(.enabled)
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(Theme.background)
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+        }
     }
 }
 
@@ -385,6 +785,7 @@ struct TodoCard: View {
                     Image(systemName: Self.symbol(todo.state))
                         .font(.subheadline)
                         .foregroundStyle(todo.state == .done ? Color(hex: 0x3FB950) : todo.state == .inProgress ? AvatarColor.orange.color : Theme.tertiary)
+                        .accessibilityHidden(true)
                     Text(todo.text)
                         .font(.subheadline.weight(todo.state == .inProgress ? .semibold : .regular))
                         .foregroundStyle(todo.state == .done ? Theme.tertiary : .white)
@@ -423,7 +824,11 @@ struct PlanCard: View {
     let cardId: MessageID?
 
     @Environment(BridgeClient.self) private var client
-    @State private var sent: PermissionChoice?
+    @Environment(AppStore.self) private var store
+
+    /// The choice on its way. The store holds it, so a failed send or a refusal frees the buttons (F-SES-142).
+    private var sent: PermissionChoice? { cardId.flatMap { store.pendingDecisions[$0] } }
+    private var offline: Bool { store.machine == nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -437,14 +842,17 @@ struct PlanCard: View {
             switch state {
             case .proposed:
                 if let cardId {
-                    HStack(spacing: 8) {
-                        decide("Approve", .once, cardId, primary: true)
-                        decide("Keep planning", .deny, cardId, primary: false)
-                    }
-                    .disabled(sent != nil)
+                    // Before the buttons, so VoiceOver reads what a choice does before the choices (F-SES-166).
                     Text("Approving lets Claude leave plan mode and start on it.")
                         .font(.footnote)
                         .foregroundStyle(Theme.tertiary)
+                    HStack(spacing: 8) {
+                        decide("Approve", .once, cardId, primary: true, hint: "Leaves plan mode and starts the work")
+                        decide("Keep planning", .deny, cardId, primary: false, hint: "Claude stays in plan mode and revises the plan")
+                    }
+                    .disabled(sent != nil || offline)
+                    .opacity(offline ? 0.4 : 1)
+                    DecisionStatusLine(offline: offline, note: store.decisionNote(cardId))
                 } else {
                     Text("Waiting for an answer where it was asked.")
                         .font(.footnote)
@@ -456,6 +864,8 @@ struct PlanCard: View {
                 Label("Kept planning", systemImage: "arrow.uturn.backward.circle").font(.subheadline).foregroundStyle(Theme.secondary)
             case .expired, .unknown:
                 Text("Expired. Nobody answered in time.").font(.subheadline).foregroundStyle(Theme.tertiary)
+            case .stopped:
+                Text(Self.stoppedLine).font(.subheadline).foregroundStyle(Theme.tertiary)
             }
         }
         .padding(16)
@@ -466,16 +876,29 @@ struct PlanCard: View {
             }
         }
         .sensoryFeedback(trigger: sent) { _, choice in choice.map { $0.allows ? .success : .warning } }
-        .onChange(of: state) { sent = nil }
+        .announcesClose(Self.closing(state))
     }
 
-    private func decide(_ title: String, _ choice: PermissionChoice, _ cardId: MessageID, primary: Bool) -> some View {
+    static let stoppedLine = "Closed when the turn was stopped."
+
+    /// What VoiceOver hears when the plan stops waiting.
+    static func closing(_ state: PlanState) -> String? {
+        switch state {
+        case .proposed: nil
+        case .approved: "Plan approved."
+        case .rejected: "Plan not approved. Kept planning."
+        case .expired: "The plan closed without an answer."
+        case .stopped: "The plan closed when the turn was stopped."
+        case .unknown: "The plan closed."
+        }
+    }
+
+    private func decide(_ title: String, _ choice: PermissionChoice, _ cardId: MessageID, primary: Bool, hint: String) -> some View {
         Button {
-            sent = choice
             client.send(.sessionDecide(sessionId: sessionId, cardId: cardId, choice: choice))
         } label: {
             HStack(spacing: 6) {
-                if sent == choice { ProgressView().controlSize(.mini) }
+                if sent == choice { SendingSpinner() }
                 Text(title)
             }
             .font(.ui(size: 15, weight: .semibold))
@@ -485,6 +908,8 @@ struct PlanCard: View {
             .background(primary ? Color.white : Theme.inset, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.pressable)
+        .sending(sent == choice)
+        .accessibilityHint(hint)
     }
 }
 
@@ -495,9 +920,13 @@ struct AskCard: View {
     let cardId: MessageID?
 
     @Environment(BridgeClient.self) private var client
+    @Environment(AppStore.self) private var store
     @State private var picks: [String: Set<String>] = [:]
     @State private var typed: [String: String] = [:]
-    @State private var sent = false
+
+    /// An answer on its way. The store holds it, so a failed send or a refusal frees the card (F-SES-142).
+    private var sent: Bool { cardId.map(store.holds) ?? false }
+    private var offline: Bool { store.machine == nil }
 
     private var open: Bool { answers == nil && cardId != nil }
 
@@ -521,7 +950,6 @@ struct AskCard: View {
                 Spacer()
                 if open, let cardId {
                     Button {
-                        sent = true
                         client.send(.sessionAnswer(sessionId: sessionId, cardId: cardId, answers: nil))
                     } label: {
                         Image(systemName: "xmark")
@@ -531,7 +959,7 @@ struct AskCard: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(sent)
+                    .disabled(sent || offline)
                     .help("Dismiss Question")
                     .accessibilityLabel("Dismiss question")
                 }
@@ -547,7 +975,32 @@ struct AskCard: View {
             if open { RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Theme.attention.opacity(0.35), lineWidth: 1) }
         }
         .sensoryFeedback(.success, trigger: sent) { _, now in now }
-        .onChange(of: answers) { sent = false }
+        .announcesClose(Self.closing(answers, count: questions.count))
+    }
+
+    /// What VoiceOver hears when the question stops waiting.
+    static func closing(_ answers: AskAnswers?, count: Int) -> String? {
+        switch answers {
+        case nil: nil
+        case .answered: count == 1 ? "Question answered." : "Questions answered."
+        case .dismissed: "Question dismissed."
+        case .expired: "The question closed without an answer."
+        case .stopped: "The question closed when the turn was stopped."
+        case .closed: "The question closed."
+        }
+    }
+
+    /// Why Send answers is dimmed: the questions with no answer yet (F-SES-231). nil once every one has an answer.
+    static func unanswered(_ questions: [AskQuestion], answered: Set<String>) -> String? {
+        let missing = questions.map(\.question).filter { !answered.contains($0) }
+        guard !missing.isEmpty else { return nil }
+        if questions.count == 1 { return "Pick or type an answer to send it." }
+        return "Still to answer: " + StopScope.listed(missing)
+    }
+
+    /// What names a question beside each of its controls when the card asks more than one (F-SES-230).
+    private func scope(_ q: AskQuestion) -> String? {
+        questions.count > 1 ? (q.header.isEmpty ? q.question : q.header) : nil
     }
 
     @ViewBuilder
@@ -574,20 +1027,22 @@ struct AskCard: View {
                     ForEach(Array(q.options.enumerated()), id: \.offset) { index, option in
                         if index > 0 { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 48) }
                         Button { pick(option.label, in: q) } label: {
-                            AskOptionRow(index: index, option: option, multi: q.multiSelect, picked: picks[q.question]?.contains(option.label) == true)
+                            AskOptionRow(index: index, option: option, multi: q.multiSelect, picked: picks[q.question]?.contains(option.label) == true, question: scope(q))
                         }
                         .buttonStyle(.pressable)
-                        .disabled(sent)
+                        .disabled(sent || offline)
                     }
                 }
                 .background(Theme.inset, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .opacity(offline ? 0.4 : 1)
                 TextField("Or type your own answer", text: Binding(get: { typed[q.question, default: ""] }, set: { typed[q.question] = $0 }), axis: .vertical)
                     .font(.subheadline)
                     .lineLimit(1...4)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(Theme.inset, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .disabled(sent)
+                    .disabled(sent || offline)
+                    .accessibilityLabel(scope(q).map { "Your own answer to \($0)" } ?? "Or type your own answer")
             } else if case .answered(let given) = answers, let answer = given[q.question] {
                 Label(answer, systemImage: "checkmark.circle.fill")
                     .font(.subheadline.weight(.medium))
@@ -604,11 +1059,10 @@ struct AskCard: View {
             if let cardId {
                 if needsSubmit {
                     Button {
-                        sent = true
                         client.send(.sessionAnswer(sessionId: sessionId, cardId: cardId, answers: draft))
                     } label: {
                         HStack(spacing: 6) {
-                            if sent { ProgressView().controlSize(.mini) }
+                            if sent { SendingSpinner() }
                             Text(questions.count == 1 ? "Send answer" : "Send answers")
                         }
                         .font(.ui(size: 15, weight: .semibold))
@@ -616,11 +1070,20 @@ struct AskCard: View {
                         .padding(.vertical, 11)
                         .foregroundStyle(.black)
                         .background(.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .opacity(draft.count == questions.count ? 1 : 0.4)
+                        .opacity(draft.count == questions.count && !offline ? 1 : 0.4)
                     }
                     .buttonStyle(.pressable)
-                    .disabled(sent || draft.count != questions.count)
+                    .sending(sent)
+                    .disabled(sent || offline || draft.count != questions.count)
+                    .accessibilityHint(Self.unanswered(questions, answered: Set(draft.keys)) ?? "")
+                    if !sent, !draft.isEmpty, let missing = Self.unanswered(questions, answered: Set(draft.keys)) {
+                        Text(missing)
+                            .font(.footnote)
+                            .foregroundStyle(Theme.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
+                DecisionStatusLine(offline: offline, note: store.decisionNote(cardId))
             } else {
                 Text("Waiting for an answer where it was asked.").font(.footnote).foregroundStyle(Theme.tertiary)
             }
@@ -628,6 +1091,8 @@ struct AskCard: View {
             Text("Dismissed").font(.subheadline).foregroundStyle(Theme.tertiary)
         case .expired:
             Text("Expired. Nobody answered in time.").font(.subheadline).foregroundStyle(Theme.tertiary)
+        case .stopped:
+            Text(PlanCard.stoppedLine).font(.subheadline).foregroundStyle(Theme.tertiary)
         case .closed:
             Text("Closed").font(.subheadline).foregroundStyle(Theme.tertiary)
         case .answered:
@@ -649,7 +1114,6 @@ struct AskCard: View {
         picks[q.question] = set
         typed[q.question] = ""
         if !needsSubmit, let cardId {
-            sent = true
             client.send(.sessionAnswer(sessionId: sessionId, cardId: cardId, answers: [q.question: label]))
         }
     }
@@ -660,6 +1124,8 @@ private struct AskOptionRow: View {
     let option: AskOption
     let multi: Bool
     let picked: Bool
+    /// The question this option answers, when the card asks more than one.
+    var question: String?
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -668,6 +1134,7 @@ private struct AskOptionRow: View {
                     .font(.ui(size: 19))
                     .foregroundStyle(picked ? .white : Theme.tertiary)
                     .frame(width: 22, height: 22)
+                    .accessibilityHidden(true)
             } else {
                 LetterBadge(index: index, fill: picked ? .white : .white.opacity(0.08), ink: picked ? .black : Theme.tertiary)
             }
@@ -689,6 +1156,7 @@ private struct AskOptionRow: View {
         .frame(minHeight: HitTarget.minHeight)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+        .accessibilityLabel([question, option.label, option.description].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", "))
         .accessibilityAddTraits(picked ? .isSelected : [])
     }
 }
@@ -696,14 +1164,19 @@ private struct AskOptionRow: View {
 struct NoticeLine: View {
     let text: String
     let tone: NoticeTone
+    var reason: NoticeReason? = nil
 
     var body: some View {
+        // What became of a task the user started is news about their work, not a footnote (F-SES-200).
+        let task = reason == .task
         Label(text, systemImage: tone == .error ? "exclamationmark.triangle" : "info.circle")
-            .font(.footnote)
-            .foregroundStyle(tone == .error ? Theme.danger : Theme.tertiary)
+            .font(task ? .ui(.body) : .footnote)
+            .foregroundStyle(tone == .error ? Theme.danger : task ? Theme.secondary : Theme.tertiary)
             .multilineTextAlignment(.center)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 24)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(tone == .error ? "Error: " + text : text)
     }
 }
 
@@ -721,10 +1194,10 @@ struct CompactionDivider: View {
     }
 }
 
-/// The only view that reads the live text, so a delta redraws this and nothing else.
+/// The only view that reads the live text, so a delta redraws this and nothing else. What runs is the status line's.
 struct StreamingTail: View {
     let live: LiveText
-    let working: Bool
+    @Environment(\.runStateStale) private var staleAt
 
     var body: some View {
         if live.itemId != nil, !live.text.isEmpty {
@@ -733,17 +1206,9 @@ struct StreamingTail: View {
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 14)
-                .accessibilityLabel("Writing: \(live.text)")
-        } else if working {
-            HStack(spacing: 8) {
-                WorkingRing(size: 12)
-                Text("Working…")
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.secondary)
-                    .shimmering()
-            }
-            .padding(.top, 14)
-            .accessibilityElement(children: .combine)
+                // A label of the growing text would be read again on every delta. The reply reads in full once it lands.
+                .accessibilityLabel(staleAt == nil ? "Claude is replying" : "Reply in progress when last updated")
+                .opacity(staleAt == nil ? 1 : 0.6)
         }
     }
 }

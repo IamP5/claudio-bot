@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BotId, MessageId, RoutineId, RunId, SessionId } from "../src/protocol";
 import { newGroup } from "../src/groups";
+import { newDrive } from "../src/own";
 import { createSaver, flushNow, loadWorld, StateFileError } from "../src/store";
 import { emptySession, emptyWorld, exchangeBetween, logExchange, newBot, own, type MoveId, type MoveRecord, type Signature } from "../src/world";
 
@@ -408,6 +409,16 @@ test("world moves survive a save and a load; a file from before them reads as no
   const frozenWithNothingHeld = freshHome();
   writeState(frozenWithNothingHeld, v3({ bots: [v3Bot], moves: [{ kind: "out", moveId: "mv_1", at, machine: "mac", phase: "frozen" }] }));
   expect(() => loadWorld(frozenWithNothingHeld)).toThrow(StateFileError);
+});
+
+test("a session's sent clientIds and the create ref that made it survive a save and a load", () => {
+  const home = freshHome();
+  const { world } = loadWorld(home);
+  const id = "6b1f3c2a-8d4e-4f7a-9c1b-2e5d7a9f0c31" as SessionId;
+  world.sessions.set(id, { id, hidden: false, visitedAt: null, sent: ["c_1", "c_2"], own: { ...newDrive({ id, cwd: "/repo", created: true, at, model: null, mode: null, prompt: "Hi" }), ref: "r_1" } });
+  flushNow(world, home);
+  const again = loadWorld(home).world.sessions.get(id);
+  expect([again?.sent, again?.own?.ref, again?.own?.prompt]).toEqual([["c_1", "c_2"], "r_1", "Hi"]);
 });
 
 test("the saver debounces, and \"now\" writes before it returns", async () => {

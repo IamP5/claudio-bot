@@ -106,6 +106,40 @@ const card = {
   kind: "permission" as const, id: "m20", at: later, from: null, tool: "Bash", label: "Bash",
   detail: "rm -rf node_modules && bun install", always: "rm -rf node_modules in solta-o-som, for this session", answer: null, expiresAt: "2026-10-16T16:00:00.000Z",
 };
+// Run state (feature session_tasks): a session the phone started, with a background subagent blocked on a card, the
+// command it started, a failed call and a stopped subagent.
+const phoneRow: Wire<SessionRow> = {
+  id: "a52e9d17-6c4b-4f08-b3a1-8e7d2c5f9b16", machine: HOME, projectId: solta.id, parentId: null, title: "Sleep in parallel", origin: "phone",
+  agent: null, status: "awaiting_approval", holder: "claudio", unread: false,
+  branch: "main", worktree: false, pr: null, mirror: "none", hidden: false, url: null, createdAt: at, lastAt: later,
+  since: at, running: { agents: 1, commands: 1 }, activity: "Waiting for approval: Bash",
+};
+const runControls: Wire<SessionControls> = {
+  ...controls, queued: 0,
+  turn: { startedAt: at, wake: false },
+  tasks: [
+    { id: "a7f3c2e9b1d40e58", stepId: "toolu_01Ac1", kind: "agent", label: "sleeper two", background: true, startedAt: at, owner: null, progress: { tools: 3, last: "Bash", at: later }, waiting: "m23" },
+    { id: "bk2x9q7", stepId: "toolu_01Ac3", kind: "command", label: "sleep 60", background: true, startedAt: at, owner: "toolu_01Ac1", progress: null, waiting: null },
+  ],
+  heardAt: later,
+};
+const runItems = [
+  { kind: "work", id: "toolu_01Ac1", at, steps: [
+    { id: "toolu_01Ac1", tool: "Agent", label: "sleeper two", state: "running", diff: null, output: null, detail: "general-purpose", startedAt: at, background: true },
+    { id: "toolu_01Ac2", tool: "Bash", label: "Remove the build folder", state: "waiting", diff: null, output: null, detail: "rm -rf build", owner: "toolu_01Ac1" },
+    { id: "toolu_01Ac3", tool: "Bash", label: "Run in background: sleep 60", state: "running", diff: null, output: null, detail: "sleep 60", startedAt: at, background: true, owner: "toolu_01Ac1" },
+    { id: "toolu_01Ac4", tool: "Bash", label: "List the late files", state: "error", diff: null, output: "ls: late.txt: No such file or directory\n", detail: "ls late.txt", startedAt: at, endedAt: later, cause: "Exit code 1: ls: late.txt: No such file or directory" },
+    { id: "toolu_01Ac5", tool: "Agent", label: "sleeper one", state: "stopped", diff: null, output: null, detail: "general-purpose", startedAt: at, endedAt: later, cause: "Stopped by you", usage: { tools: 4, ms: 31000 } },
+    { id: "toolu_01Ac7", tool: "Bash", label: "Run in background: sleep 600", state: "unsure", diff: null, output: null, detail: "sleep 600", startedAt: at, background: true, cause: "Can't tell whether this still runs on your Mac" },
+    { id: "toolu_01Ac8", tool: "Bash", label: "Run in background: sleep 700", state: "ended", diff: null, output: null, detail: "sleep 700", startedAt: at, background: true, cause: "It ended without a result" },
+  ] },
+  { kind: "permission", id: "m23", at: later, card: { ...permission, id: "m23", label: "Bash", detail: "rm -rf build", always: "rm -rf build in solta-o-som, for this session" }, stepId: "toolu_01Ac2", subagent: "sleeper two" },
+  { kind: "permission", id: "m24", at: later, card: { ...permission, id: "m24", label: "Bash", detail: "sleep 30", always: "sleep in solta-o-som, for this session", answer: "stopped" }, stepId: "toolu_01Ac6", subagent: "sleeper one" },
+  { kind: "permission", id: "m25", at: later, card: { ...permission, id: "m25", label: "Bash", detail: "sleep 45", always: "sleep in solta-o-som", answer: "closed" }, stepId: "toolu_01Ac7" },
+  { kind: "notice", id: "n_2", at: later, text: "Background command \"sleep 75\" completed (exit code 0)", tone: "info", reason: "task" },
+  { kind: "notice", id: "n_3", at: later, text: "Stopped by Alex: the turn and 1 agent", tone: "info", reason: "stop" },
+] satisfies Wire<SessionItem>[];
+
 const asked = "Which audio library should the fade use?";
 const ask = {
   kind: "ask" as const, id: "toolu_01Ab8", at: later, cardId: "m21", answers: null,
@@ -125,7 +159,7 @@ const machines: Wire<MachineView>[] = [
 
 export const server = [
   { type: "hello", protocol: 3, features: [...FEATURES], epoch: "e_7f3a", seq: 41, resumed: false, machine: "omarchy", userName: "Alex", bots: [bot], machines,
-    world: { id: "w_2c9d4e1f-7a3b-4c5d-8e6f-0a1b2c3d4e5f", name: "Alex's bots" } },
+    world: { id: "w_2c9d4e1f-7a3b-4c5d-8e6f-0a1b2c3d4e5f", name: "Alex's bots" }, push: { state: "on" } },
   { type: "bot", seq: 42, bot: { ...bot, id: "b2", name: "news digest", title: "Morning digest", avatar: { shape: "pentagon", color: "teal" }, status: "working", unread: 0, question: null, pinned: true, dailyCapUsd: 5, spentTodayUsd: 0, capUsd: 5, agentsOn: MAC } },
   { type: "bot_removed", botId: "b2" },
   { type: "created", ref: "c1", botId: "b3" },
@@ -141,6 +175,15 @@ export const server = [
   },
   { type: "message", seq: 44, botId: "b1", message: question(1) },
   { type: "message", botId: "b1", message: { kind: "question", id: "m7", at, question: "Add the secret?", options: ["Yes", "Not yet"], answer: "dismissed", expiresAt: null } },
+  { type: "message", botId: "b1", message: { ...permission, id: "m26", detail: "eval \"$(echo hostname)\"", answer: "superseded" } },
+  {
+    type: "bot", seq: 45, bot: {
+      ...bot, unread: 1, question: null, preview: "Started the 30 second build in the background.",
+      outcome: { kind: "failed", text: "Didn't finish: Claude Code quit unexpectedly", at: later },
+      background: { since: later, count: 2, text: "Background: npm run build and 1 more" },
+    },
+  },
+  { type: "bot", seq: 46, bot: { ...bot, status: "awaiting_approval", outcome: { kind: "stopped", text: "Stopped by Alex", at }, cards: 3 } },
   {
     type: "details", botId: "b1",
     library: [{ path: "merge-plan.md", size: 2048, modifiedAt: at }],
@@ -217,7 +260,7 @@ export const server = [
   { type: "session_delta", sessionId: agentSession, itemId: "msg_01XyZ7Lq:2", offset: 15, text: " the fade test." },
   { type: "session_items", sessionId: agentSession, rev: 43, items: [{ kind: "permission", id: "toolu_01Ab7", at: later, card }], removed: [], controls: { ...controls, working: false } },
   {
-    type: "session_items", sessionId: agentSession, rev: 45, removed: ["c_4d2a"], controls: null, items: [
+    type: "session_items", sessionId: agentSession, rev: 44, removed: ["c_4d2a"], controls: null, items: [
       ask,
       { kind: "plan", id: "toolu_01Ab9", at: later, cardId: "m22", state: "proposed", text: "## Plan\n1. Swap the linear ramp for setTargetAtTime\n2. Test on iOS Safari 18 and Firefox" },
     ],
@@ -228,12 +271,50 @@ export const server = [
       { kind: "compaction", id: "c4f1a2e7-3b9d-4c8e-a6f2-1d7b5e9c3a20", at: "2026-10-16T11:30:00.000Z" },
       { ...ask, id: "toolu_01Aa2", at: "2026-10-16T11:40:00.000Z", cardId: null, answers: { [asked]: "Web Audio API" } },
       { kind: "plan", id: "toolu_01Aa3", at: "2026-10-16T11:45:00.000Z", cardId: null, state: "approved", text: "## Plan\n1. Read the fade code" },
+      { ...ask, id: "toolu_01Aa4", at: "2026-10-16T11:50:00.000Z", cardId: "m18", answers: "dismissed" },
+      { kind: "plan", id: "toolu_01Aa5", at: "2026-10-16T11:55:00.000Z", cardId: "m19", state: "rejected", text: "## Plan\n1. Rewrite the fade" },
+      { kind: "user", id: "5b8f3d02-6c4e-4f90-b2d7-0e3c8f6a4b29", at: "2026-10-16T11:58:00.000Z", text: "Also check it on Firefox", from: "user", queued: false, clientId: "c_4d2a" },
     ],
   },
   { type: "session_created", ref: "s1", sessionId: "e3a9c5d1-7b2f-4a6e-9c8d-2f1b4e7a5c63" },
   { type: "session_tool_output", sessionId: agentSession, toolUseId: "toolu_01Ab5", output: "bun test v1.3.0\n\nsrc/audio/fade.test.ts:\n(fail) fades to silence in 40 ms\n\n 13 pass\n 1 fail\n" },
+  { type: "session_tool_output", sessionId: agentSession, toolUseId: "toolu_01Ab6", output: null, error: "That tool call's output is not in the transcript." },
   { type: "session_removed", sessionId: agentSession, movedTo: "f2c8b4a6-1e3d-4f9b-a7c5-6d2e8b1f4a37" },
   { type: "session_removed", sessionId: desktopRow.id, movedTo: null },
+  {
+    // A fork of claudio-bot checked out beside it: the bridge labels both, since they share a name.
+    type: "session_rows", removed: [], projects: [{ ...claudio, label: "alex/claudio-bot" }, { ...claudio, id: "4d1b8e6f0a2c9e73", path: "/Users/alex/forks/claudio-bot", githubRepo: "IamP5/claudio-bot", label: "IamP5/claudio-bot" }], rows: [
+      phoneRow,
+      { ...desktopRow, status: "failed", outcome: { kind: "failed", text: "Claude Code exited: out of memory", at: later } },
+      { ...childRow, status: "idle", outcome: { kind: "stopped", text: "Stopped by you: the turn, 2 agents", at: later } },
+    ],
+  },
+  { type: "session_items", sessionId: phoneRow.id, rev: 3, removed: [], items: runItems, controls: runControls },
+  // A wake turn of a new Claude Code while a command the last one ran in the foreground outlived it.
+  {
+    type: "session_items", sessionId: phoneRow.id, rev: 4, removed: [],
+    items: [{ kind: "work", id: "toolu_01Ac9", at, steps: [{ id: "toolu_01Ac9", tool: "Bash", label: "Sleep for 90 seconds", state: "running", diff: null, output: null, detail: "perl -e 'sleep 90'", startedAt: at }] }],
+    controls: { ...runControls, turn: { startedAt: later, wake: true }, tasks: [{ id: "bf90", stepId: "toolu_01Ac9", kind: "command", label: "perl -e 'sleep 90'", background: false, startedAt: at, owner: null, progress: null, waiting: null, outlived: true }] },
+  },
+  // Stop reached a turn Claude Code has not ended yet: the bridge ends Claude Code at the deadline.
+  { type: "session_items", sessionId: phoneRow.id, rev: 5, removed: [], items: [], controls: { ...controls, queued: 0, turn: { startedAt: at, wake: false }, stopping: { at: later, deadline: "2026-10-16T14:00:15.000Z" } } },
+  { type: "push_state", push: { state: "failing", error: "The push server answered 500", at: later } },
+  { type: "push_state", push: { state: "off" } },
+  { type: "session_alert", sessionId: phoneRow.id, reason: "card", count: 3, title: phoneRow.title, cardId: "m30", cardKind: "permission" },
+  { type: "session_alert", sessionId: phoneRow.id, reason: "reminder", count: 2, title: phoneRow.title, cardId: "m31", cardKind: null },
+  { type: "session_alert", sessionId: phoneRow.id, reason: "card", count: 1, title: phoneRow.title, cardId: "m32", cardKind: "ask" },
+  { type: "session_alert", sessionId: phoneRow.id, reason: "finished", count: 1, title: phoneRow.title, cardId: null, cardKind: null },
+  { type: "session_alert", sessionId: phoneRow.id, reason: "lost", count: 1, title: phoneRow.title, cardId: null, cardKind: null },
+  { type: "session_alert", sessionId: phoneRow.id, reason: "failed", count: 1, title: phoneRow.title, cardId: null, cardKind: null, running: { agents: 0, commands: 2 } },
+  { type: "session_alert", sessionId: phoneRow.id, reason: "lost", count: 1, title: phoneRow.title, cardId: null, cardKind: null, running: { agents: 0, commands: 1 } },
+  { type: "decided", cardId: "m20" },
+  { type: "error", message: "Nothing is running.", about: { kind: "stop", sessionId: agentSession } },
+  { type: "error", message: "Claude Code kept the mode Ask before edits: the session is busy.", about: { kind: "set", sessionId: agentSession } },
+  { type: "error", message: "That session is gone.", about: { kind: "send", sessionId: agentSession, clientId: "c_4d2a" } },
+  { type: "error", message: "That output is no longer on the Mac.", about: { kind: "tool", sessionId: agentSession, toolUseId: "toolu_01Ab5" } },
+  { type: "error", message: "That project is gone.", about: { kind: "create", ref: "s1" } },
+  { type: "error", message: "That card was already answered", about: { kind: "decide", sessionId: agentSession, cardId: "m20" } },
+  { type: "error", message: "That part of the thread changed. Reopen the session to load it again.", about: { kind: "page", sessionId: agentSession } },
 ] satisfies (Wire<ServerMessage> | Wire<Broadcast>)[];
 
 export const client = [
@@ -289,7 +370,11 @@ export const client = [
   { type: "session_page", sessionId: agentSession, before: "8812331:2b7c9e41" },
   { type: "session_send", sessionId: agentSession, text: "Also check it on Firefox", clientId: "c_4d2a", interrupt: false },
   { type: "session_send", sessionId: desktopRow.id, text: "Stop, use the Web Audio API instead", clientId: "c_4d2b", interrupt: true },
+  { type: "session_send", sessionId: desktopRow.id, text: "Stop, use the Web Audio API instead", clientId: "c_4d2c", interrupt: true, turnStartedAt: at },
   { type: "session_stop", sessionId: agentSession },
+  { type: "session_stop", sessionId: agentSession, target: "turn", turnStartedAt: at },
+  { type: "session_stop", sessionId: agentSession, target: { task: "bk2x9q7" }, turnStartedAt: at },
+  { type: "session_unqueue", sessionId: agentSession, clientId: "c_4d2a" },
   { type: "session_decide", sessionId: agentSession, cardId: "m20", choice: "once" },
   { type: "session_answer", sessionId: agentSession, cardId: "m21", answers: { [asked]: "Howler.js" } },
   { type: "session_answer", sessionId: agentSession, cardId: "m21", answers: null },

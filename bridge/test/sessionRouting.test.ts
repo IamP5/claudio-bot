@@ -202,7 +202,9 @@ test("a request about a machine's session goes to that machine and its frames co
   expect(await m.ask({ type: "session_stop", sessionId: S1 })).toEqual([{ type: "error", message: "Nothing is running." }]);
   expect(m.asked.slice(1)).toEqual([send, { type: "session_stop", sessionId: S1 }]);
 
-  expect(await m.ask({ type: "session_send", sessionId: S2, text: "x", clientId: "c2", interrupt: false })).toEqual([{ type: "error", message: "This session's transcript is gone." }]);
+  expect(await m.ask({ type: "session_send", sessionId: S2, text: "x", clientId: "c2", interrupt: false })).toEqual([
+    { type: "error", message: "This session's transcript is gone.", about: { kind: "send", sessionId: S2, clientId: "c2" } },
+  ]);
   expect(m.asked).toHaveLength(3);
 });
 

@@ -131,6 +131,7 @@ targets:
       - path: ClaudioBotTests
         excludes:
           - PromptTextViewTests.swift
+          - AccentContrastTests.swift
       - path: ClaudioBotMacTests
       - path: ../fixtures/protocol.json
         buildPhase: resources

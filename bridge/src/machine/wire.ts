@@ -73,7 +73,8 @@ export type Intent =
       /** What the home counts against the bot's daily cap today: the bot's own spend and all its agents'. */
       spentTodayUsd: number;
     }
-  | { kind: "agent.message"; intentId: IntentId; agentId: AgentId; text: string; initiator: Initiator }
+  /** clientId: the phone's, when the user sent it from the agent's session. */
+  | { kind: "agent.message"; intentId: IntentId; agentId: AgentId; text: string; initiator: Initiator; clientId?: string }
   /** The user from the phone, in the agent's session. */
   | { kind: "agent.direct"; intentId: IntentId; agentId: AgentId; text: string; clientId: string }
   | { kind: "agent.stop"; intentId: IntentId; agentId: AgentId }
@@ -207,7 +208,7 @@ export const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("kind", [
     initiator,
     spentTodayUsd: usd,
   }),
-  z.object({ kind: z.literal("agent.message"), intentId, agentId, text: z.string().min(1), initiator }),
+  z.object({ kind: z.literal("agent.message"), intentId, agentId, text: z.string().min(1), initiator, clientId: z.string().min(1).optional() }),
   z.object({ kind: z.literal("agent.direct"), intentId, agentId, text: z.string().min(1), clientId: z.string().min(1) }),
   z.object({ kind: z.literal("agent.stop"), intentId, agentId }),
   z.object({ kind: z.literal("agent.removeWorktree"), intentId, agentId }),

@@ -51,7 +51,7 @@ const rec = { …, session: { ...emptySession(newSessionId()) } };   // options(
 
 | Fact | Source (only writer) | Read by |
 |---|---|---|
-| session exists, cwd, createdAt, lastAt, title (`custom-title` > `ai-title` > first prompt), branch (last `gitBranch`), PR (`pr-link`), first/last `entrypoint`, last `permissionMode` | the transcript (Claude Code) | `transcript.ts` only |
+| session exists, cwd, createdAt, lastAt (the newest prompt, reply or tool result, never a title or bookkeeping line), title (`custom-title` > `ai-title` > first prompt), branch (last `gitBranch`), PR (`pr-link`), first/last `entrypoint`, last `permissionMode` | the transcript (Claude Code) | `transcript.ts` only |
 | who is live on it, busy/idle | `~/.claude/sessions/<pid>.json` (Claude Code), minus the bridge's own child pids | `claudeApps.ts` |
 | listed in the desktop app, archived there, `spawnedFrom` parent | desktop store `claude-code-sessions/**/local_*.json`, read only | `claudeApps.ts` |
 | bot agent link | `AgentRecord.session.id` (agents.ts / session.ts) | catalog join |
@@ -185,12 +185,44 @@ export type Cursor = string & { readonly __brand: "Cursor" };   // opaque: byte 
 ```
 
 Rules:
-- `rev` counts per session within a bridge `epoch`.
+- `rev` counts per session within a bridge `epoch`, one per `session_items` frame, with no gaps. A live frame is the next rev or the same one again. Only the reply to a `watch_session` from a position may jump ahead. Anything else means the app lost a frame. It then forgets its position and watches again with `after: null`, at once, for a snapshot. A thread frame the app cannot decode counts the same way, and a `session_rows` frame it cannot decode makes it watch the list again. A snapshot older than a live frame the app already applied since its watch counts as a loss too. A repair with no snapshot back after 5 s is sent once more. After that, a repair whose reply is lost waits for the next ordinary watch, so an unreadable reply never loops. The bridge holds a thread's later frames until its watch reply is on the socket.
+- One order for every item, in every view: by `at`, except a `user` item with `queued: true`, which follows everything. Items at the same time keep the order they were first seen in, also when one moves. The bridge sorts snapshots and pages this way (`threads.ts` `ordered()`), and the app inserts each upsert at its place, so live, resumed and fresh views list the same items in the same order. An answered card stays at the time it was raised. A message Claude Code took carries its turn's start time until the transcript's copy replaces it, in the same frame.
+- Every frame goes through one serializer (`stream.ts` `wire()`) that turns a lone surrogate into U+FFFD, so no frame is undecodable for that reason.
 - `session_items` upserts by `id`, so replaying an upsert is a no-op.
 - `session_delta` applies only when `offset` equals the client's current text length. Otherwise the client drops it and waits for the upsert, so a lost delta can only delay text, never corrupt it.
 - `session_decide` on a card the gate owns is routed to `gate.answer(botId, cardId)`. The client sends one verb whatever owns the card.
 - A rename calls SDK `renameSession`, which writes `custom-title` into the transcript, the source of truth.
 - Fixtures: 8 server and 14 client fixtures in `fixtures/protocol.json`, with compile-time coverage through `scripts/fixtures.ts` as today.
+
+### 3.1 Run state (features `session_tasks`, `session_unqueue`, `push_state`)
+
+The Sessions fix plan (`docs/ux-program/fix-plan-sessions.md`, G0) adds what the wire needs to say about background work, step times, run endings, stop targets and push state. `bridge/src/protocol.ts` is the contract; this is the shape at a glance. Every new field is optional, so protocol stays 3: an older app ignores the keys, and a newer app reads an absent key as none. An optional field is either set or absent, never `null`, so each fact has one spelling and the fixtures round-trip on both sides. The bridge lists a feature in `hello.features` only once it serves it, and the app offers a control only behind its feature.
+
+```ts
+type StepState = "running" | "waiting" | "ok" | "error" | "denied" | "stopped";
+type ToolStep = { /* as before */ state: StepState;
+  detail?: string; startedAt?: string; endedAt?: string; background?: true; owner?: string; cause?: string; usage?: { tools: number; ms: number } };
+type SessionTask = { id: TaskId; stepId: string | null; kind: "agent" | "command" | "other"; label: string; background: boolean;
+  startedAt: string; owner: string | null; progress: { tools: number; last: string | null; at: string } | null; waiting: MessageId | null };
+type SessionControls = { /* as before */ turn?: { startedAt: string; wake: boolean }; tasks?: SessionTask[]; heardAt?: string };
+type SessionRow = { /* as before */ since?: string; running?: { agents: number; commands: number }; activity?: string;
+  outcome?: { kind: "finished" | "failed" | "stopped" | "lost"; text: string; at: string } };
+// SessionItem: permission + stepId?, subagent?; notice + reason?: "stop" | "task" | "restart" | "failure" | "approval"
+// PermissionMessage.answer + "stopped" (the user stopped what asked) + "closed" (Claude Code exited while it waited)
+// Client: session_stop + target?: "all" | "turn" | { task: TaskId }, turnStartedAt?; session_unqueue { sessionId, clientId }
+// Server: hello + push?; push_state { push: PushState } (a live signal, like usage); error + about?: ErrorAbout
+type PushState = { state: "on" } | { state: "off" } | { state: "failing"; error: string; at: string };
+type ErrorAbout = { kind: "stop"; sessionId } | { kind: "set"; sessionId } | { kind: "send"; sessionId; clientId } | { kind: "tool"; sessionId; toolUseId } | { kind: "create"; ref };
+```
+
+Rules:
+- Steps come from the transcript, so they survive a reopen or a restart. Tasks come from the live SDK stream and exist only while a bridge-driven query runs. The app joins them by `SessionTask.stepId` = `ToolStep.id`.
+- With `session_tasks`, `controls.working` means something runs (a turn, a wake turn, or a live task), and Stop follows it. `controls.turn` says whether a turn runs, and queue-versus-send follows it. Without the feature, `working` is the turn alone and `turn` is never sent.
+- A failed full-output fetch is an `error` with `about: { kind: "tool" }`. `session_tool_output.output` stays a string, so an older app never meets a `null` there.
+- Until a bridge serves `session_tasks`, a `session_stop` aimed at `"turn"` or a task is refused with an error. `session_unqueue` is its own feature: a bridge without it refuses the request. A second withdrawal of the same message says it was already withdrawn, and both errors carry `about: { kind: "send" }`.
+- How a run ends is recorded on the session's drive in `state.json` with `persist("now")`, so it outlives a bridge restart: `outcome` and `endedTurn` (the row's ending, until a turn of another envelope starts a new run), `cut` (when work was cut off, kept across sends), `stoppedSteps` (the steps of tasks the user stopped), the bridge's own `notices` (the newest 10) and `kept` (prompts of turns that ended without a reply, shown until the transcript has their words). Notices and kept prompts sit where their time falls in a snapshot. Stop closes the turn's open cards as `"stopped"` at once, and a subagent's once Claude Code takes its task's stop. It posts a `reason: "stop"` notice that names what stopped, what Claude Code refused to stop and what it has not confirmed yet; a late stop is named when the task ends. A stop that stopped nothing is no outcome.
+- A transcript step that started before `cut.at` and still reads running reads `cut.state` with `cut.cause` once no turn from before the cut runs: `error` after Claude Code exited, `stopped` after a stop of everything or a bridge restart. Once the session rests (no turn, no task, no other Claude Code busy on it), any step still running reads `stopped`, "It ended without a result". A task the live query still runs keeps its step running.
+- A `session_set` that Claude Code refuses changes nothing the controls report, and answers with `error` and `about: { kind: "set" }`.
 
 ## 4. Bridge modules
 
@@ -271,7 +303,7 @@ export type Own = {
 
 ### 4.3 Runtime decisions
 
-- **One long-lived streaming-input query per driven session.** `session.ts` already is that: a durable inbox, one message per turn, Stop, background-task tracking and idle close. Own sessions reuse it whole, with `idleMs = 10 min` (agents keep 15). Follow-ups **queue**. "Stop and send" (`interrupt: true`) is Stop plus queue, because Stop keeps the user's queued messages. True steering (`priority: "now"` mid-turn) is deferred until a recorded transcript shows how its uuid echoes interact with `session.ts`'s turn matching. Today one message per turn is a guarded invariant.
+- **One long-lived streaming-input query per driven session.** `session.ts` already is that: a durable inbox, one message per turn, Stop, background-task tracking and idle close. Own sessions reuse it whole, with `idleMs = 10 min` (agents keep 15). Follow-ups **queue**. "Stop and send" (`interrupt: true`) stops the turn alone, then queues; background tasks keep running, and Stop keeps the user's queued messages. True steering (`priority: "now"` mid-turn) is deferred until a recorded transcript shows how its uuid echoes interact with `session.ts`'s turn matching. Today one message per turn is a guarded invariant.
 - **Approvals for own sessions are native.** `canUseTool` parks a promise tied to `signal` and posts a `permission` item: once, always (= allow plus the SDK's `suggestions` scoped `session`), deny, never (= deny plus interrupt). `AskUserQuestion` becomes an `ask` item, answered with `updatedInput {questions, answers}`. `ExitPlanMode` becomes a `plan` item: approve → allow + `setPermissionMode(modeBefore)`; reject → deny with "keep planning". A PreToolUse hook applies **only the policy floors**, deny-only. The phone is a remote surface, and the floors are what it must never be talked into. There is no bridge sandbox and no risk table: these are the user's own sessions and must behave as they do in the desktop app. The same id may be continued there, so two regimes on one transcript would be the real surprise. Cards are saved with `persist("now")` when opened, and expire after 2 h (deny + notice). At boot, every open card becomes `expired`, because the query that waited on it died with the bridge.
 - **Agent sessions keep the gate.** The phone's `direct` turn is `initiator: user`, so the agent's attended column applies, inside its sandbox. Its cards stay gate cards. `threads.ts` projects `world.gate.open` cards for the agent into the thread, and the user can answer in either place, first answer wins, as today.
 - **Ledger.** Own sessions write rows with `botId: null` and no cap. Feature 1's plan usage frame is the guard, and the composer shows its chip.

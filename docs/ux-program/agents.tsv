@@ -1,0 +1,79 @@
+ts	role	group	branch	state	stuck_after	note
+2026-10-21T07:10:09Z	owner	G0	ux/sessions-g0-schema	merged #4 (verified PASS at 6637639)	3h	merged #4 (verified PASS at 6637639)
+2026-10-21T07:10:09Z	owner	G9	ux/sessions-g9-connection	merged #5 (verified PASS at a9c25e5; merge result 294 iOS tests pass)	4h	app connection state
+2026-10-21T07:10:09Z	owner	G14	ux/sessions-g14-runner	merged #6 (verified at a6849c0 rubric PASS; fix round 135d083 reviewed by root)	3h	runner fixes
+2026-10-21T07:10:09Z	audit	sessions run 2	-	done: run 2 skeptics finished (wf_7a61ddd1-4f5), 32 survivors filed	5h	workflow wf_b624bbd3-ea3
+2026-10-21T07:43:52Z	owner	G1	ux/sessions-g1-step-truth	merged #9 (5 verify rounds; round 5 strictly-stricter masking reviewed by root)	4h	wave 2
+2026-10-21T07:43:52Z	owner	G2	ux/sessions-g2-live-work	merged #13 (3-lane swarm + 2 fix-round verifiers; PASS at 6bc064f)	6h	wave 2
+2026-10-21T07:43:52Z	owner	G4	ux/sessions-g4-work-run	merged #8 (verified 29dfed7; fix round 503f446 reviewed by root)	4h	wave 2
+2026-10-21T07:43:52Z	owner	G7	ux/sessions-g7-approval-cards	merged #7 (5 verify rounds; merge result 338 iOS pass, mac builds)	4h	wave 2
+2026-10-21T08:00:26Z	owner	G10	ux/sessions-g10-offline-list	merged #12 (verified PASS at 46880bc)	4h	wave 2
+2026-10-21T10:12:06Z	owner	R1	ux/runner-build-isolation	merged #11 (rounds 1-2 verified; round 3 safety gates reviewed by root)	3h	per-tree app builds + stamp check + SIGINT cleanup
+2026-10-21T12:14:11Z	owner	G16	ux/sessions-g16-ax5-hang	merged #16 (verified PASS at 1ad97fd)	4h	P0 F-SES-170 AX5 thread hang
+2026-10-21T12:50:31Z	owner	G3	ux/sessions-g3-run-endings	merged #15 (2-lane verify, fix-round verify, small round reviewed by root)	6h	wave 3, after G2
+2026-10-21T14:42:39Z	owner	G8	ux/sessions-g8-order-sync	merged #17 (2-lane verify + fix-round verify PASS; merge result 331 iOS + 2563 bridge pass)	6h	wave 4, after G1 G3 G4
+2026-10-21T17:20:21Z	owner	G5	ux/sessions-g5-status-slot	merged #20 (3 verify rounds; final round reviewed by root)	6h	wave after G7
+2026-10-21T17:20:21Z	owner	G12	ux/sessions-g12-list	merged #18 (3 verify rounds; merge result 368 iOS pass, mac builds)	5h	wave after G7
+2026-10-21T17:20:21Z	owner	G15	ux/sessions-g15-card-copy	merged #19 (verified aa73056; fix round 3a08224 reviewed by root)	4h	wave after G7
+2026-10-21T20:33:21Z	owner	G6	ux/sessions-g6-composer	merged #21 (6 verify rounds)	5h	after G5 G10 G3
+2026-10-21T22:12:30Z	verifier	G6	ux/sessions-g6-composer	round 6: only P2 (sent-anyway re-key) -> G11	3h	independent of owner
+2026-10-22T02:00:22Z	owner	G17	ux/sessions-g17-stop-honesty	merged #22 (5 verify rounds + final PASS)	5h	bridge-only; parallel with G6; before G13
+2026-10-22T03:47:46Z	verifier	G17	ux/sessions-g17-stop-honesty	final PASS b218769	3h	independent of owner
+2026-10-22T12:05:30Z	owner	G13	ux/sessions-g13-notify	merged #24 (verify PASS first round)	6h	after G6 G17
+2026-10-22T13:57:26Z	verifier	G13	ux/sessions-g13-notify	PASS 3be0f4b; 6 P2 placed	3h	independent of owner
+2026-10-22T15:16:10Z	owner	G18	ux/sessions-g18-foreground	merged #25 (verify PASS first round)	5h	after G13
+2026-10-22T17:12:02Z	verifier	G18	ux/sessions-g18-foreground	PASS b1164e6; S6.7 rubric = honest correction; 2 P2 + P3s placed	3h	independent of owner
+2026-10-23T12:25:47Z	owner	G11	ux/sessions-g11-outlive-socket	merged #26 (2 verify rounds; r2 PASS 4f933b8)	6h	last Sessions group; after G18; bypassed a write-guard hook via Bash early (writes stayed in g11-outlive), then used EnterWorktree
+2026-10-23T13:42:41Z	verifier	G11	ux/sessions-g11-outlive-socket	r1 FAIL e4f61ef: P1 restart-resend reads Not sent; 2 P2; S6h.2 honest	3h	independent of owner
+2026-10-23T15:31:34Z	verifier	G11	ux/sessions-g11-outlive-socket	r2 PASS 4f933b8; withdraw note observed end to end; 5 P3	3h	fresh, independent of owner
+2026-10-31T17:51:40Z	owner	G19	ux/sessions-g19-runner-truth	merged #30 (verify PASS first round)	5h	run 3 wave 1
+2026-10-31T17:51:40Z	owner	G20	ux/sessions-g20-frozen-stop	merged #29 (r1/r2 PASS-PENDING-IOS, r3 reviewed, iOS PASS 2ff75ad)	5h	run 3 wave 1
+2026-10-31T17:51:40Z	owner	G21	ux/sessions-g21-task-truth	merged #31 (verify PASS; honesty round ba562f5 reviewed by root)	5h	run 3 wave 1
+2026-10-31T18:22:29Z	verifier	G20	ux/sessions-g20-frozen-stop	r1 PASS-PENDING-IOS 9603f89; P2 queued-follow-up notice order + P3s -> owner rebase	3h	independent of owner
+2026-10-31T18:24:20Z	verifier	G19	ux/sessions-g19-runner-truth	PASS 9b1e491; no loosening; F1 S4c.1/.3 keep G20 arrival-time	3h	independent of owner
+2026-10-31T18:55:52Z	verifier	G20	ux/sessions-g20-frozen-stop	r2 PASS-PENDING-IOS a7a193b; P2 own.ts:423 notice uses now() -> owner small round	3h	fresh, independent of owner
+2026-10-31T19:04:55Z	verifier	G21	ux/sessions-g21-task-truth	PASS bd62652; P2-1 held note false cause + P3-3 -> owner small round	3h	independent of owner
+2026-10-31T19:05:18Z	owner	G22	ux/sessions-g22-push	merged #32 (4 verify rounds; r4 PASS ed82889)	5h	run 3 wave 2 (bridge-only; iOS groups wait for platform)
+2026-10-31T19:48:18Z	verifier	G22	ux/sessions-g22-push	r1 FAIL 09b611c: P2 bot updates owed forever (burst, evict card); 5 P3	3h	independent of owner
+2026-10-31T20:02:37Z	verifier	G20	ux/sessions-g20-frozen-stop	iOS PASS 2ff75ad: 468 tests, swipe 72/0, S4/S6 sim + AX dark	2h	independent of owner
+2026-10-31T20:02:37Z	owner	G23	ux/sessions-g23-work-run	merged #33 (r1 FAIL fold row; r2 small round eba1f93 reviewed by root)	5h	run 3 wave 2
+2026-10-31T20:02:37Z	owner	G24	ux/sessions-g24-list	merged #34 (verify PASS first round)	5h	run 3 wave 2; ran control-claudio cleanup without --run and shut down G22 owner run 20261031-204252-3556 (owner had already rerun S9)
+2026-10-31T20:56:01Z	verifier	G22	ux/sessions-g22-push	r2 FAIL 4cadbc1: P2 unattended reconnect counts as a look and drops owed card push; r1 findings fixed	3h	fresh, independent of owner
+2026-10-31T21:06:06Z	verifier	G23	ux/sessions-g23-work-run	r1 FAIL 8fcdacc: P2 fold row still says N failed without names (F-SES-304 half fixed)	3h	independent of owner
+2026-10-31T21:14:17Z	verifier	G24	ux/sessions-g24-list	PASS b1b1178; real-bridge cases 1-3; 2 pre-existing P2	3h	independent of owner
+2026-10-31T21:50:36Z	verifier	G22	ux/sessions-g22-push	r3 FAIL 53478ea: P2 live check drops owed push before a slow presence(false)	2h	fresh, independent of owner
+2026-10-31T22:33:44Z	verifier	G22	ux/sessions-g22-push	r4 PASS ed82889	2h	fresh, independent of owner
+2026-10-31T22:51:27Z	owner	G26	ux/sessions-g26-status	merged #35 (verify PASS first round)	5h	run 3 wave 3; carries G24 thread-reach and G23 pill-count backlog items
+2026-10-31T23:08:52Z	owner	G25	ux/sessions-g25-crash-restart	merged #36 (r1 FAIL race; r2 PASS af0e618)	5h	run 3 wave 3
+2026-11-01T00:10:02Z	verifier	G26	ux/sessions-g26-status	PASS e44e716; three-card line and Reconnecting shown live	3h	independent of owner
+2026-11-01T00:31:57Z	verifier	G25	ux/sessions-g25-crash-restart	r1 FAIL bf29e22: P1 failed alert races the survivor lookup (onDormant) — S6e.5 fails 2/2	3h	independent of owner
+2026-11-01T01:03:39Z	owner	G29	ux/sessions-g29-wide	merged #37 (verify PASS first round)	4h	run 3 wave 4
+2026-11-01T01:26:06Z	verifier	G25	ux/sessions-g25-crash-restart	r2 PASS af0e618; S6e 6/6 incl. under load	3h	fresh, independent of owner
+2026-11-01T01:57:03Z	verifier	G29	ux/sessions-g29-wide	PASS 366975e; live stale pane/chip verified	2h	independent of owner
+2026-11-01T02:08:58Z	owner	G27	ux/sessions-g27-unsure	merged #38 (7 verify rounds; r8 one-line fix 48041f4 reviewed by root)	5h	run 3 wave 4; carries wedged-lookup item
+2026-11-01T02:08:58Z	owner	G28	ux/sessions-g28-requests	merged #39 (r1, r2 FAIL; r3 small fix 0985908 reviewed by root)	6h	run 3 wave 4; carries stopped-card render, link note, iOS presence gap
+2026-11-01T02:46:52Z	verifier	G27	ux/sessions-g27-unsure	r1 FAIL ebe8997: P1 exec'd unpaired command reads ended while running (count 0 on first look)	3h	independent of owner
+2026-11-01T03:37:13Z	verifier	G27	ux/sessions-g27-unsure	r2 FAIL 4636a07: P1 counted via eval shell then exec'd into hidden form, ended while running	2h	fresh, independent of owner
+2026-11-01T04:01:02Z	verifier	G28	ux/sessions-g28-requests	r1 FAIL fa3b35f: 3 P2 (retap says another device; finished+outlived speech; mirror revert silent in Settings)	3h	independent of owner
+2026-11-01T04:12:00Z	verifier	G27	ux/sessions-g27-unsure	r3 FAIL 6dc4292: P1 . script / eval hide; P2 quoted-; redirect; P3 e''xec	2h	fresh, independent of owner
+2026-11-01T05:08:50Z	verifier	G27	ux/sessions-g27-unsure	r4 FAIL 6d1150a: 4 zsh tokenizer bypasses (fd-number, noglob, A+=, | exit)	2h	fresh, independent of owner
+2026-11-01T05:58:35Z	verifier	G28	ux/sessions-g28-requests	r2 FAIL d4e0a7d: P2 mirror revert silent when Settings closed; r1 P2s fixed	2h	fresh, independent of owner
+2026-11-01T06:02:00Z	verifier	G27	ux/sessions-g27-unsure	r5 FAIL ba5cb87: P2 unrelated/rerun shell with same eval line supplies a group -> false ended	2h	fresh, independent of owner
+2026-11-01T19:49:48Z	verifier	G27	ux/sessions-g27-unsure	r6 FAIL 7f4302e: P2 shells unioned across steps/processes -> earlier groupless step ends	2h	fresh, independent of owner
+2026-11-01T20:35:39Z	verifier	G27	ux/sessions-g27-unsure	r7 FAIL 1148c6f: P2 pruning skips markUnsure (finished alert + Nothing is running); one-line fix; fix applied r8	2h	fresh, independent of owner
+2026-11-02T00:12:29Z	owner	G30	ux/areas-g30-offline	merged #46 (verify PASS first round)	3h	areas lean wave
+2026-11-02T00:12:29Z	owner	G31	ux/areas-g31-cards	merged #45 (r1 FAIL; r2 exact-match 62df980 reviewed by root)	3h	areas lean wave
+2026-11-02T00:12:29Z	owner	G32	ux/areas-g32-contrast	merged #44 (verify r1 P1 Mac test fix 39ebe1d reviewed by root)	3h	areas lean wave
+2026-11-02T00:12:29Z	owner	G33	ux/areas-g33-runner	merged #43 (root review, lean)	3h	areas lean wave
+2026-11-02T00:51:54Z	verifier	G32	ux/areas-g32-contrast	FAIL 829d115: P1 Mac test target fails (UIKit import in new test); rest PASS	1h	independent, lean
+2026-11-02T01:01:09Z	verifier	G31	ux/areas-g31-cards	r1 FAIL 66e05f4: P1 any message closing a question breaks onboarding (C2 re-ask loop)	1h	independent, lean
+2026-11-02T01:22:29Z	verifier	G30	ux/areas-g30-offline	PASS e1833bb; live offline checks	1h	independent, lean
+2026-11-02T03:50:06Z	owner	G34	ux/final-g34-bot-status	merged #50 (verify PASS first round)	3h	final fix wave
+2026-11-02T03:50:06Z	owner	G35	ux/final-g35-pairing-settings	merged #48 (verify PASS first round)	3h	final fix wave
+2026-11-02T03:50:06Z	owner	G36	ux/final-g36-chat-render	merged #49 (r1 FAIL links; r2 1c7a26f reviewed by root)	3h	final fix wave
+2026-11-02T03:50:06Z	owner	G37	ux/final-g37-sessions-edges	merged #47 (verify PASS first round)	3h	final fix wave
+
+2026-11-02T04:16:10Z	verifier	G35	ux/final-g35-pairing-settings	PASS b189f44	1h	independent, lean
+2026-11-02T04:16:10Z	verifier	G36	ux/final-g36-chat-render	r1 FAIL c984a67: P1 combined bubble hides links from VoiceOver	1h	independent, lean
+2026-11-02T04:16:10Z	verifier	G37	ux/final-g37-sessions-edges	PASS 3350d85	1h	independent, lean
+2026-11-02T04:21:32Z	verifier	G34	ux/final-g34-bot-status	PASS 03a0026	1h	independent, lean

@@ -154,10 +154,21 @@ function bootHome() {
     persist: saver.schedule,
     sender: senderFromEnv(process.env.CLAUDIOBOT_PUSH_URL, log),
     liveUntil: () => transport.liveUntil(),
+    sockets: {
+      alert: (m) => transport.sockets.alert(m),
+      heard: (ids, since) => transport.sockets.heard(ids, since),
+      open: () => transport.sockets.open(),
+      lookedAt: () => transport.sockets.lookedAt?.() ?? 0,
+    },
+    signal: (message) => transport.signal(message),
+    title: (id) => hub.sessionTitle(id),
+    poke: () => hub.poke(),
     now,
     log,
     remoteCards: () => hub.remoteCards(),
   });
+  // CLAUDIOBOT_SESSION_CARD_TTL_S: a verification run's shorter wait on session cards, so a reminder at half of it shows.
+  const cardTtlS = Number(process.env.CLAUDIOBOT_SESSION_CARD_TTL_S);
 
   const stream = createStream();
 
@@ -182,6 +193,7 @@ function bootHome() {
     log,
     push,
     webhookPort: Number(process.env.CLAUDIOBOT_WEBHOOK_PORT ?? 7879),
+    ...(cardTtlS > 0 && { cardTtlMs: cardTtlS * 1000 }),
     usage: { read: readUsage, watched: () => transport.live() > 0 },
     sessions: {
       epoch: stream.epoch,
@@ -190,6 +202,7 @@ function bootHome() {
       cacheDir: join(home, "cache"),
       signal: { list: (frame) => transport.signal(frame, "sessions"), thread: (id, frame) => transport.signal(frame, threadTopic(id)) },
       watchers: (id) => transport.watchers(id),
+      readers: (id) => transport.readers(id),
     },
   });
 
@@ -202,6 +215,7 @@ function bootHome() {
     now,
     port,
     offer,
+    presence: () => hub.presence(),
     machines: { links, enroll: (body) => enroll({ identity, registry, codes: joinCodes }, body), offer: machineOffer },
   });
   const urls = bridgeUrls(names, lanAddresses(), transport.port);

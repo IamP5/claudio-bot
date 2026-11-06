@@ -1,3 +1,4 @@
+import Network
 import SwiftUI
 #if os(iOS)
 import UIKit
@@ -54,7 +55,15 @@ enum SidebarMode: String, Hashable, Sendable {
 final class Router {
     static let sidebarKey = "sidebarMode"
 
-    var selection: Selection?
+    /// A new pick shows its own chat or thread, never a screen pushed over the last one, however it was picked.
+    var selection: Selection? {
+        didSet {
+            if selection != oldValue { path = [] }
+            if selection?.session != linkedCard?.sessionId { linkedCard = nil }
+        }
+    }
+    /// The card the link that opened the selected session named, until its thread says whether it still waits.
+    var linkedCard: LinkedCard?
     /// Whether this window has the sidebar. A Mac window opened for one chat or session has none.
     let hasSidebar: Bool
     var sidebar: SidebarMode {
@@ -70,9 +79,16 @@ final class Router {
     var newSession: NewSessionRequest?
     /// The profile beside the chat, on iPad.
     var showingInspector = false
-    /// The ref of a create_bot in flight; the bot it becomes is opened.
-    var pendingCreate: String?
+    /// A create_bot or create_group in flight. The chat it becomes opens only if the user is still where they asked.
+    var creating: PendingCreate?
+    /// The ref of the create in flight.
+    var pendingCreate: String? {
+        get { creating?.ref }
+        set { creating = newValue.map { PendingCreate(ref: $0, from: selection) } }
+    }
     var pendingSessionCreate: String?
+    /// The New Session sheet's prompt. It outlives the sheet, so closing it never loses what was typed (F-SES-154).
+    var newSessionDraft = ComposerDraft()
 
     /// The main window's router, with the sidebar it had last time.
     init() {
@@ -87,9 +103,10 @@ final class Router {
         self.selection = selection
     }
 
-    /// The list is watched while it shows, and while a thread is open: its header reads the row.
+    /// A window with the sidebar watches the list on either side: the Bots side says what runs and what needs the
+    /// user. A window for one thread watches it for the thread's header, which reads the row.
     var watchesSessions: Bool {
-        (hasSidebar && sidebar == .sessions) || selection?.session != nil
+        hasSidebar || selection?.session != nil
     }
 
     var viewing: Viewing {
@@ -100,7 +117,12 @@ final class Router {
         open(.bot(bot))
     }
 
-    func open(_ target: Selection) {
+    /// The user still waits for the chat they asked for: nothing they opened since covers where they asked.
+    func stillWaits(for create: PendingCreate) -> Bool {
+        selection == create.from && path.isEmpty && !showingSettings && !showingUsage && newSession == nil
+    }
+
+    func open(_ target: Selection, card: MessageID? = nil) {
         showingNewChat = false
         showingSettings = false
         showingUsage = false
@@ -108,7 +130,14 @@ final class Router {
         path = []
         if case .session = target { sidebar = .sessions }
         selection = target
+        linkedCard = target.session.flatMap { session in card.map { LinkedCard(sessionId: session, cardId: $0) } }
     }
+}
+
+struct PendingCreate: Equatable, Sendable {
+    let ref: String
+    /// What the window showed when the user asked.
+    let from: Selection?
 }
 
 struct NewSessionRequest: Identifiable, Hashable, Sendable {
@@ -125,6 +154,7 @@ final class AppModel {
     /// The pairing in progress. While paired, a flow shows the pairing sheet; while unpaired the pairing screen is always up.
     private(set) var pairingFlow: PairingFlow?
     @ObservationIgnored let notifier = Notifier()
+    @ObservationIgnored private let network = NWPathMonitor()
     #if os(iOS)
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     #endif
@@ -134,9 +164,11 @@ final class AppModel {
         self.client = client
         let notifier = notifier
         let router = router
-        client.onAlerts = { notifier.post($0, viewing: client.onScreen.bots) }
+        client.onAlerts = { notifier.post($0, onScreen: client.onScreen) }
         client.onForget = { notifier.clearAll() }
+        client.onThreadsShown = { $0.forEach(notifier.clear(session:)) }
         notifier.onOpenBot = { router.open($0) }
+        notifier.onOpenSession = { router.open(.session($0), card: $1) }
         notifier.onAnswer = { bot, message, option in
             client.send(.answer(botId: bot, messageId: message, option: option))
             await client.waitUntilSent()
@@ -148,8 +180,18 @@ final class AppModel {
         }
         #endif
         if let pairing = PairingVault.app.load() {
+            #if os(iOS)
+            // A notification action can launch the app in the background. Until the first time on screen it is
+            // unattended, so the bridge does not hold pushes for it.
+            client.attended = false
+            #endif
             client.start(pairing)
         }
+        network.pathUpdateHandler = { path in
+            let seen = NetworkPath(satisfied: path.status == .satisfied, interfaces: path.availableInterfaces.map(\.name))
+            MainActor.assumeIsolated { client.networkChanged(seen) }
+        }
+        network.start(queue: .main)
     }
 
     /// Opens the pairing form, for a Mac that no longer recognizes this iPhone.
@@ -162,6 +204,10 @@ final class AppModel {
         var flow = pairingFlow ?? PairingFlow()
         flow.propose(invite)
         pairingFlow = flow
+        #if DEBUG
+        // `-pairingAutoConfirm YES` taps Pair for the scenario runner, which cannot tap a simulator.
+        if UserDefaults.standard.bool(forKey: "pairingAutoConfirm") { confirmPairing() }
+        #endif
     }
 
     func cancelConfirmation() {
@@ -200,12 +246,14 @@ final class AppModel {
         case .pair(let invite): propose(invite)
         case .outdatedBridge: showPairingFailure(DeepLink.outdatedBridgeMessage)
         case .bot(let bot, _): router.open(bot)
-        case .session(let session): router.open(.session(session))
+        case let .session(session, card): router.open(.session(session), card: card)
         case nil: break
         }
     }
 
+    /// One create at a time: a second tap while the first waits would make a second bot.
     func createBot() {
+        guard router.creating == nil else { return }
         let ref = UUID().uuidString
         router.pendingCreate = ref
         client.send(.createBot(ref: ref))
@@ -215,19 +263,22 @@ final class AppModel {
         switch phase {
         #if os(iOS)
         case .background:
-            // Keeps the socket alive for the short grace period iOS allows, so an answer
-            // tapped on a notification still reaches the Mac.
-            guard backgroundTask == .invalid else { return }
-            backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "bridge") { [weak self] in
-                MainActor.assumeIsolated { self?.endBackgroundTask() }
+            // Keeps the socket alive for the short grace period iOS allows: first so presence false and the unwatches
+            // leave before the socket can be suspended, then so an answer tapped on a notification still reaches the Mac.
+            if backgroundTask == .invalid {
+                backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "bridge") { [weak self] in
+                    MainActor.assumeIsolated { self?.endBackgroundTask() }
+                }
             }
+            client.leave()
         #endif
         case .active:
             #if os(iOS)
             endBackgroundTask()
             #endif
-            client.reconnectNow()
+            client.comeBack()
             client.onScreen.bots.forEach { notifier.clear(bot: $0) }
+            client.onScreen.sessions.forEach { notifier.clear(session: $0) }
         default:
             break
         }
@@ -267,14 +318,18 @@ struct RootView: View {
         #endif
         .viewing(router)
         .onChange(of: store.created) { _, created in
-            if let ref = router.pendingCreate, let bot = created[ref] {
-                router.pendingCreate = nil
-                router.open(bot)
+            if let create = router.creating, let bot = created[create.ref] {
+                router.creating = nil
+                if router.stillWaits(for: create) { router.open(bot) }
             }
+        }
+        .onChange(of: store.droppedCreate) { _, ref in
+            if let ref, router.creating?.ref == ref { router.creating = nil }
         }
         .onChange(of: store.sessions.created) { _, created in
             if let ref = router.pendingSessionCreate, let session = created[ref] {
                 router.pendingSessionCreate = nil
+                router.newSessionDraft = ComposerDraft()
                 router.open(.session(session))
             }
         }

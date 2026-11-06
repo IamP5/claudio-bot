@@ -1,0 +1,133 @@
+# Scenario runner
+
+The UX audit runs scenarios: a situation set up on a throwaway bridge, recorded as the phone sees it, and judged against a rubric of what the user must be able to tell. The runner is `.claude/skills/verify-claudio-bot/bin/scenario.ts`. It launches and cleans up its bridge through `control-claudio.ts` and imports that helper's socket code, so every rule of the `verify-claudio-bot` skill holds: the user's bridge on port 7878 and `~/.claudiobot` are never touched.
+
+Run everything from the repo root with the budget guard lifted for the program:
+
+```bash
+export CLAUDIOBOT_VERIFY_BUDGET_USD=100000
+R=.claude/skills/verify-claudio-bot/bin/scenario.ts
+(cd bridge && bun install)   # once per checkout
+```
+
+## Running a scenario
+
+```bash
+$R list                       # the registry: id, area, lane, title, rubric size
+$R run S2                     # protocol lane: bridge + socket only
+$R run S1,S4,S5               # several, one after another
+$R run S3 --sim               # simulator lane: also leases a device, installs the app, takes screenshots
+$R run S3 --sim --pair-wait 180
+$R run S1 --sim --content-size accessibility-extra-extra-extra-large --appearance dark   # simctl ui for the run, reset after
+$R run S1b,S4 --away          # the phone says nobody looks at it from the start, so pushes go out; it allows cards after 5 s
+$R doc sessions > docs/ux-program/scenarios/sessions.md   # regenerate the rubric doc
+for a in chat home pairing settings; do $R doc $a > docs/ux-program/scenarios/$a.md; done
+```
+
+Scenarios live in `bin/scenarios.ts` (Sessions, S…) and `bin/areas.ts` (Chat C…, Home H…, Pairing P…, Settings T…) as data: setup actions, preconditions and rubric items, each item with its lane and, for protocol items, a mechanical check. `docs/ux-program/scenarios/sessions.md` is generated from it, so edit the registry, never the doc. Every scenario runs on the protocol lane; S3 judges its push and unread items there through the run's push sink (`pushes.jsonl`), and its screenshots need `--sim`. Push items (S1.11, S1b.11, S4.11) are judged only with `--away`: an attended phone holds every push. `--away` makes the phone send `presence` with `attended: false` on every connect, so the bridge pushes as it would to a phone nobody looks at, and it taps each card 5 s after it opens instead of at once. A scenario may set `away` itself (S6f, S9: the run is away with or without the flag), `pushOff` (the bridge runs with `--push off`) and `cardTtlS` (`--card-ttl`: session cards wait that long, so S9 sees the reminder at half). The phone records `session_alert` frames in `ev.alerts` and the push state from each hello and `push_state` frame in `ev.pushStates`.
+
+Exit code 0 means the scenario was judged (rubric failures are findings, not runner failures). 2 means a precondition failed: the scenario could not produce its situation, and its rubric is reported not judged. 1 means the runner itself failed. Every session turn runs on haiku. Each permission card a scenario raises is answered Allow once, and the timeline records the tap. A scenario with `holdCardsS` (S5 10 s, S6h 240 s, S9 600 s) taps it that many seconds after the card appears, so the waiting state is on the wire; `holdCardsS` wins over the 5 s of `--away`.
+
+## What the runner does for the user
+
+The phone, and with `--sim` the app, reach the bridge through a TCP relay the runner owns. The relay is how the network fails: `reconnect` with `how: "close"` ends the sockets and refuses new ones for the window; `how: "half-open"` passes nothing either way and closes nothing, as when a phone loses signal or iOS suspends the app. Reconnects send `?epoch&after` with the stream position the phone holds, as the app's `StreamCursor` does, and the report says whether the hello resumed and how many frames were replayed. A message sent while the socket is closed waits in an outbox and goes after the next hello and the thread watches, as in the app; one sent into a half-open socket is lost. As the app does, every reconnect sends again, with the same `clientId`, each message no frame has shown back yet (an item whose `id` or `clientId` is the send's, or a removal of it), up to three copies in all. `ev.sends` holds each send by `clientId`: when it went, how many copies, and when and how a frame first showed it back. `ev.replies` holds the frames no thread files: `decided`, `error`, `session_tool_output` and `session_created`. `ev.inbox` holds every frame that is not about sessions (the hello, `bot`, `message`, `activity`, `created`, `conversation`, `devices`, `pair_code`, `memory`, `usage`, `error`), so the Chat, Home, Pairing and Settings scenarios (`bin/areas.ts`) drive bots with `raw` frames and judge what came back. The phone taps Allow once on each bot permission card too, after the same hold as a session card.
+
+| action | what it does |
+| --- | --- |
+| `create`, `send` | a new session, or a message in one (`interrupt: true` is "Stop and send"). `echoLost: true` loses every frame that names the send on its way to the phone until it reconnects, as when its socket dies right after the send (S6g's `lost-echo`) |
+| `until`, `sleep`, `mark` | wait for a condition on the evidence, wait, or mark the time |
+| `leave`, `return` | the phone unwatches a thread, or watches it again from its position |
+| `open-thread`, `show-list` | with `--sim`, the app opens the thread by its link (then 3 s to draw) or is relaunched on the Sessions list; on the protocol lane `open-thread` watches the thread again if the phone had left it |
+| `app background`, `app foreground` | with `--sim`, Settings over the app and back; on the protocol lane the phone does what the app does as it leaves (presence false, unwatch each open thread), then its socket goes half-open; on foreground it reconnects (mark `<mark>-list` when the list arrives, before any thread is watched) |
+| `sink` | `fail: true` makes the push sink answer 500 (a `sink-fail` file in the run folder) until `fail: false`; each line of `pushes.jsonl` has the `status` it got and the `priority` header |
+| `reconnect` | drop (`close` or `half-open`), optional `send` while down, reconnect with resume, compare each thread with a fresh open as JSON in order (unless `compare: false`). Marks `<mark>-dropped` when the drop starts. `sendFirst: true` sends the message just before the drop instead of during it, so it races the drop and may reach the bridge with its echo lost, or not at all (S6g's `race-send`). `until` waits for a condition while the phone is down, before the `afterS` wait (S6's `resume-2`). `shot: {name, afterS}` takes a screenshot that many seconds into the drop with `--sim` and marks `<mark>-shot` (S6h's `card-offline`); on the protocol lane the shot is listed as skipped |
+| `stop` | `session_stop` on the session; `turnOnly: true` sends `target: "turn"` ("Stop the turn only", S4c); `task` stops only the running task in `controls.tasks` whose label holds that text, and the run fails when none does |
+| `signal-claude` | SIGSTOP or SIGCONT to the session's Claude Code process, as a hung or busy Mac would freeze it (S4c). A process left frozen is resumed on every way out, so cleanup can stop it |
+| `ps` | sample the Mac's processes matching a pattern whose working directory is the seed project; the report lists every sample |
+| `kill-claude` | SIGKILL the Claude Code process whose command line names the session |
+| `restart-bridge` | `control-claudio restart`: the bridge stops and starts on the same port, home and roots; the phone reconnects |
+| `screenshot` | simulator lane only |
+| `raw` | the phone sends a frame the app can send, built by the scenario from the evidence so far (`frame(ev)`; `what` names it in the doc), and marks the time. S6g sends this way a resend after the restart, a stale Stop, a `session_tool` for an unknown tool call, a `session_decide` on a closed card and two `session_create`s |
+| `file` | read a file of the seed project, line by line, into the report's samples under `as` (S6g counts `once.txt` and `race.txt` before the restart) |
+| `watch-list` | with `--sim`: the list probe (`bin/list-probe/`, an XCUITest that only reads the app's accessibility tree, built once per source digest under `$CLAUDIOBOT_VERIFY_DIR/list-probe/`) samples the app's Sessions list about once a second until the setup ends, into `app-list.jsonl` and `ev.list`. A simulator item with a `check` (S7.7, S7.9) is judged from it mechanically, and skipped on the protocol lane |
+| `watch-labels` | with `--sim`: the label probe, the same read-only XCUITest (`testLabels`), records about once a second until the setup ends every element of the app whose label holds one of `phrases`, and whether each button among them takes a tap, into `app-labels.jsonl` and `ev.labels`. `ev.labels` is read as the samples come, so an `until` can wait on what the app shows. S6h.1 to S6h.3 are judged from it mechanically; on the protocol lane the action is listed as skipped and those items are skipped |
+| `open-bot` | the user opens a bot's chat: with `--sim` by `claudiobot://bot/<id>` (then 3 s to draw); on the protocol lane the phone sends `open`, as the app does |
+| `tap` | with `--sim`: the probe's `testTap` (the same XCUITest target) taps the app's first element with that label, as the user would ("Settings", "Pair another device"). The run stops at a precondition when nothing has the label within 15 s, or when the element stays disabled for 10 s, since a tap on it does nothing. Skipped on the protocol lane |
+| `pair` | another phone sends `POST /pair` with a code built from the evidence (`code(ev)`) and records the status, the error text and how long the answer took in `ev.pairs`. With `connect: true` it opens a socket with the token it got, records whether its hello came, and when the bridge closes it, the close code and whether its token opens a socket again. The token never leaves the runner |
+| `lose-frame` | with `--sim` and a scenario that sets `tapApp` (S6b; S6h sets it too, to see the app's own reconnect): the relay reads the app's own connection (its upgrade comes from CFNetwork) frame by frame and loses the next frame for the session that passes the test. What the app sent and received for the scenario's sessions goes into `ev.app` and the timeline as `app-in`, `app-out` and `app-lost` |
+
+The phone keeps each thread's items in the order the app's `ThreadModel` does (by `at`, a queued message last, ties in the order first seen), so a resumed thread compares with a fresh open item for item, in order, as the app would show it.
+
+`bin/latency.ts <evidence dir>...` reads finished runs and prints how late the phone learned what Claude Code had written: a create to its row, a tool call to its step, a failed subagent to its error, a prompt to Claude Code's copy (and any gap where the thread had neither), a thread at rest to its row, and the idle row's `lastAt` against the last reply.
+
+Simulator shots of a thread come after `open-thread`, so `running.png`, `done.png`, `background-running.png` and the rest show the thread their rubric item names. S2 and S8 relaunch the app on the list (`show-list`) after the mid-background shot, so the app is not watching the thread while the list's unread mark is judged.
+
+## Evidence layout
+
+Each run writes to `$CLAUDIOBOT_VERIFY_DIR/scenarios/<id>/<stamp>[-sim]/` (default `$(realpath $TMPDIR)/claudiobot-verify`), or `--out <dir>`:
+
+| file | what |
+| --- | --- |
+| `report.md`, `report.json` | outcome, preconditions, each rubric verdict with its reason, marks (seconds since start), process samples, spend; with `--sim`, `app.stamp` (the `ios/` tree the installed app was built from) and `app.bundle` (the digest of the bundle on the device) |
+| `timeline.jsonl` | every frame about the scenario's own sessions, both directions, with `at` in ms; list frames are cut to the run's seed projects |
+| `threads.txt` | the same, one readable line per frame |
+| `transcripts/` | Claude Code's transcripts of the scenario's sessions, subagents included, copied before cleanup removes them |
+| `screenshots/` | simulator lane only: `pair-link.png`, `after-pairing.png` and each scenario shot |
+| `app-list.jsonl`, `list-probe.log`, `app-labels.jsonl`, `label-probe.log` | with `--sim`, the list probe's (`watch-list`) and the label probe's (`watch-labels`) samples and their `xcodebuild` output |
+| `launch.log`, `restart.log`, `cleanup.log` | control-claudio's output; cleanup also keeps the bridge's own snapshot under `evidence/<run>/final/`. Cleanup runs on every way out (the end of the run, SIGINT, SIGTERM, SIGHUP, SIGQUIT, a crash), so an interrupted run leaves no bridge behind. It covers a launch that fails or is interrupted once launch has printed `STARTED run=<id>` |
+
+Verdicts: `pass`, `fail`, `review` (a simulator item with screenshots for a person or agent to judge), `not-judged` (a mark it needs was never reached, or the precondition failed) and `skipped` (a simulator item on the protocol lane).
+
+## The simulator pool and leases
+
+Three simulators, `ClaudioBot-UX-1` to `-3`, cloned from a shut-down iPhone 17 Pro on the newest iOS runtime. No other device is ever cloned, booted or shut down.
+
+```bash
+$R pool ensure                # clones the missing ones; idempotent
+$R pool status
+$R lease status               # holder, label, heartbeat age per device
+$R lease acquire --label "auditor chat" [--boot] [--wait 3600]
+#   LEASED device=ClaudioBot-UX-2 udid=… token=…
+$R lease heartbeat ClaudioBot-UX-2 --token <token>   # at least every 10 minutes
+$R lease boot ClaudioBot-UX-2 --token <token>
+$R lease release ClaudioBot-UX-2 --token <token>     # shuts the device down, frees it
+```
+
+A lease is the directory `$CLAUDIOBOT_VERIFY_DIR/leases/<device>/`, made with `mkdir` (atomic), holding `owner.json` (pid, label, token, time) and a `heartbeat` file the holder touches. Every agent must use the same `CLAUDIOBOT_VERIFY_DIR` (the default is shared by all worktrees) or it will not see the others' leases. `acquire` takes the first free device and polls every 5 s while all six (`ClaudioBot-UX-1` to `ClaudioBot-UX-6`) are held. A lease whose heartbeat is older than 10 minutes is reclaimed under a short global mutex (`leases/.reclaim`), and its device is shut down. The runner boots only a device it holds, and releases it (shutting it down) at the end, on SIGINT, SIGTERM and on an uncaught error; within a run it heartbeats every minute. `lease acquire` from the command line does not hold the lease for its own process, so another agent keeps it alive with `lease heartbeat` and frees it with `lease release`.
+
+`bin/lease-proof.sh [log]` starts eight lease-holding jobs (`$R sim-job --label jobN --hold 60`: lease, boot, screenshot, hold, release) against the six devices, samples the booted devices every 10 s, then fakes a lease with an 11-minute-old heartbeat and shows it reclaimed while a fresh one is left alone. The last proof is `docs/ux-program/evidence/step0-lease-proof.txt`.
+
+## The app on a leased device, and pairing
+
+`$R sim-build` (and `run --sim`) builds the Debug app once per `ios/` tree with `xcodebuild … -destination 'generic/platform=iOS Simulator'`, so the build touches no device. The stamp is the tree's hash, plus a hash of the content of any uncommitted change under `ios/` (the diff against HEAD and every untracked file), so two trees with different edits to one file never share a stamp. Each stamp builds into its own folder, `$CLAUDIOBOT_VERIFY_DIR/ios-build/<stamp>/`, and writes `stamp` there last. Worktrees that run at once never share a build, so a run that waits for a lease still installs its own tree's app however many other trees build meanwhile. A lock per stamp (`ios-build/<stamp>.lock`) keeps concurrent runs of one tree from building twice. The three most recently used builds are kept (each is about 400 MB). A build in progress is never pruned, and neither is one a live run uses: each run leaves its pid in `ios-build/<stamp>.users/` from the build until it exits, and markers of dead pids are ignored. Before it installs, the runner checks that the folder's `stamp` is its own. After, it compares a digest of every file in the bundle on the device with the build's, and the run fails if either differs. The runner launches the app with three Debug launch arguments:
+
+- `-pairingVault claudiobot-ux-<device>` keeps the pairing in a throwaway Keychain item.
+- `-pairingAutoConfirm YES` confirms a pairing link as soon as the confirmation would show, since `simctl` cannot tap Pair. It is compiled out of Release.
+- `-sidebarMode sessions` opens on the Sessions list, or `-sidebarMode bots` on the bot list for a scenario that sets `sidebar: "bots"` (every Chat, Home, Pairing and Settings scenario). A scenario's `ui` (C4's largest text size, T2's dark mode) is applied with `--sim` as if passed as `--content-size` and `--appearance`, which still win. It sets the sidebar choice the app already keeps in UserDefaults, through the launch-argument domain, so it needs no app code.
+
+The pairing:
+
+1. The runner asks its bridge for a one-time code over the socket (`pair_code`).
+2. It opens `claudiobot://pair?url=ws%3A%2F%2F127.0.0.1%3A<relay port>%2Fws&code=<code>` with `xcrun simctl openurl`, and the app confirms it on its own. `screenshots/pair-link.png` is the app 3 s later.
+3. It polls the bridge's `devices` list for up to `--pair-wait` seconds (default 120). A new device means the app paired, and `paired` is true in the report.
+4. `open-thread` uses `claudiobot://session/<id>`, and `app background|foreground` launches Settings over the app, then the app again.
+
+A paired app lists every project on the Mac the bridge runs on, not only the run's seed project. A screenshot of the Sessions list (`pair-link`, `after-pairing`, S7's `mixed`) can show real session titles, so judge it in place and never copy it into the repo.
+
+## The swipe check
+
+A screenshot cannot show a main thread that never settles. `ios/scripts/swipe-check.sh` swipes each demo thread down once at each Dynamic Type size, through XCUITest, and fails when a swipe takes over 10 s or the app's mean CPU over the next 10 s stays above 50%. XCUITest waits up to 60 s for the app to go idle after a swipe, so a hang reads as a swipe of about a minute; a swipe that settles takes 1 to 4 s, most of it the scroll's deceleration. `MAX_SWIPE_S` and `MAX_CPU` change the limits. It is a zsh script: run it as `ios/scripts/swipe-check.sh`, and started from bash or sh it runs itself again under zsh. Any step that fails (a missing argument, the driver build, the install) ends it with a non-zero status, so only exit 0 is a pass. Run it on a device you hold, with the app `sim-build` made:
+
+```bash
+$R lease acquire --label "swipe check" --boot     # LEASED device=… udid=… token=…
+ios/scripts/swipe-check.sh <udid> "$CLAUDIOBOT_VERIFY_DIR/ios-build/<stamp>/Build/Products/Debug-iphonesimulator/ClaudioBot.app"
+#   ok workrun large swipe=1.2s cpu-after=12% (…)
+#   FAIL workrun accessibility-extra-extra-extra-large swipe=60.5s cpu-after=99% (…)
+$R lease release <device> --token <token>
+```
+
+`SCREENS` and `SIZES` narrow the matrix (default: `workrun thread plan streaming longthread approvals approvalsanswered`, the composer screens `composerdraft composerlong composerlapse composerrefused composermode composerqueued stoppedearly`, and `composerlongkb composerlapsekb composerrefusedkb`, which type one letter first so the swipe runs with the keyboard up, `composerlapsekbgone`, which raises the keyboard and swipes after the app puts it away (the bar must open back up), `composerwithdraw`, swiped while a withdrawn message waits for the Mac's answer, then `composersix` and `composersixkb` (a six-command refusal) at every size from `extra-extra-extra-large` to AX5; the rest at `large`, `accessibility-extra-large` and `accessibility-extra-extra-extra-large`). With `ATTACH=1` it swipes the app once as it runs, at the content size the run set, instead of launching demo screens, so it can swipe a live thread mid-scenario. Start `$R run S1b --sim --content-size accessibility-extra-extra-extra-large`, then run `ATTACH=1 ios/scripts/swipe-check.sh <the run's udid>` when its log prints `mark s1b-started`. The driver builds first, for 10 to 30 s, so the swipe lands while the three subagents run:
+
+```
+ok live current swipe=2.7s cpu-after=10% (…)
+```

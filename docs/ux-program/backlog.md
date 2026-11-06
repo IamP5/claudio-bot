@@ -1,0 +1,258 @@
+- Sessions (P2, from G10 verify): at accessibility-extra-extra-extra-large, the offline banner over a list that already has rows takes about 80% of the screen; no session row is visible above the fold. Buttons stay reachable. Consider collapsing the banner to one line plus buttons when rows exist.
+- macOS tests: the ClaudioBotMac test runner hangs before connecting in agent environments ("test runner hung before establishing connection"); builds succeed. Needs a look at the Mac test host setup.
+- Bridge masking (pre-existing on main, from G1 verify): `--api-key plainsecretvalue` / `--password plainsecretvalue` (space-separated flags), quoted values with spaces (`SECRET="my long secret"`), URL passwords containing `/` or `@`, and values after a line continuation are not masked. Rules `ASSIGNED` and `URL_CREDENTIAL` in bridge/src/text.ts. Repro: G1 round-3 verifier's mask.ts.
+- Bridge (G3): a user Stop that ends a background agent after its turn already ended yields only a task notice with reason `task`; S4.5 expects reason `stop`.
+- Runner rubric (S4.9): the 2 s phone-latency limit flakes about half the time with no bridge change; decide whether to judge a median of several samples rather than one.
+- Runner coverage (from G2 sim verify): no scenario photographs the Sessions row while work runs, and S1b's mid-run shot shows the bottom of the thread (permission cards) so the work-run header with three steps is off screen. Add a list screenshot mid-run and scroll the thread to the work run before S1b.8.
+- Composer at accessibility sizes (from G2 sim verify): at AX5 the composer drops the "Ask before edits" chip, clips "Haiku" and truncates the placeholder to "Queue a me…" (G6 territory).
+- Runner rubric (S2.12, S8.10): noPhantomWork measures only to the next user/assistant transcript line; a real wake turn whose first line lands more than 5 s after its init could read as phantom work. Watch for flakes.
+- Chat (area 2, from G16): ChatView and ExchangeView use the same bottom-pinned LazyVStack; a very tall bot message at AX5 may hang like F-SES-170. Check in the Chat audit.
+- Swipe check (from G16 verify): if the app crashes during a swipe, no process is found and CPU averages 0, so a short swipe time passes. Fail when the app process is gone.
+- Runner (from G8 verify): the S6.6 after-resume-2 screenshot is taken ~0.5 s after the runner's own phone resumes and can catch the app mid-backoff; wait for the app's own re-watch (the S6b tap shows it) before the shot.
+- G8 follow-ups (from fix-round verify): saved heads restart with size 0 after a bridge start, costing one full transcript read per active session after an upgrade; a loss from an overtaken snapshot during a repair does not reset the timed retry; card vs transcript exact-millisecond ties can still differ between resumed and fresh views.
+- Settings (area 5, from G15): the pairing code countdown in SettingsView.swift uses TimelineView(.deadline), which G15 found never fires while the view sits still; check in the Settings audit.
+- Protocol (from G15): bot trust cards are detected by the tool name string "Claude Code settings"; add a card kind field on the wire.
+- Cards (from G15): a decision lost in a reconnect and answered later on another device is still announced as this phone's answer; the store cannot tell landed from lost. Needs a bridge ack per decision (G11 territory).
+- Runner launch flake: "the run's demo project is not listed" right after launch, seen by G8, G12 and G16 verifiers; passes on retry. The bridge can list projects before it has scanned the seed roots; launch should wait for the demo project.
+- Runner (S7.6 with the list probe): the 1/s XCUITest probe adds simulator load; S7.6 worst lag rose to 1.6 s once at AX5 (limit 1.5 s) vs 0.3-0.6 s without the probe. Run the probe only during the phase S7.7 judges, or measure S7.6 in a probe-free run.
+- Runner (S7.9): cannot catch a missing fold exemption alone when ranking already lifts working rows; add a variant with more working rows than fit above the fold.
+- swipe-check (from G5 verify): every CPU sample is empty because XCUITest ends the app when the test finishes, so the CPU-after half of the gate measures nothing; sample during the swipe or keep the app alive.
+- Bridge posts "Stopped by you: the turn …" before the turn has actually ended when Claude Code is paused (found by G6 owner; honesty, Sessions).
+- With no Claude Code process running, a model change stores any model id unchecked and the next send fails on it; the app's menu can't send a bad id (found by G6 owner).
+- Offline Send is spoken as "Sent." though the frame only went to the outbox (G6 verifier; G11 territory).
+- Two stops of the same task yield the notice "Stopped by you: command "sleep 470" and command "sleep 470"." — dedupe targets in the bridge's stop notice (G6 verifier round 2).
+- A background-task stop landing during a turn makes the status read "Stopped by you" though that turn was answered (G6 verifier round 2; status line / bridge).
+- Swipe-check default screen list did not include composer demos (being fixed in G6 round 2; confirm).
+- G17 known gaps: Claude Code's own "Interrupted" transcript line shows beside the bridge stop notice; a wake turn that ignores its interrupt is never escalated; a survivor command's step reads "The bridge restarted" once it ends after a partial restart stop; a foreground command orphaned when Claude Code is killed is not tracked; row finished text can be a foreground task summary.
+- G11: the bridge's own transcript notice for a refused stop still names every command in full; only the composer error is shortened (G6 r3).
+- (for G17) A turn-only stop on a hung Claude Code ended with the bridge killing the process; notices said "Stopped by you: command sleep 2003…" and "Claude Code's background work stopped" while the six sleeps kept running as orphans (ppid 1); the mode refusal showed raw "Query closed before response received" (G6 verifier r4, on main-based #21 bridge).
+- Merge order note: #21 and #22 conflict in bridge/src/own.ts (refusal returns ~590 and fewOf near 103-115); second to merge resolves and re-tests.
+- ClaudioBot-UX-1 has AutomaticMinimizationEnabled=NO set by a verifier (software keyboard had stopped showing).
+- Composer at xxxLarge/AX5 worst combo with keyboard up: keyboard can only be dismissed by a drag from a 3-7 pt transcript strip (better than main; consider a visible Dismiss keyboard control) (G6 verifier r5).
+- "Stop the turn and 2 commands" counts the turn's own foreground command while the dialog names only the background one (G6 verifier r5; check whether pre-existing).
+- tasks.ts cuts task labels at 80 characters, which can split a «redacted» mask in the Running panel (G6 verifier r5).
+- #21 and #22 also conflict in ios/scripts/swipe-check.sh (both add screens; keep both).
+- Harness: ClaudioBot-UX-1 shows an unanswered notification-permission alert over thread screenshots; runner should pre-answer it at install (G17 verifier r4).
+- Unsure work card: header pairs "Ran" with "may still run"; a stale "Stop ends it." notice stays after the bridge loses track; a card with only unsure steps can fold away its count (G17 verifier r4, P3).
+- S4.9 latency missed 2 s in 2/3 runs on the #21+#22 combination under load average 40-88 (watch after both merge).
+- Harness: dismissing the iOS notification-permission alert needs UI automation (simctl privacy cannot grant notifications); verifiers may Allow it once per pool device via XCUITest (decision recorded).
+- G11: "Sent before it could be withdrawn" note never shows on the real bridge: settleWithdrawals marks sentAnyway[clientId] but the bridge then re-keys the item to its transcript id, so taken(id) misses; a single replacement frame would read as a drop. Test must send the re-key frame (G6 verifier r6, shots/sa.png).
+- G11: sentAnyway map is never pruned (negligible).
+- (G17/G18) After a stop Claude Code never confirms, the bridge closes Claude Code at 15 s and says "Claude Code's background work stopped: …sleep 6002" while it is alive (seen on main); "Stop again" adds a second identical "Stopped by you" notice.
+- S4.9 (error on the wire within 2 s) flakes on main too: 2/3 fails on main 6f1f4ea, 2/10 on G17 head; machine load is high. Investigate threshold vs load before Step 4.
+- G13 gaps: "Already answered" covers permission cards only (question/plan cards drop cardId when closed); a reconnecting socket can count as having seen an alert it never received (signals not replayed — G11); an ending inside the 5 s wait is lost if the bridge crashes; S3.6 remote banner cannot be shown by simctl (coverage gap).
+- G11: the "That request expired." / "Already answered" link note stays when a new card opens below it (SessionThreadView linkNote never cleared when OpenCard.newest is non-nil) (G13 verifier P2-1).
+- G11: local notifications say "Needs your approval" for question and plan cards (session_alert lacks the card kind) (G13 P2-2); "Already answered" fallback covers permission cards only (G13 P2-3).
+- A failed card push is never retried after its 3 tries (~10 s) until the reminder at TTL/2 (1 h in production) (G13 P2-5).
+- Guess: a frontmost Mac app counts as attended and may hold every phone push while the user is away from the desk (G13 P2-6; verify).
+- push.ts lastCards never pruned (small); S3b.3 banner screenshot 1.5 s after alert is fragile under load; dark-mode Settings Memory "Confirm" pill renders blank (pre-existing, Settings area).
+- G18 gaps: a foreground command younger than ~5 s is not a task yet and is cut after a restart/crash; lsof hanging at boot leaves really-running commands unsure; a restart within ~20 s of an alert can push one held ending once (G18 owner).
+- G18 verifier (PASS b1164e6), P2-1: a foreground command younger than ~5 s still reads "stopped (The bridge restarted)" / "error (SIGKILL)" while it runs on after a restart/crash, with no notice or Stop (evidence scratchpad/v18/out/young-restart, young-crash). Possible fix: look a running Bash step's shell up by command line, observation only, and report "may still run".
+- G18 verifier P2-2: lsof hanging at restart leaves the work unsure for good; it never returns to followed/stoppable once lsof answers (scratchpad/v18/out/hang).
+- G18 verifier P3s: fork-and-exit leader makes lsof exit 1 → step stays running with a Stop that is refused (safe); each restart inside the 60 s grace defers the interruption push again (a restart loop never pushes); "Running in background" pill under a foreground step should read "Still running on your Mac", and its timer disagrees with the step's by ~3 s; VoiceOver may say "Claude finished its turn. Still running in background" after a crash (ThreadStatus.swift:287, since G17); S6.7 passes trivially if the perl step detail does not name "sleep 90"; a crash between saving the lost ending and the outcome pushes twice (deliberate); leftByKill never cleared without a gone-work report; S6 after-resume-2 shot lands during the drop (harness).
+- G18 regression note: S6e on main fails as a setup error (no task offers the perl command), not as a rubric fail; S6f.1 and the new S6.7 fail as rubric fails.
+- G11 owner gaps: alert resend can lag up to 60 s (half-open socket counts as open until idle close) (P2); a create whose first send fails makes the bridge forget its ref, so a later retry makes a new session (P2); successful-stop "Stopped by you: …" notice still names every task in full (restated() matcher depends on it) (P3); push off → ending alert never resent (P3); unconfirmed sent message kept only in memory, lost on app quit (P3); agent frame carries an unused clientId (P3); swipe-check has no demo for the new card/bubble states (P3).
+- Runner: two runs started in the same second share an evidence folder (G11 owner); program docs scenarios/sessions.md and runner.md need regenerating for S6g, S6h, S6.10 and runner actions raw, file, watch-labels, sendFirst, shot.
+- Harness incident (G11): the owner first wrote to its worktree through Bash/python, which a PreToolUse write guard does not check, before switching to EnterWorktree. Future briefs: tell owners to EnterWorktree into their worktree before any write and never route around a hook.
+- G11 r2 gaps: "Sent before it could be withdrawn" not observed end to end on the real bridge (needs a Withdraw tap; covered by unit tests with literal re-key frames) (P2); on the restart path a transcript copy carries its clientId only if the thread was watched when it appeared, else the sent-anyway note is lost (P3); Stop button still spins offline, only the composer line changed (P3).
+- G11 r2 verifier P3s: a send the Mac received reads "Not sent · Retry" while offline from 10 s until the next hello (settles ~70 ms after reconnect; wording claims something false); sentAs is not validated by the store schema (store.ts:172), so a corrupt value throws in ties()/tie() and that thread cannot load; offline Stop button spins and its a11y label says "Stopping the turn"; late withdraw shows a red "no longer queued" composer error under the calm "Sent before it could be withdrawn" note; rec.sent reaches disk only after routing, so a crash mid-route can rerun a message.
+- scenario.ts help text (default branch) does not list --away; the run usage error does (docs sync #28).
+- F-SES-234 (P2, Sessions run 3): Composer note and push-link note 'Dismiss' buttons are bare, and focus is lost when the note goes
+- F-SES-241 (P2, Sessions run 3): The failing-push message is a bare HTTP status, with no consequence and no way to retry or test
+- F-SES-242 (P2, Sessions run 3): The 'finished' alert fires 5 s after rest whether or not the user watched the session end, so leaving the thread in those 5 s gets a banner for something they just read
+- F-SES-244 (P2, Sessions run 3): Eight sessions finishing together send eight separate identical 'finished' pushes, with no count or grouping
+- F-SES-245 (P2, Sessions run 3): A session the user hid still raises Finished, Stopped-with-an-error and Needs-you alerts, and there is no way to silence it
+- F-SES-246 (P2, Sessions run 3): The iPhone app icon never shows a badge, so finished, unread or waiting-on-you sessions leave no trace on the home screen
+- F-SES-249 (P2, Sessions run 3): A session running on the Mac (terminal or desktop app) shows Working in the list, but when it finishes no 'finished' alert or push reaches the phone
+- F-SES-251 (P2, Sessions run 3): Push 'off' because of a malformed push URL tells the user to set a variable they already set
+- F-SES-252 (P2, Sessions run 3): The push-off notice says alerts are off but not what is missed, and its fix is a Mac environment variable
+- F-SES-253 (P2, Sessions run 3): Tapping 'Alerts when away are off' opens Settings at the top, far above the row that explains it
+- F-SES-254 (P2, Sessions run 3): The approval push and its reminder never say how long is left or that the request will be refused
+- F-SES-256 (P2, Sessions run 3): The 'finished' alert is just the session title plus 'Finished'. It can't say that a background command failed, because the bridge sends no outcome text
+- F-SES-261 (P2, Sessions run 3): In a fan-out of more than 20 agents, the earliest answered approval cards vanish from the thread while the agents are still running
+- F-SES-262 (P2, Sessions run 3): Approval card shows Expired or live Allow by the phone's clock against the Mac's deadline
+- F-SES-264 (P2, Sessions run 3): Elapsed time, 'no activity for' and row ages subtract the Mac's timestamps from the phone's clock with no offset
+- F-SES-265 (P2, Sessions run 3): An approval that timed out is called 'denied' in the notice and on the tool step, though the card says Expired
+- F-SES-266 (P2, Sessions run 3): A card that expired unanswered is re-asked within 3 s as a fresh identical card, with a new full-length wait (and, for an away user, a new push)
+- F-SES-271 (P2, Sessions run 3): A refused Start says only 'Unknown project', with no cause and no way forward
+- F-SES-275 (P2, Sessions run 3): After a bridge restart, a thread the user was reading shows an unread dot and a 'Finished' outcome for a reply they already saw
+- F-SES-285 (P2, Sessions run 3): Stopping a background task leaves the row's age and sort position at the earlier reply
+- F-SES-286 (P2, Sessions run 3): One Stop puts two notices in the thread: a bare 'Interrupted' and then 'Stopped by you: ...'
+- F-SES-292 (P2, Sessions run 3): After an approval, the thread's 'Working' clock and the row's run time still include the whole wait for the user
+- F-SES-293 (P2, Sessions run 3): Unread dot switches off for ~1.5 s while an unseen reply is still unread, because it follows the last transcript line's role
+- F-SES-296 (P2, Sessions run 3): Header plan-usage percentage keeps full strength offline and only dims if the Mac last said it was stale
+- F-SES-299 (P2, Sessions run 3): The Notifications toggle's footer describes bot alerts only, though it also turns off session alerts
+- F-SES-301 (P2, Sessions run 3): Full output sheet hides that it is only the last 64 KB, and opens scrolled to the bottom
+- F-SES-305 (P2, Sessions run 3): A tool step goes from waiting to running to denied when its approval expires or is denied
+- Runner: `pool ensure` refuses to clone when the newest runtime listed (even one only unavailable devices use) has no shut-down iPhone 17 Pro; it should rank only installed runtimes. Pool was cloned by hand on 2026-10-31. New pool devices need notification permission allowed once again.
+- G20 gaps: forced end from the 3-denials breaker posts no forced-end notice (P3); many-task stop notice (283) covered by unit test only (P3); G20 added scenario S4cl and item S6g.11 in scenarios.ts — G19 must merge them; sessions.md/runner.md need regenerating after G19-G21.
+- G19 gaps: S6f.3 passes on main (fails nothing today); S4c.7 cannot check a stopped mark on the user item (field not defined by G20); G25 crash notice text will break S6e.1/S6e.3 patterns; S9.8 needs G22 to resend within ~30 s; sessions.md regenerated copy at scratchpad evidence/sessions.generated.md, runner.md needs fresh-open and protocol-lane show-list.
+- G19 verifier: S9.8 has ~1 s margin against G22's 30 s owed resend; consider measuring from the last failed try (G22 owner to decide) (P2). S6g.4 proves nothing on a bridge where the stale Stop-and-send step kills the turn (S6g.11 still fails there) (P3).
+- G20 r2 gaps: decision 167 "stopped user item" has no wire field and no check (medium); partial assistant text Claude Code writes after a confirmed Stop would sort below the notice (unobserved, low).
+- G21 gaps: a held stop note is lost if Claude Code dies between stopping the command and reporting the subagent end (needs session.ts release call; medium); a task notification folded into a later system reminder is never settled — a command that exited 3 read "stopped: It ended without a result" (likely on main; medium); F-SES-280 half fixed (row clock moves at first turn end and restarts at a wake turn; needs run start in own.ts); F-SES-260 half fixed (step turns done ~1 s after the task leaves Running now); ~50 ms of no counts in S8; bridge words for a missing output file on success left to G23.
+- Runner: the "two runs in one second share an evidence folder" bug bit again (G20 r2 verifier); worth fixing in bin/scenario.ts (P3). own.ts `seen` map never cleared per session (small).
+- G21 verifier P3s: a settled step's end time flips when the ledger prunes the task (S5t Monitor 6 s -> 0 s; visible half of F-SES-260); bridge waiting note lands 0.1 s beside Claude Code's own (near duplicate); fan-out row line does not shorten long or merge repeated agent names; lostNotice name no longer fits. Pre-existing: output cut to last 2 KB before masking leaks about half of a token that straddles the cut (foreground too).
+- G22 gaps (P3): ntfy with cache off can ring a taken timed-out push twice; ntfy 500 after publishing (cache write fail) or a proxy 502/504 after publish rings twice on immediate retry; network-down/TLS errors now wait 15 s for a poll instead of quick retries; the probe assumes an ntfy-style URL (non-ntfy URL with nothing owed stays failing); S6f.4 reportedly flaky.
+- G21: a folder swapped for a symlink between open and the folder check is still a tiny window (needs per-directory openat) (P3).
+- S6f.4 is deterministic, not flaky: fails 3/3 on main and head with row activity "Background: perl …" (G22 verifier) — G25 item.
+- Runner: S6 after-resume-1 shot is taken right at the resume and can catch the offline→working change mid-animation (overlapping lines); add a short settle pause (G20 iOS verifier, P3).
+- G23 gaps: bridge flicker running→stopped→running→ok within 0.1 s for a finished subagent (S1b revs 32-35; G21/G25 territory, P2); S8 shows two "waiting on its own command" notices, one generic (G21 duplicate, P3); "Show full command" unreachable by Voice Control / Full Keyboard Access (P3); 3-line command preview cuts at the end, not the middle (P3); an expanded command collapses when its run stops ticking (P3); task notices at AX XXXL much larger than fixed-16pt replies (P3); runner needs a >60 s screenshot to show the quiet state (G19 follow-up).
+- HARNESS INCIDENT (G24 owner, 2026-10-31): `control-claudio.ts cleanup` without `--run` followed the shared `current` pointer and shut down another agent's bridge (G22 owner run 20261031-204252-3556). Fix in bin/control-claudio.ts: refuse cleanup (and other mutating commands) without `--run` when more than one run is live, or make `current` per-agent. Until then every brief says always pass --run (P1 harness).
+- G24 gaps: thread view still flashes "Your Mac isn't answering" 400 ms into a foreground reconnect (Reach not given the rejoin state; G26) (P2); outlived row's second line cuts the crash text at AX XXXL (P3); not-recognized banner has no short form at AX XXXL (P3).
+- G22 r3 gap: if the iOS app reconnects before its foreground state is known it sends no presence, so its first messages count as a look (inferred from BridgeClient.swift; P3).
+- G24 verifier: thread says "Your Mac isn't answering… Retry" within ~1 s of a slow foreground reconnect while the list says "Reconnecting…" (Reach not given rejoin; G26 should pass it) (P2); a session_rows frame arriving before the sessions list sets updatedAt so a partial list looks complete (loaded = updatedAt != nil; F-SES-202 lost/undecodable list case still open) (P2); an owner/repo label can equal a no-remote namesake's path tail (labels not checked against tails) (P3); "Reconnecting…" can run ~10.4 s (P3); header label truncated at Large with a long count line (P3); thread header still shows project.name not the label, and the thread's .reconnecting case is dead code (P3). Outside G24: sticky project header overlaps rows while scrolling at AX XXXL; outlived row clock reads "<1m" after ~1m45s because the bridge resets since.
+- G23 verifier: composer pill still counts a subagent's own command again ("2 commands, 1 agent"; "3 agents, 3 commands") against Run3 call 15 (G26 status/pill territory) (P2); AX5 task notices outweigh fixed-size Claude replies (P3); S1b sim shots at AX5 are framed at the bottom and miss the agent rows (runner, P3).
+- For G28: the iOS app sends no presence on a fresh launch (attended starts nil; comeBack returns early on first .active; BridgeClient.swift:132/284/291-294), and question-notification actions (options: [], Notifier.swift:159) can relaunch a terminated app in the background whose answer counts as a look and whose socket is live ~45 s (G22 r3 verifier, P3).
+- G23 r2: WorkSummary.errors used only by tests (one in SessionsTests.swift); an expanded command still closes if the whole row is dropped from memory far off screen (P3).
+- G22 r4 verifier P3s: a client reconnecting silently every few seconds holds an owed push for as long as the loop lasts (real app sends presence on connect); deliver() stops quick retries when an app comes up without logging "failed after N tries"; an alert to a socket counts as seen if that socket's next ping or presence(false) arrives while still attended, so a background reconnect can mark a reminder/ending seen (readAt path, unchanged from main; for G25/G28).
+- G22 r4 verifier P3s: a client reconnecting silently every few seconds holds an owed push for as long as the loop lasts (real app sends presence on connect); deliver() stops quick retries when an app comes up without logging "failed after N tries"; an alert to a socket counts as seen if that socket's next ping or presence(false) arrives while still attended, so a background reconnect can mark a reminder/ending seen (readAt path, unchanged from main; for G25/G28).
+- G26 gaps: plan/question cards closed by Stop still show "Expired. Nobody answered in time." on screen because the bridge records expired (bridge change, medium); three-card needs-you line unit-tested only (runner taps Allow at once; medium); ~1 s of "Running in background" before the orphaned line during a crash (low); offline line at AX XXXL with Retry has no visible chevron (low).
+- G25 gaps: app must render the new "stopped" ask/plan close value (G26 speaks "closed without an answer" but screen text needs it) and the thread status line must read `outlived` instead of "Running in background" for outlived foreground commands (G26 follow-up after G25 merges, P2); no failed alert when Claude Code dies between turns with only background work (P3); restart push 60 s wait not cut short when the phone reconnects away (P3); controls.working false ~1 s after a crash (P3); second restart notice for stopped background work (P3); F-SES-274 outlived start time may fall back to bridge boot (unverified).
+- G26 verifier: plan/question cards show "Expired. Nobody answered in time." after a Stop (ThreadItems.swift:833, :1056) and VoiceOver reads it on focus, contradicting the spoken close (P2; G25 adds wire "stopped"; app follow-up G26b renders it); Running now says "3 running" while all three subagents wait for approval (P3); bridge stop text "Stopped by you: 1 agent, 1 command" counts both levels (P3); crash frame order shows "no turn, no tasks" briefly (bridge, P3); OpenCard.waiting scans items twice per render (P3); main flake BridgeClientTests.aSocketThatAnswersItsPingsIsKept failed once.
+- G25 verifier (pre-existing on main, follow-up group): a Claude Code death between turns with only background work running is never told as a failure — row reads idle/finished ~460 ms while sleep runs and the later push says "finished" (P2); surviving steps read stopped/error for 350-500 ms when the user sends within ~1 s of a crash (P2); a death followed by a send before the lookup ends is never alerted (P3); card link says "Already answered" for a stopped card (app, P3).
+- G29 gaps: the at-work chip spoken label does not take effect (tree shows bare summary; iOS 26 shows icon only on phone-width toolbar) (P2); no real iPad/landscape check possible within the pool rule (P2, cross-cutting iPad checks for every area are limited the same way); parked and unavailable sessions left out of the chip and pane (P3).
+- G25 r2 verifier (pre-existing, given to G27): a hung lsof at a crash adds a second "may still run" notice with no alert count; after lsof recovers steps stay unsure and Stop errors, so survivors keep running. Still open after G26/G29: thread status line should read outlived instead of "Running in background" for an outlived foreground command (ThreadStatus.swift; small follow-up after G29 merges).
+- G29 verifier: the chip and at-work pane custom spoken labels sit on a non-button element; the button reads the visible text (also on main) (P2); stale header spoken label drops "Rows show what your Mac said then." (P3); the stopped bucket rarely appears because the bridge marks a row unread only when its last entry is an assistant reply (P3).
+- G27 gaps: F-SES-294 (row unread dot + "Command ended" row line; catalog.ts, conflicts with G25 last-reply outcome) not done (P2); F-SES-291 (running-task list briefly empty while an agent runs, S1b) not done (P2); crash push has no count when lsof is hung and never re-pushes once found (needs wire change, P2); older saved state keeps twins "may still run" until a new run (P3); other stop notices still use the short task label (P3).
+- G27 verifier P3s: the command count looks at every process on the Mac, so an unrelated same-command process keeps twins "may still run" (safe direction); when commands end while lsof hangs their steps read running until the lookup finishes, then `error` with "background work stopped" (G25 wording); a long command repeats its cut title as the detail.
+- G27 r2 gaps: an unpaired command that ends within ~5 s of a restart reads "may still run" for good; an exec that redirects/quotes/expands stays unsure until a new run (both safe direction, P3).
+- G28 gaps: offline composer says "waits…" for a request that already went out before the drop (P3); background-relaunch presence proven only with a fake bridge (P3); bridge `about` kinds for prefs/open left out (P3); swipe-check has no demos for the new bubble states (P3); Discard within 4 s of a late echo can briefly show "Sent" (P3); S6.6 after-resume-2 screenshot unjudged on main and branch (runner, P2).
+- G27 r3: commands that exec (other than redirect-only) or can leave a child behind, and unpaired commands that end before the first counting look, read "may still run" until a new run (accepted trade); a self-daemonizing program without &/nohup in its text could read ended while its daemon lives (P3).
+- G27 r4: a function/alias in the user's Claude Code shell snapshot could shadow a plain word (P3); many more unpaired commands stay "may still run" after ending (accepted cost).
+- HARNESS ISOLATION GAP (G28 verifier): a plan-mode session in an isolated run wrote ~/.claude/plans/plan-how-to-add-compressed-anchor.md into the user's REAL home; cleanup does not remove it. The runner must point Claude Code's plans dir (or HOME/CLAUDE_CONFIG_DIR) at the run's home (P1 harness). The stray file was left for the user to delete.
+- Bridge (G28 verifier): Stop of "the turn and 1 command" on a frozen Claude Code left the perl command running after the forced end while the notice said "Stopped by you: the turn." (P2, G20/G25 area).
+- "Couldn't stop." before the bridge's stale-turn text reads like a failure when the message did go (P3, from main).
+- Settings says "Reconnecting" rather than unreachable after more than 60 s offline (P3, not G28).
+- G27 r5 gaps: a heredoc command can read ended late when its process group stays occupied (slow, not false; P3); an unrelated shell running the identical eval line gets its group recorded (errs alive; contrived three-part case could end twins early; P3).
+- S6d.3 runner flake: haiku sometimes runs a command twice ("2 ended notices") (P3); session end wiped the shared scratchpad — evidence paths under scratchpad from earlier sessions may be gone; groupAlive treats EPERM as gone (pre-existing, P3).
+- HOST: disk at 96% (21 GB free); macOS purged /private/tmp mid-run and wiped verifier/owner scratchpads (2026-11-01). Merged group worktrees removed; .claude/worktrees still ~20 GB, mostly agent-* worktrees from earlier rounds (left for the user to decide).
+- G27 r6: groups are recorded only during pairing (~3 s after a task appears) and only for shells started within 30 s of the call; a step whose shell hides earlier, or whose card was held >30 s, stays "can't tell" for good (accepted, P3).
+- G27 r7 verifier P3s: the 200-key `unsure` cap can turn a still-running step into "stopped: It ended without a result" after 220+ pending steps (same as before at 20); a groupless pending step holds the session so no later run gets a finished alert until pruning; psText writes tab as 	, so a literal 	 in one command matches a tab in another (pairing ambiguity, code read).
+- Sessions re-check notes (lean pass): the 7 X-empty-error-offline P1s were confirmed by code read plus S6h only, not driven on the simulator for list screens (coverage gap); S6e once errored at setup when the foreground perl task was missing from controls.tasks after restart (intermittent race, P2); S9.1 measured tries 2 s then 10.2 s apart vs 8 s expected (sink response time, P2); S1.11 fails with --sim --away because the attached app counts as attended (runner artifact); X-ipad has no registered scenario (code read + SessionsAtWorkTests only).
+- Runner #42 gaps: no expired-code scenario (10-min lifetime fixed), no bot permission card scenario, no offline bot send; lease proof not rerun on 6 devices; T1 countdown may tick only because the probe samples the screen.
+- Areas audit (Chat/Home/Pairing/Settings, lean, 2026-11-01) P2s:
+  - F-AR-014 Bot row spoken label never says the bot is waiting for an answer
+  - F-AR-015 The chat's activity line keeps naming a tool that finished seconds ago, while the bot writes its reply
+  - F-AR-016 At the largest text size the composer placeholder for an open question is cut to "Type your…"
+  - F-AR-017 Composer placeholder, which holds the open-question instruction, is 2.5:1
+  - F-AR-018 Every reply, question or approval card arriving in an open chat makes the phone re-download the entire conversation, twice
+  - F-AR-019 A bot chat silently starts mid-conversation once it passes 1100 messages; the older part is moved to a file nothing reads
+  - F-AR-020 The 'wants to remember' card in a chat keeps tiny fixed text and tiny Confirm/Forget buttons at the largest text size
+  - F-AR-021 At the largest text size the question card's 'Expires in 23 hrs, 59 min' is far bigger than the question and options
+  - F-AR-022 Bot question card gives no sign an answer was taken, and an offline tap is queued with no age limit
+  - F-AR-023 Question card's Dismiss X is a 28 pt target that closes the question at once with no confirmation or stated effect
+  - F-AR-024 Question card option buttons are about 42 pt tall, under the 44 pt minimum used elsewhere in the app
+  - F-AR-025 The chat's stop note says 'Stopped by <name>' and nothing about what stopped; the partial reply promising a result stays as the last bot message
+  - F-AR-026 A bot working on a text-only turn shows only 'Typing…', with no words and no time
+  - F-AR-027 Home row activity line reads 'claudio: ask' (a raw tool name) just before the question card
+  - F-AR-028 Every cold launch, even into an already-loaded list or a notification deep link, sits under a fixed 1.3 s splash that ignores touches for about 1 s
+  - F-AR-029 Deleting, renaming, pinning or hiding a bot offline does nothing visible and is replayed whenever the Mac returns
+  - F-AR-030 A cold launch with no bots known and the Mac unreachable shows a banner and a blank list, with no empty-state line
+  - F-AR-031 A hidden bot that asks a question or needs approval has no row, while its push and the Mac badge still say it needs you
+  - F-AR-032 A muted bot's row looks the same as any other, so the user cannot tell which bots will not push
+  - F-AR-033 A reply that lands in the open bot chat after the user leaves the app is marked read at once
+  - F-AR-034 Home row long-press menu has no Mark as Read, offers Mark as Unread on an already unread row, and has no Stop for a working bot; there are no swipe actions
+  - F-AR-035 Row time is the newest message of any kind while the preview is the newest bot text, so they disagree
+  - F-AR-036 Row preview is the raw first line of the reply, so markdown markers and code fences show as text
+  - F-AR-037 A working bot's only mark on the row is the avatar's 30 fps wobble, with no static glyph or word, and Reduce Motion turns it into the idle blink
+  - F-AR-038 A working bot's row says nothing about working until a tool call produces an activity line; it shows the old preview and old question instead
+  - F-AR-039 Chat offline bar and Home banner read the same at 10 s, 30 s and 62 s; 'Still no answer' appears only after a manual Retry
+  - F-AR-040 The Home offline banner blames the Mac and the bridge even when the phone itself has no network
+  - F-AR-041 After a code is used up, the right code is told 'No pairing code is active', and the phone's own Settings code still looks live
+  - F-AR-042 Devices list says 'Last seen <old time>' for a phone that is connected right now
+  - F-AR-043 Paired devices list is fetched only when Settings appears, so after a drop and reconnect it shows old data
+  - F-AR-044 A pairing that fails after the bridge accepted the code leaves a paired phone that never worked, with a spent code and no next step
+  - F-AR-045 The 'removed from your Mac' message is a small orange footnote under the first-run intro, and is not kept
+  - F-AR-046 A retired pairing code is refused as 'wrong' with no pointer to the new code
+  - F-AR-047 Revoking a phone does not update the device list on the other paired phones
+  - F-AR-048 If saving a revoke fails, the bridge still disconnects the phone with 'revoked' and the phone unpairs itself
+  - F-AR-049 Any device on the network can kill the owner's displayed pairing code with five wrong guesses
+  - F-AR-050 Pairing to an unreachable Mac waits up to 10 s per address with a disabled form and reports only the last address's system error
+  - F-AR-051 Wrong-code messages never say how many tries are left or that the code will die
+  - F-AR-052 The bridge never tells the phone it is going away, so the app cannot say why the list went offline
+  - F-AR-053 After a resumed reconnect the list briefly goes back in time: hello carries the newest state, then older bot frames replay over it
+  - F-AR-054 H1.4 'Mark as Unread takes at once' passes without the chat ever having been read
+  - F-AR-055 H3 never changes anything during the 30 s drop, so H3.1 passes without testing replay, loss or doubling
+  - F-AR-056 P1.5 screenshots cannot judge 'the pairing step, then the list'
+  - F-AR-057 P1 never exercises first-run pairing: the app launches already paired to the previous run's dead relay port, and P1.5 shots only show the end state
+  - F-AR-058 T4.4 screenshot stops at the Sessions footer, so the device list and Notifications footer are never shown
+  - F-AR-059 At the largest text size the paired-devices row breaks 'Revoke' and the device name mid-word
+  - F-AR-060 Settings Machine row turns to 'Unknown' the moment the Mac stops answering
+  - F-AR-061 A fact listed as confirmed can be one the bots never see
+  - F-AR-062 If USER.md cannot be read, Memory says 'No facts yet' and the proposals vanish
+  - F-AR-063 Forget removes a fact every bot knows with a swipe and no confirmation or undo
+  - F-AR-064 A fact changed by hand in USER.md on the Mac never reaches the phone, so the chat card and Memory rows go stale
+  - F-AR-065 A Confirm or Forget on a fact that is already gone shows a file-name error and leaves the row in place
+  - F-AR-066 Settings has no Retry now, no next-try time, and still says Reconnecting 12 s after the network is back
+  - F-AR-067 Offline, a device's Revoke stays tappable, shows no pending state, and is replayed whenever the Mac returns
+  - F-AR-068 Settings 'Paired devices' shows a bare spinner for over 90 s while Status reads Connected, with no words, timeout or retry
+  - F-AR-069 Revoke in Paired devices is red text at 3.6:1 on the row
+  - F-AR-070 Sessions-in-Claude-app footer is garbled
+  - F-AR-071 Settings Status row reads Reconnecting or Connecting for the whole time the Mac is away and never says it is not answering
+  - F-AR-072 A failed usage read never says why; an expired login or a rate limit reads as 'pull down to try again'
+  - F-AR-073 A usage window whose reset time has passed still shows its old percentage and 'Resets in under a minute'
+  - F-AR-074 Refreshing plan usage on a socket that has died stops the spinner after 16 s with no message
+  - F-AR-075 Send in a bot chat gives a haptic only; VoiceOver hears nothing and the button vanishes under focus
+  - F-AR-076 Chat header is spoken as 'Name, view profile' and never says Awaiting approval, Parked or Unavailable
+  - F-AR-077 Pair-another sheet swaps live code to 'That code expired.' silently, and the code is read as one string
+  - F-AR-078 Pairing fields are spoken by their example text, and a failed pairing is not announced
+  - F-AR-079 Revoke, Confirm and Forget buttons do not say which device or fact they act on
+  - F-AR-080 Dark mode: the card expiry line, the memory footnote and the A/B/C/D option letters fall under 4.5:1 (3.2:1 and 2.9:1)
+  - F-AR-081 At the largest text size the bot state chip is cut to a prefix, so awaiting-approval, parked and unavailable are indistinguishable
+  - F-AR-082 At the largest text size the Pairing screen opens on the title and one paragraph; Scan and the fields are off screen
+- G32 gaps: at AX XXXL Home rows stay one line and long bot names cut hard (time could wrap under the name) (P2); chat bubble text barely grows at AX XXXL (P2, chat).
+- G31 gaps: C2 cannot be judged as written (typed instruction closes the greeting question; bot re-asks); composer placeholder still says "or talk about something else" though any message closes the card (G30 file); older apps show a replied card as "Dismissed".
+- H1.2 failed twice ("read after 1.2 s") on the G32 verifier run even after G33; check whether the 1 s window is too tight on a busy host (runner, P2).
+- G30 gaps: Stop in a bot chat stays enabled offline (waits 60 s then says not sent) (P2); bridges without the mute feature keep the old no-local-bubble behaviour (P3).
+- G30 verifier P3s: Attach and Dictate stay live when unrecognized; misplaced doc comment on ChatView.undelivered/openExchange; Retry on a "may have gone through" send hides its bubble up to 10 s.
+- Re-check notes: H1.6 screenshot cannot show the mark-unread change because the row is already unread (scenario design); runner startup race "demo project is not listed" seen again; composer placeholder truncates at default size.
+- Final cross-area audit (lean, 2026-11-02) P2s:
+  - F-FN-013 Bot activity line ("Sleep for 20 seconds") disappears on every reconnect and does not come back while the turn runs
+  - F-FN-014 Attaching photos or files fails silently, shows no progress, and repeated picks get the same name
+  - F-FN-015 Dictation gives no pending or spoken state, and a recognition error ends it with no message
+  - F-FN-016 File, Exchange, Connectors and Skills screens show a bare spinner forever when the Mac refuses or is away
+  - F-FN-017 Stop tapped as the reply lands raises a global 'Nothing is running.' error toast
+  - F-FN-018 Stop in a bot chat has no Stopping state: a frozen bot reads Working with a stale activity line for 15 s, then a bare note
+  - F-FN-019 Stop on a hung bot says "Stopped by Alex" while its foreground command keeps running; Chat has no way to see it
+  - F-FN-020 Answering two open questions back to back gives two separate bot turns, and the first reply is already out of date when it lands
+  - F-FN-021 Deleting a bot shows a 'Checking agents…' toast for up to 3 s that VoiceOver never hears
+  - F-FN-022 Group row shows a member's reply as the preview with no speaker, and two members can share a name
+  - F-FN-023 After the Mac returns, the phone replays the gap and posts a notification for a question or approval that was already answered
+  - F-FN-024 For about 1 to 4 s after a card opens, the row shows an italic activity line instead of the question or approval
+  - F-FN-025 A bot that waits on a question gets no word on its row, only a small orange badge and a glyph, and the same badge sits on a busy row
+  - F-FN-026 A Mac that stops answering (frozen bridge, half-open socket) still reads Connected with live controls for up to 25 s
+  - F-FN-027 After 10 wrong tries from one address, even a fresh valid code is refused for up to ten minutes, with no time left and nothing on the Mac
+  - F-FN-028 Scan QR code with camera access denied says 'This device cannot scan codes' and gives no way to fix it
+  - F-FN-029 Remove-phone tap is queued behind the remover's own earlier slow request, so the removed phone stays connected and keeps receiving frames meanwhile
+  - F-FN-030 Pair-another sheet keeps showing a code the bridge has already retired
+  - F-FN-031 Two phones paired as "iPhone" show as identical rows, and the row has no paired date
+  - F-FN-032 C2 simulator shots are covered by the system notification prompt, so C2.5/C2.6 cannot be fully judged
+  - F-FN-033 S3 simulator shots show the Sessions list with an offline banner and a Settings screen, so S3.6 and S3.7 cannot be judged
+  - F-FN-034 Approval card goes offline and dead for the whole reconnect, although the app's own grace says the Mac still answers
+  - F-FN-035 When one of several background commands finishes and Claude reports it, an away user gets no push or alert, only a dot on a row that still reads Working
+  - F-FN-036 Offline thread status line cuts the sentence that says what was running when the Mac last answered
+  - F-FN-037 A question or plan card cut off by a bridge restart reads "Expired. Nobody answered in time."
+  - F-FN-038 A session whose approval nobody answered ends as Finished, with a Finished push
+  - F-FN-039 The 'waiting on its own background command' notice states a start time 5 s short of the Running-now clock, and never updates
+  - F-FN-040 Subagent waiting on its own command drops out of Running now (only the raw command is listed); Stopping it makes the agent reappear as a new task
+  - F-FN-041 Change address, Connect with the unchanged address, closes the sheet and tries nothing
+  - F-FN-042 Change address: Connect swaps to a bare spinner, Cancel and swipe-down are disabled for up to about 20 s, and a failure is silent to VoiceOver
+  - F-FN-043 At 50 facts the Add a fact button disappears with no explanation; pending bot proposals count toward the 50
+  - F-FN-044 Memory Confirm, Forget and Save change the list without a word, a pending state or focus, and the edit sheet closes before the Mac answers
+  - F-FN-045 A deleted bot's pending proposal stays forever and still says 'Only that bot uses it'
+  - F-FN-046 Settings, Memory names the proposing bot by its old name after a rename; the chat card uses the new name
+  - F-FN-047 Memory Add, Confirm and Forget taken offline show nothing and replay at any later time
+  - F-FN-048 Pull to refresh in Settings refreshes plan usage only; the Paired devices list has no manual refresh and no refetch on return
+  - F-FN-049 Home usage button shows only the 5-hour window; with none active it is a bare gauge, and a critical weekly limit never shows there
+  - F-FN-050 Refresh plan usage keeps spinning for 16 s after the Mac already answered that the read failed
+  - F-FN-051 Usage 'Resets' time flips between 3:00 AM and 2:59 AM across refreshes
+  - F-FN-052 A command the user just allowed reads "no activity for 1m" for about 4 s, because the last sign of life dates from before the approval wait
+  - F-FN-053 The @ and / suggestion menu opens silently and the Return-picks row is only visually highlighted
+- G35 new issue: the app auto-upgrade off the old shared token asks for a code over that same socket and the bridge refuses it, so those phones never upgrade on their own (needs a finding). G36 gaps: column alignment ignored; list/table inside a quote shows plain; ExchangeView group bubbles have no time. G37 gaps: S8 subagent waiting on its own command left out.
+- G34 gaps: group chats show no failed/stopped status on their row; a create the Mac received but never answered waits until the notice is tapped; "Finishing its background work" shows a 0 count and restarts the clock; background commands not shown after a bridge restart.
+- G37 verifier P3s: after the 3-denials breaker interrupts a turn, a parallel call still running reads "Stopped by you" though the bridge stopped it (inferred); at-work pane status icons have no fixed width so titles misalign.
+- G36 r2: bubbles parse Markdown twice per render (P3); swipe-check not rerun in r2; reading order not checked with VoiceOver running.
+- G35 verifier: T1 --sim fails its precondition 3/3 because the app drops from Connected to Connecting ~9 s after opening Settings and stays >40 s (row correctly disabled); cause (relay vs reconnect timing) unknown — T1 cannot be judged reliably on the sim lane (P2, needs its own finding). refresh_usage reply can now arrive before earlier replies (P3).
+- G34 verifier: the "Creating the new chat…" notice can stick and block Create when the created reply is lost to a socket drop (clear on next hello or a timeout) (P2); a group create skips the one-at-a-time rule (P3); new Home row lines truncate at default size ("Background: sleep 60 && echo finished-b…") (P3).
+- TOP OPEN ITEM (closing re-check, 2026-11-02): the app reconnects slowly or not at all after a long outage. T3.3 fails: Settings still reads Reconnecting and Machine Unknown 10-15 s after an 80 s outage ends while the protocol phone resumed at once; T1 --sim fails its precondition 3/3 because the app drops from Connected to Connecting about 9 s after opening Settings. Cause not triaged (app reconnect backoff vs the runner relay vs the XCUITest probe backgrounding the app). Treat as a P1 candidate.
+- T3.2 (known): Settings says Reconnecting for good after 60 s offline instead of naming that the Mac is not answering.

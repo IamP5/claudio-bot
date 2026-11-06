@@ -14,8 +14,12 @@ const PROTOCOL_2_OPTIONS = [
 type Permission = Extract<Message, { kind: "permission" }>;
 type Question = Extract<Message, { kind: "question" }>;
 
+const ANSWERS: Record<NonNullable<Permission["answer"]>, Question["answer"]> = {
+  once: 0, always: 0, deny: 1, never: 1, expired: "expired", stopped: "dismissed", closed: "expired", superseded: "dismissed",
+};
+
 function asQuestion(p: Permission): Question {
-  const answer = p.answer === null || p.answer === "expired" ? p.answer : p.answer === "once" || p.answer === "always" ? 0 : 1;
+  const answer = p.answer === null ? null : ANSWERS[p.answer];
   return {
     kind: "question",
     id: p.id,
@@ -31,11 +35,13 @@ const downgrade = (m: Message): Message => (m.kind === "permission" ? asQuestion
 
 /**
  * The frame a protocol 2 socket gets in place of `message`: the same frame unless it carries a permission card, and
- * null for a session frame, which it never gets.
+ * null for a session frame and a decide ack, which it never gets.
  */
 export function forProtocol2(message: ServerMessage): ServerMessage | null {
   if (isSessionFrame(message)) return null;
   switch (message.type) {
+    case "decided":
+      return null;
     case "message":
       return message.message.kind === "permission" ? { ...message, message: asQuestion(message.message) } : message;
     case "conversation":

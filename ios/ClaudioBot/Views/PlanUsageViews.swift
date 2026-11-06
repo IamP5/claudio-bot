@@ -145,7 +145,8 @@ struct SessionUsageButton: View {
                         .foregroundStyle(.white)
                 }
                 .padding(.horizontal, 12)
-                .frame(minHeight: 36)
+                .frame(minHeight: HitTarget.minHeight)
+                .contentShape(Rectangle())
                 .background {
                     if #unavailable(iOS 26.0) { Capsule().fill(Theme.card) }
                 }
@@ -153,7 +154,7 @@ struct SessionUsageButton: View {
             } else {
                 Image(systemName: "gauge.with.dots.needle.33percent")
                     .foregroundStyle(Theme.secondary)
-                    .frame(width: 36, height: 36)
+                    .frame(width: HitTarget.minHeight, height: HitTarget.minHeight)
             }
         }
         .buttonStyle(.plain)

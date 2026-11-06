@@ -41,18 +41,31 @@ import Testing
         #expect(screen == OnScreen())
     }
 
-    @Test func thePairSheetClosesOnADeviceMissingFromTheFirstListItHeard() {
-        func device(_ id: String) -> Device {
-            Device(id: DeviceID(id), name: id, createdAt: .now, lastSeenAt: nil, legacy: false, current: id == "mac")
-        }
+    private func device(_ id: String, legacy: Bool = false, current: Bool = false) -> Device {
+        Device(id: DeviceID(id), name: id, createdAt: .now, lastSeenAt: nil, legacy: legacy, current: current)
+    }
+
+    @Test func thePairSheetNamesTheDeviceMissingFromTheFirstListItHeard() {
         var watch = NewDeviceWatch()
-        let first = watch.heard([device("mac"), device("old")])
-        let again = watch.heard([device("mac"), device("old")])
-        let revoked = watch.heard([device("mac")])
-        let paired = watch.heard([device("mac"), device("phone")])
-        #expect(!first, "the first list is what was paired before")
-        #expect(!again)
-        #expect(!revoked, "a revoke is not a new device")
-        #expect(paired)
+        let first = watch.heard([device("mac", current: true), device("old")])
+        let again = watch.heard([device("mac", current: true), device("old")])
+        let revoked = watch.heard([device("mac", current: true)])
+        let paired = watch.heard([device("mac", current: true), device("Kim's iPad")])
+        #expect(first == nil, "the first list is what was paired before")
+        #expect(again == nil)
+        #expect(revoked == nil, "a revoke is not a new device")
+        #expect(paired?.name == "Kim's iPad")
+    }
+
+    @Test func pairAnotherSaysWhyItCannotHandOutACode() {
+        let token = Pairing.Credential.device(DeviceID("me"), token: "t")
+        let shared = Pairing.Credential.legacy(token: "t")
+        #expect(PairAnother.blocked(online: true, credential: token, devices: [device("me", current: true)]) == nil)
+        #expect(PairAnother.blocked(online: true, credential: token, devices: nil) == nil)
+        #expect(PairAnother.blocked(online: false, credential: token, devices: nil) == "Connect to your Mac to pair another device.")
+        let legacyLine = "This \(ThisDevice.noun) still uses the old shared token, so your Mac won't give it a code for another device. Unpair it, then pair it again with a code from your Mac."
+        #expect(PairAnother.blocked(online: true, credential: shared, devices: nil) == legacyLine)
+        #expect(PairAnother.blocked(online: true, credential: token, devices: [device("me", legacy: true, current: true)]) == legacyLine, "the Mac's list wins over the saved pairing")
+        #expect(PairAnother.blocked(online: false, credential: shared, devices: nil) == legacyLine, "a reconnect does not fix the shared token")
     }
 }

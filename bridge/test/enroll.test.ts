@@ -48,6 +48,7 @@ function home(opts: { machines?: boolean } = {}) {
     hello: (p: StreamPosition): ServerMessage => ({ type: "hello", protocol: 3, features: [], ...p, machine: "omarchy", userName: "Alex", bots: [] }),
     greeting: () => [],
     handle: async () => [],
+    left: async () => {},
   };
   const transport = serve({
     devices,

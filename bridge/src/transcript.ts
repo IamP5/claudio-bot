@@ -1,9 +1,10 @@
 import { getSessionInfo, getSessionMessages, listSessions, type SDKSessionInfo } from "@anthropic-ai/claude-agent-sdk";
-import { closeSync, openSync, readdirSync, readSync, statSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readSync, realpathSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, normalize, relative } from "node:path";
 import { PERMISSION_MODES, type AskQuestion, type ItemId, type PermissionMode, type SessionId, type SessionItem, type SessionPr, type ToolStep } from "./protocol";
 import { directHeader } from "./prompts";
-import { maskSecrets } from "./text";
+import { maskProse, maskSecrets, middleCut, runTime } from "./text";
 
 // The only reader of Claude Code's transcripts (~/.claude/projects/<folder>/<id>.jsonl). Heads come from the SDK's
 // listSessions plus a small head and tail read; a thread is every line of the file put in the SDK's chain order;
@@ -18,6 +19,7 @@ export type Head = {
   mtimeMs: number;
   cwd: string;
   createdAt: number;
+  /** The newest prompt, reply or tool result; the file's own time only when it has none yet. */
   lastAt: number;
   /** The custom title, else Claude Code's own summary or the first prompt, as the SDK picks it. */
   title: string;
@@ -124,8 +126,8 @@ function linesOf(text: string, cut: boolean): string[] {
   return lines;
 }
 
-type Facts = Pick<Head, "firstEntry" | "lastEntry" | "pr" | "mode" | "model" | "lastRole"> & { cwd: string | null };
-const noFacts = (): Facts => ({ firstEntry: null, lastEntry: null, pr: null, mode: null, model: null, lastRole: null, cwd: null });
+type Facts = Pick<Head, "firstEntry" | "lastEntry" | "pr" | "mode" | "model" | "lastRole"> & { cwd: string | null; spokeAt: number | null };
+const noFacts = (): Facts => ({ firstEntry: null, lastEntry: null, pr: null, mode: null, model: null, lastRole: null, cwd: null, spokeAt: null });
 
 const isMode = (v: unknown): v is PermissionMode => typeof v === "string" && (PERMISSION_MODES as readonly string[]).includes(v);
 
@@ -137,6 +139,10 @@ function isToolResult(message: unknown): boolean {
 /** Folds the facts of these lines, oldest first, onto what is known: a later line wins. */
 function scan(lines: readonly string[], into: Facts): Facts {
   const f = { ...into };
+  const spoke = (o: Record<string, unknown>) => {
+    const at = Date.parse(str(o.timestamp) ?? "");
+    if (!Number.isNaN(at)) f.spokeAt = Math.max(f.spokeAt ?? at, at);
+  };
   for (const line of lines) {
     // Most lines name none of these, and the big ones (tool results, request blobs) are skipped unparsed.
     if (!/"(type|entrypoint)":/.test(line)) continue;
@@ -159,12 +165,14 @@ function scan(lines: readonly string[], into: Facts): Facts {
         if (o.isSidechain === true || o.isMeta === true) break;
         if (isMode(o.permissionMode)) f.mode = o.permissionMode;
         f.lastRole = isToolResult(o.message) ? "assistant" : "user";
+        spoke(o);
         break;
       case "assistant": {
         if (o.isSidechain === true) break;
         const model = isRecord(o.message) ? str(o.message.model) : null;
         if (model !== null && model !== "<synthetic>") f.model = model;
         f.lastRole = "assistant";
+        spoke(o);
         break;
       }
     }
@@ -201,7 +209,7 @@ function headOf(info: SDKSessionInfo, file: { path: string; size: number; mtimeM
     mtimeMs: file.mtimeMs,
     cwd,
     createdAt: info.createdAt ?? file.mtimeMs,
-    lastAt: Math.max(info.lastModified, file.mtimeMs),
+    lastAt: facts.spokeAt ?? Math.max(info.lastModified, file.mtimeMs),
     title: (info.customTitle ?? info.summary).trim() || "Untitled session",
     // "HEAD": a detached checkout, or a folder outside git.
     branch: info.gitBranch && info.gitBranch !== "HEAD" ? info.gitBranch : null,
@@ -290,7 +298,8 @@ type Cached = { head: Head; facts: Facts & { size: number } };
 export function createHeads(opts: { projectsDir: string; sdk?: SdkReaders; seed?: readonly Head[]; exclude?: (cwd: string) => boolean }) {
   const sdk = opts.sdk ?? sdkReaders;
   const cache = new Map<string, Cached>();
-  for (const head of opts.seed ?? []) if (!opts.exclude?.(head.cwd)) cache.set(head.file, { head, facts: { ...head, cwd: head.cwd, size: head.size } });
+  // A saved head's lastAt may be a file time from an older bridge, so its facts are read from the start on its next change.
+  for (const head of opts.seed ?? []) if (!opts.exclude?.(head.cwd)) cache.set(head.file, { head, facts: { ...head, cwd: head.cwd, size: 0, spokeAt: null } });
 
   const fresh = (c: Cached | undefined, f: TranscriptFile) => c !== undefined && c.head.size === f.size && c.head.mtimeMs === f.mtimeMs;
 
@@ -431,20 +440,39 @@ export function extend(chain: Chain, entries: readonly Entry[]): { appended: Ent
   return { appended, forked: false };
 }
 
-/** The full result of one tool call, its last FULL_OUTPUT_MAX characters, or null when the transcript has none. */
+/**
+ * The full output of one tool call, its last FULL_OUTPUT_MAX characters, or null when the transcript has none: what
+ * the call returned, never Claude Code's launch acknowledgement or hand-back frame. A background task's is the result
+ * its last notification carries.
+ */
 export function toolOutput(path: string, toolUseId: string): string | null {
   const f = statOf(path);
   if (!f) return null;
-  for (const line of linesOf(readRange(path, 0, f.size), false).reverse()) {
-    if (!line.includes(toolUseId) || !line.includes("tool_result")) continue;
+  let tool = "";
+  let task: string | null = null;
+  let output: string | null = null;
+  for (const line of linesOf(readRange(path, 0, f.size), false)) {
+    if (!line.includes(toolUseId) && !(task !== null && line.includes(task))) continue;
     const e = parseEntry(line);
-    const content = e?.message?.content;
-    if (!Array.isArray(content)) continue;
-    for (const b of content) {
-      if (isRecord(b) && b.type === "tool_result" && b.tool_use_id === toolUseId) return resultText(b.content).slice(-FULL_OUTPUT_MAX);
+    if (!e || e.sidechain) continue;
+    const content = e.message?.content;
+    if (Array.isArray(content)) {
+      for (const b of content) {
+        if (!isRecord(b)) continue;
+        if (b.type === "tool_use" && b.id === toolUseId) tool = str(b.name) ?? "";
+        if (b.type !== "tool_result" || b.tool_use_id !== toolUseId) continue;
+        const outcome = classifyResult(tool, resultText(b.content), e.toolResult, b.is_error === true);
+        if (outcome.kind === "launched") task = outcome.task;
+        output = outcome.kind === "ok" || outcome.kind === "error" ? outcome.output : null;
+      }
+    }
+    for (const note of parseNotes(promptText(content))) {
+      if (note.toolUseId !== toolUseId && !(task !== null && note.taskId === task)) continue;
+      const file = tool === "Bash" && note.result === null ? taskOutput(note, FULL_OUTPUT_MAX, 0) : undefined;
+      output = typeof file !== "string" ? note.result : file || null;
     }
   }
-  return null;
+  return output === null ? null : maskSecrets(output.slice(-FULL_OUTPUT_MAX));
 }
 
 /** How much history a thread's first frame carries: whichever limit comes first, counted back from the newest. */
@@ -477,17 +505,35 @@ export type ProjectContext = { cwd: string; userName: string; agent: boolean };
 /** The items a continued projection may still change, and what it counts. */
 export type ProjectionTail = {
   open: Map<ItemId, SessionItem>;
-  /** A tool_use id to the item that shows it, until its result lands. */
+  /** A tool_use id to the item that shows it, until its result lands; for good when it runs in the background. */
   tools: Map<string, ItemId>;
+  /** Claude Code's task id to the tool_use id of the step that launched it. */
+  tasks: Map<string, string>;
+  /** The model's description of each open Agent or Bash call, by tool_use id: a task summary quotes it. */
+  descriptions: Map<string, string>;
+  /** Steps a bare reject just denied, by tool_use id: an interrupt as the next entry makes them stopped. */
+  rejected: Map<string, ItemId>;
   /** The work item tool calls join until a text block or a prompt closes it. */
   work: ItemId | null;
   /** The turn's todo item, which each TodoWrite of the turn replaces. */
   todo: ItemId | null;
   /** Blocks seen per API message, for entries written without their block index. */
   blocks: Map<string, number>;
+  /** The step each task notification's notice speaks of, by the notice's item id. */
+  notes: Map<ItemId, string>;
 };
 
-export const emptyTail = (): ProjectionTail => ({ open: new Map(), tools: new Map(), work: null, todo: null, blocks: new Map() });
+export const emptyTail = (): ProjectionTail => ({
+  open: new Map(),
+  tools: new Map(),
+  tasks: new Map(),
+  descriptions: new Map(),
+  rejected: new Map(),
+  work: null,
+  todo: null,
+  blocks: new Map(),
+  notes: new Map(),
+});
 
 function resultText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -522,29 +568,65 @@ function host(u: string): string {
   }
 }
 
-const firstLine = (s: string, max = 80) => {
-  const line = s.trim().split("\n")[0] ?? "";
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
-};
+const capped = (line: string, max: number) => (line.length > max ? `${line.slice(0, max - 1)}…` : line);
+const firstLine = (s: string, max = 80) => capped(s.trim().split("\n")[0] ?? "", max);
 
-/** The call in words: "Edit src/app.ts", "Run bun test". Secret-shaped text is masked. */
-export function stepLabel(tool: string, input: Record<string, unknown>, cwd: string): string {
+const AGENT_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
+const AGENT_LABEL_MAX = 120;
+const words = (s: string) => s.replace(/\s+/g, " ").trim();
+/** A Bash description that only repeats the command, or its first line, is the command, not the model's own words. */
+const repeatsCommand = (description: string, command: string | null) => command !== null && [command, command.trim().split("\n")[0]!].some((c) => words(c) === words(description));
+const backgroundLabel = (label: string) => (/\bin (?:the )?background\b/i.test(label) ? label : `Run in background: ${label.replace(/^Run /, "")}`);
+
+/** What a Bash step shows it runs: every line, secrets masked, cut from the middle past 2 KB so the app can expand it whole. */
+const commandDetail = (command: string) => middleCut(maskSecrets(command.trim()), OUTPUT_TAIL);
+
+/**
+ * The call in words: "Edit src/app.ts", "Run bun test", the model's own description of a command. Words the model
+ * wrote are masked as prose, commands and paths as secrets. `target` names the background task a control tool points at.
+ */
+export function stepLabel(tool: string, input: Record<string, unknown>, cwd: string, target: (taskId: string | null) => string): string {
   const path = str(input.file_path) ?? str(input.notebook_path);
   const shown = (p: string) => (p.startsWith(cwd + "/") ? relative(cwd, p) : p);
-  let label: string;
-  if (FILE_TOOLS[tool] && path) label = `${FILE_TOOLS[tool]} ${shown(path)}`;
-  else if (tool === "Bash") label = `Run ${firstLine(str(input.description) ?? str(input.command) ?? "a command")}`;
-  else if (tool === "Grep") label = `Search for ${firstLine(str(input.pattern) ?? "text", 60)}`;
-  else if (tool === "Glob") label = `Find ${firstLine(str(input.pattern) ?? "files", 60)}`;
-  else if (tool === "WebFetch") label = `Read ${host(str(input.url) ?? "a web page")}`;
-  else if (tool === "WebSearch") label = `Search the web for ${firstLine(str(input.query) ?? "", 60)}`;
-  else if (tool === "Task" || tool === "Agent") label = `Agent: ${firstLine(str(input.description) ?? "a helper", 60)}`;
-  else if (tool === "Skill") label = `Skill ${str(input.skill) ?? ""}`.trim();
-  else if (tool.startsWith("mcp__")) {
+  const description = str(input.description);
+  if (FILE_TOOLS[tool] && path) return maskSecrets(`${FILE_TOOLS[tool]} ${shown(path)}`);
+  switch (tool) {
+    case "Bash": {
+      const command = str(input.command);
+      const label = description && !repeatsCommand(description, command) ? firstLine(maskProse(description)) : firstLine(maskSecrets(`Run ${command ?? "a command"}`));
+      return input.run_in_background === true ? backgroundLabel(label) : label;
+    }
+    case "Agent":
+    case "Task":
+      return `Agent: ${middleCut(maskProse(firstLine(description ?? "a helper", Infinity)), AGENT_LABEL_MAX - "Agent: ".length)}`;
+    case "BashOutput":
+      return `Check ${target(str(input.bash_id))}`;
+    case "TaskOutput":
+      return `Check ${target(str(input.task_id))}`;
+    case "KillShell":
+      return `Stop ${target(str(input.shell_id))}`;
+    case "TaskStop":
+      return `Stop ${target(str(input.task_id) ?? str(input.shell_id))}`;
+    case "Monitor":
+      return "Watch background output";
+    case "ScheduleWakeup":
+      return "Schedule a wake-up";
+    case "Grep":
+      return `Search for ${firstLine(maskSecrets(str(input.pattern) ?? "text"), 60)}`;
+    case "Glob":
+      return `Find ${firstLine(maskSecrets(str(input.pattern) ?? "files"), 60)}`;
+    case "WebFetch":
+      return maskSecrets(`Read ${host(str(input.url) ?? "a web page")}`);
+    case "WebSearch":
+      return `Search the web for ${firstLine(maskSecrets(str(input.query) ?? ""), 60)}`;
+    case "Skill":
+      return maskSecrets(`Skill ${str(input.skill) ?? ""}`.trim());
+  }
+  if (tool.startsWith("mcp__")) {
     const [, server, ...name] = tool.split("__");
-    label = `${server}: ${name.join("__")}`;
-  } else label = tool;
-  return maskSecrets(label);
+    return maskSecrets(`${server}: ${name.join("__")}`);
+  }
+  return maskSecrets(tool);
 }
 
 function inputDiff(tool: string, input: Record<string, unknown>, cwd: string): ToolStep["diff"] {
@@ -572,7 +654,253 @@ function resultDiff(step: ToolStep, toolResult: unknown): ToolStep["diff"] {
   return counts ? { ...step.diff, ...counts } : step.diff;
 }
 
-const DENIED = /^(Permission to use|The user doesn't want to proceed|<tool_use_error>Blocked|.*\bIt did not run\b)/s;
+type Usage = NonNullable<ToolStep["usage"]>;
+
+/** What one source (a tool result, a task notification) says about a step. */
+type Outcome =
+  /** An async Agent's or a background Bash's acknowledgement: the step runs on as `task`. */
+  | { kind: "launched"; task: string }
+  | { kind: "ok"; output: string | null; usage?: Usage; detail?: string; cause?: string }
+  | { kind: "error"; output: string | null; cause: string }
+  /** reject: Claude Code's bare "doesn't want to proceed", which an interrupt right after makes a stop. */
+  | { kind: "denied"; cause: string; reject: boolean }
+  | { kind: "stopped"; cause: string }
+  /** The task stopped for now with work of its own still running: what it said so far is not its result. */
+  | { kind: "interim" };
+
+const CAUSE_MAX = 200;
+const STOPPED_BY_YOU = "Stopped by you";
+const REJECTED = /^The user doesn't want to proceed with this tool use\b/;
+/** The bridge's own denials when the user pressed Stop. */
+const STOPPED = /^[^\n]+ (pressed Stop\. This call did not run|stopped the session\. It did not run\.)/;
+/** Claude Code's word for a call a stop cut off, as a result or as the prompt after a stopped turn. */
+const INTERRUPTED = /^\[Request interrupted by user[^\]]*\]$/;
+const DENIED = /^(Permission to use|<tool_use_error>Blocked|.*\bIt did not run\b)/s;
+const ASYNC_AGENT = /^Async agent launched successfully\./;
+const AGENT_ID = /^agentId: ([\w-]+)/m;
+const BACKGROUND_COMMAND = /^Command running in background with ID: ([\w-]+)/;
+/** Claude Code's stand-in for a call that printed nothing: "(Bash completed with no output)". */
+const NO_OUTPUT = /^\(\w+ completed with no output\)$/;
+const HAND_BACK = /^\[Subagent hand-back\][^\n]*\n/;
+/** The usage block that ends a hand-back or a notification; the report or result before it may quote one. */
+const USAGE_BLOCK = /\n?<usage>((?:(?!<usage>)[\s\S])*)<\/usage>\s*$/;
+const ERROR_TAGS = /<\/?tool_use_error>/g;
+/** The tool list Claude Code puts before a subagent's report. */
+const TOOLS_USED = /^\s*<tools-used-before-summary>[\s\S]*?<\/tools-used-before-summary>\s*/;
+const summaryOnly = (report: string) => report.replace(TOOLS_USED, "");
+/** A subagent's failure in its first sentence: Claude Code follows "Agent type 'x' not found." with every type it knows. */
+const firstSentence = (line: string) => line.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? line;
+
+/** A number the text gives as "key: N" (a hand-back's usage) or as <key>N</key> (a notification's). */
+const counted = (s: string, key: string) => {
+  const m = s.match(new RegExp(`${key}: (\\d+)|<${key}>(\\d+)</${key}>`));
+  return m ? Number(m[1] ?? m[2]) : null;
+};
+
+/** An Agent's report without Claude Code's hand-back frame, agentId line and usage block, and its tool count and time. */
+function handBack(text: string, toolResult: unknown): { output: string | null; usage?: Usage; detail?: string } {
+  const r = isRecord(toolResult) ? toolResult : {};
+  const blocks = Array.isArray(r.content) ? r.content.flatMap((b) => (isRecord(b) && b.type === "text" && typeof b.text === "string" ? [b.text] : [])) : [];
+  let report = blocks.join("\n");
+  if (blocks.length === 0) {
+    const body = text
+      .replace(HAND_BACK, "")
+      .replace(USAGE_BLOCK, "")
+      .replace(/(^|\n)agentId: [^\n]*$/, "");
+    // The harness indents every line of a framed report by two spaces.
+    report = HAND_BACK.test(text) ? body.replace(/^ {2}/gm, "") : body;
+  }
+  const usageText = text.match(USAGE_BLOCK)?.[1] ?? "";
+  const tools = typeof r.totalToolUseCount === "number" ? r.totalToolUseCount : counted(usageText, "tool_uses");
+  const ms = typeof r.totalDurationMs === "number" ? r.totalDurationMs : counted(usageText, "duration_ms");
+  const agentType = str(r.agentType);
+  return { output: summaryOnly(report).trim() || null, ...(tools !== null && ms !== null && { usage: { tools, ms } }), ...(agentType && { detail: agentType }) };
+}
+
+/** A failure in one line: "Exit code 1: ls: late.txt: No such file or directory". */
+function failureCause(text: string): string {
+  const lines = text
+    .replace(ERROR_TAGS, "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l !== "");
+  const exit = lines.find((l) => /^Exit code -?\d+$/.test(l));
+  const other = lines.find((l) => l !== exit);
+  return capped([exit, other].filter((l) => l !== undefined).join(": "), CAUSE_MAX);
+}
+
+/** What a tool_result block (with its entry's toolUseResult) says about the call that made it. */
+function classifyResult(tool: string, text: string, toolResult: unknown, isError: boolean): Outcome {
+  if (isError) {
+    if (REJECTED.test(text) || toolResult === "User rejected tool use") return { kind: "denied", cause: "Denied by you", reject: true };
+    if (STOPPED.test(text.replace(ERROR_TAGS, "")) || INTERRUPTED.test(text)) return { kind: "stopped", cause: STOPPED_BY_YOU };
+    if (DENIED.test(text)) return { kind: "denied", cause: firstLine(maskSecrets(text.replace(ERROR_TAGS, "")), CAUSE_MAX), reject: false };
+    const cause = failureCause(text);
+    return { kind: "error", output: text === "" ? null : text, cause: maskSecrets(AGENT_TOOLS.has(tool) ? firstSentence(cause) : cause) };
+  }
+  const r = isRecord(toolResult) ? toolResult : {};
+  const task =
+    (r.status === "async_launched" ? str(r.agentId) : null) ??
+    str(r.backgroundTaskId) ??
+    (ASYNC_AGENT.test(text) ? (text.match(AGENT_ID)?.[1] ?? null) : null) ??
+    text.match(BACKGROUND_COMMAND)?.[1] ??
+    null;
+  if (task !== null) return { kind: "launched", task };
+  if (AGENT_TOOLS.has(tool)) return { kind: "ok", ...handBack(text, toolResult) };
+  return { kind: "ok", output: text === "" || NO_OUTPUT.test(text) ? null : text };
+}
+
+/** One <task-notification> block: Claude Code's word that a background task stopped. */
+type TaskNote = { taskId: string | null; toolUseId: string | null; outputFile: string | null; status: string; summary: string; note: string; result: string | null; usage?: Usage };
+
+const unescapeXml = (s: string) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+
+function parseNotes(text: string): TaskNote[] {
+  return [...text.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)].map(([, body]) => {
+    const tag = (name: string) => {
+      const m = body!.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`));
+      return m ? unescapeXml(m[1]!.trim()) : null;
+    };
+    const usage = body!.match(USAGE_BLOCK)?.[1] ?? "";
+    const tools = counted(usage, "tool_uses");
+    const ms = counted(usage, "duration_ms");
+    const result = tag("result");
+    return {
+      taskId: tag("task-id"),
+      toolUseId: tag("tool-use-id"),
+      outputFile: tag("output-file"),
+      status: tag("status") ?? "",
+      summary: tag("summary") ?? "",
+      note: tag("note") ?? "",
+      result: result === null ? null : summaryOnly(result),
+      ...(tools !== null && ms !== null && { usage: { tools, ms } }),
+    };
+  });
+}
+
+/** `Agent "<description>" failed: <error>`, `Background command "<description or command>" completed (exit code 0)`. */
+const SUMMARY = /^([A-Z][\w ]* ")([\s\S]*?)(" (?:finished|completed|failed|was|is|stopped)\b[\s\S]*)$/;
+
+/**
+ * Claude Code quotes a task's description in its summary, and a background command's is the raw command when the model
+ * gave none. The quote is masked as prose only when it is the model's own description, whole; what follows it is error text.
+ */
+export function maskSummary(summary: string, description: string | null): string {
+  const m = summary.match(SUMMARY);
+  if (!m) return maskSecrets(summary);
+  return m[1]! + (description !== null && words(m[2]!) === words(description) ? maskProse(m[2]!) : maskSecrets(m[2]!)) + maskSecrets(m[3]!);
+}
+
+
+
+const GONE = Symbol("gone");
+/** The output file is there but is not a plain file where its path says, so it is not read. */
+const REFUSED = Symbol("refused");
+/** The line Claude Code appends to a command's output file when it exits; the step's state already says how. */
+const EXIT_TRAILER = /\n?\[exited with code -?\d+\]\n?$/;
+/** Where Claude Code writes a background task's output: <tmp>/claude-<uid>/<project>/<session>/tasks/<task id>.output. */
+const TASK_OUTPUT = /^(.*)\/claude-\d+\/[^/]+\/[^/]+\/tasks\/([\w-]+)\.output$/;
+const TEMP_ROOTS: ReadonlySet<string> = new Set(["/tmp", "/private/tmp", tmpdir().replace(/\/$/, ""), `/private${tmpdir().replace(/\/$/, "")}`]);
+
+/**
+ * What a command printed, from the file its notification names: enough of its start and end for `head` and `tail`
+ * characters, the middle left out. undefined when the note names no such file of its own task; GONE when the file is
+ * no longer there; REFUSED when it is there but is no plain file, or its folders lead somewhere else.
+ */
+function taskOutput(note: TaskNote, tail: number, head: number): string | typeof GONE | typeof REFUSED | undefined {
+  const path = note.outputFile;
+  const shape = path === null ? null : TASK_OUTPUT.exec(path);
+  if (path === null || !isAbsolute(path) || normalize(path) !== path || !shape || !TEMP_ROOTS.has(shape[1]!) || shape[2] !== note.taskId) return undefined;
+  let fd: number;
+  try {
+    // No symlink as the file itself, and no wait on a FIFO.
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "ENOENT" ? GONE : REFUSED;
+  }
+  try {
+    const f = fstatSync(fd);
+    // The folders on the way may not lead elsewhere either: the file must sit where its path says.
+    if (!f.isFile() || realpathSync(dirname(path)) !== join(realpathSync(shape[1]!), relative(shape[1]!, dirname(path)))) return REFUSED;
+    // A character takes up to 4 bytes, so these many bytes always hold the characters asked for.
+    const [start, end] = [4 * head, 4 * tail];
+    if (f.size <= start + end) return readFd(fd, 0, f.size).replace(EXIT_TRAILER, "");
+    return `${readFd(fd, 0, start).replace(/\uFFFD+$/, "")}\n…\n${readFd(fd, f.size - end, f.size).replace(/^\uFFFD+/, "").replace(EXIT_TRAILER, "")}`;
+  } catch {
+    return GONE;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function readFd(fd: number, start: number, end: number): string {
+  const buf = Buffer.alloc(Math.max(0, end - start));
+  const n = buf.length === 0 ? 0 : readSync(fd, buf, 0, buf.length, start);
+  return buf.toString("utf8", 0, n);
+}
+
+function noteOutcome(note: TaskNote, summary: string): Outcome {
+  switch (note.status) {
+    case "completed": {
+      if (/may be interim/.test(note.note) || /is waiting on its own background work/.test(note.summary)) return { kind: "interim" };
+      const exit = note.summary.match(/\(exit code (-?\d+)\)/)?.[1];
+      if (exit !== undefined && exit !== "0") return { kind: "error", output: note.result, cause: `Exit code ${exit}` };
+      return { kind: "ok", output: note.result, ...(note.usage && { usage: note.usage }) };
+    }
+    case "failed":
+      return { kind: "error", output: note.result, cause: capped(summary, CAUSE_MAX) };
+    case "killed":
+    case "stopped":
+      return { kind: "stopped", cause: /stopped by user/i.test(note.summary) ? STOPPED_BY_YOU : capped(summary, CAUSE_MAX) };
+    default:
+      return { kind: "interim" };
+  }
+}
+
+/** A settled command's output, from its output file when the notification carries none. */
+function withOutput(outcome: Outcome, file: string | typeof GONE | typeof REFUSED | undefined): Outcome {
+  if (file === undefined || (outcome.kind !== "ok" && outcome.kind !== "error")) return outcome;
+  if (file === GONE || file === REFUSED) return outcome.kind === "ok" ? { ...outcome, output: null, cause: file === GONE ? OUTPUT_GONE : OUTPUT_REFUSED } : { ...outcome, output: null };
+  return { ...outcome, output: file };
+}
+
+const OUTPUT_GONE = "Its output file was gone";
+const OUTPUT_REFUSED = "Its output file could not be read safely";
+const ERROR_HEAD = 512;
+/** An error's output keeps its head too, so the exit status at the top of a long output is never cut. */
+const shownOutput = (output: string | null, kind: "ok" | "error") => {
+  if (output === null || output === "") return null;
+  if (kind === "ok" || output.length <= OUTPUT_TAIL) return maskSecrets(output.slice(-OUTPUT_TAIL));
+  return maskSecrets(`${output.slice(0, ERROR_HEAD)}\n…\n${output.slice(-(OUTPUT_TAIL - ERROR_HEAD))}`);
+};
+
+/** The one reducer both sources settle a step through. `at` is when the source was written. */
+function settleStep(step: ToolStep, outcome: Outcome, at: string): ToolStep {
+  const { endedAt: _e, cause: _c, ...base } = step;
+  const ended = at === "" ? {} : { endedAt: at };
+  switch (outcome.kind) {
+    case "launched":
+      return { ...base, state: "running", output: null, background: true, label: step.tool === "Bash" && !step.background ? backgroundLabel(step.label) : step.label };
+    case "interim":
+      return { ...base, state: "running", output: null };
+    case "ok":
+      return {
+        ...base,
+        state: "ok",
+        output: shownOutput(outcome.output, "ok"),
+        ...ended,
+        ...(outcome.cause && { cause: outcome.cause }),
+        ...(outcome.usage && { usage: outcome.usage }),
+        ...(outcome.detail && step.detail === undefined && { detail: outcome.detail }),
+      };
+    case "error":
+      return { ...base, state: "error", output: shownOutput(outcome.output, "error"), ...ended, ...(outcome.cause && { cause: outcome.cause }) };
+    case "denied":
+      return { ...base, state: "denied", output: null, ...ended, cause: outcome.cause };
+    case "stopped":
+      return { ...base, state: "stopped", ...ended, cause: outcome.cause };
+  }
+}
 
 function questionsOf(input: Record<string, unknown>): AskQuestion[] {
   const qs = Array.isArray(input.questions) ? input.questions.filter(isRecord) : [];
@@ -599,7 +927,6 @@ const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;
 const BASH_INPUT = /^<bash-input>([\s\S]*)<\/bash-input>$/;
 /** Prompts Claude Code writes itself: command output, caveats, task and system notices. */
 const MACHINE = /^(<local-command-(stdout|stderr|caveat)>|<bash-(stdout|stderr)>|<task-notification>|<system-reminder>|Caveat: )/;
-const INTERRUPTED = /^\[Request interrupted by user[^\]]*\]$/;
 
 function promptText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -633,10 +960,19 @@ function speakerOf(text: string, ctx: ProjectContext): { from: "user" | "bot" | 
 
 /** Pure: entries in chain order → the items they make or change, in first-change order, and the tail to continue from. */
 export function project(entries: readonly Entry[], ctx: ProjectContext, prior: ProjectionTail = emptyTail()): { items: SessionItem[]; tail: ProjectionTail } {
-  const tail: ProjectionTail = { open: new Map(prior.open), tools: new Map(prior.tools), work: prior.work, todo: prior.todo, blocks: new Map(prior.blocks) };
+  const tail: ProjectionTail = {
+    open: new Map(prior.open),
+    tools: new Map(prior.tools),
+    tasks: new Map(prior.tasks),
+    descriptions: new Map(prior.descriptions),
+    rejected: new Map(prior.rejected),
+    work: prior.work,
+    todo: prior.todo,
+    blocks: new Map(prior.blocks),
+    notes: new Map(prior.notes),
+  };
   const changed = new Map<ItemId, SessionItem>();
   const put = (item: SessionItem, keep: boolean) => {
-    changed.delete(item.id);
     changed.set(item.id, item);
     if (keep) tail.open.set(item.id, item);
     else tail.open.delete(item.id);
@@ -646,6 +982,26 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
     tail.work = null;
     const work = id === null ? undefined : tail.open.get(id);
     if (work?.kind === "work" && !work.steps.some((s) => s.state === "running")) tail.open.delete(work.id);
+  };
+  const updateStep = (itemId: ItemId, toolId: string, change: (s: ToolStep) => ToolStep) => {
+    const item = tail.open.get(itemId);
+    if (item?.kind !== "work") return;
+    const steps = item.steps.map((s) => (s.id === toolId ? change(s) : s));
+    put({ ...item, steps }, tail.work === item.id || steps.some((s) => s.state === "running"));
+    if (steps.some((s) => s.id === toolId && s.state === "running")) return;
+    tail.tools.delete(toolId);
+    tail.descriptions.delete(toolId);
+    for (const [task, tool] of tail.tasks) if (tool === toolId) tail.tasks.delete(task);
+  };
+  /** "background command: sleep 75", "agent: sleeper one": the task a control tool points at, as its step shows it. */
+  const target = (taskId: string | null) => {
+    const toolId = taskId === null ? undefined : tail.tasks.get(taskId);
+    const itemId = toolId === undefined ? undefined : tail.tools.get(toolId);
+    const item = itemId === undefined ? undefined : tail.open.get(itemId);
+    const step = item?.kind === "work" ? item.steps.find((s) => s.id === toolId) : undefined;
+    if (step?.tool === "Bash" && step.detail !== undefined) return `background command: ${firstLine(step.detail)}`;
+    if (step && AGENT_TOOLS.has(step.tool)) return `agent: ${step.label.replace(/^Agent: /, "")}`;
+    return "a background task";
   };
 
   for (const e of entries) {
@@ -659,6 +1015,10 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
     }
     if (e.type === "attachment" || e.meta || e.compactSummary) continue;
     const content = e.message?.content;
+    const results = e.type === "user" && Array.isArray(content) && content.some((b) => isRecord(b) && b.type === "tool_result");
+    // Parallel calls' results come one entry each, so only an entry that is not a result ends the wait for an interrupt.
+    const rejected = tail.rejected;
+    if (!results) tail.rejected = new Map();
 
     if (e.type === "assistant") {
       const mid = e.message?.id ?? e.uuid;
@@ -668,6 +1028,8 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
         put({ kind: "notice", id: e.uuid as ItemId, at: e.at, text: promptText(content) || "Claude Code reported an error.", tone: "error" }, false);
         continue;
       }
+      // Claude Code's stand-in reply, written when it resumes after a turn that never ended: no one asked for it.
+      if (e.message?.model === "<synthetic>") continue;
       blocks.forEach((b, i) => {
         const seen = tail.blocks.get(mid) ?? 0;
         const index = e.blockIndex !== null ? e.blockIndex + i : seen;
@@ -688,16 +1050,22 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
       continue;
     }
 
-    // A user entry: tool results settle calls, anything else is a prompt.
-    if (Array.isArray(content) && content.some((b) => isRecord(b) && b.type === "tool_result")) {
-      for (const b of content) if (isRecord(b) && b.type === "tool_result") settle(b, e.toolResult);
+    // A user entry: tool results settle calls, a task notification settles background work, anything else is a prompt.
+    if (results && Array.isArray(content)) {
+      for (const b of content) if (isRecord(b) && b.type === "tool_result") settle(b, e);
       continue;
     }
     const raw = promptText(content).trim();
+    if (raw.startsWith("<task-notification>")) {
+      parseNotes(raw).forEach((note, i) => noted(note, i === 0 ? e.uuid : `${e.uuid}:${i}`, e.at));
+      continue;
+    }
     if (raw === "" || MACHINE.test(raw)) continue;
+    const interrupted = INTERRUPTED.test(raw);
+    if (interrupted) for (const [toolId, itemId] of rejected) updateStep(itemId, toolId, (s) => settleStep(s, { kind: "stopped", cause: STOPPED_BY_YOU }, s.endedAt ?? e.at));
     closeWork();
     tail.todo = null;
-    if (INTERRUPTED.test(raw)) {
+    if (interrupted) {
       put({ kind: "notice", id: e.uuid as ItemId, at: e.at, text: "Interrupted", tone: "info" }, false);
       continue;
     }
@@ -737,42 +1105,72 @@ export function project(entries: readonly Entry[], ctx: ProjectContext, prior: P
       put({ kind: "ask", id, at, questions: questionsOf(input), answers: null, cardId: null }, true);
       return;
     }
-    const step: ToolStep = { id: toolId, tool: name, label: stepLabel(name, input, ctx.cwd), state: "running", diff: inputDiff(name, input, ctx.cwd), output: null };
+    const command = name === "Bash" ? str(input.command) : null;
+    const detail = command !== null ? commandDetail(command) : AGENT_TOOLS.has(name) ? str(input.subagent_type) : null;
+    const step: ToolStep = {
+      id: toolId,
+      tool: name,
+      label: stepLabel(name, input, ctx.cwd, target),
+      state: "running",
+      diff: inputDiff(name, input, ctx.cwd),
+      output: null,
+      ...(detail && { detail }),
+      ...(at !== "" && { startedAt: at }),
+      ...(input.run_in_background === true && { background: true as const }),
+    };
     const current = tail.work === null ? undefined : tail.open.get(tail.work);
     const work: SessionItem = current?.kind === "work" ? { ...current, steps: [...current.steps, step] } : { kind: "work", id, at, steps: [step] };
     tail.work = work.id;
     tail.tools.set(toolId, work.id);
+    const description = str(input.description);
+    if (description !== null && !repeatsCommand(description, command) && (name === "Bash" || AGENT_TOOLS.has(name))) tail.descriptions.set(toolId, description);
     put(work, true);
   }
 
-  function settle(b: Record<string, unknown>, toolResult: unknown) {
+  function settle(b: Record<string, unknown>, e: Entry) {
     const toolId = str(b.tool_use_id);
     const itemId = toolId === null ? undefined : tail.tools.get(toolId);
     const item = itemId === undefined ? undefined : tail.open.get(itemId);
     if (toolId === null || !item) return;
-    tail.tools.delete(toolId);
     const text = resultText(b.content);
     const failed = b.is_error === true;
     switch (item.kind) {
       case "work": {
-        const steps = item.steps.map((s): ToolStep => {
-          if (s.id !== toolId) return s;
-          const state = !failed ? "ok" : DENIED.test(text) ? "denied" : "error";
-          return { ...s, state, diff: failed ? s.diff : resultDiff(s, toolResult), output: text === "" ? null : maskSecrets(text.slice(-OUTPUT_TAIL)) };
-        });
-        const settled: SessionItem = { ...item, steps };
-        put(settled, tail.work === item.id || steps.some((s) => s.state === "running"));
+        const step = item.steps.find((s) => s.id === toolId);
+        if (!step) return;
+        const outcome = classifyResult(step.tool, text, e.toolResult, failed);
+        if (outcome.kind === "launched") tail.tasks.set(outcome.task, toolId);
+        if (outcome.kind === "denied" && outcome.reject) tail.rejected.set(toolId, item.id);
+        updateStep(item.id, toolId, (s) => ({ ...settleStep(s, outcome, e.at), diff: outcome.kind === "ok" ? resultDiff(s, e.toolResult) : s.diff }));
         return;
       }
       case "ask":
-        put({ ...item, answers: failed ? "dismissed" : answersOf(toolResult, text), cardId: null }, false);
+        tail.tools.delete(toolId);
+        put({ ...item, answers: failed ? "dismissed" : answersOf(e.toolResult, text), cardId: null }, false);
         return;
       case "plan":
+        tail.tools.delete(toolId);
         put({ ...item, state: failed ? "rejected" : "approved", cardId: null }, false);
         return;
       default:
         return;
     }
+  }
+
+  /** A task notification settles the step that launched the task, and shows Claude Code's summary as a notice. */
+  function noted(note: TaskNote, id: string, at: string) {
+    const toolId = [note.toolUseId, note.taskId === null ? undefined : tail.tasks.get(note.taskId)].find((t): t is string => typeof t === "string" && tail.tools.has(t));
+    const item = toolId === undefined ? undefined : tail.open.get(tail.tools.get(toolId)!);
+    const description = toolId === undefined ? null : (tail.descriptions.get(toolId) ?? null);
+    const summary = maskSummary(note.summary, description);
+    const step = item?.kind === "work" ? item.steps.find((s) => s.id === toolId) : undefined;
+    const said = noteOutcome(note, summary);
+    const outcome = withOutput(said, step?.tool === "Bash" && note.result === null ? taskOutput(note, OUTPUT_TAIL, said.kind === "error" ? ERROR_HEAD : 0) : undefined);
+    if (toolId !== undefined && item) updateStep(item.id, toolId, (s) => settleStep(s, outcome, at));
+    if (toolId !== undefined) tail.notes.set(id as ItemId, toolId);
+    closeWork();
+    const usage = outcome.kind === "ok" && note.usage ? ` · ${runTime(note.usage.ms)} · ${note.usage.tools} ${note.usage.tools === 1 ? "tool" : "tools"}` : "";
+    put({ kind: "notice", id: id as ItemId, at, text: summary + usage, tone: outcome.kind === "error" ? "error" : "info", reason: "task" }, false);
   }
 
   return { items: [...changed.values()], tail };

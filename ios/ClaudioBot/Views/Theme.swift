@@ -25,6 +25,16 @@ extension Font {
         .system(size: macSize(size), weight: weight, design: design)
     }
 
+    /// The size of `style` at the default text size, and on iPhone it grows and shrinks with Dynamic Type. A Mac has
+    /// no Dynamic Type, so it reads the same as `.ui(size:)` at that size.
+    static func ui(_ style: TextStyle, weight: Weight = .regular, design: Design = .default) -> Font {
+        #if os(macOS)
+        .ui(size: style.iPhoneSize, weight: weight, design: design)
+        #else
+        .system(style, design: design, weight: weight)
+        #endif
+    }
+
     private static func macSize(_ size: CGFloat) -> CGFloat {
         #if os(macOS)
         switch size {
@@ -38,3 +48,24 @@ extension Font {
         #endif
     }
 }
+
+#if os(macOS)
+private extension Font.TextStyle {
+    /// Apple's iPhone sizes at the default text size.
+    var iPhoneSize: CGFloat {
+        switch self {
+        case .largeTitle: 34
+        case .title: 28
+        case .title2: 22
+        case .title3: 20
+        case .headline, .body: 17
+        case .callout: 16
+        case .subheadline: 15
+        case .footnote: 13
+        case .caption: 12
+        case .caption2: 11
+        @unknown default: 17
+        }
+    }
+}
+#endif

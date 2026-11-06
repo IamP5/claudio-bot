@@ -16,6 +16,9 @@ export type Stream = {
   position(resumed: boolean): StreamPosition;
 };
 
+/** A frame as it goes on the wire. A lone surrogate, such as half an emoji a cut left behind, becomes U+FFFD, so no app fails to decode it. */
+export const wire = (frame: unknown): string => JSON.stringify(frame, (_, v: unknown) => (typeof v === "string" && !v.isWellFormed() ? v.toWellFormed() : v));
+
 export function createStream(limits: { frames: number; bytes: number } = { frames: 2000, bytes: 8 << 20 }): Stream {
   const epoch = Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex");
   let seq = 0;
@@ -30,7 +33,7 @@ export function createStream(limits: { frames: number; bytes: number } = { frame
     },
     append(message) {
       seq += 1;
-      const frame = JSON.stringify({ ...message, seq } satisfies Broadcast);
+      const frame = wire({ ...message, seq } satisfies Broadcast);
       const size = Buffer.byteLength(frame);
       ring.push({ frame, bytes: size });
       bytes += size;

@@ -14,6 +14,7 @@ import type { Scope } from "./policy";
 import { createProjects } from "./projects";
 import {
   PHONE_MODES,
+  type ErrorAbout,
   type ItemId,
   type MessageId,
   type PermissionChoice,
@@ -28,12 +29,14 @@ import {
   type SessionStatus,
   type ThreadChannelFrame,
 } from "./protocol";
-import type { Result } from "./result";
-import type { SessionSpec } from "./session";
+import { refused, type Result } from "./result";
+import type { SessionEnd } from "./push";
+import { stopPending, type SessionSpec } from "./session";
 import type { Persist } from "./store";
-import { errorText } from "./text";
+import { RESTING, rowRun, runControls, runningSteps, runs, type StepPatch } from "./tasks";
+import { displayName, errorText } from "./text";
 import { createThreads } from "./threads";
-import { createHeads, folderOf, sdkReaders, statOf, transcriptExists, type Head, type SdkReaders } from "./transcript";
+import { createHeads, folderOf, sdkReaders, statOf, stepLabel, transcriptExists, type Head, type SdkReaders } from "./transcript";
 import { prepareWorkspace } from "./worktree";
 import { own, type AgentRecord, type SessionPrefs, type SessionRecord, type World } from "./world";
 
@@ -50,6 +53,8 @@ export type SessionsEnv = {
   cacheDir: string;
   signal: { list(frame: SessionsChannelFrame): void; thread(id: SessionId, frame: ThreadSignal): void };
   watchers(id: SessionId): number;
+  /** The watchers someone looks at; absent: every watcher. A thread only they hold has nothing unread. */
+  readers?(id: SessionId): number;
   sdk?: SdkReaders & { renameSession?: typeof renameSession };
   coalesceMs?: number;
   /** false: no fs.watch on the projects folder (tests). */
@@ -78,11 +83,15 @@ export type SessionsDeps = SessionsEnv & {
   /** The gate's answer to one of its cards: an agent's permission card, decided from the agent's thread. */
   decideGate(botId: string, cardId: MessageId, choice: PermissionChoice): Result;
   ledger: Ledger;
-  claude: Pick<SessionSpec, "query" | "executable">;
+  claude: Pick<SessionSpec, "query" | "executable" | "shells" | "leaders" | "taskRun">;
   /** Paths the floors protect, for a session working in cwd. */
   scope(cwd: string): Scope;
-  /** A card in a session the phone drives: a push that says only that a session needs the user. */
+  /** A card opened in a session the phone drives. */
   notify?(id: SessionId, cardId: MessageId): void;
+  /** A run of a session the phone drives came to rest, finished or failed, at `at`; never after a user's stop. */
+  ended?(id: SessionId, end: SessionEnd, at: string): void;
+  /** How long a card waits for an answer; absent: two hours. */
+  cardTtlMs?: number;
   /** The project folders under the roots (no git run), so a project with no session yet lists. */
   folders(): string[];
   persist: Persist;
@@ -105,6 +114,12 @@ export type Sessions = Tickable & {
   resume(): void;
   /** A message of an agent's live query on the session: its text streams into the thread. */
   stream(id: SessionId, m: SDKMessage): void;
+  /** A socket that watched the thread went away at `at`: the user last saw it then. */
+  left(id: SessionId, at: Date): void;
+  /** Who looks at the app changed, so what reads as unread may have. */
+  presence(): void;
+  /** The title the session's row shows. */
+  title(id: SessionId): string;
   stop(): void;
 };
 
@@ -146,6 +161,8 @@ const THREAD_POLL_MS = 1_000;
 
 const GONE = "This session's transcript is gone.";
 const SENT_KEPT = 50;
+const DRAFT_TITLE_MAX = 80;
+const draftTitle = (prompt: string | undefined) => displayName((prompt ?? "New session").split("\n")[0]!, DRAFT_TITLE_MAX);
 /** Shown cards per agent, so a settled gate card stays in the agent's thread with its answer. */
 const GATE_CARDS_KEPT = 20;
 
@@ -192,6 +209,18 @@ export function createSessions(deps: SessionsDeps): Sessions {
     return null;
   }
 
+  const cwdOf = (id: SessionId): string | null => catalog.head(id)?.cwd ?? agentOf(id)?.cwd ?? deps.world.sessions.get(id)?.own?.cwd ?? null;
+
+  /** A session's transcript: the index's head, else, for one the bridge drives, the file Claude Code writes in its cwd's folder before the index has read it. */
+  function transcript(id: SessionId): { file: string; cwd: string } | null {
+    const head = catalog.head(id);
+    if (head) return { file: head.file, cwd: head.cwd };
+    const cwd = cwdOf(id);
+    if (cwd === null) return null;
+    const file = join(deps.projectsDir, folderOf(cwd), `${id}.jsonl`);
+    return statOf(file) ? { file, cwd } : null;
+  }
+
   function driverOf(id: SessionId): Writer {
     const agent = agentOf(id);
     if (agent) return { kind: "agent", rec: agent };
@@ -214,7 +243,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   /** Why the phone must wait to send: another live Claude Code is busy on the id. */
   function blocked(id: SessionId): string | null {
     const held = deps.apps.holders().get(id);
-    if (!held?.busy) return null;
+    if (held?.status !== "busy") return null;
     return HELD_BY[held.entrypoint] ?? "Another Claude Code is working on this session.";
   }
 
@@ -224,8 +253,10 @@ export function createSessions(deps: SessionsDeps): Sessions {
     if (w.kind === "cloud") return { status: w.rec.agent.status === "failed" ? "failed" : "idle", working: false };
     if (w.kind !== "agent") return null;
     const session = deps.agents.session(w.rec.agent.id);
-    const status: SessionStatus = session?.working ? "working" : session?.parkedFor ? "parked" : AGENT_STATUS[w.rec.agent.status];
-    return { status, working: session?.working ?? false };
+    const a = session?.activity() ?? RESTING;
+    const working = (session?.working ?? false) || runs(a);
+    const status: SessionStatus = working ? "working" : session?.parkedFor ? "parked" : AGENT_STATUS[w.rec.agent.status];
+    return { status, working, ...(working && rowRun(a, [], (c, target) => stepLabel(c.tool, c.input, w.rec.cwd, target))) };
   }
 
   function controls(id: SessionId): SessionControls {
@@ -240,14 +271,26 @@ export function createSessions(deps: SessionsDeps): Sessions {
         const pending = w.rec.session.pending.length;
         const life = w.rec.session.lifecycle;
         const busy = life.kind === "working" || life.kind === "stopping" ? 1 : 0;
-        return { canSend: true, reason: null, working: session?.working ?? false, queued: Math.max(0, pending - busy), model: null, models: [], mode: "auto", modes: [] };
+        const a = session?.activity() ?? RESTING;
+        return {
+          canSend: true,
+          reason: null,
+          working: (session?.working ?? false) || runs(a),
+          queued: Math.max(0, pending - busy),
+          model: null,
+          models: [],
+          mode: "auto",
+          modes: [],
+          ...stopPending(life),
+          ...runControls(a, []),
+        };
       }
       case "open":
       case "none": {
         const wait = w.kind === "none" ? w.reason : blocked(id);
         const head = catalog.head(id);
         const mode = head?.mode && (PHONE_MODES as readonly string[]).includes(head.mode) ? (head.mode as PhoneMode) : (settingsMode(configDir) ?? "default");
-        return { canSend: wait === null, reason: wait, working: deps.apps.holders().get(id)?.busy ?? false, queued: 0, model: null, models: MODELS_SHOWN, mode, modes: [...PHONE_MODES] };
+        return { canSend: wait === null, reason: wait, working: deps.apps.holders().get(id)?.status === "busy", queued: 0, model: null, models: MODELS_SHOWN, mode, modes: [...PHONE_MODES] };
       }
     }
   }
@@ -265,18 +308,30 @@ export function createSessions(deps: SessionsDeps): Sessions {
       if (m?.kind === "permission") items.push({ kind: "permission", id: id as string as ItemId, at: m.at, card: { ...m } });
     }
     const life = rec.session.lifecycle;
-    const inFlight = life.kind === "working" || life.kind === "stopping" ? life.turn.pending : null;
+    const turn = life.kind === "working" || life.kind === "stopping" ? life.turn : null;
     for (const p of rec.session.pending) {
       if (p.clientId === undefined) continue;
       const text = p.text.split("\n").slice(1).join("\n");
-      items.push({ kind: "user", id: p.clientId as ItemId, at: p.at, text, from: "user", queued: p.id !== inFlight });
+      const took = p.id === turn?.pending ? turn.startedAt : null;
+      items.push({ kind: "user", id: p.clientId as ItemId, at: took ?? p.at, text, from: "user", queued: took === null });
     }
     return items;
   }
 
   /** A cloud agent's thread is what the bridge said to it and heard back: the bridge never has its transcript. */
   const cloudOverlay = (rec: AgentRecord): SessionItem[] =>
-    rec.messages.map((m): SessionItem => (m.from === "bot" ? { kind: "user", id: m.id as string as ItemId, at: m.at, text: m.text, from: "bot", queued: false } : { kind: "assistant", id: m.id as string as ItemId, at: m.at, text: m.text }));
+    rec.messages.map((m): SessionItem =>
+      m.from === "bot"
+        ? { kind: "user", id: m.id as string as ItemId, at: m.at, text: m.text, from: "bot", queued: false, ...(m.clientId !== undefined && { clientId: m.clientId }) }
+        : { kind: "assistant", id: m.id as string as ItemId, at: m.at, text: m.text },
+    );
+
+  function steps(id: SessionId): Map<string, StepPatch> {
+    const w = driverOf(id);
+    if (w.kind === "own") return drivers.steps(w.rec);
+    if (w.kind !== "agent") return new Map();
+    return runningSteps(deps.agents.session(w.rec.agent.id)?.activity() ?? RESTING);
+  }
 
   function overlay(id: SessionId): SessionItem[] {
     const w = driverOf(id);
@@ -299,17 +354,24 @@ export function createSessions(deps: SessionsDeps): Sessions {
     },
     transcriptExists: (id, cwd) => transcriptExists(deps.projectsDir, id, cwd),
     blocked,
+    elsewhere: (id) => deps.apps.holders().has(id),
     defaultMode: () => settingsMode(configDir),
     scope: deps.scope,
     changed(id) {
-      catalog.touch();
+      // The row's last activity follows the transcript, so a turn's end re-reads it even when no watch event came.
+      const file = transcript(id)?.file;
+      if (file) catalog.changed(file);
+      else catalog.touch();
       threads.refresh(id);
     },
     done(id) {
       if (deps.world.sessions.get(id)?.own?.created) due(id);
     },
     ...(deps.notify && { notify: deps.notify }),
+    ...(deps.ended && { ended: deps.ended }),
+    ...(deps.cardTtlMs !== undefined && { cardTtlMs: deps.cardTtlMs }),
     observe: (id, m) => threads.stream(id, m),
+    cutOff: (id) => threads.cutOff(id),
     options: { includePartialMessages: true },
     now: deps.now,
     log: deps.log,
@@ -325,6 +387,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   });
 
   const watched = (id: SessionId) => deps.watchers(id) > 0;
+  const read = (id: SessionId) => (deps.readers ?? deps.watchers)(id) > 0;
 
   const catalog = createCatalog({
     machine: deps.machine,
@@ -336,9 +399,9 @@ export function createSessions(deps: SessionsDeps): Sessions {
     driven,
     drafts: () =>
       [...deps.world.sessions.values()].flatMap((r) =>
-        r.own?.created ? [{ id: r.id, cwd: r.own.cwd, title: (r.own.prompt ?? "New session").split("\n")[0]!.slice(0, 80), at: r.own.at }] : [],
+        r.own?.created ? [{ id: r.id, cwd: r.own.cwd, title: draftTitle(r.own.prompt), at: r.own.at }] : [],
       ),
-    watched,
+    watched: read,
     folders: deps.folders,
     publish: deps.signal.list,
     appended: (path) => threads.appended(path),
@@ -351,14 +414,26 @@ export function createSessions(deps: SessionsDeps): Sessions {
 
   const threads = createThreads({
     epoch: deps.epoch,
-    head: (id) => catalog.head(id),
-    context: (id, head) => ({ cwd: head?.cwd ?? agentOf(id)?.cwd ?? deps.world.sessions.get(id)?.own?.cwd ?? "", userName: deps.userName, agent: agentOf(id) !== null }),
+    transcript,
+    context: (id) => ({ cwd: cwdOf(id) ?? "", userName: deps.userName, agent: agentOf(id) !== null }),
     overlay,
+    steps,
+    cuts: (id) => {
+      const w = driverOf(id);
+      return w.kind === "own" ? drivers.cuts(w.rec) : [];
+    },
     controls,
     publish: deps.signal.thread,
     watched,
+    now: deps.now,
     log: deps.log,
     sdk,
+    ties: (id) => (deps.world.sessions.get(id)?.sentAs ?? []).map(([item, clientId]) => [item as ItemId, clientId] as [ItemId, string]),
+    tie: (id, item, clientId) => {
+      const rec = recordOf(id);
+      rec.sentAs = [...(rec.sentAs ?? []).filter(([i]) => i !== item), [item, clientId] as [string, string]].slice(-SENT_KEPT);
+      deps.persist();
+    },
   });
 
   function recordOf(id: SessionId): SessionRecord {
@@ -370,7 +445,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   const listFrame = (): ServerMessage => ({ type: "sessions", ...catalog.snapshot(), mirror: deps.world.sessionPrefs.mirror });
   const known = (id: SessionId) => catalog.head(id) !== null || agentOf(id) !== null || cloudOf(id) !== null || deps.world.sessions.get(id)?.own?.created === true;
   const gone = (id: SessionId): ServerMessage[] => [{ type: "session_removed", sessionId: id, movedTo: null }];
-  const error = (message: string): ServerMessage[] => [{ type: "error", message }];
+  const error = (message: string, about?: ErrorAbout): ServerMessage[] => [{ type: "error", message, ...(about && { about }) }];
 
   async function rename(id: SessionId, title: string): Promise<ServerMessage[]> {
     const head = catalog.head(id);
@@ -395,79 +470,162 @@ export function createSessions(deps: SessionsDeps): Sessions {
     mirrorAt = 0;
   }
 
-  const reply = (r: Result): ServerMessage[] => (r.ok ? [] : error(r.error));
+  const reply = (r: Result, about?: ErrorAbout): ServerMessage[] => (r.ok ? [] : error(r.error, about));
 
-  /** The phone's clientIds each session took, so a resend after a reconnect runs nothing twice. */
-  const taken = new Map<SessionId, string[]>();
-  async function send(m: Extract<SessionClientMessage, { type: "session_send" }>): Promise<ServerMessage[]> {
-    const seen = taken.get(m.sessionId) ?? [];
-    if (seen.includes(m.clientId)) return [];
-    const replies = await route(m);
-    if (replies.length === 0) taken.set(m.sessionId, [...seen, m.clientId].slice(-SENT_KEPT));
-    return replies;
+  /** The user last saw the thread at `at`. A visit never moves back. */
+  function left(id: SessionId, at: Date) {
+    if (known(id)) {
+      const rec = recordOf(id);
+      if (rec.visitedAt === null || Date.parse(rec.visitedAt) < at.getTime()) rec.visitedAt = at.toISOString();
+      deps.persist();
+      catalog.touch();
+    }
+    // The socket's topic is dropped after this message is handled, so the count is read on the next turn.
+    setTimeout(() => threads.release(id), 0);
   }
 
-  async function route(m: Extract<SessionClientMessage, { type: "session_send" }>): Promise<ServerMessage[]> {
+  /**
+   * A resend after a reconnect or a restart runs nothing twice: the clientId is taken before the send is routed, so one
+   * that arrives while the first still waits is dropped too, and given back if the send was refused.
+   */
+  async function send(m: Extract<SessionClientMessage, { type: "session_send" }>): Promise<ServerMessage[]> {
+    const about: ErrorAbout = { kind: "send", sessionId: m.sessionId, clientId: m.clientId };
     const w = driverOf(m.sessionId);
+    if (w.kind === "none") return error(w.reason, about);
+    const rec = recordOf(m.sessionId);
+    const key = `${m.sessionId} ${m.clientId}`;
+    if (rec.sent?.includes(m.clientId)) {
+      // Still being routed: its own frame is on the way. Taken before: its echo may have been lost with a socket or a
+      // restart, so the reply names it again.
+      return routing.has(key) ? [] : threads.sentBack(m.sessionId, m.clientId);
+    }
+    rec.sent = [...(rec.sent ?? []), m.clientId].slice(-SENT_KEPT);
+    routing.add(key);
+    // Stop and send is aimed at the turn the phone saw: once that turn has ended, the message goes without the interrupt.
+    const turn = controls(m.sessionId).turn ?? null;
+    const stale = m.interrupt && m.turnStartedAt !== undefined && turn?.startedAt !== m.turnStartedAt;
+    let ran = false;
+    try {
+      const replies = await route(stale ? { ...m, interrupt: false } : m, w, about);
+      ran = replies.length === 0;
+      if (!ran || !stale) return replies;
+      // A message queues only behind a turn that runs; with none, it starts now.
+      return error(`That turn had already ended. ${turn === null ? "Your message was sent." : "Your message is queued."}`, { kind: "stop", sessionId: m.sessionId });
+    } finally {
+      routing.delete(key);
+      if (!ran) rec.sent = rec.sent.filter((c) => c !== m.clientId);
+      deps.persist();
+    }
+  }
+  /** Sends still being routed, by session and clientId. */
+  const routing = new Set<string>();
+
+  async function route(m: Extract<SessionClientMessage, { type: "session_send" }>, w: Exclude<Writer, { kind: "none" }>, about: ErrorAbout): Promise<ServerMessage[]> {
     switch (w.kind) {
       case "agent": {
         const agentId = w.rec.agent.id;
         if (m.interrupt) await deps.send({ kind: "agent.stop", intentId: newIntentId(), agentId });
         const applied = await deps.send({ kind: "agent.direct", intentId: newIntentId(), agentId, text: m.text, clientId: m.clientId });
-        return applied.ok ? [] : error(applied.reason);
+        return applied.ok ? [] : error(applied.reason, about);
       }
       case "cloud": {
-        const applied = await deps.send({ kind: "agent.message", intentId: newIntentId(), agentId: w.rec.agent.id, text: m.text, initiator: { kind: "user" } });
+        const applied = await deps.send({
+          kind: "agent.message",
+          intentId: newIntentId(),
+          agentId: w.rec.agent.id,
+          text: m.text,
+          initiator: { kind: "user" },
+          clientId: m.clientId,
+        });
         const said = applied.ok ? (applied.reply ?? "") : applied.reason;
-        return said.startsWith("Sent") ? [] : error(said);
+        return said.startsWith("Sent") ? [] : error(said, about);
       }
       case "own":
-        return reply(await drivers.send(w.rec, m.text, m.clientId, m.interrupt));
+        return reply(await drivers.send(w.rec, m.text, m.clientId, m.interrupt), about);
       case "open":
-        return reply(await drivers.send(take(m.sessionId, w.head), m.text, m.clientId, m.interrupt));
-      case "none":
-        return error(w.reason);
+        return reply(await drivers.send(take(m.sessionId, w.head), m.text, m.clientId, m.interrupt), about);
     }
   }
 
-  async function stopTurn(id: SessionId): Promise<ServerMessage[]> {
-    const w = driverOf(id);
-    if (w.kind === "cloud") return error("A cloud session runs on claude.ai; stop it there.");
-    const stopped =
-      w.kind === "agent"
-        ? (await deps.send({ kind: "agent.stop", intentId: newIntentId(), agentId: w.rec.agent.id })).ok
-        : w.kind === "own"
-          ? await drivers.stop(w.rec)
-          : false;
-    return stopped ? [] : error("Nothing is running.");
-  }
-
-  function decide(m: Extract<SessionClientMessage, { type: "session_decide" }>): ServerMessage[] {
+  async function stop(m: Extract<SessionClientMessage, { type: "session_stop" }>): Promise<ServerMessage[]> {
+    const target = m.target ?? "all";
+    const about: ErrorAbout = { kind: "stop", sessionId: m.sessionId };
     const w = driverOf(m.sessionId);
-    if (w.kind === "own") return reply(drivers.decide(w.rec, m.cardId, m.choice));
-    if (w.kind === "agent") return reply(deps.decideGate(w.rec.agent.botId, m.cardId, m.choice));
-    return error("Unknown card");
+    if (w.kind === "cloud") return error("A cloud session runs on claude.ai; stop it there.", about);
+    if (w.kind === "agent") {
+      if (target !== "all") return error("An agent's session stops as a whole.", about);
+      return (await deps.send({ kind: "agent.stop", intentId: newIntentId(), agentId: w.rec.agent.id })).ok ? [] : error("Nothing is running.", about);
+    }
+    if (w.kind !== "own") return error("Nothing is running.", about);
+    // A stop is aimed at the run the phone saw: one meant for a turn that has since ended never reaches a newer one.
+    const turn = drivers.controls(w.rec).turn ?? null;
+    if (m.turnStartedAt !== undefined && (turn !== null ? turn.startedAt !== m.turnStartedAt : target === "turn")) {
+      return error(turn !== null ? "That turn ended, and a newer one runs now. Stop again to stop it." : "That turn already ended.", about);
+    }
+    const r = await drivers.stop(w.rec, target);
+    return r.ok ? [] : error(r.error, about);
   }
 
-  async function create(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<ServerMessage[]> {
-    if (m.machine !== undefined && m.machine !== deps.machine) return error("Sessions on other machines arrive later");
+  function unqueue(m: Extract<SessionClientMessage, { type: "session_unqueue" }>): ServerMessage[] {
+    const w = driverOf(m.sessionId);
+    const about: ErrorAbout = { kind: "send", sessionId: m.sessionId, clientId: m.clientId };
+    if (w.kind !== "own") return error("Only a message you queued in this session can be withdrawn.", about);
+    const r = drivers.unqueue(w.rec, m.clientId);
+    return r.ok ? [] : error(r.error, about);
+  }
+
+  /** A decision the bridge took is acknowledged to the socket that sent it; a refused one names its card. */
+  function decision(m: Extract<SessionClientMessage, { type: "session_decide" | "session_answer" }>): ServerMessage[] {
+    const w = driverOf(m.sessionId);
+    const r =
+      m.type === "session_decide"
+        ? w.kind === "own"
+          ? drivers.decide(w.rec, m.cardId, m.choice)
+          : w.kind === "agent"
+            ? deps.decideGate(w.rec.agent.botId, m.cardId, m.choice)
+            : refused("Unknown card")
+        : w.kind === "own"
+          ? drivers.answer(w.rec, m.cardId, m.answers)
+          : refused("Unknown card");
+    return r.ok ? [{ type: "decided", cardId: m.cardId }] : error(r.error, { kind: "decide", sessionId: m.sessionId, cardId: m.cardId });
+  }
+
+  /** Creates in flight by ref, so a resend while the first still runs gets the first's answer. */
+  const creating = new Map<string, Promise<ServerMessage[]>>();
+  function create(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<ServerMessage[]> {
+    const made = [...deps.world.sessions.values()].find((r) => r.own?.ref === m.ref);
+    if (made) return Promise.resolve([{ type: "session_created", ref: m.ref, sessionId: made.id }]);
+    const running = creating.get(m.ref);
+    if (running) return running;
+    const p = make(m).finally(() => creating.delete(m.ref));
+    creating.set(m.ref, p);
+    return p;
+  }
+
+  async function make(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<ServerMessage[]> {
+    const about: ErrorAbout = { kind: "create", ref: m.ref };
+    if (m.machine !== undefined && m.machine !== deps.machine) return error("Sessions on other machines arrive later", about);
     const project = catalog.snapshot().projects.find((p) => p.id === m.projectId);
-    if (!project) return error("Unknown project");
-    if (!existsSync(project.path)) return error(`${project.name}'s folder is gone from this Mac.`);
+    if (!project) return error("Unknown project", about);
+    if (!existsSync(project.path)) return error(`${project.name}'s folder is gone from this Mac.`, about);
     const id = crypto.randomUUID() as SessionId;
     let cwd = project.path;
     if (m.isolate === "worktree") {
       try {
         cwd = (await prepareWorkspace({ path: project.path, name: project.name }, id, "worktree")).cwd;
       } catch (e) {
-        return error(errorText(e));
+        return error(errorText(e), about);
       }
     }
     const rec = recordOf(id);
-    rec.own = newDrive({ id, cwd, created: true, at: deps.now().toISOString(), model: m.model, mode: m.mode, prompt: m.text });
+    rec.own = { ...newDrive({ id, cwd, created: true, at: deps.now().toISOString(), model: m.model, mode: m.mode, prompt: m.text }), ref: m.ref };
     deps.persist("now");
     const sent = await drivers.send(rec, m.text, m.ref, false);
-    if (!sent.ok) return error(sent.error);
+    if (!sent.ok) {
+      delete rec.own.ref;
+      deps.persist();
+      return error(sent.error, about);
+    }
     catalog.touch();
     return [{ type: "session_created", ref: m.ref, sessionId: id }];
   }
@@ -481,7 +639,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
       if (w.kind === "none") return error(w.reason);
       const rec = w.kind === "own" ? w.rec : take(id, w.head);
       const r = await drivers.set(rec, { ...(model !== undefined && { model }), ...(mode !== undefined && { mode }) });
-      if (!r.ok) return error(r.error);
+      if (!r.ok) return error(r.error, { kind: "set", sessionId: id });
     }
     if (hidden !== undefined) {
       recordOf(id).hidden = hidden;
@@ -568,17 +726,12 @@ export function createSessions(deps: SessionsDeps): Sessions {
           return [];
         case "watch_session":
           if (!known(m.sessionId)) return gone(m.sessionId);
+          // An open thread has nothing unread, so its row says so with the next pass rather than once the user leaves.
+          catalog.touch();
           return threads.watch(m.sessionId, m.after);
-        case "unwatch_session": {
-          if (known(m.sessionId)) {
-            recordOf(m.sessionId).visitedAt = deps.now().toISOString();
-            deps.persist();
-            catalog.touch();
-          }
-          // The socket's topic is dropped after this message is handled, so the count is read on the next turn.
-          setTimeout(() => threads.release(m.sessionId), 0);
+        case "unwatch_session":
+          left(m.sessionId, deps.now());
           return [];
-        }
         case "session_page":
           return known(m.sessionId) ? threads.page(m.sessionId, m.before) : gone(m.sessionId);
         case "session_tool":
@@ -594,13 +747,12 @@ export function createSessions(deps: SessionsDeps): Sessions {
         case "session_send":
           return send(m);
         case "session_stop":
-          return stopTurn(m.sessionId);
+          return stop(m);
+        case "session_unqueue":
+          return unqueue(m);
         case "session_decide":
-          return decide(m);
-        case "session_answer": {
-          const w = driverOf(m.sessionId);
-          return w.kind === "own" ? reply(drivers.answer(w.rec, m.cardId, m.answers)) : error("Unknown card");
-        }
+        case "session_answer":
+          return decision(m);
         case "session_create":
           return create(m);
       }
@@ -618,6 +770,9 @@ export function createSessions(deps: SessionsDeps): Sessions {
     },
 
     stream: (id, m) => threads.stream(id, m),
+    left,
+    presence: () => catalog.touch(),
+    title: (id) => catalog.head(id)?.title ?? agentOf(id)?.agent.title ?? draftTitle(deps.world.sessions.get(id)?.own?.prompt),
 
     agentTurnDone(rec) {
       if (rec.session.id) due(rec.session.id as SessionId);
@@ -646,6 +801,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
         polledAt = at.getTime();
         awaited();
         void threads.poll();
+        threads.beat();
       }
       if (at.getTime() >= mirrorAt && !mirroring) {
         mirrorAt = at.getTime() + MIRROR_EVERY_MS;

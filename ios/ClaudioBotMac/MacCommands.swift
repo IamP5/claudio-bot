@@ -158,7 +158,7 @@ enum MacCommand: String, CaseIterable, Identifiable {
             c.openMain()
             main.showingUsage = true
         case .refresh:
-            c.app.client.reconnectNow()
+            c.app.client.retryNow()
             if router.watchesSessions { c.app.client.refreshSessions() }
             if c.store.has(.usage) { c.app.client.send(.refreshUsage) }
         case .startBridge: Task { await c.local.start() }

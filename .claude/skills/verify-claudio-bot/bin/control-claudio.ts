@@ -10,13 +10,16 @@ import { chmodSync, closeSync, cpSync, existsSync, mkdirSync, openSync, readdirS
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const REPO = resolve(import.meta.dir, "../../../..");
+export const REPO = resolve(import.meta.dir, "../../../..");
 const MAIN = join(REPO, "bridge/src/main.ts");
-const BASE = process.env.CLAUDIOBOT_VERIFY_DIR ?? join(realpathSync(tmpdir()), "claudiobot-verify");
+const base = process.env.CLAUDIOBOT_VERIFY_DIR ?? join(tmpdir(), "claudiobot-verify");
+mkdirSync(base, { recursive: true });
+/** Resolved, so paths built on it compare equal to the ones lsof and realpath report. */
+export const BASE = realpathSync(base);
 const CURRENT = join(BASE, "current");
 const TURN_S = 240;
 
-type Run = {
+export type Run = {
   id: string;
   dir: string;
   home: string;
@@ -32,10 +35,14 @@ type Run = {
   dirty: boolean;
   startedAt: string;
   budgetUsd: number;
+  /** --push off: the bridge has no push URL. */
+  pushOff?: boolean;
+  /** --card-ttl: seconds a session card waits, so its reminder at half of it can be seen. */
+  cardTtlS?: number;
 };
 type Msg = { kind: string; id: string; at: string; text?: string; [k: string]: unknown };
 type Bot = { id: string; name: string; status: string; question: string | null; [k: string]: unknown };
-type Frame = { type: string; [k: string]: unknown };
+export type Frame = { type: string; [k: string]: unknown };
 
 const args = process.argv.slice(2);
 const cmd = args.shift() ?? "help";
@@ -81,7 +88,7 @@ const freePort = () => {
   return p;
 };
 // Claude Code names a project's transcript folder after its path with every non-alphanumeric character as "-".
-const slug = (p: string) => p.replace(/[^A-Za-z0-9]/g, "-");
+export const slug = (p: string) => p.replace(/[^A-Za-z0-9]/g, "-");
 
 function loadRun(): Run {
   const id = flag("run") ?? process.env.CLAUDIO_RUN ?? (existsSync(CURRENT) ? readFileSync(CURRENT, "utf8").trim() : "");
@@ -92,15 +99,19 @@ function loadRun(): Run {
 }
 const tokenOf = (run: Run) => readFileSync(join(run.dir, "token"), "utf8").trim();
 const bridgeLog = (run: Run) => (existsSync(join(run.dir, "bridge.log")) ? readFileSync(join(run.dir, "bridge.log"), "utf8") : "");
-const spent = (run: Run) =>
+export const spent = (run: Run) =>
   [...bridgeLog(run).matchAll(/^result \S+ \S+ session=\S+ totalCostUsd=\S+ deltaUsd=([\d.e-]+)$/gm)].reduce((n, m) => n + Number(m[1]), 0);
 
-/** One socket like the app's: protocol 3, Bearer token. Keeps the bot list and every conversation it has seen. */
-async function connect(run: Run) {
+/**
+ * One socket like the app's: protocol 3, Bearer token. Keeps the bot list and every conversation it has seen. `port`
+ * reaches the bridge through a relay; `resume` asks for a replay after the stream position the app holds.
+ */
+export async function connect(run: Run, opts: { port?: number; resume?: { epoch: string; after: number } | null } = {}) {
   const bots = new Map<string, Bot>();
   const convs = new Map<string, Msg[]>();
   const frames: Frame[] = [];
-  const ws = new WebSocket(`ws://127.0.0.1:${run.port}/ws?protocol=3`, { headers: { Authorization: `Bearer ${tokenOf(run)}` } } as never);
+  const resume = opts.resume ? `&epoch=${encodeURIComponent(opts.resume.epoch)}&after=${opts.resume.after}` : "";
+  const ws = new WebSocket(`ws://127.0.0.1:${opts.port ?? run.port}/ws?protocol=3${resume}`, { headers: { Authorization: `Bearer ${tokenOf(run)}` } } as never);
   const upsert = (botId: string, m: Msg) => {
     const list = convs.get(botId) ?? [];
     const i = list.findIndex((x) => x.id === m.id);
@@ -167,6 +178,70 @@ function line(i: number, m: Msg) {
   }
 }
 
+// setsid puts each process in its own session, so it outlives this command and the shell that ran it. stdout and
+// stderr share one append-mode descriptor: two separate opens of the file overwrite each other's lines.
+function detach(argv: string[], logFile: string, env: Record<string, string | undefined>) {
+  const fd = openSync(logFile, "a");
+  const p = Bun.spawn(["perl", "-MPOSIX", "-e", "POSIX::setsid(); exec @ARGV", ...argv], { env, stdout: fd, stderr: fd, stdin: "ignore" });
+  closeSync(fd);
+  p.unref();
+  return p;
+}
+
+/** The bridge's environment for a run, everything pointing into the run folder. launch and restart share it. */
+function bridgeEnv(run: Pick<Run, "dir" | "home" | "roots" | "port" | "webhookPort" | "ntfyPort" | "model" | "pushOff" | "cardTtlS">) {
+  const bin = join(run.dir, "bin");
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    CLAUDIOBOT_PORT: String(run.port),
+    CLAUDIOBOT_ROOTS: run.roots,
+    CLAUDIOBOT_HOME: run.home,
+    CLAUDIOBOT_MODEL: run.model,
+    CLAUDIOBOT_USER_NAME: "Alex",
+    CLAUDIOBOT_PUSH_URL: `http://127.0.0.1:${run.ntfyPort}/verify`,
+    CLAUDIOBOT_DESKTOP_FAKE: join(run.dir, "desktop-imports.txt"),
+    CLAUDIOBOT_WEBHOOK_PORT: String(run.webhookPort),
+    CLAUDIOBOT_CLAUDE: join(bin, "claude"),
+    PATH: `${bin}:${process.env.PATH ?? ""}`,
+    ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+    ...(run.cardTtlS && { CLAUDIOBOT_SESSION_CARD_TTL_S: String(run.cardTtlS) }),
+  };
+  if (run.pushOff) delete env.CLAUDIOBOT_PUSH_URL;
+  for (const k of ["CLAUDEBOT_HOME", "SSH_AUTH_SOCK", "GH_TOKEN", "GITHUB_TOKEN", "CLAUDIOBOT_ALLOWED_DOMAINS", "CLAUDIOBOT_SANDBOX_STRICT_NETWORK", "CLAUDIOBOT_SANDBOX_GH"]) delete env[k];
+  // A Claude Code this helper runs inside (the desktop app, a terminal) leaves its session id, entrypoint and messaging
+  // socket in the environment; the bridge's own Claude Code children must not inherit them.
+  for (const k of Object.keys(env)) if (/^(CLAUDE_CODE_|CLAUDE_AGENT_SDK_|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDECODE$|AI_AGENT$)/.test(k)) delete env[k];
+  // Inherited CLAUDIOBOT_* settings would leak the user's own configuration into the run. Access and sandbox modes pass
+  // through on purpose, so full access can be verified by setting them for one launch.
+  const ours = new Set(["CLAUDIOBOT_PORT", "CLAUDIOBOT_ROOTS", "CLAUDIOBOT_HOME", "CLAUDIOBOT_MODEL", "CLAUDIOBOT_USER_NAME", "CLAUDIOBOT_PUSH_URL", "CLAUDIOBOT_DESKTOP_FAKE", "CLAUDIOBOT_WEBHOOK_PORT", "CLAUDIOBOT_CLAUDE", "CLAUDIOBOT_ACCESS", "CLAUDIOBOT_SANDBOX", "CLAUDIOBOT_SESSION_CARD_TTL_S"]);
+  for (const k of Object.keys(env)) if (k.startsWith("CLAUDIOBOT_") && !ours.has(k)) delete env[k];
+  return env;
+}
+
+/**
+ * restart: stops the run's bridge and starts it again on the same port, home and roots, as a crash and relaunch would.
+ * Sockets drop; the pairing, sessions and transcripts stay. run.json gets the new pid.
+ */
+async function restart(run: Run) {
+  if (run.port === 7878 || !run.home.startsWith(`${run.dir}/`)) die("refusing to restart a bridge that is not a verification run's");
+  if (alive(run.bridgePid)) {
+    process.kill(run.bridgePid, "SIGTERM");
+    for (let i = 0; i < 100 && alive(run.bridgePid); i++) await Bun.sleep(100);
+    if (alive(run.bridgePid)) process.kill(run.bridgePid, "SIGKILL");
+  }
+  for (let i = 0; i < 50 && listener(run.port).length; i++) await Bun.sleep(100);
+  const bridge = detach(["bun", "run", MAIN], join(run.dir, "bridge.log"), bridgeEnv(run));
+  const next = { ...run, bridgePid: bridge.pid };
+  writeFileSync(join(run.dir, "run.json"), JSON.stringify(next, null, 2));
+  for (let i = 0; i < 600; i++) {
+    await Bun.sleep(100);
+    if (!alive(bridge.pid)) die(`the bridge exited at restart; log ${join(run.dir, "bridge.log")}:\n${bridgeLog(run).slice(-2000)}`);
+    const ok = await fetch(`http://127.0.0.1:${run.port}/health`).then((r) => r.ok).catch(() => false);
+    if (ok) return console.log(`RESTARTED run=${run.id} pid ${run.bridgePid} -> ${bridge.pid} on 127.0.0.1:${run.port}`);
+  }
+  die(`the bridge did not answer /health within 60s of restart; log ${join(run.dir, "bridge.log")}`);
+}
+
 async function launch() {
   const model = flag("model") ?? process.env.CLAUDIOBOT_VERIFY_MODEL ?? "claude-sonnet-5-5";
   const budgetUsd = Number(flag("budget") ?? process.env.CLAUDIOBOT_VERIFY_BUDGET_USD ?? 2);
@@ -207,27 +282,35 @@ async function launch() {
   );
   chmodSync(wrapper, 0o755);
 
-  // The ntfy stand-in: every push the bridge sends becomes one JSON line in pushes.jsonl.
+  // The ntfy stand-in: every push the bridge sends becomes one JSON line in pushes.jsonl. While the run folder holds
+  // sink-fail, it answers 500, as a broken push server would, and the line says so. While it holds sink-slow (a number
+  // of seconds), it publishes a push and answers that much later, as a slow one would. A GET is ntfy's poll of what it
+  // published (?poll=1&since=<unix s>), logged to polls.jsonl, never pushes.jsonl.
   const sink = join(dir, "ntfy-sink.ts");
   writeFileSync(
     sink,
-    `import { appendFileSync } from "node:fs";
-const s = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async (req) => {
-  appendFileSync(${JSON.stringify(join(dir, "pushes.jsonl"))}, JSON.stringify({ at: new Date().toISOString(), path: new URL(req.url).pathname, title: req.headers.get("title"), click: req.headers.get("click"), body: await req.text() }) + "\\n");
-  return new Response("{}");
+    `import { appendFileSync, existsSync, readFileSync } from "node:fs";
+const published: object[] = [];
+const s = Bun.serve({ port: 0, hostname: "127.0.0.1", idleTimeout: 0, fetch: async (req) => {
+  const status = existsSync(${JSON.stringify(join(dir, "sink-fail"))}) ? 500 : 200;
+  const url = new URL(req.url);
+  const now = new Date();
+  if (req.method === "GET") {
+    appendFileSync(${JSON.stringify(join(dir, "polls.jsonl"))}, JSON.stringify({ at: now.toISOString(), path: url.pathname, since: url.searchParams.get("since"), status }) + "\\n");
+    const since = Number(url.searchParams.get("since") ?? 0);
+    return new Response(status === 200 ? published.filter((m: any) => m.time >= since).map((m) => JSON.stringify(m)).join("\\n") : "{}", { status });
+  }
+  const slow = existsSync(${JSON.stringify(join(dir, "sink-slow"))}) ? Number(readFileSync(${JSON.stringify(join(dir, "sink-slow"))}, "utf8")) || 0 : 0;
+  const body = await req.text();
+  appendFileSync(${JSON.stringify(join(dir, "pushes.jsonl"))}, JSON.stringify({ at: now.toISOString(), path: url.pathname, title: req.headers.get("title"), click: req.headers.get("click"), priority: req.headers.get("priority"), status, ...(slow > 0 && { slowS: slow }), body }) + "\\n");
+  const id = crypto.randomUUID();
+  if (status === 200) published.push({ id, time: Math.floor(now.getTime() / 1000), event: "message", topic: url.pathname.slice(1), message: body, click: req.headers.get("click"), sequence_id: req.headers.get("x-sequence-id") ?? id });
+  if (slow > 0) await Bun.sleep(slow * 1000);
+  return new Response("{}", { status });
 } });
 console.log("ntfy-sink " + s.port);
 `,
   );
-  // setsid puts each process in its own session, so it outlives this command and the shell that ran it. stdout and
-  // stderr share one append-mode descriptor: two separate opens of the file overwrite each other's lines.
-  const detach = (argv: string[], logFile: string, env: Record<string, string | undefined>) => {
-    const fd = openSync(logFile, "a");
-    const p = Bun.spawn(["perl", "-MPOSIX", "-e", "POSIX::setsid(); exec @ARGV", ...argv], { env, stdout: fd, stderr: fd, stdin: "ignore" });
-    closeSync(fd);
-    p.unref();
-    return p;
-  };
   const ntfy = detach(["bun", "run", sink], join(dir, "ntfy.log"), process.env);
   let ntfyPort = 0;
   for (let i = 0; i < 100 && !ntfyPort; i++) {
@@ -238,28 +321,9 @@ console.log("ntfy-sink " + s.port);
 
   const port = freePort();
   const webhookPort = freePort();
-  const env: Record<string, string | undefined> = {
-    ...process.env,
-    CLAUDIOBOT_PORT: String(port),
-    CLAUDIOBOT_ROOTS: roots,
-    CLAUDIOBOT_HOME: home,
-    CLAUDIOBOT_MODEL: model,
-    CLAUDIOBOT_USER_NAME: "Alex",
-    CLAUDIOBOT_PUSH_URL: `http://127.0.0.1:${ntfyPort}/verify`,
-    CLAUDIOBOT_DESKTOP_FAKE: join(dir, "desktop-imports.txt"),
-    CLAUDIOBOT_WEBHOOK_PORT: String(webhookPort),
-    CLAUDIOBOT_CLAUDE: wrapper,
-    PATH: `${bin}:${process.env.PATH ?? ""}`,
-    ENABLE_CLAUDEAI_MCP_SERVERS: "false",
-  };
-  for (const k of ["CLAUDEBOT_HOME", "SSH_AUTH_SOCK", "GH_TOKEN", "GITHUB_TOKEN", "CLAUDIOBOT_ALLOWED_DOMAINS", "CLAUDIOBOT_SANDBOX_STRICT_NETWORK", "CLAUDIOBOT_SANDBOX_GH"]) delete env[k];
-  // A Claude Code this helper runs inside (the desktop app, a terminal) leaves its session id, entrypoint and messaging
-  // socket in the environment; the bridge's own Claude Code children must not inherit them.
-  for (const k of Object.keys(env)) if (/^(CLAUDE_CODE_|CLAUDE_AGENT_SDK_|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDECODE$|AI_AGENT$)/.test(k)) delete env[k];
-  // Inherited CLAUDIOBOT_* settings would leak the user's own configuration into the run. Access and sandbox modes pass
-  // through on purpose, so full access can be verified by setting them for one launch.
-  const ours = new Set(["CLAUDIOBOT_PORT", "CLAUDIOBOT_ROOTS", "CLAUDIOBOT_HOME", "CLAUDIOBOT_MODEL", "CLAUDIOBOT_USER_NAME", "CLAUDIOBOT_PUSH_URL", "CLAUDIOBOT_DESKTOP_FAKE", "CLAUDIOBOT_WEBHOOK_PORT", "CLAUDIOBOT_CLAUDE", "CLAUDIOBOT_ACCESS", "CLAUDIOBOT_SANDBOX"]);
-  for (const k of Object.keys(env)) if (k.startsWith("CLAUDIOBOT_") && !ours.has(k)) delete env[k];
+  const pushOff = flag("push") === "off";
+  const cardTtlS = Number(flag("card-ttl") ?? 0) || undefined;
+  const env = bridgeEnv({ dir, home, roots, port, webhookPort, ntfyPort, model, pushOff, cardTtlS });
   for (const k of ["CLAUDIOBOT_ACCESS", "CLAUDIOBOT_SANDBOX"]) if (process.env[k] !== undefined) console.log(`note: ${k}=${process.env[k]} is passed through from your shell`);
 
   const inRun = (v: string | undefined) => v !== undefined && v.startsWith(`${dir}/`);
@@ -271,7 +335,9 @@ console.log("ntfy-sink " + s.port);
     [env.GH_TOKEN === undefined && env.GITHUB_TOKEN === undefined, "GH_TOKEN and GITHUB_TOKEN are unset"],
     [env.ENABLE_CLAUDEAI_MCP_SERVERS === "false", "claude.ai connectors are off"],
     [env.CLAUDIOBOT_CLAUDE === wrapper && env.PATH!.startsWith(`${bin}:`), "claude is the --cloud-refusing wrapper"],
-    [env.CLAUDIOBOT_PUSH_URL!.startsWith("http://127.0.0.1:"), "push goes to the local sink"],
+    pushOff
+      ? [env.CLAUDIOBOT_PUSH_URL === undefined, "push is off (--push off): no push URL"]
+      : [env.CLAUDIOBOT_PUSH_URL?.startsWith("http://127.0.0.1:") === true, "push goes to the local sink"],
     [port !== 7878 && webhookPort !== 7879, `ports ${port}/${webhookPort} are not the real bridge's 7878/7879`],
     [!Object.keys(env).some((k) => k.startsWith("CLAUDE_CODE_") || k === "CLAUDECODE"), "no CLAUDE_CODE_* variable of a surrounding Claude Code"],
   ];
@@ -284,9 +350,11 @@ console.log("ntfy-sink " + s.port);
   const rev = sh(["git", "-C", REPO, "rev-parse", "HEAD"]).out;
   const dirty = sh(["git", "-C", REPO, "status", "--porcelain", "--", "bridge"]).out !== "";
   const bridge = detach(["bun", "run", MAIN], join(dir, "bridge.log"), env);
-  const run: Run = { id, dir, home, roots, worktrees, port, webhookPort, ntfyPort, bridgePid: bridge.pid, ntfyPid: ntfy.pid, model, rev, dirty, startedAt: new Date().toISOString(), budgetUsd };
+  const run: Run = { id, dir, home, roots, worktrees, port, webhookPort, ntfyPort, bridgePid: bridge.pid, ntfyPid: ntfy.pid, model, rev, dirty, startedAt: new Date().toISOString(), budgetUsd, ...(pushOff && { pushOff }), ...(cardTtlS && { cardTtlS }) };
   writeFileSync(join(dir, "run.json"), JSON.stringify(run, null, 2));
   writeFileSync(CURRENT, id);
+  // Printed before the bridge is ready, so a caller can clean up the run even if launch fails or is interrupted from here on.
+  console.log(`STARTED run=${id}`);
 
   let code: string | undefined;
   for (let i = 0; i < 600 && !code; i++) {
@@ -347,6 +415,8 @@ async function main() {
       return launch();
     case "doctor":
       return doctor();
+    case "restart":
+      return restart(loadRun());
     case "runs": {
       for (const id of readdirSync(join(BASE, "runs"))) {
         const f = join(BASE, "runs", id, "run.json");
@@ -472,13 +542,13 @@ async function main() {
 }
 
 /** Copies what proves a behavior into evidence/<run>/<label>/. Never the token. */
-type Row = { id: string; projectId: string; title: string; origin: string; status: string; holder: string; unread: boolean; agent: unknown; mirror: string; hidden: boolean; branch: string | null; worktree: boolean };
-type Project = { id: string; name: string; path: string };
+export type Row = { id: string; projectId: string; parentId?: string | null; title: string; origin: string; status: string; holder: string; unread: boolean; agent: unknown; mirror: string; hidden: boolean; branch: string | null; worktree: boolean; lastAt: string; outcome?: unknown };
+export type Project = { id: string; name: string; path: string };
 
 const countBy = <T>(xs: T[], key: (x: T) => string) => Object.entries(xs.reduce<Record<string, number>>((m, x) => ((m[key(x)] = (m[key(x)] ?? 0) + 1), m), {})).map(([k, n]) => `${k}=${n}`).join(" ");
 
 /** A session is the run's own when its project lies under the run's roots: only those are printed with their words. */
-const ownProject = (run: Run, p: Project | undefined) => p !== undefined && (p.path === run.roots || p.path.startsWith(`${run.roots}/`));
+export const ownProject = (run: Run, p: Project | undefined) => p !== undefined && (p.path === run.roots || p.path.startsWith(`${run.roots}/`));
 
 async function listOf(run: Run, c: Awaited<ReturnType<typeof connect>>) {
   const at = c.frames.length;
@@ -509,7 +579,7 @@ async function sessionsList(run: Run) {
 }
 
 /** A frame in a line: types, revs, item kinds and ids, delta offsets; the words only for the run's own sessions. */
-function frameLine(f: Frame, words: boolean): string {
+export function frameLine(f: Frame, words: boolean): string {
   const items = (f.items as { kind: string; id: string; text?: string; steps?: { label: string; state: string }[]; card?: { label: string; detail: string; answer: unknown }; state?: string }[] | undefined) ?? [];
   const shown = items.map((i) => {
     const detail = !words
@@ -719,6 +789,7 @@ async function evidence(run: Run, label: string) {
   copy(join(run.home, "usage"), "usage");
   copy(join(run.dir, "bridge.log"), "bridge.log");
   copy(join(run.dir, "pushes.jsonl"), "pushes.jsonl");
+  copy(join(run.dir, "polls.jsonl"), "polls.jsonl");
   copy(join(run.dir, "cloud-attempt.txt"), "cloud-attempt.txt");
   const { token: _t, ...rest } = run as Run & { token?: string };
   writeFileSync(join(out, "run.json"), JSON.stringify(rest, null, 2));
@@ -750,6 +821,9 @@ async function evidence(run: Run, label: string) {
 /** Stops only what this run started (pids from run.json, processes whose command line names the run folder). */
 async function cleanup() {
   const run = loadRun();
+  const home = join(BASE, "runs", run.id);
+  if (!/^[\w-]+$/.test(run.id) || !run.dir || !existsSync(run.dir) || realpathSync(run.dir) !== realpathSync(home))
+    die(`refusing to clean up: run.json names dir "${run.dir}", not ${home}`);
   const keepNone = flag("no-evidence");
   if (!keepNone && existsSync(run.dir)) await evidence(run, "final").catch((e) => console.log(`final evidence failed: ${e}`));
   for (const [what, pid] of [["bridge", run.bridgePid], ["push sink", run.ntfyPid]] as const) {
@@ -762,8 +836,22 @@ async function cleanup() {
     if (alive(pid)) process.kill(pid, "SIGKILL");
     console.log(`${what} pid ${pid} stopped`);
   }
-  // Agents, sandboxes and claude children of this run all name the run folder in their command line.
-  const strays = sh(["pgrep", "-f", run.dir]).out.split("\n").filter(Boolean).map(Number).filter((p) => p !== process.pid);
+  // Agents, sandboxes and claude children of this run name the run folder in their command line; the tools sessions
+  // run (a `sleep`, a dev server) often do not, but their working directory is inside it.
+  const dir = realpathSync(run.dir);
+  const exact = `${dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(/|[[:space:]"']|$)`;
+  const named = sh(["pgrep", "-f", exact]).out.split("\n").filter(Boolean).map(Number);
+  let pid = 0;
+  const inside: number[] = [];
+  for (const l of sh(["lsof", "-w", "-d", "cwd", "-Fpn"]).out.split("\n")) {
+    if (l.startsWith("p")) pid = Number(l.slice(1));
+    else if (l.startsWith("n") && (l.slice(1) === dir || l.slice(1).startsWith(`${dir}/`))) inside.push(pid);
+  }
+  // This process, whatever started it (a shell that cd'd into the run, the runner) and its process group (the rest of
+  // a pipeline) are never strays. The bridge is detached into its own session, so nothing of the run shares the group.
+  const ours = new Set<number>(sh(["pgrep", "-g", sh(["ps", "-o", "pgid=", "-p", String(process.pid)]).out]).out.split("\n").filter(Boolean).map(Number));
+  for (let p = process.pid, hops = 0; p > 1 && hops < 64; p = Number(sh(["ps", "-o", "ppid=", "-p", String(p)]).out) || 0, hops++) ours.add(p);
+  const strays = [...new Set([...named, ...inside])].filter((p) => !ours.has(p) && alive(p));
   for (const p of strays) {
     console.log(`stray pid ${p}: ${sh(["ps", "-p", String(p), "-o", "command="]).out.slice(0, 120)}`);
     try {
@@ -783,12 +871,15 @@ async function cleanup() {
         rmSync(join(projects, name), { recursive: true, force: true });
         console.log(`removed transcripts ~/.claude/projects/${name}`);
       }
-  rmSync(run.dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true });
   if (existsSync(CURRENT) && readFileSync(CURRENT, "utf8").trim() === run.id) rmSync(CURRENT);
   const ev = join(BASE, "evidence", run.id);
   console.log(`removed ${run.dir}`);
   console.log(existsSync(ev) ? `evidence kept at ${ev}: ${readdirSync(ev).join(" ")}` : "no evidence was captured for this run");
 }
 
-await main();
-process.exit(0);
+// scenario.ts imports the socket and run helpers; only a direct run parses argv as a command.
+if (import.meta.main) {
+  await main();
+  process.exit(0);
+}

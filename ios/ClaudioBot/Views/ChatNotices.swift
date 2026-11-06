@@ -1,32 +1,35 @@
 import SwiftUI
 
-/// Above the chat while the bridge is out of reach: what is wrong, and that what you send waits.
+/// Above the chat while the bridge is out of reach: the chat list's banner, with its cause, its age and its actions
+/// (F-AR-002, F-AR-006).
 struct OfflineBar: View {
-    let state: ConnectionState
     @Environment(AppStore.self) private var store
-
-    static func shows(_ state: ConnectionState) -> Bool {
-        switch state {
-        case .connected, .unpaired: false
-        case .connecting, .disconnected, .unrecognized: true
-        }
-    }
+    @State private var lastRetryFailed = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            ConnectionBadge(state: state)
-            Text(state == .unrecognized ? "Pair again from the chat list." : "Messages you send wait until \(store.computerName()) is back.")
-                .font(.footnote)
-                .foregroundStyle(Theme.secondary)
-                .lineLimit(2)
-            Spacer(minLength: 0)
+        Group {
+            if store.connection == .unrecognized {
+                UnrecognizedBanner(staleSince: store.heardAt, staleWhat: "Messages")
+            } else {
+                ConnectionBanner(state: store.connection, staleSince: store.heardAt, staleWhat: "Messages", lastRetryFailed: $lastRetryFailed)
+            }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .padding(.horizontal, 16)
         .padding(.top, 4)
-        .accessibilityElement(children: .combine)
+        .onChange(of: store.machine) { lastRetryFailed = false }
+    }
+}
+
+/// Offline, what a bot was doing is only last known (P-ALIVE-3, F-AR-005, F-AR-009).
+enum LastKnown {
+    static let working = "Working when last updated"
+    static let background = "Running in the background when last updated"
+}
+
+extension AppStore {
+    /// Offline a working bot's avatar rests: nothing says it still works.
+    func motion(of bot: Bot) -> AvatarMotion {
+        showsOnline ? bot.motion : .idle
     }
 }
 

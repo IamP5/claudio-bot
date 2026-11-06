@@ -21,7 +21,9 @@ import {
   type AgentView,
   type Avatar,
   type Bot,
+  type BotBackground,
   type BotId,
+  type BotOutcome,
   type BotPatch,
   type ClientMessage,
   type Feature,
@@ -57,8 +59,9 @@ import { createNode, settingsFor, trimThread } from "./machine/node";
 import { newAgentId, newIntentId, type Applied, type BotStandIn, type Event, type MachineId } from "./machine/wire";
 import { createScheduler, type RunOutcome } from "./scheduler";
 import { createSessions, type Sessions, type SessionsEnv } from "./sessions";
-import { BREAKER_NOTE, createSession, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
+import { BREAKER_NOTE, createSession, RESTARTED_ERROR, usedBudget, type Session, type SessionSpec, type TurnEnd } from "./session";
 import { createSkills } from "./skills";
+import { rowRun, runs } from "./tasks";
 import { createUsageMonitor } from "./usage";
 import type { Persist } from "./store";
 import { BOT_NAME_MAX, errorText, hasHiddenCharacters } from "./text";
@@ -112,6 +115,14 @@ export type Hub = {
   greeting(): ServerMessage[];
   /** Every client message. The transport ones (devices, revoke_device, pair_code) belong to main.ts, which answers them first. */
   handle(message: ClientMessage): Promise<ServerMessage[]>;
+  /** A socket that watched the session's thread went away; the user last saw it at `at`. */
+  left(sessionId: SessionId, at: Date): Promise<void>;
+  /** Who looks at an app changed: a held push may be due, and what reads as unread may differ. */
+  presence(): void;
+  /** A deadline moved outside a tick (a push try came back): the clock looks again. */
+  poke(): void;
+  /** The title a session's row shows, for a session alert. */
+  sessionTitle(id: SessionId): string;
   /** Runs every stored-deadline owner once at `now`. One that throws is logged and the rest still run. */
   tick(now: Date): void;
   /** The open cards other machines' gates hold, for push to catch up on once no phone is live. */
@@ -141,6 +152,8 @@ export type HubDeps = {
   push: Push;
   /** The loopback port webhook routines answer on; null: no listener. */
   webhookPort: number | null;
+  /** How long a card in a session the phone drives waits for an answer; absent: two hours. */
+  cardTtlMs?: number;
   /** Tests pass a fake SDK. The bridge uses the real query and the claude on PATH. */
   claude: Pick<SessionSpec, "query" | "executable">;
   /** The machines enrolled into this home (machine/links.ts). Absent: no "machines" feature. */
@@ -169,7 +182,7 @@ type Reading = { id: EnvelopeId; turn: Turn; held: Bubble[] | null; tail: Bubble
 type Pushes = { pushed: { id: MessageId; at: number } | null; last: MessageId | null };
 
 /** What hello advertises: the FEATURES this bridge serves. Each new one joins when the hub implements it. */
-const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups", "presence"];
+const SERVED: readonly Feature[] = ["memory", "activity", "mute", "worktrees", "connectors", "skills", "webhooks", "spend", "mentions", "commands", "exchanges", "groups", "presence", "session_tasks", "session_unqueue", "push_state", "decide_ack"];
 
 /** A client request about one chat: a bot's, or a group's. */
 type ChatRequest = Extract<ClientMessage, { botId: BotId }>;
@@ -264,8 +277,21 @@ export function createHub(deps: HubDeps): Hub {
       held: session ? session.parkedFor !== null : holdOf(bot.session) !== null,
       awaitingApproval: world.gate.open.some((c) => c.kind !== "question" && c.actor.botId === bot.id) || mirror.openCards(bot.id) > 0,
     });
-    return { ...toBot(bot, status), ...ledger.botSpend(bot.id) };
+    return { ...toBot(bot, status, backgroundOf(session)), ...ledger.botSpend(bot.id) };
   }
+
+  /** What the bot started that runs on after its turn. null while a turn runs or waits: that shows as working. */
+  function backgroundOf(session: Session | undefined): BotBackground | null {
+    if (!session || session.working) return null;
+    const a = session.activity();
+    if (!runs(a)) return null;
+    const row = rowRun(a, [], (c) => (c.tool === "Bash" ? "Running a command" : `Using ${c.tool}`));
+    const count = (row.running?.agents ?? 0) + (row.running?.commands ?? 0);
+    return { since: row.since!, count, text: row.activity ?? "Finishing its background work" };
+  }
+
+  /** The background each bot's frame last carried, so only a change to it sends the frame again. */
+  const shownBackground = new Map<BotId, string>();
 
   const membersOf = (group: GroupRecord): BotRecord[] => group.members.flatMap((id) => world.bots.get(id) ?? []);
   /** The members running a turn for this group right now. A member busy in its own chat is not one. */
@@ -464,10 +490,35 @@ export function createHub(deps: HubDeps): Hub {
   const pausedNote = (until: string, why: "usage_limit" | "daily_cap") =>
     `Paused until ${new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} (${why === "usage_limit" ? "usage limit" : "daily cap"})`;
 
+  /** What the bot's row says about a turn that did not finish; null when it finished, or only waits. */
+  function rowOutcome(end: TurnEnd): Omit<BotOutcome, "at"> | null {
+    if (usedBudget(end)) return { kind: "stopped", text: "Stopped: today's budget is used" };
+    switch (end.kind) {
+      case "done":
+        return end.result.subtype === "success" ? null : { kind: "failed", text: "Didn't finish: Claude Code ended it with an error" };
+      case "failed":
+        return { kind: "failed", text: end.error === RESTARTED_ERROR ? "Didn't finish: the bridge restarted" : "Didn't finish: Claude Code quit unexpectedly" };
+      case "stopped":
+        return { kind: "stopped", text: end.by === "breaker" ? "Stopped after 3 held or denied tool calls" : `Stopped by ${userName}` };
+      case "deferred":
+      case "dropped":
+        return null;
+    }
+  }
+
   function endTurn(bot: BotRecord, turn: Pending, end: TurnEnd, quiet: boolean) {
     // A group turn's end is told where its reply would have been.
     const group = groupFor(turn.group, bot);
     const tell = (text: string) => (group ? noteInGroup(group, text) : note(bot, text));
+    // A deferred turn runs later, and a dropped one was never the user's to see end. Only the bot's own chat has a row
+    // for this turn.
+    if (!group && end.kind !== "deferred" && end.kind !== "dropped") {
+      const outcome = rowOutcome(end);
+      if (outcome === null) delete bot.outcome;
+      else bot.outcome = { ...outcome, at: now() };
+      // A failure the user did not cause marks the chat unread, so Home shows it even after the user looked away.
+      if (outcome?.kind === "failed") bot.unread += 1;
+    }
     switch (end.kind) {
       case "done":
         if (usedBudget(end)) tell(`${bot.name} used today's budget; routines and other background work wait until tomorrow.`);
@@ -708,6 +759,13 @@ export function createHub(deps: HubDeps): Hub {
         if (!world.bots.has(bot.id)) return;
         changed(bot);
         retypeFor(bot.id);
+      },
+      onActivity() {
+        if (!world.bots.has(bot.id)) return;
+        const key = JSON.stringify(backgroundOf(brains.get(bot.id)));
+        if (shownBackground.get(bot.id) === key) return;
+        shownBackground.set(bot.id, key);
+        deps.broadcast({ type: "bot", bot: view(bot) });
       },
       note(text) {
         if (!world.bots.has(bot.id)) return;
@@ -1041,7 +1099,10 @@ export function createHub(deps: HubDeps): Hub {
         ledger,
         claude: deps.claude,
         scope: (cwd) => sessionScope(deps.profile, cwd),
-        notify: (id, cardId) => void deps.push.notifySession?.(id, cardId),
+        // The push module reads open cards from the world; a new one only moves its deadline earlier.
+        notify: () => poke(),
+        ended: (id, end, at) => deps.push.sessionEnded?.(id, end, at),
+        ...(deps.cardTtlMs !== undefined && { cardTtlMs: deps.cardTtlMs }),
         folders: () => projectFolders().map((f) => f.path),
         persist: deps.persist,
         now: clockNow,
@@ -1343,6 +1404,7 @@ export function createHub(deps: HubDeps): Hub {
     const mentions = resolveMentions(world, m.mentions ?? [], on);
     const attachments = homes.saveUploads(bot.id, m.uploads);
     if ("error" in attachments) return error(attachments.error);
+    delete bot.outcome;
     say(bot, {
       kind: "user",
       id: newMessageId(),
@@ -1353,7 +1415,14 @@ export function createHub(deps: HubDeps): Hub {
       ...(mentions.length > 0 && { mentions }),
     });
     const others = mentions.filter((x) => x.kind !== "bot" || x.id !== bot.id);
-    deliver(bot.id, command !== null ? { from: "command", line: m.text.trim() } : { from: "user", text: m.text, attachments, mentions: others });
+    if (command !== null) deliver(bot.id, { from: "command", line: m.text.trim() });
+    else {
+      // Typing one of an open question's options is tapping it; any other text leaves the question open, and the bot is
+      // told so. It closes the permission cards the user's own requests left open: the user moved on instead of tapping.
+      const cards = gate.typed(bot.id, m.text);
+      const told = cards.answered.length > 0 || cards.open.length > 0 || cards.closed.length > 0;
+      deliver(bot.id, { from: "user", text: m.text, attachments, mentions: others, ...(told && { cards }) });
+    }
     return [];
   }
 
@@ -1542,10 +1611,12 @@ export function createHub(deps: HubDeps): Hub {
         const reply = cardReply(bot.messages.find((m) => m.id === message.messageId), message);
         return reply ? answerCard(bot, message.messageId, reply) : error("Unknown option");
       }
-      case "decide":
-        return answerCard(bot, message.messageId, { kind: "permission", choice: message.choice });
+      case "decide": {
+        const failed = await answerCard(bot, message.messageId, { kind: "permission", choice: message.choice });
+        return failed.length > 0 ? failed : [{ type: "decided", cardId: message.messageId }];
+      }
       case "stop":
-        return (await brains.get(bot.id)?.interrupt()) ? [] : error("Nothing is running.");
+        return (await brains.get(bot.id)?.interrupt())?.ran ? [] : error("Nothing is running.");
       case "update_bot":
         if (message.patch.members !== undefined) return error("Only a group has members.");
         if (message.patch.name !== undefined && !nameOk(message.patch.name)) return error(BAD_NAME);
@@ -1661,12 +1732,20 @@ export function createHub(deps: HubDeps): Hub {
       userName,
       bots: sortBots([...[...world.bots.values()].map(view), ...[...world.groups.values()].map(groupView)]),
       ...(deps.links && { machines: machineViews(), world: { id: deps.worldId, name: `${userName}'s bots` } }),
+      ...(deps.push.state && { push: deps.push.state() }),
     }),
     greeting() {
       const latest = usage?.opened() ?? null;
       return latest ? [{ type: "usage", usage: latest }] : [];
     },
     handle,
+    left: async (id, at) => sessions?.left(id, at),
+    presence() {
+      sessions?.presence();
+      poke();
+    },
+    poke: () => poke(),
+    sessionTitle: (id) => sessions?.title(id) ?? "Claude Code session",
     tick: (at) => tickEach(tickers, at, deps.log),
     remoteCards: () => mirror.held().map(({ botId, cardId }) => ({ botId, cardId })),
 

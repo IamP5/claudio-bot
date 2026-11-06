@@ -55,8 +55,8 @@ test("an alive holder with a matching start is listed, busy or idle", () => {
   h.holder(10, { status: "busy", entrypoint: "claude-desktop" });
   h.holder(11);
   const holders = h.apps().holders();
-  expect(holders.get(sid("s-10"))).toEqual({ pid: 10, sessionId: sid("s-10"), entrypoint: "claude-desktop", kind: "interactive", cwd: "/repo", busy: true });
-  expect(holders.get(sid("s-11"))?.busy).toBe(false);
+  expect(holders.get(sid("s-10"))).toEqual({ pid: 10, sessionId: sid("s-10"), entrypoint: "claude-desktop", kind: "interactive", cwd: "/repo", status: "busy", waitingFor: null });
+  expect(holders.get(sid("s-11"))?.status).toBe("idle");
 });
 
 test("a dead pid, a reused pid, the bridge's own child and a malformed file are not holders", () => {

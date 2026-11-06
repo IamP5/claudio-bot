@@ -8,6 +8,8 @@ struct PromptTextView: View {
     /// The caret, in UTF-16 units, so the composer can find the "@" or "/" it sits in.
     @Binding var caret: Int
     var placeholder: String
+    /// What VoiceOver calls the field. The placeholder when nil. It stays after the placeholder hides under typed text.
+    var label: String? = nil
     var minLines = 1
     var maxLines: Int?
     var autofocus = false
@@ -28,6 +30,7 @@ struct PromptTextView: View {
             tokenColor: tokenColor, onReturn: onReturn, onEscape: onEscape, onSubmit: onSubmit,
             onAttachFiles: onAttachFiles, onAttachImage: onAttachImage
         )
+        .accessibilityLabel(label ?? placeholder)
         .overlay(alignment: .topLeading) {
             // Hidden with no animation, so a menu opening on the first "@" never fades it under the typed text.
             Text(placeholder)
@@ -36,7 +39,7 @@ struct PromptTextView: View {
                 .lineLimit(1)
                 .opacity(draft.text.isEmpty ? 1 : 0)
                 .animation(nil, value: draft.text.isEmpty)
-                .accessibilityHidden(!draft.text.isEmpty)
+                .accessibilityHidden(true)
                 .allowsHitTesting(false)
         }
     }

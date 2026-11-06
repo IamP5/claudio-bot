@@ -125,7 +125,7 @@ export function createAgentRuntime(deps: RuntimeDeps): AgentRuntime {
       case "agent.start":
         return start(intent);
       case "agent.message":
-        return onAgent(intent.agentId, async (rec) => ({ ok: true, reply: await agents.message(rec, intent.text, intent.initiator) }));
+        return onAgent(intent.agentId, async (rec) => ({ ok: true, reply: await agents.message(rec, intent.text, intent.initiator, intent.clientId) }));
       case "agent.direct":
         return onAgent(intent.agentId, (rec) => {
           const refusal = agents.direct(rec, intent.text, intent.clientId);

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Options, query, SDKMessage, SDKResultMessage, SDKUserMessage, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import type { Headroom, Ledger } from "../src/ledger";
-import type { AgentId, BotId, RoutineId, RunId } from "../src/protocol";
+import type { AgentId, BotId, RoutineId, RunId, TaskId } from "../src/protocol";
 import {
   BACKGROUND_WAIT_MS,
   BREAKER_NOTE,
@@ -34,6 +34,7 @@ import {
   usedBudget,
 } from "../src/session";
 import type { SessionInput } from "../src/prompts";
+import { backgroundCommand } from "./shells";
 import {
   attended,
   emptySession,
@@ -599,7 +600,10 @@ class FakeQuery {
   async interrupt() {
     this.interrupts++;
   }
+  /** Tasks Claude Code refuses to stop. */
+  readonly refusing = new Set<string>();
   async stopTask(id: string) {
+    if (this.refusing.has(id)) throw new Error(`no task ${id}`);
     this.stoppedTasks.push(id);
   }
   close() {
@@ -1054,7 +1058,7 @@ describe("session", () => {
     const { h, id } = await started("[a]");
     h.q().emit(said("Running the migration."));
     await flush();
-    expect(await h.session.interrupt()).toBe(true);
+    expect((await h.session.interrupt()).ran).toBe(true);
     expect(h.q().interrupts).toBe(1);
     expect(h.session.lifecycle.kind).toBe("stopping");
     expect(h.session.current?.id).toBe(id as EnvelopeId);
@@ -1063,7 +1067,7 @@ describe("session", () => {
     expect(h.ends).toMatchObject([{ id, end: { kind: "stopped", by: "user" } }]);
     expect(h.usage).toMatchObject([{ cumulativeUsd: 0.3 }]);
     expect([h.session.nextDeadline(), h.session.working, h.sent().length]).toEqual([later(15 * 60_000), false, 1]);
-    expect(await h.session.interrupt()).toBe(false);
+    expect((await h.session.interrupt()).ran).toBe(false);
   });
 
   test("while stopping nothing new is sent; queued unattended mail is dropped and the user's queued message runs after", async () => {
@@ -1249,7 +1253,7 @@ describe("session", () => {
 
   test("Stop when nothing runs resolves false and changes nothing", async () => {
     const h = harness();
-    expect(await h.session.interrupt()).toBe(false);
+    expect((await h.session.interrupt()).ran).toBe(false);
     expect(h.state).toEqual(emptySession());
   });
 
@@ -1384,7 +1388,7 @@ describe("session", () => {
     const r = h.push("[r]", routine, false, fired);
     await flush();
     expect(h.session.parkedFor).toBe("usage_limit");
-    expect(await h.session.interrupt()).toBe(true);
+    expect((await h.session.interrupt()).ran).toBe(true);
     expect([h.finals(u), h.finals(r)]).toMatchObject([[], [{ end: { kind: "dropped" } }]]);
     expect(h.state.pending.map((p) => p.id as string)).toEqual([u]);
   });
@@ -1744,6 +1748,12 @@ describe("a conversation Claude Code no longer has", () => {
 
 const tasks = (...ts: { task_id: string; description: string; ambient?: boolean }[]) =>
   ({ type: "system", subtype: "background_tasks_changed", tasks: ts.map((t) => ({ task_type: "local_bash", ...t })), uuid: "bg", session_id: "s_1" }) as unknown as SDKMessage;
+/** A task's status turning completed, which Claude Code sends before the task leaves the background level. */
+const finished = (task_id: string) =>
+  ({ type: "system", subtype: "task_updated", task_id, patch: { status: "completed", end_time: 0 }, uuid: `u_${task_id}`, session_id: "s_1" }) as unknown as SDKMessage;
+const until = async (what: () => boolean, ms = 2_000) => {
+  for (let waited = 0; waited < ms && !what(); waited += 20) await Bun.sleep(20);
+};
 const build = { task_id: "t1", description: "npm run build" };
 const lint = { task_id: "t2", description: "npm run lint" };
 /** A frame as Claude Code stamps it with the uuids of the user messages its turn consumed. */
@@ -1753,6 +1763,31 @@ const allowed = (status: "allowed" | "allowed_warning", info: object = {}) =>
   ({ type: "rate_limit_event", uuid: "rl", session_id: "s_1", rate_limit_info: { status, ...info } }) as unknown as SDKMessage;
 
 describe("background work", () => {
+  test("Stop of the turn leaves background work running; Stop of everything waits on each task and names those not stopped", async () => {
+    const { h } = await started("[a]");
+    h.q().emit(said("Working."), tasks(build, lint));
+    await flush();
+    expect(await h.session.interrupt("turn")).toEqual({ ran: true, refused: [], late: [], woken: false });
+    expect(h.q().stoppedTasks).toEqual([]);
+    h.q().emit(interruptedResult(0.1));
+    await flush();
+    h.q().refusing.add("t2");
+    expect(await h.session.interrupt("all")).toEqual({ ran: true, refused: ["t2" as TaskId], late: [], woken: false });
+    expect(h.q().stoppedTasks).toEqual(["t1"]);
+  });
+
+  test("a queued message the phone withdraws never runs, and the one in flight cannot be withdrawn", async () => {
+    const h = harness();
+    h.session.push({ kind: "envelope", text: "[a]", initiator: user, settles: null, clientId: "c_a" });
+    h.session.push({ kind: "envelope", text: "[b]", initiator: user, settles: null, clientId: "c_b" });
+    await flush();
+    expect([h.session.unqueue("c_a"), h.session.unqueue("c_b"), h.session.unqueue("c_b")]).toEqual([false, true, false]);
+    expect(h.ends.filter((e) => e.text === "[b]").map((e) => e.end.kind)).toEqual(["dropped"]);
+    h.q().emit(resultMsg(0.1));
+    await flush();
+    expect(h.sent()).toEqual(["[a]"]);
+  });
+
   test("a query with background work is not closed when idle; the 15 minutes start once the work is done", async () => {
     const { h } = await started("[a]");
     h.q().emit(tasks(build), resultMsg(0.1));
@@ -1818,7 +1853,7 @@ describe("background work", () => {
     const r = h.push("[r]", routine);
     await flush();
     expect([first.closed, h.queries.length, h.session.current?.id as string | undefined]).toEqual([false, 1, r]);
-    first.emit(tasks());
+    first.emit(finished("t1"), tasks());
     await flush();
     expect([first.closed, h.queries.length, h.q().received.map((x) => x.text), h.q().options.maxBudgetUsd]).toEqual([true, 2, ["[r]"], 10]);
     expect(h.notes).toEqual([]);
@@ -1837,6 +1872,18 @@ describe("background work", () => {
     await h.advance(1);
     expect(first.stoppedTasks).toEqual(["t1", "t2"]);
     expect(h.notes).toEqual(["Ana's background work stopped: npm run build; npm run lint."]);
+  });
+
+  test("the note for a held turn's stop of background work names only what Claude Code stopped", async () => {
+    const { h } = await started("[a]");
+    const first = h.q();
+    first.emit(tasks(build, lint), resultMsg(0.1));
+    await flush();
+    first.refusing.add("t2");
+    h.push("[r]", routine);
+    await flush();
+    await h.advance(BACKGROUND_WAIT_MS);
+    expect(h.notes).toEqual(["Ana's background work stopped: npm run build."]);
   });
 
   test("a result while an unattended turn waits is not that turn's", async () => {
@@ -1864,14 +1911,14 @@ describe("background work", () => {
     const { h, id } = await started("[a]");
     h.q().emit(tasks(build, lint));
     await flush();
-    expect(await h.session.interrupt()).toBe(true);
+    expect((await h.session.interrupt()).ran).toBe(true);
     expect(h.q().stoppedTasks).toEqual(["t1", "t2"]);
     h.q().emit(interruptedResult(0.1));
     await flush();
     expect(h.finals(id)).toMatchObject([{ end: { kind: "stopped" } }]);
     h.q().emit(tasks(lint));
     await flush();
-    expect(await h.session.interrupt()).toBe(true);
+    expect((await h.session.interrupt()).ran).toBe(true);
     expect(h.q().stoppedTasks).toEqual(["t1", "t2", "t2"]);
   });
 
@@ -1890,17 +1937,94 @@ describe("background work", () => {
   });
 
   test("background work a restart stopped is named in one note, once", async () => {
-    const { h } = await started("[a]");
+    const gone = [backgroundCommand("t1"), backgroundCommand("t3")];
+    for (const c of gone) await c.end();
+    const h = harness({ spec: { shells: async () => new Map([["t1", gone[0]!.pid], ["t3", gone[1]!.pid]]) } });
+    h.push("[a]");
+    await flush();
     h.q().emit(tasks(build, { task_id: "t3", description: "x".repeat(200) }), resultMsg(0.1));
+    await flush();
     await flush();
     h.session.close();
     const after = harness({ state: structuredClone(h.state) });
-    await flush();
+    await until(() => after.notes.length > 0);
     expect(after.notes).toEqual([`The bridge restarted, so Ana's background work stopped: npm run build; ${"x".repeat(79)}….`]);
     after.session.close();
     const again = harness({ state: structuredClone(after.state) });
     await flush();
     expect(again.notes).toEqual([]);
+  });
+
+  test("after a restart, background work is named by what the Mac still runs: stopped, still running, or not known", async () => {
+    const running = backgroundCommand("t1");
+    const ended = backgroundCommand("t3");
+    await ended.end();
+    try {
+      const h = harness({ spec: { shells: async () => new Map([["t1", running.pid], ["t3", ended.pid]]) } });
+      h.push("[a]");
+      await flush();
+      h.q().emit(tasks(build, lint, { task_id: "t3", description: "npm test" }), resultMsg(0.1));
+      await flush();
+      await flush();
+      h.session.close();
+      const after = harness({ state: structuredClone(h.state) });
+      await until(() => after.notes.length === 3);
+      expect(after.notes).toEqual([
+        "The bridge restarted, so Ana's background work stopped: npm test.",
+        "The bridge restarted, and Ana no longer follows its background work, which still runs on this Mac: npm run build.",
+        "The bridge restarted, and Ana's background work may still run on this Mac: npm run lint.",
+      ]);
+    } finally {
+      await running.end();
+    }
+  });
+
+  test("background work that outlives a Claude Code that exited is not said to have stopped", async () => {
+    const running = backgroundCommand("t1");
+    try {
+      const h = harness({ spec: { shells: async () => new Map([["t1", running.pid]]) } });
+      h.push("[a]");
+      await flush();
+      h.q().emit(tasks(build), resultMsg(0.1));
+      await flush();
+      await flush();
+      h.q().crash(new Error("Claude Code process terminated by signal SIGKILL"));
+      await until(() => h.notes.length > 0, 3_000);
+      expect(h.notes).toEqual(["Ana exited, and no longer follows its background work, which still runs on this Mac: npm run build."]);
+    } finally {
+      await running.end();
+    }
+  });
+
+  test("a session closed before its exit check still says what became of its background work", async () => {
+    const running = backgroundCommand("t1");
+    try {
+      const h = harness({ spec: { shells: async () => new Map([["t1", running.pid]]) } });
+      h.push("[a]");
+      await flush();
+      h.q().emit(tasks(build), resultMsg(0.1));
+      await flush();
+      await flush();
+      h.q().crash(new Error("Claude Code process terminated by signal SIGKILL"));
+      await flush();
+      h.session.close();
+      await until(() => h.notes.length > 0);
+      expect(h.notes).toEqual(["Ana exited, and no longer follows its background work, which still runs on this Mac: npm run build."]);
+    } finally {
+      await running.end();
+    }
+  });
+
+  test("a stop Claude Code took before the turn it aims at began is sent again as that turn begins", async () => {
+    const { h, id } = await started("[a]");
+    await h.session.interrupt("turn");
+    expect(h.q().interrupts).toBe(1);
+    h.q().emit(echoing(wakeInit(), lastUuid(h)));
+    await flush();
+    expect(h.q().interrupts).toBe(2);
+    h.q().emit(interruptedResult(0));
+    await flush();
+    expect(h.finals(id).map((e) => e.end.kind)).toEqual(["stopped"]);
   });
 
   test("background work that ends on its own leaves nothing for a restart to name", async () => {

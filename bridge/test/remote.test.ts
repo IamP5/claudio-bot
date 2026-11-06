@@ -129,7 +129,7 @@ test("a remote agent's card shows in its bot's chat, pushes, and holds the bot a
 test("a phone decide on a mirrored card goes to its machine as card.answer and leaves this gate alone; the machine's card event closes it", async () => {
   const r = placed();
   r.send({ kind: "card", botId: B, message: card() });
-  expect(await r.h.hub.handle({ type: "decide", botId: B, messageId: "c_mac1" as MessageId, choice: "once" })).toEqual([]);
+  expect(await r.h.hub.handle({ type: "decide", botId: B, messageId: "c_mac1" as MessageId, choice: "once" })).toEqual([{ type: "decided", cardId: "c_mac1" as MessageId }]);
   expect(r.intents).toMatchObject([{ kind: "card.answer", botId: B, cardId: "c_mac1", reply: { kind: "permission", choice: "once" }, signed: null }]);
   expect(r.world.bots.get(B)!.messages.at(-1)).toMatchObject({ answer: null });
   expect(r.world.gate.grants).toEqual([]);
@@ -143,7 +143,7 @@ test("an answer to a card of an offline machine waits for it, says so in the cha
   const r = placed();
   r.send({ kind: "card", botId: B, message: card() });
   r.flip(false);
-  expect(await r.h.hub.handle({ type: "decide", botId: B, messageId: "c_mac1" as MessageId, choice: "deny" })).toEqual([]);
+  expect(await r.h.hub.handle({ type: "decide", botId: B, messageId: "c_mac1" as MessageId, choice: "deny" })).toEqual([{ type: "decided", cardId: "c_mac1" as MessageId }]);
   expect(r.world.bots.get(B)!.messages.at(-1)).toMatchObject({ kind: "note", text: 'MacBook is offline, so your answer to "Push to the default branch" goes to it when it is back.' });
   expect(r.intents).toEqual([]);
   r.flip(true);
@@ -299,7 +299,7 @@ test("deleting a bot drops the start still waiting for its offline machine, so n
 test("a remote card's reminder pushes from the home once, even when its event comes again, and not after the card closed", async () => {
   const world = emptyWorld();
   const sent: string[] = [];
-  const push = createPush({ world, persist: () => {}, sender: async (n) => void sent.push(n.text), liveUntil: () => null, now: () => new Date(), log: () => {} });
+  const push = createPush({ world, persist: () => {}, sender: { send: async (n) => void sent.push(n.text), taken: async () => [] }, liveUntil: () => null, now: () => new Date(), log: () => {} });
   const m = remote();
   world.bots.set(B, bot("eng"));
   hubOver(world, { links: m.links, push, seed: placedOn({ agentId: A, machine: MAC, botId: B }) });
@@ -321,7 +321,7 @@ test("a remote card a live phone held back is pushed once when the phone goes qu
   const quietAt = new Date(Date.now() + 45_000);
   let liveUntil: Date | null = quietAt;
   let h: ReturnType<typeof hubOver> | undefined;
-  const push = createPush({ world, persist: () => {}, sender: async (n) => void sent.push(n.text), liveUntil: () => liveUntil, now: () => new Date(), log: () => {}, remoteCards: () => h!.hub.remoteCards() });
+  const push = createPush({ world, persist: () => {}, sender: { send: async (n) => void sent.push(n.text), taken: async () => [] }, liveUntil: () => liveUntil, now: () => new Date(), log: () => {}, remoteCards: () => h!.hub.remoteCards() });
   const m = remote();
   world.bots.set(B, bot("eng"));
   h = hubOver(world, { links: m.links, push, seed: placedOn({ agentId: A, machine: MAC, botId: B }) });

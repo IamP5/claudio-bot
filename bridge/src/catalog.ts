@@ -1,8 +1,8 @@
 import { watch } from "node:fs";
 import { basename, join } from "node:path";
 import type { Tickable } from "./clock";
-import type { ClaudeApps } from "./claudeApps";
-import type { ProjectOf } from "./projects";
+import type { ClaudeApps, Live } from "./claudeApps";
+import { projectLabels, type ProjectOf } from "./projects";
 import type { Holder, MachineId, SessionId, SessionOrigin, SessionProject, SessionRow, SessionsChannelFrame, SessionStatus } from "./protocol";
 import { isTranscriptName, type Head, type Heads } from "./transcript";
 import type { AgentRecord, World } from "./world";
@@ -11,7 +11,8 @@ import type { AgentRecord, World } from "./world";
 // else holds a session, the Claude app's list and the overlay (hidden, visited). Rows are computed, never stored, and
 // diffs go to the sockets watching the list at most every 500 ms.
 
-export type Driven = { status: SessionStatus; working: boolean };
+/** What the bridge's writer says of a session: its status, and while something runs, the row's run fields. */
+export type Driven = { status: SessionStatus; working: boolean } & Pick<SessionRow, "since" | "running" | "activity" | "outcome">;
 
 export type CatalogDeps = {
   /** The machine whose transcripts these are. */
@@ -65,6 +66,12 @@ function holderOf(entrypoint: string): Holder {
   if (entrypoint === "claude-desktop") return "desktop";
   if (entrypoint === "cli") return "terminal";
   return "other";
+}
+
+function heldStatus(held: Live): SessionStatus {
+  if (held.status === "busy") return "working";
+  if (held.status !== "waiting") return "idle";
+  return held.waitingFor === "permission prompt" || held.waitingFor === "sandbox request" ? "awaiting_approval" : "awaiting_input";
 }
 
 function originOf(head: Head | null): SessionOrigin {
@@ -122,7 +129,7 @@ export function createCatalog(deps: CatalogDeps): Catalog {
       const visited = overlay?.visitedAt ?? null;
       const unread =
         !deps.watched(id) && (driven !== null || rec !== null || visited !== null) && head?.lastRole === "assistant" && (visited === null || lastAt > Date.parse(visited));
-      const status: SessionStatus = driven?.status ?? (held?.busy ? "working" : "idle");
+      const status: SessionStatus = driven?.status ?? (held ? heldStatus(held) : "idle");
       const holder: Holder = driven?.working ? "claudio" : held ? holderOf(held.entrypoint) : "none";
       rows.push({
         id,
@@ -143,6 +150,10 @@ export function createCatalog(deps: CatalogDeps): Catalog {
         url: rec?.agent.where === "cloud" ? rec.agent.url : null,
         createdAt: iso(createdAt),
         lastAt: iso(lastAt),
+        ...(driven?.since !== undefined && { since: driven.since }),
+        ...(driven?.running !== undefined && { running: driven.running }),
+        ...(driven?.activity !== undefined && { activity: driven.activity }),
+        ...(driven?.outcome !== undefined && { outcome: driven.outcome }),
       });
       const p = projects.get(project.id) ?? { id: project.id, machine: deps.machine, name: project.name, path: project.root, githubRepo: project.githubRepo, lastAt: null, canCloud: false };
       if (p.lastAt === null || iso(lastAt) > p.lastAt) p.lastAt = iso(lastAt);
@@ -152,7 +163,10 @@ export function createCatalog(deps: CatalogDeps): Catalog {
     const shown = new Set(rows.map((r) => r.id));
     for (const r of rows) if (r.parentId !== null && !shown.has(r.parentId)) r.parentId = null;
     rows.sort((a, b) => b.lastAt.localeCompare(a.lastAt));
-    const ordered = [...projects.values()].sort((a, b) => (b.lastAt ?? "").localeCompare(a.lastAt ?? "") || a.name.localeCompare(b.name));
+    const labels = projectLabels([...projects.values()]);
+    const ordered = [...projects.values()]
+      .map((p) => (labels.has(p.id) ? { ...p, label: labels.get(p.id)! } : p))
+      .sort((a, b) => (b.lastAt ?? "").localeCompare(a.lastAt ?? "") || a.name.localeCompare(b.name));
     return { projects: ordered, rows };
   }
 

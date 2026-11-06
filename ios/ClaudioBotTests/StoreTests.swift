@@ -236,12 +236,32 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
     @Test func aNewBotMessageOrOpenQuestionAlertsAndNothingElseDoes() {
         let store = store()
         let b1 = BotID("b1")
-        #expect(store.apply(.message(botId: b1, message: botMessage("m1", "Done"))).map(\.reason) == [.message("Done")])
-        #expect(store.apply(.message(botId: b1, message: question("q1"))).map(\.reason)
-            == [.question(id: MessageID("q1"), question: "Merge?", options: ["Yes", "Not yet"])])
+        let b = store.bots[b1]!
+        #expect(store.apply(.message(botId: b1, message: botMessage("m1", "Done"))) == [.bot(b, .message("Done"))])
+        #expect(store.apply(.message(botId: b1, message: question("q1")))
+            == [.bot(b, .question(id: MessageID("q1"), question: "Merge?", options: ["Yes", "Not yet"]))])
         #expect(store.apply(.message(botId: b1, message: question("q2", answer: .dismissed))).isEmpty)
         #expect(store.apply(.message(botId: b1, message: .user(id: MessageID("u1"), at: at, text: "ok", attachments: []))).isEmpty)
         #expect(store.apply(.message(botId: b1, message: botMessage("m1", "Done, edited"))).isEmpty)
+    }
+
+    @Test func pushStateComesFromHelloAndFollowsItsFrames() {
+        let store = AppStore()
+        store.apply(.hello(Hello(features: [.pushState], machine: "Mac", userName: "Alex", bots: [], push: .off)))
+        #expect(store.pushState == .off)
+        store.apply(.pushState(.failing(error: "HTTP 500", at: at)))
+        #expect(store.pushState == .failing(error: "HTTP 500", at: at))
+        #expect(store.pushState?.listNote == "Alerts when away are failing")
+        store.apply(.pushState(.on))
+        #expect(store.pushState?.listNote == nil)
+        store.apply(hello([]))
+        #expect(store.pushState == nil)
+    }
+
+    @Test func aSessionAlertIsPostedAsIs() {
+        let store = store()
+        let alert = SessionAlert(sessionId: SessionID("s1"), reason: .card, count: 2, title: "Fix login", cardId: MessageID("m1"))
+        #expect(store.apply(.sessionAlert(alert)) == [.session(alert)])
     }
 
     @Test func openQuestionIsTheNewestUnansweredCard() {
@@ -326,7 +346,7 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
     @Test func aNewPermissionCardAlertsOnceWithItsLabel() {
         let store = store()
         let alerts = store.apply(.message(botId: BotID("b1"), message: permission("p1")))
-        #expect(alerts.map(\.reason) == [.permission(id: MessageID("p1"), label: "Push to the default branch")])
+        #expect(alerts == [.bot(store.bots[BotID("b1")]!, .permission(id: MessageID("p1"), label: "Push to the default branch"))])
         #expect(store.apply(.message(botId: BotID("b1"), message: permission("p1"))).isEmpty)
         guard case .permission(_, _, let card)? = store.conversations[BotID("b1")]?[MessageID("p1")] else {
             Issue.record("card missing"); return
@@ -412,7 +432,7 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         store.decisionSent(.always, for: MessageID("p1"))
         store.decisionFailed(for: MessageID("p1"))
         #expect(store.pendingDecisions.isEmpty)
-        #expect(store.lastError?.message == "Your decision did not reach Mac. Try again.")
+        #expect(store.decisionNote(MessageID("p1"))?.text == "Not sent · Try again", "said on the card that failed (F-SES-142)")
     }
 
     @Test func anErrorIsDismissedOnlyByItsOwnNotice() throws {
@@ -549,13 +569,56 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
 
     @Test func listLinesBecomeItemsWithTheirMarkers() {
         #expect(MarkdownBlock.parse("Today:\n1. **One** thing\n12. Twelve\n- dash") == [
-            .prose("Today:"), .item(marker: "1.", "**One** thing"), .item(marker: "12.", "Twelve"), .item(marker: "•", "dash"),
+            .prose("Today:"), .item(level: 0, marker: "1.", "**One** thing"), .item(level: 0, marker: "12.", "Twelve"),
+            .item(level: 0, marker: "•", "dash"),
         ])
         #expect(MarkdownBlock.parse("2026 was a year.") == [.prose("2026 was a year.")])
     }
 
     @Test func headingsAreTheirOwnBlock() {
         #expect(MarkdownBlock.parse("## Plan\nstep one") == [.heading("Plan"), .prose("step one")])
+    }
+
+    @Test func nestedListsKeepTheirLevels() {
+        #expect(MarkdownBlock.parse("- fruit\n  - apple\n    1. green\n  - pear\n- veg") == [
+            .item(level: 0, marker: "•", "fruit"), .item(level: 1, marker: "◦", "apple"), .item(level: 2, marker: "1.", "green"),
+            .item(level: 1, marker: "◦", "pear"), .item(level: 0, marker: "•", "veg"),
+        ])
+    }
+
+    @Test func tablesQuotesAndRulesAreBlocks() {
+        #expect(MarkdownBlock.parse("Sizes:\n| Name | Size |\n|:---|---:|\n| a \\| b | 2 |\n| c |\nAfter") == [
+            .prose("Sizes:"), .table(header: ["Name", "Size"], rows: [["a | b", "2"], ["c", ""]]), .prose("After"),
+        ])
+        #expect(MarkdownBlock.parse("> one\n> two\n\n---\nnext") == [.quote("one\ntwo"), .rule, .prose("next")])
+        #expect(MarkdownBlock.parse("a | b with no divider") == [.prose("a | b with no divider")])
+    }
+
+    @Test func voiceOverReadsTablesWithoutPipes() {
+        #expect(RenderedMarkdown("Hi\n| Name | Age |\n|---|---|\n| **Ada** | 36 |\n\n> careful\n\n- one\n2. two\n***").spoken
+            == "Hi. Table, 2 columns: Name, Age. Name: Ada, Age: 36. Quote: careful. one. 2. two.")
+    }
+
+    @Test func bubblesSayWhoSpokeAndWhen() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_US")
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(BubbleSpeech.label("You", "Hi there", at: at, now: at, calendar: calendar) == "You: Hi there. Today 8:00\u{202F}AM")
+        #expect(BubbleSpeech.label("Grok", RenderedMarkdown("Done!").spoken, at: nil) == "Grok: Done!")
+        #expect(BubbleSpeech.speaker("Grok", at: at, now: at, calendar: calendar) == "Grok, Today 8:00\u{202F}AM")
+    }
+
+    @Test func linksAreFoundInEveryBlockKind() {
+        #expect(RenderedMarkdown("Merge [#141](https://x/141) now.\n- see [docs](https://x/d)\n| PR |\n|---|\n| [#142](https://x/142) |").links
+            == ["#141", "docs", "#142"])
+        #expect(RenderedMarkdown("No links, `[x](y)` in code.").links == [])
+    }
+
+    @Test func aSentenceWithAPipeUnderATableIsProse() {
+        #expect(MarkdownBlock.parse("| a | b |\n|---|---|\n| 1 | 2 |\nUse a | b to pipe.") == [
+            .table(header: ["a", "b"], rows: [["1", "2"]]), .prose("Use a | b to pipe."),
+        ])
     }
 }
 
@@ -768,6 +831,48 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         for _ in 0..<10 { #expect(store.resendsAfterHello() == [send("offline", id: "c1")]) }
     }
 
+    @Test func aBotSendHeldOfflineShowsInItsChatUntilItsEchoAndReadsNotSentAfterAMinute() {
+        let store = store()
+        store.sendStarted(send("offline", id: "c1"), at: at)
+        store.sendHeld(send("offline", id: "c1"))
+        #expect(store.botSends(in: BotID("b1")).map(\.clientId) == ["c1"])
+        #expect(store.botSends(in: BotID("b1")).first?.send.pending.state == .waiting)
+        #expect(store.botSends(in: BotID("b1")).first?.send.pending.text == "offline")
+        #expect(SessionUserBubble.words(.waiting) == "Not sent yet · Goes if your Mac is back within a minute")
+
+        store.requestDropped(send("offline", id: "c1"))
+        #expect(store.botSends(in: BotID("b1")).first?.send.pending.state == .notSent(nil))
+        #expect(store.resendsAfterHello(now: at + 61).isEmpty)
+
+        store.sendStarted(send("offline", id: "c1"), at: at + 90)
+        #expect(store.botSends(in: BotID("b1")).first?.send.pending.state == .waiting, "Retry")
+        store.apply(echo("c1"))
+        #expect(store.botSends(in: BotID("b1")).isEmpty)
+        #expect(store.botSends.isEmpty)
+    }
+
+    @Test func aBotSendThatWentStraightOutShowsOnlyOnceItMayHaveGoneAstray() {
+        let store = store()
+        store.sendStarted(send("online", id: "c1"), at: at)
+        #expect(store.botSends(in: BotID("b1")).isEmpty, "no flash of Not sent before the socket takes it")
+        store.sendTransmitted(send("online", id: "c1"), at: at)
+        #expect(store.botSends(in: BotID("b1")).isEmpty)
+        store.lapseBotSends(at: at + 10)
+        #expect(store.botSends(in: BotID("b1")).first?.send.pending.state == .unechoed)
+        store.requestDropped(send("online", id: "c1"))
+        #expect(store.botSends(in: BotID("b1")).first?.send.pending.state == .unechoed, "a socket took it, so never Not sent")
+        store.discardBotSend(clientId: "c1")
+        #expect(store.botSends.isEmpty)
+        #expect(store.unechoedSends.isEmpty)
+    }
+
+    @Test func aBotSendIsResentAfterHelloOnlyWithinAMinuteOfTheTap() {
+        let store = store()
+        store.sendStarted(send("offline", id: "c1"), at: at)
+        #expect(store.resendsAfterHello(now: at + 59) == [send("offline", id: "c1")])
+        #expect(store.resendsAfterHello(now: at + 61).isEmpty)
+    }
+
     @Test func aBridgeThatCannotDropRepeatsGetsNoResend() {
         let store = store(features: [])
         store.sendStarted(send("first", id: "c1"))
@@ -927,16 +1032,27 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(late?.message == HomeView.deleteMessage(b, home: "your computer"))
     }
 
-    @Test func theConnectionBannerOffersHelpAfterThreeFailedConnects() {
-        #expect(ConnectionBanner.help(failures: 2, address: "10.0.0.20:7878", computer: "omarchy") == nil)
-        #expect(ConnectionBanner.help(failures: 3, address: "10.0.0.20:7878", computer: "omarchy")?.contains("on omarchy isn't answering at 10.0.0.20:7878") == true)
+    @Test func theConnectionBannerNamesTheBridgesComputer() {
+        let cause = ConnectionBanner.cause(.retrying, address: "10.0.0.20:7878", lastRetryFailed: false, computer: "omarchy")
+        #expect(cause.hasPrefix("The bridge on omarchy isn't answering at 10.0.0.20:7878."))
+        #expect(cause.contains("omarchy's Tailscale name"))
+        #expect(UnrecognizedBanner.cause("omarchy").hasSuffix("retry once you are back on omarchy's network."))
     }
 
-    @Test func theOfflineBarShowsWhileTheMacIsOutOfReach() {
-        #expect(!OfflineBar.shows(.connected(machine: "Mac")))
-        #expect(!OfflineBar.shows(.unpaired))
-        #expect(OfflineBar.shows(.disconnected(retryAt: at)))
-        #expect(OfflineBar.shows(.connecting))
+    @Test func offlineAWorkingBotIsOnlyLastKnown() {
+        var working = bot("b1")
+        working.status = .working
+        let store = AppStore()
+        store.apply(.hello(Hello(features: [.activity], machine: "Mac", userName: "Alex", bots: [working])))
+        store.apply(.activity(botId: BotID("b1"), agentId: nil, text: "Reading hub.ts", at: at))
+        #expect(ActivityLine.text(in: store, botId: BotID("b1")) == "Reading hub.ts")
+        #expect(store.motion(of: working) == .working)
+
+        store.setConnection(.disconnected(retryAt: at))
+        #expect(ActivityLine.text(in: store, botId: BotID("b1")) == nil, "the line could be long over")
+        #expect(store.motion(of: working) == .idle)
+        #expect(LastKnown.working == "Working when last updated")
+        #expect(store.heardAt != nil, "the banner says how old the chat is")
     }
 
     @Test func theWebhookCurlCommandCarriesTheTokenAndTheAddress() {
@@ -947,9 +1063,62 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
     @Test func aStopQueuedOfflineIsDroppedAfterAMinuteAndOtherMessagesAreNot() {
         let stop = ClientMessage.stop(botId: BotID("b1"))
         let send = ClientMessage.send(botId: BotID("b1"), text: "hi", uploads: [], clientId: "c1")
-        #expect(BridgeClient.stillWanted(stop, queuedAt: at, now: at + 30, staleStop: 60))
-        #expect(!BridgeClient.stillWanted(stop, queuedAt: at, now: at + 61, staleStop: 60))
-        #expect(!BridgeClient.stillWanted(.stopAgent(agentId: AgentID("a1")), queuedAt: at, now: at + 61, staleStop: 60))
-        #expect(BridgeClient.stillWanted(send, queuedAt: at, now: at + 3600, staleStop: 60))
+        #expect(BridgeClient.stillWanted(stop, queuedAt: at, now: at + 30, maxAge: 60))
+        #expect(!BridgeClient.stillWanted(stop, queuedAt: at, now: at + 61, maxAge: 60))
+        #expect(!BridgeClient.stillWanted(.stopAgent(agentId: AgentID("a1")), queuedAt: at, now: at + 61, maxAge: 60))
+        #expect(!BridgeClient.stillWanted(send, queuedAt: at, now: at + 61, maxAge: 60), "a bot message keeps the session send's minute")
+    }
+}
+
+/// What Home says about a bot's last turn, its waiting cards and the create the user is waiting on.
+@MainActor
+@Suite struct BotStatusTruthTests {
+    private func bot(outcome: SessionOutcome? = nil, question: String? = nil, cards: Int? = nil) -> Bot {
+        Bot(
+            id: BotID("b1"), name: "eng", title: nil, avatar: .standard, pinned: false, hidden: false, status: .idle,
+            unread: 1, question: question, preview: "ok", lastAt: at, createdAt: at, routines: [], outcome: outcome, cards: cards
+        )
+    }
+
+    @Test func aTurnThatDidNotFinishReplacesTheOldReplyOnTheRow() {
+        let display = RowDisplay(bot(outcome: SessionOutcome(kind: .failed, text: "Didn't finish: Claude Code quit unexpectedly", at: at)))
+        #expect(display.preview == "Didn't finish: Claude Code quit unexpectedly")
+        #expect(display.outcome == .failed)
+        #expect(display.unreadDot)
+    }
+
+    @Test func anOpenCardOutranksTheOutcomeAndSaysHowManyWait() {
+        let display = RowDisplay(bot(outcome: SessionOutcome(kind: .stopped, text: "Stopped by Alex", at: at), question: "Which remote?", cards: 3))
+        #expect(display.preview == "3 waiting · Which remote?")
+        #expect(display.outcome == nil)
+        #expect(RowDisplay(bot(question: "Which remote?")).preview == "Which remote?")
+    }
+
+    @Test func aCardClosedByTheNextMessageSaysItDidNotRun() {
+        #expect(PermissionAnswer.superseded.outcome().text == "Closed when you sent a new message. It did not run.")
+    }
+
+    @Test func aNewBotOpensOnlyIfTheUserStayedWhereTheyAsked() {
+        let router = Router()
+        router.pendingCreate = "c1"
+        let create = router.creating!
+        #expect(create.from == nil)
+        #expect(router.stillWaits(for: create))
+        router.selection = .bot(BotID("b9"))
+        #expect(!router.stillWaits(for: create))
+        router.selection = nil
+        router.showingSettings = true
+        #expect(!router.stillWaits(for: create))
+    }
+
+    @Test func aCreateHeldPastAMinuteIsDroppedWithWords() {
+        let create = ClientMessage.createBot(ref: "c1")
+        #expect(OutboxRule.of(create) == .expires)
+        #expect(!BridgeClient.stillWanted(create, queuedAt: at, now: at + 61, maxAge: OutboxRule.maxAge))
+        #expect(OutboxRule.of(.createGroup(ref: "g1", name: "team", members: [])) == .expires)
+        let store = AppStore()
+        store.requestDropped(create)
+        #expect(store.droppedCreate == "c1")
+        #expect(store.lastError?.message == "New bot not created: your Mac was unreachable for a minute. Try again once it's back.")
     }
 }

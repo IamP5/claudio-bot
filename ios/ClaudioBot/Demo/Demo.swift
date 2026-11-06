@@ -9,8 +9,17 @@ import Foundation
 /// `group|groupprofile|newgroup|botexchange` the group and bot exchange screens. `usage` opens Plan usage over the bot list,
 /// `usagehot` with the session near its limit and `usageoff` with no plan limits to read. The pairing and connection states have their own:
 /// `pairconfirm|outdated` (unpaired), `confirm|unrecognized|error|oldbridge` (paired). Sessions: `sessions` (the sidebar),
-/// `thread` (work runs and a permission card), `ask`, `plan`, `streaming`, `cloud`, `longthread` (500 items), `newsession`,
-/// `sessionsempty` and `sessionsoffline`.
+/// `thread` (work runs and a permission card), `workrun` (subagents running, one failed, a background command), `ask`,
+/// `plan`, `approvals` (subagents' cards, open and answered), `approvalsanswered` (all answered), `approvalsexpiring` (the open
+/// card expires 20 s in), `approvalselsewhere` (another device denies it 15 s in), `streaming`, `cloud`,
+/// `longthread` (500 items), `newsession`, `background` (the turn over, a subagent and its command still running),
+/// `threadoffline` (the Mac lost after the thread loaded), `threadwaiting` (a thread opened with the Mac out of reach),
+/// `composerdraft`, `composerlong`, `composerlapse`, `composersix`, `composerrefused`, `composermode`, `composerqueued`, `composerwithdraw`, `stoppedearly` (DemoSessions.stageComposer;
+/// add "kb" for the same with the keyboard up, or "kbgone" for the keyboard up and then put away 8 s in),
+/// `markdown` and `markdownthread` end the claude chat and the thread with a reply holding a table, a quote, a rule and nested lists,
+/// `sessionsempty` and `sessionsoffline`. `pushoff` and `pushfailing` open the Sessions list with alerts when away off or
+/// failing, `settingspush` Settings with them failing, and `staleapproval` the approvals thread from a push link whose
+/// card was answered.
 @MainActor
 enum Demo {
     private static let arguments = ProcessInfo.processInfo.arguments
@@ -33,27 +42,36 @@ enum Demo {
         let features: [Feature] = switch screen {
         case "live": [.activity]
         case "oldbridge": []
-        case "machines": [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions, .memory, .mute, .skills, .spend, .machines]
-        default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions, .memory, .mute, .skills, .spend]
+        case "machines": [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions, .memory, .mute, .skills, .spend, .sessionTasks, .sessionUnqueue, .pushState, .machines]
+        default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions, .memory, .mute, .skills, .spend, .sessionTasks, .sessionUnqueue, .pushState]
+        }
+        let push: PushState = switch screen {
+        case "pushoff": .off
+        case "pushfailing", "settingspush": .failing(error: "ntfy answered 500 Internal Server Error", at: .now - 240)
+        default: .on
         }
         store.apply(.hello(Hello(
             protocol: oldBridge ? 2 : Wire.protocolVersion, features: features,
             machine: features.contains(.machines) ? machines[0].name : "MacBook Pro", userName: "Alex", bots: bots,
             world: features.contains(.machines) ? World(id: WorldID("w_demo"), name: "Alex's bots") : nil,
-            machines: features.contains(.machines) ? machines : nil
+            machines: features.contains(.machines) ? machines : nil,
+            push: push
         )))
         if !oldBridge { store.apply(.usage(usage(screen))) }
         if !oldBridge { store.apply(.devices(devices)) }
         for (bot, messages) in conversations {
-            store.apply(.conversation(botId: BotID(bot), messages: messages))
+            let sample: [Message] = bot == "claude" && screen == "markdown" ? [say("md", .now, markdownSample)] : []
+            store.apply(.conversation(botId: BotID(bot), messages: messages + sample))
         }
         store.apply(.details(botId: BotID("claude"), library: library, links: links, agents: [], routines: []))
         store.apply(.details(botId: BotID("engineer"), library: [], links: [], agents: agents, routines: []))
         store.apply(.agent(agents[0], messages: agentMessages))
         store.apply(.file(botId: BotID("claude"), path: "library/merge-plan.md", file: BotFile(mime: "text/markdown", content: plan, data: nil)))
         if features.contains(.sessions) {
-            DemoSessions.load(into: store, empty: screen == "sessionsempty")
-            DemoSessions.streamParity(into: store)
+            if screen != "atworkwaiting" {
+                DemoSessions.load(into: store, empty: screen == "sessionsempty")
+                DemoSessions.streamParity(into: store)
+            }
         }
 
         router.sidebar = .bots
@@ -61,7 +79,9 @@ enum Demo {
         switch screen {
         case "newchat": router.showingNewChat = true
         case "usage", "usagehot", "usageoff": router.showingUsage = true
-        case "settings", "machines": router.showingSettings = true
+        case "settings", "settingspush", "machines": router.showingSettings = true
+        case "markdown": router.selection = .bot(BotID("claude"))
+        case "markdownthread": router.open(.session(DemoSessions.fade))
         case "chat":
             router.selection = .bot(BotID("claude"))
             router.showingInspector = true
@@ -135,10 +155,30 @@ enum Demo {
             router.selection = .bot(BotID("release"))
             store.apply(.error(message: "That card already closed."))
         case "oldbridge": router.showingSettings = true
-        case "sessions", "sessionsempty": router.sidebar = .sessions
+        case "sessions", "sessionsempty", "pushoff", "pushfailing": router.sidebar = .sessions
         case "thread": router.open(.session(DemoSessions.fade))
+        case "workrun": router.open(.session(DemoSessions.audit))
         case "ask": router.open(.session(DemoSessions.sidebar))
         case "plan": router.open(.session(DemoSessions.playlist))
+        case "approvals": router.open(.session(DemoSessions.sleepers))
+        case "approvalsexpiring":
+            DemoSessions.sleeperTwoDeadline = .now + 20
+            router.open(.session(DemoSessions.sleepers))
+        case "approvalselsewhere":
+            router.open(.session(DemoSessions.sleepers))
+            Task {
+                try? await Task.sleep(for: .seconds(15))
+                DemoSessions.denyElsewhere(store: store)
+            }
+        case "staleapproval":
+            DemoSessions.sleepersAnswered = true
+            router.open(.session(DemoSessions.sleepers), card: MessageID("card-sleeper-2"))
+        case "approvalsanswered":
+            DemoSessions.sleepersAnswered = true
+            router.open(.session(DemoSessions.sleepers))
+        case "unsure":
+            DemoSessions.sleepersUnsure = true
+            router.open(.session(DemoSessions.sleepers))
         case "streaming": router.open(.session(DemoSessions.parity))
         case "cloud": router.open(.session(DemoSessions.changelog))
         case "longthread": router.open(.session(DemoSessions.catalog))
@@ -148,17 +188,80 @@ enum Demo {
         case "sessionsoffline":
             router.sidebar = .sessions
             store.setConnection(.disconnected(retryAt: .now + 25))
+        case "background":
+            DemoSessions.backgroundOnly = true
+            router.open(.session(DemoSessions.audit))
+        case "toolfailed": router.open(.session(DemoSessions.audit))
+        case "threadoffline":
+            router.open(.session(DemoSessions.audit))
+            Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                store.setConnection(.disconnected(retryAt: .now + 25))
+            }
+        case "atwork", "atworkoffline", "atworkwaiting":
+            router.sidebar = .sessions
+            router.columns = .detailOnly
+            if screen != "atwork" { store.setConnection(.disconnected(retryAt: .now + 25)) }
+        case "atworkchip", "atworkchipoffline":
+            router.sidebar = .sessions
+            router.open(.session(DemoSessions.parity))
+            router.columns = .detailOnly
+            if screen == "atworkchipoffline" { store.setConnection(.disconnected(retryAt: .now + 25)) }
+        case "threadwaiting":
+            store.setConnection(.disconnected(retryAt: .now + 25))
+            router.open(.session(DemoSessions.audit))
+        case let composer? where DemoSessions.composerScreens.contains(composer.replacing(/kb(gone)?$/, with: "")):
+            let staged = composer.replacing(/kb(gone)?$/, with: "")
+            DemoSessions.backgroundOnly = staged == "composerlong" || staged == "composersix"
+            router.open(.session(DemoSessions.audit))
+            DemoSessions.stageComposer(staged, in: store)
         default: break
         }
     }
 
+    static var showsMarkdownThread: Bool { screen == "markdownthread" }
+    static let markdownSample = """
+        Here's where the release stands:
+
+        | Step | Owner | Status |
+        |:-----|:------|-------:|
+        | Migration | Dana | Done |
+        | Payments stack | Claude | **Waiting** |
+
+        > Production changes need your OK first.
+
+        ---
+
+        - Payments
+          - #139 to #141 green
+            1. migration checked
+          - #143 needs a rebase
+        - Docs
+        """
     /// `-demoColumns` opens the iPad with the sidebar beside the detail. A simulator in portrait cannot be turned from
     /// inside the app, and this is the split view a landscape iPad shows.
     static let showsAllColumns = arguments.contains("-demoColumns")
+    /// The `atwork` screens lay the window out as a wide one, so a phone shows the split view's at-work pane and chip:
+    /// `atwork` (nothing chosen, the list hidden as on an iPad in portrait), `atworkoffline` (the same with the Mac lost), `atworkwaiting` (no list yet, Mac lost),
+    /// `atworkchip` and `atworkchipoffline` (a thread with the list hidden).
+    /// `-wideLayout` does the same for the app paired with a bridge, so the live chip and pane can be seen on a phone.
+    static var forcesWide: Bool { screen?.hasPrefix("atwork") == true || arguments.contains("-wideLayout") }
+    /// `toolfailed`: the thread opens a step's full output, which the Mac does not have.
+    static var toolFails: Bool { screen == "toolfailed" }
 
     /// The bots already ticked when `newgroup` opens the group picker.
     static var groupPick: [BotID]? {
         screen == "newgroup" ? [BotID("engineer"), BotID("news")] : nil
+    }
+
+    /// A composer screen whose name ends in "kb" or "kbgone" opens with the field focused, so the keyboard is up.
+    static var focusesComposer: Bool {
+        screen.map { DemoSessions.composerScreens.contains($0.replacing(/kb(gone)?$/, with: "")) && $0.contains(/kb(gone)?$/) } ?? false
+    }
+
+    /// A "kbgone" screen puts the keyboard away after this long, as a drag down the transcript would.
+    static var dropsComposerFocus: Duration? {
+        focusesComposer && screen?.hasSuffix("kbgone") == true ? .seconds(8) : nil
     }
 
     /// What the composer holds when a screen opens mid-sentence: the "@" menu, a picked token, or the "/" menu.
@@ -510,7 +613,7 @@ enum Demo {
             me("l3", ago(minutes: 6), "Push the changelog fix straight to main."),
             .permission(id: MessageID("l4"), at: ago(minutes: 5), card: PermissionCard(
                 from: nil, tool: "Bash", label: "Push to the default branch", detail: "git push origin main",
-                always: "git push to main or master from release captain", answer: nil, expiresAt: .now + 100 * 60
+                always: "Push to the default branch, without asking, in turns you start", answer: nil, expiresAt: .now + 100 * 60
             )),
         ]),
         ("standup", [

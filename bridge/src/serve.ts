@@ -17,8 +17,9 @@ import {
   type TransportMessage,
 } from "./protocol";
 import { forProtocol2 } from "./protocol2";
+import type { AlertSockets } from "./push";
 import type { ThreadSignal } from "./sessions";
-import type { Stream } from "./stream";
+import { wire, type Stream } from "./stream";
 import { errorText } from "./text";
 
 // HTTP and the sockets: /health, POST /pair, /ws with resume and the transport messages, and on a home with machines,
@@ -39,19 +40,34 @@ export const PAIR_FAILURE_WINDOW_MS = 10 * 60_000;
 const LIVE_WINDOW_MS = 45_000;
 // Bun pings a socket silent for 44 s and closes it at 60 s, so a dead one goes away instead of lingering for two minutes.
 const IDLE_TIMEOUT_S = 60;
+/** Closed sockets whose last attended hearing is kept, so an alert sent to one can still count as seen. */
+const CLOSED_KEPT = 256;
 
 /**
  * limited: the protocol 2 shared token, or an app that did not announce protocol 3 (see `refusal`). threads: the
  * sessions this socket watches, so its close unwatches them. turns: the socket's requests run one at a time in the
- * order sent, so an answer never overtakes the one asked before it. attended: the app's last presence, true until it
+ * order sent, so an answer never overtakes the one asked before it (a usage refresh runs beside them). attended: the app's last presence, true until it
  * sends one.
  */
 type SocketData = {
+  /** The transport's own id for the socket, never reused while the bridge runs. */
+  id: number;
   deviceId: DeviceId;
   protocol: 2 | 3;
   resume: { epoch: string; after: number } | null;
   heardAt: number;
+  /** When it was last heard from while attended: the user last saw its threads then. */
+  readAt: number;
   attended: boolean;
+  /** When it connected. Until it sends a message, pings alone keep it live no longer than LIVE_WINDOW_MS after that. */
+  connectedAt: number;
+  /** It has sent a message, not only pings. */
+  spoke: boolean;
+  /**
+   * The app's presence as its messages arrive, before its requests run in turn: a message after a presence(false) is
+   * from nobody looking even while that presence still waits in turns.
+   */
+  looking: boolean;
   limited: boolean;
   threads: Set<SessionId>;
   turns: Promise<void>;
@@ -65,7 +81,7 @@ const isLink = (ws: AnySocket): ws is ServerWebSocket<LinkData> => "link" in ws.
 export type ServeDeps = {
   devices: Devices;
   stream: Stream;
-  hub: Pick<Hub, "hello" | "greeting" | "handle">;
+  hub: Pick<Hub, "hello" | "greeting" | "handle" | "left">;
   legacy: Legacy;
   log: (line: string) => void;
   now: () => Date;
@@ -75,6 +91,8 @@ export type ServeDeps = {
   offer: () => PairOffer;
   /** A home's machines: their links, enrollment, and join codes (machine_code). Absent: none of the three. */
   machines?: { links: Links; enroll(body: unknown): Enrollment; offer(): PairOffer };
+  /** Who is looking changed: a socket's presence flipped, or an attended socket left. */
+  presence?: () => void;
 };
 
 export type Transport = {
@@ -90,10 +108,14 @@ export type Transport = {
   signal(message: SessionsChannelFrame, topic: "sessions"): void;
   signal(message: ThreadSignal, topic: ThreadTopic): void;
   watchers(sessionId: SessionId): number;
+  /** Watchers that read the thread: attended and heard from within LIVE_WINDOW_MS. An app nobody looks at reads nothing. */
+  readers(sessionId: SessionId): number;
   /** Open authenticated sockets heard from within LIVE_WINDOW_MS whose app is attended. */
   live(): number;
   /** When the last of those goes quiet, or null when none is live. */
   liveUntil(): Date | null;
+  /** Session alerts, sent to each open protocol 3 socket by its id, and whether a socket that got one saw it. */
+  sockets: AlertSockets;
   stop(): void;
 };
 
@@ -162,14 +184,36 @@ export function serve(deps: ServeDeps): Transport {
     failures.set(address, { since: at, count: 1 });
   };
 
+  let nextId = 0;
+  /** Each closed socket's readAt, by its id, the newest CLOSED_KEPT. */
+  const closedReadAt = new Map<number, number>();
+  // Before a presence(false) is handled, so the app that sends it counts as having seen what came before it.
   const heard = (ws: Socket) => {
     ws.data.heardAt = deps.now().getTime();
+    if (ws.data.attended) ws.data.readAt = ws.data.heardAt;
   };
-  const quietAt = () => [...sockets.values()].flatMap((set) => [...set].filter((ws) => ws.data.attended).map((ws) => ws.data.heardAt + LIVE_WINDOW_MS));
+  /** When someone last looked at an app: a presence(true), or any other message while it said it is looked at. */
+  let lookedAt = 0;
+  /** Notes a look, and returns the message's type. */
+  function look(ws: Socket, raw: string): unknown {
+    let m: { type?: unknown; attended?: unknown };
+    try {
+      m = (JSON.parse(raw) ?? {}) as typeof m;
+    } catch {
+      return undefined;
+    }
+    if (m.type === "presence" && typeof m.attended === "boolean") ws.data.looking = m.attended;
+    // The connect is no look: an app reconnecting in the background says so first, in its presence(false).
+    if (ws.data.looking && (m.type !== "presence" || m.attended === true)) lookedAt = ws.data.heardAt;
+    return m.type;
+  }
+  const open = () => [...sockets.values()].flatMap((set) => [...set]);
+  // A socket that never says a word, not even its presence, is not someone watching past the window after it connected.
+  const quietAt = () => open().filter((ws) => ws.data.attended).map((ws) => (ws.data.spoke ? ws.data.heardAt : ws.data.connectedAt) + LIVE_WINDOW_MS);
 
   const send = (ws: Socket, message: ServerMessage) => {
     const frame = ws.data.protocol === 3 ? message : forProtocol2(message);
-    if (frame !== null) ws.send(JSON.stringify(frame));
+    if (frame !== null) ws.send(wire(frame));
   };
 
   function transport(ws: Socket, message: TransportMessage): ServerMessage[] {
@@ -190,7 +234,13 @@ export function serve(deps: ServeDeps): Transport {
         log("machine code minted from a phone");
         return [{ type: "machine_code", ...deps.machines.offer() }];
       case "presence":
-        ws.data.attended = message.attended;
+        if (ws.data.attended !== message.attended) {
+          ws.data.attended = message.attended;
+          if (message.attended) ws.data.readAt = ws.data.heardAt;
+          // Nobody looks at its threads any more, so what lands in them from now on is news.
+          if (!message.attended) for (const id of ws.data.threads) void hub.left(id, new Date(ws.data.readAt)).catch(() => {});
+          deps.presence?.();
+        }
         return [];
       case "revoke_device": {
         const target = devices.list(null).find((d) => d.id === message.deviceId);
@@ -285,7 +335,7 @@ export function serve(deps: ServeDeps): Transport {
         // The ring holds protocol 3 frames, and a protocol 2 app never asks to resume.
         const resume = epoch && protocol === 3 ? { epoch, after: Number(url.searchParams.get("after") ?? NaN) } : null;
         const limited = protocol === 2 || devices.list(null).some((d) => d.id === deviceId && d.legacy);
-        if (server.upgrade(req, { data: { deviceId, protocol, resume, heardAt: deps.now().getTime(), attended: true, limited, threads: new Set(), turns: Promise.resolve() } })) return;
+        if (server.upgrade(req, { data: { id: ++nextId, deviceId, protocol, resume, heardAt: deps.now().getTime(), readAt: deps.now().getTime(), attended: true, looking: true, connectedAt: deps.now().getTime(), spoke: false, limited, threads: new Set(), turns: Promise.resolve() } })) return;
         return new Response("Expected a WebSocket upgrade", { status: 426 });
       }
       return new Response("Not found", { status: 404 });
@@ -322,10 +372,18 @@ export function serve(deps: ServeDeps): Transport {
         }
         const ws = any as Socket;
         sockets.get(ws.data.deviceId)?.delete(ws);
-        // Bun drops a closed socket's topics; the hub hears it left each thread, after the requests already sent.
+        closedReadAt.set(ws.data.id, ws.data.readAt);
+        for (const id of closedReadAt.keys()) {
+          if (closedReadAt.size <= CLOSED_KEPT) break;
+          closedReadAt.delete(id);
+        }
+        // Bun drops a closed socket's topics; the hub hears it left each thread, after the requests already sent. A
+        // socket that went silent, or nobody looked at, left when it was last heard attended, not when its close came.
+        // The visits land before who looks is judged again, so no row reads unread in between.
         ws.data.turns = ws.data.turns.then(async () => {
-          for (const sessionId of ws.data.threads) await hub.handle({ type: "unwatch_session", sessionId }).catch(() => {});
+          for (const sessionId of ws.data.threads) await hub.left(sessionId, new Date(ws.data.readAt)).catch(() => {});
           ws.data.threads.clear();
+          if (ws.data.attended) deps.presence?.();
         });
       },
       message(any, raw) {
@@ -335,6 +393,10 @@ export function serve(deps: ServeDeps): Transport {
         }
         const ws = any as Socket;
         heard(ws);
+        ws.data.spoke = true;
+        // A usage refresh answers when the Mac's read ends, up to 15 s later; it runs beside the queue, so it holds back
+        // nothing the phone sends after it.
+        if (look(ws, String(raw)) === "refresh_usage") return void handle(ws, String(raw)).catch((e) => log(`serve: ${errorText(e)}`));
         ws.data.turns = ws.data.turns.then(() => handle(ws, String(raw))).catch((e) => log(`serve: ${errorText(e)}`));
       },
     },
@@ -364,13 +426,30 @@ export function serve(deps: ServeDeps): Transport {
       const frame = stream.append(message);
       server.publish(TOPIC[3], frame);
       const old = forProtocol2(message);
-      if (old !== null) server.publish(TOPIC[2], old === message ? frame : JSON.stringify({ ...old, seq: stream.seq }));
+      if (old !== null) server.publish(TOPIC[2], old === message ? frame : wire({ ...old, seq: stream.seq }));
     },
     signal: (message: Signal | SessionsChannelFrame | ThreadSignal, topic?: string) => {
-      server.publish(topic ?? TOPIC[3], JSON.stringify(message));
+      server.publish(topic ?? TOPIC[3], wire(message));
     },
     watchers: (sessionId) => server.subscriberCount(threadTopic(sessionId)),
+    readers: (sessionId) => {
+      const at = deps.now().getTime();
+      return open().filter((ws) => ws.data.attended && ws.data.heardAt + LIVE_WINDOW_MS > at && ws.data.threads.has(sessionId)).length;
+    },
     live: () => quietAt().filter((t) => t > deps.now().getTime()).length,
+    sockets: {
+      alert: (m, only) => {
+        const to = open().filter((ws) => ws.data.protocol === 3 && ws.readyState === 1 && (only === undefined || only.includes(ws.data.id)));
+        for (const ws of to) ws.send(wire(m));
+        return to.map((ws) => ws.data.id);
+      },
+      heard: (ids, since) => {
+        const readAt = new Map(open().map((ws) => [ws.data.id, ws.data.readAt] as const));
+        return ids.some((id) => (readAt.get(id) ?? closedReadAt.get(id) ?? 0) > since);
+      },
+      open: () => open().flatMap((ws) => (ws.data.protocol === 3 && ws.readyState === 1 ? [ws.data.id] : [])),
+      lookedAt: () => lookedAt,
+    },
     liveUntil: () => {
       const last = Math.max(0, ...quietAt());
       return last > deps.now().getTime() ? new Date(last) : null;

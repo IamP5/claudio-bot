@@ -11,7 +11,7 @@ import { profileOf } from "../src/machine/profile";
 import { createRegistry, type Registry } from "../src/machine/registry";
 import type { AgentRuntime } from "../src/machine/runtime";
 import { newIntentId, profileView, type Event, type EventBody, type HomeFrame, type MachineId, type SessionSignal } from "../src/machine/wire";
-import type { SessionClientMessage, SessionId } from "../src/protocol";
+import type { MessageId, SessionClientMessage, SessionId } from "../src/protocol";
 
 const profile = (() => {
   const view = profileView(profileOf({ env: { CLAUDIOBOT_ACCESS: "full" }, platform: "linux", name: "omarchy", homedir: "/home/alex", username: "alex" }), []);
@@ -218,7 +218,7 @@ test("a phone's session request reaches the machine's sessions over the link and
   const m = machineAt(h.url, pair, tmp(), {
     async handle(frame) {
       asked.push(frame);
-      return frame.type === "session_stop" ? [{ type: "error", message: "Nothing is running." }, { type: "bot_removed", botId: "b1" as never }] : [];
+      return frame.type === "session_stop" ? [{ type: "error", message: "Nothing is running." }] : [];
     },
   });
   await until("online", () => h.links.machines()[0]!.status().online);
@@ -236,6 +236,23 @@ test("a phone's session request reaches the machine's sessions over the link and
   await until("offline", () => !h.links.machines()[0]!.status().online);
   expect(m.dialer.watched(S)).toBe(false);
   expect(await h.links.ask(pair.mac.machineId, { type: "session_stop", sessionId: S })).toEqual({ ok: false, reason: "MacBook is offline" });
+});
+
+test("a decision on a card in a machine's session comes back to the phone as decided, for a permission and for a question", async () => {
+  const pair = enrolledPair();
+  const registry = createRegistry({ bridgeHome: tmp(), now: () => new Date() });
+  registry.enroll({ id: pair.mac.machineId, name: "MacBook", publicKey: pair.mac.publicKey });
+  const h = homeServer(pair.home, registry);
+  const S = "6f1c2b9e-0d2a-4c1e-9b7a-3e5d4c2b1a00" as SessionId;
+  machineAt(h.url, pair, tmp(), {
+    async handle(frame) {
+      return frame.type === "session_decide" || frame.type === "session_answer" ? [{ type: "decided", cardId: frame.cardId }] : [];
+    },
+  });
+  await until("online", () => h.links.machines()[0]!.status().online);
+
+  expect(await h.links.ask(pair.mac.machineId, { type: "session_decide", sessionId: S, cardId: "c_plan" as MessageId, choice: "once" })).toEqual({ ok: true, frames: [{ type: "decided", cardId: "c_plan" as MessageId }] });
+  expect(await h.links.ask(pair.mac.machineId, { type: "session_answer", sessionId: S, cardId: "c_ask" as MessageId, answers: { Which: "A" } })).toEqual({ ok: true, frames: [{ type: "decided", cardId: "c_ask" as MessageId }] });
 });
 
 test("a machine that serves no sessions refuses an ask in words", async () => {

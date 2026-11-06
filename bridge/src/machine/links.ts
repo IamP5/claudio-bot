@@ -2,9 +2,9 @@ import type { Identity } from "./identity";
 import { homeHears, homeOpens, type LinkState } from "./link";
 import type { Machine, Sent } from "./machines";
 import type { Registry } from "./registry";
-import type { SessionClientMessage } from "../protocol";
+import type { SessionClientMessage, SessionReply } from "../protocol";
 import { errorText } from "../text";
-import { newIntentId, parseMachineFrame, type Event, type HomeFrame, type IntentId, type MachineId, type ProfileView, type Seq, type SessionReply, type SessionSignal } from "./wire";
+import { newIntentId, parseMachineFrame, type Event, type HomeFrame, type IntentId, type MachineId, type ProfileView, type Seq, type SessionSignal } from "./wire";
 
 // The home's end of every machine's link (GET /link): the handshake, the remote Machine each enrolled machine is, its
 // events in, and acks out once the registry has saved them.

@@ -19,10 +19,9 @@ import {
   type MessageId,
   type RoutineId,
   type RunId,
-  type ServerMessage,
   type SessionClientMessage,
   type SessionId,
-  type SessionServerMessage,
+  type SessionReply,
   type SessionsChannelFrame,
 } from "../protocol";
 import type { ThreadSignal } from "../sessions";
@@ -125,8 +124,6 @@ export type EventBody =
 
 export type Event = { seq: Seq; at: string } & EventBody;
 
-/** What a machine's sessions answer a phone's request with: session frames, or an error frame. */
-export type SessionReply = SessionServerMessage | Extract<ServerMessage, { type: "error" }>;
 /** A frame a machine's sessions put on a channel: the list's, or one thread's. */
 export type SessionSignal = SessionsChannelFrame | ThreadSignal;
 
@@ -365,16 +362,22 @@ const threadFrame = z.looseObject({ type: z.enum(["session_items", "session_delt
 const removedFrame = z.looseObject({ type: z.literal("session_removed"), sessionId, movedTo: sessionId.nullable() });
 const snapshotFrame = z.looseObject({ type: z.literal("session"), sessionId });
 const signalSchema = z.union([rowsFrame, threadFrame, removedFrame, snapshotFrame]) as unknown as z.ZodType<SessionSignal>;
-const replySchema = z.union([
-  rowsFrame,
-  threadFrame,
-  removedFrame,
-  z.looseObject({ type: z.literal("sessions"), rows: z.array(keyed), projects: z.array(keyed), mirror: z.enum(MIRROR_PREFS) }),
-  z.looseObject({ type: z.literal("session_created"), ref: z.string(), sessionId }),
-  snapshotFrame,
-  z.looseObject({ type: z.enum(["session_page", "session_tool_output"]), sessionId }),
-  z.looseObject({ type: z.literal("error"), message: z.string() }),
-]) as unknown as z.ZodType<SessionReply>;
+const threadOf = <T extends string>(type: T) => z.looseObject({ type: z.literal(type), sessionId });
+// Keyed by every reply type, so a reply type with no schema fails tsc.
+const replyFrames: Record<SessionReply["type"], z.ZodType> = {
+  sessions: z.looseObject({ type: z.literal("sessions"), rows: z.array(keyed), projects: z.array(keyed), mirror: z.enum(MIRROR_PREFS) }),
+  session_rows: rowsFrame,
+  session: snapshotFrame,
+  session_items: threadOf("session_items"),
+  session_delta: threadOf("session_delta"),
+  session_page: threadOf("session_page"),
+  session_created: z.looseObject({ type: z.literal("session_created"), ref: z.string(), sessionId }),
+  session_tool_output: threadOf("session_tool_output"),
+  session_removed: removedFrame,
+  decided: z.looseObject({ type: z.literal("decided"), cardId: z.string().min(1) }),
+  error: z.looseObject({ type: z.literal("error"), message: z.string() }),
+};
+const replySchema = z.union(Object.values(replyFrames) as [z.ZodType, ...z.ZodType[]]) as unknown as z.ZodType<SessionReply>;
 
 export const homeFrameSchema: z.ZodType<HomeFrame> = z.discriminatedUnion("t", [
   z.object({ t: z.literal("challenge"), nonce }),

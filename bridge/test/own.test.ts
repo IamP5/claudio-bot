@@ -9,7 +9,7 @@ import type { ClaudeApps, DesktopEntry, Live } from "../src/claudeApps";
 import { alwaysText, END_SETTLE_MS, OWN_CARD_TTL_MS } from "../src/own";
 import { OUTLIVED_LOOK_MS } from "../src/outlived";
 import type { TaskRun } from "../src/procs";
-import type { AgentId, BotId, ItemId, MachineId, MessageId, ServerMessage, SessionId, SessionItem, SessionRow, TaskId, ThreadChannelFrame } from "../src/protocol";
+import type { AgentId, BotId, ItemId, MachineId, MessageId, ServerMessage, SessionId, SessionItem, SessionReply, SessionRow, TaskId, ThreadChannelFrame } from "../src/protocol";
 import { EXIT_SETTLE_MS, GONE_ERROR, GONE_LOOK_MAX_MS } from "../src/session";
 import { createSessions, type Sessions, type ThreadSignal } from "../src/sessions";
 import { emptySession, emptyWorld, type AgentRecord, type World } from "../src/world";
@@ -2036,7 +2036,7 @@ describe("the thread says what stopped only once it did", () => {
       await flush();
       await flush();
       const stopAll = async () => handle({ type: "session_stop", sessionId: ASK, target: "all" });
-      const cantTell: ServerMessage[] = [
+      const cantTell: SessionReply[] = [
         {
           type: "error",
           message: `The bridge can't tell whether command "Run in background: Sleep" (${command}) still runs on your Mac, so it has nothing it can stop. Check it on your Mac (Activity Monitor, or ps).`,

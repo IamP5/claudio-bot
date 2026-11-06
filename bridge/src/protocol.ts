@@ -771,6 +771,13 @@ export type ServerMessage =
   | { type: "error"; message: string; about?: ErrorAbout };
 
 /**
+ * What the bridge answers a session request with, here and from another machine over the link: session frames, the
+ * decided ack, or an error. session_alert is a signal, never an answer. Sessions.handle returns this type and the link's
+ * reply schema is keyed by it, so a new answer frame fails tsc until the link carries it, instead of being dropped.
+ */
+export type SessionReply = Exclude<SessionServerMessage, { type: "session_alert" }> | Extract<ServerMessage, { type: "decided" | "error" }>;
+
+/**
  * Whether phone pushes reach the user. off: no push URL is set. failing: the last send failed after its retries, with
  * why and when. The app treats an unknown state as "on".
  */

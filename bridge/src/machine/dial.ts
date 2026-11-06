@@ -3,8 +3,8 @@ import type { HomeRef, Identity } from "./identity";
 import { machineHears, type LinkState } from "./link";
 import { LINK_REMOVED, LINK_REPLACED } from "./links";
 import type { AgentRuntime } from "./runtime";
-import { isSessionFrame, type ServerMessage, type SessionClientMessage, type SessionId } from "../protocol";
-import { parseHomeFrame, type Event, type IntentId, type MachineFrame, type ProfileView, type SessionReply, type SessionSignal } from "./wire";
+import type { SessionClientMessage, SessionId, SessionReply } from "../protocol";
+import { parseHomeFrame, type Event, type IntentId, type MachineFrame, type ProfileView, type SessionSignal } from "./wire";
 
 // The machine's end of the link: it dials its home's /link, proves itself, replays what the home has not acked, then
 // applies intents and streams events until the socket drops, and dials again with backoff. The machine never listens
@@ -29,8 +29,6 @@ export type Dialer = {
   stop(): void;
 };
 
-const isReply = (f: ServerMessage): f is SessionReply => isSessionFrame(f) || f.type === "error";
-
 export const BACKOFF = { firstMs: 1000, maxMs: 30_000 } as const;
 
 /** http://host:port → ws://host:port/link, https → wss. */
@@ -48,7 +46,7 @@ export function dialHub(deps: {
   /** Read at each hello, so a link made again carries the connectors found since boot. */
   profile: () => ProfileView;
   /** This machine's Sessions tab, for the home's asks. Absent: every ask is refused. */
-  sessions?: { handle(m: SessionClientMessage): Promise<ServerMessage[]> };
+  sessions?: { handle(m: SessionClientMessage): Promise<SessionReply[]> };
   log: (line: string) => void;
   connect?: (url: string) => DialSocket;
   backoff?: { firstMs: number; maxMs: number };
@@ -135,7 +133,7 @@ export function dialHub(deps: {
     if (m.type === "unwatch_session") watching.delete(m.sessionId);
     let frames: SessionReply[];
     try {
-      frames = deps.sessions ? (await deps.sessions.handle(m)).filter(isReply) : [{ type: "error", message: "This machine does not serve sessions." }];
+      frames = deps.sessions ? await deps.sessions.handle(m) : [{ type: "error", message: "This machine does not serve sessions." }];
     } catch (e) {
       frames = [{ type: "error", message: `The machine failed to answer: ${errorText(e)}` }];
     }

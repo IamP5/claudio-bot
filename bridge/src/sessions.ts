@@ -19,8 +19,8 @@ import {
   type MessageId,
   type PermissionChoice,
   type PhoneMode,
-  type ServerMessage,
   type SessionClientMessage,
+  type SessionReply,
   type SessionServerMessage,
   type SessionControls,
   type SessionId,
@@ -103,7 +103,7 @@ export type Sessions = Tickable & {
   start(): Promise<void>;
   /** Reads the transcripts again now, as the sweep and the open threads' polls do. */
   sync(): Promise<void>;
-  handle(m: SessionClientMessage): Promise<ServerMessage[]>;
+  handle(m: SessionClientMessage): Promise<SessionReply[]>;
   /** This bridge's own list holds the session: its transcript, an agent's or a cloud agent's id, or a phone draft. */
   owns(id: SessionId): boolean;
   /** An agent record changed: its row and its thread's controls follow. */
@@ -442,12 +442,12 @@ export function createSessions(deps: SessionsDeps): Sessions {
     return rec;
   }
 
-  const listFrame = (): ServerMessage => ({ type: "sessions", ...catalog.snapshot(), mirror: deps.world.sessionPrefs.mirror });
+  const listFrame = (): SessionReply => ({ type: "sessions", ...catalog.snapshot(), mirror: deps.world.sessionPrefs.mirror });
   const known = (id: SessionId) => catalog.head(id) !== null || agentOf(id) !== null || cloudOf(id) !== null || deps.world.sessions.get(id)?.own?.created === true;
-  const gone = (id: SessionId): ServerMessage[] => [{ type: "session_removed", sessionId: id, movedTo: null }];
-  const error = (message: string, about?: ErrorAbout): ServerMessage[] => [{ type: "error", message, ...(about && { about }) }];
+  const gone = (id: SessionId): SessionReply[] => [{ type: "session_removed", sessionId: id, movedTo: null }];
+  const error = (message: string, about?: ErrorAbout): SessionReply[] => [{ type: "error", message, ...(about && { about }) }];
 
-  async function rename(id: SessionId, title: string): Promise<ServerMessage[]> {
+  async function rename(id: SessionId, title: string): Promise<SessionReply[]> {
     const head = catalog.head(id);
     if (!head) return error("This session has no transcript to rename yet.");
     try {
@@ -470,7 +470,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     mirrorAt = 0;
   }
 
-  const reply = (r: Result, about?: ErrorAbout): ServerMessage[] => (r.ok ? [] : error(r.error, about));
+  const reply = (r: Result, about?: ErrorAbout): SessionReply[] => (r.ok ? [] : error(r.error, about));
 
   /** The user last saw the thread at `at`. A visit never moves back. */
   function left(id: SessionId, at: Date) {
@@ -488,7 +488,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
    * A resend after a reconnect or a restart runs nothing twice: the clientId is taken before the send is routed, so one
    * that arrives while the first still waits is dropped too, and given back if the send was refused.
    */
-  async function send(m: Extract<SessionClientMessage, { type: "session_send" }>): Promise<ServerMessage[]> {
+  async function send(m: Extract<SessionClientMessage, { type: "session_send" }>): Promise<SessionReply[]> {
     const about: ErrorAbout = { kind: "send", sessionId: m.sessionId, clientId: m.clientId };
     const w = driverOf(m.sessionId);
     if (w.kind === "none") return error(w.reason, about);
@@ -520,7 +520,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   /** Sends still being routed, by session and clientId. */
   const routing = new Set<string>();
 
-  async function route(m: Extract<SessionClientMessage, { type: "session_send" }>, w: Exclude<Writer, { kind: "none" }>, about: ErrorAbout): Promise<ServerMessage[]> {
+  async function route(m: Extract<SessionClientMessage, { type: "session_send" }>, w: Exclude<Writer, { kind: "none" }>, about: ErrorAbout): Promise<SessionReply[]> {
     switch (w.kind) {
       case "agent": {
         const agentId = w.rec.agent.id;
@@ -547,7 +547,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     }
   }
 
-  async function stop(m: Extract<SessionClientMessage, { type: "session_stop" }>): Promise<ServerMessage[]> {
+  async function stop(m: Extract<SessionClientMessage, { type: "session_stop" }>): Promise<SessionReply[]> {
     const target = m.target ?? "all";
     const about: ErrorAbout = { kind: "stop", sessionId: m.sessionId };
     const w = driverOf(m.sessionId);
@@ -566,7 +566,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     return r.ok ? [] : error(r.error, about);
   }
 
-  function unqueue(m: Extract<SessionClientMessage, { type: "session_unqueue" }>): ServerMessage[] {
+  function unqueue(m: Extract<SessionClientMessage, { type: "session_unqueue" }>): SessionReply[] {
     const w = driverOf(m.sessionId);
     const about: ErrorAbout = { kind: "send", sessionId: m.sessionId, clientId: m.clientId };
     if (w.kind !== "own") return error("Only a message you queued in this session can be withdrawn.", about);
@@ -575,7 +575,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   }
 
   /** A decision the bridge took is acknowledged to the socket that sent it; a refused one names its card. */
-  function decision(m: Extract<SessionClientMessage, { type: "session_decide" | "session_answer" }>): ServerMessage[] {
+  function decision(m: Extract<SessionClientMessage, { type: "session_decide" | "session_answer" }>): SessionReply[] {
     const w = driverOf(m.sessionId);
     const r =
       m.type === "session_decide"
@@ -591,8 +591,8 @@ export function createSessions(deps: SessionsDeps): Sessions {
   }
 
   /** Creates in flight by ref, so a resend while the first still runs gets the first's answer. */
-  const creating = new Map<string, Promise<ServerMessage[]>>();
-  function create(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<ServerMessage[]> {
+  const creating = new Map<string, Promise<SessionReply[]>>();
+  function create(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<SessionReply[]> {
     const made = [...deps.world.sessions.values()].find((r) => r.own?.ref === m.ref);
     if (made) return Promise.resolve([{ type: "session_created", ref: m.ref, sessionId: made.id }]);
     const running = creating.get(m.ref);
@@ -602,7 +602,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     return p;
   }
 
-  async function make(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<ServerMessage[]> {
+  async function make(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<SessionReply[]> {
     const about: ErrorAbout = { kind: "create", ref: m.ref };
     if (m.machine !== undefined && m.machine !== deps.machine) return error("Sessions on other machines arrive later", about);
     const project = catalog.snapshot().projects.find((p) => p.id === m.projectId);
@@ -630,7 +630,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     return [{ type: "session_created", ref: m.ref, sessionId: id }];
   }
 
-  async function set(m: Extract<SessionClientMessage, { type: "session_set" }>): Promise<ServerMessage[]> {
+  async function set(m: Extract<SessionClientMessage, { type: "session_set" }>): Promise<SessionReply[]> {
     const id = m.sessionId;
     const { title, hidden, model, mode } = m.patch;
     if (model !== undefined || mode !== undefined) {
@@ -674,7 +674,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     catalog.touch();
   }
 
-  async function openInDesktop(id: SessionId): Promise<ServerMessage[]> {
+  async function openInDesktop(id: SessionId): Promise<SessionReply[]> {
     const ok = await deps.apps.openInDesktop(id);
     const rec = deps.world.sessions.get(id);
     if (ok && rec?.mirror) {

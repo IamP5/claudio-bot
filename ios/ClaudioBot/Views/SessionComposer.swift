@@ -18,7 +18,8 @@ struct SessionComposer: View {
     /// Send and Stop grow with the text, up to a size that leaves the field its room (F-SES-134).
     private var control: CGFloat { min(scaled, Composer.control * 1.5) }
     @AccessibilityFocusState private var lockFocused: Bool
-    private var computer: String { store.computerName(store.sessions.rows[sessionId]?.machine) }
+    /// Every composer note is about reaching the bridge, whichever machine holds the session.
+    private var computer: String { store.computerName() }
     @State private var caret = 0
     @State private var sends = 0
     @State private var stops = 0

@@ -586,15 +586,12 @@ final class AppStore {
     /// no longer mean what the user meant.
     func requestDropped(_ msg: ClientMessage) {
         let unreachable = " not sent: \(computerName()) was unreachable."
-        func unreachableOn(_ session: SessionID) -> String { " not sent: \(computerName(sessions.rows[session]?.machine)) was unreachable." }
         switch msg {
         case let .sessionStop(sessionId, target, _):
             stops[sessionId]?[target ?? .all] = nil
-            sessionErrors[sessionId] = SessionError(kind: .stop, text: "Stop" + unreachableOn(sessionId))
-        case .stop:
+            sessionErrors[sessionId] = SessionError(kind: .stop, text: "Stop" + unreachable)
+        case .stop, .stopAgent:
             lastError = ErrorNotice(message: "Stop" + unreachable)
-        case .stopAgent(let agentId):
-            lastError = ErrorNotice(message: "Stop not sent: \(computerName(agents[agentId]?.agent.machine)) was unreachable.")
         case let .createBot(ref), let .createGroup(ref, _, _):
             droppedCreate = ref
             let what = if case .createBot = msg { "bot" } else { "group" }
@@ -604,14 +601,14 @@ final class AppStore {
         case let .sessionSet(sessionId, patch):
             if patch.mode != nil || patch.model != nil {
                 sets[sessionId] = nil
-                sessionErrors[sessionId] = SessionError(kind: .set, text: (patch.mode != nil ? "Mode change" : "Model change") + unreachableOn(sessionId))
+                sessionErrors[sessionId] = SessionError(kind: .set, text: (patch.mode != nil ? "Mode change" : "Model change") + unreachable)
             } else if let hidden = patch.hidden {
-                lastError = ErrorNotice(message: (hidden ? "Hide" : "Show") + unreachableOn(sessionId))
+                lastError = ErrorNotice(message: (hidden ? "Hide" : "Show") + unreachable)
             } else if patch.title != nil {
-                lastError = ErrorNotice(message: "Rename" + unreachableOn(sessionId))
+                lastError = ErrorNotice(message: "Rename" + unreachable)
             }
         case .sessionOpenDesktop(let sessionId):
-            lastError = ErrorNotice(message: "Open in the Claude app" + unreachableOn(sessionId))
+            lastError = ErrorNotice(message: "Open in the Claude app" + unreachable)
         case .sessionPrefs:
             if let before = mirrorAsked?.before { sessions.setMirror(before) }
             mirrorAsked = nil

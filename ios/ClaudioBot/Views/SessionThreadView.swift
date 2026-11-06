@@ -70,6 +70,10 @@ struct SessionThreadView: View {
 
     private var row: SessionRow? { store.sessions.rows[sessionId] }
     private var computer: String { store.computerName(row?.machine) }
+    /// Offline copy is about the phone's connection, which goes to the bridge whichever machine holds the session.
+    private func computer(for status: ThreadStatus?) -> String {
+        if case .offline = status { store.computerName() } else { computer }
+    }
 
     /// The transcript, banners and composer share one centered column.
     #if os(macOS)
@@ -161,7 +165,7 @@ struct SessionThreadView: View {
                 // Lazy, so the earlier page loads only once the thread is scrolled up to it.
                 LazyVStack {
                     if model.before != nil {
-                        LoadEarlierRow(state: LoadEarlierRow.State(loading: model.loadingEarlier, online: store.machine != nil), computer: computer) { loadEarlier(model) }
+                        LoadEarlierRow(state: LoadEarlierRow.State(loading: model.loadingEarlier, online: store.machine != nil), computer: store.computerName()) { loadEarlier(model) }
                             .onAppear { loadEarlier(model) }
                     }
                 }
@@ -262,8 +266,8 @@ struct SessionThreadView: View {
                 VStack(spacing: 6) {
                     if let status {
                         // A hanging attempt would hold Retry until its greeting deadline, so Retry starts a new one.
-                        ThreadStatusLine(status: status, cause: cause, computer: computer, lines: fit.density.statusLines, onTap: tap(status)) {
-                            Task { lastRetryFailed = !(await ConnectionBanner.retry(client, restartingAttempt: true, computer: computer)) }
+                        ThreadStatusLine(status: status, cause: cause, computer: computer(for: status), lines: fit.density.statusLines, onTap: tap(status)) {
+                            Task { lastRetryFailed = !(await ConnectionBanner.retry(client, restartingAttempt: true, computer: store.computerName())) }
                         }
                         .padding(.horizontal, 16)
                         .transition(.opacity)
@@ -304,7 +308,7 @@ struct SessionThreadView: View {
         }
         .onChange(of: ThreadAnnouncement.key(status), initial: true) {
             statuses.name = { [store, sessionId] task in ThreadAnnouncement.name(task, in: store.threads[sessionId]?.items ?? []) }
-            statuses.update(status, computer: computer)
+            statuses.update(status, computer: computer(for: status))
         }
         .onChange(of: banner) { _, new in
             if let new { announcer.post(new.spoken) }
@@ -930,9 +934,9 @@ struct ToolOutputSheet: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .waitingForMac:
                     ContentUnavailableView {
-                        Label("Waiting for \(computer)", systemImage: "wifi.slash")
+                        Label("Waiting for \(store.computerName())", systemImage: "wifi.slash")
                     } description: {
-                        Text("The output loads when \(computer) is back.")
+                        Text("The output loads when \(store.computerName()) is back.")
                     } actions: {
                         Button("Close") { dismiss() }
                     }
@@ -979,7 +983,7 @@ struct ToolOutputSheet: View {
         .onChange(of: state) { old, new in
             switch new {
             case .failed(let why) where old != new: AccessibilityNotification.Announcement("No output. " + why).post()
-            case .waitingForMac where old != new: AccessibilityNotification.Announcement("Waiting for \(computer).").post()
+            case .waitingForMac where old != new: AccessibilityNotification.Announcement("Waiting for \(store.computerName()).").post()
             default: break
             }
         }

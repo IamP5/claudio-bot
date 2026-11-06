@@ -1052,6 +1052,24 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(store.lastError?.message == "New bot not created: omarchy was unreachable for a minute. Try again once it's back.")
     }
 
+    @Test func aRequestDroppedForASessionOnAnotherMachineNamesTheBridgeItNeverReached() {
+        let store = AppStore()
+        let machines = [
+            Machine(id: MachineID("m_home"), name: "omarchy", role: .home, online: true, since: nil, platform: .linux, access: MachineAccess(full: false, sandbox: true), connectors: []),
+            Machine(id: MachineID("m_mac"), name: "MacBook", role: .machine, online: true, since: nil, platform: .darwin, access: MachineAccess(full: false, sandbox: true), connectors: []),
+        ]
+        store.apply(.hello(Hello(features: [.sessions, .machines], machine: "omarchy", userName: "Alex", bots: [], machines: machines)))
+        let sid = SessionID("s1")
+        var row = SessionRow(
+            id: sid, projectId: ProjectID("p1"), parentId: nil, title: "s1", origin: .terminal, agent: nil, status: .working, holder: .nobody,
+            unread: false, branch: nil, worktree: false, pr: nil, mirror: .notMirrored, hidden: false, url: nil, createdAt: at, lastAt: at
+        )
+        row.machine = MachineID("m_mac")
+        store.apply(.sessions(.list(projects: [], rows: [row], mirror: .auto)))
+        store.requestDropped(.sessionStop(sessionId: sid, target: .all, turnStartedAt: nil))
+        #expect(store.sessionErrors[sid]?.text == "Stop not sent: omarchy was unreachable.")
+    }
+
     @Test func offlineAWorkingBotIsOnlyLastKnown() {
         var working = bot("b1")
         working.status = .working

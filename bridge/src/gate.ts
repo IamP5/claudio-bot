@@ -689,7 +689,8 @@ export function createGate(deps: GateDeps): Gate {
       }
       const said = plainAnswer(text);
       for (const m of bot.messages) {
-        if (m.kind !== "question" || m.answer !== null) continue;
+        // Another machine's gate holds it: the hub answers it there.
+        if (m.kind !== "question" || m.answer !== null || deps.elsewhere?.(m.id)) continue;
         const held = state.open.find((c) => c.cardId === m.id);
         if (held && held.expiresAt <= now) {
           expire(held);

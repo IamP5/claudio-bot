@@ -151,6 +151,21 @@ test("an answer to a card of an offline machine waits for it, says so in the cha
   expect(besidesUpdates(r.intents)).toMatchObject([{ kind: "card.answer", reply: { choice: "deny" } }]);
 });
 
+test("typing an option of a remote agent's question answers it on its machine, and the home never settles it itself", async () => {
+  const r = placed();
+  const question: Message = { kind: "question", id: "c_q1" as MessageId, at, question: "Which branch?", options: ["main", "dev"], answer: null, expiresAt };
+  r.send({ kind: "card", botId: B, message: question });
+  await r.h.hub.handle({ type: "send", botId: B, text: "Dev.", uploads: [] });
+  await flush();
+  expect(besidesUpdates(r.intents)).toMatchObject([{ kind: "card.answer", botId: B, cardId: "c_q1", reply: { kind: "option", index: 1 } }]);
+  expect(r.world.bots.get(B)!.messages.find((m) => m.id === "c_q1")).toMatchObject({ answer: null });
+
+  await r.h.hub.handle({ type: "send", botId: B, text: "and the tests?", uploads: [] });
+  await flush();
+  expect(besidesUpdates(r.intents)).toHaveLength(1);
+  expect(r.world.bots.get(B)!.messages.find((m) => m.id === "c_q1")).toMatchObject({ answer: null });
+});
+
 test("an answer queued for a machine asleep past its card's expiry still goes, and the machine's refusal is the note in the chat", async () => {
   const r = placed();
   r.send({ kind: "card", botId: B, message: card() });

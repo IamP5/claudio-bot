@@ -41,7 +41,7 @@ import {
 } from "./protocol";
 import { botMemory, DEFAULT_BOT, defaultBotJob, inputOf, machinesBlock, onboarding, persona, type Envelope } from "./prompts";
 import { cardReply } from "./protocol2";
-import type { CardReply } from "./gate";
+import { plainAnswer, type CardReply } from "./gate";
 import type { Push } from "./push";
 import type { Result } from "./result";
 import { sandboxFor } from "./sandbox";
@@ -1419,11 +1419,30 @@ export function createHub(deps: HubDeps): Hub {
     else {
       // Typing one of an open question's options is tapping it; any other text leaves the question open, and the bot is
       // told so. It closes the permission cards the user's own requests left open: the user moved on instead of tapping.
-      const cards = gate.typed(bot.id, m.text);
+      const here = gate.typed(bot.id, m.text);
+      const there = typedElsewhere(bot, m.text);
+      const cards = { answered: [...here.answered, ...there.answered], open: [...here.open, ...there.open], closed: here.closed };
       const told = cards.answered.length > 0 || cards.open.length > 0 || cards.closed.length > 0;
       deliver(bot.id, { from: "user", text: m.text, attachments, mentions: others, ...(told && { cards }) });
     }
     return [];
+  }
+
+  /** gate.typed for the open questions other machines' gates hold: a typed option goes to that machine as a tap would. */
+  function typedElsewhere(bot: BotRecord, text: string): { answered: { question: string; option: string }[]; open: string[] } {
+    const said = plainAnswer(text);
+    const out = { answered: [] as { question: string; option: string }[], open: [] as string[] };
+    for (const q of bot.messages) {
+      if (q.kind !== "question" || q.answer !== null || mirror.cardOwner(q.id)?.botId !== bot.id) continue;
+      const index = q.options.findIndex((o) => plainAnswer(o) === said);
+      if (index === -1) {
+        out.open.push(q.question);
+        continue;
+      }
+      void answerCard(bot, q.id, { kind: "option", index });
+      out.answered.push({ question: q.question, option: q.options[index]! });
+    }
+    return out;
   }
 
   const error = (message: string): ServerMessage[] => [{ type: "error", message }];

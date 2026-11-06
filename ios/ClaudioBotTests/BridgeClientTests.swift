@@ -554,7 +554,7 @@ private func scratchVault() -> PairingVault {
         client.start(pairing)
         try await eventually("the queued message") { bridge.texts.contains { $0.contains("mark_unread") } }
         #expect(!bridge.texts.contains { $0.contains(#""type":"session_stop""#) })
-        #expect(client.store.sessionErrors[SessionID("s1")]?.text == "Stop not sent: your Mac was unreachable.")
+        #expect(client.store.sessionErrors[SessionID("s1")]?.text == "Stop not sent: your computer was unreachable.")
         client.stop()
     }
 
@@ -567,15 +567,15 @@ private func scratchVault() -> PairingVault {
 
         client.send(.sessionSet(sessionId: sid, patch: SessionPatch(mode: .plan)))
         try await eventually("the mode change's note", within: .seconds(1)) {
-            client.store.sessionErrors[sid]?.text == "Mode change not sent: your Mac was unreachable."
+            client.store.sessionErrors[sid]?.text == "Mode change not sent: your computer was unreachable."
         }
         client.send(.sessionSet(sessionId: sid, patch: SessionPatch(hidden: true)))
-        try await eventually("the hide toast", within: .seconds(1)) { client.store.lastError?.message == "Hide not sent: your Mac was unreachable." }
+        try await eventually("the hide toast", within: .seconds(1)) { client.store.lastError?.message == "Hide not sent: your computer was unreachable." }
         client.send(.sessionPrefs(mirror: .never))
         #expect(client.store.sessions.mirror == .never)
         try await eventually("the setting put back", within: .seconds(1)) { client.store.sessions.mirror == .auto }
-        #expect(client.store.mirrorNote == "Not changed: your Mac was unreachable.")
-        #expect(client.store.lastError?.message == "The Claude app setting was not changed: your Mac was unreachable.", "Settings is closed, so a toast says it")
+        #expect(client.store.mirrorNote == "Not changed: your computer was unreachable.")
+        #expect(client.store.lastError?.message == "The Claude app setting was not changed: your computer was unreachable.", "Settings is closed, so a toast says it")
     }
 
     @Test func discardTakesASendOutOfTheOutboxSoTheNextHelloNeverSendsIt() async throws {

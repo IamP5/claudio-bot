@@ -432,7 +432,7 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         store.decisionSent(.always, for: MessageID("p1"))
         store.decisionFailed(for: MessageID("p1"))
         #expect(store.pendingDecisions.isEmpty)
-        #expect(store.decisionNote(MessageID("p1"))?.text == "Not sent · Try again", "said on the card that failed (F-SES-142)")
+        #expect(store.decisionNote(MessageID("p1"))?.text(computer: "omarchy") == "Not sent · Try again", "said on the card that failed (F-SES-142)")
     }
 
     @Test func anErrorIsDismissedOnlyByItsOwnNotice() throws {
@@ -838,7 +838,7 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(store.botSends(in: BotID("b1")).map(\.clientId) == ["c1"])
         #expect(store.botSends(in: BotID("b1")).first?.send.pending.state == .waiting)
         #expect(store.botSends(in: BotID("b1")).first?.send.pending.text == "offline")
-        #expect(SessionUserBubble.words(.waiting) == "Not sent yet · Goes if your Mac is back within a minute")
+        #expect(SessionUserBubble.words(.waiting, computer: "omarchy") == "Not sent yet · Goes if omarchy is back within a minute")
 
         store.requestDropped(send("offline", id: "c1"))
         #expect(store.botSends(in: BotID("b1")).first?.send.pending.state == .notSent(nil))
@@ -1039,6 +1039,19 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(UnrecognizedBanner.cause("omarchy").hasSuffix("retry once you are back on omarchy's network."))
     }
 
+    @Test func whatTheStoreSaysOfAnUnreachableBridgeNamesItsComputer() {
+        let store = AppStore()
+        store.apply(.hello(Hello(features: [.sessions, .decideAck], machine: "omarchy", userName: "Alex", bots: [])))
+        let sid = SessionID("s1")
+        store.requestDropped(.sessionStop(sessionId: sid, target: .all, turnStartedAt: nil))
+        #expect(store.sessionErrors[sid]?.text == "Stop not sent: omarchy was unreachable.")
+        store.decisionSent(.once, for: MessageID("m1"))
+        store.requestDropped(.sessionDecide(sessionId: sid, cardId: MessageID("m1"), choice: .once))
+        #expect(store.decisionNote(MessageID("m1"))?.text(computer: store.computerName()) == "Not sent: omarchy was unreachable · Try again")
+        store.requestDropped(.createBot(ref: "c1"))
+        #expect(store.lastError?.message == "New bot not created: omarchy was unreachable for a minute. Try again once it's back.")
+    }
+
     @Test func offlineAWorkingBotIsOnlyLastKnown() {
         var working = bot("b1")
         working.status = .working
@@ -1095,7 +1108,7 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
     }
 
     @Test func aCardClosedByTheNextMessageSaysItDidNotRun() {
-        #expect(PermissionAnswer.superseded.outcome().text == "Closed when you sent a new message. It did not run.")
+        #expect(PermissionAnswer.superseded.outcome(computer: "omarchy").text == "Closed when you sent a new message. It did not run.")
     }
 
     @Test func aNewBotOpensOnlyIfTheUserStayedWhereTheyAsked() {
@@ -1119,6 +1132,6 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         let store = AppStore()
         store.requestDropped(create)
         #expect(store.droppedCreate == "c1")
-        #expect(store.lastError?.message == "New bot not created: your Mac was unreachable for a minute. Try again once it's back.")
+        #expect(store.lastError?.message == "New bot not created: your computer was unreachable for a minute. Try again once it's back.")
     }
 }

@@ -158,7 +158,7 @@ struct Composer: View {
         .onChange(of: sendStates) { old, new in
             for id in Set(old.keys).union(new.keys).sorted() {
                 let echoed = new[id] == nil && shownBack(id) ? false : nil
-                if let text = PendingSend.announcement(old: old[id], new: new[id], echoedQueued: echoed) {
+                if let text = PendingSend.announcement(old: old[id], new: new[id], echoedQueued: echoed, computer: store.computerName()) {
                     AccessibilityNotification.Announcement(text).post()
                 }
             }
@@ -370,7 +370,7 @@ struct Composer: View {
         guard canSend else { return }
         dictation.stop()
         let send = draft.send(to: bot.id, uploads: uploads, clientId: UUID().uuidString)
-        AccessibilityNotification.Announcement(ComposerState.sentAnnouncement(offline: store.machine == nil)).post()
+        AccessibilityNotification.Announcement(ComposerState.sentAnnouncement(offline: store.machine == nil, computer: store.computerName())).post()
         client.send(send)
         draft = ComposerDraft()
         caret = 0

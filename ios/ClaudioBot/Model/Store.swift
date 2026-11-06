@@ -138,11 +138,12 @@ enum DecisionNote: Equatable, Sendable {
     /// Nobody can say whether it landed: the socket dropped, or no ack came within AppStore.decisionPatience.
     case unsure
 
-    var text: String {
+    /// computer: where the card's agent or session runs (`AppStore.computerName`).
+    func text(computer: String) -> String {
         switch self {
-        case .unsure: "Your answer may not have reached your Mac · Tap again"
+        case .unsure: "Your answer may not have reached \(computer) · Tap again"
         case .notSent: "Not sent · Try again"
-        case .tooLate: "Not sent: your Mac was unreachable · Try again"
+        case .tooLate: "Not sent: \(computer) was unreachable · Try again"
         case .refused(let why): why.localizedCaseInsensitiveContains("already answered") ? "Already answered" : why.hasSuffix(".") ? why : why + "."
         }
     }
@@ -584,35 +585,38 @@ final class AppStore {
     /// A message held offline was not sent: no socket took it within OutboxRule.maxAge of the tap, and later it would
     /// no longer mean what the user meant.
     func requestDropped(_ msg: ClientMessage) {
-        let unreachable = " not sent: your Mac was unreachable."
+        let unreachable = " not sent: \(computerName()) was unreachable."
+        func unreachableOn(_ session: SessionID) -> String { " not sent: \(computerName(sessions.rows[session]?.machine)) was unreachable." }
         switch msg {
         case let .sessionStop(sessionId, target, _):
             stops[sessionId]?[target ?? .all] = nil
-            sessionErrors[sessionId] = SessionError(kind: .stop, text: "Stop" + unreachable)
-        case .stop, .stopAgent:
+            sessionErrors[sessionId] = SessionError(kind: .stop, text: "Stop" + unreachableOn(sessionId))
+        case .stop:
             lastError = ErrorNotice(message: "Stop" + unreachable)
+        case .stopAgent(let agentId):
+            lastError = ErrorNotice(message: "Stop not sent: \(computerName(agents[agentId]?.agent.machine)) was unreachable.")
         case let .createBot(ref), let .createGroup(ref, _, _):
             droppedCreate = ref
             let what = if case .createBot = msg { "bot" } else { "group" }
-            lastError = ErrorNotice(message: "New \(what) not created: your Mac was unreachable for a minute. Try again once it's back.")
+            lastError = ErrorNotice(message: "New \(what) not created: \(computerName()) was unreachable for a minute. Try again once it's back.")
         case .decide(_, let card, _), .sessionDecide(_, let card, _), .sessionAnswer(_, let card, _):
             decisions[card]?.fail(.tooLate)
         case let .sessionSet(sessionId, patch):
             if patch.mode != nil || patch.model != nil {
                 sets[sessionId] = nil
-                sessionErrors[sessionId] = SessionError(kind: .set, text: (patch.mode != nil ? "Mode change" : "Model change") + unreachable)
+                sessionErrors[sessionId] = SessionError(kind: .set, text: (patch.mode != nil ? "Mode change" : "Model change") + unreachableOn(sessionId))
             } else if let hidden = patch.hidden {
-                lastError = ErrorNotice(message: (hidden ? "Hide" : "Show") + unreachable)
+                lastError = ErrorNotice(message: (hidden ? "Hide" : "Show") + unreachableOn(sessionId))
             } else if patch.title != nil {
-                lastError = ErrorNotice(message: "Rename" + unreachable)
+                lastError = ErrorNotice(message: "Rename" + unreachableOn(sessionId))
             }
-        case .sessionOpenDesktop:
-            lastError = ErrorNotice(message: "Open in the Claude app" + unreachable)
+        case .sessionOpenDesktop(let sessionId):
+            lastError = ErrorNotice(message: "Open in the Claude app" + unreachableOn(sessionId))
         case .sessionPrefs:
             if let before = mirrorAsked?.before { sessions.setMirror(before) }
             mirrorAsked = nil
-            mirrorNote = "Not changed: your Mac was unreachable."
-            if !settingsShown { lastError = ErrorNotice(message: "The Claude app setting was not changed: your Mac was unreachable.") }
+            mirrorNote = "Not changed: \(computerName()) was unreachable."
+            if !settingsShown { lastError = ErrorNotice(message: "The Claude app setting was not changed: \(computerName()) was unreachable.") }
         case let .sessionSend(sessionId, _, clientId, _, _):
             unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId }
             // A Retry of one a socket took before may have arrived the first time: it keeps saying so.

@@ -352,7 +352,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(cards.map(\.stepId) == ["toolu_01Ac2", "toolu_01Ac6", "toolu_01Ac7"])
         #expect(cards.map(\.subagent) == ["sleeper two", "sleeper one", nil])
         #expect(cards.map(\.card.answer) == [nil, .stopped, .closed])
-        #expect(cards[2].card.answer?.outcome().short == "Closed", "a card Claude Code abandoned reads closed, not expired")
+        #expect(cards[2].card.answer?.outcome(computer: "omarchy").short == "Closed", "a card Claude Code abandoned reads closed, not expired")
         let reasons = items.compactMap { if case let .notice(_, _, _, _, reason) = $0 { reason } else { nil } }
         #expect(reasons == [.task, .stop])
 
@@ -1261,10 +1261,10 @@ private func unknowns(in message: ServerMessage) -> [String] {
         }
         #expect(endings.map(\.reason) == [.lost, .failed, .lost])
         #expect(endings.map(\.running) == [nil, SessionRunning(agents: 0, commands: 2), SessionRunning(agents: 0, commands: 1)])
-        #expect(endings.compactMap { Notifier.text(of: $0)?.body } == [
+        #expect(endings.compactMap { Notifier.text(of: $0, computer: "omarchy")?.body } == [
             "Interrupted by a bridge restart",
-            "Stopped with an error. 2 commands still run on your Mac.",
-            "Interrupted by a bridge restart. 1 command still runs on your Mac.",
+            "Stopped with an error. 2 commands still run on omarchy.",
+            "Interrupted by a bridge restart. 1 command still runs on omarchy.",
         ])
     }
 
@@ -1279,7 +1279,7 @@ private func unknowns(in message: ServerMessage) -> [String] {
 
     @Test func aSessionAlertNamesTheSessionAndWhatItWants() {
         func text(_ alert: Alert) -> [String]? {
-            guard case .session(let s) = alert, let t = Notifier.text(of: s) else { return nil }
+            guard case .session(let s) = alert, let t = Notifier.text(of: s, computer: "omarchy") else { return nil }
             return [t.title, t.body]
         }
         #expect(text(session("s1", .card)) == ["Sleep in parallel", "Needs your approval"])
@@ -1291,10 +1291,10 @@ private func unknowns(in message: ServerMessage) -> [String] {
         #expect(text(session("s1", .finished, title: "  ")) == ["Claude Code session", "Finished"])
         #expect(text(session("s1", .failed)) == ["Sleep in parallel", "Stopped with an error"])
         #expect(text(session("s1", .lost)) == ["Sleep in parallel", "Interrupted by a bridge restart"])
-        #expect(text(ending(.failed, agents: 0, commands: 2)) == ["Sleep in parallel", "Stopped with an error. 2 commands still run on your Mac."])
-        #expect(text(ending(.lost, agents: 0, commands: 1)) == ["Sleep in parallel", "Interrupted by a bridge restart. 1 command still runs on your Mac."])
-        #expect(text(ending(.lost, agents: 1, commands: 0)) == ["Sleep in parallel", "Interrupted by a bridge restart. 1 agent still runs on your Mac."])
-        #expect(text(ending(.failed, agents: 1, commands: 1)) == ["Sleep in parallel", "Stopped with an error. 1 agent, 1 command still run on your Mac."])
+        #expect(text(ending(.failed, agents: 0, commands: 2)) == ["Sleep in parallel", "Stopped with an error. 2 commands still run on omarchy."])
+        #expect(text(ending(.lost, agents: 0, commands: 1)) == ["Sleep in parallel", "Interrupted by a bridge restart. 1 command still runs on omarchy."])
+        #expect(text(ending(.lost, agents: 1, commands: 0)) == ["Sleep in parallel", "Interrupted by a bridge restart. 1 agent still runs on omarchy."])
+        #expect(text(ending(.failed, agents: 1, commands: 1)) == ["Sleep in parallel", "Stopped with an error. 1 agent, 1 command still run on omarchy."])
         #expect(text(ending(.failed, agents: 0, commands: 0)) == ["Sleep in parallel", "Stopped with an error"])
         #expect(text(session("s1", .unknown("paused"))) == nil)
     }

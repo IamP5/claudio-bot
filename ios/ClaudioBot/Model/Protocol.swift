@@ -2681,7 +2681,7 @@ enum ServerMessage: Codable, Sendable {
             let error = try c.decodeIfPresent(String.self, forKey: .error)
             self = .thread(sessionId: try session(), .toolOutput(
                 toolUseId: try c.decode(String.self, forKey: .toolUseId),
-                output.map(ToolOutput.text) ?? .missing(error ?? "Your Mac has no output for this step.")
+                output.map(ToolOutput.text) ?? .missing(error ?? "The bridge has no output for this step.")
             ))
         case "session_removed":
             self = .thread(sessionId: try session(), .removed(movedTo: try c.decodeIfPresent(SessionID.self, forKey: .movedTo)))

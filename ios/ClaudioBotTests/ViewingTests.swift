@@ -60,12 +60,12 @@ import Testing
     @Test func pairAnotherSaysWhyItCannotHandOutACode() {
         let token = Pairing.Credential.device(DeviceID("me"), token: "t")
         let shared = Pairing.Credential.legacy(token: "t")
-        #expect(PairAnother.blocked(online: true, credential: token, devices: [device("me", current: true)]) == nil)
-        #expect(PairAnother.blocked(online: true, credential: token, devices: nil) == nil)
-        #expect(PairAnother.blocked(online: false, credential: token, devices: nil) == "Connect to your Mac to pair another device.")
-        let legacyLine = "This \(ThisDevice.noun) still uses the old shared token, so your Mac won't give it a code for another device. Unpair it, then pair it again with a code from your Mac."
-        #expect(PairAnother.blocked(online: true, credential: shared, devices: nil) == legacyLine)
-        #expect(PairAnother.blocked(online: true, credential: token, devices: [device("me", legacy: true, current: true)]) == legacyLine, "the Mac's list wins over the saved pairing")
-        #expect(PairAnother.blocked(online: false, credential: shared, devices: nil) == legacyLine, "a reconnect does not fix the shared token")
+        #expect(PairAnother.blocked(online: true, credential: token, devices: [device("me", current: true)], computer: "omarchy") == nil)
+        #expect(PairAnother.blocked(online: true, credential: token, devices: nil, computer: "omarchy") == nil)
+        #expect(PairAnother.blocked(online: false, credential: token, devices: nil, computer: "omarchy") == "Connect to omarchy to pair another device.")
+        let legacyLine = "This \(ThisDevice.noun) still uses the old shared token, so omarchy won't give it a code for another device. Unpair it, then pair it again with a code from omarchy."
+        #expect(PairAnother.blocked(online: true, credential: shared, devices: nil, computer: "omarchy") == legacyLine)
+        #expect(PairAnother.blocked(online: true, credential: token, devices: [device("me", legacy: true, current: true)], computer: "omarchy") == legacyLine, "the Mac's list wins over the saved pairing")
+        #expect(PairAnother.blocked(online: false, credential: shared, devices: nil, computer: "omarchy") == legacyLine, "a reconnect does not fix the shared token")
     }
 }

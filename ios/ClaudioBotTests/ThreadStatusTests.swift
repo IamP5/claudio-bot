@@ -66,14 +66,14 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
         sleeper.outlived = true
         let later = SessionOutcome(kind: .finished, text: "Done.", at: at - 5)
         let after = status(controls: controls(working: true, turn: false, tasks: [perl]), since: at - 30, outcome: later)
-        #expect(after?.text(now: at) == "Still running after Claude Code stopped: perl -e 'sleep 3656' · 1m 12s")
-        #expect(after?.word == "Still running")
-        #expect(ThreadAnnouncement.of(from: .working(since: at - 30, tasks: [perl]), to: after)
+        #expect(after?.text(now: at, computer: "omarchy") == "Still running after Claude Code stopped: perl -e 'sleep 3656' · 1m 12s")
+        #expect(after?.word(computer: "omarchy") == "Still running")
+        #expect(ThreadAnnouncement.of(from: .working(since: at - 30, tasks: [perl]), to: after, computer: "omarchy")
             == "Still running after Claude Code stopped: perl -e 'sleep 3656'.")
         let background = status(controls: controls(working: true, turn: false, tasks: [sleeper]), since: at - 30, outcome: later)
-        #expect(background?.text(now: at) == "Running in background: sleep 3655 · 1m 12s", "a background command keeps its word")
+        #expect(background?.text(now: at, computer: "omarchy") == "Running in background: sleep 3655 · 1m 12s", "a background command keeps its word")
         let crash = status(controls: controls(working: true, turn: false, tasks: [perl]), since: at - 80, outcome: failed)
-        #expect(crash?.text(now: at) == "Claude Code stopped unexpectedly (terminated by signal SIGKILL) · 1 command still runs · Stop ends it")
+        #expect(crash?.text(now: at, computer: "omarchy") == "Claude Code stopped unexpectedly (terminated by signal SIGKILL) · 1 command still runs · Stop ends it")
     }
 
     @Test func aQuietSocketCountsOnlyWhileThisThreadWorks() {
@@ -87,9 +87,9 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
         let lost = SessionOutcome(kind: .lost, text: "The bridge restarted", at: at)
         let resting = controls(working: false, turn: false)
         #expect(status(controls: resting, outcome: finished) == nil)
-        #expect(status(controls: resting, outcome: stopped)?.text(now: at) == "Stopped by you")
-        #expect(status(controls: resting, outcome: failed)?.text(now: at) == "Claude Code stopped unexpectedly (terminated by signal SIGKILL). Send a message to start it again.")
-        #expect(status(controls: resting, outcome: lost)?.text(now: at) == "The bridge restarted. Send a message to start it again.")
+        #expect(status(controls: resting, outcome: stopped)?.text(now: at, computer: "omarchy") == "Stopped by you")
+        #expect(status(controls: resting, outcome: failed)?.text(now: at, computer: "omarchy") == "Claude Code stopped unexpectedly (terminated by signal SIGKILL). Send a message to start it again.")
+        #expect(status(controls: resting, outcome: lost)?.text(now: at, computer: "omarchy") == "The bridge restarted. Send a message to start it again.")
     }
 
     @Test func onlyAnOutOfDateLineFreezesTheRun() {
@@ -102,33 +102,33 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
 
     @Test func theLineSaysWhatRunsAndForHowLong() {
         let three = (1...3).map { task("a\($0)", .agent, "agent \($0)", background: false) }
-        #expect(ThreadStatus.working(since: at - 125, tasks: three).text(now: at) == "Working 2m 05s · 3 agents")
-        #expect(ThreadStatus.working(since: at - 125, tasks: three).spoken(now: at) == "Working 2 minutes 5 seconds · 3 agents")
-        #expect(ThreadStatus.working(since: nil, tasks: []).text(now: at) == "Working")
-        #expect(ThreadStatus.working(since: at - 9, tasks: [task("a", .agent), task("c")]).text(now: at) == "Working 9s · 1 agent, 1 command")
-        #expect(ThreadStatus.background(since: at - 72, tasks: [task("t1")]).text(now: at) == "Running in background: sleep 75 · 1m 12s")
-        #expect(ThreadStatus.background(since: at - 72, tasks: [task("t1"), task("t2", .agent, "starter")]).text(now: at) == "Running in background: 1 command, 1 agent · 1m 12s")
+        #expect(ThreadStatus.working(since: at - 125, tasks: three).text(now: at, computer: "omarchy") == "Working 2m 05s · 3 agents")
+        #expect(ThreadStatus.working(since: at - 125, tasks: three).spoken(now: at, computer: "omarchy") == "Working 2 minutes 5 seconds · 3 agents")
+        #expect(ThreadStatus.working(since: nil, tasks: []).text(now: at, computer: "omarchy") == "Working")
+        #expect(ThreadStatus.working(since: at - 9, tasks: [task("a", .agent), task("c")]).text(now: at, computer: "omarchy") == "Working 9s · 1 agent, 1 command")
+        #expect(ThreadStatus.background(since: at - 72, tasks: [task("t1")]).text(now: at, computer: "omarchy") == "Running in background: sleep 75 · 1m 12s")
+        #expect(ThreadStatus.background(since: at - 72, tasks: [task("t1"), task("t2", .agent, "starter")]).text(now: at, computer: "omarchy") == "Running in background: 1 command, 1 agent · 1m 12s")
         let long = task("t9", .command, "sleep 75 && echo bg-done > bg.txt && echo more > more.txt")
-        #expect(ThreadStatus.background(since: at - 19, tasks: [long]).text(now: at) == "Running in background: sleep 75 && echo bg-done > bg.txt && ec… · 19s")
-        #expect(ThreadStatus.quiet(since: at - 50, tasks: []).text(now: at) == "No word from your Mac for 50s")
-        #expect(ThreadStatus.needsYou(card, tasks: []).text(now: at) == "Needs your approval: Bash in sleeper two")
+        #expect(ThreadStatus.background(since: at - 19, tasks: [long]).text(now: at, computer: "omarchy") == "Running in background: sleep 75 && echo bg-done > bg.txt && ec… · 19s")
+        #expect(ThreadStatus.quiet(since: at - 50, tasks: []).text(now: at, computer: "omarchy") == "No word from omarchy for 50s")
+        #expect(ThreadStatus.needsYou(card, tasks: []).text(now: at, computer: "omarchy") == "Needs your approval: Bash in sleeper two")
     }
 
     @Test func offlineSaysTheCauseAndHowOldTheThreadIs() {
-        let cause = "Your Mac isn't answering at 127.0.0.1."
-        #expect(ThreadStatus.offline(.retrying, lastUpdate: at - 40, tasks: []).text(now: at, cause: cause) == "Your Mac isn't answering at 127.0.0.1. Last update 40s ago.")
-        #expect(ThreadStatus.offline(.retrying, lastUpdate: nil, tasks: []).text(now: at, cause: cause) == "Your Mac isn't answering at 127.0.0.1. This session loads when your Mac is back.")
-        #expect(ThreadStatus.offline(.firstConnect, lastUpdate: nil, tasks: []).text(now: at, cause: cause) == "Connecting to your Mac… This session loads when your Mac is back.")
-        #expect(ThreadStatus.offline(.retrying, lastUpdate: at - 40, tasks: []).spoken(now: at, cause: cause).hasSuffix("Last update 40 seconds ago."))
+        let cause = "The bridge on omarchy isn't answering at 127.0.0.1."
+        #expect(ThreadStatus.offline(.retrying, lastUpdate: at - 40, tasks: []).text(now: at, cause: cause, computer: "omarchy") == "The bridge on omarchy isn't answering at 127.0.0.1. Last update 40s ago.")
+        #expect(ThreadStatus.offline(.retrying, lastUpdate: nil, tasks: []).text(now: at, cause: cause, computer: "omarchy") == "The bridge on omarchy isn't answering at 127.0.0.1. This session loads when omarchy is back.")
+        #expect(ThreadStatus.offline(.firstConnect, lastUpdate: nil, tasks: []).text(now: at, cause: cause, computer: "omarchy") == "Connecting to omarchy… This session loads when omarchy is back.")
+        #expect(ThreadStatus.offline(.retrying, lastUpdate: at - 40, tasks: []).spoken(now: at, cause: cause, computer: "omarchy").hasSuffix("Last update 40 seconds ago."))
     }
 
     @Test func theHeaderSpeaksTheStateInAWord() {
-        #expect(ThreadStatus.working(since: nil, tasks: []).word == "Working")
-        #expect(ThreadStatus.background(since: at, tasks: [task("t")]).word == "Running in background")
-        #expect(ThreadStatus.needsYou(card, tasks: []).word == "Needs your approval")
-        #expect(ThreadStatus.needsYou(OpenCard.waiting(in: [ask("q", ["Which?"])], at: at)!, tasks: []).word == "Needs your answer")
-        #expect(ThreadStatus.offline(.retrying, lastUpdate: nil, tasks: []).word == "Offline")
-        #expect(ThreadStatus.ended(failed).word == "Failed")
+        #expect(ThreadStatus.working(since: nil, tasks: []).word(computer: "omarchy") == "Working")
+        #expect(ThreadStatus.background(since: at, tasks: [task("t")]).word(computer: "omarchy") == "Running in background")
+        #expect(ThreadStatus.needsYou(card, tasks: []).word(computer: "omarchy") == "Needs your approval")
+        #expect(ThreadStatus.needsYou(OpenCard.waiting(in: [ask("q", ["Which?"])], at: at)!, tasks: []).word(computer: "omarchy") == "Needs your answer")
+        #expect(ThreadStatus.offline(.retrying, lastUpdate: nil, tasks: []).word(computer: "omarchy") == "Offline")
+        #expect(ThreadStatus.ended(failed).word(computer: "omarchy") == "Failed")
     }
 }
 
@@ -175,15 +175,15 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
     private let working = ThreadStatus.working(since: at, tasks: [])
 
     @Test func aThreadOpenedOnACardSaysSo() {
-        #expect(ThreadAnnouncement.of(from: nil, to: .needsYou(card, tasks: []), first: true, heard: card.id) == card.announcement, "opened again, it is said again")
-        #expect(ThreadAnnouncement.of(from: nil, to: working, first: true) == nil, "an open thread says nothing about a run already going")
+        #expect(ThreadAnnouncement.of(from: nil, to: .needsYou(card, tasks: []), first: true, heard: card.id, computer: "omarchy") == card.announcement, "opened again, it is said again")
+        #expect(ThreadAnnouncement.of(from: nil, to: working, first: true, computer: "omarchy") == nil, "an open thread says nothing about a run already going")
     }
 
     @Test func aNewCardIsSpokenOnceAndTheSameOneNotAgain() {
-        #expect(ThreadAnnouncement.of(from: working, to: .needsYou(card, tasks: [])) == card.announcement)
-        #expect(ThreadAnnouncement.of(from: working, to: .needsYou(card, tasks: []), heard: card.id) == nil)
+        #expect(ThreadAnnouncement.of(from: working, to: .needsYou(card, tasks: []), computer: "omarchy") == card.announcement)
+        #expect(ThreadAnnouncement.of(from: working, to: .needsYou(card, tasks: []), heard: card.id, computer: "omarchy") == nil)
         let next = OpenCard.waiting(in: [permission("p9", subagent: "sleeper three")], at: at)!
-        #expect(ThreadAnnouncement.of(from: .needsYou(card, tasks: []), to: .needsYou(next, tasks: []), heard: card.id) == next.announcement)
+        #expect(ThreadAnnouncement.of(from: .needsYou(card, tasks: []), to: .needsYou(next, tasks: []), heard: card.id, computer: "omarchy") == next.announcement)
     }
 
     @Test func clocksAndProgressMoveWithoutAnythingToSay() {
@@ -196,19 +196,19 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
     }
 
     @Test func theEndOfARunIsSpokenWithHowItEnded() {
-        #expect(ThreadAnnouncement.of(from: working, to: nil) == "Claude finished.")
-        #expect(ThreadAnnouncement.of(from: working, to: .ended(failed)) == "Claude Code stopped unexpectedly (terminated by signal SIGKILL). Send a message to start it again.")
+        #expect(ThreadAnnouncement.of(from: working, to: nil, computer: "omarchy") == "Claude finished.")
+        #expect(ThreadAnnouncement.of(from: working, to: .ended(failed), computer: "omarchy") == "Claude Code stopped unexpectedly (terminated by signal SIGKILL). Send a message to start it again.")
         let stopped = SessionOutcome(kind: .stopped, text: "Stopped by you: the turn", at: at)
-        #expect(ThreadAnnouncement.of(from: working, to: .ended(stopped)) == "Stopped by you: the turn")
-        #expect(ThreadAnnouncement.of(from: .needsYou(card, tasks: []), to: .ended(failed)) == ThreadStatus.outcome(failed))
-        #expect(ThreadAnnouncement.of(from: nil, to: .ended(failed)) == ThreadStatus.outcome(failed), "an outcome that lands after the rest is still spoken")
+        #expect(ThreadAnnouncement.of(from: working, to: .ended(stopped), computer: "omarchy") == "Stopped by you: the turn")
+        #expect(ThreadAnnouncement.of(from: .needsYou(card, tasks: []), to: .ended(failed), computer: "omarchy") == ThreadStatus.outcome(failed))
+        #expect(ThreadAnnouncement.of(from: nil, to: .ended(failed), computer: "omarchy") == ThreadStatus.outcome(failed), "an outcome that lands after the rest is still spoken")
     }
 
     @Test func aStopThatClosesTheOpenCardIsSpokenOnceByTheCard() {
         let stopped = SessionOutcome(kind: .stopped, text: "Stopped by you: the turn", at: at)
-        #expect(ThreadAnnouncement.of(from: .needsYou(card, tasks: []), to: .ended(stopped)) == nil)
-        #expect(ThreadAnnouncement.of(from: nil, to: .ended(stopped), cardClosed: true) == nil, "the stop's row landed after the rest")
-        #expect(ThreadAnnouncement.of(from: nil, to: .ended(failed), cardClosed: true) == ThreadStatus.outcome(failed), "a card does not speak a failure")
+        #expect(ThreadAnnouncement.of(from: .needsYou(card, tasks: []), to: .ended(stopped), computer: "omarchy") == nil)
+        #expect(ThreadAnnouncement.of(from: nil, to: .ended(stopped), cardClosed: true, computer: "omarchy") == nil, "the stop's row landed after the rest")
+        #expect(ThreadAnnouncement.of(from: nil, to: .ended(failed), cardClosed: true, computer: "omarchy") == ThreadStatus.outcome(failed), "a card does not speak a failure")
     }
 
     @Test func anOutcomeThatEndsWithAPeriodGetsNoSecondOne() {
@@ -220,24 +220,24 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
     @Test func backgroundWorkIsSpokenWhenTheTurnEndsAndWhenItFinishes() {
         let sleeper = task("t1")
         let starter = task("t2", .agent, "starter")
-        #expect(ThreadAnnouncement.of(from: .working(since: at, tasks: [sleeper]), to: .background(since: at, tasks: [sleeper]))
+        #expect(ThreadAnnouncement.of(from: .working(since: at, tasks: [sleeper]), to: .background(since: at, tasks: [sleeper]), computer: "omarchy")
             == "Claude finished its turn. Still running in background: sleep 75.")
-        #expect(ThreadAnnouncement.of(from: .background(since: at, tasks: [sleeper, starter]), to: .background(since: at, tasks: [starter])) == "Ended in background. sleep 75.")
-        #expect(ThreadAnnouncement.of(from: .background(since: at, tasks: [sleeper]), to: nil) == "Background work ended. sleep 75.")
-        #expect(ThreadAnnouncement.of(from: .background(since: at, tasks: [sleeper]), to: .working(since: at, tasks: [])) == "Ended in background. sleep 75.")
+        #expect(ThreadAnnouncement.of(from: .background(since: at, tasks: [sleeper, starter]), to: .background(since: at, tasks: [starter]), computer: "omarchy") == "Ended in background. sleep 75.")
+        #expect(ThreadAnnouncement.of(from: .background(since: at, tasks: [sleeper]), to: nil, computer: "omarchy") == "Background work ended. sleep 75.")
+        #expect(ThreadAnnouncement.of(from: .background(since: at, tasks: [sleeper]), to: .working(since: at, tasks: []), computer: "omarchy") == "Ended in background. sleep 75.")
     }
 
     @Test func subagentsOfTheTurnComeAndGoQuietly() {
         let agent = task("a1", .agent, "sleeper one", background: false)
-        #expect(ThreadAnnouncement.of(from: .working(since: at, tasks: [agent]), to: .working(since: at, tasks: [])) == nil)
+        #expect(ThreadAnnouncement.of(from: .working(since: at, tasks: [agent]), to: .working(since: at, tasks: []), computer: "omarchy") == nil)
     }
 
     @Test func whatTheMacSaysOnReturnIsNotNews() {
-        #expect(ThreadAnnouncement.of(from: .offline(.retrying, lastUpdate: at, tasks: []), to: nil) == nil)
-        #expect(ThreadAnnouncement.of(from: .quiet(since: at, tasks: []), to: .ended(failed)) == nil)
-        #expect(ThreadAnnouncement.of(from: .offline(.retrying, lastUpdate: at, tasks: []), to: .needsYou(card, tasks: []), heard: card.id) == nil, "the card was spoken before the drop")
-        #expect(ThreadAnnouncement.of(from: .offline(.retrying, lastUpdate: at, tasks: []), to: .needsYou(card, tasks: [])) == card.announcement, "a card raised while away is news")
-        #expect(ThreadAnnouncement.of(from: working, to: .offline(.retrying, lastUpdate: at, tasks: [])) == nil, "the app says the connection dropped once, for every screen")
+        #expect(ThreadAnnouncement.of(from: .offline(.retrying, lastUpdate: at, tasks: []), to: nil, computer: "omarchy") == nil)
+        #expect(ThreadAnnouncement.of(from: .quiet(since: at, tasks: []), to: .ended(failed), computer: "omarchy") == nil)
+        #expect(ThreadAnnouncement.of(from: .offline(.retrying, lastUpdate: at, tasks: []), to: .needsYou(card, tasks: []), heard: card.id, computer: "omarchy") == nil, "the card was spoken before the drop")
+        #expect(ThreadAnnouncement.of(from: .offline(.retrying, lastUpdate: at, tasks: []), to: .needsYou(card, tasks: []), computer: "omarchy") == card.announcement, "a card raised while away is news")
+        #expect(ThreadAnnouncement.of(from: working, to: .offline(.retrying, lastUpdate: at, tasks: []), computer: "omarchy") == nil, "the app says the connection dropped once, for every screen")
     }
 }
 
@@ -297,11 +297,11 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
     @Test func aFailureWhoseRowLandsLateIsSpokenAsAFailureAndNeverAsFinished() async throws {
         var spoken: [String] = []
         let statuses = announcer { spoken.append($0) }
-        statuses.update(working)
+        statuses.update(working, computer: "omarchy")
         try await Task.sleep(for: .milliseconds(150))
-        statuses.update(nil)
+        statuses.update(nil, computer: "omarchy")
         try await Task.sleep(for: .milliseconds(160))
-        statuses.update(.ended(failed))
+        statuses.update(.ended(failed), computer: "omarchy")
         try await Task.sleep(for: .milliseconds(600))
         #expect(spoken == [ThreadStatus.outcome(failed)])
     }
@@ -313,7 +313,7 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
         for (index, (wait, status)) in steps.enumerated() {
             try await Task.sleep(for: .milliseconds(wait))
             if index == start { spoken = [] }
-            statuses.update(status)
+            statuses.update(status, computer: "omarchy")
         }
         try await Task.sleep(for: .milliseconds(700))
         return spoken
@@ -347,9 +347,9 @@ private let failed = SessionOutcome(kind: .failed, text: "Claude Code stopped un
     @Test func aRunThatRestsWithNoOutcomeIsSpokenFinishedOnceTheRowHadItsChance() async throws {
         var spoken: [String] = []
         let statuses = announcer { spoken.append($0) }
-        statuses.update(working)
+        statuses.update(working, computer: "omarchy")
         try await Task.sleep(for: .milliseconds(150))
-        statuses.update(nil)
+        statuses.update(nil, computer: "omarchy")
         try await Task.sleep(for: .milliseconds(200))
         #expect(spoken.isEmpty, "the rest waits for the row")
         try await Task.sleep(for: .milliseconds(500))
@@ -451,8 +451,8 @@ private let sleeperCommands = (1...3).map { owned("c\($0)", by: "a\($0)") }
         var held = sleepers
         held[0].waiting = MessageID("card-p1")
         let line = ThreadStatus.needsYou(three, tasks: held + [task("t9")])
-        #expect(line.text(now: at + 130) == "Needs your approval: 3 requests (sleeper one, sleeper two, sleeper three) · 3 still running · 2m")
-        #expect(line.spoken(now: at + 130) == "Needs your approval: 3 requests (sleeper one, sleeper two, sleeper three) · 3 still running · waiting 2 minutes")
+        #expect(line.text(now: at + 130, computer: "omarchy") == "Needs your approval: 3 requests (sleeper one, sleeper two, sleeper three) · 3 still running · 2m")
+        #expect(line.spoken(now: at + 130, computer: "omarchy") == "Needs your approval: 3 requests (sleeper one, sleeper two, sleeper three) · 3 still running · waiting 2 minutes")
         #expect(three.announcement == "3 requests wait on you. Newest: Approval needed. sleeper three wants to run Bash: perl -e 'sleep 40'")
         let mixed = try #require(OpenCard.waiting(in: [permission("p1"), ask("q", ["Which?"])], at: at))
         #expect(mixed.line == "Needs you: 2 requests (Bash, a question)")
@@ -470,32 +470,32 @@ private let sleeperCommands = (1...3).map { owned("c\($0)", by: "a\($0)") }
     }
 
     @Test func offlineAndQuietSayWhatWasRunning() {
-        let cause = "Your Mac isn't answering."
-        #expect(ThreadStatus.offline(.retrying, lastUpdate: at - 40, tasks: sleepers).text(now: at, cause: cause)
-            == "Your Mac isn't answering. 3 agents were running when your Mac last answered 40s ago.")
-        #expect(ThreadStatus.offline(.retrying, lastUpdate: at - 40, tasks: [task("t1")]).spoken(now: at, cause: cause)
-            == "Your Mac isn't answering. 1 command was running when your Mac last answered 40 seconds ago.")
-        #expect(ThreadStatus.quiet(since: at - 50, tasks: sleepers).text(now: at) == "No word from your Mac for 50s · 3 agents were running then")
-        #expect(ThreadStatus.catchingUp(lastUpdate: at, tasks: [task("t1")]).text(now: at) == "Catching up… 1 command was running at the last update.")
-        #expect(ThreadStatus.offline(.reconnecting, lastUpdate: at - 1, tasks: []).text(now: at, cause: ConnectionBanner.cause(.reconnecting, address: nil, lastRetryFailed: false))
+        let cause = "The bridge on omarchy isn't answering."
+        #expect(ThreadStatus.offline(.retrying, lastUpdate: at - 40, tasks: sleepers).text(now: at, cause: cause, computer: "omarchy")
+            == "The bridge on omarchy isn't answering. 3 agents were running when omarchy last answered 40s ago.")
+        #expect(ThreadStatus.offline(.retrying, lastUpdate: at - 40, tasks: [task("t1")]).spoken(now: at, cause: cause, computer: "omarchy")
+            == "The bridge on omarchy isn't answering. 1 command was running when omarchy last answered 40 seconds ago.")
+        #expect(ThreadStatus.quiet(since: at - 50, tasks: sleepers).text(now: at, computer: "omarchy") == "No word from omarchy for 50s · 3 agents were running then")
+        #expect(ThreadStatus.catchingUp(lastUpdate: at, tasks: [task("t1")]).text(now: at, computer: "omarchy") == "Catching up… 1 command was running at the last update.")
+        #expect(ThreadStatus.offline(.reconnecting, lastUpdate: at - 1, tasks: []).text(now: at, cause: ConnectionBanner.cause(.reconnecting, address: nil, lastRetryFailed: false), computer: "omarchy")
             == "Reconnecting… Last update 1s ago.")
     }
 
     @Test func workThatOutlivesClaudeCodeKeepsTheCrashInView() {
         let line = ThreadStatus.orphaned(failed, tasks: [task("t1")])
-        #expect(line.text(now: at) == "Claude Code stopped unexpectedly (terminated by signal SIGKILL) · 1 command still runs · Stop ends it")
-        #expect(line.word == "Failed")
-        #expect(ThreadStatus.orphaned(failed, tasks: [task("t1"), task("t2")]).text(now: at).hasSuffix("· 2 commands still run · Stop ends them"))
+        #expect(line.text(now: at, computer: "omarchy") == "Claude Code stopped unexpectedly (terminated by signal SIGKILL) · 1 command still runs · Stop ends it")
+        #expect(line.word(computer: "omarchy") == "Failed")
+        #expect(ThreadStatus.orphaned(failed, tasks: [task("t1"), task("t2")]).text(now: at, computer: "omarchy").hasSuffix("· 2 commands still run · Stop ends them"))
         let dotted = SessionOutcome(kind: .lost, text: "The bridge restarted.", at: at)
-        #expect(ThreadStatus.orphaned(dotted, tasks: [task("t1")]).text(now: at) == "The bridge restarted · 1 command still runs · Stop ends it")
+        #expect(ThreadStatus.orphaned(dotted, tasks: [task("t1")]).text(now: at, computer: "omarchy") == "The bridge restarted · 1 command still runs · Stop ends it")
     }
 
     @Test func aSubagentsOwnCommandIsNamedUnderItNotCountedAgain() {
         #expect(TaskCount(sleepers + sleeperCommands).text == "3 agents (each running a command)")
-        #expect(ThreadStatus.working(since: at - 9, tasks: [sleepers[0], sleeperCommands[0], task("t9")]).spoken(now: at) == "Working 9 seconds · 1 agent (running a command), 1 command")
-        #expect(ThreadStatus.working(since: at - 9, tasks: [sleepers[0], sleeperCommands[0], task("t9")]).text(now: at) == "Working 9s · 1 agent, 1 command", "shown, Running now has what runs under each agent")
-        #expect(ThreadStatus.offline(.retrying, lastUpdate: at - 40, tasks: sleepers + sleeperCommands).text(now: at, cause: "Your Mac isn't answering.")
-            == "Your Mac isn't answering. 3 agents were running when your Mac last answered 40s ago.")
+        #expect(ThreadStatus.working(since: at - 9, tasks: [sleepers[0], sleeperCommands[0], task("t9")]).spoken(now: at, computer: "omarchy") == "Working 9 seconds · 1 agent (running a command), 1 command")
+        #expect(ThreadStatus.working(since: at - 9, tasks: [sleepers[0], sleeperCommands[0], task("t9")]).text(now: at, computer: "omarchy") == "Working 9s · 1 agent, 1 command", "shown, Running now has what runs under each agent")
+        #expect(ThreadStatus.offline(.retrying, lastUpdate: at - 40, tasks: sleepers + sleeperCommands).text(now: at, cause: "The bridge on omarchy isn't answering.", computer: "omarchy")
+            == "The bridge on omarchy isn't answering. 3 agents were running when omarchy last answered 40s ago.")
         #expect(TaskCount(sleepers + [sleeperCommands[0]]).text == "3 agents (1 running a command)")
         #expect(TaskCount(sleepers + [sleeperCommands[0], owned("c4", by: "a1")]).text == "3 agents (1 running 2 commands)")
         #expect(TaskCount([sleeperCommands[0]]).text == "1 command", "a command whose agent ended counts on its own")
@@ -522,17 +522,17 @@ private let sleeperCommands = (1...3).map { owned("c\($0)", by: "a\($0)") }
     private let working = ThreadStatus.working(since: at, tasks: [])
 
     @Test func goingQuietIsSpokenOnce() {
-        #expect(ThreadAnnouncement.of(from: working, to: .quiet(since: at - 45, tasks: []), now: at) == "No word from your Mac for 45 seconds. The thread may be out of date.")
-        #expect(ThreadAnnouncement.of(from: .needsYou(card, tasks: []), to: .quiet(since: at - 46, tasks: []), now: at) == "No word from your Mac for 46 seconds. The thread may be out of date.")
-        #expect(ThreadAnnouncement.of(from: .quiet(since: at - 45, tasks: []), to: .quiet(since: at - 45, tasks: [task("t1")]), now: at) == nil)
-        #expect(ThreadAnnouncement.of(from: nil, to: .quiet(since: at - 45, tasks: []), first: true, now: at) == nil)
+        #expect(ThreadAnnouncement.of(from: working, to: .quiet(since: at - 45, tasks: []), now: at, computer: "omarchy") == "No word from omarchy for 45 seconds. The thread may be out of date.")
+        #expect(ThreadAnnouncement.of(from: .needsYou(card, tasks: []), to: .quiet(since: at - 46, tasks: []), now: at, computer: "omarchy") == "No word from omarchy for 46 seconds. The thread may be out of date.")
+        #expect(ThreadAnnouncement.of(from: .quiet(since: at - 45, tasks: []), to: .quiet(since: at - 45, tasks: [task("t1")]), now: at, computer: "omarchy") == nil)
+        #expect(ThreadAnnouncement.of(from: nil, to: .quiet(since: at - 45, tasks: []), first: true, now: at, computer: "omarchy") == nil)
     }
 
     @Test func aCrashThatLeavesWorkRunningIsSpoken() {
         let orphan = ThreadStatus.orphaned(failed, tasks: [task("t1")])
-        #expect(ThreadAnnouncement.of(from: .background(since: at, tasks: [task("t1")]), to: orphan, now: at)
+        #expect(ThreadAnnouncement.of(from: .background(since: at, tasks: [task("t1")]), to: orphan, now: at, computer: "omarchy")
             == "Claude Code stopped unexpectedly (terminated by signal SIGKILL) · 1 command still runs · Stop ends it")
-        #expect(ThreadAnnouncement.of(from: orphan, to: .ended(failed)) == "Background work ended. sleep 75.", "the crash was already spoken")
+        #expect(ThreadAnnouncement.of(from: orphan, to: .ended(failed), computer: "omarchy") == "Background work ended. sleep 75.", "the crash was already spoken")
     }
 
     @Test func endedWorkIsNamedByItsStepAndHowItEnded() {
@@ -541,7 +541,7 @@ private let sleeperCommands = (1...3).map { owned("c\($0)", by: "a\($0)") }
             ToolStep(id: "step-t1", tool: "Bash", label: "Sleep 75 seconds", state: .ok, diff: nil, output: nil, detail: "sleep 75 && echo bg-done"),
         ])
         #expect(ThreadAnnouncement.name(sleeper, in: [work]).spoken == "Sleep 75 seconds, done.")
-        #expect(ThreadAnnouncement.of(from: .background(since: at, tasks: [sleeper]), to: nil) { ThreadAnnouncement.name($0, in: [work]) }
+        #expect(ThreadAnnouncement.of(from: .background(since: at, tasks: [sleeper]), to: nil, computer: "omarchy") { ThreadAnnouncement.name($0, in: [work]) }
             == "Background work ended. Sleep 75 seconds, done.")
         let running = SessionItem.work(id: ItemID("w"), at: at, steps: [
             ToolStep(id: "step-t1", tool: "Bash", label: "Sleep 75 seconds", state: .running, diff: nil, output: nil, detail: nil),
@@ -551,21 +551,21 @@ private let sleeperCommands = (1...3).map { owned("c\($0)", by: "a\($0)") }
         let unsure = SessionItem.work(id: ItemID("w"), at: at, steps: [
             ToolStep(id: "step-t1", tool: "Bash", label: "Sleep 75 seconds", state: .unsure, diff: nil, output: nil, detail: nil),
         ])
-        #expect(ThreadAnnouncement.of(from: .background(since: at, tasks: [sleeper, task("t2")]), to: nil) { ThreadAnnouncement.name($0, in: [unsure]) }
-            == "Background work ended. sleep 75. Sleep 75 seconds may still run on your Mac.", "work the bridge lost track of is never called ended")
+        #expect(ThreadAnnouncement.of(from: .background(since: at, tasks: [sleeper, task("t2")]), to: nil, computer: "omarchy") { ThreadAnnouncement.name($0, in: [unsure]) }
+            == "Background work ended. sleep 75. Sleep 75 seconds may still run on omarchy.", "work the bridge lost track of is never called ended")
     }
 
     @Test func aStopThatClosesAPlanOrQuestionIsStillSpoken() {
         let stopped = SessionOutcome(kind: .stopped, text: "Stopped by you", at: at)
         let plan = OpenCard.waiting(in: [.plan(id: ItemID("pl"), at: at, text: "# Plan", state: .proposed, cardId: MessageID("m"))], at: at)!
-        #expect(ThreadAnnouncement.of(from: .needsYou(plan, tasks: []), to: .ended(stopped)) == "Stopped by you")
+        #expect(ThreadAnnouncement.of(from: .needsYou(plan, tasks: []), to: .ended(stopped), computer: "omarchy") == "Stopped by you")
         let question = OpenCard.waiting(in: [ask("q", ["Which?"])], at: at)!
-        #expect(ThreadAnnouncement.of(from: .needsYou(question, tasks: []), to: .ended(stopped)) == "Stopped by you")
+        #expect(ThreadAnnouncement.of(from: .needsYou(question, tasks: []), to: .ended(stopped), computer: "omarchy") == "Stopped by you")
         let mixed = OpenCard.waiting(in: [ask("q", ["Which?"]), permission("p1")], at: at)!
         #expect(mixed.kind == .permission)
-        #expect(ThreadAnnouncement.of(from: .needsYou(mixed, tasks: []), to: .ended(stopped)) == "Stopped by you", "the question's close does not say stopped")
+        #expect(ThreadAnnouncement.of(from: .needsYou(mixed, tasks: []), to: .ended(stopped), computer: "omarchy") == "Stopped by you", "the question's close does not say stopped")
         let permissions = OpenCard.waiting(in: [permission("p1"), permission("p2")], at: at)!
-        #expect(ThreadAnnouncement.of(from: .needsYou(permissions, tasks: []), to: .ended(stopped)) == nil)
+        #expect(ThreadAnnouncement.of(from: .needsYou(permissions, tasks: []), to: .ended(stopped), computer: "omarchy") == nil)
     }
 
     @Test func plansAndQuestionsSayHowTheyClosed() {
@@ -593,11 +593,11 @@ private let sleeperCommands = (1...3).map { owned("c\($0)", by: "a\($0)") }
     @Test func aCrashThatLeavesWorkRunningIsNeverFirstSpokenAsAFinishedTurn() async throws {
         var spoken: [String] = []
         let statuses = StatusAnnouncer(settle: .milliseconds(50), rest: .milliseconds(400)) { text, _ in spoken.append(text) }
-        statuses.update(.working(since: at, tasks: [task("t1")]))
+        statuses.update(.working(since: at, tasks: [task("t1")]), computer: "omarchy")
         try await Task.sleep(for: .milliseconds(150))
-        statuses.update(.background(since: at, tasks: [task("t1")]))
+        statuses.update(.background(since: at, tasks: [task("t1")]), computer: "omarchy")
         try await Task.sleep(for: .milliseconds(200))
-        statuses.update(.orphaned(failed, tasks: [task("t1")]))
+        statuses.update(.orphaned(failed, tasks: [task("t1")]), computer: "omarchy")
         try await Task.sleep(for: .milliseconds(300))
         #expect(spoken == ["Claude Code stopped unexpectedly (terminated by signal SIGKILL) · 1 command still runs · Stop ends it"])
     }
@@ -605,9 +605,9 @@ private let sleeperCommands = (1...3).map { owned("c\($0)", by: "a\($0)") }
     @Test func aTurnThatEndsWithWorkLeftIsSpokenOnceTheRowHadItsChance() async throws {
         var spoken: [String] = []
         let statuses = StatusAnnouncer(settle: .milliseconds(50), rest: .milliseconds(400)) { text, _ in spoken.append(text) }
-        statuses.update(.working(since: at, tasks: [task("t1")]))
+        statuses.update(.working(since: at, tasks: [task("t1")]), computer: "omarchy")
         try await Task.sleep(for: .milliseconds(150))
-        statuses.update(.background(since: at, tasks: [task("t1")]))
+        statuses.update(.background(since: at, tasks: [task("t1")]), computer: "omarchy")
         try await Task.sleep(for: .milliseconds(600))
         #expect(spoken == ["Claude finished its turn. Still running in background: sleep 75."])
     }
@@ -616,14 +616,14 @@ private let sleeperCommands = (1...3).map { owned("c\($0)", by: "a\($0)") }
         var spoken: [String] = []
         let statuses = StatusAnnouncer(settle: .milliseconds(50), rest: .milliseconds(400)) { text, _ in spoken.append(text) }
         let plan = OpenCard.waiting(in: [.plan(id: ItemID("pl"), at: at, text: "# Plan", state: .proposed, cardId: MessageID("m"))], at: at)!
-        statuses.update(.working(since: at, tasks: []))
+        statuses.update(.working(since: at, tasks: []), computer: "omarchy")
         try await Task.sleep(for: .milliseconds(150))
-        statuses.update(.needsYou(plan, tasks: []))
+        statuses.update(.needsYou(plan, tasks: []), computer: "omarchy")
         try await Task.sleep(for: .milliseconds(150))
         spoken = []
-        statuses.update(nil)
+        statuses.update(nil, computer: "omarchy")
         try await Task.sleep(for: .milliseconds(120))
-        statuses.update(.ended(SessionOutcome(kind: .stopped, text: "Stopped by you", at: at)))
+        statuses.update(.ended(SessionOutcome(kind: .stopped, text: "Stopped by you", at: at)), computer: "omarchy")
         try await Task.sleep(for: .milliseconds(700))
         #expect(spoken == ["Stopped by you"])
     }

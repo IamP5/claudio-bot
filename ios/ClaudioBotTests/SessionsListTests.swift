@@ -141,16 +141,16 @@ private let crash = SessionOutcome(kind: .failed, text: "Claude Code stopped une
 
     @Test func reconnectingIsNeitherLostNorAnnounced() {
         #expect(!Reach.reconnecting.lost)
-        #expect(Reach.announcement(from: .connected(machine: "Mac"), to: .reconnecting) == nil)
-        #expect(Reach.announcement(from: .reconnecting, to: .connected(machine: "Mac")) == nil)
-        #expect(Reach.announcement(from: .reconnecting, to: .retrying) == "Can't reach your Mac. Reconnecting.")
+        #expect(Reach.announcement(from: .connected(machine: "Mac"), to: .reconnecting, computer: "omarchy") == nil)
+        #expect(Reach.announcement(from: .reconnecting, to: .connected(machine: "Mac"), computer: "omarchy") == nil)
+        #expect(Reach.announcement(from: .reconnecting, to: .retrying, computer: "omarchy") == "Can't reach omarchy. Reconnecting.")
         #expect(ConnectionBanner.cause(.reconnecting, address: "10.0.0.20:7878", lastRetryFailed: false) == "Reconnecting…")
     }
 
     @Test func aMacThatDoesNotRecognizeThisPhoneIsNeverCalledNotRunning() {
         let cause = ConnectionBanner.cause(.unrecognized, address: "10.0.0.20:7878", lastRetryFailed: false, computer: "MacBook")
         #expect(cause == "This bridge doesn't recognize this \(ThisDevice.noun). The bridge on MacBook may have removed it, or this is another server. Pair again, or retry once you are back on MacBook's network.")
-        #expect(StartPhase.unrecognizedLabel == "Start (your Mac doesn't recognize this \(ThisDevice.noun))")
+        #expect(StartPhase.unrecognizedLabel("omarchy") == "Start (omarchy doesn't recognize this \(ThisDevice.noun))")
     }
 
     @Test func namesakeProjectsShowTheirLabelsAndSearchFindsThem() throws {

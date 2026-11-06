@@ -27,12 +27,14 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
     }
 
-    /// Skips alerts for the chats and threads on screen while the app is active.
-    func post(_ alerts: [Alert], onScreen: OnScreen) {
+    /// Skips alerts for the chats and threads on screen while the app is active. computer: where a session runs
+    /// (`AppStore.computerName`).
+    func post(_ alerts: [Alert], onScreen: OnScreen, computer: (SessionID) -> String) {
         guard enabled else { return }
         let active = AppActivity.isActive
         for alert in alerts where Self.shows(alert, active: active, onScreen: onScreen) {
-            Task { await post(alert) }
+            let computer = if case .session(let session) = alert { computer(session.sessionId) } else { "" }
+            Task { await post(alert, computer: computer) }
         }
     }
 
@@ -91,24 +93,24 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /// The session's title, then what it wants. nil for a reason a newer bridge invented, which is not posted.
-    static func text(of session: SessionAlert) -> (title: String, body: String)? {
+    static func text(of session: SessionAlert, computer: String) -> (title: String, body: String)? {
         let title = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body: String
         switch session.reason {
         case .card: body = Self.cards(session.count, session.cardKind)
         case .reminder: body = Self.reminder(session.count, session.cardKind)
         case .finished: body = "Finished"
-        case .failed: body = Self.ending("Stopped with an error", session.running)
-        case .lost: body = Self.ending("Interrupted by a bridge restart", session.running)
+        case .failed: body = Self.ending("Stopped with an error", session.running, computer: computer)
+        case .lost: body = Self.ending("Interrupted by a bridge restart", session.running, computer: computer)
         case .unknown: return nil
         }
         return (title.isEmpty ? "Claude Code session" : title, body)
     }
 
-    /// "Stopped with an error. 2 commands still run on your Mac.", or the bare ending when nothing outlived Claude Code.
-    static func ending(_ ending: String, _ running: SessionRunning?) -> String {
+    /// "Stopped with an error. 2 commands still run on omarchy.", or the bare ending when nothing outlived Claude Code.
+    static func ending(_ ending: String, _ running: SessionRunning?, computer: String) -> String {
         guard let running, let counted = SessionText.running(running) else { return ending }
-        return "\(ending). \(counted) still \(running.agents + running.commands == 1 ? "runs" : "run") on your Mac."
+        return "\(ending). \(counted) still \(running.agents + running.commands == 1 ? "runs" : "run") on \(computer)."
     }
 
     /// Named by what the cards ask for. Mixed kinds, or a bridge that does not say, name none (as the bridge's push does).
@@ -129,7 +131,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    private func post(_ alert: Alert) async {
+    private func post(_ alert: Alert, computer: String) async {
         let content = UNMutableNotificationContent()
         content.threadIdentifier = Self.thread(of: alert)
         content.sound = .default
@@ -149,7 +151,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 content.body = "Needs your approval: \(label)"
             }
         case let .session(session):
-            guard let text = Self.text(of: session) else { return }
+            guard let text = Self.text(of: session, computer: computer) else { return }
             content.title = text.title
             content.body = text.body
             content.userInfo = ["sessionId": session.sessionId.rawValue]

@@ -105,6 +105,7 @@ extension ButtonStyle where Self == PressableStyle {
 
 struct ConnectionBadge: View {
     let state: ConnectionState
+    @Environment(AppStore.self) private var store
 
     var body: some View {
         HStack(spacing: 6) {
@@ -135,7 +136,7 @@ struct ConnectionBadge: View {
         .lineLimit(1)
         // VoiceOver would reread the per-second countdown, so it hears only the state.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(state.spoken)
+        .accessibilityLabel(state.spoken(computer: store.computerName()))
     }
 }
 
@@ -150,13 +151,14 @@ extension ConnectionState {
         }
     }
 
-    var spoken: String {
+    /// computer: the bridge's computer (`AppStore.computerName`).
+    func spoken(computer: String) -> String {
         switch self {
         case .unpaired: "Not paired"
-        case .connecting: "Connecting to your Mac"
+        case .connecting: "Connecting to \(computer)"
         case .connected(let machine, _): "Connected to \(machine)"
-        case .disconnected: "Mac unreachable, reconnecting"
-        case .unrecognized: "Not recognized by your Mac"
+        case .disconnected: "Can't reach \(computer), reconnecting"
+        case .unrecognized: "Not recognized by \(computer)"
         }
     }
 }
@@ -191,14 +193,15 @@ enum Reach: Equatable, Sendable {
         }
     }
 
-    static func announcement(from old: Reach, to new: Reach) -> String? {
+    /// computer: the bridge's computer (`AppStore.computerName`).
+    static func announcement(from old: Reach, to new: Reach, computer: String) -> String? {
         switch new {
         case .unreachable, .retrying:
-            old.lost ? nil : "Can't reach your Mac. Reconnecting."
+            old.lost ? nil : "Can't reach \(computer). Reconnecting."
         case .connected(let machine):
             old.lost || old == .unrecognized ? "Reconnected to \(machine)." : nil
         case .unrecognized:
-            old == .unrecognized ? nil : "Your Mac doesn't recognize this \(ThisDevice.noun)."
+            old == .unrecognized ? nil : "The bridge on \(computer) doesn't recognize this \(ThisDevice.noun)."
         case .firstConnect, .reconnecting, .unpaired:
             nil
         }

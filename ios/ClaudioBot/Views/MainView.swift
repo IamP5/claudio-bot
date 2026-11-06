@@ -168,10 +168,10 @@ struct DetailStack: View {
     private func waitingForMac(since: Date?) -> some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             ContentUnavailableView(
-                "Waiting for your Mac",
+                "Waiting for \(store.computerName())",
                 systemImage: "desktopcomputer",
                 description: Text(since.map { SessionText.updated($0, now: context.date) + ". Nothing ran or waited on you then." }
-                    ?? "Your sessions show once your Mac answers.")
+                    ?? "Your sessions show once \(store.computerName()) answers.")
             )
         }
         .foregroundStyle(Theme.secondary)
@@ -205,6 +205,7 @@ struct DetailStack: View {
 struct SessionsAtWorkView: View {
     let atWork: SessionsAtWork
     @Environment(Router.self) private var router
+    @Environment(AppStore.self) private var store
 
     var body: some View {
         // Live clocks tick each second; a kept list's only moving part is its age.
@@ -216,7 +217,7 @@ struct SessionsAtWorkView: View {
                             .font(.title3.weight(.semibold))
                             .foregroundStyle(.white)
                         if case .asOf(let since) = atWork.freshness {
-                            Text(SessionText.updated(since, now: context.date) + ". Rows show what your Mac said then.")
+                            Text(SessionText.updated(since, now: context.date) + ". Rows show what \(store.computerName()) said then.")
                                 .font(.footnote)
                                 .foregroundStyle(Theme.secondary)
                         } else if let running = atWork.runningTotal {

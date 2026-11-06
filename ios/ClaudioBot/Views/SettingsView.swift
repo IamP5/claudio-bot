@@ -163,7 +163,7 @@ struct SettingsView: View {
                 ProgressView().frame(maxWidth: .infinity)
             }
             if store.bridgeManagesDevices {
-                let blocked = PairAnother.blocked(online: store.machine != nil, credential: client.pairing?.credential, devices: store.devices)
+                let blocked = PairAnother.blocked(online: store.machine != nil, credential: client.pairing?.credential, devices: store.devices, computer: store.computerName())
                 Button("Pair another device") { pairingAnother = true }
                     .disabled(blocked != nil)
                 if let blocked {
@@ -217,11 +217,12 @@ struct SettingsView: View {
 /// Whether the Mac's pushes reach this phone while the app is closed.
 private struct AwayAlertsRow: View {
     let push: PushState
+    @Environment(AppStore.self) private var store
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             LabeledContent("Alerts when away", value: push.value)
-            if let detail = push.detail {
+            if let detail = push.detail(computer: store.computerName()) {
                 Text(detail)
                     .font(.footnote)
                     .foregroundStyle(push.failing ? Theme.danger : Theme.secondary)
@@ -246,9 +247,10 @@ extension PushState {
         if case .failing = self { true } else { false }
     }
 
-    var detail: String? {
+    /// computer: the bridge's computer (`AppStore.computerName`).
+    func detail(computer: String) -> String? {
         switch self {
-        case .off: "Set CLAUDIOBOT_PUSH_URL on the Mac to get alerts when the app is closed."
+        case .off: "Set CLAUDIOBOT_PUSH_URL on \(computer) to get alerts when the app is closed."
         case let .failing(error, at): "\(error), \(at.formatted(.relative(presentation: .named)))"
         case .on, .unknown: nil
         }
@@ -346,7 +348,7 @@ struct PairAnotherView: View {
             } else if unanswered {
                 noAnswer
             } else {
-                ProgressView("Getting a code from your Mac…").frame(maxHeight: .infinity)
+                ProgressView("Getting a code from \(store.computerName())…").frame(maxHeight: .infinity)
             }
         }
         .padding(24)
@@ -402,8 +404,8 @@ struct PairAnotherView: View {
     private var noAnswer: some View {
         VStack(spacing: 16) {
             Text(store.machine == nil
-                 ? "Your Mac went offline before it sent a code."
-                 : "Your Mac didn't send a code within \(Int(Self.codeWait.components.seconds)) seconds.")
+                 ? "The bridge on \(store.computerName()) went offline before it sent a code."
+                 : "The bridge on \(store.computerName()) didn't send a code within \(Int(Self.codeWait.components.seconds)) seconds.")
                 .foregroundStyle(Theme.secondary)
                 .multilineTextAlignment(.center)
                 .accessibilityFocused($focus, equals: .unanswered)

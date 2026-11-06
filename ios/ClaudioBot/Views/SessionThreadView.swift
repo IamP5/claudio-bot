@@ -69,6 +69,7 @@ struct SessionThreadView: View {
     }
 
     private var row: SessionRow? { store.sessions.rows[sessionId] }
+    private var computer: String { store.computerName(row?.machine) }
 
     /// The transcript, banners and composer share one centered column.
     #if os(macOS)
@@ -160,7 +161,7 @@ struct SessionThreadView: View {
                 // Lazy, so the earlier page loads only once the thread is scrolled up to it.
                 LazyVStack {
                     if model.before != nil {
-                        LoadEarlierRow(state: LoadEarlierRow.State(loading: model.loadingEarlier, online: store.machine != nil)) { loadEarlier(model) }
+                        LoadEarlierRow(state: LoadEarlierRow.State(loading: model.loadingEarlier, online: store.machine != nil), computer: computer) { loadEarlier(model) }
                             .onAppear { loadEarlier(model) }
                     }
                 }
@@ -261,8 +262,8 @@ struct SessionThreadView: View {
                 VStack(spacing: 6) {
                     if let status {
                         // A hanging attempt would hold Retry until its greeting deadline, so Retry starts a new one.
-                        ThreadStatusLine(status: status, cause: cause, lines: fit.density.statusLines, onTap: tap(status)) {
-                            Task { lastRetryFailed = !(await ConnectionBanner.retry(client, restartingAttempt: true)) }
+                        ThreadStatusLine(status: status, cause: cause, computer: computer, lines: fit.density.statusLines, onTap: tap(status)) {
+                            Task { lastRetryFailed = !(await ConnectionBanner.retry(client, restartingAttempt: true, computer: computer)) }
                         }
                         .padding(.horizontal, 16)
                         .transition(.opacity)
@@ -283,7 +284,7 @@ struct SessionThreadView: View {
             .clipped()
             // A crowded bar fills its room, so the transcript under it would show between its controls.
             .background(fit.density > .full ? Theme.background : .clear)
-            .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: status?.word)
+            .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: status?.word(computer: computer))
         }
         .sheet(isPresented: $showsWork) {
             BackgroundWorkSheet(sessionId: sessionId, staleAt: status?.staleAt)
@@ -303,7 +304,7 @@ struct SessionThreadView: View {
         }
         .onChange(of: ThreadAnnouncement.key(status), initial: true) {
             statuses.name = { [store, sessionId] task in ThreadAnnouncement.name(task, in: store.threads[sessionId]?.items ?? []) }
-            statuses.update(status)
+            statuses.update(status, computer: computer)
         }
         .onChange(of: banner) { _, new in
             if let new { announcer.post(new.spoken) }
@@ -324,9 +325,9 @@ struct SessionThreadView: View {
     /// What the offline line says is wrong, in the words the Sessions banner uses. At accessibility sizes the address
     /// goes: it would take more lines than the rest.
     private var cause: String {
-        if reach == .unrecognized { return "Your Mac doesn't recognize this \(ThisDevice.noun). Pair again from the list." }
+        if reach == .unrecognized { return "The bridge on \(store.computerName()) doesn't recognize this \(ThisDevice.noun). Pair again from the list." }
         let address = typeSize.isAccessibilitySize ? nil : client.pairing?.url.bridgeAddress
-        return ConnectionBanner.cause(reach, address: address, lastRetryFailed: lastRetryFailed, brief: true)
+        return ConnectionBanner.cause(reach, address: address, lastRetryFailed: lastRetryFailed, brief: true, computer: store.computerName())
     }
 
     /// Any level with tasks opens the list of what runs, or ran when the Mac last answered. A card with nothing else
@@ -361,7 +362,7 @@ struct SessionThreadView: View {
             let state = store.threads[sessionId].flatMap { status($0, card: OpenCard.waiting(in: $0.items, at: max(cardClock, .now))) }
             ThreadHeader(
                 row: row, project: row.flatMap { store.sessions.project(of: $0) }, avatar: row?.agent.flatMap { store.bots[$0.botId]?.avatar },
-                state: state?.word
+                state: state?.word(computer: computer)
             )
         }
         #if os(iOS)
@@ -524,6 +525,8 @@ struct ThreadStatusLine: View {
     let status: ThreadStatus
     /// The connection copy the Sessions banner uses.
     let cause: String
+    /// The session's machine (`AppStore.computerName`).
+    let computer: String
     /// At most this many lines, cut with an ellipsis. VoiceOver still reads the whole line.
     var lines = 3
     let onTap: (() -> Void)?
@@ -561,7 +564,7 @@ struct ThreadStatusLine: View {
         let layout = stacked && retries ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 10))
         return layout {
             if !stacked { glyph.frame(width: slot, height: slot) }
-            Text(status.text(now: now, cause: cause))
+            Text(status.text(now: now, cause: cause, computer: computer))
                 .font(.subheadline)
                 .lineLimit(lines)
                 .truncationMode(.tail)
@@ -571,7 +574,7 @@ struct ThreadStatusLine: View {
                 .foregroundStyle(tint == Theme.secondary ? .white : tint)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityLabel(status.spoken(now: now, cause: cause))
+                .accessibilityLabel(status.spoken(now: now, cause: cause, computer: computer))
                 .modifier(OpensWork(onTap: retries ? onTap : nil, hint: hint))
             if onTap != nil, !(stacked && retries) {
                 Image(systemName: "chevron.right")
@@ -589,7 +592,7 @@ struct ThreadStatusLine: View {
                 }
                 .font(.footnote.weight(.semibold))
                 .buttonStyle(.pressable)
-                .accessibilityLabel("Retry connecting to your Mac")
+                .accessibilityLabel("Retry connecting to \(computer)")
             }
         }
         // The capsule is the element VoiceOver and a finger find, so it is at least a fingertip tall.
@@ -599,12 +602,12 @@ struct ThreadStatusLine: View {
         .glass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture { onTap?() }
-        .modifier(Spoken(text: status.spoken(now: now, cause: cause), onTap: onTap, retries: retries, hint: hint))
+        .modifier(Spoken(text: status.spoken(now: now, cause: cause, computer: computer), onTap: onTap, retries: retries, hint: hint))
     }
 
     private var hint: String {
         if status.tasks.isEmpty { return "Shows the card" }
-        return status.staleAt == nil ? "Lists what runs, with a Stop for each" : "Lists what was running when your Mac last answered"
+        return status.staleAt == nil ? "Lists what runs, with a Stop for each" : "Lists what was running when \(computer) last answered"
     }
 
     /// Beside Retry the words are their own element, so they carry the tap that opens what runs.
@@ -825,16 +828,18 @@ struct LoadEarlierRow: View {
             self = !online ? .offline : loading ? .loading : .idle
         }
 
-        var text: String {
+        func text(computer: String) -> String {
             switch self {
             case .idle: "Load earlier messages"
             case .loading: "Loading earlier messages…"
-            case .offline: "Earlier messages: waiting for your Mac"
+            case .offline: "Earlier messages: waiting for \(computer)"
             }
         }
     }
 
     let state: State
+    /// The session's machine (`AppStore.computerName`).
+    let computer: String
     let load: () -> Void
 
     var body: some View {
@@ -842,7 +847,7 @@ struct LoadEarlierRow: View {
             switch state {
             case .idle:
                 Button(action: load) {
-                    Label(state.text, systemImage: "arrow.up.circle")
+                    Label(state.text(computer: computer), systemImage: "arrow.up.circle")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Theme.link)
                         .frame(maxWidth: .infinity, minHeight: HitTarget.minHeight)
@@ -852,12 +857,12 @@ struct LoadEarlierRow: View {
             case .loading:
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text(state.text).font(.footnote).foregroundStyle(Theme.tertiary)
+                    Text(state.text(computer: computer)).font(.footnote).foregroundStyle(Theme.tertiary)
                 }
                 .frame(maxWidth: .infinity, minHeight: HitTarget.minHeight)
                 .accessibilityElement(children: .combine)
             case .offline:
-                Label(state.text, systemImage: "wifi.slash")
+                Label(state.text(computer: computer), systemImage: "wifi.slash")
                     .font(.footnote)
                     .foregroundStyle(Theme.tertiary)
                     .frame(maxWidth: .infinity, minHeight: HitTarget.minHeight)
@@ -877,15 +882,15 @@ enum ToolOutputState: Equatable {
     case failed(String)
 
     static let patience: TimeInterval = 15
-    static let unanswered = "Your Mac didn't send the output."
+    static func unanswered(_ computer: String) -> String { "The bridge on \(computer) didn't send the output." }
 
-    init(output: ToolOutput?, askedAt: Date?, online: Bool, now: Date) {
+    init(output: ToolOutput?, askedAt: Date?, online: Bool, now: Date, computer: String) {
         switch output {
         case .text(let text)?: self = .text(text)
         case .missing(let why)?: self = .failed(why)
         case nil:
             if !online { self = .waitingForMac }
-            else if let askedAt, now.timeIntervalSince(askedAt) >= Self.patience { self = .failed(Self.unanswered) }
+            else if let askedAt, now.timeIntervalSince(askedAt) >= Self.patience { self = .failed(Self.unanswered(computer)) }
             else { self = .reading }
         }
     }
@@ -901,10 +906,11 @@ struct ToolOutputSheet: View {
     @State private var clock = Date.now
 
     private var thread: ThreadModel? { store.threads[sessionId] }
+    private var computer: String { store.computerName(store.sessions.rows[sessionId]?.machine) }
 
     var body: some View {
         let state = ToolOutputState(
-            output: thread?.toolOutputs[step.id], askedAt: thread?.toolAsked[step.id], online: store.machine != nil, now: max(clock, .now)
+            output: thread?.toolOutputs[step.id], askedAt: thread?.toolAsked[step.id], online: store.machine != nil, now: max(clock, .now), computer: computer
         )
         NavigationStack {
             Group {
@@ -920,13 +926,13 @@ struct ToolOutputSheet: View {
                     }
                     .defaultScrollAnchor(.bottom)
                 case .reading:
-                    ProgressView("Reading the output from \(store.computerName(store.sessions.rows[sessionId]?.machine))…")
+                    ProgressView("Reading the output from \(computer)…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .waitingForMac:
                     ContentUnavailableView {
-                        Label("Waiting for your Mac", systemImage: "wifi.slash")
+                        Label("Waiting for \(computer)", systemImage: "wifi.slash")
                     } description: {
-                        Text("The output loads when your Mac is back.")
+                        Text("The output loads when \(computer) is back.")
                     } actions: {
                         Button("Close") { dismiss() }
                     }
@@ -973,7 +979,7 @@ struct ToolOutputSheet: View {
         .onChange(of: state) { old, new in
             switch new {
             case .failed(let why) where old != new: AccessibilityNotification.Announcement("No output. " + why).post()
-            case .waitingForMac where old != new: AccessibilityNotification.Announcement("Waiting for your Mac.").post()
+            case .waitingForMac where old != new: AccessibilityNotification.Announcement("Waiting for \(computer).").post()
             default: break
             }
         }

@@ -66,7 +66,7 @@ struct BackgroundWorkSheet: View {
                     }
                 }
                 if staleAt != nil {
-                    Text("Your Mac has not confirmed this for a while, so it may have changed.")
+                    Text("The bridge on \(store.computerName(store.sessions.rows[sessionId]?.machine)) has not confirmed this for a while, so it may have changed.")
                         .font(.footnote)
                         .foregroundStyle(Theme.tertiary)
                         .padding(.top, 12)

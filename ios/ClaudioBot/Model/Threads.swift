@@ -177,7 +177,7 @@ enum WorkSummary {
 
 extension ToolStep {
     /// What an unsure step says: its command may outlive what the bridge can follow.
-    static let mayStillRun = "May still run on your Mac"
+    static func mayStillRun(on computer: String) -> String { "May still run on \(computer)" }
 }
 
 extension ToolStepState {
@@ -324,7 +324,7 @@ struct WorkRun {
 
     /// One step's state and timing in words: "Running · 1m 12s · 3 tools, last Bash · started by sleeper two". Spoken
     /// while stale, a running step says the clock is from the last update: "Running when last updated, 1 minute 12 seconds".
-    func status(_ step: ToolStep, now: Date, spoken: Bool = false, stale: Bool = false) -> [String] {
+    func status(_ step: ToolStep, now: Date, spoken: Bool = false, stale: Bool = false, computer: String) -> [String] {
         let format = spoken ? RunClock.spoken : RunClock.short
         let joint = spoken ? ", " : " · "
         let task = task(for: step)
@@ -344,7 +344,7 @@ struct WorkRun {
             parts.append("Denied")
         case .unsure:
             let age = step.startedAt.map { (spoken ? RunClock.spoken : RunClock.coarse)(now.timeIntervalSince($0)) }
-            parts.append(ToolStep.mayStillRun + (age.map { joint + "started \($0) ago" } ?? ""))
+            parts.append(ToolStep.mayStillRun(on: computer) + (age.map { joint + "started \($0) ago" } ?? ""))
         case .ended:
             parts.append(spoken ? "Ended, result unknown" : "Ended · result unknown")
         case .unknown(let raw):

@@ -89,18 +89,18 @@ private func eventually(_ what: String, within timeout: Duration = .seconds(5), 
 
     @Test func voiceOverHearsOneAnnouncementPerChangeOfMeaning() {
         let lost = Reach.unreachable(nextTry: at + 1)
-        #expect(Reach.announcement(from: .connected(machine: "Mac"), to: lost) == "Can't reach your Mac. Reconnecting.")
-        #expect(Reach.announcement(from: lost, to: .retrying) == nil, "a retry is not news")
-        #expect(Reach.announcement(from: .retrying, to: .unreachable(nextTry: at + 30)) == nil)
-        #expect(Reach.announcement(from: lost, to: .connected(machine: "Mac")) == "Reconnected to Mac.")
-        #expect(Reach.announcement(from: .firstConnect, to: .connected(machine: "Mac")) == nil, "a launch that connects says nothing")
-        #expect(Reach.announcement(from: .firstConnect, to: lost) != nil)
-        #expect(Reach.announcement(from: lost, to: .unrecognized) != nil)
+        #expect(Reach.announcement(from: .connected(machine: "Mac"), to: lost, computer: "omarchy") == "Can't reach omarchy. Reconnecting.")
+        #expect(Reach.announcement(from: lost, to: .retrying, computer: "omarchy") == nil, "a retry is not news")
+        #expect(Reach.announcement(from: .retrying, to: .unreachable(nextTry: at + 30), computer: "omarchy") == nil)
+        #expect(Reach.announcement(from: lost, to: .connected(machine: "Mac"), computer: "omarchy") == "Reconnected to Mac.")
+        #expect(Reach.announcement(from: .firstConnect, to: .connected(machine: "Mac"), computer: "omarchy") == nil, "a launch that connects says nothing")
+        #expect(Reach.announcement(from: .firstConnect, to: lost, computer: "omarchy") != nil)
+        #expect(Reach.announcement(from: lost, to: .unrecognized, computer: "omarchy") != nil)
     }
 
     @Test func theBadgeSpeaksTheStateNotTheCountdown() {
-        #expect(ConnectionState.disconnected(retryAt: at + 3).spoken == ConnectionState.disconnected(retryAt: at + 29).spoken)
-        #expect(ConnectionState.disconnected(retryAt: at + 3).spoken == "Mac unreachable, reconnecting")
+        #expect(ConnectionState.disconnected(retryAt: at + 3).spoken(computer: "omarchy") == ConnectionState.disconnected(retryAt: at + 29).spoken(computer: "omarchy"))
+        #expect(ConnectionState.disconnected(retryAt: at + 3).spoken(computer: "omarchy") == "Can't reach omarchy, reconnecting")
     }
 
     @Test func retryingWhileTheMacIsDownTriesAtOnceAndSaysItDidNotAnswer() async throws {

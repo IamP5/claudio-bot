@@ -18,6 +18,7 @@ struct SessionComposer: View {
     /// Send and Stop grow with the text, up to a size that leaves the field its room (F-SES-134).
     private var control: CGFloat { min(scaled, Composer.control * 1.5) }
     @AccessibilityFocusState private var lockFocused: Bool
+    private var computer: String { store.computerName(store.sessions.rows[sessionId]?.machine) }
     @State private var caret = 0
     @State private var sends = 0
     @State private var stops = 0
@@ -117,12 +118,12 @@ struct SessionComposer: View {
         .onChange(of: model.pendingSends) { old, new in
             for id in Set(old.keys).union(new.keys).sorted(by: { $0.rawValue < $1.rawValue }) {
                 let echoed = new[id] == nil ? model.shownBehindTurn(id) : nil
-                if let text = PendingSend.announcement(old: old[id]?.state, new: new[id]?.state, echoedQueued: echoed) { announce(text) }
+                if let text = PendingSend.announcement(old: old[id]?.state, new: new[id]?.state, echoedQueued: echoed, computer: computer) { announce(text) }
             }
         }
         .onChange(of: state.stop?.phase) { _, phase in
-            guard let phase, let scope = state.stop?.scope, let text = ComposerState.announcement(phase, scope) else { return }
-            announce(phase == .stopping && store.machine == nil ? ComposerState.stopWaitsLine : text)
+            guard let phase, let scope = state.stop?.scope, let text = ComposerState.announcement(phase, scope, computer: computer) else { return }
+            announce(phase == .stopping && store.machine == nil ? ComposerState.stopWaitsLine(computer: computer) : text)
         }
         .onChange(of: note) { _, note in
             guard case let .changeUnconfirmed(set, text)? = note, lapseSpoken != set.at else { return }
@@ -215,7 +216,7 @@ struct SessionComposer: View {
             }
         }
         .accessibilityLabel(slot.label)
-        .accessibilityHint(slot.hint ?? "")
+        .accessibilityHint(slot.hint(computer: computer) ?? "")
         .accessibilityActions {
             if case .send(.queue) = slot { Button("Stop turn and send") { send(interrupt: true) } }
         }
@@ -230,7 +231,7 @@ struct SessionComposer: View {
         .buttonStyle(.pressable)
         .disabled(!slot.acts)
         .accessibilityLabel(slot.label)
-        .accessibilityHint(slot.hint ?? "")
+        .accessibilityHint(slot.hint(computer: computer) ?? "")
         .help(slot.label)
     }
 
@@ -275,14 +276,14 @@ struct SessionComposer: View {
                 case .unconfirmed, .changeUnconfirmed:
                     Image(systemName: "questionmark.circle").foregroundStyle(Theme.attention)
                 }
-                Text(note.text)
+                Text(note.text(computer: computer))
                     .foregroundStyle(note.isError ? Theme.danger : Theme.secondary)
                     .lineLimit(lines)
                     .truncationMode(.tail)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(alignment: .topLeading) {
-                        Text(note.text)
+                        Text(note.text(computer: computer))
                             .fixedSize(horizontal: false, vertical: true)
                             .hidden()
                             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { noteFullHeight = $0 }
@@ -290,7 +291,7 @@ struct SessionComposer: View {
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { noteShownHeight = $0 }
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(note.spoken)
+            .accessibilityLabel(note.spoken(computer: computer))
             HStack(spacing: 4) {
                 if noteFullHeight > noteShownHeight + 1 {
                     noteButton("More", symbol: "ellipsis.circle", dense: dense) { showsFullNote = true }
@@ -310,7 +311,7 @@ struct SessionComposer: View {
         .padding(.horizontal, 16)
         .accessibilityElement(children: .contain)
         .sheet(isPresented: $showsFullNote) {
-            NoteSheet(text: note.text, tone: note.isError ? Theme.danger : .white, dismiss: dismiss(note))
+            NoteSheet(text: note.text(computer: computer), tone: note.isError ? Theme.danger : .white, dismiss: dismiss(note))
         }
     }
 
@@ -492,7 +493,7 @@ struct SessionComposer: View {
         sentAt = offline ? nil : .now
         sentQueued = queued
         sentClientId = ItemID(clientId)
-        announce(ComposerState.sentAnnouncement(offline: offline))
+        announce(ComposerState.sentAnnouncement(offline: offline, computer: computer))
         onSend()
     }
 
@@ -631,9 +632,9 @@ enum StartPhase: Equatable, Sendable {
 
     static let startingLine = "Starting session…"
     static let unconfirmedLine = "Couldn't confirm. Check the list or retry."
-    static let offlineLabel = "Start (your Mac is unreachable)"
-    static let reconnectingLabel = "Start (reconnecting to your Mac)"
-    static let unrecognizedLabel = "Start (your Mac doesn't recognize this \(ThisDevice.noun))"
+    static func offlineLabel(_ computer: String) -> String { "Start (\(computer) is unreachable)" }
+    static func reconnectingLabel(_ computer: String) -> String { "Start (reconnecting to \(computer))" }
+    static func unrecognizedLabel(_ computer: String) -> String { "Start (\(computer) doesn't recognize this \(ThisDevice.noun))" }
 }
 
 struct NewSessionSheet: View {
@@ -663,9 +664,9 @@ struct NewSessionSheet: View {
     private var startLabel: String {
         switch store.connection {
         case .connected: Self.startTitle
-        case .unrecognized: StartPhase.unrecognizedLabel
-        case .connecting where store.rejoin != nil: StartPhase.reconnectingLabel
-        default: StartPhase.offlineLabel
+        case .unrecognized: StartPhase.unrecognizedLabel(store.computerName())
+        case .connecting where store.rejoin != nil: StartPhase.reconnectingLabel(store.computerName())
+        default: StartPhase.offlineLabel(store.computerName())
         }
     }
 

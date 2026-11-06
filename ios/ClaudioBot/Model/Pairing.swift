@@ -534,11 +534,11 @@ struct NewDeviceWatch: Sendable {
 enum PairAnother {
     /// Why this device cannot get a code for another device now, in the words Settings shows; nil when it can. The Mac
     /// refuses a code to a device on the shared token from before protocol 3, so that case is said even offline.
-    static func blocked(online: Bool, credential: Pairing.Credential?, devices: [Device]?) -> String? {
+    static func blocked(online: Bool, credential: Pairing.Credential?, devices: [Device]?, computer: String) -> String? {
         let shared = if case .legacy? = credential { true } else { false }
         if shared || devices?.first(where: \.current)?.legacy == true {
-            return "This \(ThisDevice.noun) still uses the old shared token, so your Mac won't give it a code for another device. Unpair it, then pair it again with a code from your Mac."
+            return "This \(ThisDevice.noun) still uses the old shared token, so \(computer) won't give it a code for another device. Unpair it, then pair it again with a code from \(computer)."
         }
-        return online ? nil : "Connect to your Mac to pair another device."
+        return online ? nil : "Connect to \(computer) to pair another device."
     }
 }

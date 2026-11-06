@@ -42,7 +42,7 @@ struct SidebarRoot: View {
             }
         }
         .onChange(of: Reach(store.connection, failures: client.failures, greeted: store.bridgeProtocol != nil, rejoining: store.rejoin != nil)) { old, new in
-            if let text = Reach.announcement(from: old, to: new) { AccessibilityNotification.Announcement(text).post() }
+            if let text = Reach.announcement(from: old, to: new, computer: store.computerName()) { AccessibilityNotification.Announcement(text).post() }
         }
     }
 }
@@ -261,7 +261,7 @@ struct SessionsSidebar: View {
                 Text(empty.title(on: sessionsPlace))
                     .font(.headline)
                     .multilineTextAlignment(.center)
-                Text("You hid every session in this list. They are still on your Mac.")
+                Text("You hid every session in this list. They are still on \(sessionsPlace).")
                     .font(.subheadline)
                     .foregroundStyle(Theme.secondary)
                     .multilineTextAlignment(.center)
@@ -545,7 +545,7 @@ struct SessionsSidebar: View {
     private func refresh() async {
         let before = index.updatedAt
         if store.machine == nil {
-            lastRetryFailed = !(await ConnectionBanner.retry(client))
+            lastRetryFailed = !(await ConnectionBanner.retry(client, computer: store.computerName()))
             if lastRetryFailed { return }
         } else {
             client.refreshSessions()
@@ -770,10 +770,11 @@ private struct ListWait: Hashable {
 /// A connected Mac whose list has not come: say so and let the user ask again, instead of a skeleton with no end.
 struct ListLateNote: View {
     let refresh: () -> Void
+    @Environment(AppStore.self) private var store
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Your Mac is connected but hasn't sent the session list yet.")
+            Text("The bridge on \(store.computerName()) is connected but hasn't sent the session list yet.")
                 .font(.subheadline)
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)

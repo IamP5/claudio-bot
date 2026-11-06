@@ -34,7 +34,8 @@ struct ChatView: View {
                     }
                     ForEach(store.botSends(in: botId), id: \.clientId) { clientId, send in
                         SessionUserBubble(
-                            text: send.pending.text, from: .user, queued: true, actions: undelivered(clientId, send), delivery: send.pending.state
+                            text: send.pending.text, from: .user, queued: true, actions: undelivered(clientId, send), delivery: send.pending.state,
+                            computer: store.computerName()
                         )
                         .padding(.top, Self.senderGap)
                     }

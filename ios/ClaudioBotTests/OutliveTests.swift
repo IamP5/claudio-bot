@@ -76,10 +76,10 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(model.pendingSends[ItemID("c1")]?.state == .sending(since: at))
         model.lapseSends(at: at + 10)
         #expect(model.pendingSends[ItemID("c1")]?.state == .unechoed, "a socket took it, so it is never called not sent")
-        #expect(SessionUserBubble.words(.unechoed) == "No word from your Mac yet. It may have gone through.")
-        #expect(SessionUserBubble.words(.sending(since: at)) == "Sending…")
-        #expect(SessionUserBubble.words(.notSent(nil)) == "Not sent")
-        #expect(SessionUserBubble.words(.notSent("This session's transcript is gone.")) == "Not sent: This session's transcript is gone.")
+        #expect(SessionUserBubble.words(.unechoed, computer: "omarchy") == "No word from omarchy yet. It may have gone through.")
+        #expect(SessionUserBubble.words(.sending(since: at), computer: "omarchy") == "Sending…")
+        #expect(SessionUserBubble.words(.notSent(nil), computer: "omarchy") == "Not sent")
+        #expect(SessionUserBubble.words(.notSent("This session's transcript is gone."), computer: "omarchy") == "Not sent: This session's transcript is gone.")
         #expect(model.items.map(\.id) == [ItemID("c1")])
 
         store.discardSend(sessionId: sid, clientId: "c1")
@@ -124,15 +124,15 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
     }
 
     @Test func aSendIsSpokenAsSendingThenSentOnlyOnceTheMacShowsItBack() {
-        #expect(ComposerState.sentAnnouncement(offline: false) == "Sending.")
-        #expect(ComposerState.sentAnnouncement(offline: true) == "Not sent yet. It goes if your Mac is back within a minute.")
-        #expect(PendingSend.announcement(old: .sending(since: at), new: nil, echoedQueued: false) == "Sent.")
-        #expect(PendingSend.announcement(old: .sending(since: at), new: nil, echoedQueued: true) == "Queued behind the current turn.")
-        #expect(PendingSend.announcement(old: .unechoed, new: nil, echoedQueued: nil) == nil, "discarded: nothing to say")
-        #expect(PendingSend.announcement(old: .sending(since: at), new: .unechoed, echoedQueued: nil) == "No word from your Mac yet. Your message may not have arrived.")
-        #expect(PendingSend.announcement(old: .waiting, new: .notSent(nil), echoedQueued: nil) == "Your message was not sent. Your Mac was unreachable.")
-        #expect(PendingSend.announcement(old: .waiting, new: .notSent("This session's transcript is gone."), echoedQueued: nil) == nil)
-        #expect(PendingSend.announcement(old: .waiting, new: .sending(since: at), echoedQueued: nil) == nil)
+        #expect(ComposerState.sentAnnouncement(offline: false, computer: "omarchy") == "Sending.")
+        #expect(ComposerState.sentAnnouncement(offline: true, computer: "omarchy") == "Not sent yet. It goes if omarchy is back within a minute.")
+        #expect(PendingSend.announcement(old: .sending(since: at), new: nil, echoedQueued: false, computer: "omarchy") == "Sent.")
+        #expect(PendingSend.announcement(old: .sending(since: at), new: nil, echoedQueued: true, computer: "omarchy") == "Queued behind the current turn.")
+        #expect(PendingSend.announcement(old: .unechoed, new: nil, echoedQueued: nil, computer: "omarchy") == nil, "discarded: nothing to say")
+        #expect(PendingSend.announcement(old: .sending(since: at), new: .unechoed, echoedQueued: nil, computer: "omarchy") == "No word from omarchy yet. Your message may not have arrived.")
+        #expect(PendingSend.announcement(old: .waiting, new: .notSent(nil), echoedQueued: nil, computer: "omarchy") == "Your message was not sent. The bridge on omarchy was unreachable.")
+        #expect(PendingSend.announcement(old: .waiting, new: .notSent("This session's transcript is gone."), echoedQueued: nil, computer: "omarchy") == nil)
+        #expect(PendingSend.announcement(old: .waiting, new: .sending(since: at), echoedQueued: nil, computer: "omarchy") == nil)
     }
 
     @Test func theEchoTellsWhetherTheMessageQueued() throws {
@@ -147,7 +147,7 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
     }
 
     @Test func aSendOfflineIsNeverCalledSent() {
-        #expect(SessionUserBubble.words(.waiting) == "Not sent yet · Goes if your Mac is back within a minute")
+        #expect(SessionUserBubble.words(.waiting, computer: "omarchy") == "Not sent yet · Goes if omarchy is back within a minute")
     }
 
     @Test func aSnapshotThatDoesNotHaveThePendingMessageYetKeepsItsEcho() throws {
@@ -263,19 +263,19 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         store.requestDropped(.sessionSet(sessionId: sid, patch: SessionPatch(mode: .plan)))
         #expect(store.sets[sid] == nil)
         #expect(store.sessionErrors[sid]?.kind == .set)
-        #expect(store.sessionErrors[sid]?.text == "Mode change not sent: your Mac was unreachable.")
+        #expect(store.sessionErrors[sid]?.text == "Mode change not sent: Mac was unreachable.")
         store.requestDropped(.sessionSet(sessionId: sid, patch: SessionPatch(model: .some("opus"))))
-        #expect(store.sessionErrors[sid]?.text == "Model change not sent: your Mac was unreachable.")
+        #expect(store.sessionErrors[sid]?.text == "Model change not sent: Mac was unreachable.")
         store.requestDropped(.sessionSet(sessionId: sid, patch: SessionPatch(hidden: true)))
-        #expect(store.lastError?.message == "Hide not sent: your Mac was unreachable.")
+        #expect(store.lastError?.message == "Hide not sent: Mac was unreachable.")
         store.requestDropped(.sessionSet(sessionId: sid, patch: SessionPatch(hidden: false)))
-        #expect(store.lastError?.message == "Show not sent: your Mac was unreachable.")
+        #expect(store.lastError?.message == "Show not sent: Mac was unreachable.")
         store.requestDropped(.sessionSet(sessionId: sid, patch: SessionPatch(title: "Fix the build")))
-        #expect(store.lastError?.message == "Rename not sent: your Mac was unreachable.")
+        #expect(store.lastError?.message == "Rename not sent: Mac was unreachable.")
         store.requestDropped(.sessionOpenDesktop(sessionId: sid))
-        #expect(store.lastError?.message == "Open in the Claude app not sent: your Mac was unreachable.")
+        #expect(store.lastError?.message == "Open in the Claude app not sent: Mac was unreachable.")
         store.requestDropped(.stopAgent(agentId: AgentID("a1")))
-        #expect(store.lastError?.message == "Stop not sent: your Mac was unreachable.")
+        #expect(store.lastError?.message == "Stop not sent: Mac was unreachable.")
     }
 
     @Test func aMirrorSettingThatNeverWentPutsThePickerBack() {
@@ -286,7 +286,7 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(store.sessions.mirror == .never, "shown at once")
         store.requestDropped(.sessionPrefs(mirror: .tap))
         #expect(store.sessions.mirror == .auto, "back to the value before the first change")
-        #expect(store.mirrorNote == "Not changed: your Mac was unreachable.")
+        #expect(store.mirrorNote == "Not changed: Mac was unreachable.")
         store.sessionRequestSent(.sessionPrefs(mirror: .never))
         #expect(store.mirrorNote == nil, "the next change clears it")
     }
@@ -297,15 +297,15 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         store.settingsShown = true
         store.sessionRequestSent(.sessionPrefs(mirror: .never))
         store.requestDropped(.sessionPrefs(mirror: .never))
-        #expect(store.mirrorNote == "Not changed: your Mac was unreachable.")
+        #expect(store.mirrorNote == "Not changed: Mac was unreachable.")
         #expect(store.lastError == nil, "Settings shows and speaks it beside the picker")
 
         store.settingsShown = false
         store.sessionRequestSent(.sessionPrefs(mirror: .tap))
         store.requestDropped(.sessionPrefs(mirror: .tap))
         #expect(store.sessions.mirror == .auto)
-        #expect(store.lastError?.message == "The Claude app setting was not changed: your Mac was unreachable.", "Settings was closed, so a toast says it")
-        #expect(store.mirrorNote == "Not changed: your Mac was unreachable.", "and the note waits for the next look")
+        #expect(store.lastError?.message == "The Claude app setting was not changed: Mac was unreachable.", "Settings was closed, so a toast says it")
+        #expect(store.mirrorNote == "Not changed: Mac was unreachable.", "and the note waits for the next look")
     }
 
     @Test func aDroppedStopSaysSoUnderTheComposer() {
@@ -315,14 +315,14 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(store.latestStop(in: sid, [.all]) != nil)
         store.requestDropped(stop)
         #expect(store.latestStop(in: sid, [.all]) == nil)
-        #expect(store.sessionErrors[sid]?.text == "Stop not sent: your Mac was unreachable.")
+        #expect(store.sessionErrors[sid]?.text == "Stop not sent: Mac was unreachable.")
     }
 
     @Test func aStopTappedOfflineSaysItWaitsNotThatItStops() {
         let c = controls(working: true, turn: "2026-10-16T12:00:00.000Z")
         let stop = (scope: StopScope(c), phase: StopPhase.stopping)
         #expect(ComposerNote.of(error: nil, stop: stop, set: nil, controls: c, now: at, offline: true) == .stopWaits)
-        #expect(ComposerNote.stopWaits.text == "Stop waits for your Mac. It goes if the connection is back within a minute.")
+        #expect(ComposerNote.stopWaits.text(computer: "omarchy") == "Stop waits for omarchy. It goes if the connection is back within a minute.")
         #expect(ComposerNote.of(error: nil, stop: stop, set: nil, controls: c, now: at) == .stopping(StopScope(c)))
     }
 
@@ -339,7 +339,7 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         store.decisionSent(.once, for: MessageID("m1"))
         store.requestDropped(.sessionDecide(sessionId: sid, cardId: MessageID("m1"), choice: .once))
         #expect(store.pendingDecisions.isEmpty)
-        #expect(store.decisionNote(MessageID("m1"))?.text == "Not sent: your Mac was unreachable · Try again")
+        #expect(store.decisionNote(MessageID("m1"))?.text(computer: "omarchy") == "Not sent: omarchy was unreachable · Try again")
     }
 }
 
@@ -352,7 +352,7 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(store.holds(MessageID("ask1")))
         store.decisionFailed(for: MessageID("ask1"))
         #expect(!store.holds(MessageID("ask1")))
-        #expect(store.decisionNote(MessageID("ask1"))?.text == "Not sent · Try again")
+        #expect(store.decisionNote(MessageID("ask1"))?.text(computer: "omarchy") == "Not sent · Try again")
     }
 
     @Test func aRefusedAnswerFreesTheCardAndSaysAlreadyAnswered() {
@@ -361,10 +361,10 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(store.pendingDecisions[MessageID("plan1")] == .once)
         store.apply(.error(message: "That card was already answered", about: .decide(sessionId: sid, cardId: MessageID("plan1"))))
         #expect(store.pendingDecisions.isEmpty)
-        #expect(store.decisionNote(MessageID("plan1"))?.text == "Already answered")
+        #expect(store.decisionNote(MessageID("plan1"))?.text(computer: "omarchy") == "Already answered")
         #expect(store.lastError == nil, "said on the card, not as a toast")
         store.apply(.error(message: "Unknown card", about: .decide(sessionId: sid, cardId: MessageID("plan1"))))
-        #expect(store.decisionNote(MessageID("plan1"))?.text == "Unknown card.")
+        #expect(store.decisionNote(MessageID("plan1"))?.text(computer: "omarchy") == "Unknown card.")
     }
 
     @Test func aClosedQuestionOrPlanReleasesItsButtons() {
@@ -392,8 +392,8 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(store.decidedHere(MessageID("m1")) == nil)
         #expect(!store.holds(MessageID("m1")), "an open card takes a tap again")
         let card = PermissionCard(from: nil, tool: "Bash", label: "Run a command", detail: "ls", always: "", answer: nil, expiresAt: at + 600)
-        #expect(PermissionAnswer.chose(.once).announcement(card: card, here: nil) == "Allowed once. Bash: ls")
-        #expect(PermissionAnswer.chose(.once).announcement(card: card, here: false) == "Answered on another device. Allowed once. Bash: ls")
+        #expect(PermissionAnswer.chose(.once).announcement(card: card, here: nil, computer: "omarchy") == "Allowed once. Bash: ls")
+        #expect(PermissionAnswer.chose(.once).announcement(card: card, here: false, computer: "omarchy") == "Answered on another device. Allowed once. Bash: ls")
     }
 
     @Test func aDecisionWhoseFateIsUnknownAfterAReconnectSaysSoAndTakesATapAgain() {
@@ -401,7 +401,7 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         store.decisionSent(.once, for: MessageID("m1"), at: at)
         #expect(store.decisionNote(MessageID("m1")) == nil, "on its way: the spinner says it")
         store.apply(.hello(Hello(features: [.sessions, .decideAck], machine: "Mac", userName: "Alex", bots: [])))
-        #expect(store.decisionNote(MessageID("m1"))?.text == "Your answer may not have reached your Mac · Tap again")
+        #expect(store.decisionNote(MessageID("m1"))?.text(computer: "omarchy") == "Your answer may not have reached omarchy · Tap again")
     }
 
     @Test func aDecisionWithNoAckInTenSecondsOnALiveSocketBecomesUnsure() {
@@ -411,7 +411,7 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(store.holds(MessageID("m1")) && store.decisionNote(MessageID("m1")) == nil)
         store.lapseDecisions(at: at + 10)
         #expect(!store.holds(MessageID("m1")))
-        #expect(store.decisionNote(MessageID("m1"))?.text == "Your answer may not have reached your Mac · Tap again")
+        #expect(store.decisionNote(MessageID("m1"))?.text(computer: "omarchy") == "Your answer may not have reached omarchy · Tap again")
         #expect(store.decidedHere(MessageID("m1")) == nil)
         store.decisionSent(.once, for: MessageID("m2"), at: at)
         store.apply(.decided(cardId: MessageID("m2")))
@@ -427,7 +427,7 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         store.apply(.error(message: "That card was already answered", about: .decide(sessionId: sid, cardId: MessageID("m1"))))
         #expect(store.decidedHere(MessageID("m1")) == nil, "the first tap may be the answer")
         let card = PermissionCard(from: nil, tool: "Bash", label: "Run a command", detail: "ls", always: "", answer: nil, expiresAt: at + 600)
-        #expect(PermissionAnswer.chose(.once).announcement(card: card, here: store.decidedHere(MessageID("m1"))) == "Allowed once. Bash: ls")
+        #expect(PermissionAnswer.chose(.once).announcement(card: card, here: store.decidedHere(MessageID("m1")), computer: "omarchy") == "Allowed once. Bash: ls")
 
         store.decisionSent(.once, for: MessageID("m2"))
         store.apply(.error(message: "That card was already answered", about: .decide(sessionId: sid, cardId: MessageID("m2"))))
@@ -482,11 +482,11 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
 @MainActor
 @Suite struct UnansweredRequestTests {
     @Test func theToolSheetEndsWithAReasonOrWaitsForTheMacNeverSpinsForever() {
-        #expect(ToolOutputState(output: .missing("That tool call's output is not in the transcript."), askedAt: at, online: true, now: at) == .failed("That tool call's output is not in the transcript."))
-        #expect(ToolOutputState(output: nil, askedAt: at, online: true, now: at + 14) == .reading)
-        #expect(ToolOutputState(output: nil, askedAt: at, online: true, now: at + 15) == .failed("Your Mac didn't send the output."))
-        #expect(ToolOutputState(output: nil, askedAt: at, online: false, now: at + 99) == .waitingForMac)
-        #expect(ToolOutputState(output: .text("ok"), askedAt: nil, online: false, now: at) == .text("ok"))
+        #expect(ToolOutputState(output: .missing("That tool call's output is not in the transcript."), askedAt: at, online: true, now: at, computer: "omarchy") == .failed("That tool call's output is not in the transcript."))
+        #expect(ToolOutputState(output: nil, askedAt: at, online: true, now: at + 14, computer: "omarchy") == .reading)
+        #expect(ToolOutputState(output: nil, askedAt: at, online: true, now: at + 15, computer: "omarchy") == .failed("The bridge on omarchy didn't send the output."))
+        #expect(ToolOutputState(output: nil, askedAt: at, online: false, now: at + 99, computer: "omarchy") == .waitingForMac)
+        #expect(ToolOutputState(output: .text("ok"), askedAt: nil, online: false, now: at, computer: "omarchy") == .text("ok"))
     }
 
     @Test func anOlderBridgesToolErrorEndsTheSheetToo() throws {
@@ -504,8 +504,8 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(LoadEarlierRow.State(loading: false, online: true) == .idle)
         #expect(LoadEarlierRow.State(loading: true, online: true) == .loading)
         #expect(LoadEarlierRow.State(loading: true, online: false) == .offline)
-        #expect(LoadEarlierRow.State.idle.text == "Load earlier messages")
-        #expect(LoadEarlierRow.State.offline.text == "Earlier messages: waiting for your Mac")
+        #expect(LoadEarlierRow.State.idle.text(computer: "omarchy") == "Load earlier messages")
+        #expect(LoadEarlierRow.State.offline.text(computer: "omarchy") == "Earlier messages: waiting for omarchy")
 
         let store = AppStore()
         store.apply(.hello(Hello(features: [.sessions], machine: "Mac", userName: "Alex", bots: [])))
@@ -529,8 +529,8 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
             catchingUp: model.catchingUp
         )
         #expect(status == .catchingUp(lastUpdate: at, tasks: []))
-        #expect(status?.text(now: at) == "Catching up…")
-        #expect(status?.word == "Catching up")
+        #expect(status?.text(now: at, computer: "omarchy") == "Catching up…")
+        #expect(status?.word(computer: "omarchy") == "Catching up")
         #expect(status?.staleAt == at, "clocks stop while the state may be old")
         items(store, rev: 2)
         #expect(!model.catchingUp)
@@ -546,7 +546,7 @@ private func send(_ clientId: String, _ text: String = "Run the tests") -> Clien
         #expect(store.createRefusals["r1"] == "demo's folder is gone from this Mac.")
         #expect(store.lastError == nil)
         #expect(StartPhase.unconfirmedLine == "Couldn't confirm. Check the list or retry.")
-        #expect(StartPhase.offlineLabel == "Start (your Mac is unreachable)")
+        #expect(StartPhase.offlineLabel("omarchy") == "Start (omarchy is unreachable)")
         #expect(StartPhase.patience == 20)
     }
 

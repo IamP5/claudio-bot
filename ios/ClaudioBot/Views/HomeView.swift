@@ -283,10 +283,11 @@ struct HomeView: View {
 struct CreatingNotice: View {
     let online: Bool
     let stop: () -> Void
+    @Environment(AppStore.self) private var store
 
     var body: some View {
         Label {
-            Text(online ? "Creating the new chat…" : "Waiting for your Mac. If it is not back within a minute, nothing is created.")
+            Text(online ? "Creating the new chat…" : "Waiting for \(store.computerName()). If it is not back within a minute, nothing is created.")
         } icon: {
             ProgressView()
         }
@@ -503,16 +504,17 @@ struct ConnectionBanner: View {
     }
 }
 
-/// How old a list kept from before the Mac went out of reach is: "Last updated 12 min. ago. Rows show what your Mac
+/// How old a list kept from before the Mac went out of reach is: "Last updated 12 min. ago. Rows show what omarchy
 /// said then."
 struct StaleListLine: View {
     let since: Date
     var what = "Rows"
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(AppStore.self) private var store
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            Text(SessionText.updated(since, now: context.date) + (typeSize.isAccessibilitySize ? "." : ". \(what) show what your Mac said then."))
+            Text(SessionText.updated(since, now: context.date) + (typeSize.isAccessibilitySize ? "." : ". \(what) show what \(store.computerName()) said then."))
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)

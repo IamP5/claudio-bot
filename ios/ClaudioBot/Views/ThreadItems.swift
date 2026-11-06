@@ -14,6 +14,7 @@ struct ThreadRowView: View, Equatable {
     let onFullOutput: (ToolStep) -> Void
 
     @Environment(BridgeClient.self) private var client
+    @Environment(AppStore.self) private var store
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.row == b.row && a.sessionId == b.sessionId && a.botName == b.botName && a.unanswered == b.unanswered && a.withdraws == b.withdraws
@@ -28,7 +29,7 @@ struct ThreadRowView: View, Equatable {
             case let .user(id, _, text, from, queued, _):
                 SessionUserBubble(
                     text: text, from: from, queued: queued, taken: taken(id), botName: botName, actions: actions(id, text, queued: queued),
-                    delivery: model.pendingSends[id]?.state
+                    delivery: model.pendingSends[id]?.state, computer: store.computerName(store.sessions.rows[sessionId]?.machine)
                 )
             case let .assistant(id, _, text):
                 RenderedMarkdownView(markdown: model.rendered(id, text))
@@ -39,7 +40,10 @@ struct ThreadRowView: View, Equatable {
                 ThinkingRow(text: text, ms: ms)
             case let .work(_, _, steps):
                 // Only a live run reads the controls, so a heartbeat redraws the work still running and nothing else.
-                WorkRunRow(run: WorkRun(steps: steps, controls: steps.contains { $0.state.isLive } ? model.controls : nil), onFullOutput: onFullOutput)
+                WorkRunRow(
+                    run: WorkRun(steps: steps, controls: steps.contains { $0.state.isLive } ? model.controls : nil),
+                    computer: store.computerName(store.sessions.rows[sessionId]?.machine), onFullOutput: onFullOutput
+                )
             case let .todo(_, _, todos):
                 TodoCard(todos: todos)
             case let .plan(id, _, text, state, cardId):
@@ -147,13 +151,15 @@ struct SessionUserBubble: View {
     var actions: Actions?
     /// Where a message this phone sent stands until the Mac shows it back (F-SES-070).
     var delivery: PendingSend.State?
+    /// Where the message goes (`AppStore.computerName`).
+    let computer: String
 
     /// The caption's words for a message not yet shown back. Offline it is never called sent.
-    static func words(_ delivery: PendingSend.State) -> String {
+    static func words(_ delivery: PendingSend.State, computer: String) -> String {
         switch delivery {
-        case .waiting: "Not sent yet · Goes if your Mac is back within a minute"
+        case .waiting: "Not sent yet · Goes if \(computer) is back within a minute"
         case .sending: "Sending…"
-        case .unechoed: "No word from your Mac yet. It may have gone through."
+        case .unechoed: "No word from \(computer) yet. It may have gone through."
         case .notSent(let why?): "Not sent: " + why
         case .notSent(nil): "Not sent"
         }
@@ -194,7 +200,7 @@ struct SessionUserBubble: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel(
                 Self.spoken(rendered, from: from, botName: botName, queued: queued && delivery == nil)
-                    + (delivery.map { ". " + Self.words($0) } ?? taken.map { ". " + $0.words } ?? "")
+                    + (delivery.map { ". " + Self.words($0, computer: computer) } ?? taken.map { ". " + $0.words } ?? "")
             )
             .accessibilityActions {
                 switch actions {
@@ -242,7 +248,7 @@ struct SessionUserBubble: View {
         case let .undelivered(retry, discard)?:
             let unechoed = delivery == .unechoed
             VStack(alignment: .trailing, spacing: 0) {
-                Label(delivery.map(Self.words) ?? "Not sent", systemImage: unechoed ? "questionmark.circle" : "exclamationmark.triangle")
+                Label(delivery.map { Self.words($0, computer: computer) } ?? "Not sent", systemImage: unechoed ? "questionmark.circle" : "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(unechoed ? Theme.attention : Theme.danger)
                     .multilineTextAlignment(.trailing)
@@ -254,7 +260,7 @@ struct SessionUserBubble: View {
             }
         case nil:
             if let delivery {
-                Label(Self.words(delivery), systemImage: delivery == .waiting ? "wifi.slash" : "arrow.up.circle")
+                Label(Self.words(delivery, computer: computer), systemImage: delivery == .waiting ? "wifi.slash" : "arrow.up.circle")
                     .font(.caption)
                     .foregroundStyle(Theme.tertiary)
             } else if let taken {
@@ -273,10 +279,10 @@ struct SessionUserBubble: View {
     private func undeliveredButtons(retry: @escaping () -> Void, discard: @escaping () -> Void, unechoed: Bool) -> some View {
         Button(action: retry) { captionLabel("Retry", symbol: "arrow.clockwise") }
             .buttonStyle(.plain)
-            .accessibilityHint(unechoed ? "Safe to retry: your Mac runs it only once." : "")
+            .accessibilityHint(unechoed ? "Safe to retry: \(computer) runs it only once." : "")
         Button(action: discard) { captionLabel("Discard", symbol: "xmark") }
             .buttonStyle(.plain)
-            .accessibilityHint(unechoed ? "Removes it from this \(ThisDevice.noun). Your Mac may still run it." : "")
+            .accessibilityHint(unechoed ? "Removes it from this \(ThisDevice.noun). The bridge on \(computer) may still run it." : "")
     }
 
     private func captionLabel(_ title: String, symbol: String) -> some View {
@@ -400,6 +406,8 @@ extension EnvironmentValues {
 /// running and waiting steps stay in view; the rest open on tap. One clock ticks per run, never one per step.
 struct WorkRunRow: View {
     let run: WorkRun
+    /// The session's machine (`AppStore.computerName`).
+    let computer: String
     let onFullOutput: (ToolStep) -> Void
     @State private var open = false
     /// The steps whose whole command is shown. Kept here, above the switch between a ticking and a still body, so a
@@ -445,7 +453,7 @@ struct WorkRunRow: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(shown) { step in
                         ToolStepRow(
-                            step: step, run: run, now: now, brief: !open && !step.state.isLive,
+                            step: step, run: run, now: now, computer: computer, brief: !open && !step.state.isLive,
                             commandOpen: Binding(
                                 get: { openCommands.contains(step.id) },
                                 set: { if $0 { openCommands.insert(step.id) } else { openCommands.remove(step.id) } }
@@ -517,6 +525,7 @@ struct ToolStepRow: View {
     let step: ToolStep
     let run: WorkRun
     let now: Date
+    let computer: String
     /// A finished step kept in a collapsed run: its name and how it ended, nothing more.
     var brief = false
     @Binding var commandOpen: Bool
@@ -589,7 +598,7 @@ struct ToolStepRow: View {
                 if !brief, let detail = step.detail, !detail.isEmpty, detail != step.label {
                     StepDetail(text: detail, title: step.label, open: $commandOpen)
                 }
-                Text(run.status(step, now: now).joined(separator: " · "))
+                Text(run.status(step, now: now, computer: computer).joined(separator: " · "))
                     .font(.caption)
                     .monospacedDigit()
                     .foregroundStyle(step.state == .waiting || run.task(for: step)?.waiting != nil ? Theme.attention : Theme.tertiary)
@@ -605,7 +614,7 @@ struct ToolStepRow: View {
     }
 
     private var spoken: String {
-        var parts = [step.label] + run.status(step, now: now, spoken: true, stale: staleAt != nil)
+        var parts = [step.label] + run.status(step, now: now, spoken: true, stale: staleAt != nil, computer: computer)
         if let detail = step.detail, !detail.isEmpty, detail != step.label {
             switch step.tool {
             case "Bash": parts.append("command: " + detail)
@@ -852,7 +861,7 @@ struct PlanCard: View {
                     }
                     .disabled(sent != nil || offline)
                     .opacity(offline ? 0.4 : 1)
-                    DecisionStatusLine(offline: offline, note: store.decisionNote(cardId))
+                    DecisionStatusLine(offline: offline, note: store.decisionNote(cardId), computer: store.computerName(store.sessions.rows[sessionId]?.machine))
                 } else {
                     Text("Waiting for an answer where it was asked.")
                         .font(.footnote)
@@ -1083,7 +1092,7 @@ struct AskCard: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                DecisionStatusLine(offline: offline, note: store.decisionNote(cardId))
+                DecisionStatusLine(offline: offline, note: store.decisionNote(cardId), computer: store.computerName(store.sessions.rows[sessionId]?.machine))
             } else {
                 Text("Waiting for an answer where it was asked.").font(.footnote).foregroundStyle(Theme.tertiary)
             }

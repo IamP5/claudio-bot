@@ -212,13 +212,13 @@ enum ThreadStatus: Equatable, Sendable {
         }
     }
 
-    /// The thread header's state, in one or two words.
-    var word: String {
+    /// The thread header's state, in one or two words. computer: the session's machine (`AppStore.computerName`).
+    func word(computer: String) -> String {
         switch self {
         case .offline(.firstConnect, _, _): "Connecting"
         case .offline: "Offline"
         case .catchingUp: "Catching up"
-        case .quiet: "No word from your Mac"
+        case .quiet: "No word from \(computer)"
         case .needsYou(let card, _): card.need
         case .working: "Working"
         case .background(_, let tasks): Self.outlives(tasks) ? "Still running" : "Running in background"
@@ -236,29 +236,30 @@ enum ThreadStatus: Equatable, Sendable {
         }
     }
 
-    /// The line as shown. cause: the connection copy the Sessions banner uses, for the offline level.
-    func text(now: Date, cause: String = "") -> String {
-        line(now: now, cause: cause, spoken: false)
+    /// The line as shown. cause: the connection copy the Sessions banner uses, for the offline level. computer: the
+    /// session's machine (`AppStore.computerName`).
+    func text(now: Date, cause: String = "", computer: String) -> String {
+        line(now: now, cause: cause, computer: computer, spoken: false)
     }
 
     /// The line as VoiceOver reads it: whole words for times.
-    func spoken(now: Date, cause: String = "") -> String {
-        line(now: now, cause: cause, spoken: true)
+    func spoken(now: Date, cause: String = "", computer: String) -> String {
+        line(now: now, cause: cause, computer: computer, spoken: true)
     }
 
-    private func line(now: Date, cause: String, spoken: Bool) -> String {
+    private func line(now: Date, cause: String, computer: String, spoken: Bool) -> String {
         let clock = spoken ? RunClock.spoken : RunClock.short
         switch self {
         case let .offline(reach, lastUpdate, tasks):
-            let head = reach == .firstConnect ? "Connecting to your Mac…" : cause
-            guard let lastUpdate else { return head + " This session loads when your Mac is back." }
+            let head = reach == .firstConnect ? "Connecting to \(computer)…" : cause
+            guard let lastUpdate else { return head + " This session loads when \(computer) is back." }
             let ago = clock(now.timeIntervalSince(lastUpdate))
             guard let ran = TaskCount(tasks).were(spoken: spoken) else { return head + " Last update \(ago) ago." }
-            return head + " \(ran) running when your Mac last answered \(ago) ago."
+            return head + " \(ran) running when \(computer) last answered \(ago) ago."
         case let .catchingUp(_, tasks):
             return "Catching up…" + (TaskCount(tasks).were(spoken: spoken).map { " \($0) running at the last update." } ?? "")
         case let .quiet(since, tasks):
-            let head = "No word from your Mac for \(clock(now.timeIntervalSince(since)))"
+            let head = "No word from \(computer) for \(clock(now.timeIntervalSince(since)))"
             return [head, TaskCount(tasks).were(spoken: spoken).map { $0 + " running then" }].compactMap { $0 }.joined(separator: " · ")
         case let .needsYou(card, tasks):
             let running = TaskCount(tasks.filter { $0.waiting == nil }).top.count
@@ -383,7 +384,7 @@ enum ThreadAnnouncement {
     /// name: a task as it is spoken once it ended, with how it ended when the thread shows that.
     static func of(
         from old: ThreadStatus?, to new: ThreadStatus?, first: Bool = false, heard: ItemID? = nil, cardClosed: Bool = false,
-        now: Date = .now, name: (SessionTask) -> EndedTask = { EndedTask(title: $0.label) }
+        now: Date = .now, computer: String, name: (SessionTask) -> EndedTask = { EndedTask(title: $0.label) }
     ) -> String? {
         if case .needsYou(let card, _) = new {
             return first || card.id != heard ? card.announcement : nil
@@ -391,7 +392,7 @@ enum ThreadAnnouncement {
         guard !first, old != new else { return nil }
         if case .quiet(let since, _) = new {
             if case .quiet = old { return nil }
-            return "No word from your Mac for \(RunClock.spoken(now.timeIntervalSince(since))). The thread may be out of date."
+            return "No word from \(computer) for \(RunClock.spoken(now.timeIntervalSince(since))). The thread may be out of date."
         }
         switch old {
         case .offline, .catchingUp, .quiet, .ended:
@@ -399,40 +400,40 @@ enum ThreadAnnouncement {
         case nil:
             // The row brings the outcome after the thread's frame put it at rest, later than StatusAnnouncer waited.
             if case .ended(let outcome) = new, !(cardClosed && outcome.kind == .stopped) { return ThreadStatus.outcome(outcome) }
-            if case .orphaned = new { return new?.spoken(now: now) }
+            if case .orphaned = new { return new?.spoken(now: now, computer: computer) }
             return nil
         case .needsYou(let card, _):
             // Stop closes an open permission card, and that card says so itself (ChatItems announcesClose). A plan or a
             // question says only that it closed, so the stop is still news (F-SES-178).
             if case .ended(let outcome) = new, outcome.kind != .stopped || card.kinds != [.permission] { return ThreadStatus.outcome(outcome) }
-            if case .orphaned = new { return new?.spoken(now: now) }
+            if case .orphaned = new { return new?.spoken(now: now, computer: computer) }
             return nil
         case let .orphaned(outcome, was):
             switch new {
-            case nil: return ended("Background work ended.", was, [], name)
-            case .ended(let ending) where ending == outcome: return ended("Background work ended.", was, [], name)
+            case nil: return ended("Background work ended.", was, [], computer, name)
+            case .ended(let ending) where ending == outcome: return ended("Background work ended.", was, [], computer, name)
             case .ended(let ending): return ThreadStatus.outcome(ending)
-            case .orphaned(_, let live), .working(_, let live), .background(_, let live): return ended("Ended in background.", was, live, name)
+            case .orphaned(_, let live), .working(_, let live), .background(_, let live): return ended("Ended in background.", was, live, computer, name)
             case .offline, .catchingUp, .quiet, .needsYou: return nil
             }
         case let .working(_, was), let .background(_, was):
             switch new {
             case nil:
                 if case .working = old { return "Claude finished." }
-                return ended("Background work ended.", was, [], name)
+                return ended("Background work ended.", was, [], computer, name)
             case .ended(let outcome):
                 return ThreadStatus.outcome(outcome)
             case .orphaned:
-                return new?.spoken(now: now)
+                return new?.spoken(now: now, computer: computer)
             case .background(_, let live):
                 if case .working = old {
                     // Work that outlived Claude Code means the turn did not finish: never say it did (G26).
                     let what = live.map(\.label).joined(separator: ", ") + "."
                     return ThreadStatus.outlives(live) ? "Still running after Claude Code stopped: " + what : "Claude finished its turn. Still running in background: " + what
                 }
-                return ended("Ended in background.", was.filter(\.background), live, name)
+                return ended("Ended in background.", was.filter(\.background), live, computer, name)
             case .working(_, let live):
-                return ended("Ended in background.", was.filter(\.background), live, name)
+                return ended("Ended in background.", was.filter(\.background), live, computer, name)
             case .offline, .catchingUp, .quiet, .needsYou:
                 return nil
             }
@@ -442,11 +443,11 @@ enum ThreadAnnouncement {
     /// Tasks that were live and are gone, one sentence each: "Ended in background. Sleep 75 seconds, done." Subagents
     /// of the turn come and go too often to speak each one, so the caller passes only the work worth naming. A task
     /// the bridge can no longer follow is not called ended.
-    private static func ended(_ head: String, _ was: [SessionTask], _ now: [SessionTask], _ name: (SessionTask) -> EndedTask) -> String? {
+    private static func ended(_ head: String, _ was: [SessionTask], _ now: [SessionTask], _ computer: String, _ name: (SessionTask) -> EndedTask) -> String? {
         let live = Set(now.map(\.id))
         let gone = was.filter { !live.contains($0.id) }.map(name)
         let over = gone.filter { !$0.mayStillRun }.map(\.spoken)
-        let unsure = gone.filter(\.mayStillRun).map { $0.title + " may still run on your Mac." }
+        let unsure = gone.filter(\.mayStillRun).map { $0.title + " may still run on \(computer)." }
         let sentences = (over.isEmpty ? [] : [head] + over) + unsure
         return sentences.isEmpty ? nil : sentences.joined(separator: " ")
     }
@@ -507,7 +508,8 @@ final class StatusAnnouncer {
     }
 
     /// Call when the status's announcement key changes. What it replaces before it settles is never spoken.
-    func update(_ status: ThreadStatus?) {
+    /// computer: the session's machine (`AppStore.computerName`).
+    func update(_ status: ThreadStatus?, computer: String) {
         pending?.cancel()
         let live = switch spoken {
         case .working, .background, .needsYou, .orphaned: true
@@ -519,13 +521,13 @@ final class StatusAnnouncer {
         pending = Task { [weak self] in
             try? await Task.sleep(for: wait)
             guard !Task.isCancelled else { return }
-            self?.land(status)
+            self?.land(status, computer: computer)
         }
     }
 
-    private func land(_ status: ThreadStatus?) {
+    private func land(_ status: ThreadStatus?, computer: String) {
         let first = !once
-        if let text = ThreadAnnouncement.of(from: spoken, to: status, first: first, heard: heardCard, cardClosed: cardClosed, name: name) {
+        if let text = ThreadAnnouncement.of(from: spoken, to: status, first: first, heard: heardCard, cardClosed: cardClosed, computer: computer, name: name) {
             speak(text, first)
         }
         switch status {

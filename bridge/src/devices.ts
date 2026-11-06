@@ -56,9 +56,9 @@ const CODE_LENGTH = 8;
 const NAME_LIMIT = 64;
 
 const sha256 = (token: string) => createHash("sha256").update(token).digest();
-const sameBytes = (a: Buffer, b: Buffer) => a.length === b.length && timingSafeEqual(a, b);
+export const sameBytes = (a: Buffer, b: Buffer) => a.length === b.length && timingSafeEqual(a, b);
 
-function randomCode(): string {
+export function randomCode(): string {
   let out = "";
   while (out.length < CODE_LENGTH) {
     for (const byte of crypto.getRandomValues(new Uint8Array(CODE_LENGTH))) {
@@ -70,9 +70,9 @@ function randomCode(): string {
 }
 
 /** What a person might type for the code: any case, with or without the dash or spaces. */
-const normalize = (code: string) => code.toUpperCase().replace(/[^0-9A-Z]/g, "");
+export const normalize = (code: string) => code.toUpperCase().replace(/[^0-9A-Z]/g, "");
 
-const display = (code: string) => `${code.slice(0, 4)}-${code.slice(4)}`;
+export const display = (code: string) => `${code.slice(0, 4)}-${code.slice(4)}`;
 
 // The name lands in logs and in every phone's device list.
 const cleanName = (name: string) => displayName(name, NAME_LIMIT) || "Phone";

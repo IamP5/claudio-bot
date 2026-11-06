@@ -17,7 +17,7 @@ struct WebhookTokenSection: View {
         if Self.shows(routine, features: store.features) {
             CardSection(
                 title: "Webhook",
-                footer: "Programs on your Mac POST to this address with the token; it does not answer from other devices or the network. The Mac keeps only a hash of the token, so it is shown once, and a new one replaces the old."
+                footer: "Programs on \(store.computerName()) POST to this address with the token; it does not answer from other devices or the network. The bridge keeps only a hash of the token, so it is shown once, and a new one replaces the old."
             ) {
                 if let fresh = store.webhookToken, fresh.routineId == routine.id {
                     reveal(fresh)
@@ -31,7 +31,7 @@ struct WebhookTokenSection: View {
         }
     }
 
-    /// A command that fires the routine once, with the token, for pasting into Terminal on the Mac.
+    /// A command that fires the routine once, with the token, for pasting into a terminal on the bridge's computer.
     static func curl(_ token: WebhookToken) -> String {
         "curl -X POST -H 'Authorization: Bearer \(token.token)' -d 'test from my phone' \(token.url.absoluteString)"
     }
@@ -58,7 +58,7 @@ struct WebhookTokenSection: View {
             Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16)
             field("Token", fresh.token)
             Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16)
-            field("Test it in Terminal on your Mac", Self.curl(fresh))
+            field("Test it in a terminal on \(store.computerName())", Self.curl(fresh))
             Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 16)
             Button("Done") { store.dismissWebhookToken() }
                 .font(.ui(size: 16, weight: .semibold))

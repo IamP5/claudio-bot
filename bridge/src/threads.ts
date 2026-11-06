@@ -1,5 +1,5 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { Cursor, ItemId, ServerMessage, SessionControls, SessionId, SessionItem, ThreadChannelFrame, ThreadLive, ThreadPosition } from "./protocol";
+import type { Cursor, ItemId, SessionControls, SessionReply, SessionId, SessionItem, ThreadChannelFrame, ThreadLive, ThreadPosition } from "./protocol";
 import { cutStep, patchStep, type StepPatch } from "./tasks";
 import { emptyTail, extend, follow, pageOf, project, readThread, sdkReaders, statOf, toolOutput, type Chain, type ProjectContext, type ProjectionTail, type SdkReaders } from "./transcript";
 import type { Cut } from "./world";
@@ -37,15 +37,15 @@ export type ThreadsDeps = {
 
 export type Threads = {
   /** The reply to watch_session: a replay since `after` while the ring holds it, else a snapshot. */
-  watch(id: SessionId, after: ThreadPosition | null): Promise<ServerMessage[]>;
-  page(id: SessionId, before: Cursor): Promise<ServerMessage[]>;
+  watch(id: SessionId, after: ThreadPosition | null): Promise<SessionReply[]>;
+  page(id: SessionId, before: Cursor): Promise<SessionReply[]>;
   /**
    * The reply to a session_send the bridge already took: one frame that names the clientId, so a phone whose echo was
    * lost stops resending. It upserts the item that shows the message and removes the clientId's own item, or only
    * removes it when no item shows the message any more.
    */
-  sentBack(id: SessionId, clientId: string): Promise<ServerMessage[]>;
-  tool(id: SessionId, toolUseId: string): ServerMessage[];
+  sentBack(id: SessionId, clientId: string): Promise<SessionReply[]>;
+  tool(id: SessionId, toolUseId: string): SessionReply[];
   /** The overlay or the controls of a session may have changed: an open thread publishes what did. */
   refresh(id: SessionId): void;
   /** A watched thread whose session works and has sent nothing for BEAT_MS sends its controls again. */
@@ -440,7 +440,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
     return s.queue;
   }
 
-  function snapshot(s: State): ServerMessage[] {
+  function snapshot(s: State): SessionReply[] {
     const page = pageOf(merged(s), null)!;
     return [
       {
@@ -456,7 +456,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
     ];
   }
 
-  function replay(s: State, after: ThreadPosition): ServerMessage[] | null {
+  function replay(s: State, after: ThreadPosition): SessionReply[] | null {
     if (after.epoch !== s.epoch || after.rev > s.rev) return null;
     const first = s.ring[0]?.rev ?? s.rev + 1;
     if (after.rev < first - 1) return null;
@@ -473,7 +473,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
         removed.add(id);
       }
     }
-    const out: ServerMessage[] = [{ type: "session_items", sessionId: s.id, rev: s.rev, items: [...items.values()], removed: [...removed], controls: deps.controls(s.id) }];
+    const out: SessionReply[] = [{ type: "session_items", sessionId: s.id, rev: s.rev, items: [...items.values()], removed: [...removed], controls: deps.controls(s.id) }];
     if (s.live) out.push({ type: "session_delta", sessionId: s.id, itemId: s.live.itemId, offset: 0, text: s.live.text });
     return out;
   }
@@ -495,7 +495,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
       s.usedAt = Date.now();
       // The reply travels back through the hub and the socket in microtasks; holding the thread's queue for one turn of
       // the event loop keeps any later frame of this thread behind it on the wire.
-      return new Promise<ServerMessage[]>((resolve, reject) => {
+      return new Promise<SessionReply[]>((resolve, reject) => {
         void serial(s, () => {
           try {
             resolve((after && replay(s, after)) ?? snapshot(s));
@@ -525,7 +525,7 @@ export function createThreads(deps: ThreadsDeps): Threads {
     },
 
     tool(id, toolUseId) {
-      const none = (error: string): ServerMessage[] => [{ type: "session_tool_output", sessionId: id, toolUseId, output: null, error }];
+      const none = (error: string): SessionReply[] => [{ type: "session_tool_output", sessionId: id, toolUseId, output: null, error }];
       const written = deps.transcript(id);
       if (!written) return none("This session has no transcript on this Mac.");
       let output: string | null;

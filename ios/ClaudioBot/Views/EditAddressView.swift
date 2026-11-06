@@ -74,9 +74,9 @@ struct EditAddressView: View {
     }
 
     #if os(macOS)
-    private static let hint = "The bridge's Mac prints its addresses when the bridge starts, and claudiobot doctor shows its Tailscale address. A *.ts.net name works from anywhere this Mac runs Tailscale."
+    private static let hint = "The bridge prints its addresses when it starts, and claudiobot doctor shows its Tailscale address. A *.ts.net name works from anywhere this Mac runs Tailscale."
     #else
-    private static let hint = "Your Mac prints its addresses when the bridge starts, and claudiobot doctor shows its Tailscale address. A *.ts.net name works from anywhere your phone runs Tailscale."
+    private static let hint = "The bridge prints its addresses when it starts, and claudiobot doctor shows its Tailscale address. A *.ts.net name works from anywhere your phone runs Tailscale."
     #endif
 
     private func connect() {

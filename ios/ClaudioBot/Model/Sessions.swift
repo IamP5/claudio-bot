@@ -133,9 +133,10 @@ enum EmptyList: Equatable, Sendable {
         else { self = .noSessions }
     }
 
-    var title: String {
+    /// place: the computer the sessions would be on, or "your machines" on a world with several.
+    func title(on place: String) -> String {
         switch self {
-        case .noSessions: "No Claude Code sessions on this Mac yet"
+        case .noSessions: "No Claude Code sessions on \(place) yet"
         case .allHidden(let count): "\(count) hidden \(count == 1 ? "session" : "sessions")"
         case .noMatch(let filter): filter == .all ? "No sessions match." : "No \(filter.title.lowercased()) sessions."
         }

@@ -27,6 +27,8 @@ enum RoutineTag {}
 enum RunTag {}
 enum DeviceTag {}
 enum FactTag {}
+enum MachineTag {}
+enum WorldTag {}
 typealias BotID = Identifier<BotTag>
 typealias MessageID = Identifier<MessageTag>
 typealias AgentID = Identifier<AgentTag>
@@ -34,6 +36,9 @@ typealias RoutineID = Identifier<RoutineTag>
 typealias RunID = Identifier<RunTag>
 typealias DeviceID = Identifier<DeviceTag>
 typealias FactID = Identifier<FactTag>
+typealias MachineID = Identifier<MachineTag>
+/// One world of bots: the home's, minted once, so it outlives the home's address.
+typealias WorldID = Identifier<WorldTag>
 
 /// A string enum whose unknown values survive a decode and encode back unchanged.
 protocol OpenEnum: RawRepresentable<String>, Codable, Hashable, Sendable, CaseIterable {
@@ -158,7 +163,7 @@ enum TriggerKind: OpenEnum {
 /// What a bridge can do beyond protocol 3's base (hello.features). Screens for a feature the bridge does not list stay hidden.
 enum Feature: OpenEnum {
     case memory, activity, mute, worktrees, connectors, skills, webhooks, spend
-    case mentions, commands, exchanges, groups, usage, sessions, presence
+    case mentions, commands, exchanges, groups, usage, sessions, presence, machines
     /// Run state on rows and controls, and Stop aimed at the turn or at one task.
     case sessionTasks
     /// Withdrawing a queued message (sessionUnqueue).
@@ -171,7 +176,7 @@ enum Feature: OpenEnum {
 
     static let allCases: [Feature] = [
         .memory, .activity, .mute, .worktrees, .connectors, .skills, .webhooks, .spend,
-        .mentions, .commands, .exchanges, .groups, .usage, .sessions, .presence,
+        .mentions, .commands, .exchanges, .groups, .usage, .sessions, .presence, .machines,
         .sessionTasks, .sessionUnqueue, .pushState, .decideAck,
     ]
     init?(rawValue: String) { self.init(wire: rawValue) }
@@ -193,6 +198,7 @@ enum Feature: OpenEnum {
         case .usage: "usage"
         case .sessions: "sessions"
         case .presence: "presence"
+        case .machines: "machines"
         case .sessionTasks: "session_tasks"
         case .sessionUnqueue: "session_unqueue"
         case .pushState: "push_state"
@@ -349,6 +355,8 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
     /// What the bot and its agents spent today, and the cap in force. Nil from a bridge without the spend feature.
     var spentTodayUsd: Double?
     var capUsd: Double?
+    /// The machine this bot starts its agents on. nil: the bot picks, and a bridge without machines sends none.
+    var agentsOn: MachineID?
     /// How the last turn ended when it did not finish (failed or stopped). Nil once one finishes or the user sends.
     var outcome: SessionOutcome?
     /// Work the bot started that still runs after its turn ended. Stop on the bot ends it.
@@ -358,14 +366,14 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, title, avatar, pinned, hidden, status, unread, question, preview, lastAt, createdAt, routines, dailyCapUsd, muted
-        case spentTodayUsd, capUsd, kind, members, outcome, background, cards
+        case spentTodayUsd, capUsd, kind, members, agentsOn, outcome, background, cards
     }
 
     init(
         id: BotID, name: String, title: String?, avatar: Avatar, pinned: Bool, hidden: Bool, status: BotStatus,
         unread: Int, question: String?, preview: String, lastAt: Date, createdAt: Date, routines: [Routine],
         dailyCapUsd: Double? = nil, muted: Bool = false, spentTodayUsd: Double? = nil, capUsd: Double? = nil,
-        kind: BotKind = .bot, members: [BotID] = [], outcome: SessionOutcome? = nil, background: BotBackground? = nil, cards: Int? = nil
+        kind: BotKind = .bot, members: [BotID] = [], agentsOn: MachineID? = nil, outcome: SessionOutcome? = nil, background: BotBackground? = nil, cards: Int? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -386,6 +394,7 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
         self.muted = muted
         self.spentTodayUsd = spentTodayUsd
         self.capUsd = capUsd
+        self.agentsOn = agentsOn
         self.outcome = outcome
         self.background = background
         self.cards = cards
@@ -412,6 +421,7 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
         muted = try c.decodeIfPresent(Bool.self, forKey: .muted) ?? false
         spentTodayUsd = try c.decodeIfPresent(Double.self, forKey: .spentTodayUsd)
         capUsd = try c.decodeIfPresent(Double.self, forKey: .capUsd)
+        agentsOn = try c.decodeIfPresent(MachineID.self, forKey: .agentsOn)
         outcome = try c.decodeIfPresent(SessionOutcome.self, forKey: .outcome)
         background = try c.decodeIfPresent(BotBackground.self, forKey: .background)
         cards = try c.decodeIfPresent(Int.self, forKey: .cards)
@@ -441,6 +451,7 @@ struct Bot: Codable, Hashable, Sendable, Identifiable {
             try c.encode(spentTodayUsd, forKey: .spentTodayUsd)
             try c.encode(capUsd, forKey: .capUsd)
         }
+        try c.encode(agentsOn, forKey: .agentsOn)
         try c.encodeIfPresent(outcome, forKey: .outcome)
         try c.encodeIfPresent(background, forKey: .background)
         try c.encodeIfPresent(cards, forKey: .cards)
@@ -861,9 +872,11 @@ struct Agent: Codable, Hashable, Sendable, Identifiable {
     /// Lifetime spend and the budget in force. Nil for cloud agents, and from a bridge without the spend feature.
     var spentUsd: Double? = nil
     var budgetUsd: Double? = nil
+    /// The machine it runs on; for a cloud agent, the machine that started it. Nil from a bridge without machines.
+    var machine: MachineID? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case id, botId, title, `where`, projectName, status, url, createdAt, updatedAt, evidence, worktree, spentUsd, budgetUsd
+        case id, botId, title, `where`, projectName, status, url, createdAt, updatedAt, evidence, worktree, spentUsd, budgetUsd, machine
     }
 
     func encode(to encoder: Encoder) throws {
@@ -881,6 +894,7 @@ struct Agent: Codable, Hashable, Sendable, Identifiable {
         try c.encode(worktree, forKey: .worktree)
         try c.encode(spentUsd, forKey: .spentUsd)
         try c.encode(budgetUsd, forKey: .budgetUsd)
+        try c.encodeIfPresent(machine, forKey: .machine)
     }
 }
 
@@ -1101,18 +1115,120 @@ struct Hello: Hashable, Sendable {
     var userName: String
     var bots: [Bot]
     var position: StreamPosition
+    /// The world of bots this bridge holds. Nil from a bridge without machines.
+    var world: World?
+    /// Every machine of that world. Nil from a bridge without machines.
+    var machines: [Machine]?
     /// Feature pushState: whether phone pushes reach the user. nil from a bridge without it.
     var push: PushState?
 
     init(protocol: Int = Wire.protocolVersion, features: [Feature] = [], machine: String, userName: String, bots: [Bot],
-         position: StreamPosition = StreamPosition(epoch: "", seq: 0, resumed: false), push: PushState? = nil) {
+         position: StreamPosition = StreamPosition(epoch: "", seq: 0, resumed: false), world: World? = nil, machines: [Machine]? = nil, push: PushState? = nil) {
         self.protocol = `protocol`
         self.features = features
         self.machine = machine
         self.userName = userName
         self.bots = bots
         self.position = position
+        self.world = world
+        self.machines = machines
         self.push = push
+    }
+}
+
+struct World: Codable, Hashable, Sendable {
+    let id: WorldID
+    /// "<userName>'s bots".
+    var name: String
+}
+
+enum MachineRole: OpenEnum {
+    /// home: the bridge the phone is connected to.
+    case home, machine
+    case unknown(String)
+
+    static let allCases: [MachineRole] = [.home, .machine]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .home: "home"
+        case .machine: "machine"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+enum MachinePlatform: OpenEnum {
+    case darwin, linux
+    case unknown(String)
+
+    static let allCases: [MachinePlatform] = [.darwin, .linux]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .darwin: "darwin"
+        case .linux: "linux"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// A machine's own mode, set only by its own environment.
+struct MachineAccess: Codable, Hashable, Sendable {
+    var full: Bool
+    var sandbox: Bool
+}
+
+/// The app reads an unknown kind as other.
+enum ConnectorKind: OpenEnum {
+    case chrome, computerUse, other
+    case unknown(String)
+
+    static let allCases: [ConnectorKind] = [.chrome, .computerUse, .other]
+    init?(rawValue: String) { self.init(wire: rawValue) }
+
+    var rawValue: String {
+        switch self {
+        case .chrome: "chrome"
+        case .computerUse: "computer-use"
+        case .other: "other"
+        case .unknown(let raw): raw
+        }
+    }
+}
+
+/// An MCP server a machine's agents can use, by name only.
+struct MachineConnector: Codable, Hashable, Sendable {
+    var name: String
+    var kind: ConnectorKind
+}
+
+/// A computer that runs agents for the home (feature machines). since: when it came online, or when it was last heard
+/// from while offline; nil when never.
+struct Machine: Codable, Hashable, Sendable, Identifiable {
+    let id: MachineID
+    var name: String
+    var role: MachineRole
+    var online: Bool
+    var since: Date?
+    var platform: MachinePlatform
+    var access: MachineAccess
+    var connectors: [MachineConnector]
+
+    private enum CodingKeys: String, CodingKey { case id, name, role, online, since, platform, access, connectors }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(role, forKey: .role)
+        try c.encode(online, forKey: .online)
+        try c.encode(since, forKey: .since)
+        try c.encode(platform, forKey: .platform)
+        try c.encode(access, forKey: .access)
+        try c.encode(connectors, forKey: .connectors)
     }
 }
 
@@ -1561,9 +1677,11 @@ enum SessionIsolation: String, Codable, Hashable, Sendable, CaseIterable {
     case worktree
 }
 
-/// A git repository's main checkout. name: the GitHub repo name, else the folder name. lastAt: nil when it has no sessions.
+/// A git repository's main checkout. machine: the machine whose disk holds it, nil from a bridge older than machines,
+/// whose projects are all the home's. name: the GitHub repo name, else the folder name. lastAt: nil when it has no sessions.
 struct SessionProject: Codable, Hashable, Sendable, Identifiable {
     let id: ProjectID
+    var machine: MachineID? = nil
     var name: String
     var path: String
     var githubRepo: String?
@@ -1573,11 +1691,12 @@ struct SessionProject: Codable, Hashable, Sendable, Identifiable {
     /// Set when another project has the same name: its GitHub owner and repo, or the tail of its path.
     var label: String? = nil
 
-    private enum CodingKeys: String, CodingKey { case id, name, path, githubRepo, lastAt, canCloud, label }
+    private enum CodingKeys: String, CodingKey { case id, machine, name, path, githubRepo, lastAt, canCloud, label }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
+        try c.encodeIfPresent(machine, forKey: .machine)
         try c.encode(name, forKey: .name)
         try c.encode(path, forKey: .path)
         try c.encode(githubRepo, forKey: .githubRepo)
@@ -1644,6 +1763,8 @@ struct SessionRow: Codable, Hashable, Sendable, Identifiable {
     var url: URL?
     var createdAt: Date
     var lastAt: Date
+    /// The machine whose transcripts hold the session. Nil from a bridge without machines.
+    var machine: MachineID? = nil
     /// Run state (feature sessionTasks). since, running and activity are nil at rest. since: when the current run started.
     var since: Date? = nil
     var running: SessionRunning? = nil
@@ -1654,6 +1775,7 @@ struct SessionRow: Codable, Hashable, Sendable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, projectId, parentId, title, origin, agent, status, holder, unread, branch, worktree, pr, mirror, hidden, url, createdAt, lastAt
+        case machine
         case since, running, activity, outcome
     }
 
@@ -1676,6 +1798,7 @@ struct SessionRow: Codable, Hashable, Sendable, Identifiable {
         try c.encode(url, forKey: .url)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(lastAt, forKey: .lastAt)
+        try c.encodeIfPresent(machine, forKey: .machine)
         try c.encodeIfPresent(since, forKey: .since)
         try c.encodeIfPresent(running, forKey: .running)
         try c.encodeIfPresent(activity, forKey: .activity)
@@ -2382,6 +2505,10 @@ enum ServerMessage: Codable, Sendable {
     case file(botId: BotID, path: String, file: BotFile)
     case devices([Device])
     case pairCode(PairCode)
+    /// Feature machines: every machine, whenever one comes online, goes offline or enrolls.
+    case machines([Machine])
+    /// Feature machines, answering machineCode: a code another computer enrolls with, and the home's addresses.
+    case machineCode(PairCode)
     /// What a bot or one of its agents is doing now. text nil: it stopped. Never sequenced or replayed.
     case activity(botId: BotID, agentId: AgentID?, text: String?, at: Date)
     case memory([Fact])
@@ -2415,11 +2542,18 @@ enum ServerMessage: Codable, Sendable {
         case `protocol`, epoch, seq, resumed, features, push
         case agentId, text, at, facts, connectors, skills, routineId, url, token, commands, peer, usage
         case projects, rows, mirror, removed, sessionId, rev, items, before, controls, live, itemId, offset, toolUseId, output, movedTo
+        case world, machines
         case about, reason, count, title, cardId, cardKind, running, error
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        func offer() throws -> PairCode {
+            PairCode(
+                code: try c.decode(String.self, forKey: .code), expiresAt: try c.decode(Date.self, forKey: .expiresAt),
+                urls: try c.decodeIfPresent([String].self, forKey: .urls)
+            )
+        }
         func session() throws -> SessionID { try c.decode(SessionID.self, forKey: .sessionId) }
         func items() throws -> [SessionItem] { try c.decode([SessionItem].self, forKey: .items) }
         switch try c.decode(String.self, forKey: .type) {
@@ -2435,6 +2569,8 @@ enum ServerMessage: Codable, Sendable {
                     seq: try c.decodeIfPresent(Int.self, forKey: .seq) ?? 0,
                     resumed: try c.decodeIfPresent(Bool.self, forKey: .resumed) ?? false
                 ),
+                world: try c.decodeIfPresent(World.self, forKey: .world),
+                machines: try c.decodeIfPresent([Machine].self, forKey: .machines),
                 push: try c.decodeIfPresent(PushState.self, forKey: .push)
             ))
         case "bot":
@@ -2470,10 +2606,11 @@ enum ServerMessage: Codable, Sendable {
         case "devices":
             self = .devices(try c.decode([Device].self, forKey: .devices))
         case "pair_code":
-            self = .pairCode(PairCode(
-                code: try c.decode(String.self, forKey: .code), expiresAt: try c.decode(Date.self, forKey: .expiresAt),
-                urls: try c.decodeIfPresent([String].self, forKey: .urls)
-            ))
+            self = .pairCode(try offer())
+        case "machines":
+            self = .machines(try c.decode([Machine].self, forKey: .machines))
+        case "machine_code":
+            self = .machineCode(try offer())
         case "activity":
             self = .activity(
                 botId: try c.decode(BotID.self, forKey: .botId),
@@ -2544,7 +2681,7 @@ enum ServerMessage: Codable, Sendable {
             let error = try c.decodeIfPresent(String.self, forKey: .error)
             self = .thread(sessionId: try session(), .toolOutput(
                 toolUseId: try c.decode(String.self, forKey: .toolUseId),
-                output.map(ToolOutput.text) ?? .missing(error ?? "Your Mac has no output for this step.")
+                output.map(ToolOutput.text) ?? .missing(error ?? "The bridge has no output for this step.")
             ))
         case "session_removed":
             self = .thread(sessionId: try session(), .removed(movedTo: try c.decodeIfPresent(SessionID.self, forKey: .movedTo)))
@@ -2582,6 +2719,8 @@ enum ServerMessage: Codable, Sendable {
             try c.encode(hello.position.epoch, forKey: .epoch)
             try c.encode(hello.position.seq, forKey: .seq)
             try c.encode(hello.position.resumed, forKey: .resumed)
+            try c.encodeIfPresent(hello.world, forKey: .world)
+            try c.encodeIfPresent(hello.machines, forKey: .machines)
             try c.encodeIfPresent(hello.push, forKey: .push)
         case let .bot(bot):
             try c.encode("bot", forKey: .type)
@@ -2624,6 +2763,14 @@ enum ServerMessage: Codable, Sendable {
             try c.encode(devices, forKey: .devices)
         case let .pairCode(code):
             try c.encode("pair_code", forKey: .type)
+            try c.encode(code.code, forKey: .code)
+            try c.encode(code.expiresAt, forKey: .expiresAt)
+            try c.encodeIfPresent(code.urls, forKey: .urls)
+        case let .machines(machines):
+            try c.encode("machines", forKey: .type)
+            try c.encode(machines, forKey: .machines)
+        case let .machineCode(code):
+            try c.encode("machine_code", forKey: .type)
             try c.encode(code.code, forKey: .code)
             try c.encode(code.expiresAt, forKey: .expiresAt)
             try c.encodeIfPresent(code.urls, forKey: .urls)
@@ -2785,12 +2932,14 @@ struct BotPatch: Codable, Hashable, Sendable {
     var muted: Bool?
     /// A group's members, 2 to 8 different bots.
     var members: [BotID]?
+    /// A bot only. `.some(nil)` lets the bot choose.
+    var agentsOn: MachineID??
 
-    private enum CodingKeys: String, CodingKey { case name, title, avatar, pinned, hidden, dailyCapUsd, muted, members }
+    private enum CodingKeys: String, CodingKey { case name, title, avatar, pinned, hidden, dailyCapUsd, muted, members, agentsOn }
 
     init(
         name: String? = nil, title: String?? = nil, avatar: Avatar? = nil, pinned: Bool? = nil, hidden: Bool? = nil,
-        dailyCapUsd: Double?? = nil, muted: Bool? = nil, members: [BotID]? = nil
+        dailyCapUsd: Double?? = nil, muted: Bool? = nil, members: [BotID]? = nil, agentsOn: MachineID?? = nil
     ) {
         self.name = name
         self.title = title
@@ -2800,6 +2949,7 @@ struct BotPatch: Codable, Hashable, Sendable {
         self.dailyCapUsd = dailyCapUsd
         self.muted = muted
         self.members = members
+        self.agentsOn = agentsOn
     }
 
     init(from decoder: Decoder) throws {
@@ -2816,6 +2966,9 @@ struct BotPatch: Codable, Hashable, Sendable {
         }
         muted = try c.decodeIfPresent(Bool.self, forKey: .muted)
         members = try c.decodeIfPresent([BotID].self, forKey: .members)
+        if c.contains(.agentsOn) {
+            agentsOn = .some(try c.decodeNil(forKey: .agentsOn) ? nil : try c.decode(MachineID.self, forKey: .agentsOn))
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -2828,6 +2981,7 @@ struct BotPatch: Codable, Hashable, Sendable {
         if let dailyCapUsd { try c.encode(dailyCapUsd, forKey: .dailyCapUsd) }
         try c.encodeIfPresent(muted, forKey: .muted)
         try c.encodeIfPresent(members, forKey: .members)
+        if let agentsOn { try c.encode(agentsOn, forKey: .agentsOn) }
     }
 }
 
@@ -2873,6 +3027,10 @@ enum ClientMessage: Codable, Hashable, Sendable {
     case devices
     case revokeDevice(deviceId: DeviceID)
     case pairCode
+    /// Feature machines: a one-time code another computer enrolls with as a machine of this home.
+    case machineCode
+    /// Feature machines: forgets an enrolled machine. Answered with a machines frame.
+    case removeMachine(machineId: MachineID)
     /// Feature presence. false: nobody is looking at this app, so its socket does not hold back phone pushes.
     case presence(attended: Bool)
     /// Reads the plan's usage now. Answered with a usage frame.
@@ -2898,8 +3056,12 @@ enum ClientMessage: Codable, Hashable, Sendable {
     case sessionDecide(sessionId: SessionID, cardId: MessageID, choice: PermissionChoice)
     /// Answers an ask item by question text. nil dismisses it.
     case sessionAnswer(sessionId: SessionID, cardId: MessageID, answers: [String: String]?)
-    /// Answered by sessionCreated with the same ref. model and mode nil: the user's Claude Code defaults.
-    case sessionCreate(ref: String, projectId: ProjectID, text: String, model: String?, mode: PermissionMode?, isolate: SessionIsolation)
+    /// Answered by sessionCreated with the same ref. model and mode nil: the user's Claude Code defaults. machine nil:
+    /// the home's own machine, and the only choice on a bridge without machines.
+    case sessionCreate(
+        ref: String, projectId: ProjectID, text: String, model: String?, mode: PermissionMode?, isolate: SessionIsolation,
+        machine: MachineID? = nil
+    )
     case sessionSet(sessionId: SessionID, patch: SessionPatch)
     /// Imports the session into the Claude app when needed, then brings the app forward.
     case sessionOpenDesktop(sessionId: SessionID)
@@ -2912,7 +3074,7 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case type, ref, botId, text, uploads, messageId, option, choice, patch, routineId, enabled, agentId, path, deviceId
         case clientId, factId, name, force, mentions, peer, members
         case sessionId, after, before, interrupt, cardId, answers, projectId, model, mode, isolate, toolUseId, mirror
-        case attended, target, turnStartedAt
+        case attended, machine, machineId, target, turnStartedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -2966,6 +3128,8 @@ enum ClientMessage: Codable, Hashable, Sendable {
         case "devices": self = .devices
         case "revoke_device": self = .revokeDevice(deviceId: try c.decode(DeviceID.self, forKey: .deviceId))
         case "pair_code": self = .pairCode
+        case "machine_code": self = .machineCode
+        case "remove_machine": self = .removeMachine(machineId: try c.decode(MachineID.self, forKey: .machineId))
         case "presence": self = .presence(attended: try c.decode(Bool.self, forKey: .attended))
         case "refresh_usage": self = .refreshUsage
         case "watch_sessions": self = .watchSessions
@@ -2993,7 +3157,8 @@ enum ClientMessage: Codable, Hashable, Sendable {
             self = .sessionCreate(
                 ref: try c.decode(String.self, forKey: .ref), projectId: try c.decode(ProjectID.self, forKey: .projectId),
                 text: try c.decode(String.self, forKey: .text), model: try c.decodeIfPresent(String.self, forKey: .model),
-                mode: try c.decodeIfPresent(PermissionMode.self, forKey: .mode), isolate: try c.decode(SessionIsolation.self, forKey: .isolate)
+                mode: try c.decodeIfPresent(PermissionMode.self, forKey: .mode), isolate: try c.decode(SessionIsolation.self, forKey: .isolate),
+                machine: try c.decodeIfPresent(MachineID.self, forKey: .machine)
             )
         case "session_set": self = .sessionSet(sessionId: try session(), patch: try c.decode(SessionPatch.self, forKey: .patch))
         case "session_open_desktop": self = .sessionOpenDesktop(sessionId: try session())
@@ -3123,6 +3288,11 @@ enum ClientMessage: Codable, Hashable, Sendable {
             try c.encode(deviceId, forKey: .deviceId)
         case .pairCode:
             try c.encode("pair_code", forKey: .type)
+        case .machineCode:
+            try c.encode("machine_code", forKey: .type)
+        case let .removeMachine(machineId):
+            try c.encode("remove_machine", forKey: .type)
+            try c.encode(machineId, forKey: .machineId)
         case let .presence(attended):
             try c.encode("presence", forKey: .type)
             try c.encode(attended, forKey: .attended)
@@ -3169,7 +3339,7 @@ enum ClientMessage: Codable, Hashable, Sendable {
             try c.encode(sessionId, forKey: .sessionId)
             try c.encode(cardId, forKey: .cardId)
             try c.encode(answers, forKey: .answers)
-        case let .sessionCreate(ref, projectId, text, model, mode, isolate):
+        case let .sessionCreate(ref, projectId, text, model, mode, isolate, machine):
             try c.encode("session_create", forKey: .type)
             try c.encode(ref, forKey: .ref)
             try c.encode(projectId, forKey: .projectId)
@@ -3177,6 +3347,7 @@ enum ClientMessage: Codable, Hashable, Sendable {
             try c.encode(model, forKey: .model)
             try c.encode(mode, forKey: .mode)
             try c.encode(isolate, forKey: .isolate)
+            try c.encodeIfPresent(machine, forKey: .machine)
         case let .sessionSet(sessionId, patch):
             try c.encode("session_set", forKey: .type)
             try c.encode(sessionId, forKey: .sessionId)

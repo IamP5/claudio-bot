@@ -1,9 +1,11 @@
+import { profileOf } from "../src/machine/profile";
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Options, query, SandboxSettings, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createAgents, projectConfigOf } from "../src/agents";
+import { newAgentId } from "../src/machine/wire";
 import type { Headroom, Ledger } from "../src/ledger";
 import type { AgentEvidence, AgentId, AgentStatus, BotId, RoutineId, RunId } from "../src/protocol";
 import type { Project } from "../src/projects";
@@ -100,6 +102,7 @@ function harness(
   };
   const agents = createAgents({
     world,
+    profile: profileOf({ env: {}, platform: "darwin", name: "Mac", homedir: "/Users/alex", username: "alex" }),
     userName: "Alex",
     model: "claude-sonnet-5-5",
     ledger,
@@ -133,7 +136,7 @@ function harness(
     turnDone: (rec) => done.push(rec.agent.id),
   });
   const start = (where: "mac" | "cloud" = "mac", initiator: Initiator = user, botId: BotId = B1) =>
-    agents.start(botId, { title: "Fix tests", prompt: "Make the suite green.", project: where === "cloud" ? cloudProject : (opts.project ?? project), where, isolate: "auto", botName: "Ana", initiator, budgetUsd: null });
+    agents.start(botId, { id: newAgentId(), title: "Fix tests", prompt: "Make the suite green.", project: where === "cloud" ? cloudProject : (opts.project ?? project), where, isolate: "auto", botName: "Ana", initiator, budgetUsd: null });
   return { world, agents, queries, reports, notes, statuses, evidence, begun, trustCards, transcripts, done, start, q: () => queries.at(-1)! };
 }
 
@@ -189,7 +192,7 @@ test("a mac agent starts on its project with its standing rules in the system pr
 
 test("a mac agent started with a slash opens with that command as its bare first turn, shown in its thread", async () => {
   const h = harness();
-  const rec = await h.agents.start(B1, { title: "Review", prompt: "PR 12, focus on auth", project, where: "mac", isolate: "auto", botName: "Ana", initiator: user, budgetUsd: null, slash: "code-review" });
+  const rec = await h.agents.start(B1, { id: newAgentId(), title: "Review", prompt: "PR 12, focus on auth", project, where: "mac", isolate: "auto", botName: "Ana", initiator: user, budgetUsd: null, slash: "code-review" });
   await flush();
   expect(h.q().received).toEqual(["/code-review PR 12, focus on auth"]);
   expect(rec.messages).toMatchObject([{ from: "bot", text: "/code-review PR 12, focus on auth" }]);
@@ -400,6 +403,7 @@ test("a report saved but not delivered when the bridge stopped reaches the bot a
     startedBy: user,
     unreported: [{ status: "waiting", text: "Done: opened PR #4.", by: routine }],
   });
+  world.bots.set(B1, newBot({ id: B1, name: "Ana", avatar: { shape: "circle", color: "gray" }, at: AT }));
   const home = mkdtempSync(join(tmpdir(), "claudiobot-agents-"));
   roots.push(home);
   flushNow(world, home);
@@ -414,7 +418,7 @@ test("a report saved but not delivered when the bridge stopped reaches the bot a
   expect([rec.agent.status, rec.unreported, rec.messages.map((m) => m.text)]).toEqual(["waiting", [], ["Done: opened PR #4."]]);
 });
 
-test("resume starts mac agents with queued work and tells bots about agents a restart cut off", async () => {
+test("resume starts mac agents with queued work and tells bots about agents a restart cut off, and leaves an agent whose bot is not here", async () => {
   const world = emptyWorld();
   const record = (id: string, status: AgentStatus, where: "mac" | "cloud", queued: boolean): AgentRecord => {
     const session = emptySession("s_old");
@@ -431,6 +435,9 @@ test("resume starts mac agents with queued work and tells bots about agents a re
   };
   for (const r of [record("a_q", "working", "mac", true), record("a_cut", "working", "mac", false), record("a_idle", "waiting", "mac", false), record("a_cloud", "in_cloud", "cloud", false)])
     world.agents.set(r.agent.id, r);
+  world.bots.set(B1, newBot({ id: B1, name: "Ana", avatar: { shape: "circle", color: "gray" }, at: AT }));
+  const orphan = record("a_orphan", "working", "mac", true);
+  world.agents.set(orphan.agent.id, { ...orphan, agent: { ...orphan.agent, botId: "b_moved" as BotId } });
   const h = harness({ world });
   h.agents.resume();
   await flush();
@@ -677,7 +684,7 @@ function worktreeHarness(opts: { world?: World; dir?: string; path?: string } = 
   const shop: Project = { name: "shop", path: opts.path ?? dir, branch: "main", githubRepo: null };
   const h = harness({ ...opts, project: shop });
   const startIn = (isolate: "auto" | "none" | "worktree", where: "mac" | "cloud" = "mac") =>
-    h.agents.start(B1, { title: "Fix tests", prompt: "Make the suite green.", project: shop, where, isolate, botName: "Ana", initiator: user, budgetUsd: null });
+    h.agents.start(B1, { id: newAgentId(), title: "Fix tests", prompt: "Make the suite green.", project: shop, where, isolate, botName: "Ana", initiator: user, budgetUsd: null });
   return { ...h, dir, worktrees, startIn };
 }
 

@@ -60,9 +60,9 @@ private func window(_ utilization: Double, resetsIn seconds: TimeInterval?, labe
     }
 
     @Test func eachReasonForNoLimitsSaysHowToFixIt() {
-        #expect(UsageText.unavailable(.loggedOut) == "Log in to Claude Code on your Mac with your Claude subscription.")
-        #expect(UsageText.unavailable(.unknown("paused")) == UsageText.unavailable(.failed))
-        for reason in UsageUnavailable.allCases { #expect(!UsageText.unavailable(reason).isEmpty) }
+        #expect(UsageText.unavailable(.loggedOut, on: "omarchy") == "Log in to Claude Code on omarchy with your Claude subscription.")
+        #expect(UsageText.unavailable(.unknown("paused"), on: "omarchy") == UsageText.unavailable(.failed, on: "omarchy"))
+        for reason in UsageUnavailable.allCases { #expect(!UsageText.unavailable(reason, on: "omarchy").isEmpty) }
     }
 
     @MainActor @Test func theStoreKeepsTheLatestUsageAcrossReconnectsAndDropsItForABridgeWithoutTheFeature() {

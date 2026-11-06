@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { Agent, AgentId, BotId, Message, MessageId, Peer, RoutineId, RunId } from "../src/protocol";
-import { envelope, fence, initiatorOf, inputOf, notices, withNotices, type Envelope } from "../src/prompts";
+import { envelope, fence, initiatorOf, inputOf, notices, persona, withNotices, type Envelope } from "../src/prompts";
 import {
   attended,
   botStatus,
@@ -254,7 +254,7 @@ test.each([
   [{ from: "answer", question: "Which?", option: "B" }, '[Alex answered "Which?": B]'],
   [{ from: "dismiss", question: "Which?" }, '[Alex dismissed "Which?" without answering]'],
   [{ from: "routine", name: "digest", prompt: "Post it.", manual: false, late: false, payload: null }, "[Routine digest fired]\nPost it.\nIf there is nothing worth telling Alex, call routine_no_update and end your turn."],
-  [{ from: "routine", name: "digest", prompt: "Post it.", manual: true, late: true, payload: null }, "[Routine digest fired]\nPost it.\n(It ran late: the Mac was asleep at its time.)\n(Alex ran this now from the phone: reply even if nothing changed.)"],
+  [{ from: "routine", name: "digest", prompt: "Post it.", manual: true, late: true, payload: null }, "[Routine digest fired]\nPost it.\n(It ran late: the computer was asleep at its time.)\n(Alex ran this now from the phone: reply even if nothing changed.)"],
   [{ from: "decision", choice: "once", tool: "Bash", detail: "git push origin main" }, "[Alex allowed once: Bash `git push origin main`. Run exactly that call again now.]"],
   [{ from: "decision", choice: "always", tool: "Bash", detail: "git push origin main" }, "[Alex allowed Bash `git push origin main` from now on. Run exactly that call again now.]"],
   [{ from: "decision", choice: "deny", tool: "Bash", detail: "git push origin main" }, "[Alex denied: Bash `git push origin main`. Do not try it or anything equivalent.]"],
@@ -437,4 +437,10 @@ test("deleting a bot forgets its exchange logs and keeps other pairs'", () => {
   forgetExchanges(world, b);
 
   expect([exchangeBetween(world, a, b), exchangeBetween(world, b, c), exchangeBetween(world, a, c).map((m) => m.text)]).toEqual([[], [], ["hi cy"]]);
+});
+
+test("a bot's persona names the machine it runs on, whatever its platform", () => {
+  const text = persona({ name: "Ada", userName: "Alex", machine: "omarchy" });
+  expect(text).toContain("You work for Alex on their computer, omarchy.");
+  expect(text).not.toMatch(/\bMac\b/);
 });

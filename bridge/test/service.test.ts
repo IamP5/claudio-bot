@@ -4,24 +4,28 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   capturedEnv,
+  DEFAULT_LABEL,
   install,
   pair,
   parseLaunchdPrint,
+  parseSystemctlShow,
   plistXml,
   readInstalled,
   serviceTarget,
+  systemdUnit,
   uninstall,
   update,
   type Exec,
   type Ran,
   type ServiceSpec,
+  type ServiceTarget,
 } from "../src/service";
 
 const ok = (stdout = ""): Ran => ({ code: 0, stdout, stderr: "" });
 const no = (code: number, stderr: string): Ran => ({ code, stdout: "", stderr });
 
 const spec = (over: Partial<ServiceSpec["target"]> = {}, env: Record<string, string> = { PATH: "/opt/homebrew/bin:/usr/bin" }): ServiceSpec => ({
-  target: { label: "com.claudiobot.bridge", uid: 501, plist: "/Users/me/Library/LaunchAgents/com.claudiobot.bridge.plist", log: "/Users/me/Library/Logs/ClaudioBot/bridge.log", bridgeDir: "/Users/me/claudiobot/bridge", ...over },
+  target: { platform: "darwin", label: "com.claudiobot.bridge", uid: 501, unit: "/Users/me/Library/LaunchAgents/com.claudiobot.bridge.plist", log: "/Users/me/Library/Logs/ClaudioBot/bridge.log", bridgeDir: "/Users/me/claudiobot/bridge", ...over },
   bun: "/opt/homebrew/bin/bun",
   env,
 });
@@ -82,7 +86,121 @@ describe("plist", () => {
     const path = join(dir, "x.plist");
     writeFileSync(path, plistXml(spec({ bridgeDir: "/R&D <x>" }, env)));
     expect((await realExec(["plutil", "-lint", path])).code).toBe(0);
-    expect(await readInstalled(realExec, path)).toEqual({ bun: "/opt/homebrew/bin/bun", main: "/R&D <x>/src/main.ts", env });
+    expect(await readInstalled(realExec, { ...spec().target, unit: path })).toEqual({ bun: "/opt/homebrew/bin/bun", main: "/R&D <x>/src/main.ts", env });
+  });
+});
+
+describe("systemd unit", () => {
+  const linuxSpec = (bridgeDir = "/home/me/claudio-bot/bridge", env: Record<string, string> = { PATH: "/home/me/.bun/bin:/usr/bin", CLAUDIOBOT_ACCESS: "full", CLAUDIOBOT_SANDBOX: "off" }): ServiceSpec => ({
+    target: serviceTarget({ platform: "linux", label: DEFAULT_LABEL.linux, uid: 1000, logDir: "/home/me/.local/state/claudiobot", bridgeDir, home: "/home/me" }),
+    bun: "/home/me/.bun/bin/bun",
+    env,
+  });
+
+  test("lives in the user's systemd dir, runs main.ts with bun, restarts on crash only, logs to one file and starts at login", () => {
+    const spec = linuxSpec();
+    expect(spec.target.unit).toBe("/home/me/.config/systemd/user/claudiobot.service");
+    expect(systemdUnit(spec)).toBe(`[Unit]
+Description=ClaudioBot bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/me/claudio-bot/bridge
+ExecStart="/home/me/.bun/bin/bun" "/home/me/claudio-bot/bridge/src/main.ts"
+Environment="PATH=/home/me/.bun/bin:/usr/bin"
+Environment="CLAUDIOBOT_ACCESS=full"
+Environment="CLAUDIOBOT_SANDBOX=off"
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/home/me/.local/state/claudiobot/bridge.log
+StandardError=append:/home/me/.local/state/claudiobot/bridge.log
+
+[Install]
+WantedBy=default.target
+`);
+  });
+
+  test("reads back what it wrote, with quotes, backslashes, % and $ intact", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "unit-"));
+    const env = { PATH: "/a b/bin:/usr/bin", CLAUDIOBOT_USER_NAME: `O'Brien "100%" $HOME \\o/ ünï` };
+    const spec = linuxSpec("/srv/R&D 50%$x", env);
+    const target = { ...spec.target, unit: join(dir, "claudiobot.service") };
+    writeFileSync(target.unit, systemdUnit({ ...spec, target }));
+    expect(readFileSync(target.unit, "utf8")).toContain(`Environment="CLAUDIOBOT_USER_NAME=O'Brien \\"100%%\\" $HOME \\\\o/ ünï"`);
+    expect(await readInstalled(async () => no(127, "no exec"), target)).toEqual({ bun: "/home/me/.bun/bin/bun", main: "/srv/R&D 50%$x/src/main.ts", env });
+  });
+});
+
+test("reads systemd's state of the unit: running, stopped, or not there", () => {
+  expect(parseSystemctlShow("LoadState=loaded\nActiveState=active\nSubState=running\nMainPID=4242\nExecMainStatus=0\n")).toEqual({ state: "running", pid: 4242, lastExit: "0" });
+  expect(parseSystemctlShow("LoadState=loaded\nActiveState=failed\nSubState=failed\nMainPID=0\nExecMainStatus=1\n")).toEqual({ state: "failed", pid: null, lastExit: "1" });
+  expect(parseSystemctlShow("LoadState=not-found\nActiveState=inactive\nMainPID=0\n")).toBeNull();
+});
+
+/** The systemd user manager as far as these commands see it: it knows a unit once its file exists. */
+function fakeSystemd(target: ServiceTarget) {
+  const calls: string[] = [];
+  let running = false;
+  let enabled = false;
+  const exec: Exec = async (argv) => {
+    calls.push(argv.join(" "));
+    const [tool, user, verb] = argv;
+    if (tool !== "systemctl" || user !== "--user") return no(127, `unexpected ${argv.join(" ")}`);
+    switch (verb) {
+      case "daemon-reload":
+        return ok();
+      case "show":
+        if (!existsSync(target.unit)) return ok("LoadState=not-found\nActiveState=inactive\n");
+        return ok(`LoadState=loaded\nActiveState=${running ? "active" : "inactive"}\nSubState=${running ? "running" : "dead"}\nMainPID=${running ? 77 : 0}\n`);
+      case "enable":
+        enabled = true;
+        running = true;
+        appendFileSync(target.log, PAIRING);
+        return ok();
+      case "stop":
+        running = false;
+        return ok();
+      case "disable":
+        enabled = false;
+        return ok();
+      default:
+        return no(1, `unknown verb ${verb}`);
+    }
+  };
+  return { exec, calls, state: () => ({ running, enabled }) };
+}
+
+describe("install and uninstall on Linux", () => {
+  function linuxSandbox() {
+    const root = mkdtempSync(join(tmpdir(), "svc-linux-"));
+    const target = serviceTarget({ platform: "linux", label: "claudiobot-test", uid: 1000, logDir: join(root, ".local", "state", "claudiobot"), bridgeDir: "/b", home: root });
+    let text = "";
+    return { root, target, deps: { out: (t: string) => void (text += t), sleep: async () => {} }, output: () => text };
+  }
+
+  test("install writes the user unit, enables and starts it, prints the code and how to outlive a logout", async () => {
+    const { target, deps, output } = linuxSandbox();
+    const systemd = fakeSystemd(target);
+    expect(await install({ ...deps, exec: systemd.exec }, { target, bun: "/bin/bun", env: { PATH: "/bin" } }, 1000)).toBe(0);
+    expect(statSync(target.unit).mode & 0o777).toBe(0o600);
+    expect(readFileSync(target.unit, "utf8")).toContain('ExecStart="/bin/bun" "/b/src/main.ts"');
+    expect(systemd.calls).toContain("systemctl --user enable --now claudiobot-test.service");
+    expect(systemd.state()).toEqual({ running: true, enabled: true });
+    expect(output()).toContain("loginctl enable-linger");
+    expect(output()).toContain("pair code: 7KQM-X2PD");
+  });
+
+  test("uninstall stops, disables and removes the unit, and keeps the log", async () => {
+    const { root, target, deps, output } = linuxSandbox();
+    const systemd = fakeSystemd(target);
+    await install({ ...deps, exec: systemd.exec }, { target, bun: "/bin/bun", env: { PATH: "/bin" } }, 1000);
+    expect(await uninstall({ ...deps, exec: systemd.exec }, target, join(root, ".claudiobot"))).toBe(0);
+    expect(systemd.state()).toEqual({ running: false, enabled: false });
+    expect(existsSync(target.unit)).toBe(false);
+    expect(existsSync(target.log)).toBe(true);
+    expect(output()).toContain("stopped and removed claudiobot-test.");
   });
 });
 
@@ -174,7 +292,7 @@ const PAIRING = "claudiobot bridge on Mac\n  ws://10.0.0.2:7878/ws\npair code: 7
 
 function sandbox() {
   const root = mkdtempSync(join(tmpdir(), "svc-"));
-  const target = serviceTarget({ label: "com.claudiobot.bridge.test", uid: 501, logDir: join(root, "Logs", "ClaudioBot"), bridgeDir: "/b", home: root });
+  const target = serviceTarget({ platform: "darwin", label: "com.claudiobot.bridge.test", uid: 501, logDir: join(root, "Logs", "ClaudioBot"), bridgeDir: "/b", home: root });
   let text = "";
   const deps = { out: (t: string) => void (text += t), sleep: async () => {} };
   return { root, target, deps, output: () => text, reset: () => void (text = "") };
@@ -187,8 +305,8 @@ describe("install", () => {
     expect(await install({ ...deps, exec: launchd.exec }, { target, bun: "/bin/bun", env: { PATH: "/bin" } }, 1000)).toBe(0);
     expect(statSync(target.log).mode & 0o777).toBe(0o600);
     expect(statSync(join(target.log, "..")).mode & 0o777).toBe(0o700);
-    expect(statSync(target.plist).mode & 0o777).toBe(0o600);
-    expect(launchd.jobs.get("com.claudiobot.bridge.test")?.body).toBe(readFileSync(target.plist, "utf8"));
+    expect(statSync(target.unit).mode & 0o777).toBe(0o600);
+    expect(launchd.jobs.get("com.claudiobot.bridge.test")?.body).toBe(readFileSync(target.unit, "utf8"));
     expect(output()).toContain("pair code: 7KQM-X2PD (single use, until 10:10:00)\npair: claudiobot://pair?url=ws&code=7KQM-X2PD\n");
   });
 
@@ -210,7 +328,7 @@ describe("install", () => {
     expect(await install({ ...deps, exec: launchd.exec }, { target, bun: "/bin/bun", env: { PATH: "/bin" } }, 1000)).toBe(1);
     expect(launchd.jobs.size).toBe(0);
     expect(output()).toContain("Another ClaudioBot bridge (pid 9)");
-    expect(existsSync(target.plist)).toBe(true);
+    expect(existsSync(target.unit)).toBe(true);
   });
 
   test("echoes only this start's lines, not an older run's code", async () => {
@@ -235,7 +353,7 @@ describe("uninstall", () => {
     reset();
     expect(await uninstall({ ...deps, exec: launchd.exec }, target, home)).toBe(0);
     expect(launchd.jobs.size).toBe(0);
-    expect(existsSync(target.plist)).toBe(false);
+    expect(existsSync(target.unit)).toBe(false);
     expect(readFileSync(join(home, "state.json"), "utf8")).toBe("{}");
     expect(existsSync(target.log)).toBe(true);
     reset();

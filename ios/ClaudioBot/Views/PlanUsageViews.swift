@@ -42,7 +42,7 @@ struct PlanUsageSection: View {
             }
         } else if store.lacks(.usage) {
             Section("Plan usage") {
-                Text("Update the bridge on your Mac to see your plan's usage limits.")
+                Text("Update the bridge on \(store.computerName()) to see your plan's usage limits.")
                     .foregroundStyle(Theme.secondary)
             }
         }
@@ -54,7 +54,7 @@ struct PlanUsageSection: View {
         case nil:
             HStack(spacing: 10) {
                 ProgressView()
-                Text("Reading usage from your Mac…").foregroundStyle(Theme.secondary)
+                Text("Reading usage from \(store.computerName())…").foregroundStyle(Theme.secondary)
             }
         case .ok(_, _, _, let windows) where windows.isEmpty:
             Text("Claude Code reported no limits for this plan.").foregroundStyle(Theme.secondary)
@@ -62,7 +62,7 @@ struct PlanUsageSection: View {
             ForEach(windows) { UsageRow(window: $0, stale: stale) }
         case .unavailable(let reason, _):
             Label {
-                Text(UsageText.unavailable(reason)).foregroundStyle(Theme.secondary)
+                Text(UsageText.unavailable(reason, on: store.computerName())).foregroundStyle(Theme.secondary)
             } icon: {
                 Image(systemName: "exclamationmark.circle").foregroundStyle(Theme.tertiary)
             }

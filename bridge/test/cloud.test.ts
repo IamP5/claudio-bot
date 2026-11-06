@@ -1,8 +1,8 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCloudSession, followUpAccepted, followUpCloudSession, isolated, parseCloudCreated } from "../src/cloud";
+import { createCloudSession, followUpAccepted, followUpCloudSession, isolated, parseCloudCreated, TERMINAL } from "../src/cloud";
 
 const captured =
   "\x1b[?25l\x1b[2K\x1b[1G\x1b[32mCreated cloud session: README summary\x1b[39m\r\n" +
@@ -42,17 +42,18 @@ printf '{"ok":true,"session_id":"%s"}\\n' "$4"
 `,
 );
 chmodSync(fake, 0o755);
+const mac = { platform: "darwin" as const, managedMcpPath: join(dir, "no-managed-mcp.json") };
 const previous = process.env.CLAUDIOBOT_CLAUDE;
 process.env.CLAUDIOBOT_CLAUDE = fake;
 afterAll(() => (previous === undefined ? delete process.env.CLAUDIOBOT_CLAUDE : (process.env.CLAUDIOBOT_CLAUDE = previous)));
 
 test("creates a cloud session through a terminal, then follows up on it, never loading the repo's own settings or MCP servers", async () => {
-  expect(await createCloudSession(dir, "Summarize the README")).toEqual({
+  expect(await createCloudSession(mac, dir, "Summarize the README")).toEqual({
     title: "README summary",
     url: "https://claude.ai/code/session_FAKE",
     sessionId: "session_FAKE",
   });
-  await followUpCloudSession(dir, "session_FAKE", "Also list the TODOs");
+  await followUpCloudSession(mac, dir, "session_FAKE", "Also list the TODOs");
   expect((await Bun.file(log).text()).trim().split("\n")).toEqual([
     "--cloud Summarize the README --setting-sources user --strict-mcp-config",
     "-p Also list the TODOs --cloud session_FAKE --output-format json --setting-sources user --strict-mcp-config",
@@ -64,4 +65,20 @@ test("leaves out --strict-mcp-config when an admin's managed MCP config exists, 
   expect(isolated(managed)).toEqual(["--setting-sources", "user", "--strict-mcp-config"]);
   writeFileSync(managed, "{}");
   expect(isolated(managed)).toEqual(["--setting-sources", "user"]);
+});
+
+describe("script(1) per platform", () => {
+  const argv = ["/opt/claude code/claude", "--cloud", "it's \"done\"; $HOME \\ $(touch pwned) `id` *", "--setting-sources", "user"];
+
+  test("darwin hands BSD script the argv as is", () => {
+    expect(TERMINAL.darwin(argv)).toEqual(["script", "-q", "/dev/null", ...argv]);
+  });
+
+  test("linux hands util-linux script one command line that /bin/sh splits back into the same argv, running nothing else", () => {
+    const [script, flags, line, transcript] = TERMINAL.linux(argv);
+    expect([script, flags, transcript]).toEqual(["script", "-qec", "/dev/null"]);
+    const shown = Bun.spawnSync(["/bin/sh", "-c", `show() { for a in "$@"; do printf '%s\\0' "$a"; done; }; show ${line}`], { cwd: dir });
+    expect(shown.stdout.toString().split("\0").slice(0, -1)).toEqual(argv);
+    expect(Bun.file(join(dir, "pwned")).size).toBe(0);
+  });
 });

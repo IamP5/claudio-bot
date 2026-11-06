@@ -164,7 +164,8 @@ final class AppModel {
         self.client = client
         let notifier = notifier
         let router = router
-        client.onAlerts = { notifier.post($0, onScreen: client.onScreen) }
+        let store = store
+        client.onAlerts = { notifier.post($0, onScreen: client.onScreen) { store.computerName(store.sessions.rows[$0]?.machine) } }
         client.onForget = { notifier.clearAll() }
         client.onThreadsShown = { $0.forEach(notifier.clear(session:)) }
         notifier.onOpenBot = { router.open($0) }

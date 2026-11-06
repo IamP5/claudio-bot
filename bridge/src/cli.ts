@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import * as fs from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname, userInfo } from "node:os";
 import { lanAddresses } from "./address";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { readAccount, strictMcp } from "./claudeCode";
 import { doctor, serviceView, status, type DoctorDeps } from "./doctor";
@@ -20,17 +20,24 @@ import {
   type Foreground,
   type ServiceDeps,
 } from "./service";
+import { machineCommand } from "./machine/command";
+import { platformOf, profileOf } from "./machine/profile";
+import { worldCommand } from "./move";
+import { bridgeHome } from "./store";
 import { errorText } from "./text";
 
-const USAGE = `usage: claudiobot <install|uninstall|status|doctor|logs|pair|update> [--label <label>] [--log-dir <dir>]
+const USAGE = `usage: claudiobot <install|uninstall|status|doctor|logs|pair|update|world|machine> [--label <label>] [--log-dir <dir>]
 
-  install    run the bridge as a LaunchAgent that starts at login, and print the pairing code
-  uninstall  stop it and remove the LaunchAgent (your bots and data are kept)
-  status     launchd state, pid, /health and the lock holder
+  install    run the bridge as a service that starts at login (a LaunchAgent on macOS, a systemd user unit on
+             Linux), and print the pairing code
+  uninstall  stop it and remove the service (your bots and data are kept)
+  status     the service's state and pid, /health and the lock holder
   doctor     check everything the service needs; exits 1 on any FAIL
   logs       follow the service log
   pair       stop the service, run the bridge here with --pair until a phone pairs, start it again
   update     fetch, show incoming commits, and on yes pull, install and restart
+  world      move this bridge's bots to another machine: world export, world import <file>, world finish <moveId>
+  machine    run agents for a home on another computer: machine show, machine invite, machine enroll <url> <code>
 
 --label and --log-dir (or CLAUDIOBOT_SERVICE_LABEL, CLAUDIOBOT_LOG_DIR) set up a separate, throwaway service.
 `;
@@ -98,9 +105,11 @@ const alive = (pid: number) => {
 
 async function main(argv: string[]): Promise<number> {
   const command = argv[0];
-  const label = flag(argv, "--label") ?? process.env.CLAUDIOBOT_SERVICE_LABEL ?? DEFAULT_LABEL;
-  const logDir = flag(argv, "--log-dir") ?? process.env.CLAUDIOBOT_LOG_DIR ?? defaultLogDir();
-  const target = serviceTarget({ label, uid: process.getuid!(), logDir, bridgeDir: dirname(import.meta.dir) });
+  const platform = platformOf(process.platform);
+  const profile = profileOf({ env: process.env, platform, name: hostname(), homedir: homedir(), username: userInfo().username });
+  const label = flag(argv, "--label") ?? process.env.CLAUDIOBOT_SERVICE_LABEL ?? DEFAULT_LABEL[platform];
+  const logDir = flag(argv, "--log-dir") ?? process.env.CLAUDIOBOT_LOG_DIR ?? defaultLogDir(platform);
+  const target = serviceTarget({ platform, label, uid: process.getuid!(), logDir, bridgeDir: dirname(import.meta.dir) });
   const out = (text: string) => process.stdout.write(text);
   const deps: ServiceDeps = { exec, out, sleep: Bun.sleep };
   const doctorDeps: DoctorDeps = {
@@ -110,16 +119,16 @@ async function main(argv: string[]): Promise<number> {
     which: (command, path) => Bun.which(command, { PATH: path }),
     alive,
     lan: lanAddresses,
-    platform: process.platform,
+    platform,
     env: process.env,
     homeDir: homedir(),
     login: (claude, env) =>
-      readAccount(query, { pathToClaudeCodeExecutable: claude, env, cwd: homedir(), settingSources: ["user"], ...strictMcp(), mcpServers: {} }),
+      readAccount(query, { pathToClaudeCodeExecutable: claude, env, cwd: homedir(), settingSources: ["user"], ...strictMcp(profile.managedMcpPath), mcpServers: {} }),
   };
 
   switch (command) {
     case "install": {
-      // The PATH symlink, not the resolved Cellar path, so a bun upgrade does not strand the plist.
+      // The PATH symlink, not the resolved Cellar path, so a bun upgrade does not strand the service.
       const bun = Bun.which("bun") ?? process.execPath;
       return install(deps, { target, bun, env: capturedEnv(process.env) });
     }
@@ -148,6 +157,26 @@ async function main(argv: string[]): Promise<number> {
     }
     case "update":
       return update({ ...deps, ask }, target);
+    case "machine": {
+      // The installed service's home and mode, unless this shell names its own.
+      const env = { ...(await serviceView(doctorDeps, target)).env, ...process.env };
+      return machineCommand(argv.slice(1), {
+        bridgeHome: env.CLAUDIOBOT_HOME ?? join(homedir(), ".claudiobot"),
+        env,
+        run: async (cmd) => {
+          const r = await exec(cmd);
+          return r.code === 0 ? r.stdout.trim() : "";
+        },
+        fetch: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(10_000) }),
+        out,
+      });
+    }
+    case "world": {
+      // The name main.ts gives the machine, so the moved bot's notice and the next steps say what the hello says.
+      const computer = await exec(["scutil", "--get", "ComputerName"]);
+      const machine = (computer.code === 0 && computer.stdout.trim()) || hostname().replace(/\.local$/, "");
+      return worldCommand(argv.slice(1), { home: bridgeHome(), machine, now: () => new Date(), cwd: process.cwd(), out });
+    }
     default:
       process.stderr.write(USAGE);
       return command === undefined || command === "help" || command === "--help" ? 0 : 2;

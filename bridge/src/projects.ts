@@ -171,6 +171,9 @@ export function createProjects(opts: { file: string | null }): { of(cwd: string)
   };
 }
 
+/** What list_projects answers, from whichever machine scanned them. */
+export const projectsText = (projects: readonly Project[]) => (projects.length === 0 ? "No projects found." : JSON.stringify(projects, null, 1));
+
 /**
  * Labels for projects that share a name, case-insensitively, by id, so the phone never shows two that look the same:
  * the GitHub "owner/repo" when no namesake has the same remote, else the shortest tail of the path that no namesake

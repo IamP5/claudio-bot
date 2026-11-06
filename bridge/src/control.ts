@@ -4,7 +4,8 @@ import { rejectsOrigin } from "./devices";
 import type { PairOffer } from "./protocol";
 import { errorText } from "./text";
 
-// The same-user door: a unix socket in the bridge home that mints a pairing code for the ClaudioBot app on this Mac.
+// The same-user door: a unix socket in the bridge home that mints a pairing code for the ClaudioBot app on this Mac,
+// and on a home a join code for `claudiobot machine invite` and the removal `claudiobot machine remove` asks for.
 // The app redeems the code at POST /pair like any phone, so there is no second way to create a device. connect(2)
 // needs write permission on the socket and search permission on its folder, so only this macOS user gets in, even
 // where the home itself is 0755. Bots cannot reach it: the gate refuses tool calls naming the home, and the sandbox
@@ -15,11 +16,20 @@ const SUN_PATH_BYTES = 104;
 
 export type Control = { stop(): void };
 
+/** A machine named by id or name, unpinned from this home. */
+export type MachineRemoval = { ok: true; name: string } | { ok: false; error: string };
+
 /**
  * Listens on <home>/run/control.sock. Call only while holding the home lock, which is what makes a socket left at that
  * path stale. Null, with one log line, when the path is too long or the listen fails: the bridge runs on without it.
  */
-export function serveControl(deps: { home: string; offer: () => PairOffer; log: (line: string) => void }): Control | null {
+export function serveControl(deps: {
+  home: string;
+  offer: () => PairOffer;
+  machineOffer?: () => PairOffer;
+  removeMachine?: (named: string) => MachineRemoval;
+  log: (line: string) => void;
+}): Control | null {
   const dir = join(deps.home, "run");
   const path = join(dir, "control.sock");
   if (Buffer.byteLength(path) >= SUN_PATH_BYTES) {
@@ -34,12 +44,22 @@ export function serveControl(deps: { home: string; offer: () => PairOffer; log: 
     const server = Bun.serve({
       unix: path,
       development: false,
-      fetch(req) {
+      async fetch(req) {
         if (rejectsOrigin(req)) return new Response("Forbidden", { status: 403 });
-        if (new URL(req.url).pathname !== "/pair-code") return new Response("Not found", { status: 404 });
+        const path = new URL(req.url).pathname;
+        if (path === "/machine-remove" && deps.removeMachine) {
+          if (req.method !== "POST") return new Response("Use POST", { status: 405 });
+          const body = (await req.json().catch(() => null)) as { machine?: unknown } | null;
+          if (typeof body?.machine !== "string") return Response.json({ ok: false, error: "Send {machine} as JSON." }, { status: 400 });
+          const removed = deps.removeMachine(body.machine);
+          if (removed.ok) deps.log(`machine ${removed.name} removed from the command line`);
+          return Response.json(removed, { status: removed.ok ? 200 : 404 });
+        }
+        const mint = path === "/pair-code" ? deps.offer : path === "/machine-code" ? deps.machineOffer : undefined;
+        if (!mint) return new Response("Not found", { status: 404 });
         if (req.method !== "POST") return new Response("Use POST", { status: 405 });
-        deps.log("local pair code minted");
-        return Response.json(deps.offer());
+        deps.log(`local ${path === "/pair-code" ? "pair" : "machine"} code minted`);
+        return Response.json(mint());
       },
     });
     try {

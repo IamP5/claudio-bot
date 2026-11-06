@@ -58,44 +58,44 @@ private func step(_ state: ToolStepState, cause: String? = nil) -> ToolStep {
 
     @Test func aCardStoppedBeforeAnyoneAnsweredSaysSoAndIsNotGreen() throws {
         let card = try permission("m24", in: try runningThread())
-        let outcome = try #require(card.card.answer).outcome()
+        let outcome = try #require(card.card.answer).outcome(computer: "omarchy")
         #expect(outcome.text == "Stopped by you. It did not run.")
         #expect(outcome.short == "Stopped by you")
         #expect(outcome.tone == .ended)
     }
 
     @Test func anAllowedCallCutShortNoLongerReadsAsAllowed() {
-        let stopped = PermissionAnswer.chose(.once).outcome(step: step(.stopped, cause: "Stopped by you"))
+        let stopped = PermissionAnswer.chose(.once).outcome(step: step(.stopped, cause: "Stopped by you"), computer: "omarchy")
         #expect(stopped.text == "Allowed once. Stopped by you before it finished.")
         #expect(stopped.short == "Allowed once, then stopped")
         #expect(stopped.tone == .ended)
 
-        let restarted = PermissionAnswer.chose(.always).outcome(step: step(.stopped, cause: "The bridge restarted"))
+        let restarted = PermissionAnswer.chose(.always).outcome(step: step(.stopped, cause: "The bridge restarted"), computer: "omarchy")
         #expect(restarted.text == "Always allowed. The bridge restarted before it finished.")
 
-        let failed = PermissionAnswer.chose(.once).outcome(step: step(.error, cause: "Exit code 1"))
+        let failed = PermissionAnswer.chose(.once).outcome(step: step(.error, cause: "Exit code 1"), computer: "omarchy")
         #expect(failed.short == "Allowed once, then failed" && failed.tone == .failed)
     }
 
     @Test func anAllowedCallTheBridgeCannotFollowSaysItMayStillRunAndNotStopped() {
-        let unsure = PermissionAnswer.chose(.once).outcome(step: step(.unsure, cause: "Can't tell whether this still runs on your Mac"))
-        #expect(unsure == PermissionOutcome(short: "Allowed once · may still run", text: "Allowed once. May still run on your Mac.", tone: .unsure))
+        let unsure = PermissionAnswer.chose(.once).outcome(step: step(.unsure, cause: "Can't tell whether this still runs on your Mac"), computer: "omarchy")
+        #expect(unsure == PermissionOutcome(short: "Allowed once · may still run", text: "Allowed once. May still run on omarchy.", tone: .unsure))
         #expect(unsure.glyph == "questionmark.circle")
-        let ended = PermissionAnswer.chose(.once).outcome(step: step(.ended, cause: "It ended without a result"))
+        let ended = PermissionAnswer.chose(.once).outcome(step: step(.ended, cause: "It ended without a result"), computer: "omarchy")
         #expect(ended == PermissionOutcome(short: "Allowed once · ended, result unknown", text: "Allowed once. It ended; its result is unknown.", tone: .unseen))
         #expect(ended.glyph == "circle.dashed")
     }
 
     @Test(arguments: [ToolStepState.running, .waiting, .ok])
     func anAllowedCallThatRunsOrFinishedReadsAllowed(state: ToolStepState) {
-        #expect(PermissionAnswer.chose(.once).outcome(step: step(state)) == PermissionOutcome(short: "Allowed once", text: "Allowed once", tone: .allowed))
-        #expect(PermissionAnswer.chose(.once).outcome() == PermissionOutcome(short: "Allowed once", text: "Allowed once", tone: .allowed))
+        #expect(PermissionAnswer.chose(.once).outcome(step: step(state), computer: "omarchy") == PermissionOutcome(short: "Allowed once", text: "Allowed once", tone: .allowed))
+        #expect(PermissionAnswer.chose(.once).outcome(computer: "omarchy") == PermissionOutcome(short: "Allowed once", text: "Allowed once", tone: .allowed))
     }
 
     @Test func refusalsAndClosingsSayTheCallDidNotRun() {
-        #expect(PermissionAnswer.chose(.deny).outcome(step: step(.stopped)) == PermissionOutcome(short: "Denied", text: "Denied", tone: .refused))
-        #expect(PermissionAnswer.chose(.never).outcome().tone == .refused)
-        #expect(PermissionAnswer.expired.outcome() == PermissionOutcome(short: "Expired", text: "Expired. It did not run.", tone: .ended))
-        #expect(PermissionAnswer.unknown("withdrawn").outcome() == PermissionOutcome(short: "Closed", text: "Closed. It did not run.", tone: .ended))
+        #expect(PermissionAnswer.chose(.deny).outcome(step: step(.stopped), computer: "omarchy") == PermissionOutcome(short: "Denied", text: "Denied", tone: .refused))
+        #expect(PermissionAnswer.chose(.never).outcome(computer: "omarchy").tone == .refused)
+        #expect(PermissionAnswer.expired.outcome(computer: "omarchy") == PermissionOutcome(short: "Expired", text: "Expired. It did not run.", tone: .ended))
+        #expect(PermissionAnswer.unknown("withdrawn").outcome(computer: "omarchy") == PermissionOutcome(short: "Closed", text: "Closed. It did not run.", tone: .ended))
     }
 }

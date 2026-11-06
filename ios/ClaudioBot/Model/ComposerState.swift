@@ -35,11 +35,11 @@ struct PendingSend: Equatable, Sendable {
     /// What VoiceOver hears as a pending send moves on (F-SES-179). old, new: its state before and after, nil when it is
     /// not pending. echoedQueued: once it is gone, whether the thread shows it queued; nil when the thread does not show
     /// it, as after Discard. A refusal says nothing here: the composer's error note speaks it.
-    static func announcement(old: State?, new: State?, echoedQueued: Bool?) -> String? {
+    static func announcement(old: State?, new: State?, echoedQueued: Bool?, computer: String) -> String? {
         switch (old, new) {
         case (.some, nil): echoedQueued.map { $0 ? "Queued behind the current turn." : "Sent." }
-        case (.sending?, .unechoed?): "No word from your Mac yet. Your message may not have arrived."
-        case (.waiting?, .notSent(nil)?): "Your message was not sent. Your Mac was unreachable."
+        case (.sending?, .unechoed?): "No word from \(computer) yet. Your message may not have arrived."
+        case (.waiting?, .notSent(nil)?): "Your message was not sent. The bridge on \(computer) was unreachable."
         default: nil
         }
     }
@@ -214,8 +214,8 @@ struct SetRequest: Equatable, Sendable {
     var line: String { "Changing the \(field) to \(target)…" }
 
     /// Said while the Mac is out of reach.
-    var waitsLine: String {
-        (field == "model" ? "Model" : "Mode") + " change waits for your Mac. It goes if the connection is back within a minute."
+    func waitsLine(computer: String) -> String {
+        (field == "model" ? "Model" : "Mode") + " change waits for \(computer). It goes if the connection is back within a minute."
     }
 
     /// The change took too long: what still runs. kept: the value the controls show.
@@ -333,20 +333,22 @@ struct ComposerState: Equatable, Sendable {
 
     /// Spoken at the tap (F-SES-146, F-SES-179). Nothing is sent until the Mac shows it back, which
     /// PendingSend.announcement speaks. Offline the message only waits on this phone.
-    static func sentAnnouncement(offline: Bool) -> String {
-        offline ? "Not sent yet. It goes if your Mac is back within a minute." : "Sending."
+    static func sentAnnouncement(offline: Bool, computer: String) -> String {
+        offline ? "Not sent yet. It goes if \(computer) is back within a minute." : "Sending."
     }
 
-    static let stopWaitsLine = "Stop waits for your Mac. It goes if the connection is back within a minute."
+    static func stopWaitsLine(computer: String) -> String {
+        "Stop waits for \(computer). It goes if the connection is back within a minute."
+    }
 
     /// The stop's progress, spoken. The outcome itself is the status line's (StatusAnnouncer), so success says nothing.
-    static func announcement(_ phase: StopPhase, _ scope: StopScope) -> String? {
+    static func announcement(_ phase: StopPhase, _ scope: StopScope, computer: String) -> String? {
         switch phase {
         case .ready: nil
         case .stopping: "Stopping \(scope.what)."
         case .claudeStopping: "Waiting for Claude Code to stop."
-        case .unconfirmed: "Your Mac has not confirmed the stop. Stop again to retry."
-        case .notSent: ComposerNote.stopNotSent.text
+        case .unconfirmed: "The bridge on \(computer) has not confirmed the stop. Stop again to retry."
+        case .notSent: ComposerNote.stopNotSent.text(computer: computer)
         case .refused(let why): "Couldn't stop. " + why
         }
     }
@@ -400,12 +402,12 @@ extension ComposerState.Slot {
         }
     }
 
-    var hint: String? {
+    func hint(computer: String) -> String? {
         switch self {
         case .send(.queue): "Sends when the current turn ends. Hold for Stop turn and send."
         case .stop(let scope, .ready): scope.asks ? "Asks before it stops background work." : nil
-        case .stop(_, .unconfirmed): "Your Mac has not confirmed the stop."
-        case .stop(_, .notSent): "Stop did not reach your Mac."
+        case .stop(_, .unconfirmed): "The bridge on \(computer) has not confirmed the stop."
+        case .stop(_, .notSent): "Stop did not reach \(computer)."
         case .stop(_, .refused(let why)): why
         case .send, .stop(_, .stopping), .stop(_, .claudeStopping): nil
         }
@@ -468,23 +470,24 @@ enum ComposerNote: Equatable, Sendable {
         return controls.map { .changeUnconfirmed(set, text: set.unconfirmed(kept: set.kept($0))) }
     }
 
-    var text: String {
+    /// computer: the session's machine (`AppStore.computerName`).
+    func text(computer: String) -> String {
         switch self {
         case .error(let error): error.text
         case .stopping(let scope): "Stopping \(scope.what)…"
-        case .stopWaits: ComposerState.stopWaitsLine
+        case .stopWaits: ComposerState.stopWaitsLine(computer: computer)
         case .claudeStopping: "Waiting for Claude Code to stop…"
-        case .stopNotSent: "Stop not sent. It goes if your Mac is back within a minute."
-        case .unconfirmed: "Your Mac has not confirmed the stop. It may still be running."
+        case .stopNotSent: "Stop not sent. It goes if \(computer) is back within a minute."
+        case .unconfirmed: "The bridge on \(computer) has not confirmed the stop. It may still be running."
         case .changing(let set): set.line
-        case .changeWaits(let set): set.waitsLine
+        case .changeWaits(let set): set.waitsLine(computer: computer)
         case .changeUnconfirmed(_, let text): text
         }
     }
 
     /// P-A11Y-1: an error says so in words, not only in red.
-    var spoken: String {
-        if case .error = self { "Error: " + text } else { text }
+    func spoken(computer: String) -> String {
+        if case .error = self { "Error: " + text(computer: computer) } else { text(computer: computer) }
     }
 }
 

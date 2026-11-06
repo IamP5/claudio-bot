@@ -8,13 +8,14 @@ import { serviceTarget, type Exec, type Ran } from "../src/service";
 
 const healthy: Facts = {
   platform: "darwin",
-  macos: "26.5.2",
+  os: "macOS 26.5.2",
+  supervisor: "launchd",
   label: "com.claudiobot.bridge",
-  plist: "/Users/me/Library/LaunchAgents/com.claudiobot.bridge.plist",
+  unit: "/Users/me/Library/LaunchAgents/com.claudiobot.bridge.plist",
   installed: { bun: "/opt/homebrew/bin/bun", main: "/Users/me/bridge/src/main.ts", env: { PATH: "/opt/homebrew/bin:/usr/bin" } },
-  launchd: { state: "running", pid: 4242, lastExit: "(never exited)" },
+  loaded: { state: "running", pid: 4242, lastExit: "(never exited)" },
   mainExists: true,
-  envFrom: "plist",
+  envFrom: "unit",
   bun: { path: "/opt/homebrew/bin/bun", version: "1.3.14" },
   claude: { asked: "claude", path: "/Users/me/.local/bin/claude", version: "2.1.301 (Claude Code)" },
   config: { dir: "/Users/me/.claude", set: false, shellDir: "/Users/me/.claude" },
@@ -28,6 +29,7 @@ const healthy: Facts = {
   tailscale: { path: "/usr/local/bin/tailscale", ip: "100.64.0.7", url: "ws://mac.tail-1234.ts.net:7878/ws" },
   lan: ["192.168.1.20"],
   access: { full: false, sandbox: true },
+  sandbox: { needs: [], missing: [] },
   legacy: { homeSet: false, oldEnvSet: false, oldHome: "/Users/me/.claudebot", newHome: "/Users/me/.claudiobot", old: { kind: "absent" }, new: { kind: "dir" } },
 };
 
@@ -40,15 +42,14 @@ describe("checks", () => {
     expect(findings.filter((f) => f.level !== "PASS")).toEqual([
       { level: "WARN", check: "mcp env", detail: expect.stringContaining("launchd does not read .zshrc") },
     ]);
-    expect(findings.map((f) => f.check)).toEqual(["macos", "service", "bun", "claude", "config", "login", "home", "secrets", "state", "health", "lock", "roots", "tailscale", "access", "lan", "home link", "mcp env"]);
+    expect(findings.map((f) => f.check)).toEqual(["os", "service", "bun", "claude", "config", "login", "home", "secrets", "state", "health", "lock", "roots", "tailscale", "access", "lan", "home link", "mcp env"]);
   });
 
   const table: [string, string, Partial<Facts>, string, string][] = [
-    ["macos", "not macOS", { platform: "linux" }, "FAIL", "this is linux; the service needs macOS"],
     ["service", "not installed", { installed: null, envFrom: "shell" }, "WARN", "com.claudiobot.bridge is not installed. Run: claudiobot install"],
     ["service", "checkout moved", { mainExists: false }, "FAIL", "/Users/me/bridge/src/main.ts is gone (was the checkout moved?). Run claudiobot install from the new place"],
-    ["service", "plist not loaded", { launchd: null }, "FAIL", "/Users/me/Library/LaunchAgents/com.claudiobot.bridge.plist exists but launchd has not loaded it. Run: claudiobot install"],
-    ["service", "crashed", { launchd: { state: "not running", pid: null, lastExit: "1" } }, "FAIL", "com.claudiobot.bridge is not running (last exit code 1)"],
+    ["service", "plist not loaded", { loaded: null }, "FAIL", "/Users/me/Library/LaunchAgents/com.claudiobot.bridge.plist exists but launchd has not loaded it. Run: claudiobot install"],
+    ["service", "crashed", { loaded: { state: "not running", pid: null, lastExit: "1" } }, "FAIL", "com.claudiobot.bridge is not running (last exit code 1)"],
     ["bun", "missing", { bun: { path: null, version: null } }, "FAIL", "bun is not on PATH"],
     ["claude", "not on the service PATH", { claude: { asked: "claude", path: null, version: null } }, "FAIL", "claude does not resolve under the service PATH. Set CLAUDIOBOT_CLAUDE to its full path and run claudiobot install"],
     ["claude", "found but broken", { claude: { asked: "claude", path: "/x/claude", version: null } }, "FAIL", "/x/claude --version failed"],
@@ -155,10 +156,10 @@ function world(opts: { plistEnv?: Record<string, string> } = {}) {
   const roots = join(root, "code");
   mkdirSync(join(roots, "app", ".git"), { recursive: true });
   mkdirSync(join(roots, "notes"));
-  const target = serviceTarget({ label: "com.claudiobot.bridge.test", uid: 501, logDir: join(root, "logs"), bridgeDir: join(root, "bridge"), home: root });
+  const target = serviceTarget({ platform: "darwin", label: "com.claudiobot.bridge.test", uid: 501, logDir: join(root, "logs"), bridgeDir: join(root, "bridge"), home: root });
   if (opts.plistEnv) {
     mkdirSync(join(root, "Library", "LaunchAgents"), { recursive: true });
-    writeFileSync(target.plist, "plist");
+    writeFileSync(target.unit, "plist");
   }
   const env = { PATH: "/shell/bin", CLAUDIOBOT_HOME: home, CLAUDIOBOT_ROOTS: roots };
   const exec: Exec = async (argv) => {
@@ -208,7 +209,7 @@ describe("gather", () => {
   test("resolves claude under the PATH the plist gives the service, not the shell's", async () => {
     const found = world({ plistEnv: { PATH: "/svc/bin:/usr/bin" } });
     const facts = await gather(found.deps, found.target);
-    expect(facts.envFrom).toBe("plist");
+    expect(facts.envFrom).toBe("unit");
     expect(facts.claude).toEqual({ asked: "claude", path: "/svc/bin/claude", version: "2.1.0 (Claude Code)" });
 
     const missing = world({ plistEnv: { PATH: "/usr/bin" } });
@@ -268,6 +269,53 @@ describe("gather", () => {
     const facts = await gather(deps, target);
     expect(facts.legacy.new).toEqual({ kind: "link", target: ".claudebot", resolves: true });
     expect(check(facts).find((f) => f.check === "home link")).toEqual({ level: "PASS", check: "home link", detail: `${join(root, ".claudiobot")} links to ${join(root, ".claudebot")}` });
+  });
+});
+
+describe("on Linux", () => {
+  function linuxWorld(env: Record<string, string>) {
+    const w = world();
+    const target = serviceTarget({ platform: "linux", label: "claudiobot", uid: 1000, logDir: join(w.root, "logs"), bridgeDir: join(w.root, "bridge"), home: w.root });
+    const darwinExec = w.deps.exec;
+    w.deps.platform = "linux";
+    w.deps.env = { ...w.deps.env, ...env };
+    w.deps.exec = async (argv, opts) => {
+      if (argv.join(" ") === "uname -sr") return ok("Linux 6.17.2-arch1-1\n");
+      if (argv[0] === "systemctl") return ok("LoadState=not-found\nActiveState=inactive\n");
+      return darwinExec(argv, opts);
+    };
+    return { ...w, target };
+  }
+  const findings = async (env: Record<string, string>) => {
+    const w = linuxWorld(env);
+    return check(await gather(w.deps, w.target));
+  };
+  const row = (all: Finding[], name: string) => all.filter((f) => f.check === name);
+
+  test("names the kernel and asks systemd about the user unit", async () => {
+    const all = await findings({});
+    expect([...row(all, "os"), ...row(all, "service")]).toEqual([
+      { level: "PASS", check: "os", detail: "Linux 6.17.2-arch1-1" },
+      { level: "WARN", check: "service", detail: "claudiobot is not installed. Run: claudiobot install" },
+    ]);
+  });
+
+  test("guarded, with the sandbox on, fails until bubblewrap and socat are on the service PATH", async () => {
+    expect(row(await findings({ PATH: "/shell/bin" }), "sandbox")).toEqual([
+      {
+        level: "FAIL",
+        check: "sandbox",
+        detail: "the sandbox is on but bwrap and socat are not on the service PATH, so every Bash call fails. Install bubblewrap socat, or set CLAUDIOBOT_SANDBOX=off and run claudiobot install",
+      },
+    ]);
+    expect(row(await findings({ PATH: "/svc/bin" }), "sandbox")).toEqual([{ level: "PASS", check: "sandbox", detail: "bwrap and socat found for the sandbox" }]);
+  });
+
+  test("full with the sandbox off asks for no bubblewrap", async () => {
+    const all = await findings({ PATH: "/shell/bin", CLAUDIOBOT_ACCESS: "full", CLAUDIOBOT_SANDBOX: "off" });
+    expect(row(all, "sandbox")).toEqual([]);
+    expect(all.filter((f) => /bwrap|bubblewrap/.test(f.detail))).toEqual([]);
+    expect(row(all, "access")[0]?.detail).toStartWith("access: full, sandbox off");
   });
 });
 

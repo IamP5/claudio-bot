@@ -51,7 +51,7 @@ struct MemorySection: View {
             } header: {
                 Text("Memory")
             } footer: {
-                Text("What bots know about you. A fact a bot remembers stays with that bot until you confirm it; then every bot knows it. \(Self.howToEdit) They live in USER.md on your Mac.")
+                Text("What bots know about you. A fact a bot remembers stays with that bot until you confirm it; then every bot knows it. \(Self.howToEdit) They live in USER.md on \(store.computerName()).")
             }
             .task(id: store.connection.summary) { client.send(.memory) }
             .sheet(item: $editing) { draft in
@@ -61,7 +61,7 @@ struct MemorySection: View {
             }
         } else if store.lacks(.memory) {
             Section("Memory") {
-                Text("Update the bridge on your Mac to see and edit what bots remember about you.")
+                Text("Update the bridge on \(store.computerName()) to see and edit what bots remember about you.")
                     .foregroundStyle(Theme.secondary)
             }
         }

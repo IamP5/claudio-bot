@@ -426,6 +426,7 @@ struct PermissionCardView: View {
     let decision: (PermissionChoice) -> ClientMessage
 
     @AccessibilityFocusState private var focus: CardFocus?
+    @Environment(AppStore.self) private var store
 
     var body: some View {
         AtDeadline(card.expiresAt) { now in
@@ -433,10 +434,10 @@ struct PermissionCardView: View {
             Settling(answer) { answer in
                 PermissionCardBody(
                     messageId: messageId, card: card, title: card.label, scope: scope, answer: answer, decision: decision,
-                    focus: $focus
+                    focus: $focus, computer: store.computerName()
                 )
             }
-            .announcesClose(messageId, card: card, answer: answer, focus: $focus)
+            .announcesClose(messageId, card: card, answer: answer, focus: $focus, computer: store.computerName())
         }
     }
 }
@@ -474,7 +475,10 @@ struct SessionPermissionCard: View {
     /// The step "Show the step" asked for from the sheet, revealed once the sheet is gone.
     @State private var pendingReveal: HeldStep?
     @Environment(\.revealStep) private var revealStep
+    @Environment(AppStore.self) private var store
     @AccessibilityFocusState private var focus: CardFocus?
+
+    private var computer: String { store.computerName(store.sessions.rows[sessionId]?.machine) }
 
     var body: some View {
         let card = permission.card
@@ -483,12 +487,12 @@ struct SessionPermissionCard: View {
             let answer = card.answer(at: now)
             Settling(answer) { answer in
                 if let answer {
-                    ClosedApprovalRow(permission: permission, outcome: answer.outcome(step: held?.step), focus: $focus) { sheet = true }
+                    ClosedApprovalRow(permission: permission, outcome: answer.outcome(step: held?.step, computer: computer), focus: $focus) { sheet = true }
                 } else {
                     full(answer: nil, held: held)
                 }
             }
-            .announcesClose(permission.cardId, card: card, answer: answer, step: held?.step, focus: $focus)
+            .announcesClose(permission.cardId, card: card, answer: answer, step: held?.step, focus: $focus, computer: computer)
         }
         .sheet(isPresented: $sheet, onDismiss: {
             if let pendingReveal { revealStep?(pendingReveal) }
@@ -515,7 +519,7 @@ struct SessionPermissionCard: View {
         return PermissionCardBody(
             messageId: permission.cardId, card: permission.card, title: permission.title, scope: .session, answer: answer,
             decision: { .sessionDecide(sessionId: sessionId, cardId: permission.cardId, choice: $0) },
-            focus: $focus,
+            focus: $focus, computer: computer,
             step: held?.step, fillsColumn: true,
             reveal: held.flatMap { held in reveal.map { reveal in { reveal(held) } } },
             close: close
@@ -605,9 +609,9 @@ extension View {
     /// choices are gone.
     func announcesClose(
         _ cardId: MessageID, card: PermissionCard, answer: PermissionAnswer?, step: ToolStep? = nil,
-        focus: AccessibilityFocusState<CardFocus?>.Binding
+        focus: AccessibilityFocusState<CardFocus?>.Binding, computer: String
     ) -> some View {
-        modifier(CloseAnnouncer(cardId: cardId, card: card, answer: answer, step: step, focus: focus))
+        modifier(CloseAnnouncer(cardId: cardId, card: card, answer: answer, step: step, focus: focus, computer: computer))
     }
 
     /// Speaks a plan or question card closing, whatever closed it (F-SES-178). closing: what the card says once it is
@@ -631,6 +635,7 @@ private struct CloseAnnouncer: ViewModifier {
     let answer: PermissionAnswer?
     let step: ToolStep?
     let focus: AccessibilityFocusState<CardFocus?>.Binding
+    let computer: String
 
     @Environment(AppStore.self) private var store
     @State private var onChoice = false
@@ -660,7 +665,7 @@ private struct CloseAnnouncer: ViewModifier {
             try? await Task.sleep(for: .milliseconds(100))
             waited += 1
         }
-        let said = new.announcement(card: card, step: step, here: store.decidedHere(cardId))
+        let said = new.announcement(card: card, step: step, here: store.decidedHere(cardId), computer: computer)
         var text = AttributedString(said)
         text.accessibilitySpeechAnnouncementPriority = .high
         AccessibilityNotification.Announcement(text).post()
@@ -679,6 +684,8 @@ private struct PermissionCardBody: View {
     let answer: PermissionAnswer?
     let decision: (PermissionChoice) -> ClientMessage
     let focus: AccessibilityFocusState<CardFocus?>.Binding
+    /// Where the card's agent or session runs (`AppStore.computerName`).
+    let computer: String
     var step: ToolStep?
     var fillsColumn = false
     var reveal: (() -> Void)?
@@ -757,7 +764,7 @@ private struct PermissionCardBody: View {
 
             Group {
                 if let answer {
-                    let outcome = answer.outcome(step: step)
+                    let outcome = answer.outcome(step: step, computer: computer)
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Image(systemName: outcome.glyph)
                             .foregroundStyle(outcome.color)
@@ -778,7 +785,7 @@ private struct PermissionCardBody: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         buttons
-                        DecisionStatusLine(offline: offline, note: store.decisionNote(messageId))
+                        DecisionStatusLine(offline: offline, note: store.decisionNote(messageId), computer: computer)
                         ExpiryLine(expiresAt: card.expiresAt)
                     }
                 }
@@ -913,34 +920,38 @@ private struct PermissionCardBody: View {
 
 /// Under a card's buttons: why a tap cannot reach the Mac now, or why the last one did not count (F-SES-094, F-SES-142).
 struct DecisionStatusLine: View {
-    static let offlineText = "Your answer can't reach your Mac"
+    static func offlineText(_ computer: String) -> String { "Your answer can't reach \(computer)" }
 
     let offline: Bool
     let note: DecisionNote?
+    /// Where the card's agent or session runs (`AppStore.computerName`).
+    let computer: String
 
     var body: some View {
         Group {
             if offline {
-                Label(Self.offlineText, systemImage: "wifi.slash")
+                Label(Self.offlineText(computer), systemImage: "wifi.slash")
                     .font(.ui(.footnote))
                     .foregroundStyle(Theme.attention)
                     .fixedSize(horizontal: false, vertical: true)
             } else if let note {
-                Label(note.text, systemImage: note.answered ? "checkmark.circle" : note == .unsure ? "questionmark.circle" : "exclamationmark.triangle")
+                Label(note.text(computer: computer), systemImage: note.answered ? "checkmark.circle" : note == .unsure ? "questionmark.circle" : "exclamationmark.triangle")
                     .font(.ui(.footnote))
                     .foregroundStyle(note.answered ? Theme.secondary : note == .unsure ? Theme.attention : Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
         .onChange(of: note) { _, note in
-            if let note { AccessibilityNotification.Announcement(note.text).post() }
+            if let note { AccessibilityNotification.Announcement(note.text(computer: computer)).post() }
         }
     }
 }
 
 extension DecisionNote {
     /// Someone answered first: not a failure the user has to fix.
-    var answered: Bool { text == "Already answered" }
+    var answered: Bool {
+        if case .refused(let why) = self { why.localizedCaseInsensitiveContains("already answered") } else { false }
+    }
 }
 
 /// The spinner on a tapped choice. The button's value says "Sending", so the spinner itself stays silent.

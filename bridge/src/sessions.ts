@@ -2,11 +2,13 @@ import { renameSession, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
-import type { Agents } from "./agents";
 import { createCatalog, type Driven } from "./catalog";
 import type { ClaudeApps } from "./claudeApps";
 import type { Tickable } from "./clock";
 import type { Ledger } from "./ledger";
+import type { Machine } from "./machine/machines";
+import type { LocalAgents } from "./machine/runtime";
+import { newIntentId, type MachineId } from "./machine/wire";
 import { createOwn, newDrive, type OwnDeps } from "./own";
 import type { Scope } from "./policy";
 import { createProjects } from "./projects";
@@ -17,8 +19,9 @@ import {
   type MessageId,
   type PermissionChoice,
   type PhoneMode,
-  type ServerMessage,
   type SessionClientMessage,
+  type SessionReply,
+  type SessionServerMessage,
   type SessionControls,
   type SessionId,
   type SessionItem,
@@ -48,7 +51,7 @@ export type SessionsEnv = {
   apps: ClaudeApps;
   /** Where the index and the project cache are kept between starts. */
   cacheDir: string;
-  signal: { list(frame: SessionsChannelFrame): void; thread(id: SessionId, frame: ThreadChannelFrame): void };
+  signal: { list(frame: SessionsChannelFrame): void; thread(id: SessionId, frame: ThreadSignal): void };
   watchers(id: SessionId): number;
   /** The watchers someone looks at; absent: every watcher. A thread only they hold has nothing unread. */
   readers?(id: SessionId): number;
@@ -58,14 +61,25 @@ export type SessionsEnv = {
   watch?: boolean;
 };
 
+/**
+ * What goes on a thread's channel. A snapshot goes there only from the home, for a machine's thread the phones were
+ * watching when that machine linked again: the app applies a session frame whenever it gets one.
+ */
+export type ThreadSignal = ThreadChannelFrame | Extract<SessionServerMessage, { type: "session" }>;
+
 export type SessionsDeps = SessionsEnv & {
+  /** This bridge's own machine: the one whose transcripts the list reads. */
+  machine: MachineId;
   world: World;
   userName: string;
   /** The bridge home: a session whose cwd is under it is a bot's, shown in the Bots view instead. */
   bridgeHome: string;
   /** The project roots, by realpath: a session under a temp folder lists only when it is under one of these. */
   roots: string[];
-  agents: Pick<Agents, "session" | "direct" | "stop" | "message">;
+  /** The live sessions of the agents in this process, for a thread's status. */
+  agents: Pick<LocalAgents, "session">;
+  /** An intent to the machine that runs the agent: the user's turn, a stop, or a cloud agent's follow-up. */
+  send: Machine["send"];
   /** The gate's answer to one of its cards: an agent's permission card, decided from the agent's thread. */
   decideGate(botId: string, cardId: MessageId, choice: PermissionChoice): Result;
   ledger: Ledger;
@@ -89,7 +103,9 @@ export type Sessions = Tickable & {
   start(): Promise<void>;
   /** Reads the transcripts again now, as the sweep and the open threads' polls do. */
   sync(): Promise<void>;
-  handle(m: SessionClientMessage): Promise<ServerMessage[]>;
+  handle(m: SessionClientMessage): Promise<SessionReply[]>;
+  /** This bridge's own list holds the session: its transcript, an agent's or a cloud agent's id, or a phone draft. */
+  owns(id: SessionId): boolean;
   /** An agent record changed: its row and its thread's controls follow. */
   agentChanged(rec: AgentRecord): void;
   /** A mac agent's turn ended done: its session becomes due for the Claude app (the mirror policy). */
@@ -374,6 +390,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   const read = (id: SessionId) => (deps.readers ?? deps.watchers)(id) > 0;
 
   const catalog = createCatalog({
+    machine: deps.machine,
     projectsDir: deps.projectsDir,
     heads,
     projects,
@@ -425,12 +442,12 @@ export function createSessions(deps: SessionsDeps): Sessions {
     return rec;
   }
 
-  const listFrame = (): ServerMessage => ({ type: "sessions", ...catalog.snapshot(), mirror: deps.world.sessionPrefs.mirror });
+  const listFrame = (): SessionReply => ({ type: "sessions", ...catalog.snapshot(), mirror: deps.world.sessionPrefs.mirror });
   const known = (id: SessionId) => catalog.head(id) !== null || agentOf(id) !== null || cloudOf(id) !== null || deps.world.sessions.get(id)?.own?.created === true;
-  const gone = (id: SessionId): ServerMessage[] => [{ type: "session_removed", sessionId: id, movedTo: null }];
-  const error = (message: string, about?: ErrorAbout): ServerMessage[] => [{ type: "error", message, ...(about && { about }) }];
+  const gone = (id: SessionId): SessionReply[] => [{ type: "session_removed", sessionId: id, movedTo: null }];
+  const error = (message: string, about?: ErrorAbout): SessionReply[] => [{ type: "error", message, ...(about && { about }) }];
 
-  async function rename(id: SessionId, title: string): Promise<ServerMessage[]> {
+  async function rename(id: SessionId, title: string): Promise<SessionReply[]> {
     const head = catalog.head(id);
     if (!head) return error("This session has no transcript to rename yet.");
     try {
@@ -453,7 +470,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     mirrorAt = 0;
   }
 
-  const reply = (r: Result, about?: ErrorAbout): ServerMessage[] => (r.ok ? [] : error(r.error, about));
+  const reply = (r: Result, about?: ErrorAbout): SessionReply[] => (r.ok ? [] : error(r.error, about));
 
   /** The user last saw the thread at `at`. A visit never moves back. */
   function left(id: SessionId, at: Date) {
@@ -471,7 +488,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
    * A resend after a reconnect or a restart runs nothing twice: the clientId is taken before the send is routed, so one
    * that arrives while the first still waits is dropped too, and given back if the send was refused.
    */
-  async function send(m: Extract<SessionClientMessage, { type: "session_send" }>): Promise<ServerMessage[]> {
+  async function send(m: Extract<SessionClientMessage, { type: "session_send" }>): Promise<SessionReply[]> {
     const about: ErrorAbout = { kind: "send", sessionId: m.sessionId, clientId: m.clientId };
     const w = driverOf(m.sessionId);
     if (w.kind === "none") return error(w.reason, about);
@@ -503,15 +520,24 @@ export function createSessions(deps: SessionsDeps): Sessions {
   /** Sends still being routed, by session and clientId. */
   const routing = new Set<string>();
 
-  async function route(m: Extract<SessionClientMessage, { type: "session_send" }>, w: Exclude<Writer, { kind: "none" }>, about: ErrorAbout): Promise<ServerMessage[]> {
+  async function route(m: Extract<SessionClientMessage, { type: "session_send" }>, w: Exclude<Writer, { kind: "none" }>, about: ErrorAbout): Promise<SessionReply[]> {
     switch (w.kind) {
       case "agent": {
-        if (m.interrupt) await deps.agents.stop(w.rec);
-        const refusal = deps.agents.direct(w.rec, m.text, m.clientId);
-        return refusal === null ? [] : error(refusal, about);
+        const agentId = w.rec.agent.id;
+        if (m.interrupt) await deps.send({ kind: "agent.stop", intentId: newIntentId(), agentId });
+        const applied = await deps.send({ kind: "agent.direct", intentId: newIntentId(), agentId, text: m.text, clientId: m.clientId });
+        return applied.ok ? [] : error(applied.reason, about);
       }
       case "cloud": {
-        const said = await deps.agents.message(w.rec, m.text, { kind: "user" }, m.clientId);
+        const applied = await deps.send({
+          kind: "agent.message",
+          intentId: newIntentId(),
+          agentId: w.rec.agent.id,
+          text: m.text,
+          initiator: { kind: "user" },
+          clientId: m.clientId,
+        });
+        const said = applied.ok ? (applied.reply ?? "") : applied.reason;
         return said.startsWith("Sent") ? [] : error(said, about);
       }
       case "own":
@@ -521,14 +547,14 @@ export function createSessions(deps: SessionsDeps): Sessions {
     }
   }
 
-  async function stop(m: Extract<SessionClientMessage, { type: "session_stop" }>): Promise<ServerMessage[]> {
+  async function stop(m: Extract<SessionClientMessage, { type: "session_stop" }>): Promise<SessionReply[]> {
     const target = m.target ?? "all";
     const about: ErrorAbout = { kind: "stop", sessionId: m.sessionId };
     const w = driverOf(m.sessionId);
     if (w.kind === "cloud") return error("A cloud session runs on claude.ai; stop it there.", about);
     if (w.kind === "agent") {
       if (target !== "all") return error("An agent's session stops as a whole.", about);
-      return (await deps.agents.stop(w.rec)) ? [] : error("Nothing is running.", about);
+      return (await deps.send({ kind: "agent.stop", intentId: newIntentId(), agentId: w.rec.agent.id })).ok ? [] : error("Nothing is running.", about);
     }
     if (w.kind !== "own") return error("Nothing is running.", about);
     // A stop is aimed at the run the phone saw: one meant for a turn that has since ended never reaches a newer one.
@@ -540,7 +566,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     return r.ok ? [] : error(r.error, about);
   }
 
-  function unqueue(m: Extract<SessionClientMessage, { type: "session_unqueue" }>): ServerMessage[] {
+  function unqueue(m: Extract<SessionClientMessage, { type: "session_unqueue" }>): SessionReply[] {
     const w = driverOf(m.sessionId);
     const about: ErrorAbout = { kind: "send", sessionId: m.sessionId, clientId: m.clientId };
     if (w.kind !== "own") return error("Only a message you queued in this session can be withdrawn.", about);
@@ -549,7 +575,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
   }
 
   /** A decision the bridge took is acknowledged to the socket that sent it; a refused one names its card. */
-  function decision(m: Extract<SessionClientMessage, { type: "session_decide" | "session_answer" }>): ServerMessage[] {
+  function decision(m: Extract<SessionClientMessage, { type: "session_decide" | "session_answer" }>): SessionReply[] {
     const w = driverOf(m.sessionId);
     const r =
       m.type === "session_decide"
@@ -565,8 +591,8 @@ export function createSessions(deps: SessionsDeps): Sessions {
   }
 
   /** Creates in flight by ref, so a resend while the first still runs gets the first's answer. */
-  const creating = new Map<string, Promise<ServerMessage[]>>();
-  function create(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<ServerMessage[]> {
+  const creating = new Map<string, Promise<SessionReply[]>>();
+  function create(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<SessionReply[]> {
     const made = [...deps.world.sessions.values()].find((r) => r.own?.ref === m.ref);
     if (made) return Promise.resolve([{ type: "session_created", ref: m.ref, sessionId: made.id }]);
     const running = creating.get(m.ref);
@@ -576,8 +602,9 @@ export function createSessions(deps: SessionsDeps): Sessions {
     return p;
   }
 
-  async function make(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<ServerMessage[]> {
+  async function make(m: Extract<SessionClientMessage, { type: "session_create" }>): Promise<SessionReply[]> {
     const about: ErrorAbout = { kind: "create", ref: m.ref };
+    if (m.machine !== undefined && m.machine !== deps.machine) return error("Sessions on other machines arrive later", about);
     const project = catalog.snapshot().projects.find((p) => p.id === m.projectId);
     if (!project) return error("Unknown project", about);
     if (!existsSync(project.path)) return error(`${project.name}'s folder is gone from this Mac.`, about);
@@ -603,7 +630,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     return [{ type: "session_created", ref: m.ref, sessionId: id }];
   }
 
-  async function set(m: Extract<SessionClientMessage, { type: "session_set" }>): Promise<ServerMessage[]> {
+  async function set(m: Extract<SessionClientMessage, { type: "session_set" }>): Promise<SessionReply[]> {
     const id = m.sessionId;
     const { title, hidden, model, mode } = m.patch;
     if (model !== undefined || mode !== undefined) {
@@ -647,7 +674,7 @@ export function createSessions(deps: SessionsDeps): Sessions {
     catalog.touch();
   }
 
-  async function openInDesktop(id: SessionId): Promise<ServerMessage[]> {
+  async function openInDesktop(id: SessionId): Promise<SessionReply[]> {
     const ok = await deps.apps.openInDesktop(id);
     const rec = deps.world.sessions.get(id);
     if (ok && rec?.mirror) {
@@ -730,6 +757,8 @@ export function createSessions(deps: SessionsDeps): Sessions {
           return create(m);
       }
     },
+
+    owns: known,
 
     agentChanged(rec) {
       catalog.touch();

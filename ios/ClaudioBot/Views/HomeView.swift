@@ -15,7 +15,7 @@ struct HomeView: View {
     @State private var lastRetryFailed = false
 
     private var deletion: Deletion? {
-        deleting.flatMap { Deletion($0, details: store.details[$0.id], detailsLate: detailsLate) }
+        deleting.flatMap { Deletion($0, details: store.details[$0.id], detailsLate: detailsLate, store: store) }
     }
 
     /// On the Mac the search field always shows, so a query in it is what searching means.
@@ -160,25 +160,28 @@ struct HomeView: View {
         let message: String
         let request: ClientMessage
 
-        init?(_ bot: Bot, details: BotDetails?, detailsLate: Bool) {
+        @MainActor init?(_ bot: Bot, details: BotDetails?, detailsLate: Bool, store: AppStore) {
             // A group has no agents, so there are no worktrees to wait for.
             guard details != nil || detailsLate || bot.isGroup else { return nil }
-            let worktrees = details?.agents.compactMap(\.worktree) ?? []
+            let worktrees = details?.agents.compactMap { agent in agent.worktree.map { ($0, on: store.computerName(agent.machine)) } } ?? []
             botId = bot.id
-            message = HomeView.deleteMessage(bot, worktrees: worktrees)
-            // The bridge refuses a bot whose agents hold worktrees unless forced. The message says they stay on the Mac.
+            message = HomeView.deleteMessage(bot, home: store.computerName(), worktrees: worktrees)
+            // The bridge refuses a bot whose agents hold worktrees unless forced. The message says they stay behind.
             request = .deleteBot(botId: bot.id, force: !worktrees.isEmpty)
         }
     }
 
     /// The bridge moves the bot's home to its trash folder and keeps every agent worktree until the user removes it.
-    nonisolated static func deleteMessage(_ bot: Bot, worktrees: [Worktree]) -> String {
+    /// home: the bridge's computer. Each worktree comes with the computer that holds it.
+    nonisolated static func deleteMessage(_ bot: Bot, home: String, worktrees: [(Worktree, on: String)] = []) -> String {
         if bot.isGroup { return "Deletes the group \(bot.name) and its chat. Its bots and their own chats stay." }
-        let base = "Deletes \(bot.name) and its chat. Its folder, with its files and memory, moves to the bridge's trash folder on your Mac, where you can recover it."
+        let base = "Deletes \(bot.name) and its chat. Its folder, with its files and memory, moves to the bridge's trash folder on \(home), where you can recover it."
+        let places = Set(worktrees.map { $0.on })
+        let there = places.count == 1 ? places.first! : "their machines"
         switch worktrees.count {
         case 0: return base
-        case 1: return base + " Its agent's worktree on \(worktrees[0].branch) stays on your Mac. Remove it from the agent first if you no longer need it."
-        default: return base + " Its agents' \(worktrees.count) worktrees stay on your Mac. Remove them from each agent first if you no longer need them."
+        case 1: return base + " Its agent's worktree on \(worktrees[0].0.branch) stays on \(there). Remove it from the agent first if you no longer need it."
+        default: return base + " Its agents' \(worktrees.count) worktrees stay on \(there). Remove them from each agent first if you no longer need them."
         }
     }
 
@@ -280,10 +283,11 @@ struct HomeView: View {
 struct CreatingNotice: View {
     let online: Bool
     let stop: () -> Void
+    @Environment(AppStore.self) private var store
 
     var body: some View {
         Label {
-            Text(online ? "Creating the new chat…" : "Waiting for your Mac. If it is not back within a minute, nothing is created.")
+            Text(online ? "Creating the new chat…" : "Waiting for \(store.computerName()). If it is not back within a minute, nothing is created.")
         } icon: {
             ProgressView()
         }
@@ -423,31 +427,32 @@ struct ConnectionBanner: View {
     @State private var editingAddress = false
 
     /// `brief` drops the advice, which at accessibility sizes would push the buttons and the list off the screen.
-    static func cause(_ reach: Reach, address: String?, lastRetryFailed: Bool, brief: Bool = false) -> String {
+    /// `computer` names the bridge's computer (`AppStore.computerName`).
+    static func cause(_ reach: Reach, address: String?, lastRetryFailed: Bool, brief: Bool = false, computer: String = "your computer") -> String {
         let at = address.map { " at \($0)" } ?? ""
         switch reach {
         case .firstConnect:
-            return "Connecting to your Mac\(at)."
+            return "Connecting to \(computer)\(at)."
         case .reconnecting:
             return "Reconnecting…"
         case .unreachable, .retrying:
-            let head = lastRetryFailed ? "Still no answer from your Mac\(at)." : "Your Mac isn't answering\(at)."
-            return brief ? head : head + " Check the bridge is running. Away from home, connect with your Mac's Tailscale name, or pair again."
+            let head = lastRetryFailed ? "Still no answer from the bridge on \(computer)\(at)." : "The bridge on \(computer) isn't answering\(at)."
+            return brief ? head : head + " Check it is running. Away from home, connect with \(computer)'s Tailscale name, or pair again."
         case .unrecognized:
-            return UnrecognizedBanner.cause
+            return UnrecognizedBanner.cause(computer)
         case .connected, .unpaired:
-            return "ClaudioBot needs the bridge running on your Mac. Your bots keep working there while this \(ThisDevice.casualNoun) is away."
+            return "ClaudioBot needs the bridge running on \(computer). Your bots keep working there while this \(ThisDevice.casualNoun) is away."
         }
     }
 
     /// Retries still waiting for the Mac. Taps in a row are one retry to the user, so only the last one to give up speaks.
     @MainActor private static var waiting = 0
 
-    static func retry(_ client: BridgeClient, restartingAttempt: Bool = false) async -> Bool {
+    static func retry(_ client: BridgeClient, restartingAttempt: Bool = false, computer: String = "your computer") async -> Bool {
         waiting += 1
         let answered = await client.retryNowAndWait(restartingAttempt: restartingAttempt)
         waiting -= 1
-        if !answered, waiting == 0 { AccessibilityNotification.Announcement("Still no answer from your Mac.").post() }
+        if !answered, waiting == 0 { AccessibilityNotification.Announcement("Still no answer from \(computer).").post() }
         return answered
     }
 
@@ -458,13 +463,13 @@ struct ConnectionBanner: View {
                 // A socket the app chose to replace: no cause to name and nothing to do yet.
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
-                    Text(Self.cause(reach, address: nil, lastRetryFailed: false))
+                    Text(Self.cause(reach, address: nil, lastRetryFailed: false, computer: store.computerName()))
                 }
                 .font(.footnote.weight(.medium))
                 .accessibilityElement(children: .combine)
             } else {
                 ConnectionBadge(state: state)
-                Text(Self.cause(reach, address: client.pairing?.url.bridgeAddress, lastRetryFailed: lastRetryFailed, brief: typeSize.isAccessibilitySize))
+                Text(Self.cause(reach, address: client.pairing?.url.bridgeAddress, lastRetryFailed: lastRetryFailed, brief: typeSize.isAccessibilitySize, computer: store.computerName()))
                     .font(.footnote)
                     .foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -488,7 +493,7 @@ struct ConnectionBanner: View {
     @ViewBuilder
     private func actions(trying: Bool) -> some View {
         Button("Retry now") {
-            Task { lastRetryFailed = !(await Self.retry(client)) }
+            Task { lastRetryFailed = !(await Self.retry(client, computer: store.computerName())) }
         }
         .bannerProminent()
         .disabled(trying)
@@ -499,16 +504,17 @@ struct ConnectionBanner: View {
     }
 }
 
-/// How old a list kept from before the Mac went out of reach is: "Last updated 12 min. ago. Rows show what your Mac
+/// How old a list kept from before the Mac went out of reach is: "Last updated 12 min. ago. Rows show what omarchy
 /// said then."
 struct StaleListLine: View {
     let since: Date
     var what = "Rows"
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(AppStore.self) private var store
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            Text(SessionText.updated(since, now: context.date) + (typeSize.isAccessibilitySize ? "." : ". \(what) show what your Mac said then."))
+            Text(SessionText.updated(since, now: context.date) + (typeSize.isAccessibilitySize ? "." : ". \(what) show what \(store.computerName()) said then."))
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -516,22 +522,25 @@ struct StaleListLine: View {
     }
 }
 
-/// The bridge answered with 401. The pairing is kept: this may be another network, or the Mac may need a new code.
+/// The bridge answered with 401. The pairing is kept: this may be another network, or the bridge may need a new code.
 struct UnrecognizedBanner: View {
     /// When the list on screen last heard from the Mac; nil where no list shows.
     var staleSince: Date?
     var staleWhat = "Rows"
     /// Set by a screen that is itself a sheet: it must close before pairing can open.
     var pairAgain: (() -> Void)?
+    @Environment(AppStore.self) private var store
     @Environment(AppModel.self) private var app
     @Environment(BridgeClient.self) private var client
 
-    static let cause = "This bridge doesn't recognize this \(ThisDevice.noun). Your Mac may have removed it, or this is another server. Pair again, or retry once you are back on your Mac's network."
+    static func cause(_ computer: String = "your computer") -> String {
+        "This bridge doesn't recognize this \(ThisDevice.noun). The bridge on \(computer) may have removed it, or this is another server. Pair again, or retry once you are back on \(computer)'s network."
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ConnectionBadge(state: .unrecognized)
-            Text(Self.cause)
+            Text(Self.cause(store.computerName()))
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -554,6 +563,7 @@ struct UnrecognizedBanner: View {
 /// The bridge and the app speak protocols too far apart for everything to work.
 struct UpdateBanner: View {
     let mismatch: ProtocolMismatch
+    @Environment(AppStore.self) private var store
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -561,8 +571,8 @@ struct UpdateBanner: View {
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(Theme.attention)
             Text(mismatch == .updateBridge
-                 ? "The bridge on your Mac is older than this app. Approvals, Stop and paired devices need the new bridge."
-                 : "The bridge on your Mac is newer than this app. Update ClaudioBot so nothing is missing.")
+                 ? "The bridge on \(store.computerName()) is older than this app. Approvals, Stop and paired devices need the new bridge."
+                 : "The bridge on \(store.computerName()) is newer than this app. Update ClaudioBot so nothing is missing.")
                 .font(.footnote)
                 .foregroundStyle(Theme.secondary)
         }

@@ -432,7 +432,7 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         store.decisionSent(.always, for: MessageID("p1"))
         store.decisionFailed(for: MessageID("p1"))
         #expect(store.pendingDecisions.isEmpty)
-        #expect(store.decisionNote(MessageID("p1"))?.text == "Not sent · Try again", "said on the card that failed (F-SES-142)")
+        #expect(store.decisionNote(MessageID("p1"))?.text(computer: "omarchy") == "Not sent · Try again", "said on the card that failed (F-SES-142)")
     }
 
     @Test func anErrorIsDismissedOnlyByItsOwnNotice() throws {
@@ -666,8 +666,8 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(ConnectorsSection.rows(store, b1) == .loading)
         store.apply(.connectors(botId: b1, connectors: [gmail]))
         #expect(ConnectorsSection.rows(store, b1) == .shown([gmail]))
-        #expect(ConnectorsSection.detail(gmail) == "Needs sign-in on your Mac")
-        #expect(ConnectorsSection.detail(Connector(name: "x", status: .connected, enabled: false)) == "Off for this Bot and its agents")
+        #expect(ConnectorsSection.detail(gmail, on: "omarchy") == "Needs sign-in on omarchy")
+        #expect(ConnectorsSection.detail(Connector(name: "x", status: .connected, enabled: false), on: "omarchy") == "Off for this Bot and its agents")
     }
 
     @Test func theSwitchSendsSetConnector() throws {
@@ -838,7 +838,7 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         #expect(store.botSends(in: BotID("b1")).map(\.clientId) == ["c1"])
         #expect(store.botSends(in: BotID("b1")).first?.send.pending.state == .waiting)
         #expect(store.botSends(in: BotID("b1")).first?.send.pending.text == "offline")
-        #expect(SessionUserBubble.words(.waiting) == "Not sent yet · Goes if your Mac is back within a minute")
+        #expect(SessionUserBubble.words(.waiting, computer: "omarchy") == "Not sent yet · Goes if omarchy is back within a minute")
 
         store.requestDropped(send("offline", id: "c1"))
         #expect(store.botSends(in: BotID("b1")).first?.send.pending.state == .notSent(nil))
@@ -1000,10 +1000,13 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
 
     @Test func theDeleteDialogSaysTheFolderGoesToTrashAndNamesWorktreesLeftBehind() {
         let b = bot("b1")
-        #expect(HomeView.deleteMessage(b, worktrees: []).contains("trash folder on your Mac, where you can recover it"))
-        #expect(!HomeView.deleteMessage(b, worktrees: []).contains("can't be undone"))
-        #expect(HomeView.deleteMessage(b, worktrees: [Worktree(path: "/w/a", branch: "claudio/fix")]).contains("worktree on claudio/fix stays"))
-        #expect(HomeView.deleteMessage(b, worktrees: [Worktree(path: "/w/a", branch: "x"), Worktree(path: "/w/b", branch: "y")]).contains("2 worktrees stay"))
+        #expect(HomeView.deleteMessage(b, home: "omarchy").contains("trash folder on omarchy, where you can recover it"))
+        #expect(!HomeView.deleteMessage(b, home: "omarchy").contains("can't be undone"))
+        #expect(HomeView.deleteMessage(b, home: "omarchy", worktrees: [(Worktree(path: "/w/a", branch: "claudio/fix"), on: "mac")]).contains("worktree on claudio/fix stays on mac."))
+        let two = [(Worktree(path: "/w/a", branch: "x"), on: "mac"), (Worktree(path: "/w/b", branch: "y"), on: "mac")]
+        #expect(HomeView.deleteMessage(b, home: "omarchy", worktrees: two).contains("2 worktrees stay on mac."))
+        let apart = [(Worktree(path: "/w/a", branch: "x"), on: "mac"), (Worktree(path: "/w/b", branch: "y"), on: "omarchy")]
+        #expect(HomeView.deleteMessage(b, home: "omarchy", worktrees: apart).contains("2 worktrees stay on their machines."))
     }
 
     @Test func theDeleteDialogWaitsForDetailsAndForcesOnlyWhenWorktreesStayBehind() {
@@ -1012,20 +1015,59 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
             id: AgentID("a1"), botId: BotID("b1"), title: "Fix", where: .mac, projectName: "web", status: .waiting,
             url: nil, createdAt: at, updatedAt: at
         )
-        #expect(HomeView.Deletion(b, details: nil, detailsLate: false) == nil, "no details yet: still checking")
+        let store = AppStore()
+        #expect(HomeView.Deletion(b, details: nil, detailsLate: false, store: store) == nil, "no details yet: still checking")
 
-        let plain = HomeView.Deletion(b, details: BotDetails(library: [], links: [], agents: [agent], routines: []), detailsLate: false)
+        let plain = HomeView.Deletion(b, details: BotDetails(library: [], links: [], agents: [agent], routines: []), detailsLate: false, store: store)
         #expect(plain?.request == .deleteBot(botId: BotID("b1"), force: false))
-        #expect(plain?.message == HomeView.deleteMessage(b, worktrees: []))
+        #expect(plain?.message == HomeView.deleteMessage(b, home: "your computer"))
 
         agent.worktree = Worktree(path: "/w/a", branch: "claudio/fix")
-        let held = HomeView.Deletion(b, details: BotDetails(library: [], links: [], agents: [agent], routines: []), detailsLate: false)
+        let held = HomeView.Deletion(b, details: BotDetails(library: [], links: [], agents: [agent], routines: []), detailsLate: false, store: store)
         #expect(held?.request == .deleteBot(botId: BotID("b1"), force: true))
-        #expect(held?.message.contains("worktree on claudio/fix stays") == true)
+        #expect(held?.message.contains("worktree on claudio/fix stays on your computer.") == true)
 
-        let late = HomeView.Deletion(b, details: nil, detailsLate: true)
+        let late = HomeView.Deletion(b, details: nil, detailsLate: true, store: store)
         #expect(late?.request == .deleteBot(botId: BotID("b1"), force: false))
-        #expect(late?.message == HomeView.deleteMessage(b, worktrees: []))
+        #expect(late?.message == HomeView.deleteMessage(b, home: "your computer"))
+    }
+
+    @Test func theConnectionBannerNamesTheBridgesComputer() {
+        let cause = ConnectionBanner.cause(.retrying, address: "10.0.0.20:7878", lastRetryFailed: false, computer: "omarchy")
+        #expect(cause.hasPrefix("The bridge on omarchy isn't answering at 10.0.0.20:7878."))
+        #expect(cause.contains("omarchy's Tailscale name"))
+        #expect(UnrecognizedBanner.cause("omarchy").hasSuffix("retry once you are back on omarchy's network."))
+    }
+
+    @Test func whatTheStoreSaysOfAnUnreachableBridgeNamesItsComputer() {
+        let store = AppStore()
+        store.apply(.hello(Hello(features: [.sessions, .decideAck], machine: "omarchy", userName: "Alex", bots: [])))
+        let sid = SessionID("s1")
+        store.requestDropped(.sessionStop(sessionId: sid, target: .all, turnStartedAt: nil))
+        #expect(store.sessionErrors[sid]?.text == "Stop not sent: omarchy was unreachable.")
+        store.decisionSent(.once, for: MessageID("m1"))
+        store.requestDropped(.sessionDecide(sessionId: sid, cardId: MessageID("m1"), choice: .once))
+        #expect(store.decisionNote(MessageID("m1"))?.text(computer: store.computerName()) == "Not sent: omarchy was unreachable · Try again")
+        store.requestDropped(.createBot(ref: "c1"))
+        #expect(store.lastError?.message == "New bot not created: omarchy was unreachable for a minute. Try again once it's back.")
+    }
+
+    @Test func aRequestDroppedForASessionOnAnotherMachineNamesTheBridgeItNeverReached() {
+        let store = AppStore()
+        let machines = [
+            Machine(id: MachineID("m_home"), name: "omarchy", role: .home, online: true, since: nil, platform: .linux, access: MachineAccess(full: false, sandbox: true), connectors: []),
+            Machine(id: MachineID("m_mac"), name: "MacBook", role: .machine, online: true, since: nil, platform: .darwin, access: MachineAccess(full: false, sandbox: true), connectors: []),
+        ]
+        store.apply(.hello(Hello(features: [.sessions, .machines], machine: "omarchy", userName: "Alex", bots: [], machines: machines)))
+        let sid = SessionID("s1")
+        var row = SessionRow(
+            id: sid, projectId: ProjectID("p1"), parentId: nil, title: "s1", origin: .terminal, agent: nil, status: .working, holder: .nobody,
+            unread: false, branch: nil, worktree: false, pr: nil, mirror: .notMirrored, hidden: false, url: nil, createdAt: at, lastAt: at
+        )
+        row.machine = MachineID("m_mac")
+        store.apply(.sessions(.list(projects: [], rows: [row], mirror: .auto)))
+        store.requestDropped(.sessionStop(sessionId: sid, target: .all, turnStartedAt: nil))
+        #expect(store.sessionErrors[sid]?.text == "Stop not sent: omarchy was unreachable.")
     }
 
     @Test func offlineAWorkingBotIsOnlyLastKnown() {
@@ -1084,7 +1126,7 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
     }
 
     @Test func aCardClosedByTheNextMessageSaysItDidNotRun() {
-        #expect(PermissionAnswer.superseded.outcome().text == "Closed when you sent a new message. It did not run.")
+        #expect(PermissionAnswer.superseded.outcome(computer: "omarchy").text == "Closed when you sent a new message. It did not run.")
     }
 
     @Test func aNewBotOpensOnlyIfTheUserStayedWhereTheyAsked() {
@@ -1108,6 +1150,6 @@ private func hello(_ bots: [Bot], protocol version: Int = 3) -> ServerMessage {
         let store = AppStore()
         store.requestDropped(create)
         #expect(store.droppedCreate == "c1")
-        #expect(store.lastError?.message == "New bot not created: your Mac was unreachable for a minute. Try again once it's back.")
+        #expect(store.lastError?.message == "New bot not created: your computer was unreachable for a minute. Try again once it's back.")
     }
 }

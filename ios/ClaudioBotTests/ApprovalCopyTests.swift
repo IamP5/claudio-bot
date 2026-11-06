@@ -56,8 +56,8 @@ private func card(
         #expect(PermissionChoice.once.consequence(.trust) == "Trusts it for this agent only.")
         #expect(PermissionChoice.never.consequence(.trust) == "Keeps every agent in this repo on empty settings.")
         let settings = card(tool: "Claude Code settings", detail: ".claude/settings.json in /repo", always: "x")
-        #expect(PermissionAnswer.expired.announcement(card: settings, here: false) == "Expired. Nothing was trusted: .claude/settings.json in /repo")
-        #expect(PermissionAnswer.chose(.once).announcement(card: settings, here: true) == "Allowed once. Trusted: .claude/settings.json in /repo")
+        #expect(PermissionAnswer.expired.announcement(card: settings, here: false, computer: "omarchy") == "Expired. Nothing was trusted: .claude/settings.json in /repo")
+        #expect(PermissionAnswer.chose(.once).announcement(card: settings, here: true, computer: "omarchy") == "Allowed once. Trusted: .claude/settings.json in /repo")
     }
 
     @Test func eachButtonIsSpokenWithItsToolAndCommand() {
@@ -74,22 +74,22 @@ private func card(
 
     @Test func aCardClosingIsAnnouncedWithItsOutcomeAndCommand() {
         let c = card(detail: "perl -e 'sleep 45'")
-        #expect(PermissionAnswer.expired.announcement(card: c, here: false) == "Expired. Bash did not run: perl -e 'sleep 45'")
-        #expect(PermissionAnswer.stopped.announcement(card: c, here: false) == "Stopped by you. Bash did not run: perl -e 'sleep 45'")
-        #expect(PermissionAnswer.unknown("gone").announcement(card: c, here: false) == "Closed. Bash did not run: perl -e 'sleep 45'")
-        #expect(PermissionAnswer.chose(.once).announcement(card: c, here: true) == "Allowed once. Bash: perl -e 'sleep 45'")
-        #expect(PermissionAnswer.chose(.never).announcement(card: c, here: true) == "Never allowed. Bash did not run: perl -e 'sleep 45'")
+        #expect(PermissionAnswer.expired.announcement(card: c, here: false, computer: "omarchy") == "Expired. Bash did not run: perl -e 'sleep 45'")
+        #expect(PermissionAnswer.stopped.announcement(card: c, here: false, computer: "omarchy") == "Stopped by you. Bash did not run: perl -e 'sleep 45'")
+        #expect(PermissionAnswer.unknown("gone").announcement(card: c, here: false, computer: "omarchy") == "Closed. Bash did not run: perl -e 'sleep 45'")
+        #expect(PermissionAnswer.chose(.once).announcement(card: c, here: true, computer: "omarchy") == "Allowed once. Bash: perl -e 'sleep 45'")
+        #expect(PermissionAnswer.chose(.never).announcement(card: c, here: true, computer: "omarchy") == "Never allowed. Bash did not run: perl -e 'sleep 45'")
     }
 
     @Test func anAnswerFromAnotherDeviceSaysSo() {
         let c = card(detail: "perl -e 'sleep 30'")
-        #expect(PermissionAnswer.chose(.deny).announcement(card: c, here: false) == "Answered on another device. Denied. Bash did not run: perl -e 'sleep 30'")
-        #expect(!PermissionAnswer.expired.announcement(card: c, here: false).contains("another device"))
+        #expect(PermissionAnswer.chose(.deny).announcement(card: c, here: false, computer: "omarchy") == "Answered on another device. Denied. Bash did not run: perl -e 'sleep 30'")
+        #expect(!PermissionAnswer.expired.announcement(card: c, here: false, computer: "omarchy").contains("another device"))
     }
 
     @Test func anAllowedCallCutShortIsAnnouncedAsCutShort() {
         let step = ToolStep(id: "s", tool: "Bash", label: "Run perl", state: .stopped, diff: nil, output: nil, cause: "Stopped by you")
-        let said = PermissionAnswer.chose(.once).announcement(card: card(detail: "perl -e 'sleep 30'"), step: step, here: true)
+        let said = PermissionAnswer.chose(.once).announcement(card: card(detail: "perl -e 'sleep 30'"), step: step, here: true, computer: "omarchy")
         #expect(said == "Allowed once. Stopped by you before it finished. Bash: perl -e 'sleep 30'")
     }
 }

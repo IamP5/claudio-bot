@@ -42,7 +42,7 @@ struct SidebarRoot: View {
             }
         }
         .onChange(of: Reach(store.connection, failures: client.failures, greeted: store.bridgeProtocol != nil, rejoining: store.rejoin != nil)) { old, new in
-            if let text = Reach.announcement(from: old, to: new) { AccessibilityNotification.Announcement(text).post() }
+            if let text = Reach.announcement(from: old, to: new, computer: store.computerName()) { AccessibilityNotification.Announcement(text).post() }
         }
     }
 }
@@ -119,7 +119,7 @@ struct SessionsSidebar: View {
                     .plainRow()
             } else if !index.loaded {
                 if !store.showsOnline {
-                    Text("Your sessions show here once your Mac answers.")
+                    Text("Your sessions show here once \(store.computerName()) answers.")
                         .font(.subheadline)
                         .foregroundStyle(Theme.secondary)
                         .frame(maxWidth: .infinity)
@@ -236,12 +236,17 @@ struct SessionsSidebar: View {
         #endif
     }
 
+    /// Where the empty list says sessions would be: the one computer, or every machine of the world.
+    private var sessionsPlace: String {
+        store.hasSeveralMachines ? "your machines" : store.computerName()
+    }
+
     @ViewBuilder
     private var emptyState: some View {
         let empty = EmptyList(hidden: index.hiddenCount, query: query)
         switch empty {
         case .noMatch:
-            Text(empty.title)
+            Text(empty.title(on: sessionsPlace))
                 .font(.subheadline)
                 .foregroundStyle(Theme.secondary)
                 .frame(maxWidth: .infinity)
@@ -253,10 +258,10 @@ struct SessionsSidebar: View {
                     .font(.ui(size: 30, weight: .light))
                     .foregroundStyle(Theme.tertiary)
                     .accessibilityHidden(true)
-                Text(empty.title)
+                Text(empty.title(on: sessionsPlace))
                     .font(.headline)
                     .multilineTextAlignment(.center)
-                Text("You hid every session in this list. They are still on your Mac.")
+                Text("You hid every session in this list. They are still on \(sessionsPlace).")
                     .font(.subheadline)
                     .foregroundStyle(Theme.secondary)
                     .multilineTextAlignment(.center)
@@ -280,7 +285,7 @@ struct SessionsSidebar: View {
                 Image(systemName: "chevron.left.forwardslash.chevron.right")
                     .font(.ui(size: 30, weight: .light))
                     .foregroundStyle(Theme.tertiary)
-                Text(empty.title)
+                Text(empty.title(on: sessionsPlace))
                     .font(.headline)
                     .multilineTextAlignment(.center)
                 Text("Sessions from the Claude app, a terminal or your bots' agents show up here, grouped by project.")
@@ -366,7 +371,7 @@ struct SessionsSidebar: View {
 
     private func sessionRow(_ row: SessionRow, depth: Int = 0, isLast: Bool = false, parent: String? = nil) -> some View {
         let bot = row.agent.flatMap { store.bots[$0.botId] }
-        return SessionRowView(row: row, avatar: bot?.avatar, depth: depth, isLast: isLast, now: now, freshness: freshness)
+        return SessionRowView(row: row, avatar: bot?.avatar, machine: store.chipName(row.machine), depth: depth, isLast: isLast, now: now, freshness: freshness)
             .equatable()
             .tag(Selection.session(row.id))
         .listRowSeparator(.hidden)
@@ -540,7 +545,7 @@ struct SessionsSidebar: View {
     private func refresh() async {
         let before = index.updatedAt
         if store.machine == nil {
-            lastRetryFailed = !(await ConnectionBanner.retry(client))
+            lastRetryFailed = !(await ConnectionBanner.retry(client, computer: store.computerName()))
             if lastRetryFailed { return }
         } else {
             client.refreshSessions()
@@ -737,12 +742,14 @@ struct FilterChips: View {
 }
 
 struct UpdateBridgeNote: View {
+    @Environment(AppStore.self) private var store
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Label("Update the bridge", systemImage: "arrow.triangle.2.circlepath")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Theme.attention)
-            Text("The bridge on your Mac doesn't serve Claude Code sessions yet. Update it to see your sessions here, grouped by project.")
+            Text("The bridge on \(store.computerName()) doesn't serve Claude Code sessions yet. Update it to see your sessions here, grouped by project.")
                 .font(.subheadline)
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -763,10 +770,11 @@ private struct ListWait: Hashable {
 /// A connected Mac whose list has not come: say so and let the user ask again, instead of a skeleton with no end.
 struct ListLateNote: View {
     let refresh: () -> Void
+    @Environment(AppStore.self) private var store
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Your Mac is connected but hasn't sent the session list yet.")
+            Text("The bridge on \(store.computerName()) is connected but hasn't sent the session list yet.")
                 .font(.subheadline)
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)

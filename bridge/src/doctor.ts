@@ -6,7 +6,8 @@ import { bridgeUrls, tailnetName } from "./address";
 import { claudeConfigDir, loginOf, MIN_CLAUDE, olderThan, type Login } from "./claudeCode";
 import { lockPathOf, pidIn } from "./lock";
 import { projectRoots } from "./projects";
-import { launchctl, readInstalled, type Exec, type InstalledPlist, type LaunchdState, type ServiceTarget } from "./service";
+import { profileOf, type Platform } from "./machine/profile";
+import { readInstalled, serviceState, SUPERVISOR, type Exec, type InstalledUnit, type ServiceState, type ServiceTarget } from "./service";
 import { checkStateFile, type StateCheck } from "./store";
 import { errorText } from "./text";
 
@@ -22,8 +23,8 @@ export type DoctorDeps = {
   which: (command: string, path: string) => string | null;
   alive: (pid: number) => boolean;
   lan: () => string[];
-  platform: string;
-  /** The CLI's own environment, used where no plist is installed. */
+  platform: Platform;
+  /** The CLI's own environment, used where no service is installed. */
   env: Record<string, string | undefined>;
   homeDir: string;
   /** The account a query of `claude` under `env` reports, read without running a turn. */
@@ -40,17 +41,22 @@ type StateFacts = { kind: "absent" } | { kind: "unreadable"; why: string } | Sta
 type LockFacts = { path: string } & ({ kind: "free" } | { kind: "pid"; pid: number; alive: boolean } | { kind: "garbled" });
 
 export type Facts = {
-  platform: string;
-  macos: string | null;
+  platform: Platform;
+  /** "macOS 26.5", "Linux 6.17.2-arch1-1"; null when the OS gave no version. */
+  os: string | null;
+  supervisor: "launchd" | "systemd";
   label: string;
-  plist: string;
-  installed: InstalledPlist | null;
-  launchd: LaunchdState | null;
+  unit: string;
+  installed: InstalledUnit | null;
+  /** null: the supervisor has not loaded the service. */
+  loaded: ServiceState | null;
   mainExists: boolean | null;
-  /** The environment the service runs with: the plist's when installed, else this shell's. */
-  envFrom: "plist" | "shell";
+  /** The environment the service runs with: the unit's when installed, else this shell's. */
+  envFrom: "unit" | "shell";
   /** CLAUDIOBOT_ACCESS and CLAUDIOBOT_SANDBOX as the service reads them. */
   access: Access;
+  /** What the OS sandbox needs on the service's PATH (none when it is off), and which of those are missing. */
+  sandbox: { needs: readonly string[]; missing: readonly string[] };
   bun: { path: string | null; version: string | null };
   claude: { asked: string; path: string | null; version: string | null };
   /** Claude Code's config dir as the service resolves it (set: from CLAUDE_CONFIG_DIR), and as this shell does. */
@@ -125,16 +131,16 @@ async function version(exec: Exec, argv: string[], env?: Record<string, string |
   return ran && ran.code === 0 ? firstLine(ran.stdout) : null;
 }
 
-type ServiceView = { installed: InstalledPlist | null; env: Record<string, string | undefined>; envFrom: "plist" | "shell"; home: string; port: number };
+type ServiceView = { installed: InstalledUnit | null; env: Record<string, string | undefined>; envFrom: "unit" | "shell"; home: string; port: number };
 
-/** What the service sees: launchd hands it the plist's variables and no others from the shell. */
+/** What the service sees: launchd and systemd hand it the unit's variables and no others from the shell. */
 export async function serviceView(deps: Pick<DoctorDeps, "exec" | "env" | "homeDir">, target: ServiceTarget): Promise<ServiceView> {
-  const installed = await readInstalled(deps.exec, target.plist);
+  const installed = await readInstalled(deps.exec, target);
   const env = installed ? installed.env : deps.env;
   return {
     installed,
     env,
-    envFrom: installed ? "plist" : "shell",
+    envFrom: installed ? "unit" : "shell",
     home: env.CLAUDIOBOT_HOME ?? join(deps.homeDir, ".claudiobot"),
     port: Number(env.CLAUDIOBOT_PORT ?? 7878),
   };
@@ -149,6 +155,14 @@ async function health(deps: Pick<DoctorDeps, "fetch">, port: number): Promise<Fa
     return { url, ok: false, error: errorText(e) };
   }
 }
+
+const OS_VERSION: Readonly<Record<Platform, (exec: Exec) => Promise<string | null>>> = {
+  darwin: async (exec) => {
+    const v = await version(exec, ["sw_vers", "-productVersion"]);
+    return v && `macOS ${v}`;
+  },
+  linux: (exec) => version(exec, ["uname", "-sr"]),
+};
 
 const TAILSCALE_APP = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
 
@@ -183,13 +197,16 @@ export async function gather(deps: DoctorDeps, target: ServiceTarget): Promise<F
   const oldHome = join(deps.homeDir, ".claudebot");
   const newHome = join(deps.homeDir, ".claudiobot");
 
+  const needs = profileOf({ env: view.env, platform: deps.platform, name: "", homedir: deps.homeDir, username: "" }).sandboxNeeds;
+
   return {
     platform: deps.platform,
-    macos: deps.platform === "darwin" ? await version(exec, ["sw_vers", "-productVersion"]) : null,
+    os: await OS_VERSION[deps.platform](exec),
+    supervisor: SUPERVISOR[deps.platform].name,
     label: target.label,
-    plist: target.plist,
+    unit: target.unit,
     installed: view.installed,
-    launchd: deps.platform === "darwin" ? await launchctl(exec, target.uid).print(target.label) : null,
+    loaded: await serviceState(exec, target),
     mainExists: view.installed?.main ? fs.existsSync(view.installed.main) : null,
     envFrom: view.envFrom,
     bun: { path: bunPath, version: bunPath ? await version(exec, [bunPath, "--version"]) : null },
@@ -213,6 +230,7 @@ export async function gather(deps: DoctorDeps, target: ServiceTarget): Promise<F
     tailscale: await tailscaleOf(exec, tailscalePath, view.port),
     lan: deps.lan(),
     access: accessOf(view.env),
+    sandbox: { needs, missing: needs.filter((command) => deps.which(command, servicePath) === null) },
     legacy: {
       homeSet: view.env.CLAUDIOBOT_HOME !== undefined,
       oldEnvSet: view.env.CLAUDEBOT_HOME !== undefined,
@@ -233,21 +251,21 @@ const fail = (check: string, detail: string): Finding => ({ level: "FAIL", check
 type Check = (f: Facts) => Finding | Finding[];
 
 const CHECKS: Check[] = [
-  (f) => (f.platform !== "darwin" ? fail("macos", `this is ${f.platform}; the service needs macOS`) : f.macos ? pass("macos", `macOS ${f.macos}`) : warn("macos", "sw_vers gave no version")),
+  (f) => (f.os ? pass("os", f.os) : warn("os", `${f.platform} gave no version`)),
 
   (f) => {
     if (!f.installed) return warn("service", `${f.label} is not installed. Run: claudiobot install`);
-    if (f.installed.bun === null || f.installed.main === null) return fail("service", `${f.plist} is not a plist this CLI wrote. Run: claudiobot install`);
+    if (f.installed.bun === null || f.installed.main === null) return fail("service", `${f.unit} is not a service file this CLI wrote. Run: claudiobot install`);
     if (!f.mainExists) return fail("service", `${f.installed.main} is gone (was the checkout moved?). Run claudiobot install from the new place`);
-    if (!f.launchd) return fail("service", `${f.plist} exists but launchd has not loaded it. Run: claudiobot install`);
-    if (f.launchd.state !== "running") return fail("service", `${f.label} is ${f.launchd.state} (last exit code ${f.launchd.lastExit ?? "unknown"})`);
-    return pass("service", `${f.label} running, pid ${f.launchd.pid ?? "unknown"}`);
+    if (!f.loaded) return fail("service", `${f.unit} exists but ${f.supervisor} has not loaded it. Run: claudiobot install`);
+    if (f.loaded.state !== "running") return fail("service", `${f.label} is ${f.loaded.state} (last exit code ${f.loaded.lastExit ?? "unknown"})`);
+    return pass("service", `${f.label} running, pid ${f.loaded.pid ?? "unknown"}`);
   },
 
   (f) => (f.bun.version ? pass("bun", `bun ${f.bun.version} (${f.bun.path})`) : fail("bun", f.bun.path ? `${f.bun.path} --version failed` : "bun is not on PATH")),
 
   (f) => {
-    const where = f.envFrom === "plist" ? "the service PATH" : "this shell's PATH (no service installed)";
+    const where = f.envFrom === "unit" ? "the service PATH" : "this shell's PATH (no service installed)";
     if (!f.claude.path) return fail("claude", `${f.claude.asked} does not resolve under ${where}. Set CLAUDIOBOT_CLAUDE to its full path and run claudiobot install`);
     if (!f.claude.version) return fail("claude", `${f.claude.path} --version failed`);
     if (olderThan(f.claude.version, MIN_CLAUDE))
@@ -256,7 +274,7 @@ const CHECKS: Check[] = [
   },
 
   (f) =>
-    f.envFrom === "plist" && f.config.dir !== f.config.shellDir
+    f.envFrom === "unit" && f.config.dir !== f.config.shellDir
       ? warn("config", `the service reads Claude Code's config from ${f.config.dir} but this shell from ${f.config.shellDir}. Run claudiobot install from the shell whose config the bots should use`)
       : pass("config", `Claude Code's config is ${f.config.dir}`),
 
@@ -306,7 +324,7 @@ const CHECKS: Check[] = [
     if (l.kind === "free") return f.health.ok ? warn("lock", `${l.path} is missing but something answers on the port`) : warn("lock", `no bridge holds ${l.path}`);
     if (l.kind === "garbled") return fail("lock", `${l.path} holds no pid, so no bridge will start. If none is running, delete it`);
     if (!l.alive) return warn("lock", `${l.path} names pid ${l.pid}, which is gone; the next bridge takes it over`);
-    if (f.launchd?.pid && f.launchd.pid !== l.pid) return warn("lock", `${l.path} is held by pid ${l.pid}, not by the service (pid ${f.launchd.pid})`);
+    if (f.loaded?.pid && f.loaded.pid !== l.pid) return warn("lock", `${l.path} is held by pid ${l.pid}, not by the service (pid ${f.loaded.pid})`);
     return pass("lock", `${l.path} held by live pid ${l.pid}`);
   },
 
@@ -337,6 +355,14 @@ const CHECKS: Check[] = [
         ? pass("access", accessLine(f.access))
         : warn("access", `${accessLine(f.access)}: commands run unsandboxed under the gate's rules`),
 
+  (f) => {
+    const { needs, missing } = f.sandbox;
+    if (needs.length === 0) return [];
+    if (missing.length === 0) return pass("sandbox", `${needs.join(" and ")} found for the sandbox`);
+    const packages = missing.map((c) => (c === "bwrap" ? "bubblewrap" : c)).join(" ");
+    return fail("sandbox", `the sandbox is on but ${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} not on the service PATH, so every Bash call fails. Install ${packages}, or set CLAUDIOBOT_SANDBOX=off and run claudiobot install`);
+  },
+
   (f) => (f.lan.length === 0 ? warn("lan", "no LAN address: a phone on the same Wi-Fi cannot reach the bridge") : pass("lan", f.lan.join(", "))),
 
   (f) => {
@@ -358,7 +384,7 @@ const CHECKS: Check[] = [
 
   (f) =>
     f.installed
-      ? warn("mcp env", "launchd does not read .zshrc: an MCP server that needs a variable from it will not see it. Put the value in the server's env (claude mcp add -e KEY=value)")
+      ? warn("mcp env", `${f.supervisor} does not read .zshrc or .bashrc: an MCP server that needs a variable from it will not see it. Put the value in the server's env (claude mcp add -e KEY=value)`)
       : [],
 ];
 
@@ -374,17 +400,17 @@ export async function doctor(deps: DoctorDeps, target: ServiceTarget, out: (text
   return failed === 0 ? 0 : 1;
 }
 
-/** Exit 0 only when launchd runs the service and it answers /health. */
+/** Exit 0 only when the supervisor runs the service and it answers /health. */
 export async function status(deps: DoctorDeps, target: ServiceTarget, out: (text: string) => void): Promise<number> {
   const view = await serviceView(deps, target);
-  const launchd = await launchctl(deps.exec, target.uid).print(target.label);
+  const loaded = await serviceState(deps.exec, target);
   const h = await health(deps, view.port);
   const lock = readLock(deps.fs, deps.alive, view.home);
   const service = !view.installed
     ? "not installed"
-    : !launchd
-      ? `installed but not loaded (${target.plist})`
-      : `${launchd.state}, pid ${launchd.pid ?? "none"}, last exit code ${launchd.lastExit ?? "none"}`;
+    : !loaded
+      ? `installed but not loaded (${target.unit})`
+      : `${loaded.state}, pid ${loaded.pid ?? "none"}, last exit code ${loaded.lastExit ?? "none"}`;
   const holder = lock.kind === "free" ? "free" : lock.kind === "garbled" ? "holds no pid" : `pid ${lock.pid}${lock.alive ? "" : " (gone)"}`;
   out(
     [
@@ -396,5 +422,5 @@ export async function status(deps: DoctorDeps, target: ServiceTarget, out: (text
       ``,
     ].join("\n"),
   );
-  return launchd?.state === "running" && h.ok ? 0 : 1;
+  return loaded?.state === "running" && h.ok ? 0 : 1;
 }

@@ -171,6 +171,23 @@ const sameText = (a: string, b: string) => {
   return key(a) === key(b);
 };
 
+/**
+ * USER.md after a world move: the local file plus each fact of the incoming one it lacks, by id or by text. Merging
+ * the same file again changes nothing.
+ */
+export function mergeFacts(local: string, incoming: string): string {
+  if (local.trim() === "") return incoming;
+  const d = docOf(local);
+  const have = factLines(d, "").map((f) => f.fact);
+  const from = docOf(incoming);
+  for (const { line, fact } of factLines(from, "")) {
+    if (have.some((h) => h.id === fact.id || sameText(h.text, fact.text))) continue;
+    appendItem(d, "Facts", from.lines[line]!.trim());
+    have.push(fact);
+  }
+  return textOf(d);
+}
+
 /** Why a line may not be stored or shown to a bot, or null. context() re-checks lines a hand edit may have added. */
 function unsafe(text: string): string | null {
   if (hasHiddenCharacters(text)) return "That text has hidden characters.";

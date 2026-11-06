@@ -320,6 +320,7 @@ private struct InfoTab: View {
             }
             SpendingSection(bot: bot)
             MuteSection(bot: bot)
+            AgentsOnSection(bot: bot)
             ConnectorsSection(bot: bot)
             SkillsSection(bot: bot)
         }
@@ -548,6 +549,7 @@ private struct LibraryTab: View {
 
 private struct AgentsTab: View {
     let agents: [Agent]?
+    @Environment(AppStore.self) private var store
     @Environment(Router.self) private var router
     @Environment(\.openURL) private var openURL
 
@@ -572,6 +574,7 @@ private struct AgentsTab: View {
                                         .font(.ui(size: 13))
                                         .foregroundStyle(Theme.secondary)
                                         .lineLimit(1)
+                                    if let machine = store.chipName(for: agent) { MachineChip(name: machine) }
                                     Spacer(minLength: 0)
                                     if let url = agent.url {
                                         Button("Open in Claude") { openURL(url) }

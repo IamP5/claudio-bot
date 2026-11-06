@@ -70,7 +70,7 @@ enum OutboxRule: Equatable, Sendable {
         case .open, .answer, .dismiss, .updateBot, .markUnread, .deleteBot, .setRoutine, .runRoutine, .details, .agent,
              .file, .memory, .setFact, .forgetFact, .confirmFact, .connectors, .setConnector, .skills, .deleteSkill, .webhookToken,
              .removeWorktree, .commands, .exchange, .devices, .revokeDevice, .pairCode, .presence, .refreshUsage,
-             .watchSessions, .unwatchSessions, .watchSession, .unwatchSession, .sessionPage, .sessionTool:
+             .watchSessions, .unwatchSessions, .watchSession, .unwatchSession, .sessionPage, .sessionTool, .machineCode, .removeMachine:
             .waits
         }
     }
@@ -197,14 +197,12 @@ final class BridgeClient {
         }
     }
 
-    /// Connects with `pairing`. Another bridge starts from an empty store, so nothing from the old Mac lingers.
+    /// Connects with `pairing`. Another world starts from an empty store, so nothing from the old one lingers.
     func start(_ pairing: Pairing) {
         stop()
-        if let current = self.pairing, current.url != pairing.url {
-            store.setConnection(.unpaired)
-            outbox.removeAll()
+        if let current = self.pairing, !current.sameWorld(as: pairing) {
             cursor = StreamCursor()
-            onForget()
+            forgetWorld()
         }
         self.pairing = pairing
         unpairedReason = nil
@@ -226,8 +224,8 @@ final class BridgeClient {
 
     /// Redeems the code, then keeps the current pairing until the new bridge says hello. On any failure nothing changes.
     func pair(_ invite: PairInvite) async throws {
-        let candidate = try await Pairing.redeem(invite, deviceName: deviceName)
-        try await candidate.greet(within: timing.greeting)
+        let redeemed = try await Pairing.redeem(invite, deviceName: deviceName)
+        let candidate = redeemed.entering(try await redeemed.greet(within: timing.greeting).world?.id)
         try vault.save(candidate)
         start(candidate)
     }
@@ -238,15 +236,13 @@ final class BridgeClient {
     func changeAddress(to url: URL) async throws {
         guard let current = pairing, url != current.url else { return }
         try await current.proveBridge(at: url, timeout: timing.health)
-        let moved = Pairing(url: url, credential: current.credential)
+        let moved = current.at(url)
         do {
             try await moved.greet(within: timing.greeting)
         } catch {
             throw Pairing.AddressChange.unreachable(url)
         }
         try vault.save(moved)
-        // Set first, so start() sees the same bridge and keeps what the store holds.
-        pairing = moved
         start(moved)
     }
 
@@ -445,11 +441,37 @@ final class BridgeClient {
         stop()
         vault.clear()
         pairing = nil
-        cursor = StreamCursor()
         unpairedReason = reason
+        cursor = StreamCursor()
+        forgetWorld()
+    }
+
+    /// Leaves the stream cursor to the caller: a hello from the new world has already moved it there.
+    private func forgetWorld() {
         outbox.removeAll()
         store.setConnection(.unpaired)
         onForget()
+    }
+
+    /// A hello names the world behind this pairing. The first one a pairing hears is remembered; a different one
+    /// later means another world answers at these addresses, so nothing from the old one may linger.
+    private func enter(_ world: WorldID) {
+        guard let current = pairing, current.world != world else { return }
+        if current.world != nil { forgetWorld() }
+        let entered = current.entering(world)
+        pairing = entered
+        do { try vault.save(entered) } catch { log.error("could not save the pairing's world: \(error.localizedDescription)") }
+    }
+
+    /// After a connect that never said hello: the first other address of this world, in the link's order, that proves
+    /// it is the same bridge. Like changeAddress, the token goes nowhere that has not proved it holds it.
+    private func provenFallback() async -> Pairing? {
+        guard let current = pairing, case .device = current.credential else { return nil }
+        for address in current.urls where address != current.url {
+            guard !Task.isCancelled else { return nil }
+            if (try? await current.proveBridge(at: address, timeout: timing.health)) != nil { return current.at(address) }
+        }
+        return nil
     }
 
     private func transmitIfConnected(_ msg: ClientMessage) {
@@ -507,13 +529,17 @@ final class BridgeClient {
             if Task.isCancelled { return }
             switch ending {
             case .revoked:
-                return forget(reason: "This \(ThisDevice.noun) was removed from your Mac. Pair it again to reconnect.")
+                return forget(reason: "This \(ThisDevice.noun) was removed from \(store.computerName()). Pair it again to reconnect.")
             case .unrecognized:
                 return store.setConnection(.unrecognized)
             case .greeted:
                 failures = 0
             case .failed:
-                break
+                if let moved = await provenFallback(), !Task.isCancelled, self.pairing == pairing {
+                    log.info("moving to \(moved.url.bridgeAddress), which proved it is the same bridge")
+                    try? vault.save(moved)
+                    self.pairing = moved
+                }
             }
             if hurry { continue }
             let delay = Backoff.delay(afterFailures: failures)
@@ -643,6 +669,7 @@ final class BridgeClient {
                 break
             }
             let msg = frame.message
+            if case .hello(let hello) = msg, let world = hello.world?.id { enter(world) }
             let alerts = store.apply(msg)
             switch msg {
             case .hello:

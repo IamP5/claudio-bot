@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var revoking: Device?
     @State private var pairingAnother = false
     @State private var editingAddress = false
+    @State private var addingMachine = false
 
     var body: some View {
         content
@@ -38,11 +39,11 @@ struct SettingsView: View {
 
     private var form: some View {
         Form {
-            Section("Mac") {
+            Section("This bridge") {
                 LabeledContent("Status", value: store.connection.summary)
                 LabeledContent("Machine", value: store.machine ?? "Unknown")
                 if let url = client.pairing?.url {
-                    LabeledContent("Bridge") {
+                    LabeledContent("Address") {
                         Text(url.absoluteString)
                             .font(.footnote.monospaced())
                             .lineLimit(1)
@@ -52,6 +53,8 @@ struct SettingsView: View {
                 }
                 LabeledContent("Bots", value: "\(store.bots.count)")
             }
+
+            MachinesSection { addingMachine = true }
 
             PlanUsageSection()
 
@@ -75,7 +78,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Sessions")
                 } footer: {
-                    Text(Copy.sessionsFooter)
+                    Text(Copy.sessionsFooter(store.computerName(or: Copy.bridgeComputer)))
                 }
                 .onChange(of: store.mirrorNote) { _, note in
                     if let note { AccessibilityNotification.Announcement("Show agent sessions in the Claude app: " + note).post() }
@@ -95,7 +98,7 @@ struct SettingsView: View {
                 if store.has(.pushState) { AwayAlertsRow(push: store.pushState ?? .on) }
                 #endif
             } footer: {
-                Text("Alerts for bot messages, questions and approvals arrive while ClaudioBot is connected to your Mac. A question alert lets you pick one of its first two answers.")
+                Text("Alerts for bot messages, questions and approvals arrive while ClaudioBot is connected to the bridge. A question alert lets you pick one of its first two answers.")
             }
 
             Section {
@@ -137,14 +140,20 @@ struct SettingsView: View {
                 #endif
         }
         .sheet(isPresented: $editingAddress) { EditAddressView() }
+        .sheet(isPresented: $addingMachine) {
+            AddMachineView()
+                #if os(macOS)
+                .frame(width: 520, height: 460)
+                #endif
+        }
     }
 
     private var devices: some View {
         Section {
             if !store.bridgeManagesDevices {
                 Text(store.bridgeProtocol == nil
-                     ? "Connect to your Mac to see the devices paired with it."
-                     : "Update the bridge on your Mac to see and revoke paired devices.")
+                     ? "Connect to the bridge to see the devices paired with it."
+                     : "Update the bridge to see and revoke paired devices.")
                     .foregroundStyle(Theme.secondary)
             } else if let devices = store.devices {
                 ForEach(devices) { device in
@@ -154,7 +163,7 @@ struct SettingsView: View {
                 ProgressView().frame(maxWidth: .infinity)
             }
             if store.bridgeManagesDevices {
-                let blocked = PairAnother.blocked(online: store.machine != nil, credential: client.pairing?.credential, devices: store.devices)
+                let blocked = PairAnother.blocked(online: store.machine != nil, credential: client.pairing?.credential, devices: store.devices, computer: store.computerName())
                 Button("Pair another device") { pairingAnother = true }
                     .disabled(blocked != nil)
                 if let blocked {
@@ -178,18 +187,27 @@ struct SettingsView: View {
         static let unpairWarning = "To reach your bots again, pair this Mac with the bridge again."
         static let unpairFooter = "The bridge forgets this Mac when it is connected, then this Mac deletes the bridge address and token."
         static let devicesFooter = "Each device has its own token. Revoking one leaves the others paired."
-        static let sessionsFooter = "Sessions your bots' agents and this Mac start can appear in the Claude app on the bridge's Mac. Automatically adds them while you're away from that Mac; When I click adds one when you choose Open in Claude app."
+        /// "Your computer" would read as this Mac.
+        static let bridgeComputer = "the bridge's computer"
+
+        static func sessionsFooter(_ computer: String) -> String {
+            "Sessions your bots' agents and this Mac start can appear in the Claude app on \(computer). Automatically adds them while you're away from \(computer); When I click adds one when you choose Open in Claude app."
+        }
 
         static func mirror(_ pref: MirrorPref) -> String {
             pref == .tap ? "When I click" : SessionText.mirror(pref)
         }
         #else
-        static let unpair = "Unpair this Mac"
-        static let unpairQuestion = "Unpair this Mac?"
-        static let unpairWarning = "You will need a new pairing code from your Mac."
-        static let unpairFooter = "Removes this \(ThisDevice.noun) from your Mac when it is connected, then deletes the bridge address and token from this \(ThisDevice.noun)."
+        static let unpair = "Unpair from the bridge"
+        static let unpairQuestion = "Unpair from the bridge?"
+        static let unpairWarning = "You will need a new pairing code from the bridge."
+        static let unpairFooter = "Removes this \(ThisDevice.noun) from the bridge when it is connected, then deletes the bridge address and token from this \(ThisDevice.noun)."
         static let devicesFooter = "Each phone has its own token. Revoking one leaves the others paired."
-        static let sessionsFooter = "Sessions your bots' agents and this \(ThisDevice.casualNoun) start can appear in the Claude app on your Mac. Automatically adds them while you're away from the Mac; When I tap adds one when you choose Open in Claude app."
+        static let bridgeComputer = "your computer"
+
+        static func sessionsFooter(_ computer: String) -> String {
+            "Sessions your bots' agents and this \(ThisDevice.casualNoun) start can appear in the Claude app on \(computer). Automatically adds them while you're away from \(computer); When I tap adds one when you choose Open in Claude app."
+        }
 
         static func mirror(_ pref: MirrorPref) -> String { SessionText.mirror(pref) }
         #endif
@@ -199,11 +217,12 @@ struct SettingsView: View {
 /// Whether the Mac's pushes reach this phone while the app is closed.
 private struct AwayAlertsRow: View {
     let push: PushState
+    @Environment(AppStore.self) private var store
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             LabeledContent("Alerts when away", value: push.value)
-            if let detail = push.detail {
+            if let detail = push.detail(computer: store.computerName()) {
                 Text(detail)
                     .font(.footnote)
                     .foregroundStyle(push.failing ? Theme.danger : Theme.secondary)
@@ -228,9 +247,10 @@ extension PushState {
         if case .failing = self { true } else { false }
     }
 
-    var detail: String? {
+    /// computer: the bridge's computer (`AppStore.computerName`).
+    func detail(computer: String) -> String? {
         switch self {
-        case .off: "Set CLAUDIOBOT_PUSH_URL on the Mac to get alerts when the app is closed."
+        case .off: "Set CLAUDIOBOT_PUSH_URL on \(computer) to get alerts when the app is closed."
         case let .failing(error, at): "\(error), \(at.formatted(.relative(presentation: .named)))"
         case .on, .unknown: nil
         }
@@ -328,7 +348,7 @@ struct PairAnotherView: View {
             } else if unanswered {
                 noAnswer
             } else {
-                ProgressView("Getting a code from your Mac…").frame(maxHeight: .infinity)
+                ProgressView("Getting a code from \(store.computerName())…").frame(maxHeight: .infinity)
             }
         }
         .padding(24)
@@ -384,8 +404,8 @@ struct PairAnotherView: View {
     private var noAnswer: some View {
         VStack(spacing: 16) {
             Text(store.machine == nil
-                 ? "Your Mac went offline before it sent a code."
-                 : "Your Mac didn't send a code within \(Int(Self.codeWait.components.seconds)) seconds.")
+                 ? "The bridge on \(store.computerName()) went offline before it sent a code."
+                 : "The bridge on \(store.computerName()) didn't send a code within \(Int(Self.codeWait.components.seconds)) seconds.")
                 .foregroundStyle(Theme.secondary)
                 .multilineTextAlignment(.center)
                 .accessibilityFocused($focus, equals: .unanswered)
@@ -436,7 +456,7 @@ struct PairAnotherView: View {
         ContentUnavailableView(
             "No address to share",
             systemImage: "network.slash",
-            description: Text("Your Mac reported only addresses another device cannot reach. Join it to Wi-Fi or Tailscale, then get a new code.")
+            description: Text("The bridge on \(store.computerName()) reported only addresses another device cannot reach. Join \(store.computerName()) to Wi-Fi or Tailscale, then get a new code.")
         )
     }
 

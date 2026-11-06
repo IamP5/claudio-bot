@@ -93,9 +93,9 @@ struct PairingView: View {
         VStack(spacing: 14) {
             AvatarView(avatar: .standard, size: 84, motion: .idle)
                 .padding(.top, 24)
-            Text("Pair with your Mac")
+            Text("Pair with your computer")
                 .font(.largeTitle.bold())
-            Text("Your bots live on your Mac. Run `bun run start` in the bridge folder there. It prints a QR code and a pairing code. A \(Self.pairedPeer) that is already paired can show one too, under Settings.")
+            Text("Your bots live on the computer that runs the bridge. Run `bun run start` in the bridge folder there. It prints a QR code and a pairing code. A \(Self.pairedPeer) that is already paired can show one too, under Settings.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

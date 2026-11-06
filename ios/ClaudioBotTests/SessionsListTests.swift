@@ -34,10 +34,10 @@ private let crash = SessionOutcome(kind: .failed, text: "Claude Code stopped une
         #expect(index.sections(SessionQuery()).isEmpty)
         let empty = EmptyList(hidden: index.hiddenCount, query: SessionQuery())
         #expect(empty == .allHidden(2))
-        #expect(empty.title == "2 hidden sessions")
-        #expect(EmptyList(hidden: 1, query: SessionQuery()).title == "1 hidden session")
-        #expect(EmptyList(hidden: 0, query: SessionQuery()).title == "No Claude Code sessions on this Mac yet", "none yet only when no row exists")
-        #expect(EmptyList(hidden: 2, query: SessionQuery(filter: .working)).title == "No working sessions.")
+        #expect(empty.title(on: "omarchy") == "2 hidden sessions")
+        #expect(EmptyList(hidden: 1, query: SessionQuery()).title(on: "omarchy") == "1 hidden session")
+        #expect(EmptyList(hidden: 0, query: SessionQuery()).title(on: "omarchy") == "No Claude Code sessions on omarchy yet", "none yet only when no row exists")
+        #expect(EmptyList(hidden: 2, query: SessionQuery(filter: .working)).title(on: "omarchy") == "No working sessions.")
     }
 
     @Test func failedUnavailableAndParkedRowsAreNeverFolded() {
@@ -141,16 +141,16 @@ private let crash = SessionOutcome(kind: .failed, text: "Claude Code stopped une
 
     @Test func reconnectingIsNeitherLostNorAnnounced() {
         #expect(!Reach.reconnecting.lost)
-        #expect(Reach.announcement(from: .connected(machine: "Mac"), to: .reconnecting) == nil)
-        #expect(Reach.announcement(from: .reconnecting, to: .connected(machine: "Mac")) == nil)
-        #expect(Reach.announcement(from: .reconnecting, to: .retrying) == "Can't reach your Mac. Reconnecting.")
+        #expect(Reach.announcement(from: .connected(machine: "Mac"), to: .reconnecting, computer: "omarchy") == nil)
+        #expect(Reach.announcement(from: .reconnecting, to: .connected(machine: "Mac"), computer: "omarchy") == nil)
+        #expect(Reach.announcement(from: .reconnecting, to: .retrying, computer: "omarchy") == "Can't reach omarchy. Reconnecting.")
         #expect(ConnectionBanner.cause(.reconnecting, address: "10.0.0.20:7878", lastRetryFailed: false) == "Reconnecting…")
     }
 
     @Test func aMacThatDoesNotRecognizeThisPhoneIsNeverCalledNotRunning() {
-        let cause = ConnectionBanner.cause(.unrecognized, address: "10.0.0.20:7878", lastRetryFailed: false)
-        #expect(cause == "This bridge doesn't recognize this \(ThisDevice.noun). Your Mac may have removed it, or this is another server. Pair again, or retry once you are back on your Mac's network.")
-        #expect(StartPhase.unrecognizedLabel == "Start (your Mac doesn't recognize this \(ThisDevice.noun))")
+        let cause = ConnectionBanner.cause(.unrecognized, address: "10.0.0.20:7878", lastRetryFailed: false, computer: "MacBook")
+        #expect(cause == "This bridge doesn't recognize this \(ThisDevice.noun). The bridge on MacBook may have removed it, or this is another server. Pair again, or retry once you are back on MacBook's network.")
+        #expect(StartPhase.unrecognizedLabel("omarchy") == "Start (omarchy doesn't recognize this \(ThisDevice.noun))")
     }
 
     @Test func namesakeProjectsShowTheirLabelsAndSearchFindsThem() throws {

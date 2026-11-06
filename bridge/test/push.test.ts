@@ -537,6 +537,17 @@ const at = (h: ReturnType<typeof harness>, t: number) => {
   h.push.tick(new Date(t));
 };
 
+test("a card in a session another machine runs pushes once, while no phone is live, with its link", async () => {
+  const live = harness({ liveFor: 45_000 });
+  expect(live.push.notifySession!(SID, "m_far" as MessageId)).toBe(false);
+  const h = harness();
+  expect(h.push.notifySession!(SID, "m_far" as MessageId)).toBe(true);
+  expect(h.push.notifySession!(SID, "m_far" as MessageId)).toBe(false);
+  await settle();
+  expect(sent(h)).toEqual([["A Claude Code session needs you", `claudiobot://session/${SID}?card=m_far`, "high"]]);
+  expect(keys(h.world)).toEqual(["m_far|card"]);
+});
+
 test("a session's cards that open within 2 s of the one before share one high-priority push that counts them and names nothing", async () => {
   const h = harness();
   drive(h, [permission("m_a", T0), permission("m_b", T0 + 3), permission("m_c", T0 + 1_500)]);

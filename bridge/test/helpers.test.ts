@@ -63,8 +63,8 @@ test("appendArchive appends JSON lines to a private file in a private folder", (
   expect([statSync(path).mode & 0o777, statSync(join(path, "..")).mode & 0o777]).toEqual([0o600, 0o700]);
 });
 
-test("PRIVATE holds distinct relative paths with no trailing slash", () => {
-  const all = Object.values(PRIVATE).flat();
+test.each(Object.entries(PRIVATE))("PRIVATE.%s holds distinct relative paths with no trailing slash", (_platform, paths) => {
+  const all = Object.values(paths).flat();
   expect(all.filter((p) => p.startsWith("/") || p.startsWith("~") || p.endsWith("/") || p.includes(".."))).toEqual([]);
   expect(new Set(all).size).toBe(all.length);
 });

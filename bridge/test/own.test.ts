@@ -1,3 +1,4 @@
+import { PRIVATE } from "../src/private";
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -8,9 +9,9 @@ import type { ClaudeApps, DesktopEntry, Live } from "../src/claudeApps";
 import { alwaysText, END_SETTLE_MS, OWN_CARD_TTL_MS } from "../src/own";
 import { OUTLIVED_LOOK_MS } from "../src/outlived";
 import type { TaskRun } from "../src/procs";
-import type { AgentId, BotId, ItemId, MessageId, ServerMessage, SessionId, SessionItem, SessionRow, TaskId, ThreadChannelFrame } from "../src/protocol";
+import type { AgentId, BotId, ItemId, MachineId, MessageId, ServerMessage, SessionId, SessionItem, SessionReply, SessionRow, TaskId, ThreadChannelFrame } from "../src/protocol";
 import { EXIT_SETTLE_MS, GONE_ERROR, GONE_LOOK_MAX_MS } from "../src/session";
-import { createSessions, type Sessions } from "../src/sessions";
+import { createSessions, type Sessions, type ThreadSignal } from "../src/sessions";
 import { emptySession, emptyWorld, type AgentRecord, type World } from "../src/world";
 import { FakeQuery, result } from "./hub-kit";
 import { alive, backgroundCommand, evalShell } from "./shells";
@@ -28,7 +29,7 @@ let repo: string;
 let folder: string;
 let world: World;
 let sessions: Sessions;
-let thread: { id: SessionId; frame: ThreadChannelFrame }[];
+let thread: { id: SessionId; frame: ThreadSignal }[];
 let holders: Map<SessionId, Live>;
 let queries: FakeQuery[];
 let directs: { agentId: string; text: string; clientId: string }[];
@@ -62,6 +63,7 @@ const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 
 function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
   sessions = createSessions({
+    machine: "m_test" as MachineId,
     epoch: "e1",
     projectsDir: join(base, "projects"),
     apps: apps(),
@@ -74,11 +76,12 @@ function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
     userName: "Alex",
     bridgeHome: join(base, "home"),
     roots: [base],
-    agents: {
-      session: () => null,
-      direct: (rec, text, clientId) => (directs.push({ agentId: rec.agent.id, text, clientId }), null),
-      stop: async () => true,
-      message: async (rec, text) => (directs.push({ agentId: rec.agent.id, text, clientId: "cloud" }), "Sent to the cloud session."),
+    agents: { session: () => null },
+    send: async (i) => {
+      if (i.kind === "agent.direct") directs.push({ agentId: i.agentId, text: i.text, clientId: i.clientId });
+      if (i.kind !== "agent.message") return { ok: true };
+      directs.push({ agentId: i.agentId, text: i.text, clientId: "cloud" });
+      return { ok: true, reply: "Sent to the cloud session." };
     },
     decideGate: (botId, cardId, choice) => (gateDecisions.push({ botId, cardId, choice }), { ok: true }),
     ledger: { add() {}, headroom: () => ({ ok: true, capReached: false }), budgetLeft: () => null, dailyLeft: () => null },
@@ -93,7 +96,7 @@ function start(over: Partial<Parameters<typeof createSessions>[0]> = {}) {
       leaders: () => leaders(),
       ...(taskRunOf && { taskRun: taskRunOf }),
     },
-    scope: (cwd) => ({ bridgeHome: join(base, "home"), own: cwd, userMd: null, homedir: base }),
+    scope: (cwd) => ({ bridgeHome: join(base, "home"), own: cwd, userMd: null, homedir: base, private: PRIVATE.darwin }),
     folders: () => [],
     persist: () => {},
     now: () => new Date(clock),
@@ -843,6 +846,17 @@ describe("a session the phone starts", () => {
     const o = queries[0]!.options;
     expect([o.sessionId, o.resume, o.title, o.permissionMode, o.cwd]).toEqual([id, undefined, undefined, "acceptEdits", repo]);
     expect((await snapshot(id)).items).toMatchObject([{ kind: "user", id: "r1", text: "Add a mute button", queued: false }]);
+  });
+
+  test("it starts on this machine when it names this machine or none, and is refused on any other until they arrive", async () => {
+    await start({ folders: () => [repo] });
+    const project = ((await handle({ type: "watch_sessions" }))[0] as Extract<ServerMessage, { type: "sessions" }>).projects.find((p) => p.path === repo)!;
+    const base = { type: "session_create", projectId: project.id, text: "Add a mute button", model: null, mode: null, isolate: "none" } as const;
+    expect(await handle({ ...base, ref: "r1", machine: "m_other" as MachineId })).toEqual([
+      { type: "error", message: "Sessions on other machines arrive later", about: { kind: "create", ref: "r1" } },
+    ]);
+    expect(queries).toHaveLength(0);
+    expect(await handle({ ...base, ref: "r2", machine: "m_test" as MachineId })).toMatchObject([{ type: "session_created", ref: "r2" }]);
   });
 });
 
@@ -2022,7 +2036,7 @@ describe("the thread says what stopped only once it did", () => {
       await flush();
       await flush();
       const stopAll = async () => handle({ type: "session_stop", sessionId: ASK, target: "all" });
-      const cantTell: ServerMessage[] = [
+      const cantTell: SessionReply[] = [
         {
           type: "error",
           message: `The bridge can't tell whether command "Run in background: Sleep" (${command}) still runs on your Mac, so it has nothing it can stop. Check it on your Mac (Activity Monitor, or ps).`,
@@ -3180,11 +3194,10 @@ describe("requests that outlive the socket", () => {
     let release = () => {};
     const held = new Promise<void>((r) => (release = r));
     await start({
-      agents: {
-        session: () => null,
-        direct: (rec, text, clientId) => (directs.push({ agentId: rec.agent.id, text, clientId }), null),
-        stop: async () => (await held, true),
-        message: async () => "",
+      send: async (i) => {
+        if (i.kind === "agent.stop") await held;
+        if (i.kind === "agent.direct") directs.push({ agentId: i.agentId, text: i.text, clientId: i.clientId });
+        return { ok: true };
       },
     });
     const first = sendTo(ASK, "Use red", "c_red", true);
@@ -3197,7 +3210,12 @@ describe("requests that outlive the socket", () => {
     agentAt("mac");
     let refusal: string | null = "Pick a color worked in a worktree that was removed, so it cannot continue.";
     await start({
-      agents: { session: () => null, direct: (rec, text, clientId) => refusal ?? (directs.push({ agentId: rec.agent.id, text, clientId }), null), stop: async () => true, message: async () => "" },
+      send: async (i) => {
+        if (i.kind !== "agent.direct") return { ok: true };
+        if (refusal !== null) return { ok: false, reason: refusal };
+        directs.push({ agentId: i.agentId, text: i.text, clientId: i.clientId });
+        return { ok: true };
+      },
     });
     expect(await sendTo(ASK, "Use red", "c_red")).toEqual([{ type: "error", message: refusal, about: { kind: "send", sessionId: ASK, clientId: "c_red" } }]);
     refusal = null;
@@ -3209,14 +3227,10 @@ describe("requests that outlive the socket", () => {
     const rec = agentAt("cloud");
     let said = "Sent to the cloud session.";
     await start({
-      agents: {
-        session: () => null,
-        direct: () => null,
-        stop: async () => false,
-        message: async (r, text, _initiator, clientId) => {
-          if (said.startsWith("Sent")) r.messages.push({ id: "m_c1" as MessageId, at: "2026-10-18T12:00:00.000Z", from: "bot", text, ...(clientId !== undefined && { clientId }) });
-          return said;
-        },
+      send: async (i) => {
+        if (i.kind !== "agent.message") return { ok: true };
+        if (said.startsWith("Sent")) rec.messages.push({ id: "m_c1" as MessageId, at: "2026-10-18T12:00:00.000Z", from: "bot", text: i.text, ...(i.clientId !== undefined && { clientId: i.clientId }) });
+        return { ok: true, reply: said };
       },
     });
     expect(await sendTo(CLOUD, "Use blue", "c_blue")).toEqual([]);

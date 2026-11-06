@@ -88,14 +88,15 @@ struct SpendingSection: View {
     }
 }
 
-/// A card in a profile: the bridge on the Mac speaks this app's protocol but predates this feature.
+/// A card in a profile: the bridge speaks this app's protocol but predates this feature.
 struct NeedsNewerBridge: View {
     let title: String
     let what: String
+    @Environment(AppStore.self) private var store
 
     var body: some View {
         CardSection(title: title) {
-            Placeholder(text: "Update the bridge on your Mac to \(what).")
+            Placeholder(text: "Update the bridge on \(store.computerName()) to \(what).")
         }
     }
 }

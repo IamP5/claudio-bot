@@ -483,3 +483,19 @@ test("a session the phone drives is metered with no bot: no cap holds it, no bot
   expect(rowsIn(h.dir).at(-1)).toMatchObject({ deltaUsd: 0.5 });
   expect(h.logs.filter((l) => l.includes("unreadable"))).toEqual([]);
 });
+
+test("a row another machine charged counts toward its bot's day here as charged there, and survives a restart", () => {
+  const h = harness({ caps: { [B1]: 1 } });
+  const seen: UsageRow[] = [];
+  const machineDir = mkdtempSync(join(tmpdir(), "claudiobot-ledger-"));
+  dirs.push(machineDir);
+  const machine = createLedger({ dir: machineDir, capFor: () => null, budgetFor: () => null, now: () => h.clock.now, log: () => {}, rowed: (r) => seen.push(r) });
+  machine.add({ actor: agent1, sessionId: "s_mac", initiator: user, cumulativeUsd: 0.75, fresh: true });
+  expect(seen).toMatchObject([{ actor: "agent:a1", botId: B1, deltaUsd: 0.75 }]);
+
+  h.ledger.record(seen[0]!);
+  expect(h.ledger.botSpend(B1)).toEqual({ spentTodayUsd: 0.75, capUsd: 1 });
+  expect(h.ledger.agentSpend(A1).spentUsd).toBe(0.75);
+  expect(rowsIn(h.dir)).toEqual(seen);
+  expect(h.reopen().botSpend(B1).spentTodayUsd).toBe(0.75);
+});

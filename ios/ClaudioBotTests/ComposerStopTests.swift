@@ -102,8 +102,8 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         #expect(state(resting, sent: (at, true, true), now: at + 1).slot.label == "Queued")
         #expect(state(resting, sent: (at, false, true), now: at + 5).slot == .send(.empty), "Sent fades once no work starts")
         #expect(state(controls(), sent: (at, true, true), now: at + 1).slot == .stop(StopScope(controls()), .ready), "work started: the same slot is Stop")
-        #expect(ComposerState.sentAnnouncement(offline: false) == "Sending.")
-        #expect(ComposerState.sentAnnouncement(offline: true) == "Not sent yet. It goes if your Mac is back within a minute.")
+        #expect(ComposerState.sentAnnouncement(offline: false, computer: "omarchy") == "Sending.")
+        #expect(ComposerState.sentAnnouncement(offline: true, computer: "omarchy") == "Not sent yet. It goes if omarchy is back within a minute.")
     }
 
     @Test func stopAndSendNamesTheTurnItStops() {
@@ -132,8 +132,8 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         let waiting = state(held, stop: request, now: at + 12)
         #expect(waiting.slot.label == "Waiting for Claude Code to stop" && !waiting.slot.acts && waiting.slot.spins)
         let note = ComposerNote.of(error: nil, stop: waiting.stop, set: nil, controls: held, now: at + 12)
-        #expect(note?.text == "Waiting for Claude Code to stop…")
-        #expect(ComposerState.announcement(.claudeStopping, StopScope(held)) == "Waiting for Claude Code to stop.")
+        #expect(note?.text(computer: "omarchy") == "Waiting for Claude Code to stop…")
+        #expect(ComposerState.announcement(.claudeStopping, StopScope(held), computer: "omarchy") == "Waiting for Claude Code to stop.")
     }
 
     @Test func aStopTheSocketRefusedSaysNotSentAndOffersStopAgain() {
@@ -143,10 +143,10 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         let busy = controls(tasks: [sleeper])
         #expect(StopPhase(store.latestStop(in: sid, [.all]), controls: busy, at: at + 1) == .notSent)
         let slot = state(busy, stop: store.latestStop(in: sid, [.all]), now: at + 1).slot
-        #expect(slot.label == "Stop again: the turn and 1 agent" && slot.acts && slot.hint == "Stop did not reach your Mac.")
+        #expect(slot.label == "Stop again: the turn and 1 agent" && slot.acts && slot.hint(computer: "omarchy") == "Stop did not reach omarchy.")
         let note = ComposerNote.of(error: nil, stop: state(busy, stop: store.latestStop(in: sid, [.all]), now: at + 1).stop, set: nil, controls: busy, now: at + 1)
-        #expect(note?.text == "Stop not sent. It goes if your Mac is back within a minute.")
-        #expect(ComposerState.announcement(.notSent, StopScope(busy)) == "Stop not sent. It goes if your Mac is back within a minute.")
+        #expect(note?.text(computer: "omarchy") == "Stop not sent. It goes if omarchy is back within a minute.")
+        #expect(ComposerState.announcement(.notSent, StopScope(busy), computer: "omarchy") == "Stop not sent. It goes if omarchy is back within a minute.")
         #expect(BackgroundWorkSheet.stopAll(count: 1, turn: true, phase: .notSent) == "Not stopped yet. Stop the 1 task and the current turn again")
         store.sessionRequestSent(.sessionStop(sessionId: sid, target: .all, turnStartedAt: turnStart), at: at + 2)
         #expect(store.latestStop(in: sid, [.all])?.state == .pending, "the outbox's replay asks again")
@@ -158,12 +158,12 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         let stopping = state(busy, stop: request, now: at + 2).slot
         #expect(stopping == .stop(StopScope(busy), .stopping) && !stopping.acts && stopping.label == "Stopping the turn and 1 agent")
         let late = state(busy, stop: request, now: at + 10).slot
-        #expect(late == .stop(StopScope(busy), .unconfirmed) && late.acts && late.hint == "Your Mac has not confirmed the stop.")
+        #expect(late == .stop(StopScope(busy), .unconfirmed) && late.acts && late.hint(computer: "omarchy") == "The bridge on omarchy has not confirmed the stop.")
         var refused = request
         refused.state = .refused("Claude Code did not stop sleeper one.")
-        #expect(state(busy, stop: refused, now: at + 1).slot.hint == "Claude Code did not stop sleeper one.")
-        #expect(ComposerState.announcement(.stopping, StopScope(busy)) == "Stopping the turn and 1 agent.")
-        #expect(ComposerState.announcement(.ready, StopScope(busy)) == nil, "the status line speaks the outcome")
+        #expect(state(busy, stop: refused, now: at + 1).slot.hint(computer: "omarchy") == "Claude Code did not stop sleeper one.")
+        #expect(ComposerState.announcement(.stopping, StopScope(busy), computer: "omarchy") == "Stopping the turn and 1 agent.")
+        #expect(ComposerState.announcement(.ready, StopScope(busy), computer: "omarchy") == nil, "the status line speaks the outcome")
     }
 
     @Test func theStoreConfirmsAStopOnceTheWorkItWasAimedAtIsGone() {
@@ -217,7 +217,7 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         let newTurn = controls(tasks: [sleep75])
         let slot = state(newTurn, stop: refused, now: at + 1).slot
         #expect(slot == .stop(StopScope(newTurn), .ready), "a turn sent after the refusal was never asked to stop")
-        #expect(slot.label == "Stop the turn and 1 command" && slot.hint == "Asks before it stops background work.")
+        #expect(slot.label == "Stop the turn and 1 command" && slot.hint(computer: "omarchy") == "Asks before it stops background work.")
     }
 
     @Test func aStopOnItsWaySpeaksOfWhatItAskedFor() {
@@ -311,16 +311,16 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         store.sessionRequestSent(.sessionSet(sessionId: sid, patch: SessionPatch(mode: .acceptEdits)), at: at)
         let c = store.threads[sid]?.controls
         let note = ComposerNote.of(error: store.sessionErrors[sid], stop: nil, set: store.sets[sid], controls: c, now: at + 1)
-        #expect(note?.text == "Changing the mode to Accept edits…")
+        #expect(note?.text(computer: "omarchy") == "Changing the mode to Accept edits…")
         #expect(store.threads[sid]?.controls?.mode == .default, "the chip keeps the old value until controls change")
         let lapsed = ComposerNote.of(error: nil, stop: nil, set: store.sets[sid], controls: c, now: at + 16)
-        #expect(lapsed?.text == "Claude Code has not taken the change to Accept edits yet. The mode stays Ask before edits.")
+        #expect(lapsed?.text(computer: "omarchy") == "Claude Code has not taken the change to Accept edits yet. The mode stays Ask before edits.")
         if case .changeUnconfirmed? = lapsed {} else { Issue.record("a change that goes quiet says so") }
         #expect(store.sets[sid] != nil, "it stays until it lands, is refused or put away")
         store.apply(.error(message: "Claude Code did not take the change: busy", about: .set(sessionId: sid)))
         #expect(store.sets[sid] == nil)
         #expect(store.sessionErrors[sid]?.text == "The mode stays Ask before edits. Claude Code did not take the change: busy", "F-SES-140")
-        #expect(ComposerNote.error(store.sessionErrors[sid]!).spoken.hasPrefix("Error: "))
+        #expect(ComposerNote.error(store.sessionErrors[sid]!).spoken(computer: "omarchy").hasPrefix("Error: "))
 
         store.sessionRequestSent(.sessionSet(sessionId: sid, patch: SessionPatch(model: .some("opus"))), at: at + 2)
         #expect(store.sets[sid]?.line == "Changing the model to Opus (5.5)…")
@@ -336,11 +336,11 @@ private func frame(_ store: AppStore, rev: Int, items: [SessionItem] = [], contr
         let store = store(controls())
         store.sessionRequestSent(.sessionSet(sessionId: sid, patch: SessionPatch(mode: .plan)), at: at)
         let c = store.threads[sid]?.controls
-        #expect(ComposerNote.of(error: nil, stop: nil, set: store.sets[sid], controls: c, now: at + 20, offline: true)?.text
-            == "Mode change waits for your Mac. It goes if the connection is back within a minute.")
+        #expect(ComposerNote.of(error: nil, stop: nil, set: store.sets[sid], controls: c, now: at + 20, offline: true)?.text(computer: "omarchy")
+            == "Mode change waits for omarchy. It goes if the connection is back within a minute.")
         store.sessionRequestSent(.sessionSet(sessionId: sid, patch: SessionPatch(model: .some("opus"))), at: at)
-        #expect(ComposerNote.of(error: nil, stop: nil, set: store.sets[sid], controls: c, now: at + 1, offline: true)?.text
-            == "Model change waits for your Mac. It goes if the connection is back within a minute.")
+        #expect(ComposerNote.of(error: nil, stop: nil, set: store.sets[sid], controls: c, now: at + 1, offline: true)?.text(computer: "omarchy")
+            == "Model change waits for omarchy. It goes if the connection is back within a minute.")
     }
 
     @Test func aPromptAStopCutOffBeforeAnyReplyCanBeEditedAndSentAgain() {

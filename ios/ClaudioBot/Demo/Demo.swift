@@ -42,6 +42,7 @@ enum Demo {
         let features: [Feature] = switch screen {
         case "live": [.activity]
         case "oldbridge": []
+        case "machines": [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions, .memory, .mute, .skills, .spend, .sessionTasks, .sessionUnqueue, .pushState, .machines]
         default: [.mentions, .commands, .exchanges, .groups, .connectors, .usage, .sessions, .memory, .mute, .skills, .spend, .sessionTasks, .sessionUnqueue, .pushState]
         }
         let push: PushState = switch screen {
@@ -50,7 +51,11 @@ enum Demo {
         default: .on
         }
         store.apply(.hello(Hello(
-            protocol: oldBridge ? 2 : Wire.protocolVersion, features: features, machine: "MacBook Pro", userName: "Alex", bots: bots, push: push
+            protocol: oldBridge ? 2 : Wire.protocolVersion, features: features,
+            machine: features.contains(.machines) ? machines[0].name : "MacBook Pro", userName: "Alex", bots: bots,
+            world: features.contains(.machines) ? World(id: WorldID("w_demo"), name: "Alex's bots") : nil,
+            machines: features.contains(.machines) ? machines : nil,
+            push: push
         )))
         if !oldBridge { store.apply(.usage(usage(screen))) }
         if !oldBridge { store.apply(.devices(devices)) }
@@ -74,7 +79,7 @@ enum Demo {
         switch screen {
         case "newchat": router.showingNewChat = true
         case "usage", "usagehot", "usageoff": router.showingUsage = true
-        case "settings", "settingspush": router.showingSettings = true
+        case "settings", "settingspush", "machines": router.showingSettings = true
         case "markdown": router.selection = .bot(BotID("claude"))
         case "markdownthread": router.open(.session(DemoSessions.fade))
         case "chat":
@@ -278,6 +283,18 @@ enum Demo {
         }
     }
 
+    static let machines = [
+        Machine(
+            id: MachineID("m_home"), name: "omarchy", role: .home, online: true, since: nil, platform: .linux,
+            access: MachineAccess(full: true, sandbox: false), connectors: []
+        ),
+        Machine(
+            id: MachineID("m_mac"), name: "MacBook Pro", role: .machine, online: false, since: .now - 3 * 3600, platform: .darwin,
+            access: MachineAccess(full: false, sandbox: true),
+            connectors: [MachineConnector(name: "claude-in-chrome", kind: .chrome), MachineConnector(name: "computer-use", kind: .computerUse)]
+        ),
+    ]
+
     /// Stands in for the bridge: answers devices and pair_code, settles question and permission cards, and replies to a send.
     static func respond(to msg: ClientMessage, store: AppStore) {
         if DemoSessions.respond(to: msg, store: store) { return }
@@ -290,6 +307,14 @@ enum Demo {
                 code: "K7QD-M2XP", expiresAt: .now + 600,
                 urls: ["ws://mac.tail1234.ts.net:7878/ws", "ws://Mac.local:7878/ws", "ws://192.168.1.20:7878/ws"]
             )))
+            return
+        case .machineCode:
+            store.apply(.machineCode(PairCode(
+                code: "R4TW-9HJC", expiresAt: .now + 600, urls: ["http://omarchy.tail1234.ts.net:7878", "http://192.168.1.30:7878"]
+            )))
+            return
+        case let .removeMachine(machineId):
+            store.apply(.machines(store.machines.filter { $0.id != machineId }))
             return
         case .refreshUsage:
             store.apply(.usage(usage(screen, ago: 0)))

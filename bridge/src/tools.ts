@@ -30,9 +30,9 @@ export type Isolate = "auto" | "none" | "worktree";
 
 export type BotActions = {
   ask(botId: BotId, a: { question: string; options: string[] }): string;
-  startAgent(botId: BotId, a: { title: string; prompt: string; project: string; where: "mac" | "cloud"; isolate: Isolate; slash?: string }): Promise<string>;
+  startAgent(botId: BotId, a: { title: string; prompt: string; project: string; where: "mac" | "cloud"; isolate: Isolate; slash?: string; machine?: string }): Promise<string>;
   messageAgent(botId: BotId, a: { agentId: string; text: string }): Promise<string>;
-  listProjects(): Promise<string>;
+  listProjects(botId: BotId, a: { machine?: string }): Promise<string>;
   messageBot(botId: BotId, a: { bot: string; text: string }): string;
   createBot(botId: BotId, a: { name: string; job: string; shape?: Shape; color?: Color }): string;
   updateSelf(botId: BotId, a: { name?: string; title?: string; shape?: Shape; color?: Color; job?: string }): string;
@@ -73,7 +73,7 @@ export function botToolServer(botId: BotId, act: BotActions) {
     ),
     start_agent: tool(
       "start_agent",
-      "Start a Claude Code agent on a project for coding work. project is a name or path from list_projects. where is mac (default, reports back to you) or cloud (needs a GitHub remote, does not report back). isolate (mac only): auto (default) lets the bridge decide, worktree gives the agent its own git worktree, none works in the project folder itself. slash (mac only): a skill or command name, without the /; the agent's first turn is then exactly \"/<slash> <prompt>\", as if the user typed it, which runs skills that only the user can invoke. Returns the agent id.",
+      "Start a Claude Code agent on a project for coding work. project is a name or path from list_projects. where is mac (default, reports back to you) or cloud (needs a GitHub remote, does not report back). isolate (mac only): auto (default) lets the bridge decide, worktree gives the agent its own git worktree, none works in the project folder itself. slash (mac only): a skill or command name, without the /; the agent's first turn is then exactly \"/<slash> <prompt>\", as if the user typed it, which runs skills that only the user can invoke. machine (mac only): the machine to run it on, by name; without it, the machine the user picked for your agents, else this one. Returns the agent id.",
       {
         title: z.string().min(1),
         prompt: z.string().min(1),
@@ -81,6 +81,7 @@ export function botToolServer(botId: BotId, act: BotActions) {
         where: z.enum(["mac", "cloud"]).default("mac"),
         isolate: z.enum(["auto", "none", "worktree"]).default("auto"),
         slash: z.string().min(1).optional(),
+        machine: z.string().min(1).optional(),
       },
       (a) => reply(() => act.startAgent(botId, a)),
       always,
@@ -92,7 +93,13 @@ export function botToolServer(botId: BotId, act: BotActions) {
       (a) => reply(() => act.messageAgent(botId, a)),
       always,
     ),
-    list_projects: tool("list_projects", "List the git projects on this Mac: name, path, branch and GitHub repo.", {}, () => reply(() => act.listProjects()), always),
+    list_projects: tool(
+      "list_projects",
+      "List the git projects on this computer, or on the machine named: name, path, branch and GitHub repo.",
+      { machine: z.string().min(1).optional() },
+      (a) => reply(() => act.listProjects(botId, a)),
+      always,
+    ),
     message_bot: tool(
       "message_bot",
       "Send a message to another bot, by name, title or id.",
@@ -116,7 +123,7 @@ export function botToolServer(botId: BotId, act: BotActions) {
     ),
     set_routine: tool(
       "set_routine",
-      "Create or update (by name) a routine: a prompt you receive when it fires. trigger cron (default) fires on schedule, a 5-field cron in the Mac's local time (minute hour day-of-month month day-of-week, Sunday 0). trigger webhook fires when a program on this Mac calls its webhook; the user makes its token on the phone, and the call's payload reaches you as data.",
+      "Create or update (by name) a routine: a prompt you receive when it fires. trigger cron (default) fires on schedule, a 5-field cron in this computer's local time (minute hour day-of-month month day-of-week, Sunday 0). trigger webhook fires when a program on this computer calls its webhook; the user makes its token on the phone, and the call's payload reaches you as data.",
       {
         name: z.string().min(1),
         trigger: z.enum(["cron", "webhook"]).default("cron"),

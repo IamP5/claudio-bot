@@ -34,7 +34,8 @@ struct ChatView: View {
                     }
                     ForEach(store.botSends(in: botId), id: \.clientId) { clientId, send in
                         SessionUserBubble(
-                            text: send.pending.text, from: .user, queued: true, actions: undelivered(clientId, send), delivery: send.pending.state
+                            text: send.pending.text, from: .user, queued: true, actions: undelivered(clientId, send), delivery: send.pending.state,
+                            computer: store.computerName()
                         )
                         .padding(.top, Self.senderGap)
                     }
@@ -73,7 +74,7 @@ struct ChatView: View {
                     case .idle where bot.background != nil:
                         BackgroundLine(background: bot.background!, online: store.showsOnline)
                     case .unavailable:
-                        Text("Claude Code could not start on your Mac. Your messages wait, and the bridge keeps trying.")
+                        Text("Claude Code could not start on \(store.computerName()). Your messages wait, and the bridge keeps trying.")
                             .font(.ui(size: 13))
                             .foregroundStyle(Theme.tertiary)
                             .multilineTextAlignment(.center)

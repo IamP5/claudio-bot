@@ -15,6 +15,7 @@ import {
   type ExchangeLog,
   type GateState,
   type GroupRecord,
+  type MoveRecord,
   type Owned,
   type PushState,
   type SessionPrefs,
@@ -48,6 +49,8 @@ type StateFileV3 = {
   /** Absent in files from before Sessions: no session was hidden or visited. */
   sessions?: SessionRecord[];
   sessionPrefs?: Owned<SessionPrefs>;
+  /** Absent in files from before world moves: this home never exported or imported one. */
+  moves?: Owned<MoveRecord[]>;
 };
 
 // Protocol 2's records, frozen here for the upgrade only.
@@ -132,6 +135,7 @@ const V3_FILE = z.looseObject({
     z.looseObject({
       ...profile,
       dailyCapUsd: z.number().nullable(),
+      agentsOn: maybeText.optional(),
       muted: z.boolean().optional(),
       connectorsOff: z.array(text).optional(),
       session,
@@ -171,6 +175,15 @@ const V3_FILE = z.looseObject({
   groups: z.array(z.looseObject({ ...profile, muted: z.boolean(), members: z.array(text) })).optional(),
   sessions: z.array(z.looseObject({ id: text, hidden: z.boolean(), visitedAt: maybeText })).optional(),
   sessionPrefs: z.looseObject({ mirror: z.enum(MIRROR_PREFS) }).optional(),
+  moves: z
+    .array(
+      z.union([
+        z.looseObject({ kind: z.literal("out"), moveId: text, at: text, phase: z.literal("frozen"), held: z.looseObject({ bots: z.array(anyObject), groups: z.array(anyObject), exchanges: z.array(anyObject) }) }),
+        z.looseObject({ kind: z.literal("out"), moveId: text, at: text, phase: z.literal("done") }),
+        z.looseObject({ kind: z.literal("in"), moveId: text, at: text }),
+      ]),
+    )
+    .optional(),
 });
 
 /**
@@ -187,6 +200,7 @@ export function upgradeV2(v2: StateFileV2): StateFileV3 {
     ...profile,
     messages: messages.map((m): Message => (m.kind === "question" ? { ...m, expiresAt: null } : m)),
     dailyCapUsd: null,
+    agentsOn: null,
     muted: false,
     connectorsOff: [],
     session: emptySession(sessionId),
@@ -220,7 +234,7 @@ export function upgradeV2(v2: StateFileV2): StateFileV3 {
  * one. That is the whole guarantee: on macOS fsync does not flush the drive's own cache (only F_FULLFSYNC does), so a
  * power loss can still lose the newest write.
  */
-function writeAtomic(path: string, body: string | Uint8Array) {
+export function writeAtomic(path: string, body: string | Uint8Array) {
   const dir = dirname(path);
   mkdirSync(dir, { recursive: true });
   const bytes = typeof body === "string" ? Buffer.from(body) : body;
@@ -330,6 +344,7 @@ function fromV3(file: StateFileV3): World {
   // Fields added after version 3 shipped. A file from before them reads as their empty value.
   for (const bot of file.bots) {
     bot.muted ??= false;
+    bot.agentsOn ??= null;
     if (bot.connectorsOff === undefined) Object.assign(bot, { connectorsOff: [] });
   }
   for (const rec of file.agents) rec.agent = { ...rec.agent, evidence: rec.agent.evidence ?? null, worktree: rec.agent.worktree ?? null };
@@ -347,6 +362,7 @@ function fromV3(file: StateFileV3): World {
     exchanges: file.exchanges ?? [],
     sessions: new Map((file.sessions ?? []).map((r) => [r.id, r])),
     sessionPrefs: file.sessionPrefs ?? { mirror: "auto" },
+    moves: file.moves ?? [],
   };
 }
 
@@ -362,6 +378,7 @@ const toFile = (world: World): StateFileV3 => ({
   groups: [...world.groups.values()],
   sessions: [...world.sessions.values()],
   sessionPrefs: world.sessionPrefs,
+  moves: world.moves,
 });
 
 /**

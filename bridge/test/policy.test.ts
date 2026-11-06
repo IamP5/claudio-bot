@@ -1,3 +1,4 @@
+import { PRIVATE } from "../src/private";
 import { describe, expect, test } from "bun:test";
 import { decide, detailOf, fingerprint, type Decision, type PolicyContext, type Scope, type ToolCall } from "../src/policy";
 import type { AgentId, BotId, MessageId, RoutineId, RunId } from "../src/protocol";
@@ -10,8 +11,8 @@ const OWN = `${BRIDGE}/bots/b_1`;
 const PROJECT = `${HOME}/code/app`;
 const NOW = "2026-10-17T12:00:00.000Z";
 
-const botScope: Scope = { bridgeHome: BRIDGE, own: OWN, userMd: `${BRIDGE}/USER.md`, homedir: HOME };
-const agentScope: Scope = { bridgeHome: BRIDGE, own: PROJECT, userMd: null, homedir: HOME };
+const botScope: Scope = { bridgeHome: BRIDGE, own: OWN, userMd: `${BRIDGE}/USER.md`, homedir: HOME, private: PRIVATE.darwin };
+const agentScope: Scope = { bridgeHome: BRIDGE, own: PROJECT, userMd: null, homedir: HOME, private: PRIVATE.darwin };
 const bot: Actor = { kind: "bot", botId: "b_1" as BotId };
 const agent: Actor = { kind: "agent", botId: "b_1" as BotId, agentId: "a_1" as AgentId };
 
@@ -146,7 +147,7 @@ describe("floors", () => {
   test("the bridge reached through a symlinked name is still the bridge, and the bot's own home through it is still its own", () => {
     const real = `${HOME}/.claudebot`;
     const realpath = (p: string) => (p === BRIDGE || p.startsWith(`${BRIDGE}/`) ? real + p.slice(BRIDGE.length) : p);
-    const scope: Scope = { bridgeHome: real, own: `${real}/bots/b_1`, userMd: `${real}/USER.md`, homedir: HOME };
+    const scope: Scope = { bridgeHome: real, own: `${real}/bots/b_1`, userMd: `${real}/USER.md`, homedir: HOME, private: PRIVATE.darwin };
     const over = { scope, realpath };
     expect(verdict(sh("cat ~/.claudiobot/state.json"), over)).toBe("deny:floor.bridge");
     expect(verdict(sh(`cat ${OWN}/CLAUDE.md`), over)).toBe("pass");

@@ -52,6 +52,11 @@ export type Push = Tickable & {
   sessionEnded?(id: SessionId, end: SessionEnd, at: string): void;
   /** Whether pushes reach the user, for hello. */
   state?(): Reach;
+  /**
+   * A card opened in a session the phone drives on another machine. The home cannot see that session's cards, so it is
+   * one try, made only while no phone is live, and dropped rather than retried.
+   */
+  notifySession?(sessionId: SessionId, cardId: MessageId): boolean;
 };
 
 /**
@@ -280,6 +285,8 @@ export function createPush(deps: {
   title?: (id: SessionId) => string;
   now: () => Date;
   log: (line: string) => void;
+  /** Open cards other machines' gates hold, shown in a bot's chat here. They never enter this world's gate. */
+  remoteCards?: () => { botId: BotId; cardId: MessageId }[];
   /** Waits between tries; tests pass one that does not. */
   wait?: (ms: number) => Promise<void>;
   /** A deadline moved after a try came back: the clock looks again. */
@@ -413,10 +420,12 @@ export function createPush(deps: {
 
   const live = (now: number) => (deps.liveUntil()?.getTime() ?? 0) > now;
   const pushed = (key: string) => world.push.sent.some((s) => s.key === key);
+  /** Every open card waiting on the user, this machine's and other machines'. */
+  const openCards = () => [...world.gate.open.map((c) => ({ botId: c.actor.botId, cardId: c.cardId })), ...(deps.remoteCards?.() ?? [])];
   /** The alert for the key was seen: a socket it went to was heard from, attended, after it went. */
   const seen = (key: string) => alerted.get(key)?.sent.some((b) => deps.sockets?.heard(b.to, b.at) === true) ?? false;
   /** Open cards whose own push has not gone out, for any reason but a failed record. */
-  const heldCards = () => world.gate.open.filter((c) => !pushed(`${c.cardId}|card`));
+  const heldCards = () => openCards().filter((c) => !pushed(`${c.cardId}|card`));
 
   /** A newer run of the session replaced the ending the key names. A session the phone does not drive cannot tell. */
   const current = (id: SessionId, key: string) => {
@@ -433,7 +442,7 @@ export function createPush(deps: {
     const f = o.for;
     if (f.kind === "cards") return f.cards.some((c) => isOpen(f.session, c));
     if (f.kind === "ending") return current(f.session, o.keys[0]!);
-    if (f.kind === "bot-card") return world.gate.open.some((c) => c.cardId === f.card);
+    if (f.kind === "bot-card") return openCards().some((c) => c.cardId === f.card);
     return true;
   }
   const sidOf = (o: OwedPush) => `cb${createHash("sha256").update(pid(o)).digest("hex").slice(0, 32)}`;
@@ -768,6 +777,15 @@ export function createPush(deps: {
 
   return {
     notify: (bot, reason, messageId) => notify(bot, reason, messageId),
+    notifySession(id, cardId) {
+      const now = deps.now().getTime();
+      const key = `${cardId}|card`;
+      if (sender === null || live(now) || pushed(key)) return false;
+      const what = `card for session ${id} on another machine`;
+      if (!record([key], what, now)) return false;
+      void deliver({ keys: [key], botId: null, text: `${SESSION} needs you`, link: sessionLink(id, cardId), high: true, for: { kind: "cards", session: id, cards: [cardId] } }, what);
+      return true;
+    },
     sessionEnded(id, end, at) {
       const now = deps.now().getTime();
       const key = `${id}|${at}|done`;
@@ -788,7 +806,7 @@ export function createPush(deps: {
         deferred.clear();
       }
       for (const card of heldCards()) {
-        const bot = world.bots.get(card.actor.botId);
+        const bot = world.bots.get(card.botId);
         if (bot) notify(bot, "card", card.cardId, now.getTime());
       }
       for (const [key, a] of alerted) if (now.getTime() - a.sent[0]!.at > ALERTS_KEPT_MS) alerted.delete(key);

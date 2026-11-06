@@ -314,7 +314,8 @@ struct PermissionOutcome: Equatable {
 
 extension PermissionAnswer {
     /// step: the call the card held back, in a session's thread. Its end can undo what "Allowed" promised.
-    func outcome(step: ToolStep? = nil) -> PermissionOutcome {
+    /// computer: where the step ran (`AppStore.computerName`).
+    func outcome(step: ToolStep? = nil, computer: String) -> PermissionOutcome {
         switch self {
         case .chose(let choice) where choice.allows:
             switch step?.state {
@@ -326,7 +327,7 @@ extension PermissionAnswer {
             case .error?:
                 PermissionOutcome(short: "\(choice.outcome), then failed", text: "\(choice.outcome). It failed.", tone: .failed)
             case .unsure?:
-                PermissionOutcome(short: "\(choice.outcome) · may still run", text: "\(choice.outcome). \(ToolStep.mayStillRun).", tone: .unsure)
+                PermissionOutcome(short: "\(choice.outcome) · may still run", text: "\(choice.outcome). \(ToolStep.mayStillRun(on: computer)).", tone: .unsure)
             case .ended?:
                 PermissionOutcome(short: "\(choice.outcome) · ended, result unknown", text: "\(choice.outcome). It ended; its result is unknown.", tone: .unseen)
             default:
@@ -419,8 +420,8 @@ extension PermissionAnswer {
     /// What VoiceOver hears when an open card closes: who closed it when it was not this device, the outcome, whether
     /// the tool ran, and the command: "Expired. Bash did not run: perl -e 'sleep 45'".
     /// here: whether this phone's decision closed it; nil when the phone cannot tell, so it names nobody.
-    func announcement(card: PermissionCard, step: ToolStep? = nil, here: Bool?) -> String {
-        let outcome = outcome(step: step)
+    func announcement(card: PermissionCard, step: ToolStep? = nil, here: Bool?, computer: String) -> String {
+        let outcome = outcome(step: step, computer: computer)
         let allowed = if case .chose(let choice) = self { choice.allows } else { false }
         let result = switch (allowed, card.isTrust) {
         case (true, false): "\(outcome.text.trimmingCharacters(in: CharacterSet(charactersIn: "."))). \(card.tool)"

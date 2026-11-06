@@ -138,11 +138,12 @@ enum DecisionNote: Equatable, Sendable {
     /// Nobody can say whether it landed: the socket dropped, or no ack came within AppStore.decisionPatience.
     case unsure
 
-    var text: String {
+    /// computer: where the card's agent or session runs (`AppStore.computerName`).
+    func text(computer: String) -> String {
         switch self {
-        case .unsure: "Your answer may not have reached your Mac · Tap again"
+        case .unsure: "Your answer may not have reached \(computer) · Tap again"
         case .notSent: "Not sent · Try again"
-        case .tooLate: "Not sent: your Mac was unreachable · Try again"
+        case .tooLate: "Not sent: \(computer) was unreachable · Try again"
         case .refused(let why): why.localizedCaseInsensitiveContains("already answered") ? "Already answered" : why.hasSuffix(".") ? why : why + "."
         }
     }
@@ -197,6 +198,8 @@ final class AppStore {
     private(set) var protocolMismatch: ProtocolMismatch?
     /// From the last hello. Nil until this pairing has connected once.
     private(set) var bridgeProtocol: Int?
+    /// The bridge's computer, as its last hello named it. Kept while offline, so copy can still name it.
+    private(set) var bridgeName: String?
     /// The decisions and answers this phone sent, by card. They outlive the card's view and a reconnect, so a card
     /// closing is announced as this phone's answer, another device's, or one this phone cannot vouch for.
     private(set) var decisions: [MessageID: CardDecision] = [:]
@@ -211,6 +214,13 @@ final class AppStore {
     @ObservationIgnored private(set) var heardAt: Date?
     /// The newest code for pairing another phone.
     private(set) var pairCode: PairCode?
+    /// The world of bots this bridge holds, from the last hello. Nil from a bridge without machines.
+    private(set) var world: World?
+    /// The computers that run this world's agents, the home first as the bridge lists them. Empty from a bridge
+    /// without machines.
+    private(set) var machines: [Machine] = []
+    /// The newest code for enrolling another computer as a machine.
+    private(set) var machineCode: PairCode?
     /// From the last hello. Empty for a bridge from before features.
     private(set) var features: Set<Feature> = []
     /// What each bot or agent is doing right now. Live only: cleared by every hello.
@@ -273,6 +283,35 @@ final class AppStore {
         if case .connected(let machine, _) = connection { machine } else { nil }
     }
 
+    /// Machine chips and pickers show only when there is a choice to make or to read.
+    var hasSeveralMachines: Bool {
+        machines.count > 1
+    }
+
+    func machine(_ id: MachineID?) -> Machine? {
+        id.flatMap { id in machines.first { $0.id == id } }
+    }
+
+    /// The name on a machine chip, only when the world has several machines to tell apart.
+    func chipName(_ id: MachineID?) -> String? {
+        hasSeveralMachines ? machine(id)?.name : nil
+    }
+
+    /// The computer copy names: the machine with this id, else the bridge's own, else `fallback` before any hello.
+    func computerName(_ id: MachineID? = nil, or fallback: String = "your computer") -> String {
+        machine(id)?.name ?? bridgeName ?? fallback
+    }
+
+    /// Where copy says an agent runs.
+    func place(of agent: Agent) -> String {
+        agent.where == .cloud ? "the cloud" : computerName(agent.machine)
+    }
+
+    /// A cloud agent runs on claude.ai, so it wears no machine chip even though a machine started it.
+    func chipName(for agent: Agent) -> String? {
+        agent.where == .cloud ? nil : chipName(agent.machine)
+    }
+
     /// Paired devices, pairing codes and Bearer tokens arrived with protocol 3.
     var bridgeManagesDevices: Bool {
         (bridgeProtocol ?? 0) >= 3
@@ -323,11 +362,15 @@ final class AppStore {
             created = [:]
             protocolMismatch = nil
             bridgeProtocol = nil
+            bridgeName = nil
             decisions = [:]
             decided = []
             createRefusals = [:]
             devices = nil
             pairCode = nil
+            world = nil
+            machines = []
+            machineCode = nil
             features = []
             activity = [:]
             facts = nil
@@ -542,7 +585,7 @@ final class AppStore {
     /// A message held offline was not sent: no socket took it within OutboxRule.maxAge of the tap, and later it would
     /// no longer mean what the user meant.
     func requestDropped(_ msg: ClientMessage) {
-        let unreachable = " not sent: your Mac was unreachable."
+        let unreachable = " not sent: \(computerName()) was unreachable."
         switch msg {
         case let .sessionStop(sessionId, target, _):
             stops[sessionId]?[target ?? .all] = nil
@@ -552,7 +595,7 @@ final class AppStore {
         case let .createBot(ref), let .createGroup(ref, _, _):
             droppedCreate = ref
             let what = if case .createBot = msg { "bot" } else { "group" }
-            lastError = ErrorNotice(message: "New \(what) not created: your Mac was unreachable for a minute. Try again once it's back.")
+            lastError = ErrorNotice(message: "New \(what) not created: \(computerName()) was unreachable for a minute. Try again once it's back.")
         case .decide(_, let card, _), .sessionDecide(_, let card, _), .sessionAnswer(_, let card, _):
             decisions[card]?.fail(.tooLate)
         case let .sessionSet(sessionId, patch):
@@ -564,13 +607,13 @@ final class AppStore {
             } else if patch.title != nil {
                 lastError = ErrorNotice(message: "Rename" + unreachable)
             }
-        case .sessionOpenDesktop:
+        case .sessionOpenDesktop(let sessionId):
             lastError = ErrorNotice(message: "Open in the Claude app" + unreachable)
         case .sessionPrefs:
             if let before = mirrorAsked?.before { sessions.setMirror(before) }
             mirrorAsked = nil
-            mirrorNote = "Not changed: your Mac was unreachable."
-            if !settingsShown { lastError = ErrorNotice(message: "The Claude app setting was not changed: your Mac was unreachable.") }
+            mirrorNote = "Not changed: \(computerName()) was unreachable."
+            if !settingsShown { lastError = ErrorNotice(message: "The Claude app setting was not changed: \(computerName()) was unreachable.") }
         case let .sessionSend(sessionId, _, clientId, _, _):
             unechoedSends.removeAll { Self.clientId(of: $0.message) == clientId }
             // A Retry of one a socket took before may have arrived the first time: it keeps saying so.
@@ -700,6 +743,10 @@ final class AppStore {
         pairCode = nil
     }
 
+    func discardMachineCode() {
+        machineCode = nil
+    }
+
     /// The reducer. Returns what the user should be notified about.
     @discardableResult
     func apply(_ msg: ServerMessage, at now: Date = .now) -> [Alert] {
@@ -707,11 +754,14 @@ final class AppStore {
         switch msg {
         case let .hello(hello):
             connection = .connected(machine: hello.machine)
+            bridgeName = hello.machine
             endRejoin()
             userName = hello.userName
             protocolMismatch = ProtocolMismatch(bridge: hello.protocol)
             bridgeProtocol = hello.protocol
             features = Set(hello.features)
+            world = hello.world
+            machines = hello.machines ?? []
             activity = [:]
             if !features.contains(.usage) { usage = nil }
             pushState = hello.push
@@ -799,6 +849,14 @@ final class AppStore {
 
         case let .pairCode(code):
             pairCode = code
+            return []
+
+        case let .machines(machines):
+            self.machines = machines
+            return []
+
+        case let .machineCode(code):
+            machineCode = code
             return []
 
         case let .activity(botId, agentId, text, _):

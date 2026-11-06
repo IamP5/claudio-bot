@@ -61,13 +61,13 @@ private func date(_ wire: String) -> Date {
         let now = date("2026-10-16T14:00:30.000Z")
         let byId = Dictionary(uniqueKeysWithValues: steps.map { ($0.id, $0) })
 
-        #expect(run.status(byId["toolu_01Ac1"]!, now: now) == ["Running · 2h 00m", "waiting for your approval", "3 tools, last Bash"])
-        #expect(run.status(byId["toolu_01Ac2"]!, now: now) == ["Waiting for approval", "started by sleeper two"])
-        #expect(run.status(byId["toolu_01Ac3"]!, now: now).first == "Running · 2h 00m")
-        #expect(run.status(byId["toolu_01Ac3"]!, now: now).contains("started by sleeper two"))
-        #expect(run.status(byId["toolu_01Ac4"]!, now: now) == ["Failed · 2h 00m"])
-        #expect(run.status(byId["toolu_01Ac5"]!, now: now) == ["Stopped by you · 2h 00m", "4 tools"])
-        #expect(run.status(byId["toolu_01Ac1"]!, now: now, spoken: true).first == "Running, 2 hours")
+        #expect(run.status(byId["toolu_01Ac1"]!, now: now, computer: "omarchy") == ["Running · 2h 00m", "waiting for your approval", "3 tools, last Bash"])
+        #expect(run.status(byId["toolu_01Ac2"]!, now: now, computer: "omarchy") == ["Waiting for approval", "started by sleeper two"])
+        #expect(run.status(byId["toolu_01Ac3"]!, now: now, computer: "omarchy").first == "Running · 2h 00m")
+        #expect(run.status(byId["toolu_01Ac3"]!, now: now, computer: "omarchy").contains("started by sleeper two"))
+        #expect(run.status(byId["toolu_01Ac4"]!, now: now, computer: "omarchy") == ["Failed · 2h 00m"])
+        #expect(run.status(byId["toolu_01Ac5"]!, now: now, computer: "omarchy") == ["Stopped by you · 2h 00m", "4 tools"])
+        #expect(run.status(byId["toolu_01Ac1"]!, now: now, spoken: true, computer: "omarchy").first == "Running, 2 hours")
     }
 
     @Test func aWaitingStepKeepsTheRunLive() {
@@ -112,12 +112,12 @@ private func date(_ wire: String) -> Date {
         #expect(!run.isLive)
         #expect(run.headline() == "Ran 3 agents, 43s")
         #expect(run.spoken(now: start + 600) == "Ran 3 agents, 43 seconds")
-        #expect(run.status(run.steps[1], now: start + 600) == ["Done · 42s"])
+        #expect(run.status(run.steps[1], now: start + 600, computer: "omarchy") == ["Done · 42s"])
     }
 
     @Test func aFinishedAgentWithoutTimesFallsBackToItsUsage() {
         let run = WorkRun(steps: [step("1", "Agent", state: .ok, usage: ToolUsage(tools: 5, ms: 12_400))])
-        #expect(run.status(run.steps[0], now: start) == ["Done · 12s", "5 tools"])
+        #expect(run.status(run.steps[0], now: start, computer: "omarchy") == ["Done · 12s", "5 tools"])
     }
 
     @Test func severalFailuresNameTheFirstAndCountTheRest() {
@@ -134,8 +134,8 @@ private func date(_ wire: String) -> Date {
         let run = WorkRun(steps: [step("1", "Agent", "sleeper", state: .running, started: 0)], controls: controls(tasks: [task], heardAt: start + 2))
         #expect(run.quiet(run.steps[0], now: start + 60) == nil)
         #expect(run.quiet(run.steps[0], now: start + 185) == 180)
-        #expect(run.status(run.steps[0], now: start + 185) == ["Running · 3m 05s", "2 tools, last Bash", "no activity for 3m"])
-        #expect(run.status(run.steps[0], now: start + 185, spoken: true).last == "no activity for 3 minutes")
+        #expect(run.status(run.steps[0], now: start + 185, computer: "omarchy") == ["Running · 3m 05s", "2 tools, last Bash", "no activity for 3m"])
+        #expect(run.status(run.steps[0], now: start + 185, spoken: true, computer: "omarchy").last == "no activity for 3 minutes")
     }
 
     @Test func aStepWithoutATaskIsQuietByTheSessionsLastSignOfLife() {
@@ -153,7 +153,7 @@ private func date(_ wire: String) -> Date {
         )
         let run = WorkRun(steps: [step("1", state: .running, started: 0)], controls: controls(tasks: [task], heardAt: start))
         #expect(run.quiet(run.steps[0], now: start + 120) == nil)
-        #expect(run.status(run.steps[0], now: start + 120) == ["Running · 2m 00s"])
+        #expect(run.status(run.steps[0], now: start + 120, computer: "omarchy") == ["Running · 2m 00s"])
     }
 
     @Test func anAgentWaitingOnItsOwnCommandIsNotQuiet() {
@@ -164,7 +164,7 @@ private func date(_ wire: String) -> Date {
         let steps = [step("1", "Agent", "sleeper two", state: .running, started: 0), step("2", "Bash", "Sleep 5 minutes", state: .running, started: 5, owner: "1")]
         let run = WorkRun(steps: steps, controls: controls(tasks: [command], heardAt: start + 5))
         #expect(run.quiet(run.steps[0], now: start + 200) == nil)
-        #expect(run.status(run.steps[0], now: start + 200) == ["Running · 3m 20s"])
+        #expect(run.status(run.steps[0], now: start + 200, computer: "omarchy") == ["Running · 3m 20s"])
     }
 
     @Test func anAgentIsQuietOnlyWhenItsProgressItsTasksAndTheSessionAreAllOld() {
@@ -194,7 +194,7 @@ private func date(_ wire: String) -> Date {
         #expect(run.headline() == "2 of 3 agents running · 1 done")
         #expect(run.headline(spoken: true) == "Running: 2 of 3 agents, 1 done")
         #expect(run.collapsed.map(\.id) == ["1", "2", "3"])
-        #expect(run.status(run.steps[0], now: start + 60) == ["Done · 35s", "1 tool"])
+        #expect(run.status(run.steps[0], now: start + 60, computer: "omarchy") == ["Done · 35s", "1 tool"])
         let ended = WorkRun(steps: [step("1", "Agent", state: .ok, started: 0, ended: 35), step("2", "Agent", state: .ok, started: 0, ended: 40)])
         #expect(ended.collapsed.isEmpty)
         #expect(ended.headline() == "Ran 2 agents, 40s")
@@ -238,15 +238,15 @@ private func date(_ wire: String) -> Date {
 
     @Test func workThatMayStillRunSaysWhenItStarted() {
         let run = WorkRun(steps: [step("1", state: .unsure, started: 0)])
-        #expect(run.status(run.steps[0], now: start + 250) == ["May still run on your Mac · started 4m ago"])
-        #expect(run.status(run.steps[0], now: start + 250, spoken: true) == ["May still run on your Mac, started 4 minutes 10 seconds ago"])
+        #expect(run.status(run.steps[0], now: start + 250, computer: "omarchy") == ["May still run on omarchy · started 4m ago"])
+        #expect(run.status(run.steps[0], now: start + 250, spoken: true, computer: "omarchy") == ["May still run on omarchy, started 4 minutes 10 seconds ago"])
         #expect(run.ages)
     }
 
     @Test func aStoppedCommandSaysHowLongItRan() {
         let run = WorkRun(steps: [step("1", state: .stopped, started: 0, ended: 72, cause: "Stopped by you")])
-        #expect(run.status(run.steps[0], now: start + 600) == ["Stopped by you · 1m 12s"])
-        #expect(run.status(run.steps[0], now: start + 600, spoken: true) == ["Stopped by you, 1 minute 12 seconds"])
+        #expect(run.status(run.steps[0], now: start + 600, computer: "omarchy") == ["Stopped by you · 1m 12s"])
+        #expect(run.status(run.steps[0], now: start + 600, spoken: true, computer: "omarchy") == ["Stopped by you, 1 minute 12 seconds"])
     }
 
     @Test func oneLineChangedIsSpokenSingular() {
@@ -261,7 +261,7 @@ private func date(_ wire: String) -> Date {
         )
         let run = WorkRun(steps: [step("1", "Agent", state: .running, started: 0)], controls: controls(tasks: [task], heardAt: start))
         #expect(run.quiet(run.steps[0], now: start + 600) == nil)
-        #expect(run.status(run.steps[0], now: start + 600) == ["Running · 10m 00s", "waiting for your approval", "2 tools, last Bash"])
+        #expect(run.status(run.steps[0], now: start + 600, computer: "omarchy") == ["Running · 10m 00s", "waiting for your approval", "2 tools, last Bash"])
     }
 
     @Test func aFailedWriteIsNotCountedAsAnEdit() {
@@ -311,16 +311,16 @@ private func date(_ wire: String) -> Date {
         #expect(run.headline(spoken: true) == "1 may still run")
         let mixed = WorkRun(steps: [step("1", state: .ok), step("2", state: .unsure, cause: "Can't tell whether this still runs on your Mac")])
         #expect(mixed.headline() == "Ran 1 command · 1 may still run")
-        #expect(run.status(run.steps[0], now: start + 60) == ["May still run on your Mac · started 1m ago"])
-        #expect(run.status(run.steps[0], now: start + 60, spoken: true) == ["May still run on your Mac, started 1 minute ago"])
+        #expect(run.status(run.steps[0], now: start + 60, computer: "omarchy") == ["May still run on omarchy · started 1m ago"])
+        #expect(run.status(run.steps[0], now: start + 60, spoken: true, computer: "omarchy") == ["May still run on omarchy, started 1 minute ago"])
     }
 
     @Test func aCommandThatEndedUnseenReadsEndedWithResultUnknownNeitherStoppedNorDone() throws {
         let run = WorkRun(steps: [step("1", state: .ended, started: 0, cause: "It ended without a result")])
         #expect(!run.isLive && !run.isRunning)
         #expect(run.headline().hasSuffix(" · 1 ended") && !run.headline().contains("stopped"))
-        #expect(run.status(run.steps[0], now: start + 60) == ["Ended · result unknown"])
-        #expect(run.status(run.steps[0], now: start + 60, spoken: true) == ["Ended, result unknown"])
+        #expect(run.status(run.steps[0], now: start + 60, computer: "omarchy") == ["Ended · result unknown"])
+        #expect(run.status(run.steps[0], now: start + 60, spoken: true, computer: "omarchy") == ["Ended, result unknown"])
         #expect(ToolStepState(wire: "ended") == .ended)
     }
 
@@ -335,8 +335,8 @@ private func date(_ wire: String) -> Date {
         let run = WorkRun(steps: [step("1", "Agent", "sleeper one", state: .running, started: 0), step("2", "Agent", "sleeper two", state: .running, started: 0)])
         #expect(run.spoken(now: start + 125, stale: true) == "Running when last updated: 2 agents, 2 minutes 5 seconds")
         #expect(run.spoken(now: start + 125) == "Running: 2 agents, 2 minutes 5 seconds")
-        #expect(run.status(run.steps[0], now: start + 72, spoken: true, stale: true).first == "Running when last updated, 1 minute 12 seconds")
-        #expect(run.status(run.steps[0], now: start + 72, stale: true).first == "Running · 1m 12s", "the shown line keeps its words; the dimmed marks say it is old")
+        #expect(run.status(run.steps[0], now: start + 72, spoken: true, stale: true, computer: "omarchy").first == "Running when last updated, 1 minute 12 seconds")
+        #expect(run.status(run.steps[0], now: start + 72, stale: true, computer: "omarchy").first == "Running · 1m 12s", "the shown line keeps its words; the dimmed marks say it is old")
     }
 
     @Test func aCommandARunningAgentMakesIsNotCountedAgain() {

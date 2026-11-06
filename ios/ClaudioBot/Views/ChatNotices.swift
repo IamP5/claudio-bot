@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Above the chat while the Mac is out of reach: the chat list's banner, with its cause, its age and its actions
+/// Above the chat while the bridge is out of reach: the chat list's banner, with its cause, its age and its actions
 /// (F-AR-002, F-AR-006).
 struct OfflineBar: View {
     @Environment(AppStore.self) private var store
